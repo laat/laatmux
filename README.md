@@ -1,8 +1,7 @@
 # laatmux
 
-Git worktrees and coding agents across hosts, from tmux. The plan is
-[issue #1](https://github.com/laat/laatmux/issues/1). This is the milestone-one
-spike: a per-host status daemon, a merged multi-host listing, a launcher for
+Git worktrees and coding agents across hosts, from tmux. This is the
+milestone-one spike: a per-host status daemon, a merged multi-host listing, a launcher for
 managed sessions, and jump.
 
 ## Layout
