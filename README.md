@@ -18,6 +18,7 @@ managed sessions, and jump.
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge` |
 | `internal/home` | state dir, environment id, runtime file, startup lock |
 | `internal/config` | `~/.config/laatmux/config.yaml` |
+| `tools/syncmanifests` | refreshes the vendored manifests from herdr's published catalog (`go run ./tools/syncmanifests`, or `-check`) |
 
 ## Run
 
