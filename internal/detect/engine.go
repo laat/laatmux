@@ -30,8 +30,17 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+//go:generate go run ../../tools/syncmanifests -dir manifests
+
 //go:embed manifests/*.toml
 var manifestFS embed.FS
+
+// engineVersion is the herdr manifest engine version this port implements
+// (MANIFEST_ENGINE_VERSION in herdr's src/detect/manifest_update.rs). A
+// manifest whose min_engine_version is higher may use gates or regions this
+// engine does not know; Validate rejects it rather than letting its rules go
+// silently dead.
+const engineVersion = 3
 
 type manifest struct {
 	ID               string   `toml:"id"`
@@ -107,6 +116,17 @@ func mustLoadManifests() map[string]*loadedManifest {
 	return out
 }
 
+// Validate parses a manifest and checks that this engine can evaluate every
+// rule in it: the TOML has no unknown keys, every regex compiles under RE2,
+// min_engine_version is not newer than engineVersion, and every region
+// selector is one this port implements. It is what the vendored manifests
+// are held to in tests and what tools/syncmanifests requires before it
+// writes an upstream update.
+func Validate(raw []byte) error {
+	_, err := loadManifest(raw)
+	return err
+}
+
 func loadManifest(raw []byte) (*loadedManifest, error) {
 	var m manifest
 	md, err := toml.Decode(string(raw), &m)
@@ -119,10 +139,16 @@ func loadManifest(raw []byte) (*loadedManifest, error) {
 	if m.ID == "" || len(m.Rules) == 0 {
 		return nil, fmt.Errorf("manifest needs an id and at least one rule")
 	}
+	if m.MinEngineVersion > engineVersion {
+		return nil, fmt.Errorf("manifest %s needs engine version %d, this port implements %d", m.ID, m.MinEngineVersion, engineVersion)
+	}
 	lm := &loadedManifest{manifest: m}
 	for _, r := range m.Rules {
 		if r.Region == "" {
 			r.Region = "whole_recent"
+		}
+		if !knownRegion(r.Region) {
+			return nil, fmt.Errorf("rule %s uses region %q, which this port does not implement", r.ID, strings.TrimSpace(r.Region))
 		}
 		cg, err := compileGate(r.gate)
 		if err != nil {
@@ -259,7 +285,7 @@ type evaluatedRule struct {
 }
 
 func evaluate(lm *loadedManifest, in Input) evaluation {
-	ev := evaluation{screen: strings.Join(in.Screen, "\n"), regions: map[string]regionInfo{}, winner: -1}
+	ev := evaluation{screen: joinScreen(in.Screen), regions: map[string]regionInfo{}, winner: -1}
 	for i := range lm.rules {
 		r := &lm.rules[i]
 		spec := strings.TrimSpace(r.Region)
@@ -275,6 +301,20 @@ func evaluate(lm *loadedManifest, in Input) evaluation {
 		}
 	}
 	return ev
+}
+
+// joinScreen joins captured lines the way herdr's engine sees them. A
+// trailing "\r" on a line is dropped so that raw "\r\n" captures slice the
+// same as Rust's str::lines(), which strips it.
+func joinScreen(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		parts[i] = strings.TrimSuffix(l, "\r")
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (ev evaluation) result() Result {

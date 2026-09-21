@@ -1,6 +1,12 @@
-The files claude.toml and codex.toml in this directory are copied verbatim from
-herdr (https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
-commit 309749ad65f3aa596f077ec23a1bf3ee428b7a04.
+The manifests in this directory are copied verbatim from herdr
+(https://github.com/herdrdev/herdr), which publishes them at
+https://herdr.dev/agent-detection/index.toml
+and also ships them in its source tree under src/detect/manifests/.
+Refresh with `go run ./tools/syncmanifests`; see that command for details.
+
+Vendored files:
+  claude.toml          version 2026.09.11.1   updated_at 2026-09-11T00:00:00Z
+  codex.toml           version 2026.09.15.1   updated_at 2026-09-15T00:00:00Z
 
 herdr is licensed under the Apache License, Version 2.0. You may obtain a copy
 of the License at http://www.apache.org/licenses/LICENSE-2.0. The manifests are

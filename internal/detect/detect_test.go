@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"io/fs"
 	"os"
 	"reflect"
 	"strings"
@@ -189,5 +190,94 @@ func TestExplainListsUnsupportedRegions(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("Explain output lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// Every vendored manifest must be fully evaluable by this port. When a sync
+// pulls an upstream manifest that needs a newer engine or a region selector
+// that has not been ported, this fails instead of the rules going dead.
+func TestVendoredManifestsValidate(t *testing.T) {
+	entries, err := fs.ReadDir(manifestFS, "manifests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no vendored manifests")
+	}
+	for _, e := range entries {
+		raw, err := manifestFS.ReadFile("manifests/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Validate(raw); err != nil {
+			t.Errorf("%s: %v", e.Name(), err)
+		}
+	}
+}
+
+func TestValidateRejectsUnportedManifests(t *testing.T) {
+	cases := []struct{ name, raw, want string }{
+		{"engine too new", `
+id = "x"
+min_engine_version = 99
+[[rules]]
+id = "r"
+state = "idle"
+contains = ["a"]
+`, "needs engine version 99"},
+		{"unknown region", `
+id = "x"
+[[rules]]
+id = "r"
+state = "idle"
+region = "after_current_prompt_block_marker"
+contains = ["a"]
+`, `region "after_current_prompt_block_marker"`},
+		{"unknown key", `
+id = "x"
+[[rules]]
+id = "r"
+state = "idle"
+fuzzy = ["a"]
+`, "unknown keys"},
+		{"bad regex", `
+id = "x"
+[[rules]]
+id = "r"
+state = "idle"
+regex = ['(?<=a)b']
+`, "regex"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Validate([]byte(c.raw))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, c.want)
+			}
+		})
+	}
+	// osc_progress is known even though laatmux never has data for it.
+	if err := Validate([]byte(`
+id = "x"
+[[rules]]
+id = "r"
+state = "idle"
+region = "osc_progress"
+regex = ['^4;0']
+`)); err != nil {
+		t.Fatalf("osc_progress rejected: %v", err)
+	}
+}
+
+func TestScreenLinesDropCarriageReturn(t *testing.T) {
+	raw := screen(t, "claude-permission-prompt.screen")
+	crlf := make([]string, len(raw))
+	for i, l := range raw {
+		crlf[i] = l + "\r"
+	}
+	want := Detect(Input{Agent: "claude", Screen: raw})
+	got := Detect(Input{Agent: "claude", Screen: crlf})
+	if got != want {
+		t.Fatalf("with \\r: %+v, without: %+v", got, want)
 	}
 }

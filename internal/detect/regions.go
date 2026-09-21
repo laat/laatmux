@@ -20,6 +20,19 @@ import (
 // Not ported (unused by the Claude and Codex manifests):
 // current_prompt_block_marker, after_current_prompt_block_marker.
 
+// knownRegion reports whether spec is a selector this port implements.
+// osc_progress counts as known: the selector is understood, laatmux simply
+// never has progress data for it, so rules using it stay quietly unmatched
+// (regionText reports it as unsupported for Explain).
+func knownRegion(spec string) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "osc_progress" {
+		return true
+	}
+	_, ok := regionText(Input{}, "", spec)
+	return ok
+}
+
 // regionText returns the text a rule's region selector refers to. ok is false
 // when the selector is not supported by this port (or, for osc_progress, when
 // the data is never available), in which case the rule can never match.
