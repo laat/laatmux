@@ -1,0 +1,172 @@
+// Package protocol defines the JSON-lines wire format between a laatmux
+// client and a laatmux daemon. One JSON object per line, in both directions.
+//
+// The contract is the boundary between independently released clients and
+// daemons. A client branches on the capability set in the daemon's hello
+// reply, never on the version string.
+package protocol
+
+import (
+	"bufio"
+	"encoding/json"
+	"io"
+	"sync"
+	"time"
+)
+
+// Version is the protocol version this build speaks.
+const Version = 1
+
+// Message types.
+const (
+	TypeHello     = "hello"     // both directions; first message on a connection
+	TypeSubscribe = "subscribe" // client -> daemon
+	TypeSnapshot  = "snapshot"  // daemon -> client, full state after subscribe
+	TypeUpsert    = "upsert"    // daemon -> client, one agent changed or appeared
+	TypeRemove    = "remove"    // daemon -> client, one agent disappeared
+	TypeNew       = "new"       // client -> daemon, create a managed session
+	TypeResult    = "result"    // daemon -> client, reply to a command
+	TypePing      = "ping"
+	TypePong      = "pong"
+	TypeError     = "error"
+)
+
+// Capabilities a daemon may advertise.
+const (
+	CapStatus = "status" // subscribe / snapshot / upsert / remove
+	CapNew    = "new"    // the new command
+)
+
+// Activity is what the agent on screen appears to be doing.
+type Activity string
+
+const (
+	Working Activity = "working"
+	Blocked Activity = "blocked"
+	Idle    Activity = "idle"
+	Unknown Activity = "unknown"
+)
+
+// Liveness is whether the identified agent process is still there.
+type Liveness string
+
+const (
+	Alive Liveness = "alive"
+	Gone  Liveness = "gone" // pane exists, identified process does not
+	None  Liveness = "none" // no agent process was ever identified in this pane
+)
+
+// Identity pins an agent instance: the process, not the pane.
+type Identity struct {
+	PID       int    `json:"pid"`
+	StartUnix int64  `json:"start_unix"`
+	Comm      string `json:"comm"`
+	LeaderPID int    `json:"leader_pid,omitempty"` // foreground process group leader of the tty
+}
+
+// Agent is one pane on one host as the sidebar sees it.
+type Agent struct {
+	ID            string    `json:"id"` // "<environment_id>/<pane_id>"
+	EnvironmentID string    `json:"environment_id"`
+	Session       string    `json:"session"`
+	Window        int       `json:"window"`
+	PaneID        string    `json:"pane_id"`
+	TTY           string    `json:"tty"`
+	Cwd           string    `json:"cwd"`
+	Title         string    `json:"title"`
+	Agent         string    `json:"agent"` // "claude", "codex", "" when none identified
+	Activity      Activity  `json:"activity"`
+	Liveness      Liveness  `json:"liveness"`
+	Identity      *Identity `json:"identity,omitempty"`
+	Rule          string    `json:"rule,omitempty"`   // detection rule that produced Activity
+	Reason        string    `json:"reason,omitempty"` // detection explanation
+	Managed       bool      `json:"managed"`          // created by laatmux new
+	ActivityAt    time.Time `json:"activity_at"`      // when Activity last changed
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// Message is the single envelope. Fields are used per Type; unused ones are
+// omitted on the wire.
+type Message struct {
+	Type string `json:"type"`
+
+	// hello
+	Protocol      int      `json:"protocol,omitempty"`
+	Client        string   `json:"client,omitempty"`
+	EnvironmentID string   `json:"environment_id,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Host          string   `json:"host,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+
+	// snapshot / upsert / remove
+	Seq     uint64  `json:"seq,omitempty"`
+	Agents  []Agent `json:"agents,omitempty"`
+	Agent   *Agent  `json:"agent,omitempty"`
+	AgentID string  `json:"agent_id,omitempty"`
+
+	// commands and results
+	ID      string   `json:"id,omitempty"` // client-chosen command id
+	Name    string   `json:"name,omitempty"`
+	Cwd     string   `json:"cwd,omitempty"`
+	Cmd     []string `json:"cmd,omitempty"`
+	OK      bool     `json:"ok,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Session string   `json:"session,omitempty"`
+	PaneID  string   `json:"pane_id,omitempty"`
+}
+
+// Conn is a line-oriented JSON connection. Writes are serialized.
+type Conn struct {
+	r  *bufio.Reader
+	w  io.Writer
+	mu sync.Mutex
+}
+
+func NewConn(rw io.ReadWriter) *Conn {
+	return &Conn{r: bufio.NewReaderSize(rw, 1<<20), w: rw}
+}
+
+func NewConnRW(r io.Reader, w io.Writer) *Conn {
+	return &Conn{r: bufio.NewReaderSize(r, 1<<20), w: w}
+}
+
+// Read blocks for the next message. io.EOF when the peer closed.
+func (c *Conn) Read() (Message, error) {
+	var m Message
+	line, err := c.r.ReadBytes('\n')
+	if err != nil {
+		if err == io.EOF && len(line) > 0 {
+			// trailing message without newline
+			if uerr := json.Unmarshal(line, &m); uerr == nil {
+				return m, nil
+			}
+		}
+		return m, err
+	}
+	if err := json.Unmarshal(line, &m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+func (c *Conn) Write(m Message) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, err = c.w.Write(b)
+	return err
+}
+
+// Has reports whether the capability set includes cap.
+func Has(caps []string, cap string) bool {
+	for _, c := range caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
