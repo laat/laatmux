@@ -186,6 +186,9 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		{"set-option", "-g", "focus-events", "on"},
 		{"set-option", "-g", "default-terminal", "tmux-256color"},
 		{"set-option", "-g", "remain-on-exit", "off"},
+		// The most recent client sizes the window, so a second attachment
+		// from a smaller terminal does not shrink the first.
+		{"set-option", "-g", "window-size", "latest"},
 		// -q: a table already emptied by a previous reconciliation no longer
 		// exists on tmux 3.5, and that is not an error here.
 		{"unbind-key", "-q", "-a", "-T", "root"},
@@ -309,17 +312,22 @@ func (s Server) HasSession(ctx context.Context, name string) bool {
 	return err == nil
 }
 
-// AttachArgs is the argv to attach a terminal to a session on this server,
-// for use locally or after ssh -t.
-func (s Server) AttachArgs(session string) []string {
-	return append([]string{"tmux"}, s.args("attach-session", "-t", "="+session)...)
+// AttachArgsBare is the argv after "tmux" to attach a terminal to a session
+// on this server, for use locally or after ssh -t.
+func (s Server) AttachArgsBare(session string) []string {
+	return s.args("attach-session", "-t", "="+session)
 }
+
+// ArgsBare prepends this server's -L/-S selection to a tmux command.
+func (s Server) ArgsBare(a ...string) []string { return s.args(a...) }
 
 // shellJoin quotes argv for tmux's shell-command argument.
 func shellJoin(argv []string) string {
 	parts := make([]string, len(argv))
 	for i, a := range argv {
-		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~") {
+		// Leading = and ~ are zsh equals and tilde expansion: an unquoted
+		// "=lcl" makes zsh look up a command named lcl and abort the line.
+		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~") || a[0] == '=' {
 			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
 		parts[i] = a

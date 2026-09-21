@@ -1,7 +1,8 @@
 # laatmux
 
-Git worktrees and coding agents across hosts, from tmux. This is the
-milestone-one spike: a per-host status daemon, a merged multi-host listing, a launcher for
+Git worktrees and coding agents across hosts, from tmux. The plan is
+[issue #1](https://github.com/laat/laatmux/issues/1). This is the milestone-one
+spike: a per-host status daemon, a merged multi-host listing, a launcher for
 managed sessions, and jump.
 
 ## Layout
@@ -133,13 +134,47 @@ error, capture failure on a blocked prompt, discovery-time reconciliation,
 subprocess close under cancellation, and protocol mismatch are covered by
 tests under `-race`.
 
+## Jump and attach spike
+
+Run from a scratch tmux session so the user's view stayed untouched. Local
+and remote:
+
+- First `jump` opens a window in the session it was run from and tags the
+  pane; a second `jump` focuses that window instead of opening another.
+- Keys typed into the attach pane reach the managed pane; paste-buffer too.
+- The inner pane follows the outer pane's size, locally and over ssh.
+- Two attachments to one session both see the same output; closing one leaves
+  the other. With `window-size latest` the inner size trails one event behind
+  whichever client last acted, which is tmux's semantics.
+- Killing the attach pane's ssh closes the window; the remote session survives
+  and the next `jump` reattaches. Killing the remote session closes the window
+  and the next `jump` reports "no such session" instead of opening a dying one.
+- Killing the daemon repeatedly during initial discovery while `watch` was
+  subscribed left one row per agent, no ghosts, after reconnect.
+
+Two bugs found by the spike: the inner tmux refused to nest because `TMUX` was
+still set in the attach pane, and the exact-match session target `=name` was
+eaten by zsh's equals expansion. Both fixed.
+
+From review: the remote preflight (`has-session` over ssh before opening a
+window) now reports an absent session, an ssh failure with ssh's own message,
+and a timeout as three different errors, and is bounded to 15 s with
+ConnectTimeout and keepalives. Verified live: an unresolvable host fails at
+once with ssh's message. Under `remain-on-exit on` a dead attach pane is
+respawned in place and keys pass through afterwards.
+
+Mouse: a probe in the managed pane that requests mouse mode and echoes its
+input (`printf '\e[?1000h\e[?1006h'; cat -v`) received SGR click and wheel
+reports injected into the attach pane with `send-keys -l`, locally and over
+ssh, and the mode request propagated outward: both the inner pane and the
+outer attach pane showed `mouse_any_flag` set, which is what makes the outer
+tmux forward a real click rather than use it. Claude Code and Codex do not
+request mouse mode, so ordinary clicks stay with the local tmux. A real click
+in a real terminal was not part of the spike; to do it, run the probe in a
+managed pane, click in the attach pane and expect `^[[<0;12;5M` with the
+column and row of the click.
+
 ## Not yet verified
 
-`jump` (first attach, focus of an existing attach, session disappearance),
-two simultaneous attachments with resize, paste, mouse and key passthrough,
-and daemon restart during initial discovery.
-A foreground change on the pane's tty during a tool call is covered by a unit
-test only: Claude Code runs tools on pipes, so its tool calls never change the
-tty's foreground group. The "gone" marker in `ls` after an agent exits is
-covered by a unit test and by the daemon's identity output, not by a live
-listing.
+Nothing in milestone one's acceptance list. Mouse passthrough was checked with
+injected reports, not a physical click.
