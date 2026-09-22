@@ -1,0 +1,373 @@
+package daemon
+
+import (
+	"context"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
+)
+
+// fakeServer is a managed tmux server with any number of panes. NewSession
+// adds a managed pane tagged with the root, as the real one does;
+// KillSession removes it.
+type fakeServer struct {
+	panes  []tmux.Pane
+	next   int
+	killed []string
+}
+
+func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
+	return append([]tmux.Pane(nil), f.panes...), nil
+}
+func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) { return nil, nil }
+func (f *fakeServer) EnsureConfigured(context.Context) error                 { return nil }
+func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (string, error) {
+	f.next++
+	id := "%" + strconv.Itoa(f.next)
+	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, Managed: true, Host: o.Host, ServerPID: 5, TTY: "/dev/null"})
+	return id, nil
+}
+func (f *fakeServer) KillSession(_ context.Context, name string) error {
+	f.killed = append(f.killed, name)
+	kept := f.panes[:0]
+	for _, p := range f.panes {
+		if p.Session != name {
+			kept = append(kept, p)
+		}
+	}
+	f.panes = kept
+	return nil
+}
+
+// newStore makes a bare remote with one commit and a store with empty
+// repos and worktrees directories. The remote's .laatmux.yaml copies
+// .envrc and runs one setup command.
+func newStore(t *testing.T) (*worktree.Store, string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	if runtime.GOOS == "darwin" {
+		if real, err := filepath.EvalSymlinks(base); err == nil {
+			base = real
+		}
+	}
+	remote := filepath.Join(base, "remote.git")
+	seed := filepath.Join(base, "seed")
+	sh := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	sh(base, "git", "init", "-q", "--bare", "--initial-branch=main", remote)
+	sh(base, "git", "init", "-q", "--initial-branch=main", seed)
+	sh(seed, "git", "config", "user.email", "t@example.com")
+	sh(seed, "git", "config", "user.name", "t")
+	os.WriteFile(filepath.Join(seed, config.SetupFile), []byte("copy: [.envrc]\nsetup: [\"echo ran >> log\"]\n"), 0o644)
+	sh(seed, "git", "add", ".")
+	sh(seed, "git", "commit", "-q", "-m", "init")
+	sh(seed, "git", "push", "-q", remote, "main")
+	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
+	return worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}}), remote
+}
+
+// conn opens a client connection to d, hello done.
+func conn(t *testing.T, d *Daemon) *protocol.Conn {
+	t.Helper()
+	server, client := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go d.HandleConn(ctx, server, func() { server.Close() })
+	pc := protocol.NewConn(client)
+	client.SetDeadline(time.Now().Add(60 * time.Second))
+	if m, err := pc.Read(); err != nil || m.Type != protocol.TypeHello {
+		t.Fatalf("hello: %+v %v", m, err)
+	}
+	return pc
+}
+
+// result reads until the result for id, collecting progress on the way.
+func result(t *testing.T, pc *protocol.Conn, id string) (protocol.Message, []protocol.Message) {
+	t.Helper()
+	var progress []protocol.Message
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatalf("read: %v (after %d progress messages)", err, len(progress))
+		}
+		if m.ID != id {
+			continue
+		}
+		switch m.Type {
+		case protocol.TypeProgress:
+			progress = append(progress, m)
+		case protocol.TypeResult:
+			return m, progress
+		}
+	}
+}
+
+func hasProgress(ps []protocol.Message, stage, state, detailPrefix string) bool {
+	for _, p := range ps {
+		if p.Stage == stage && p.State == state && strings.HasPrefix(p.Detail, detailPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func newAddDaemon(t *testing.T) (*Daemon, *fakeServer, *worktree.Store, string) {
+	store, remote := newStore(t)
+	ft := &fakeServer{}
+	d := New(Config{
+		EnvironmentID: "env", Host: "box",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
+		Procs:   &fakeProcs{tables: []procTable{{}}},
+		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
+	})
+	return d, ft, store, remote
+}
+
+func TestCapabilitiesNeedStoreAndManaged(t *testing.T) {
+	store, _ := newStore(t)
+	d := New(Config{Store: store, Targets: unmanaged(&fakeTmux{})})
+	caps := d.capabilities()
+	if !protocol.Has(caps, protocol.CapWorktrees) || protocol.Has(caps, protocol.CapAdd) || protocol.Has(caps, protocol.CapRm) {
+		t.Fatalf("caps %v", caps)
+	}
+	d = New(Config{Targets: managed(&fakeTmux{})})
+	if caps := d.capabilities(); protocol.Has(caps, protocol.CapWorktrees) || protocol.Has(caps, protocol.CapAdd) {
+		t.Fatalf("caps %v", caps)
+	}
+	d = New(Config{Store: store, Targets: managed(&fakeTmux{})})
+	if caps := d.capabilities(); !protocol.Has(caps, protocol.CapAdd) || !protocol.Has(caps, protocol.CapRm) {
+		t.Fatalf("caps %v", caps)
+	}
+}
+
+func TestAddThenRm(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	pc := conn(t, d)
+
+	// add: every stage runs, the session is proj/<encoded branch>, and
+	// the pane is tagged with the root git registered.
+	if err := pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "fix/v1.2", AgentName: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	res, progress := result(t, pc, "c1")
+	if !res.OK {
+		t.Fatalf("add failed at %s: %s", res.Stage, res.Error)
+	}
+	root := store.Dirs.Worktree("proj", "fix/v1.2")
+	if res.Root != root || res.Session != "proj/fix/v1%2e2" || res.PaneID != "%1" {
+		t.Fatalf("result %+v", res)
+	}
+	if len(ft.panes) != 1 || ft.panes[0].Cwd != root || ft.panes[0].Host != "box" {
+		t.Fatalf("panes %+v", ft.panes)
+	}
+	for _, want := range [][3]string{
+		{protocol.StageResolve, protocol.StateDone, "checkout"},
+		{protocol.StageClone, protocol.StateDone, "cloned"},
+		{protocol.StageWorktree, protocol.StateDone, "worktree at " + root},
+		{protocol.StageSetup, protocol.StateDone, "echo ran >> log"},
+		{protocol.StageAgent, protocol.StateDone, "session proj/fix/v1%2e2 pane %1"},
+	} {
+		if !hasProgress(progress, want[0], want[1], want[2]) {
+			t.Errorf("missing %v in %+v", want, progress)
+		}
+	}
+	if !hasProgress(progress, protocol.StageSetup, protocol.StateOutput, "") {
+		// echo writes to a file; the marker is what proves it ran.
+		if _, err := os.Stat(filepath.Join(root, "log")); err != nil {
+			t.Fatal("setup did not run")
+		}
+	}
+
+	// The record follows: git lists the worktree and the managed pane
+	// names its session, without waiting for the ticker.
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.pollWorktrees(ctx)
+	wts := d.Worktrees()
+	if len(wts) != 1 || wts[0].Root != root || wts[0].Branch != "fix/v1.2" || wts[0].Repo != "proj" || wts[0].Session != "proj/fix/v1%2e2" || wts[0].ID != "env/worktree/"+root {
+		t.Fatalf("worktrees %+v", wts)
+	}
+
+	// A repeat with the same id replays the finished result; a repeat
+	// with a new id skips every stage, the agent one by root.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "fix/v1.2", AgentName: "claude"})
+	if again, _ := result(t, pc, "c1"); !again.OK || again.PaneID != "%1" {
+		t.Fatalf("replay %+v", again)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: "proj", Branch: "fix/v1.2", AgentName: "claude"})
+	res2, progress2 := result(t, pc, "c2")
+	if !res2.OK || res2.PaneID != "%1" || len(ft.panes) != 1 {
+		t.Fatalf("second add %+v panes %+v", res2, ft.panes)
+	}
+	for _, p := range progress2 {
+		// Only fetch runs again; it is never skipped.
+		if p.State == protocol.StateStart && p.Stage != protocol.StageFetch {
+			t.Errorf("second add started %+v", p)
+		}
+	}
+	if !hasProgress(progress2, protocol.StageAgent, protocol.StateSkip, "session proj/fix/v1%2e2 runs in "+root) {
+		t.Fatalf("agent stage not skipped: %+v", progress2)
+	}
+
+	// rm by repo and branch, root along. Setup left an untracked file, so
+	// git refuses without force, with its own message, and the session
+	// is left running; with force the worktree goes and the session whose
+	// pane records the root is killed.
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r0", Repo: remote, Branch: "fix/v1.2", Root: root})
+	if res, _ := result(t, pc, "r0"); res.OK || !strings.Contains(res.Error, "untracked files") || len(ft.panes) != 1 {
+		t.Fatalf("unforced rm: %+v panes %+v", res, ft.panes)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "fix/v1.2", Root: root, Force: true})
+	if res, _ := result(t, pc, "r1"); !res.OK {
+		t.Fatalf("rm: %s", res.Error)
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatal("root still exists")
+	}
+	if len(ft.killed) != 1 || ft.killed[0] != "proj/fix/v1%2e2" || len(ft.panes) != 0 {
+		t.Fatalf("killed %v panes %+v", ft.killed, ft.panes)
+	}
+	d.poll(ctx)
+	d.pollWorktrees(ctx)
+	if wts := d.Worktrees(); len(wts) != 0 {
+		t.Fatalf("worktrees after rm %+v", wts)
+	}
+	// A repeat rm is a no-op and ok.
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "fix/v1.2", Root: root})
+	if res, _ := result(t, pc, "r2"); !res.OK {
+		t.Fatalf("repeat rm: %s", res.Error)
+	}
+}
+
+// A session with the intended name whose pane records another root is a
+// name in use; nothing is adopted and the worktree is left for a retry.
+func TestAddNameInUse(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%9", Cwd: "/elsewhere", Managed: true}}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"sleep", "1"}})
+	res, _ := result(t, pc, "c1")
+	if res.OK || res.Stage != protocol.StageAgent || !strings.Contains(res.Error, "name in use") {
+		t.Fatalf("result %+v", res)
+	}
+	if res.Root != store.Dirs.Worktree("proj", "task") {
+		t.Fatalf("root %s", res.Root)
+	}
+	if _, err := os.Stat(res.Root); err != nil {
+		t.Fatal("worktree not left for a retry")
+	}
+	// Unknown repository and agent fail at resolve before anything runs.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: "nope", Branch: "task", AgentName: "claude"})
+	if res, _ := result(t, pc, "c2"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "unknown repository") {
+		t.Fatalf("result %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "task", AgentName: "nope"})
+	if res, _ := result(t, pc, "c3"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "unknown agent") {
+		t.Fatalf("result %+v", res)
+	}
+}
+
+// A second connection sending the id of a running add attaches to its
+// stream and gets the whole of it; the command outlives the connection
+// that started it.
+func TestAddFollowsAcrossConnections(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	first := conn(t, d)
+	first.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
+	// Read one progress message, then walk away.
+	if m, err := first.Read(); err != nil || m.Type != protocol.TypeProgress {
+		t.Fatalf("first progress: %+v %v", m, err)
+	}
+	second := conn(t, d)
+	second.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
+	res, progress := result(t, second, "c1")
+	if !res.OK {
+		t.Fatalf("add failed at %s: %s", res.Stage, res.Error)
+	}
+	if !hasProgress(progress, protocol.StageResolve, protocol.StateDone, "checkout") {
+		t.Fatalf("replay missed the start: %+v", progress)
+	}
+}
+
+// Worktree records come from git joined with the managed panes, and a
+// worktree whose directory was deleted by hand is not published.
+func TestWorktreeRecords(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	repo, _ := store.Repo(remote)
+	added, err := store.Add(ctx, repo, "task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeSubscribe})
+	// Snapshot waits for both the pane poll and the git poll.
+	got := make(chan protocol.Message, 8)
+	go func() {
+		for {
+			m, err := pc.Read()
+			if err != nil {
+				return
+			}
+			got <- m
+		}
+	}()
+	select {
+	case m := <-got:
+		t.Fatalf("snapshot before discovery: %+v", m)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.markDiscovered(&d.panesDiscovered)
+	d.pollWorktrees(ctx)
+	snap := <-got
+	if snap.Type != protocol.TypeSnapshot || len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != added.Root || snap.Worktrees[0].Session != "" {
+		t.Fatalf("snapshot %+v", snap)
+	}
+	// A managed pane on the root names the session, from the pane poll
+	// alone.
+	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%1", Cwd: added.Root, Managed: true, ServerPID: 5, TTY: "/dev/null"}}
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := <-got
+	if up.Type != protocol.TypeUpsert || up.Worktree == nil || up.Worktree.Session != "proj/task" {
+		t.Fatalf("upsert %+v", up)
+	}
+	// The pane goes: the session field clears.
+	ft.panes = nil
+	d.poll(ctx)
+	if up := <-got; up.Worktree == nil || up.Worktree.Session != "" {
+		t.Fatalf("upsert %+v", up)
+	}
+	// The directory goes: git calls it prunable and the record is removed.
+	os.RemoveAll(added.Root)
+	d.pollWorktrees(ctx)
+	if rm := <-got; rm.Type != protocol.TypeRemove || rm.WorktreeID != "env/worktree/"+added.Root {
+		t.Fatalf("remove %+v", rm)
+	}
+}

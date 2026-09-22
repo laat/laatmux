@@ -288,7 +288,10 @@ type NewSessionOpts struct {
 }
 
 // NewSession creates a detached one-window one-pane session and tags its
-// pane. Returns the pane id. If the server is not running it is started by
+// pane, in one tmux invocation: new-session and the set-option calls are
+// one ;-separated command sequence, which tmux runs to completion once
+// submitted, so the session is never observable without its options.
+// Returns the pane id. If the server is not running it is started by
 // new-session itself and then configured.
 func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string, err error) {
 	if o.Name == "" {
@@ -319,6 +322,17 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 	if len(o.Cmd) > 0 {
 		args = append(args, shellJoin(o.Cmd))
 	}
+	// The pane target is the session by exact name: a session target with
+	// a trailing colon resolves to its current window's active pane, and
+	// the session has exactly one.
+	target := "=" + o.Name + ":"
+	opts := [][2]string{{"@laatmux_managed", "1"}, {"@laatmux_cwd", o.Cwd}}
+	if o.Host != "" {
+		opts = append(opts, [2]string{"@laatmux_host", o.Host})
+	}
+	for _, kv := range opts {
+		args = append(args, ";", "set-option", "-p", "-t", target, kv[0], kv[1])
+	}
 	out, err := s.Run(ctx, args...)
 	if err != nil {
 		return "", err
@@ -340,19 +354,13 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 			}
 		}
 	}
-	opts := [][]string{
-		{"set-option", "-p", "-t", paneID, "@laatmux_managed", "1"},
-		{"set-option", "-p", "-t", paneID, "@laatmux_cwd", o.Cwd},
-	}
-	if o.Host != "" {
-		opts = append(opts, []string{"set-option", "-p", "-t", paneID, "@laatmux_host", o.Host})
-	}
-	for _, c := range opts {
-		if _, err := s.Run(ctx, c...); err != nil {
-			return paneID, err
-		}
-	}
 	return paneID, nil
+}
+
+// KillSession kills the session with exactly this name.
+func (s Server) KillSession(ctx context.Context, name string) error {
+	_, err := s.Run(ctx, "kill-session", "-t", "="+name)
+	return err
 }
 
 // HasSession reports whether a session exists on the server.
@@ -386,3 +394,55 @@ func shellJoin(argv []string) string {
 
 // ShellJoin is exported for the client, which builds ssh commands.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
+
+// EncodeBranch makes a branch safe for a tmux session name, injectively:
+// tmux rejects "." and ":" in session names, so "%" becomes "%25", "."
+// becomes "%2e" and ":" becomes "%3a"; nothing else changes. Distinct
+// branches give distinct names and DecodeBranch is exact.
+func EncodeBranch(branch string) string {
+	var b strings.Builder
+	for i := 0; i < len(branch); i++ {
+		switch c := branch[i]; c {
+		case '%':
+			b.WriteString("%25")
+		case '.':
+			b.WriteString("%2e")
+		case ':':
+			b.WriteString("%3a")
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// DecodeBranch reverses EncodeBranch. Sequences EncodeBranch never emits
+// are left as they are.
+func DecodeBranch(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '%' && i+2 < len(name) {
+			switch name[i+1 : i+3] {
+			case "25":
+				b.WriteByte('%')
+				i += 2
+				continue
+			case "2e":
+				b.WriteByte('.')
+				i += 2
+				continue
+			case "3a":
+				b.WriteByte(':')
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(name[i])
+	}
+	return b.String()
+}
+
+// SessionName is the managed session name for a worktree on its host:
+// <repo>/<encoded branch>. Labels cannot contain "/", so the first
+// component is the label and the rest is the branch, slashes included.
+func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(branch) }

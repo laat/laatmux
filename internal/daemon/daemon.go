@@ -21,6 +21,7 @@ import (
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // Timing, taken from herdr's tuned values.
@@ -40,6 +41,7 @@ type Panes interface {
 	Capture(ctx context.Context, paneID string, n int) ([]string, error)
 	EnsureConfigured(ctx context.Context) error
 	NewSession(ctx context.Context, o tmux.NewSessionOpts) (string, error)
+	KillSession(ctx context.Context, name string) error
 }
 
 // Target is one tmux server the daemon watches.
@@ -79,9 +81,17 @@ type Config struct {
 	Interval      time.Duration
 	CaptureLines  int
 	EnvironmentID string
-	Host          string // label this host uses for itself; informational
+	Host          string // this host's configured name; recorded on panes add creates
 	Version       string
 	Logger        *log.Logger
+
+	// Store is the host's checkouts and worktrees; nil when the host has no
+	// repos and worktrees directories, and then there are no worktree
+	// records and no add or rm. Agents maps an agent label to its command
+	// for add. WorktreeInterval is how often git is asked.
+	Store            *worktree.Store
+	Agents           map[string][]string
+	WorktreeInterval time.Duration
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -96,10 +106,25 @@ type Daemon struct {
 	panes  map[string]*paneState     // by pane key, every pane seen
 	subs   map[*subscriber]struct{}
 
-	// discovered closes after the first complete poll of every server, so a
-	// snapshot is never an empty or partial view of a host that has panes.
-	discovered     chan struct{}
-	discoveredOnce sync.Once
+	// Worktrees: the last git listing, the managed sessions by root, and
+	// the published join of the two.
+	worktrees    map[string]protocol.Worktree // by root
+	lastList     []worktree.Record
+	listed       bool
+	managedRoots map[string]string // root -> session
+	lastListErr  string            // logged once per change
+	poke         chan struct{}
+
+	cmds  map[string]*command    // recent add and rm by id
+	locks map[string]*sync.Mutex // per repository source
+
+	// discovered closes after the first complete poll of every server and
+	// of git, so a snapshot is never an empty or partial view of a host
+	// that has panes or worktrees.
+	discovered          chan struct{}
+	discoveredOnce      sync.Once
+	panesDiscovered     bool
+	worktreesDiscovered bool
 }
 
 type target struct {
@@ -148,11 +173,20 @@ func New(cfg Config) *Daemon {
 	if cfg.Procs == nil {
 		cfg.Procs = osProcs{}
 	}
+	if cfg.WorktreeInterval == 0 {
+		cfg.WorktreeInterval = DefaultWorktreeInterval
+	}
 	d := &Daemon{
 		cfg:    cfg,
 		agents: map[string]protocol.Agent{},
 		panes:  map[string]*paneState{},
 		subs:   map[*subscriber]struct{}{},
+
+		worktrees:    map[string]protocol.Worktree{},
+		managedRoots: map[string]string{},
+		poke:         make(chan struct{}, 1),
+		cmds:         map[string]*command{},
+		locks:        map[string]*sync.Mutex{},
 
 		discovered: make(chan struct{}),
 	}
@@ -171,11 +205,22 @@ func (d *Daemon) capabilities() []string {
 	if d.managed != nil {
 		caps = append(caps, protocol.CapNew)
 	}
+	if d.cfg.Store != nil {
+		caps = append(caps, protocol.CapWorktrees)
+		if d.managed != nil {
+			caps = append(caps, protocol.CapAdd, protocol.CapRm)
+		}
+	}
 	return caps
 }
 
 // Run polls until ctx is done.
 func (d *Daemon) Run(ctx context.Context) error {
+	if d.cfg.Store != nil {
+		go d.runWorktrees(ctx)
+	} else {
+		d.markDiscovered(&d.worktreesDiscovered)
+	}
 	t := time.NewTicker(d.cfg.Interval)
 	defer t.Stop()
 	for {
@@ -184,13 +229,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.cfg.Logger.Printf("poll: %v", err)
 		}
 		if err == nil {
-			d.discoveredOnce.Do(func() { close(d.discovered) })
+			d.markDiscovered(&d.panesDiscovered)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
 		}
+	}
+}
+
+// markDiscovered records one side's first complete poll and opens
+// discovered once both are in.
+func (d *Daemon) markDiscovered(flag *bool) {
+	d.mu.Lock()
+	*flag = true
+	both := d.panesDiscovered && d.worktreesDiscovered
+	d.mu.Unlock()
+	if both {
+		d.discoveredOnce.Do(func() { close(d.discovered) })
 	}
 }
 
@@ -214,9 +271,15 @@ func (d *Daemon) pollTarget(ctx context.Context, t *target, now time.Time) error
 		if tmux.NoServer(err) {
 			d.removeUnseen(t, nil)
 			t.configuredServer = 0
+			if t.Managed {
+				d.setManagedRoots(nil, now)
+			}
 			return nil
 		}
 		return err
+	}
+	if t.Managed {
+		d.setManagedRoots(panes, now)
 	}
 	// A managed server started by hand, or restarted, has the user's config
 	// and default bindings. Reconcile once per server instance. Unmanaged
@@ -463,7 +526,7 @@ func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	return s, protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents}
+	return s, protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked()}
 }
 
 func (d *Daemon) unsubscribe(s *subscriber) {
@@ -580,6 +643,37 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			if err := pc.Write(res); err != nil {
 				return
 			}
+		case protocol.TypeAdd, protocol.TypeRm:
+			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+			switch {
+			case d.cfg.Store == nil:
+				res.Error = "this host has no repos and worktrees directories configured"
+			case d.managed == nil:
+				res.Error = "this daemon does not watch the managed laatmux tmux server"
+			case m.ID == "":
+				res.Error = "command id required"
+			}
+			if res.Error != "" {
+				if err := pc.Write(res); err != nil {
+					return
+				}
+				continue
+			}
+			// The command runs under the daemon's context and outlives
+			// this connection; the same id from any connection follows it.
+			c, fresh := d.command(m.ID)
+			if fresh {
+				if m.Type == protocol.TypeAdd {
+					go d.runAdd(ctx, m, c)
+				} else {
+					go d.runRm(ctx, m, c)
+				}
+			}
+			go func() {
+				if err := c.stream(pc); err != nil {
+					drop()
+				}
+			}()
 		default:
 			_ = pc.Write(protocol.Message{Type: protocol.TypeError, ID: m.ID, Error: fmt.Sprintf("unknown message type %q", m.Type)})
 		}

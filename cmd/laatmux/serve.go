@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 func cmdServe(ctx context.Context, args []string) error {
@@ -29,17 +30,16 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	var specs []string
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	specs := cfg.TmuxServers
 	if servers != "" {
+		specs = nil
 		for _, v := range strings.Split(servers, ",") {
 			specs = append(specs, strings.TrimSpace(v))
 		}
-	} else {
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		specs = cfg.TmuxServers
 	}
 	watched, err := config.ParseServers(specs)
 	if err != nil {
@@ -70,7 +70,21 @@ func cmdServe(ctx context.Context, args []string) error {
 		os.Chmod(addr, 0o600)
 		defer os.Remove(addr)
 	}
+	// This host's own entry names it and says where its checkouts and
+	// worktrees go. Without directories there are no worktree records and
+	// no add; the log says so once.
 	hostname, _ := os.Hostname()
+	var store *worktree.Store
+	agents := map[string][]string{}
+	if local, ok := cfg.Local(); ok {
+		hostname = local.Name
+		if dirs, err := local.Dirs(); err == nil {
+			store = worktree.New(dirs.Expand(), cfg.Repos)
+		}
+	}
+	for name, a := range cfg.Agents {
+		agents[name] = a.Cmd
+	}
 	rt := home.Runtime{Address: network + ":" + ln.Addr().String(), PID: os.Getpid(), Version: version, EnvironmentID: envID, StartedAt: time.Now()}
 	if err := home.WriteRuntime(rt); err != nil {
 		return err
@@ -83,9 +97,15 @@ func cmdServe(ctx context.Context, args []string) error {
 		labels[i] = s.Label()
 	}
 	logger.Printf("serve %s env=%s tmux=%s listen=%s", version, envID, strings.Join(labels, ","), rt.Address)
+	if store != nil {
+		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", store.Dirs.Repos, store.Dirs.Worktrees, len(store.Repos))
+	} else {
+		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
+	}
 	d := daemon.New(daemon.Config{
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
+		Store: store, Agents: agents,
 	})
 	errc := make(chan error, 2)
 	go func() { errc <- d.Run(ctx) }()

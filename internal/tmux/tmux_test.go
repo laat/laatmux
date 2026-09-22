@@ -78,3 +78,31 @@ func TestNoServer(t *testing.T) {
 		t.Error("non-tmux error reported as no server")
 	}
 }
+
+func TestEncodeBranch(t *testing.T) {
+	cases := map[string]string{
+		"main":       "main",
+		"fix/v1.2":   "fix/v1%2e2",
+		"a:b":        "a%3ab",
+		"100%":       "100%25",
+		"a.b":        "a%2eb",
+		"a-b":        "a-b",
+		"%2e":        "%252e",
+		"feat/x.y:z": "feat/x%2ey%3az",
+	}
+	for in, want := range cases {
+		got := EncodeBranch(in)
+		if got != want {
+			t.Errorf("EncodeBranch(%q) = %q, want %q", in, got, want)
+		}
+		if back := DecodeBranch(got); back != in {
+			t.Errorf("DecodeBranch(%q) = %q, want %q", got, back, in)
+		}
+		if strings.ContainsAny(got, ".:") {
+			t.Errorf("EncodeBranch(%q) = %q contains a character tmux rejects", in, got)
+		}
+	}
+	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
+		t.Errorf("SessionName = %q", got)
+	}
+}

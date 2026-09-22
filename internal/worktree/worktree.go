@@ -1,0 +1,347 @@
+// Package worktree is the git side of a host's workspaces: the checkouts
+// under the host's repos directory, the worktrees under its worktrees
+// directory, and the stages of add that touch git and the filesystem.
+//
+// Git is the source of truth. A checkout is found under <repos> by its
+// origin, never by its directory name; a worktree is found by asking the
+// checkout's `git worktree list`, never by computing a path. Labels place
+// new things only, so a renamed repository keeps its existing paths.
+package worktree
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/laat/laatmux/internal/config"
+)
+
+// Repo is a known repository: its source, the identity, and its label,
+// which places new clones and worktrees.
+type Repo struct {
+	Source string
+	Name   string
+}
+
+// Store is one host's checkouts and worktrees.
+type Store struct {
+	Dirs  config.Dirs // expanded for this host
+	Repos []Repo
+
+	mu      sync.Mutex
+	origins map[string]originEntry // by checkout directory
+}
+
+type originEntry struct {
+	mtime time.Time
+	size  int64
+	url   string
+}
+
+// New makes a store for the host's directories and known repositories.
+func New(dirs config.Dirs, repos []config.Repo) *Store {
+	s := &Store{Dirs: dirs, origins: map[string]originEntry{}}
+	for _, r := range repos {
+		s.Repos = append(s.Repos, Repo{Source: r.Source, Name: r.Name})
+	}
+	return s
+}
+
+// Repo finds a known repository by source, else by name.
+func (s *Store) Repo(sourceOrName string) (Repo, bool) {
+	for _, r := range s.Repos {
+		if r.Source == sourceOrName {
+			return r, true
+		}
+	}
+	for _, r := range s.Repos {
+		if r.Name == sourceOrName {
+			return r, true
+		}
+	}
+	return Repo{}, false
+}
+
+// Checkout finds the main checkout of repo under the repos directory: the
+// direct child whose remote.origin.url is the source. Reads of origin are
+// cached by the mtime and size of .git/config, so an idle poll spawns no
+// git processes. Not found is ("", false, nil).
+func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
+	entries, err := os.ReadDir(s.Dirs.Repos)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for _, e := range entries {
+		dir := filepath.Join(s.Dirs.Repos, e.Name())
+		url, ok, err := s.origin(ctx, dir)
+		if err != nil {
+			return "", false, err
+		}
+		if ok && url == repo.Source {
+			return dir, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// origin returns dir's remote.origin.url when dir is a main checkout (has
+// a .git directory with a config file), cached.
+func (s *Store) origin(ctx context.Context, dir string) (string, bool, error) {
+	fi, err := os.Stat(filepath.Join(dir, ".git", "config"))
+	if err != nil {
+		return "", false, nil
+	}
+	s.mu.Lock()
+	c, cached := s.origins[dir]
+	s.mu.Unlock()
+	if cached && c.mtime.Equal(fi.ModTime()) && c.size == fi.Size() {
+		return c.url, c.url != "", nil
+	}
+	out, err := git(ctx, dir, "config", "--get", "remote.origin.url")
+	url := strings.TrimSpace(out)
+	if err != nil {
+		// Exit 1 from --get means the key is unset: a checkout with no
+		// origin. Anything else is a real failure, reported once.
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			return "", false, fmt.Errorf("%s: %w", dir, err)
+		}
+		url = ""
+	}
+	s.mu.Lock()
+	s.origins[dir] = originEntry{mtime: fi.ModTime(), size: fi.Size(), url: url}
+	s.mu.Unlock()
+	return url, url != "", nil
+}
+
+// Entry is one line group of `git worktree list --porcelain`.
+type Entry struct {
+	Root     string
+	Branch   string // "" when detached
+	Detached bool
+	Prunable bool
+	Bare     bool
+}
+
+// ListWorktrees asks a checkout for its worktrees, the main one first.
+func ListWorktrees(ctx context.Context, checkout string) ([]Entry, error) {
+	out, err := git(ctx, checkout, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	return parseWorktrees(out), nil
+}
+
+func parseWorktrees(out string) []Entry {
+	var entries []Entry
+	var cur *Entry
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			if cur != nil {
+				entries = append(entries, *cur)
+				cur = nil
+			}
+			continue
+		}
+		key, val, _ := strings.Cut(line, " ")
+		switch key {
+		case "worktree":
+			if cur != nil {
+				entries = append(entries, *cur)
+			}
+			cur = &Entry{Root: val}
+		case "branch":
+			if cur != nil {
+				cur.Branch = strings.TrimPrefix(val, "refs/heads/")
+			}
+		case "detached":
+			if cur != nil {
+				cur.Detached = true
+			}
+		case "prunable":
+			if cur != nil {
+				cur.Prunable = true
+			}
+		case "bare":
+			if cur != nil {
+				cur.Bare = true
+			}
+		}
+	}
+	if cur != nil {
+		entries = append(entries, *cur)
+	}
+	return entries
+}
+
+// Record is one worktree of a known repository under the worktrees
+// directory, as the daemon publishes it.
+type Record struct {
+	Repo   string // label
+	Source string
+	Branch string // "" when detached
+	Root   string
+}
+
+// List returns every worktree of every known repository that lives under
+// the worktrees directory. Prunable entries, whose directory is gone, are
+// left out. A repository without a checkout on this host has no worktrees.
+// One checkout failing to list does not hide the others: its error is
+// returned alongside what was listed.
+func (s *Store) List(ctx context.Context) ([]Record, error) {
+	var records []Record
+	var errs []error
+	for _, r := range s.Repos {
+		checkout, ok, err := s.Checkout(ctx, r)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		entries, err := ListWorktrees(ctx, checkout)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", checkout, err))
+			continue
+		}
+		for _, e := range entries {
+			if e.Prunable || e.Bare || !s.underWorktrees(e.Root) {
+				continue
+			}
+			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Root < records[j].Root })
+	return records, errors.Join(errs...)
+}
+
+// underWorktrees reports whether root is inside the worktrees directory.
+// Git registers real paths, so the directory is compared both as
+// configured and with symlinks resolved.
+func (s *Store) underWorktrees(root string) bool {
+	dirs := []string{s.Dirs.Worktrees}
+	if real, err := filepath.EvalSymlinks(s.Dirs.Worktrees); err == nil && real != s.Dirs.Worktrees {
+		dirs = append(dirs, real)
+	}
+	for _, d := range dirs {
+		if strings.HasPrefix(root, strings.TrimSuffix(d, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// Find locates a registered worktree by root across every known
+// repository's checkout. Used by rm on a root-only target.
+func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, error) {
+	for _, r := range s.Repos {
+		checkout, ok, err := s.Checkout(ctx, r)
+		if err != nil || !ok {
+			continue
+		}
+		entries, err := ListWorktrees(ctx, checkout)
+		if err != nil {
+			return Record{}, "", false, err
+		}
+		for _, e := range entries {
+			if e.Root == root && e.Root != checkout {
+				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, checkout, true, nil
+			}
+		}
+	}
+	return Record{}, "", false, nil
+}
+
+// Remove unregisters and deletes a worktree through git, which is the
+// judge of whether it may go: without force a dirty, locked or submodule
+// worktree is refused with git's message. Skips when root is not a
+// registered worktree of the checkout, so a retry is a no-op.
+func Remove(ctx context.Context, checkout, root string, force bool) (removed bool, err error) {
+	entries, err := ListWorktrees(ctx, checkout)
+	if err != nil {
+		return false, err
+	}
+	registered := false
+	for _, e := range entries {
+		if e.Root == root && e.Root != checkout {
+			registered = true
+		}
+	}
+	if !registered {
+		return false, nil
+	}
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force", "--force")
+	}
+	args = append(args, root)
+	if _, err := git(ctx, checkout, args...); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// git runs a git command in dir and returns its stdout. On failure the
+// error carries git's stderr.
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	var out, errb strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out.String(), &gitError{args: args, msg: msg, err: err}
+	}
+	return out.String(), nil
+}
+
+type gitError struct {
+	args []string
+	msg  string
+	err  error
+}
+
+func (e *gitError) Error() string { return "git " + strings.Join(e.args, " ") + ": " + e.msg }
+func (e *gitError) Unwrap() error { return e.err }
+
+// gitEnv is the daemon's environment with prompts disabled: a fetch that
+// needs credentials must fail, not hang the stage.
+func gitEnv() []string {
+	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+}
+
+// hash is the marker suffix for a setup command: a changed command has a
+// new hash and runs again.
+func hash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:6])
+}
+
+// streamLines feeds each line of r to fn, without the newline.
+func streamLines(r io.Reader, fn func(string)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	for sc.Scan() {
+		fn(strings.TrimRight(sc.Text(), "\r"))
+	}
+}
