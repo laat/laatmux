@@ -223,15 +223,15 @@ func (d *Daemon) agentStage(ctx context.Context, repo worktree.Repo, branch, roo
 // its root. Each step is inspected, so a retry after a crash between them
 // finishes the job and a target where both skip is ok.
 //
-// The target is resolved under the repository lock, so an add in flight on
-// the same repository is seen complete, not half done. A request that
-// names the repository locks it; a root-only request, which is for a
-// detached worktree, locks every known repository since the owner is not
-// known until git has been asked. When repo, branch and root are all
-// given they must agree: root is the worktree registered for the branch,
-// or, once that registration is gone, the root the session step matches
-// on. A root that git registers for another branch or repository is a
-// mismatch, not a target.
+// The target is resolved with every repository locked, so an add in flight
+// on any repository is seen complete, not half done: the root checks ask
+// every checkout, and a lock on the named repository alone would let an
+// add elsewhere register the root between the check and the session step.
+// rm is rare and brief, and add keeps its per-repository grain. When repo,
+// branch and root are all given they must agree: root is the worktree
+// registered for the branch, or, once that registration is gone, the
+// root the session step matches on. A root that git registers for another
+// branch or repository is a mismatch, not a target.
 func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
@@ -244,15 +244,11 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			if m.Branch == "" && m.Root == "" {
 				return errors.New("rm needs a branch or a root")
 			}
-			unlock := d.lockRepos(repo.Source)
-			defer unlock()
-		} else {
-			if m.Root == "" {
-				return errors.New("rm needs a repository and branch, or a root")
-			}
-			unlock := d.lockRepos()
-			defer unlock()
+		} else if m.Root == "" {
+			return errors.New("rm needs a repository and branch, or a root")
 		}
+		unlock := d.lockRepos()
+		defer unlock()
 
 		root, checkout := m.Root, ""
 		if root != "" {
@@ -339,14 +335,13 @@ func branchOrDetached(branch string) string {
 	return "branch " + branch
 }
 
-// lockRepos takes the locks of the given repository sources, or of every
-// known repository when none is given, in sorted order so two callers
-// taking several never deadlock. The returned func releases them.
-func (d *Daemon) lockRepos(sources ...string) func() {
-	if len(sources) == 0 {
-		for _, r := range d.cfg.Store.Repos {
-			sources = append(sources, r.Source)
-		}
+// lockRepos takes every known repository's lock in sorted order, so two
+// callers taking several never deadlock, and add's single lock nests
+// inside. The returned func releases them.
+func (d *Daemon) lockRepos() func() {
+	var sources []string
+	for _, r := range d.cfg.Store.Repos {
+		sources = append(sources, r.Source)
 	}
 	sort.Strings(sources)
 	locks := make([]*sync.Mutex, 0, len(sources))

@@ -160,6 +160,12 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	if registered {
 		report(stage, protocol.StateSkip, "worktree registered at "+a.Root)
 	} else {
+		// A symlink already at <worktrees>/<name> could carry the new
+		// worktree outside the directory, where it would never be
+		// published or removable; Owns resolves the existing prefix.
+		if !s.Owns(a.Root) {
+			return a, fail(stage, fmt.Errorf("%s resolves outside the worktrees directory %s", a.Root, s.Dirs.Worktrees))
+		}
 		if err := os.MkdirAll(filepath.Dir(a.Root), 0o755); err != nil {
 			return a, fail(stage, err)
 		}
@@ -173,10 +179,14 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		if err != nil {
 			return a, fail(stage, err)
 		}
+		placed := false
 		for _, e := range entries {
 			if e.Branch == branch && s.Owns(e.Root) {
-				a.Root = e.Root
+				a.Root, placed = e.Root, true
 			}
+		}
+		if !placed {
+			return a, fail(stage, fmt.Errorf("git registered no worktree for %s under %s", branch, s.Dirs.Worktrees))
 		}
 		report(stage, protocol.StateDone, "worktree at "+a.Root)
 	}

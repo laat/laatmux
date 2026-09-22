@@ -576,3 +576,34 @@ func TestRmRootOutsideRefused(t *testing.T) {
 		t.Fatal("session outside the worktrees directory killed")
 	}
 }
+
+// rm holds every repository's lock while it resolves, since the root
+// checks ask every checkout: an add in flight on another repository
+// blocks it until done.
+func TestRmWaitsForOtherRepositories(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	store.Repos = append(store.Repos, worktree.Repo{Source: "/nowhere/other.git", Name: "other"})
+	other := d.repoLock("/nowhere/other.git")
+	other.Lock()
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: store.Dirs.Worktree("proj", "task")})
+	got := make(chan protocol.Message, 1)
+	go func() {
+		res, _ := result(t, pc, "r1")
+		got <- res
+	}()
+	select {
+	case res := <-got:
+		t.Fatalf("rm finished while another repository was locked: %+v", res)
+	case <-time.After(300 * time.Millisecond):
+	}
+	other.Unlock()
+	select {
+	case res := <-got:
+		if !res.OK {
+			t.Fatalf("rm: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("rm did not finish after the lock was released")
+	}
+}

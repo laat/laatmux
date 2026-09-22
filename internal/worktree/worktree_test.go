@@ -632,3 +632,28 @@ func TestOwnsResolvesSymlinks(t *testing.T) {
 		}
 	}
 }
+
+// A symlink already sitting at <worktrees>/<name> would carry a new
+// worktree outside the directory; add refuses at the worktree stage
+// before creating anything.
+func TestAddRefusesSymlinkedRepoDir(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(f.store.Dirs.Worktrees, "proj"))
+	if err := os.Symlink(outside, filepath.Join(f.store.Dirs.Worktrees, "proj")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := f.add("task")
+	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "outside the worktrees directory") {
+		t.Fatalf("err %v", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("worktree created outside: %v", entries)
+	}
+}
