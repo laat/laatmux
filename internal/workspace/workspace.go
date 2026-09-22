@@ -220,11 +220,15 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 
 // tagArgs is the tmux command sequence that sets the routing and identity
 // tags on a session: the host, and for a workspace the source and branch.
+// A source or branch the spec does not know is not written, so a reuse
+// that could not resolve one keeps what the session already carries.
 func tagArgs(name string, s Spec) []string {
 	args := []string{"set-option", "-t", name, "@laatmux_host", s.Host.Name}
-	if s.Key != "" {
-		args = append(args, ";", "set-option", "-t", name, "@laatmux_repo", s.Source,
-			";", "set-option", "-t", name, "@laatmux_branch", s.Branch)
+	if s.Key != "" && s.Source != "" {
+		args = append(args, ";", "set-option", "-t", name, "@laatmux_repo", s.Source)
+	}
+	if s.Key != "" && s.Branch != "" {
+		args = append(args, ";", "set-option", "-t", name, "@laatmux_branch", s.Branch)
 	}
 	return args
 }

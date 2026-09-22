@@ -116,7 +116,8 @@ truth; labels only place new things.
   checkout under `repos` by its `origin`, asks it for
   `git worktree list --porcelain`, and publishes the entries under
   `worktrees/`. Prunable entries, whose directory is gone, are not
-  published; a detached worktree has an empty branch. The record's
+  published; a detached worktree has an empty branch. The record carries
+  the repository's label and its source. The record's
   `session` is the managed session whose single pane records the root in
   `@laatmux_cwd`, joined from the pane poll, so an agent exiting updates
   the record without a git call. Origin reads are cached by the mtime of
@@ -165,8 +166,10 @@ the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
 `@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
 pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions are
 matched on the key, never the name, so a renamed host or repository label
-still finds its session, and the host, source and branch tags are
-refreshed on every reuse so they do not go stale after one. The session is
+still finds its session. The host tag is refreshed on every reuse, and the
+source and branch whenever the reuse knows them: the worktree record
+carries the source from the daemon, so `jump` never derives it from a
+label that may mean another repository on this machine. The session is
 created detached and tagged in one tmux command sequence, then the attach
 pane is tagged by the id `new-session` printed, since the user's hooks may
 split the window at once.
@@ -187,7 +190,9 @@ split the window at once.
   to attach.
 - **`rm <repo>/<branch>`** sends the root along whenever it is known: from
   the host's record, or, when the worktree is already gone, from the key
-  of the local session found by its source and branch tags. Git's refusal of a dirty worktree comes back as the error
+  of the local session found by its source and branch tags; a session
+  found by name is accepted only when it carries no identity tags at all,
+  never when they name another workspace. Git's refusal of a dirty worktree comes back as the error
   with everything left in place; `--force` removes it. After an `ok` the
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
@@ -438,7 +443,12 @@ renamed by hand whose worktree was then removed on the VM was found by its
 source and branch tags, and `rm` killed the surviving managed session by
 root and the renamed local session; `add` run from a checkout whose origin
 is not configured refused with the origin named rather than guessing from
-the directory.
+the directory. Then, with the source in the record: `add` under a local
+label that differs from the host's, and `jump` by the host's label, left
+the source tag intact; `rm` on a branch with no worktree whose local
+session by name carried another source and branch sent no root and left
+both that session and the other worktree alone, while the same session
+with no identity tags had its root sent and was killed.
 
 ## Not yet verified
 

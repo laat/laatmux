@@ -17,8 +17,10 @@ import (
 // local session, since a branch alone maps to no root then; that is what
 // reaches a managed session whose worktree was removed by hand. The local
 // session is found by its source and branch tags, which survive a renamed
-// host or label, and by name only for a session tagged before those
-// existed.
+// host or label. A session found by name instead is accepted only when it
+// carries no identity tags at all, from before they existed: tags that
+// name another source or branch mean the name has moved on to another
+// workspace, and its root must not be sent with this one's identity.
 func cmdRm(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
 	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
@@ -73,6 +75,7 @@ func cmdRm(ctx context.Context, args []string) error {
 			l, ok := workspace.FindWorktree(locals, hello.EnvironmentID, repo.Source, branch)
 			if !ok {
 				l, ok = workspace.ByName(locals, workspace.SessionName(h.Name, repo.Name, branch))
+				ok = ok && l.Source == "" && l.Branch == ""
 			}
 			if ok && l.Workspace() {
 				if env, root := workspace.SplitKey(l.Key); env == hello.EnvironmentID {

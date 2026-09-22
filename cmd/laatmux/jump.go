@@ -84,10 +84,15 @@ func cmdJump(ctx context.Context, args []string) error {
 		spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
 		spec.Key = workspace.Key(hello.EnvironmentID, w.Root)
 		spec.Branch = w.Branch
-		// The record carries the host's label; the source comes from this
-		// machine's config, and is left empty when the labels differ.
-		if r, ok := cfg.RepoByName(w.Repo); ok {
-			spec.Source = r.Source
+		// The source is the identity and comes from the record. A daemon
+		// from before records carried it leaves it to this machine's
+		// config, by the host's label, and empty when the labels differ;
+		// Ensure then keeps whatever the session already knows.
+		spec.Source = w.Source
+		if spec.Source == "" {
+			if r, ok := cfg.RepoByName(w.Repo); ok {
+				spec.Source = r.Source
+			}
 		}
 	} else {
 		if err := checkSession(ctx, h.Host, rest); err != nil {

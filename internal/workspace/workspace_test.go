@@ -81,3 +81,19 @@ func TestShellCommand(t *testing.T) {
 		t.Error("AttachCommand picked the wrong transport")
 	}
 }
+
+// A reuse that does not know the source or branch leaves the session's
+// tags alone rather than clearing them.
+func TestTagArgsPreserveUnknownIdentity(t *testing.T) {
+	full := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Key: "k", Source: "src", Branch: "b"}), " ")
+	if !strings.Contains(full, "@laatmux_repo src") || !strings.Contains(full, "@laatmux_branch b") {
+		t.Errorf("full spec did not tag identity: %s", full)
+	}
+	partial := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Key: "k", Branch: "b"}), " ")
+	if strings.Contains(partial, "@laatmux_repo") || !strings.Contains(partial, "@laatmux_branch b") || !strings.Contains(partial, "@laatmux_host vm") {
+		t.Errorf("partial spec wrote an empty source or dropped the rest: %s", partial)
+	}
+	if plain := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Source: "src"}), " "); strings.Contains(plain, "@laatmux_repo") {
+		t.Errorf("plain attachment got identity tags: %s", plain)
+	}
+}
