@@ -433,3 +433,90 @@ func TestCommandEviction(t *testing.T) {
 		t.Fatal("evicted id not fresh")
 	}
 }
+
+// repo, branch and root on rm must agree: a root registered for another
+// branch is a mismatch, not a target, whether the branch is registered
+// elsewhere or not at all.
+func TestRmMismatchRefused(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	for _, b := range []string{"one", "two"} {
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "add-" + b, Repo: remote, Branch: b, Cmd: []string{"true"}})
+		if res, _ := result(t, pc, "add-"+b); !res.OK {
+			t.Fatalf("add %s: %+v", b, res)
+		}
+	}
+	one, two := store.Dirs.Worktree("proj", "one"), store.Dirs.Worktree("proj", "two")
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "one", Root: two, Force: true})
+	if res, _ := result(t, pc, "r1"); res.OK || !strings.Contains(res.Error, "checked out at "+one+", not "+two) {
+		t.Fatalf("rm one at two: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "gone", Root: two, Force: true})
+	if res, _ := result(t, pc, "r2"); res.OK || !strings.Contains(res.Error, "worktree for branch two") {
+		t.Fatalf("rm gone at two: %+v", res)
+	}
+	for _, root := range []string{one, two} {
+		if _, err := os.Stat(root); err != nil {
+			t.Fatalf("%s removed by a mismatched rm", root)
+		}
+	}
+	if len(ft.panes) != 2 {
+		t.Fatalf("panes %+v", ft.panes)
+	}
+	// Agreeing fields remove; a repeat with the registration gone but
+	// the root retained still finds nothing to kill and is ok.
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r3", Repo: remote, Branch: "one", Root: one, Force: true})
+	if res, _ := result(t, pc, "r3"); !res.OK || res.Root != one {
+		t.Fatalf("rm one: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r4", Repo: remote, Branch: "one", Root: one, Force: true})
+	if res, _ := result(t, pc, "r4"); !res.OK || len(ft.panes) != 1 || ft.panes[0].Cwd != two {
+		t.Fatalf("repeat rm one: %+v panes %+v", res, ft.panes)
+	}
+}
+
+// A checkout git cannot read is a failed lookup, not an absent worktree:
+// rm reports the error and leaves the session running, since nothing is
+// killed until git has removed the worktree.
+func TestRmLookupErrorKeepsSession(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a", Repo: remote, Branch: "task", Cmd: []string{"true"}})
+	res, _ := result(t, pc, "a")
+	if !res.OK {
+		t.Fatalf("add: %+v", res)
+	}
+	repo, _ := store.Repo(remote)
+	checkout, _, _ := store.Checkout(context.Background(), repo)
+	if err := os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[core\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []protocol.Message{
+		{Type: protocol.TypeRm, ID: "r1", Root: res.Root},
+		{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "task", Root: res.Root},
+	} {
+		pc.Write(m)
+		if r, _ := result(t, pc, m.ID); r.OK || !strings.Contains(r.Error, "config") {
+			t.Fatalf("rm %s: %+v", m.ID, r)
+		}
+	}
+	if len(ft.panes) != 1 {
+		t.Fatal("session killed after a failed lookup")
+	}
+}
+
+// Retained output is bounded: past the budget, lines are dropped after
+// one saying so, while step and result messages are always kept.
+func TestCommandOutputBounded(t *testing.T) {
+	c := newCommand()
+	line := strings.Repeat("x", 1024)
+	for i := 0; i < 2*maxOutput/len(line); i++ {
+		c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: "setup", State: protocol.StateOutput, Detail: line})
+	}
+	c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: "setup", State: protocol.StateDone, Detail: "cmd"})
+	c.emit(protocol.Message{Type: protocol.TypeResult, OK: true})
+	n := len(c.events)
+	if n != maxOutput/len(line)+3 || !strings.Contains(c.events[n-3].Detail, "dropped") || c.events[n-2].State != protocol.StateDone || c.events[n-1].Type != protocol.TypeResult {
+		t.Fatalf("%d events, tail %+v", n, c.events[n-3:])
+	}
+}

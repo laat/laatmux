@@ -259,7 +259,12 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 	}
 	for _, r := range s.Repos {
 		checkout, ok, err := s.Checkout(ctx, r)
-		if err != nil || !ok {
+		if err != nil {
+			// A checkout that cannot be read is not absence: rm must not
+			// take it as "already removed" and go on to kill the session.
+			return Record{}, "", false, err
+		}
+		if !ok {
 			continue
 		}
 		entries, err := ListWorktrees(ctx, checkout)

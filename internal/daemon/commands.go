@@ -17,15 +17,22 @@ import (
 // client that lost its bridge can repeat the id and get the result back.
 const DefaultCommandTTL = 5 * time.Minute
 
+// maxOutput bounds the setup and clone output one command retains for
+// replay. Past it, output lines are dropped after one line saying so;
+// step and result messages are always kept, and there are few of them.
+const maxOutput = 1 << 20
+
 // command is one add or rm in flight or recently finished. Its events,
 // progress then the result, are appended as they happen; a connection
 // that sends the same id, while it runs or after, replays them and follows.
 type command struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	events []protocol.Message
-	done   bool
-	doneAt time.Time
+	mu        sync.Mutex
+	cond      *sync.Cond
+	events    []protocol.Message
+	outBytes  int
+	truncated bool
+	done      bool
+	doneAt    time.Time
 }
 
 func newCommand() *command {
@@ -36,6 +43,17 @@ func newCommand() *command {
 
 func (c *command) emit(m protocol.Message) {
 	c.mu.Lock()
+	if m.State == protocol.StateOutput {
+		c.outBytes += len(m.Detail)
+		if c.outBytes > maxOutput {
+			if c.truncated {
+				c.mu.Unlock()
+				return
+			}
+			c.truncated = true
+			m.Detail = "(further output dropped: over 1 MiB)"
+		}
+	}
 	c.events = append(c.events, m)
 	if m.Type == protocol.TypeResult {
 		c.done = true
@@ -202,50 +220,73 @@ func (d *Daemon) agentStage(ctx context.Context, repo worktree.Repo, branch, roo
 
 // runRm removes a worktree, then every managed session whose pane records
 // its root. Each step is inspected, so a retry after a crash between them
-// finishes the job and a target where both skip is ok. The repository
-// lock is taken before the target is resolved, so an add in flight on the
-// same repository is seen complete, not half done.
+// finishes the job and a target where both skip is ok.
 //
-// Root is what reaches the session step once the worktree is gone: a
-// branch alone can no longer be mapped to a root then, and by design the
-// pane records only the root. Clients send the root from the record.
+// The target is resolved under the repository lock, so an add in flight on
+// the same repository is seen complete, not half done. A request that
+// names the repository locks it; a root-only request, which is for a
+// detached worktree, locks every known repository since the owner is not
+// known until git has been asked. When repo, branch and root are all
+// given they must agree: root is the worktree registered for the branch,
+// or, once that registration is gone, the root the session step matches
+// on. A root that git registers for another branch or repository is a
+// mismatch, not a target.
 func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
 		var repo worktree.Repo
-		byBranch := m.Root == ""
-		if byBranch {
+		if m.Repo != "" {
 			var ok bool
 			if repo, ok = d.cfg.Store.Repo(m.Repo); !ok {
 				return fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
 			}
-			if m.Branch == "" {
+			if m.Branch == "" && m.Root == "" {
 				return errors.New("rm needs a branch or a root")
 			}
-		} else if rec, _, found, err := d.cfg.Store.Find(ctx, m.Root); err != nil {
-			return err
-		} else if found {
-			repo = worktree.Repo{Source: rec.Source, Name: rec.Repo}
+			unlock := d.lockRepos(repo.Source)
+			defer unlock()
+		} else {
+			if m.Root == "" {
+				return errors.New("rm needs a repository and branch, or a root")
+			}
+			unlock := d.lockRepos()
+			defer unlock()
 		}
-		if repo.Source != "" {
-			l := d.repoLock(repo.Source)
-			l.Lock()
-			defer l.Unlock()
-		}
-		// Resolve under the lock; what was seen before it may have changed.
+
 		root, checkout := m.Root, ""
-		if byBranch {
+		switch {
+		case m.Branch != "":
 			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
 			if err != nil {
 				return err
 			}
-			if found {
+			switch {
+			case found && root != "" && rec.Root != root:
+				return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
+			case found:
 				root, checkout = rec.Root, co
+			case root != "":
+				// The registration is gone; root still finds the session.
+				// It must not be some other worktree registered since.
+				rec, _, taken, err := d.cfg.Store.Find(ctx, root)
+				if err != nil {
+					return err
+				}
+				if taken {
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
+				}
 			}
-		} else if _, co, found, err := d.cfg.Store.Find(ctx, root); err != nil {
-			return err
-		} else if found {
-			checkout = co
+		default:
+			rec, co, found, err := d.cfg.Store.Find(ctx, root)
+			if err != nil {
+				return err
+			}
+			if found {
+				if repo.Source != "" && rec.Source != repo.Source {
+					return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
+				}
+				checkout = co
+			}
 		}
 		if root == "" {
 			// Nothing registered for the branch and no root to match
@@ -278,6 +319,39 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		return nil
 	}()
 	d.finish(c, res, err)
+}
+
+func branchOrDetached(branch string) string {
+	if branch == "" {
+		return "a detached HEAD"
+	}
+	return "branch " + branch
+}
+
+// lockRepos takes the locks of the given repository sources, or of every
+// known repository when none is given, in sorted order so two callers
+// taking several never deadlock. The returned func releases them.
+func (d *Daemon) lockRepos(sources ...string) func() {
+	if len(sources) == 0 {
+		for _, r := range d.cfg.Store.Repos {
+			sources = append(sources, r.Source)
+		}
+	}
+	sort.Strings(sources)
+	locks := make([]*sync.Mutex, 0, len(sources))
+	for i, src := range sources {
+		if i > 0 && src == sources[i-1] {
+			continue
+		}
+		l := d.repoLock(src)
+		l.Lock()
+		locks = append(locks, l)
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Unlock()
+		}
+	}
 }
 
 // finish records the result and asks for a worktree poll, so the record
