@@ -241,28 +241,41 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 }
 
 // Owns reports whether root is inside the worktrees directory: the only
-// worktrees the daemon publishes, adopts for a branch, or removes. Git
-// registers real paths, so the directory is compared both as configured
-// and with symlinks resolved. The check is by path component, not by
-// string prefix, so a root a client sends with ".." in it is judged by
-// where it lands, and a relative root is never owned.
+// worktrees the daemon publishes, adopts for a branch, or removes. Both
+// sides are compared with symlinks resolved, as git registers real paths,
+// so a root reached through a link that leaves the directory is judged by
+// where it lands. The check is by path component, not by string prefix,
+// so ".." in a root a client sends counts too, and a relative root is
+// never owned.
 func (s *Store) Owns(root string) bool {
 	if !filepath.IsAbs(root) {
 		return false
 	}
-	root = filepath.Clean(root)
-	dirs := []string{filepath.Clean(s.Dirs.Worktrees)}
-	if real, err := filepath.EvalSymlinks(s.Dirs.Worktrees); err == nil && real != dirs[0] {
-		dirs = append(dirs, real)
+	root = resolveExisting(filepath.Clean(root))
+	dir := resolveExisting(filepath.Clean(s.Dirs.Worktrees))
+	rel, err := filepath.Rel(dir, root)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return false
 	}
-	for _, d := range dirs {
-		rel, err := filepath.Rel(d, root)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-			continue
+	return true
+}
+
+// resolveExisting resolves symlinks in the longest existing prefix of p
+// and keeps the rest as given, so a path whose worktree directory is
+// already deleted still resolves through the links above it.
+func resolveExisting(p string) string {
+	rest := ""
+	for cur := p; ; {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest)
 		}
-		return true
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
 	}
-	return false
 }
 
 // Find locates a registered worktree by root across every known

@@ -583,3 +583,40 @@ func TestRemoveStaleTempsLiteralDir(t *testing.T) {
 		t.Fatal("backup removed")
 	}
 }
+
+// Symlinks are resolved on both sides: a link under the worktrees
+// directory that leaves it is not owned, a link into it is, an alias of
+// the directory itself is, and a deleted worktree still resolves through
+// the links above it.
+func TestOwnsResolvesSymlinks(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, outside := filepath.Join(base, "wt"), filepath.Join(base, "outside")
+	for _, d := range []string{filepath.Join(wt, "real"), outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Symlink(outside, filepath.Join(wt, "escape"))
+	os.Symlink(filepath.Join(wt, "real"), filepath.Join(wt, "inward"))
+	os.Symlink(wt, filepath.Join(base, "alias"))
+	s := New(config.Dirs{Repos: base, Worktrees: filepath.Join(base, "alias")}, nil)
+	cases := map[string]bool{
+		filepath.Join(wt, "escape", "scratch"):       false,
+		filepath.Join(wt, "escape"):                  false,
+		filepath.Join(wt, "inward", "task"):          true,
+		filepath.Join(wt, "real", "task"):            true,
+		filepath.Join(base, "alias", "proj", "task"): true,
+		filepath.Join(wt, "gone", "deleted", "deep"): true,
+		filepath.Join(base, "alias", "escape", "x"):  false,
+		outside:                      false,
+		filepath.Join(base, "alias"): false,
+	}
+	for root, want := range cases {
+		if got := s.Owns(root); got != want {
+			t.Errorf("Owns(%q) = %v, want %v", root, got, want)
+		}
+	}
+}
