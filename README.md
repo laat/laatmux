@@ -60,7 +60,9 @@ only to managed sessions.
   daemon whose list leaves it out does not advertise the `new` capability.
 - Every other server in `tmux_servers`, the user's `default` included, is
   observed read-only: `list-panes` and `capture-pane`, nothing else. No
-  workmux config, state or hooks are read.
+  workmux config, state or hooks are read. `default` selects `-L default`
+  explicitly, so a daemon started from inside another tmux server still
+  polls the default one rather than following the inherited `TMUX`.
 - Agent ids are `<environment_id>/<server>/<pane_id>` and records carry the
   server, so `%1` on two servers cannot collide. Clients treat the id as
   opaque; a daemon from before this change sends no server, which clients read
@@ -71,7 +73,7 @@ only to managed sessions.
 - `ls` shows agents on the managed server as `@host` and others as
   `@host/server`, which is what `jump --server` takes. Jump to a session on
   this machine's default server is a `switch-client`, since it is already in
-  the user's tmux. Jump to a remote host's default server, or to any other
+  the user's tmux; it must be run from a client of that server. Jump to a remote host's default server, or to any other
   unmanaged server, is refused.
 
 The intended policy from issue #1: the laptop watches its default server plus

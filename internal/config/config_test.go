@@ -14,7 +14,7 @@ func TestServersDefaultAndParsed(t *testing.T) {
 		t.Fatalf("default = %v, %v", got, err)
 	}
 	got, err = (Config{TmuxServers: []string{"laatmux", "default"}}).Servers()
-	if err != nil || len(got) != 2 || got[0] != tmux.LaatmuxServer || got[1] != (tmux.Server{}) {
+	if err != nil || len(got) != 2 || got[0] != tmux.LaatmuxServer || got[1] != tmux.DefaultServer {
 		t.Fatalf("parsed = %v, %v", got, err)
 	}
 	if _, err := ParseServers([]string{"default", ""}); err == nil {

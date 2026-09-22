@@ -11,12 +11,20 @@ import (
 	"strings"
 )
 
-// Server addresses one tmux server: by -L name or -S path. Empty means the
-// default server.
+// Server addresses one tmux server: by -L name or -S path. The zero Server
+// adds no selector, so tmux follows the inherited TMUX variable: that is the
+// server the calling process is attached to, not the default one. Use
+// DefaultServer for the default server; it selects -L default explicitly,
+// which overrides TMUX.
 type Server struct {
 	Name string // -L
 	Path string // -S, wins over Name
 }
+
+// DefaultServer is the user's default tmux server, selected explicitly so it
+// stays the default server no matter which server the daemon or client was
+// started from.
+var DefaultServer = Server{Name: "default"}
 
 // LaatmuxServer is the dedicated server managed agents live on. It is the
 // only server laatmux configures or creates sessions on; every other server
@@ -24,12 +32,12 @@ type Server struct {
 var LaatmuxServer = Server{Name: "laatmux"}
 
 // Parse reads a server spec as config and flags write it: "default" or ""
-// is the default server, a value containing "/" is a -S socket path, and
-// anything else is a -L name.
+// is DefaultServer, a value containing "/" is a -S socket path, and anything
+// else is a -L name. Parse never returns the zero Server.
 func Parse(v string) Server {
 	switch {
 	case v == "default" || v == "":
-		return Server{}
+		return DefaultServer
 	case strings.Contains(v, "/"):
 		return Server{Path: v}
 	default:
@@ -37,8 +45,9 @@ func Parse(v string) Server {
 	}
 }
 
-// Label names the server in agent ids and listings: the -S path, the -L
-// name, or "default". Parse(s.Label()) == s.
+// Label names the server in agent ids and listings: the -S path or the -L
+// name. Parse(s.Label()) == s for any server Parse returns. The zero Server
+// is labelled "current", since it is whatever TMUX points at.
 func (s Server) Label() string {
 	switch {
 	case s.Path != "":
@@ -46,7 +55,7 @@ func (s Server) Label() string {
 	case s.Name != "":
 		return s.Name
 	}
-	return "default"
+	return "current"
 }
 
 func (s Server) args(a ...string) []string {
@@ -84,13 +93,23 @@ type Error struct {
 
 func (e *Error) Error() string { return "tmux " + strings.Join(e.Args, " ") + ": " + e.Msg }
 
-// NoServer reports whether the error means the server is not running.
+// NoServer reports whether the error means the server is not running. tmux
+// says "no server running on <path>" when the socket is missing, and "error
+// connecting to <path> (<reason>)" when it exists but cannot be used. Only a
+// stale socket counts as absent; "Permission denied" and other reasons are
+// failures to observe, not an empty server.
 func NoServer(err error) bool {
 	var te *Error
 	if !errorsAs(err, &te) {
 		return false
 	}
-	return strings.Contains(te.Msg, "no server running") || strings.Contains(te.Msg, "error connecting to")
+	switch {
+	case strings.Contains(te.Msg, "no server running"):
+		return true
+	case strings.Contains(te.Msg, "error connecting to"):
+		return strings.Contains(te.Msg, "(No such file or directory)") || strings.Contains(te.Msg, "(Connection refused)")
+	}
+	return false
 }
 
 func errorsAs(err error, target **Error) bool {
