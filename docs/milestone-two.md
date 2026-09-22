@@ -49,12 +49,32 @@ repos:                        # the known set; a list for now, discovery later
   - https://github.com/laat/other.git
 ```
 
-A repository's name is the last path component of its source without
-`.git`, so the list above knows `laatmux` and `other`. Two sources with the
-same name are a config error. A repository's main checkout on a host is
-`<repos>/<name>`; if it is missing when `add` runs there, the daemon clones
-it, so any host can be picked. A worktree's root is
-`<worktrees>/<name>/<branch>`, outside the checkout, so nothing needs
+A repository is identified by its source. Its name is a label derived from
+the source, deterministically, so every host and every run derive the same
+name from the same list:
+
+1. The last path component without `.git`: `laatmux`, `other`.
+2. If two sources share that, each of them is prefixed with its org, the
+   path component before the name, joined with `-`: `laat-laatmux` and
+   `acme-laatmux`.
+3. If they still collide, or a source has no org component, the name is
+   suffixed with the first six hex digits of the source's SHA-256:
+   `laatmux-3fa9c1`. The hash is stable where a random suffix would differ
+   per host and per run, and the name is a directory on every host.
+4. A list entry may be a mapping with an explicit `name` next to `source`,
+   which wins over all of the above.
+
+Names that come out of this are validated like every other label. Because
+identity is the source and not the name, adding a source that forces an
+existing repository's name to change is harmless: the daemon finds a
+repository's checkout under `<repos>` by its `origin`, not by its
+directory name, so an existing checkout and its worktrees keep working
+under the new label, and only new clones use the new name.
+
+A repository's main checkout on a host is `<repos>/<name>` when the daemon
+clones it, which it does if no checkout under `<repos>` has the source as
+`origin` when `add` runs there, so any host can be picked. A worktree's root
+is `<worktrees>/<name>/<branch>`, outside the checkout, so nothing needs
 excluding from git status. Per-repository overrides of these paths are not
 in this milestone and can be a list added later. `repos` and `worktrees`
 have no defaults: a host without them cannot `add`, and the error names the
@@ -107,7 +127,7 @@ current directory.
 
 | Field | Where it is authoritative |
 |---|---|
-| repo, branch, root | the host's git: `git worktree list --porcelain` in each known repository's checkout under `<repos>`, filtered to roots under `<worktrees>/<name>/`; branch is empty for a detached worktree; `prunable` entries are not published |
+| repo, branch, root | the host's git: `git worktree list --porcelain` in each known repository's checkout, found under `<repos>` by `origin`, filtered to roots under `<worktrees>/`; branch is empty for a detached worktree; `prunable` entries are not published |
 | host | the daemon that answers, by environment id |
 | managed session | the host's managed tmux server: the pane carries `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd`, set at creation as `@laatmux_cwd` is today |
 | local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `<environment_id>/<repo>/<branch>` and `@laatmux_host` = the configured host name |
@@ -169,8 +189,8 @@ a retry after a crash skips exactly what is done and finishes what is not:
 
 | Stage | Step | Skipped when |
 |---|---|---|
-| resolve | checkout path `<repos>/<name>`, root `<worktrees>/<name>/<branch>`, agent command | never |
-| clone | `git clone <source> <checkout>` | the checkout exists and its `origin` is the source; a different origin fails the stage |
+| resolve | checkout: the directory under `<repos>` whose `origin` is the source, else `<repos>/<name>` to be cloned; root `<worktrees>/<name>/<branch>`; agent command | never |
+| clone | `git clone <source> <checkout>` | a checkout with the source as `origin` exists; `<repos>/<name>` existing with a different origin fails the stage rather than being reused |
 | fetch | `git fetch origin` in the checkout | never; it is cheap and the branch base must be fresh |
 | worktree | `git remote set-head origin --auto`, `git worktree prune` | never; symref update and cleanup |
 | | branch: `git branch --track <branch> origin/<branch>` if the remote branch exists, else `git branch <branch> origin/HEAD` | the local branch exists, from an earlier attempt or made by hand; it is used as is and the progress line says so |
