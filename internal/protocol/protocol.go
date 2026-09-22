@@ -22,8 +22,8 @@ const (
 	TypeHello     = "hello"     // both directions; first message on a connection
 	TypeSubscribe = "subscribe" // client -> daemon
 	TypeSnapshot  = "snapshot"  // daemon -> client, full state after subscribe
-	TypeUpsert    = "upsert"    // daemon -> client, one agent changed or appeared
-	TypeRemove    = "remove"    // daemon -> client, one agent disappeared
+	TypeUpsert    = "upsert"    // daemon -> client, one record changed or appeared
+	TypeRemove    = "remove"    // daemon -> client, one record disappeared
 	TypeNew       = "new"       // client -> daemon, create a managed session
 	TypeAdd       = "add"       // client -> daemon, create a worktree and start an agent in it
 	TypeRm        = "rm"        // client -> daemon, remove a worktree and its managed session
@@ -41,6 +41,10 @@ const (
 	CapWorktrees = "worktrees" // worktree records in the subscription stream
 	CapAdd       = "add"       // the add command
 	CapRm        = "rm"        // the rm command
+	// CapMerged is subscribe with merged: one stream with every configured
+	// host's records, a host record per host, and this machine's local
+	// workspace sessions. Only a daemon with hosts in its config has it.
+	CapMerged = "merged"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -129,6 +133,44 @@ type Worktree struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// HostStatus is one configured host as the merging daemon sees it: a
+// separate axis from agent state, never folded into the records. Connected
+// is a live connection with a completed hello. Listed is that the host's
+// records in the merged stream come from a snapshot of the current
+// connection; while it is false the records are cached from before a drop,
+// or absent on a host never reached. Absence of a record is authoritative
+// only when both are set. EnvironmentID is empty until the host has
+// answered a hello once; agent and worktree records carry theirs, and a
+// client maps it to the host name through these records.
+type HostStatus struct {
+	Name          string    `json:"name"`
+	SSH           string    `json:"ssh,omitempty"` // "" is the merging daemon's own machine
+	EnvironmentID string    `json:"environment_id,omitempty"`
+	Connected     bool      `json:"connected"`
+	Listed        bool      `json:"listed"`
+	Error         string    `json:"error,omitempty"` // why it is not connected; "" while connecting
+	Version       string    `json:"version,omitempty"`
+	Capabilities  []string  `json:"capabilities,omitempty"`
+	Since         time.Time `json:"since"` // when the record last changed
+}
+
+// Local reports whether the host is the merging daemon's own machine.
+func (h HostStatus) Local() bool { return h.SSH == "" }
+
+// Session is one of laatmux's sessions on the merging daemon's default
+// tmux server, as its tags say: a workspace session with Key, or a plain
+// attachment with Attach. Sessions with neither are not laatmux's and are
+// not published. The field order is the workspace package's Local.
+type Session struct {
+	Name    string `json:"name"`
+	Key     string `json:"key,omitempty"`    // @laatmux_workspace: <environment_id>/<root>
+	Host    string `json:"host,omitempty"`   // @laatmux_host
+	Source  string `json:"source,omitempty"` // @laatmux_repo
+	Branch  string `json:"branch,omitempty"` // @laatmux_branch
+	Attach  string `json:"attach,omitempty"` // @laatmux_attach
+	Settled bool   `json:"settled,omitempty"`
+}
+
 // Message is the single envelope. Fields are used per Type; unused ones are
 // omitted on the wire.
 type Message struct {
@@ -142,6 +184,10 @@ type Message struct {
 	Host          string   `json:"host,omitempty"`
 	Capabilities  []string `json:"capabilities,omitempty"`
 
+	// subscribe. Merged asks for every configured host's records in one
+	// stream; without it the daemon sends its own host's records only.
+	Merged bool `json:"merged,omitempty"`
+
 	// snapshot / upsert / remove
 	Seq        uint64     `json:"seq,omitempty"`
 	Agents     []Agent    `json:"agents,omitempty"`
@@ -150,6 +196,22 @@ type Message struct {
 	Worktrees  []Worktree `json:"worktrees,omitempty"`
 	Worktree   *Worktree  `json:"worktree,omitempty"`
 	WorktreeID string     `json:"worktree_id,omitempty"`
+
+	// merged snapshot / upsert / remove. The host record and the local
+	// session record are keyed by name; a remove names the one gone.
+	// SessionsError, in a snapshot or an upsert, is that the local
+	// sessions could not be listed for a reason other than no server, so
+	// an incomplete listing says so; the records are the last listed.
+	// SessionsListed in an upsert is that a listing succeeded again and
+	// the error is cleared.
+	Hosts            []HostStatus `json:"hosts,omitempty"`
+	HostStatus       *HostStatus  `json:"host_status,omitempty"`
+	HostName         string       `json:"host_name,omitempty"`
+	Sessions         []Session    `json:"sessions,omitempty"`
+	LocalSession     *Session     `json:"local_session,omitempty"`
+	LocalSessionName string       `json:"local_session_name,omitempty"`
+	SessionsError    string       `json:"sessions_error,omitempty"`
+	SessionsListed   bool         `json:"sessions_listed,omitempty"`
 
 	// commands and results
 	ID      string   `json:"id,omitempty"` // client-chosen command id

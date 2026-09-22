@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/detect"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
@@ -92,6 +93,18 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
+
+	// The merged stream. Hosts reads the configured hosts, on every
+	// merged subscription; nil means no merged capability. Dial connects
+	// to a remote host, client.Dial by default. Sessions lists this
+	// machine's local workspace sessions; nil means none. The durations
+	// default to the constants in merge.go.
+	Hosts           func() ([]client.Host, error)
+	Dial            func(ctx context.Context, h client.Host) (*client.Conn, error)
+	Sessions        func(ctx context.Context) ([]protocol.Session, error)
+	MergedIdle      time.Duration
+	SessionInterval time.Duration
+	ReconnectMin    time.Duration
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -118,6 +131,22 @@ type Daemon struct {
 	cmds       map[string]*command    // recent add and rm by id
 	locks      map[string]*sync.Mutex // per repository source
 	commandTTL time.Duration
+
+	// The merged stream: its own sequence and subscribers, the hosts by
+	// name and in config order, the local sessions, and the context the
+	// follows and the sessions poll run under, nil while idle.
+	mseq         uint64
+	msubs        map[*subscriber]struct{}
+	mhosts       map[string]*mergedHost
+	mnames       []string
+	msessions    map[string]protocol.Session
+	sessionsErr  string
+	lastHostsErr string     // under subMu
+	subMu        sync.Mutex // serializes a subscription's config read and session listing with the poll
+	mctx         context.Context
+	mcancel      context.CancelFunc
+	midle        *time.Timer
+	midleGen     uint64 // bumped when the timer is set or stopped; a fired callback checks it
 
 	// discovered closes after the first complete poll of every server and
 	// of git, so a snapshot is never an empty or partial view of a host
@@ -154,8 +183,9 @@ type paneState struct {
 }
 
 type subscriber struct {
-	ch   chan protocol.Message
-	drop func() // closes the transport so the peer sees EOF and resnapshots
+	ch     chan protocol.Message
+	drop   func() // closes the transport so the peer sees EOF and resnapshots
+	merged bool   // on the merged stream rather than this host's own
 }
 
 func New(cfg Config) *Daemon {
@@ -177,6 +207,18 @@ func New(cfg Config) *Daemon {
 	if cfg.WorktreeInterval == 0 {
 		cfg.WorktreeInterval = DefaultWorktreeInterval
 	}
+	if cfg.Dial == nil {
+		cfg.Dial = client.Dial
+	}
+	if cfg.MergedIdle == 0 {
+		cfg.MergedIdle = DefaultMergedIdle
+	}
+	if cfg.SessionInterval == 0 {
+		cfg.SessionInterval = DefaultSessionInterval
+	}
+	if cfg.ReconnectMin == 0 {
+		cfg.ReconnectMin = DefaultReconnectMin
+	}
 	d := &Daemon{
 		cfg:    cfg,
 		agents: map[string]protocol.Agent{},
@@ -189,6 +231,10 @@ func New(cfg Config) *Daemon {
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
 		commandTTL:   DefaultCommandTTL,
+
+		msubs:     map[*subscriber]struct{}{},
+		mhosts:    map[string]*mergedHost{},
+		msessions: map[string]protocol.Session{},
 
 		discovered: make(chan struct{}),
 	}
@@ -212,6 +258,9 @@ func (d *Daemon) capabilities() []string {
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm)
 		}
+	}
+	if d.cfg.Hosts != nil {
+		caps = append(caps, protocol.CapMerged)
 	}
 	return caps
 }
@@ -242,11 +291,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 // markDiscovered records one side's first complete poll and opens
-// discovered once both are in.
+// discovered once both are in. The local host's record in the merged
+// stream becomes listed at the same moment.
 func (d *Daemon) markDiscovered(flag *bool) {
 	d.mu.Lock()
 	*flag = true
 	both := d.panesDiscovered && d.worktreesDiscovered
+	if both {
+		d.localListedLocked()
+	}
 	d.mu.Unlock()
 	if both {
 		d.discoveredOnce.Do(func() { close(d.discovered) })
@@ -503,7 +556,11 @@ func (d *Daemon) Snapshot() (uint64, []protocol.Agent) {
 	return d.seq, out
 }
 
+// broadcastLocked sends one of this host's own changes to its plain
+// subscribers, and into the merged stream when this machine is one of the
+// configured hosts.
 func (d *Daemon) broadcastLocked(m protocol.Message) {
+	d.forwardLocalLocked(m)
 	for s := range d.subs {
 		select {
 		case s.ch <- m:
@@ -532,6 +589,10 @@ func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
 }
 
 func (d *Daemon) unsubscribe(s *subscriber) {
+	if s.merged {
+		d.mergedUnsubscribe(s)
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if _, ok := d.subs[s]; ok {
@@ -606,12 +667,27 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			if sub != nil {
 				continue
 			}
-			select {
-			case <-d.discovered:
-			case <-ctx.Done():
-				return
+			if m.Merged && d.cfg.Hosts == nil {
+				_ = pc.Write(protocol.Message{Type: protocol.TypeError, Error: "this daemon has no merged capability; it has no hosts in its config"})
+				continue
 			}
-			s, snap := d.subscribe(drop)
+			var s *subscriber
+			var snap protocol.Message
+			if m.Merged {
+				// The merged snapshot is sent at once with what the
+				// daemon knows; the local host's record says whether
+				// its own records are complete, as a remote host's
+				// does, so a tmux the daemon cannot poll holds up
+				// neither the remote hosts nor the host rows.
+				s, snap = d.mergedSubscribe(ctx, drop)
+			} else {
+				select {
+				case <-d.discovered:
+				case <-ctx.Done():
+					return
+				}
+				s, snap = d.subscribe(drop)
+			}
 			sub = s
 			if err := pc.Write(snap); err != nil {
 				return

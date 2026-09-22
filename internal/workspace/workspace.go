@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -52,19 +53,42 @@ func SessionName(host, repo, branch string) string {
 }
 
 // Local is one session in the default tmux server, with the laatmux tags
-// it carries. A session with neither Key nor Attach is not laatmux's.
-type Local struct {
-	Name    string
-	Key     string // @laatmux_workspace
-	Host    string // @laatmux_host
-	Source  string // @laatmux_repo, the repository source; "" when unknown
-	Branch  string // @laatmux_branch
-	Attach  string // @laatmux_attach, for a plain attachment
-	Settled bool   // @laatmux_settled
-}
+// it carries: Key is @laatmux_workspace, Host @laatmux_host, Source
+// @laatmux_repo (the repository source, "" when unknown), Branch
+// @laatmux_branch, Attach @laatmux_attach for a plain attachment, Settled
+// @laatmux_settled. A session with neither Key nor Attach is not
+// laatmux's. It is the protocol's session record under another name, so
+// the daemon publishes what List reads with a conversion and no copying.
+type Local protocol.Session
 
 // Workspace reports whether the session is a workspace session.
 func (l Local) Workspace() bool { return l.Key != "" }
+
+// Laatmux reports whether the session is laatmux's at all: a workspace
+// or a plain attachment.
+func (l Local) Laatmux() bool { return l.Key != "" || l.Attach != "" }
+
+// Records converts laatmux's sessions among locals to protocol records,
+// which is what the merging daemon publishes. Sessions that are not
+// laatmux's are left out.
+func Records(locals []Local) []protocol.Session {
+	var out []protocol.Session
+	for _, l := range locals {
+		if l.Laatmux() {
+			out = append(out, protocol.Session(l))
+		}
+	}
+	return out
+}
+
+// FromRecords converts published session records back to locals.
+func FromRecords(recs []protocol.Session) []Local {
+	out := make([]Local, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, Local(r))
+	}
+	return out
+}
 
 var sessionFormat = strings.Join([]string{
 	"#{session_name}", "#{@laatmux_workspace}", "#{@laatmux_host}", "#{@laatmux_attach}", "#{@laatmux_settled}",

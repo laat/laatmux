@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os/exec"
 	"strings"
@@ -81,5 +82,26 @@ func TestProtocolMismatchRefused(t *testing.T) {
 	_, err = completeHello(context.Background(), c)
 	if err == nil || !strings.Contains(err.Error(), "protocol 99") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A transport error carries what ssh wrote to stderr, and still matches
+// the underlying error.
+func TestErrorsCarrySSHDiagnostic(t *testing.T) {
+	server, client := net.Pipe()
+	diag := &tailBuffer{}
+	c := &Conn{Host: Host{Name: "vm"}, pc: protocol.NewConn(client), close: func() { client.Close() }, diag: diag}
+	diag.Write([]byte("Connection closed by remote host\n"))
+	server.Close()
+	_, err := c.Read()
+	if err == nil || !strings.Contains(err.Error(), "ssh: Connection closed by remote host") {
+		t.Fatalf("err = %v", err)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("err = %v, want io.EOF underneath", err)
+	}
+	plain := &Conn{Host: Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	if _, err := plain.Read(); err == nil || err != io.EOF {
+		t.Errorf("local err = %v, want bare io.EOF", err)
 	}
 }
