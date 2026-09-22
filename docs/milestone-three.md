@@ -460,10 +460,11 @@ Protocol, capability `run`:
 
 ```
 -> {type: run, id, repo, branch, root, cmd: [...]}
-<- {type: progress, id, stage: run, state: start, detail: <root>}
-<- {type: progress, id, stage: run, state: output, fd: 1|2, detail}   zero or more
+<- {type: progress, id, n, stage: run, state: start, detail: <root>}
+<- {type: progress, id, n, stage: run, state: output, fd: 1|2, detail}   zero or more
 <- {type: result, id, ok, error, exit}
--> {type: cancel, id}                                                   from the client, any time
+-> {type: cancel, id}                                                      from the client, any time
+-> {type: follow, id, after}                                               on a redial, in place of run
 ```
 
 `output` carries one line per message with `fd` saying which stream it
@@ -499,11 +500,7 @@ build: it still takes `add` and `rm`, emits unnumbered progress and would
 reject `follow` as an unknown type, so against it the client keeps
 today's resend and positional filter, and `run` is refused before it
 starts, as any missing capability is. A daemon with `run` always has
-`follow`. Under a clean daemon shutdown, `SIGTERM`, runs
-are cancelled like `cancel` does, so a restart for an upgrade leaves no
-orphan. A daemon that crashes leaves its runs going, in their own process
-groups, unknown to the daemon that replaces it; the note says so and
-does not try to adopt them.
+`follow`.
 
 Progress messages carry `n`, a per-command sequence from 1, and a client
 keeps the highest it has seen. `follow` sends it as `after`, the daemon
@@ -525,7 +522,11 @@ it there is no way to stop `laatmux run proj/x -- pnpm dev`. A client
 that disconnects without cancelling leaves the run going, as an `add`
 keeps going, and the same id follows it again. `add` and `rm` do not take
 `cancel`: they are short and every step of theirs is idempotent, so
-letting them finish is the safe thing.
+letting them finish is the safe thing. Under a clean daemon shutdown,
+`SIGTERM`, runs are cancelled the same way, so a restart for an upgrade
+leaves no orphan. A daemon that crashes leaves its runs going, in their
+own process groups, unknown to the daemon that replaces it; the note says
+so and does not try to adopt them.
 
 Runs take no repository lock; they do not touch the main checkout and a
 long one must not block `add`. `rm` gains one step: after git has removed
@@ -582,9 +583,11 @@ unchanged in output.
    under the user's tmux config with its own new-session hook.
 4. Pickers and actions in the dashboard, with the command implementations
    split from their CLI printing.
-5. `split`, then `run` with `cancel` and the `rm` step, verified on the VM
-   with a run cancelled from the laptop, a bridge dropped mid-run and
-   followed again, and `rm` during a run.
+5. `follow` and numbered progress for `add` and `rm`, with the old path
+   kept for a daemon without the capability. Then `split`, then `run` with
+   `cancel` and the `rm` step, verified on the VM with a run cancelled from
+   the laptop, a bridge dropped mid-run and followed again, a daemon
+   restarted mid-run, and `rm` during a run.
 
 ## Out of scope
 
