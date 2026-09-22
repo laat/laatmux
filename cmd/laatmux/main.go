@@ -10,12 +10,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 var version = "0.0.0-dev"
@@ -62,12 +60,12 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: laatmux <command> [flags]
 
-  serve     run the per-host daemon (polls tmux, serves status)
+  serve     run the per-host daemon (polls the configured tmux servers, serves status)
   bridge    connect stdio to the local daemon (what ssh runs on a remote host)
   new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]
   ls        list agents across configured hosts
   watch     live list, redraws on change (sidebar)
-  jump      laatmux jump <host>/<session>   focus or open a pane attached to it
+  jump      laatmux jump [--server s] <host>/<session>   focus or open a pane attached to it
   hosts     reachability and daemon version per host
   explain   laatmux explain <pane-id>       show detection inputs and decision
   version
@@ -78,15 +76,4 @@ config: ~/.config/laatmux/config.yaml   state: $LAATMUX_HOME or ~/.local/state/l
 
 func tmuxServerFlag(fs *flag.FlagSet) *string {
 	return fs.String("tmux-socket", "laatmux", `tmux server: a -L name, "default" for the default server, or a -S path`)
-}
-
-func parseServer(v string) tmux.Server {
-	switch {
-	case v == "default" || v == "":
-		return tmux.Server{}
-	case strings.Contains(v, "/"):
-		return tmux.Server{Path: v}
-	default:
-		return tmux.Server{Name: v}
-	}
 }

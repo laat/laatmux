@@ -64,10 +64,12 @@ type Identity struct {
 	LeaderPID int    `json:"leader_pid,omitempty"` // foreground process group leader of the tty
 }
 
-// Agent is one pane on one host as the sidebar sees it.
+// Agent is one pane on one host as the sidebar sees it. Only panes with an
+// identified agent instance, alive or gone, are published.
 type Agent struct {
-	ID            string    `json:"id"` // "<environment_id>/<pane_id>"
+	ID            string    `json:"id"` // "<environment_id>/<server>/<pane_id>"; opaque to clients
 	EnvironmentID string    `json:"environment_id"`
+	Server        string    `json:"server,omitempty"` // tmux server label: "laatmux", "default", or a socket path; "" from older daemons means "laatmux"
 	Session       string    `json:"session"`
 	Window        int       `json:"window"`
 	PaneID        string    `json:"pane_id"`

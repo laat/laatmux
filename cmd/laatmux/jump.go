@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,11 +19,25 @@ import (
 // the session jump was run from if none exists. Local and remote are the same
 // operation: managed agents live on the dedicated laatmux server, which the
 // user's tmux cannot switch-client into, so both attach through a pane.
+//
+// With --server default the session is one the daemon merely observes on
+// this machine's own tmux. It is already in the user's server, so jump is a
+// switch-client. An observed session on any other server, or on a remote
+// host, is refused: attach is only ever done to sessions laatmux created.
 func cmdJump(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: laatmux jump <host>/<session>")
+	fs := flag.NewFlagSet("jump", flag.ContinueOnError)
+	server := fs.String("server", tmux.LaatmuxServer.Label(), `tmux server the session is on, as ls prints it after the host: "laatmux" or "default"`)
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	hostName, session, ok := strings.Cut(args[0], "/")
+	if fs.NArg() < 1 {
+		return errors.New("usage: laatmux jump [--server s] <host>/<session>")
+	}
+	target := fs.Arg(0)
+	if err := fs.Parse(fs.Args()[1:]); err != nil {
+		return err
+	}
+	hostName, session, ok := strings.Cut(target, "/")
 	if !ok {
 		session, hostName = hostName, ""
 	}
@@ -39,6 +54,28 @@ func cmdJump(ctx context.Context, args []string) error {
 		return errors.New("jump must run inside the local tmux")
 	}
 	local := tmux.Server{}
+	how, err := jumpMode(h, tmux.Parse(*server), session)
+	if err != nil {
+		return err
+	}
+	if how == jumpSwitch {
+		// A client belongs to one server, so switching only works when the
+		// server jump runs in is the default one. Compare socket paths as
+		// tmux reports them rather than trusting the inherited TMUX value.
+		def := tmux.DefaultServer
+		if !def.HasSession(ctx, session) {
+			return fmt.Errorf("%s/%s: no such session on the default tmux server", h.Name, session)
+		}
+		same, err := sameServer(ctx, local, def)
+		if err != nil {
+			return err
+		}
+		if !same {
+			return fmt.Errorf("%s/%s: is on the default tmux server, but jump was run from another server (%s); run it from a client of the default server", h.Name, session, os.Getenv("TMUX"))
+		}
+		_, err = def.Run(ctx, "switch-client", "-t", "="+session)
+		return err
+	}
 	// The session jump runs in is where a new attach window goes. Using the
 	// pane rather than the current client keeps jump deterministic when run
 	// from a script or a sidebar.
@@ -95,6 +132,42 @@ func cmdJump(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+type jumpKind int
+
+const (
+	jumpAttach jumpKind = iota // open or focus an attach pane onto the managed server
+	jumpSwitch                 // switch-client within this machine's default server
+)
+
+// jumpMode decides how a session is reached, or that it is not: the managed
+// server anywhere is attached; the default server on this machine is
+// switched to; everything else is observed only.
+func jumpMode(h client.Host, srv tmux.Server, session string) (jumpKind, error) {
+	switch {
+	case srv.Managed():
+		return jumpAttach, nil
+	case srv == tmux.DefaultServer && h.Local():
+		return jumpSwitch, nil
+	case srv == tmux.DefaultServer:
+		return 0, fmt.Errorf("%s/%s: on %s's default tmux server, which laatmux only observes; attach is limited to managed sessions", h.Name, session, h.Name)
+	default:
+		return 0, fmt.Errorf("%s/%s: tmux server %s is not managed by laatmux; attach is limited to managed sessions", h.Name, session, srv.Label())
+	}
+}
+
+// sameServer reports whether two selectors reach the same tmux server.
+func sameServer(ctx context.Context, a, b tmux.Server) (bool, error) {
+	pa, err := a.Run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		return false, err
+	}
+	pb, err := b.Run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(pa)) == strings.TrimSpace(string(pb)), nil
 }
 
 // attachCommand is the shell command an attach pane runs. TMUX is unset so

@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // merged is the client-side merge of every host's stream. Host connectivity
@@ -189,9 +190,25 @@ func (m *merged) render() string {
 		if len(title) > 48 {
 			title = title[:48]
 		}
-		fmt.Fprintf(&b, "%s %-8s %-6s %-24s @%s%s  %s  %s\n", mark, a.Activity, agent, a.Session, host, live, ago(now.Sub(a.ActivityAt)), title)
+		// Agents on the managed server are the common case and show the
+		// host alone; anything else names its server, which is also what
+		// jump --server takes.
+		where := host
+		if srv := serverOf(a); srv != tmux.LaatmuxServer.Label() {
+			where += "/" + srv
+		}
+		fmt.Fprintf(&b, "%s %-8s %-6s %-24s @%s%s  %s  %s\n", mark, a.Activity, agent, a.Session, where, live, ago(now.Sub(a.ActivityAt)), title)
 	}
 	return b.String()
+}
+
+// serverOf is the agent's tmux server label. Daemons from before servers
+// were carried in records only ever watched the managed server.
+func serverOf(a protocol.Agent) string {
+	if a.Server == "" {
+		return tmux.LaatmuxServer.Label()
+	}
+	return a.Server
 }
 
 func ago(d time.Duration) string {
