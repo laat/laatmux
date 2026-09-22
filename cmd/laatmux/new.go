@@ -39,7 +39,7 @@ func cmdNew(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", *host)
 	}
-	c, err := client.Dial(ctx, h)
+	c, err := client.Dial(ctx, h.Host)
 	if err != nil {
 		return err
 	}

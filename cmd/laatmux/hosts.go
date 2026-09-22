@@ -23,12 +23,12 @@ func cmdHosts(ctx context.Context, args []string) error {
 	var wg sync.WaitGroup
 	for i, h := range cfg.Hosts {
 		wg.Add(1)
-		go func(i int, h client.Host) {
+		go func(i int, h config.Host) {
 			defer wg.Done()
 			dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			start := time.Now()
-			c, err := client.Dial(dctx, h)
+			c, err := client.Dial(dctx, h.Host)
 			if err != nil {
 				rows[i] = row{h.Name, "unreachable: " + err.Error()}
 				return

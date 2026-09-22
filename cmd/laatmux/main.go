@@ -41,6 +41,8 @@ func main() {
 		err = cmdJump(ctx, os.Args[2:])
 	case "hosts":
 		err = cmdHosts(ctx, os.Args[2:])
+	case "repos":
+		err = cmdRepos(ctx, os.Args[2:])
 	case "explain":
 		err = cmdExplain(ctx, os.Args[2:])
 	case "version", "--version":
@@ -67,6 +69,7 @@ func usage() {
   watch     live list, redraws on change (sidebar)
   jump      laatmux jump [--server s] <host>/<session>   focus or open a pane attached to it
   hosts     reachability and daemon version per host
+  repos     known repositories and where each lands on each host
   explain   laatmux explain <pane-id>       show detection inputs and decision
   version
 

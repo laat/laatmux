@@ -231,9 +231,9 @@ func cmdLs(ctx context.Context, args []string) error {
 	var wg sync.WaitGroup
 	for _, h := range cfg.Hosts {
 		wg.Add(1)
-		go func(h client.Host) {
+		go func(h config.Host) {
 			defer wg.Done()
-			c, err := client.Dial(ctx, h)
+			c, err := client.Dial(ctx, h.Host)
 			if err != nil {
 				m.setHost(h.Name, hostState{Error: err.Error()})
 				return
@@ -266,7 +266,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 	}
 	m := newMerged()
 	for _, h := range cfg.Hosts {
-		go m.follow(ctx, h)
+		go m.follow(ctx, h.Host)
 	}
 	t := time.NewTicker(5 * time.Second) // refresh relative times
 	defer t.Stop()
