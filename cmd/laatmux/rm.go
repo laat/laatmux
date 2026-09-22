@@ -65,7 +65,7 @@ func cmdRm(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if w, ok := findWorktree(snap.Worktrees, repo.Name, branch); ok {
+		if w, ok := findWorktree(snap.Worktrees, repo, branch); ok {
 			req.Root = w.Root
 		} else {
 			locals, err := workspace.List(ctx)

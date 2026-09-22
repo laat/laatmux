@@ -111,7 +111,8 @@ func printProgress(m protocol.Message) {
 }
 
 // focus switches the calling client to the local session, or, outside
-// the default tmux server, says how to attach.
+// the default tmux server, says how to attach. Inside another tmux server
+// the hint cannot be run as is, since tmux refuses to nest, and says so.
 func focus(ctx context.Context, name string, created bool) error {
 	if workspace.Inside(ctx) {
 		return workspace.Switch(ctx, name)
@@ -119,6 +120,10 @@ func focus(ctx context.Context, name string, created bool) error {
 	verb := "session"
 	if created {
 		verb = "created session"
+	}
+	if os.Getenv("TMUX") != "" {
+		fmt.Printf("%s %s is on the default tmux server; detach from this one, then: %s\n", verb, name, workspace.AttachHint(name))
+		return nil
 	}
 	fmt.Printf("%s %s; attach with: %s\n", verb, name, workspace.AttachHint(name))
 	return nil

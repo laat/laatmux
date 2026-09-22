@@ -138,15 +138,26 @@ func snapshot(ctx context.Context, h client.Host, needCap string) (hello, snap p
 	return c.Hello, snap, nil
 }
 
-// findWorktree returns the record for a branch of a repository, by the
-// host's label for it.
-func findWorktree(ws []protocol.Worktree, repo, branch string) (protocol.Worktree, bool) {
+// findWorktree returns the record for a branch of a repository, by source:
+// the record carries the daemon's label, which may differ from this
+// machine's for the same source. A record from a daemon that does not
+// carry the source is matched by label instead.
+func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool) {
 	for _, w := range ws {
-		if w.Repo == repo && w.Branch == branch && branch != "" {
+		if w.Branch == branch && branch != "" && sameRepo(w, repo) {
 			return w, true
 		}
 	}
 	return protocol.Worktree{}, false
+}
+
+// sameRepo reports whether the record is of the repository: by source
+// when the record has one, else by label.
+func sameRepo(w protocol.Worktree, repo config.Repo) bool {
+	if w.Source != "" {
+		return w.Source == repo.Source
+	}
+	return w.Repo == repo.Name
 }
 
 // stream sends a command with progress to the host and returns its result,

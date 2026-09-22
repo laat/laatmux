@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -22,21 +23,26 @@ func TestSplitRepoBranch(t *testing.T) {
 }
 
 func TestMatchWorktree(t *testing.T) {
+	// This machine calls the source "mine"; the host calls it "proj".
+	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}}
 	ws := []protocol.Worktree{
-		{Repo: "proj", Branch: "fix/v1.2", Root: "/r/a", Session: "proj/fix/v1%2e2"},
-		{Repo: "proj", Branch: "", Root: "/r/detached"},
-		{Repo: "proj", Branch: "main", Root: "/r/b"},
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "fix/v1.2", Root: "/r/a", Session: "proj/fix/v1%2e2"},
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "", Root: "/r/detached"},
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "main", Root: "/r/b"},
 	}
-	if w, ok := matchWorktree(ws, "proj/fix/v1.2"); !ok || w.Root != "/r/a" {
-		t.Errorf("by repo/branch: %+v %v", w, ok)
+	if w, ok := matchWorktree(ws, cfg, "proj/fix/v1.2"); !ok || w.Root != "/r/a" {
+		t.Errorf("by the host's label: %+v %v", w, ok)
 	}
-	if w, ok := matchWorktree(ws, "proj/fix/v1%2e2"); !ok || w.Root != "/r/a" {
+	if w, ok := matchWorktree(ws, cfg, "mine/fix/v1.2"); !ok || w.Root != "/r/a" {
+		t.Errorf("by this machine's label: %+v %v", w, ok)
+	}
+	if w, ok := matchWorktree(ws, cfg, "proj/fix/v1%2e2"); !ok || w.Root != "/r/a" {
 		t.Errorf("by session name: %+v %v", w, ok)
 	}
-	if _, ok := matchWorktree(ws, "proj/"); ok {
+	if _, ok := matchWorktree(ws, cfg, "proj/"); ok {
 		t.Error("detached worktree matched by empty branch")
 	}
-	if w, ok := matchWorktree(ws, "proj/main"); !ok || w.Session != "" {
+	if w, ok := matchWorktree(ws, cfg, "proj/main"); !ok || w.Session != "" {
 		t.Errorf("worktree without session: %+v %v", w, ok)
 	}
 	// A branch written as is wins over another branch's encoded session
@@ -46,12 +52,36 @@ func TestMatchWorktree(t *testing.T) {
 		{Repo: "proj", Branch: "a%2eb", Root: "/r/pct", Session: "proj/a%252eb"},
 	}
 	for _, order := range [][]protocol.Worktree{ambiguous, {ambiguous[1], ambiguous[0]}} {
-		if w, ok := matchWorktree(order, "proj/a%2eb"); !ok || w.Root != "/r/pct" {
+		if w, ok := matchWorktree(order, cfg, "proj/a%2eb"); !ok || w.Root != "/r/pct" {
 			t.Errorf("raw branch target: %+v %v", w, ok)
 		}
-		if w, ok := matchWorktree(order, "proj/a.b"); !ok || w.Root != "/r/dot" {
+		if w, ok := matchWorktree(order, cfg, "proj/a.b"); !ok || w.Root != "/r/dot" {
 			t.Errorf("dotted branch target: %+v %v", w, ok)
 		}
+	}
+}
+
+// path and rm find a record by source, whatever the host calls it, and by
+// label only for a record from a daemon that carries no source.
+func TestFindWorktreeBySource(t *testing.T) {
+	mine := config.Repo{Source: "git@x:o/proj.git", Name: "mine"}
+	other := config.Repo{Source: "git@x:o/other.git", Name: "proj"}
+	ws := []protocol.Worktree{
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "fix", Root: "/r/proj"},
+		{Repo: "other", Source: "git@x:o/other.git", Branch: "fix", Root: "/r/other"},
+	}
+	if w, ok := findWorktree(ws, mine, "fix"); !ok || w.Root != "/r/proj" {
+		t.Errorf("by source under another label: %+v %v", w, ok)
+	}
+	if w, ok := findWorktree(ws, other, "fix"); !ok || w.Root != "/r/other" {
+		t.Errorf("a colliding label did not win over the source: %+v %v", w, ok)
+	}
+	old := []protocol.Worktree{{Repo: "mine", Branch: "fix", Root: "/r/old"}}
+	if w, ok := findWorktree(old, mine, "fix"); !ok || w.Root != "/r/old" {
+		t.Errorf("older record by label: %+v %v", w, ok)
+	}
+	if _, ok := findWorktree(old, other, "fix"); ok {
+		t.Error("older record matched a different label")
 	}
 }
 

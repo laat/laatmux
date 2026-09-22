@@ -162,14 +162,14 @@ type Spec struct {
 }
 
 // Ensure finds the local session for the spec, or creates it: one window
-// running the attach command, with the session tagged in the same tmux
+// for the attach command, with the session tagged in the same tmux
 // command sequence so it is never observable untagged, then the attach
-// pane tagged by id. An existing session is found by its key, or by its
-// attach tag for a plain attachment, whatever its name; its host, source
-// and branch tags are refreshed, since it may predate a rename, and a
-// dead attach pane in it is respawned. A session with the intended name
-// that is not it is a name in use. The name of the session, existing or
-// new, and whether it was created are returned.
+// pane tagged by id and started. An existing session is found by its key,
+// or by its attach tag for a plain attachment, whatever its name; its
+// host, source and branch tags are refreshed, since it may predate a
+// rename, and a dead attach pane in it is respawned. A session with the
+// intended name that is not it is a name in use. The name of the session,
+// existing or new, and whether it was created are returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	locals, err := List(ctx)
 	if err != nil {
@@ -196,7 +196,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 			return "", false, fmt.Errorf("local session %s exists and is not laatmux's; name in use", s.Name)
 		}
 	}
-	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", AttachCommand(s.Host, s.Managed)}
+	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
 	if s.Key != "" {
 		args = append(args, ";", "set-option", "-t", s.Name, "@laatmux_workspace", s.Key)
 	} else {
@@ -212,10 +212,26 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// session's active pane: the user's hooks may have split the window
 	// by now. It stays when ssh or the managed session goes, so the rest
 	// of the workspace survives and jump can respawn it.
-	if err := tagAttachPane(ctx, strings.TrimSpace(string(out))); err != nil {
+	if err := startAttach(ctx, strings.TrimSpace(string(out)), s); err != nil {
 		return "", false, err
 	}
 	return s.Name, true, nil
+}
+
+// placeholder is what a new attach pane runs until it is tagged: a
+// command that does not exit, so the pane cannot die before remain-on-exit
+// is set on it. The attach command, which may exit at once when ssh fails
+// or the managed session is gone, replaces it in the same sequence as the
+// tags; a pane that then dies stays for jump to respawn.
+const placeholder = "sleep 2147483647"
+
+// startAttach tags the pane and replaces its placeholder with the attach
+// command, in one tmux command sequence.
+func startAttach(ctx context.Context, paneID string, s Spec) error {
+	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "remain-on-exit", "on",
+		";", "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
+		";", "respawn-pane", "-k", "-t", paneID, AttachCommand(s.Host, s.Managed))
+	return err
 }
 
 // tagArgs is the tmux command sequence that sets the routing and identity
@@ -231,12 +247,6 @@ func tagArgs(name string, s Spec) []string {
 		args = append(args, ";", "set-option", "-t", name, "@laatmux_branch", s.Branch)
 	}
 	return args
-}
-
-func tagAttachPane(ctx context.Context, paneID string) error {
-	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
-		";", "set-option", "-p", "-t", paneID, "remain-on-exit", "on")
-	return err
 }
 
 // ensureAttach makes sure the session has a live attach pane: a dead one
@@ -259,11 +269,11 @@ func ensureAttach(ctx context.Context, name string, s Spec) error {
 		}
 		return nil
 	}
-	out, err = Server.Run(ctx, "new-window", "-t", "="+name+":", "-n", "agent", "-P", "-F", "#{pane_id}", AttachCommand(s.Host, s.Managed))
+	out, err = Server.Run(ctx, "new-window", "-t", "="+name+":", "-n", "agent", "-P", "-F", "#{pane_id}", placeholder)
 	if err != nil {
 		return err
 	}
-	return tagAttachPane(ctx, strings.TrimSpace(string(out)))
+	return startAttach(ctx, strings.TrimSpace(string(out)), s)
 }
 
 // AttachCommand is the shell command the attach window runs. TMUX is unset
@@ -315,8 +325,10 @@ func Switch(ctx context.Context, name string) error {
 }
 
 // AttachHint is what to run to attach to the session from outside tmux.
+// The default server is selected explicitly, so the command does not
+// follow an inherited TMUX that names another server.
 func AttachHint(name string) string {
-	return tmux.ShellJoin([]string{"tmux", "attach-session", "-t", "=" + name})
+	return tmux.ShellJoin(append([]string{"tmux"}, Server.AttachArgsBare(name)...))
 }
 
 // Kill kills the session, switching the calling client away first when it

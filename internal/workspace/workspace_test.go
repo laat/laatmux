@@ -97,3 +97,9 @@ func TestTagArgsPreserveUnknownIdentity(t *testing.T) {
 		t.Errorf("plain attachment got identity tags: %s", plain)
 	}
 }
+
+func TestAttachHintSelectsDefaultServer(t *testing.T) {
+	if got := AttachHint("vm/proj/x"); got != `tmux -L default attach-session -t '=vm/proj/x'` {
+		t.Fatalf("AttachHint = %s", got)
+	}
+}

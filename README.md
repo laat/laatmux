@@ -172,7 +172,10 @@ carries the source from the daemon, so `jump` never derives it from a
 label that may mean another repository on this machine. The session is
 created detached and tagged in one tmux command sequence, then the attach
 pane is tagged by the id `new-session` printed, since the user's hooks may
-split the window at once.
+split the window at once. The pane runs a placeholder until then, so it
+cannot exit before `remain-on-exit` is set on it; the attach command
+replaces the placeholder in the same sequence as the tags, and an attach
+that fails at once leaves a dead pane for the next `jump` to respawn.
 
 - **`add <branch>`** resolves the repository from `--repo`, else from the
   current directory: its git origin is matched against the known sources,
@@ -187,7 +190,8 @@ split the window at once.
   Progress prints one line per step. On success `last.json` is updated
   and the workspace session is created, or found by key; inside the
   default tmux server the client switches to it, elsewhere it prints how
-  to attach.
+  to attach, with the default server selected explicitly, and inside
+  another tmux server it says to detach first.
 - **`rm <repo>/<branch>`** sends the root along whenever it is known: from
   the host's record, or, when the worktree is already gone, from the key
   of the local session found by its source and branch tags; a session
@@ -197,13 +201,17 @@ split the window at once.
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
 - **`path <repo>/<branch>`** prints the root from the host's records.
+  Records are matched by source, since the host's label for a source may
+  differ from this machine's; a record from a daemon without the source
+  is matched by label. `rm` finds its record the same way.
 - **`jump <host>/<repo>/<branch>`** switches to the workspace session,
   creating it from the record when missing, respawning a dead attach pane,
   and opening a new attach window when the pane is gone altogether. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
-  `@laatmux_attach`. The target after the host may also be the managed
-  session's name, with the branch encoded. `--server default` still
+  `@laatmux_attach`. The repository in the target may be this machine's
+  label or the host's, and the target after the host may also be the
+  managed session's name, with the branch encoded. `--server default` still
   switches to an observed session on this machine's tmux.
 - **`ls`** joins each host's worktrees with its agents by the managed
   session the record names. A worktree shows `no agent` when its session

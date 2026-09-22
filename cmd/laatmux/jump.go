@@ -76,7 +76,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	spec := workspace.Spec{Host: h.Host}
-	if w, ok := matchWorktree(snap.Worktrees, rest); ok {
+	if w, ok := matchWorktree(snap.Worktrees, cfg, rest); ok {
 		if w.Session == "" {
 			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, w.Repo, h.Name)
 		}
@@ -109,13 +109,19 @@ func cmdJump(ctx context.Context, args []string) error {
 }
 
 // matchWorktree finds the worktree a jump target names after the host:
-// <repo>/<branch> as written, or the managed session's name, which is the
-// same with the branch encoded. A branch written as is wins: with branches
+// <repo>/<branch> as written, with the repository as this machine's label
+// or the host's, or the managed session's name, which is the host's label
+// with the branch encoded. A branch written as is wins: with branches
 // a.b and a%2eb, the target proj/a%2eb is the second branch, not the
 // first's session name, whatever order the records arrive in.
-func matchWorktree(ws []protocol.Worktree, rest string) (protocol.Worktree, bool) {
+func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (protocol.Worktree, bool) {
+	label, branch, _ := strings.Cut(rest, "/")
+	local, known := cfg.RepoByName(label)
 	for _, w := range ws {
-		if w.Branch != "" && w.Repo+"/"+w.Branch == rest {
+		if w.Branch == "" || w.Branch != branch {
+			continue
+		}
+		if w.Repo == label || (known && sameRepo(w, local)) {
 			return w, true
 		}
 	}
