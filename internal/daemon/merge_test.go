@@ -95,7 +95,11 @@ func publish(d *Daemon, key string, a protocol.Agent) {
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &a})
 }
 
-func discovered(d *Daemon) { d.discoveredOnce.Do(func() { close(d.discovered) }) }
+// discovered completes both sides of a daemon's first poll.
+func discovered(d *Daemon) {
+	d.markDiscovered(&d.panesDiscovered)
+	d.markDiscovered(&d.worktreesDiscovered)
+}
 
 // hostsList is a host set a test changes between subscriptions.
 type hostsList struct {
@@ -124,6 +128,15 @@ type mergedFixture struct {
 
 func newMergedFixture(t *testing.T, ctx context.Context, sessions func(context.Context) ([]protocol.Session, error)) *mergedFixture {
 	t.Helper()
+	f := newUndiscoveredFixture(t, ctx, sessions)
+	discovered(f.local)
+	return f
+}
+
+// newUndiscoveredFixture is the fixture with the local daemon's first
+// poll still pending.
+func newUndiscoveredFixture(t *testing.T, ctx context.Context, sessions func(context.Context) ([]protocol.Session, error)) *mergedFixture {
+	t.Helper()
 	rd := New(Config{EnvironmentID: "renv", Version: "remote"})
 	rd.mu.Lock()
 	rd.agents["laatmux/%1"] = protocol.Agent{ID: "renv/laatmux/%1", EnvironmentID: "renv", Session: "proj/x", Activity: protocol.Working}
@@ -136,8 +149,73 @@ func newMergedFixture(t *testing.T, ctx context.Context, sessions func(context.C
 	ld.mu.Lock()
 	ld.agents["laatmux/%7"] = protocol.Agent{ID: "lenv/laatmux/%7", EnvironmentID: "lenv", Session: "proj/y", Activity: protocol.Idle}
 	ld.mu.Unlock()
-	discovered(ld)
 	return &mergedFixture{local: ld, remote: remote, hosts: hosts}
+}
+
+// A merged subscription does not wait for the local daemon's first poll:
+// the snapshot comes at once with the local host unlisted, the remote
+// host is listed on its own, and the local host follows on discovery. A
+// plain subscription still waits.
+func TestMergedDoesNotWaitForLocalDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newUndiscoveredFixture(t, ctx, nil)
+	c, pc, snap := f.subscribe(t, ctx)
+	defer c.Close()
+	if h, _ := findHost(snap.Hosts, "here"); !h.Connected || h.Listed {
+		t.Errorf("local host before discovery = %+v", h)
+	}
+	until(t, c, pc, hostStatus("vm", listed))
+	f.local.markDiscovered(&f.local.panesDiscovered)
+	f.local.markDiscovered(&f.local.worktreesDiscovered)
+	until(t, c, pc, hostStatus("here", listed))
+	c2, _, snap := f.subscribe(t, ctx)
+	defer c2.Close()
+	if h, _ := findHost(snap.Hosts, "here"); !h.Listed {
+		t.Errorf("local host after discovery = %+v", h)
+	}
+}
+
+// An idle callback that fired before a subscriber came and went does
+// nothing: the subscriber's leaving set a newer timer, whose grace time
+// is the one that counts.
+func TestMergedStaleIdleCallbackIgnored(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	f.local.cfg.MergedIdle = time.Hour
+	c, pc, _ := f.subscribe(t, ctx)
+	until(t, c, pc, hostStatus("vm", listed))
+	c.Close()
+	gen := idleTimerGen(t, f.local, 0)
+	c2, _, _ := f.subscribe(t, ctx) // stops the timer
+	c2.Close()                      // sets a new one, once the connection's goroutine unsubscribes
+	idleTimerGen(t, f.local, gen)
+	f.local.mergedIdle(gen) // the old callback, late
+	f.local.mu.Lock()
+	active, timer := f.local.mctx != nil, f.local.midle != nil
+	f.local.mu.Unlock()
+	if !active || !timer {
+		t.Fatalf("stale callback acted: active=%v timer=%v", active, timer)
+	}
+}
+
+// idleTimerGen waits for an idle timer of a generation other than not
+// and returns its generation.
+func idleTimerGen(t *testing.T, d *Daemon, not uint64) uint64 {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		gen, set := d.midleGen, d.midle != nil
+		d.mu.Unlock()
+		if set && gen != not {
+			return gen
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no idle timer after the last subscriber left")
+	return 0
 }
 
 // subscribe opens a merged subscription to the local daemon and returns

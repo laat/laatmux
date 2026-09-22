@@ -146,6 +146,7 @@ type Daemon struct {
 	mctx         context.Context
 	mcancel      context.CancelFunc
 	midle        *time.Timer
+	midleGen     uint64 // bumped when the timer is set or stopped; a fired callback checks it
 
 	// discovered closes after the first complete poll of every server and
 	// of git, so a snapshot is never an empty or partial view of a host
@@ -290,11 +291,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 // markDiscovered records one side's first complete poll and opens
-// discovered once both are in.
+// discovered once both are in. The local host's record in the merged
+// stream becomes listed at the same moment.
 func (d *Daemon) markDiscovered(flag *bool) {
 	d.mu.Lock()
 	*flag = true
 	both := d.panesDiscovered && d.worktreesDiscovered
+	if both {
+		d.localListedLocked()
+	}
 	d.mu.Unlock()
 	if both {
 		d.discoveredOnce.Do(func() { close(d.discovered) })
@@ -666,16 +671,21 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				_ = pc.Write(protocol.Message{Type: protocol.TypeError, Error: "this daemon has no merged capability; it has no hosts in its config"})
 				continue
 			}
-			select {
-			case <-d.discovered:
-			case <-ctx.Done():
-				return
-			}
 			var s *subscriber
 			var snap protocol.Message
 			if m.Merged {
+				// The merged snapshot is sent at once with what the
+				// daemon knows; the local host's record says whether
+				// its own records are complete, as a remote host's
+				// does, so a tmux the daemon cannot poll holds up
+				// neither the remote hosts nor the host rows.
 				s, snap = d.mergedSubscribe(ctx, drop)
 			} else {
+				select {
+				case <-d.discovered:
+				case <-ctx.Done():
+					return
+				}
 				s, snap = d.subscribe(drop)
 			}
 			sub = s

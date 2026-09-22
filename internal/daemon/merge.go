@@ -70,10 +70,7 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 	}
 	sessions, serr := d.listSessions(ctx)
 	d.mu.Lock()
-	if d.midle != nil {
-		d.midle.Stop()
-		d.midle = nil
-	}
+	d.stopIdleLocked()
 	if d.mctx == nil {
 		d.mctx, d.mcancel = context.WithCancel(ctx)
 		go d.runSessions(d.mctx)
@@ -115,7 +112,21 @@ func (d *Daemon) mergedGoneLocked(s *subscriber, dropped bool) {
 		go s.drop()
 	}
 	if len(d.msubs) == 0 && d.mctx != nil && d.midle == nil {
-		d.midle = time.AfterFunc(d.cfg.MergedIdle, d.mergedIdle)
+		d.midleGen++
+		gen := d.midleGen
+		d.midle = time.AfterFunc(d.cfg.MergedIdle, func() { d.mergedIdle(gen) })
+	}
+}
+
+// stopIdleLocked cancels a pending idle timer. A callback that has
+// already fired and is waiting for the mutex sees the generation moved
+// on and does nothing, so a subscriber that arrives and leaves in that
+// window gets its own full idle time from the timer its leaving sets.
+func (d *Daemon) stopIdleLocked() {
+	if d.midle != nil {
+		d.midle.Stop()
+		d.midle = nil
+		d.midleGen++
 	}
 }
 
@@ -124,9 +135,12 @@ func (d *Daemon) mergedGoneLocked(s *subscriber, dropped bool) {
 // stay for the next snapshot, with the host records saying they are
 // neither connected nor listed, which is the state of a host not yet
 // reached and what a one-shot client waits on.
-func (d *Daemon) mergedIdle() {
+func (d *Daemon) mergedIdle(gen uint64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if gen != d.midleGen {
+		return // stopped, or superseded by a later timer
+	}
 	d.midle = nil
 	if len(d.msubs) > 0 || d.mctx == nil {
 		return
@@ -171,9 +185,10 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 		mh := &mergedHost{host: h, status: protocol.HostStatus{Name: h.Name, SSH: h.SSH, Since: now},
 			agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
 		if h.Local() {
-			// This machine is itself: connected, and listed once
-			// discovered, which every subscription waits for.
-			mh.status.Connected, mh.status.Listed = true, true
+			// This machine is itself: connected, and listed once its
+			// first poll of every server and of git is complete, which
+			// markDiscovered publishes.
+			mh.status.Connected, mh.status.Listed = true, d.panesDiscovered && d.worktreesDiscovered
 			mh.status.EnvironmentID, mh.status.Version = d.cfg.EnvironmentID, d.cfg.Version
 			mh.status.Capabilities = d.capabilities()
 		}
@@ -229,6 +244,18 @@ func (d *Daemon) localHostLocked() *mergedHost {
 		}
 	}
 	return nil
+}
+
+// localListedLocked marks the local host's record listed, on discovery.
+func (d *Daemon) localListedLocked() {
+	mh := d.localHostLocked()
+	if mh == nil || mh.status.Listed {
+		return
+	}
+	mh.status.Listed = true
+	mh.status.Since = time.Now()
+	st := mh.status
+	d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
 }
 
 // forwardLocalLocked publishes one of the daemon's own upserts or removes

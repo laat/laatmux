@@ -299,7 +299,9 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   set: a local session is stale only against a host that is connected,
   listed and publishes worktrees, and `jump` reports a workspace missing
   only from a listed host. The local host is itself, not a dial of its
-  own socket. Records are forwarded unchanged, ids included; a client maps
+  own socket; it is listed once the daemon's first poll of every server
+  and of git is complete, and a merged subscription does not wait for
+  that as a plain one does. Records are forwarded unchanged, ids included; a client maps
   a record's `environment_id` to a host name through the host records.
   `seq` is the merging daemon's own.
 - **Hosts follow the config file.** The daemon re-reads `hosts` on every
