@@ -209,9 +209,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   and opening a new attach window when the pane is gone altogether. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
-  `@laatmux_attach`. The repository in the target may be this machine's
-  label or the host's, and the target after the host may also be the
-  managed session's name, with the branch encoded. `--server default` still
+  `@laatmux_attach`. The repository in the target is read as this
+  machine's label first, then the host's, and the target after the host
+  may also be the managed session's name, with the branch encoded, which
+  is how a worktree detached in place is still reached. The local
+  session's name follows the managed session's. `--server default` still
   switches to an observed session on this machine's tmux.
 - **`ls`** joins each host's worktrees with its agents by the managed
   session the record names. A worktree shows `no agent` when its session

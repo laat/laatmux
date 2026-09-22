@@ -80,8 +80,13 @@ func cmdJump(ctx context.Context, args []string) error {
 		if w.Session == "" {
 			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, w.Repo, h.Name)
 		}
+		// A detached worktree has no <repo>/<branch> form; it is reached
+		// by its session name.
 		spec.Managed = w.Session
-		spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
+		// The managed session is <repo>/<encoded branch> as it was when
+		// add made it; the local name follows it rather than the record's
+		// branch, which is empty for a worktree detached since.
+		spec.Name = h.Name + "/" + w.Session
 		spec.Key = workspace.Key(hello.EnvironmentID, w.Root)
 		spec.Branch = w.Branch
 		// The source is the identity and comes from the record. A daemon
@@ -108,25 +113,35 @@ func cmdJump(ctx context.Context, args []string) error {
 	return focus(ctx, name, created)
 }
 
-// matchWorktree finds the worktree a jump target names after the host:
-// <repo>/<branch> as written, with the repository as this machine's label
-// or the host's, or the managed session's name, which is the host's label
-// with the branch encoded. A branch written as is wins: with branches
+// matchWorktree finds the worktree a jump target names after the host,
+// in order of precedence: <repo>/<branch> with the repository as this
+// machine's label, which is the user's own vocabulary; the same with the
+// host's label, for a source this machine has no label for; then the
+// managed session's name, which is the host's label with the branch
+// encoded. Each pass is a different reading of the target, so the first
+// that matches wins whatever order the records arrive in: with branches
 // a.b and a%2eb, the target proj/a%2eb is the second branch, not the
-// first's session name, whatever order the records arrive in.
+// first's session name. The session-name pass does not need a branch: a
+// worktree detached in place keeps its root and session, and stays the
+// same workspace.
 func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (protocol.Worktree, bool) {
 	label, branch, _ := strings.Cut(rest, "/")
-	local, known := cfg.RepoByName(label)
-	for _, w := range ws {
-		if w.Branch == "" || w.Branch != branch {
-			continue
+	if local, ok := cfg.RepoByName(label); ok && branch != "" {
+		for _, w := range ws {
+			if w.Branch == branch && sameRepo(w, local) {
+				return w, true
+			}
 		}
-		if w.Repo == label || (known && sameRepo(w, local)) {
-			return w, true
+	}
+	if branch != "" {
+		for _, w := range ws {
+			if w.Branch == branch && w.Repo == label {
+				return w, true
+			}
 		}
 	}
 	for _, w := range ws {
-		if w.Branch != "" && w.Session != "" && w.Session == rest {
+		if w.Session != "" && w.Session == rest {
 			return w, true
 		}
 	}

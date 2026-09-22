@@ -42,6 +42,32 @@ func TestMatchWorktree(t *testing.T) {
 	if _, ok := matchWorktree(ws, cfg, "proj/"); ok {
 		t.Error("detached worktree matched by empty branch")
 	}
+	// A worktree detached in place keeps its session and is still reached
+	// by the session's name.
+	detached := []protocol.Worktree{{Repo: "proj", Source: "git@x:o/proj.git", Branch: "", Root: "/r/d", Session: "proj/was-fix"}}
+	if w, ok := matchWorktree(detached, cfg, "proj/was-fix"); !ok || w.Root != "/r/d" {
+		t.Errorf("detached worktree by session name: %+v %v", w, ok)
+	}
+	// This machine's label wins over the host's when they name different
+	// sources, in either record order.
+	clash := []protocol.Worktree{
+		{Repo: "proj", Source: "git@x:o/other.git", Branch: "fix", Root: "/r/host-label"},
+		{Repo: "theirs", Source: "git@x:o/proj.git", Branch: "fix", Root: "/r/local-label"},
+	}
+	for _, order := range [][]protocol.Worktree{clash, {clash[1], clash[0]}} {
+		if w, ok := matchWorktree(order, cfg, "mine/fix"); !ok || w.Root != "/r/local-label" {
+			t.Errorf("local label: %+v %v", w, ok)
+		}
+		if w, ok := matchWorktree(order, cfg, "proj/fix"); !ok || w.Root != "/r/host-label" {
+			t.Errorf("host label when this machine has none: %+v %v", w, ok)
+		}
+	}
+	both := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}}}
+	for _, order := range [][]protocol.Worktree{clash, {clash[1], clash[0]}} {
+		if w, ok := matchWorktree(order, both, "proj/fix"); !ok || w.Root != "/r/local-label" {
+			t.Errorf("local label over host label: %+v %v", w, ok)
+		}
+	}
 	if w, ok := matchWorktree(ws, cfg, "proj/main"); !ok || w.Session != "" {
 		t.Errorf("worktree without session: %+v %v", w, ok)
 	}
