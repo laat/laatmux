@@ -353,7 +353,7 @@ func TestSetupFailureAndChange(t *testing.T) {
 		c := f.checkout()
 		write(t, filepath.Join(c, config.SetupFile), content)
 		run(t, c, "git", "add", config.SetupFile)
-		run(t, c, "git", "commit", "-q", "-m", "setup")
+		run(t, c, "git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "setup")
 		run(t, c, "git", "push", "-q", "origin", "main")
 	}
 	if _, _, err := f.add("first"); err != nil {
