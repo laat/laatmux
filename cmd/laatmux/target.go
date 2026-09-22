@@ -66,7 +66,9 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 }
 
 // labelUnder is the path component after the local host's repos or
-// worktrees directory when dir is under one of them.
+// worktrees directory when dir is under one of them. The more specific
+// directory is tried first: with worktrees nested under repos, a
+// worktree's label is the component after worktrees, not "worktrees".
 func labelUnder(cfg config.Config, dir string) (string, bool) {
 	local, ok := cfg.Local()
 	if !ok {
@@ -77,7 +79,11 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 		return "", false
 	}
 	d = d.Expand()
-	for _, base := range []string{d.Repos, d.Worktrees} {
+	bases := []string{d.Repos, d.Worktrees}
+	if len(d.Worktrees) > len(d.Repos) {
+		bases = []string{d.Worktrees, d.Repos}
+	}
+	for _, base := range bases {
 		if rest, ok := strings.CutPrefix(dir+"/", base+"/"); ok {
 			label, _, _ := strings.Cut(rest, "/")
 			return label, label != ""

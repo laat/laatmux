@@ -117,7 +117,7 @@ func TestFindWorktreeBySource(t *testing.T) {
 // whose workspace is gone from a connected host as stale.
 func TestRender(t *testing.T) {
 	m := newMerged()
-	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1"})
+	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1", Worktrees: true})
 	m.setHost("box", hostState{Error: "unreachable"})
 	now := time.Now()
 	m.apply("vm", protocol.Message{Type: protocol.TypeSnapshot,
@@ -139,13 +139,16 @@ func TestRender(t *testing.T) {
 		{Name: "vm/proj/gone", Key: "env1//r/gone", Host: "vm"},
 		{Name: "box/proj/x", Key: "env2//r/x", Host: "box"},
 		{Name: "slow/proj/y", Key: "env3//r/y", Host: "slow"},
+		{Name: "old/proj/z", Key: "env4//r/z", Host: "old"},
 	}
-	// A connected host whose snapshot has not arrived yet says nothing
-	// about its workspaces.
-	m.setHost("slow", hostState{Connected: true, Version: "v", EnvID: "env3"})
+	// A connected host whose snapshot has not arrived yet, or whose
+	// daemon publishes no worktrees, says nothing about its workspaces.
+	m.setHost("slow", hostState{Connected: true, Version: "v", EnvID: "env3", Worktrees: true})
+	m.setHost("old", hostState{Connected: true, Version: "v", EnvID: "env4"})
+	m.apply("old", protocol.Message{Type: protocol.TypeSnapshot})
 	out := m.render(locals)
-	if strings.Contains(out, "slow/proj/y") {
-		t.Errorf("workspace on a host before its snapshot listed as stale:\n%s", out)
+	if strings.Contains(out, "slow/proj/y") || strings.Contains(out, "old/proj/z") {
+		t.Errorf("workspace listed as stale without evidence:\n%s", out)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	find := func(sub string) int {
@@ -197,5 +200,23 @@ func TestStreamDedupe(t *testing.T) {
 	}
 	if strings.Join(got, "") != "abc" {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// The more specific directory wins when worktrees is nested under repos.
+func TestLabelUnderNested(t *testing.T) {
+	cfg := config.Config{Hosts: []config.Host{{Repos: "/src", Worktrees: "/src/worktrees"}}}
+	cases := map[string]string{
+		"/src/worktrees/proj/topic": "proj",
+		"/src/proj":                 "proj",
+		"/src/proj/sub/dir":         "proj",
+		"/src/worktrees":            "worktrees",
+		"/elsewhere/proj":           "",
+	}
+	for dir, want := range cases {
+		got, ok := labelUnder(cfg, dir)
+		if got != want || ok != (want != "") {
+			t.Errorf("labelUnder(%q) = %q, %v; want %q", dir, got, ok, want)
+		}
 	}
 }

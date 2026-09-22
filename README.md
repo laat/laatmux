@@ -182,8 +182,9 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   since identity is the source and a checkout keeps its directory after a
   label change; an origin that is not configured is an error rather than
   a guess from the directory name; only a directory with no origin falls
-  back to its place under the local host's `repos` or `worktrees`, where
-  the next path component is the label. Host and agent come from
+  back to its place under the local host's `repos` or `worktrees`, the
+  more specific first, where the next path component is the label. Host
+  and agent come from
   their flags, else `last.json`, else the config's default order. The
   command id is chosen once per invocation; a transport failure mid-way
   dials again with the same id, and the daemon's replay is printed once.
@@ -221,8 +222,8 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   agent with no worktree says so; observed agents name their server.
   Settled workspaces are listed under `settled`, and a local workspace
   session whose worktree is gone from a connected host under `stale`, from
-  which `rm` still works; a host whose snapshot has not arrived says
-  nothing about its workspaces yet. `watch` re-reads the local sessions on each
+  which `rm` still works; a host whose snapshot has not arrived, or whose
+  daemon does not publish worktrees, says nothing about its workspaces. `watch` re-reads the local sessions on each
   redraw.
 - **`shell`** runs inside a workspace session and opens a window at the
   worktree root: started there for a local host, `ssh -t` with `cd` and
