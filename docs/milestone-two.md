@@ -64,12 +64,23 @@ name from the same list:
 4. A list entry may be a mapping with an explicit `name` next to `source`,
    which wins over all of the above.
 
-Names that come out of this are validated like every other label. Because
-identity is the source and not the name, adding a source that forces an
-existing repository's name to change is harmless: the daemon finds a
-repository's checkout under `<repos>` by its `origin`, not by its
-directory name, so an existing checkout and its worktrees keep working
-under the new label, and only new clones use the new name.
+Names that come out of this are validated like every other label, and
+`Load` rejects the list when two entries have the same source or, after
+explicit names and derivation, the same final name. Explicit names are not
+exempt: they win the derivation but must still be unique.
+
+Identity is the source and not the name, so adding a source that forces an
+existing repository's name to change is harmless. The rule that makes this
+hold everywhere: **the label is used only to place new things**. Existing
+things are found by inspection and keep their paths. The daemon finds a
+repository's checkout under `<repos>` by its `origin`, not by its directory
+name. It finds the worktree for a branch by asking that checkout's
+`git worktree list`, not by computing a path. It finds the managed session
+for a worktree by the root recorded on the pane, not by the session name.
+The laptop finds the local session for a workspace by the root in its tag,
+not by the repository label in its name. After a rename, all of those still
+resolve; only new clones, new worktrees and new session names use the new
+label, and `ls` shows the new label next to the old paths.
 
 A repository's main checkout on a host is `<repos>/<name>` when the daemon
 clones it, which it does if no checkout under `<repos>` has the source as
@@ -129,14 +140,17 @@ current directory.
 |---|---|
 | repo, branch, root | the host's git: `git worktree list --porcelain` in each known repository's checkout, found under `<repos>` by `origin`, filtered to roots under `<worktrees>/`; branch is empty for a detached worktree; `prunable` entries are not published |
 | host | the daemon that answers, by environment id |
-| managed session | the host's managed tmux server: the pane carries `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd`, set at creation as `@laatmux_cwd` is today |
-| local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `<environment_id>/<repo>/<branch>` and `@laatmux_host` = the configured host name |
+| managed session | the host's managed tmux server: the pane carries `@laatmux_cwd` = the root, set at creation as today; repo and branch are not stored on the pane, they come from the worktree record with that root |
+| local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `<environment_id>/<root>` and `@laatmux_host` = the configured host name |
 | last-used defaults | `$LAATMUX_HOME/last.json` on the laptop |
 
-The workspace key is the environment id, not the host name: the id is minted
-once and survives a renamed ssh alias or host entry, so a local session
-still matches its workspace after the config changes. The host name is for
-routing and display.
+The workspace key is `<environment_id>/<root>`: the environment id is
+minted once and survives a renamed ssh alias or host entry, and the root is
+the one path git registered and never changes for the life of the worktree.
+Neither the host name nor the repository label is in the key, so a local
+session still matches its workspace after either is renamed. Both labels
+are for routing and display, and the client resolves a `<host>/<repo>/<branch>`
+target to a key through the current records at the time of the command.
 
 No workspace file is kept on either side. Git is the source of truth for
 worktrees, as the model says, so a worktree made by hand in the right
@@ -189,7 +203,7 @@ a retry after a crash skips exactly what is done and finishes what is not:
 
 | Stage | Step | Skipped when |
 |---|---|---|
-| resolve | checkout: the directory under `<repos>` whose `origin` is the source, else `<repos>/<name>` to be cloned; root `<worktrees>/<name>/<branch>`; agent command | never |
+| resolve | checkout: the directory under `<repos>` whose `origin` is the source, else `<repos>/<name>` to be cloned; root: the worktree `git worktree list` in that checkout already has for the branch, else `<worktrees>/<name>/<branch>` for a new one; agent command | never |
 | clone | `git clone <source> <checkout>` | a checkout with the source as `origin` exists; `<repos>/<name>` existing with a different origin fails the stage rather than being reused |
 | fetch | `git fetch origin` in the checkout | never; it is cheap and the branch base must be fresh |
 | worktree | `git remote set-head origin --auto`, `git worktree prune` | never; symref update and cleanup |
@@ -197,7 +211,7 @@ a retry after a crash skips exactly what is done and finishes what is not:
 | | registration: `git worktree add <root> <branch>` | root is registered on that branch; registered on another branch, or the branch is checked out elsewhere, fails the stage |
 | copy | each `copy` entry from the main checkout, written to a temporary file in the target directory and renamed into place | the target exists; it can only exist complete |
 | setup | each `setup` command in the root, in order, output streamed as detail; after each success a marker named by the command's index and hash is written under the worktree's git directory | that command's marker exists; a changed command has a new hash and runs again |
-| agent | one tmux invocation: `new-session` and every `set-option` for the pane, `\;`-separated, so the session is never observable without its options | a session of that name exists with one pane carrying matching `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd` |
+| agent | one tmux invocation: `new-session` and `set-option` for the pane, `\;`-separated, so the session is never observable without its option | a managed session exists whose single pane carries `@laatmux_cwd` equal to the root, whatever its name; a session with the intended name whose pane records another root fails the stage as a name in use |
 
 Details behind the checks. Branch creation and worktree registration are
 two steps because `git worktree add -b` is not atomic: a failure to create
@@ -224,9 +238,11 @@ laatmux does not try to make arbitrary commands idempotent.
 The agent stage creates and tags in one tmux command sequence. tmux runs the
 sequence to completion once it has been submitted, whatever happens to the
 daemon, so there is no window in which a managed session exists untagged.
-Today's `NewSession` issues separate commands and changes accordingly. A
-session of that name with anything other than one pane carrying the
-expected options fails the stage as a name in use; nothing is adopted.
+Today's `NewSession` issues separate commands and changes accordingly. The
+check is by root, not by name: a worktree made before a label change keeps
+its session under the old name, and a repeat `add` finds it. A session with
+the intended name whose pane records another root, or that is not a
+single managed pane, fails the stage as a name in use; nothing is adopted.
 
 A failed stage stops the sequence with `ok: false` and the stage name; the
 worktree is left in place for a retry. The command id is client chosen. The
