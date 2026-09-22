@@ -81,24 +81,39 @@ func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 // cached by the mtime and size of .git/config, so an idle poll spawns no
 // git processes. Not found is ("", false, nil).
 func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
+	checkouts, err := s.Checkouts(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	dir, ok := checkouts[repo.Source]
+	return dir, ok, nil
+}
+
+// Checkouts scans the repos directory once and maps each origin found to
+// its checkout, the first in directory order when two share an origin.
+// One scan serves every repository in a poll.
+func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 	entries, err := os.ReadDir(s.Dirs.Repos)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
+			return nil, nil
 		}
-		return "", false, err
+		return nil, err
 	}
+	out := map[string]string{}
 	for _, e := range entries {
 		dir := filepath.Join(s.Dirs.Repos, e.Name())
 		url, ok, err := s.origin(ctx, dir)
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
-		if ok && url == repo.Source {
-			return dir, true, nil
+		if ok {
+			if _, dup := out[url]; !dup {
+				out[url] = dir
+			}
 		}
 	}
-	return "", false, nil
+	return out, nil
 }
 
 // origin returns dir's remote.origin.url when dir is a main checkout (has
@@ -213,18 +228,20 @@ type Record struct {
 
 // List returns every worktree of every known repository that lives under
 // the worktrees directory. Prunable entries, whose directory is gone, are
-// left out. A repository without a checkout on this host has no worktrees.
-// One checkout failing to list does not hide the others: its error is
-// returned alongside what was listed.
+// left out, as is the main checkout, which is not a worktree even when
+// the repos directory sits under the worktrees one. A repository without
+// a checkout on this host has no worktrees. The repos directory is
+// scanned once; one checkout failing to list does not hide the others:
+// its error is returned alongside what was listed.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
+	checkouts, err := s.Checkouts(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var records []Record
 	var errs []error
 	for _, r := range s.Repos {
-		checkout, ok, err := s.Checkout(ctx, r)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
+		checkout, ok := checkouts[r.Source]
 		if !ok {
 			continue
 		}
@@ -234,7 +251,7 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 			continue
 		}
 		for _, e := range entries {
-			if e.Prunable || e.Bare || !s.Owns(e.Root) {
+			if e.Prunable || e.Bare || e.Root == checkout || !s.Owns(e.Root) {
 				continue
 			}
 			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
@@ -308,13 +325,14 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 	if !s.Owns(root) {
 		return Record{}, "", false, nil
 	}
+	// A checkout that cannot be read is not absence: rm must not take it
+	// as "already removed" and go on to kill the session.
+	checkouts, err := s.Checkouts(ctx)
+	if err != nil {
+		return Record{}, "", false, err
+	}
 	for _, r := range s.Repos {
-		checkout, ok, err := s.Checkout(ctx, r)
-		if err != nil {
-			// A checkout that cannot be read is not absence: rm must not
-			// take it as "already removed" and go on to kill the session.
-			return Record{}, "", false, err
-		}
+		checkout, ok := checkouts[r.Source]
 		if !ok {
 			continue
 		}

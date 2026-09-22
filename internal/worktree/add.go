@@ -69,7 +69,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		// Only a worktree under the worktrees directory is the worktree
 		// for the branch; one elsewhere fails the worktree stage below.
 		for _, e := range entries {
-			if e.Branch == branch && !e.Prunable && s.Owns(e.Root) {
+			if e.Branch == branch && !e.Prunable && e.Root != checkout && s.Owns(e.Root) {
 				a.Root = e.Root
 			}
 		}
@@ -181,7 +181,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		}
 		placed := false
 		for _, e := range entries {
-			if e.Branch == branch && s.Owns(e.Root) {
+			if e.Branch == branch && e.Root != checkout && s.Owns(e.Root) {
 				a.Root, placed = e.Root, true
 			}
 		}
@@ -195,6 +195,12 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	// carries its own setup.
 	setup, err := config.LoadSetup(a.Root)
 	if err != nil {
+		// The file is read once for both stages; an invalid entry fails
+		// the stage it belongs to.
+		var fe *config.SetupFieldError
+		if errors.As(err, &fe) && fe.Field == "setup" {
+			return a, fail(protocol.StageSetup, err)
+		}
 		return a, fail(protocol.StageCopy, err)
 	}
 

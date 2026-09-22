@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -683,5 +684,67 @@ func TestListWorktreeWithNewlineInPath(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("worktree with newline not listed: %+v", recs)
+	}
+}
+
+// An invalid setup entry fails the setup stage, an invalid copy entry the
+// copy stage, though one read of the file serves both.
+func TestSetupFileErrorsNameTheirStage(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	for _, tc := range []struct{ branch, content, stage string }{
+		{"bad-setup", "setup: [\" \"]\n", protocol.StageSetup},
+		{"bad-copy", "copy: [../x]\n", protocol.StageCopy},
+		{"bad-yaml", "copy: [\n", protocol.StageCopy},
+	} {
+		run(t, c, "git", "checkout", "-q", "-b", tc.branch, "main")
+		write(t, filepath.Join(c, config.SetupFile), tc.content)
+		run(t, c, "git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", tc.branch)
+		run(t, c, "git", "push", "-q", "origin", tc.branch)
+		run(t, c, "git", "checkout", "-q", "main")
+		_, _, err := f.add(tc.branch)
+		if got := stageOf(t, err); got != tc.stage {
+			t.Errorf("%s: stage %s, want %s (%v)", tc.branch, got, tc.stage, err)
+		}
+	}
+}
+
+// With the repos directory under the worktrees one, the main checkout
+// satisfies Owns but is not a worktree: it is not listed.
+func TestMainCheckoutNotListed(t *testing.T) {
+	f := newFixture(t)
+	f.store.Dirs.Repos = filepath.Join(f.store.Dirs.Worktrees, "checkouts")
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("list %+v", recs)
+	}
+}
+
+// One scan of the repos directory serves every repository: with many
+// known repositories a poll stats each checkout once, not once per repo.
+func TestCheckoutsScannedOnce(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("task"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		f.store.Repos = append(f.store.Repos, Repo{Source: fmt.Sprintf("/nowhere/%d.git", i), Name: fmt.Sprintf("r%d", i)})
+	}
+	checkouts, err := f.store.Checkouts(f.ctx)
+	if err != nil || len(checkouts) != 1 {
+		t.Fatalf("checkouts %v %v", checkouts, err)
+	}
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 {
+		t.Fatalf("list %+v %v", recs, err)
 	}
 }
