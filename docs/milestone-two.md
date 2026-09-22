@@ -71,8 +71,13 @@ current directory.
 | repo, branch, root | the host's git: `git worktree list --porcelain` in each configured repository, filtered to its `worktrees` directory |
 | host | the daemon that answers, by environment id |
 | managed session | the host's managed tmux server: the pane carries `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd`, set at creation as `@laatmux_cwd` is today |
-| local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `host/repo/branch` |
+| local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `<environment_id>/<repo>/<branch>` and `@laatmux_host` = the configured host name |
 | last-used defaults | `$LAATMUX_HOME/last.json` on the laptop |
+
+The workspace key is the environment id, not the host name: the id is minted
+once and survives a renamed ssh alias or host entry, so a local session
+still matches its workspace after the config changes. The host name is for
+routing and display.
 
 No workspace file is kept on either side. Git is the source of truth for
 worktrees, as the model says, so a worktree made by hand in the right
@@ -82,9 +87,20 @@ lists panes: by polling, published to subscribers as `worktree` records
 next to `agent` records, so `ls` shows a worktree whose agent has exited or
 was never started.
 
-The managed session name is `<repo>/<branch>`. The local session name is the
-same with `.` and `:` replaced by `-`, since tmux rejects them in session
-names; the `@laatmux_workspace` option holds the exact tuple.
+### Session names
+
+tmux rejects `.` and `:` in session names, and a branch may contain both
+(`fix/v1.2`). Both session names use one injective encoding of the branch:
+`%` becomes `%25`, `.` becomes `%2e`, `:` becomes `%3a`, nothing else
+changes. Distinct branches give distinct names (`a.b` and `a-b` stay apart)
+and the decode is exact, though the options above, not the name, are what
+records are matched on.
+
+- Managed session, on its host: `<repo>/<encoded branch>`. One managed server
+  per host, so the host is implicit.
+- Local workspace session, on the laptop: `<host>/<repo>/<encoded branch>`.
+  The host is part of the name because the same repository and branch may be
+  checked out on two hosts at once, and tmux refuses a duplicate name.
 
 ## Protocol
 
@@ -106,10 +122,24 @@ skips what is done:
 |---|---|---|
 | resolve | repository path for this host, worktree root, agent command | never |
 | fetch | `git fetch origin` in the main checkout | never; it is cheap and the branch base must be fresh |
-| worktree | `git worktree add -b <branch> <root> origin/HEAD`; adds the `worktrees` directory to `.git/info/exclude` | root exists as a worktree on that branch |
-| copy | each `copy` entry from the main checkout | the target exists |
-| setup | each `setup` command in the root, output streamed as detail | a marker exists at `<main>/.git/worktrees/<name>/laatmux-setup`, which dies with the worktree |
-| agent | `new` onto the managed server with the root as cwd, the agent command, `LAATMUX_AGENT` set, and the pane options above | the managed session exists |
+| worktree | `git remote set-head origin --auto`, then `git worktree add -b <branch> <root> origin/HEAD`; adds the `worktrees` directory to `.git/info/exclude` | root exists as a worktree on that branch |
+| copy | each `copy` entry from the main checkout, written to a temporary file in the target directory and renamed into place | the target exists; it can only exist complete |
+| setup | each `setup` command in the root, in order, output streamed as detail; after each success a marker named by the command's index and hash is written under the worktree's git directory | that command's marker exists; a changed command has a new hash and runs again |
+| agent | `new` onto the managed server with the root as cwd, the agent command, `LAATMUX_AGENT` set, and the pane options above | a session of that name exists with one pane carrying matching `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd` |
+
+Two details behind the skip rules. `git fetch origin` does not update
+`origin/HEAD`, so `set-head --auto` refreshes it and the branch base is the
+remote's current default branch, not the one recorded at clone time. The
+worktree's git directory is what `git -C <root> rev-parse --git-dir`
+returns, never derived from the branch name: git picks it, `feature/task`
+gets `.git/worktrees/task`, and duplicate basenames get suffixes. The
+markers live in a `laatmux/` subdirectory there and die with the worktree.
+
+The agent stage has two more outcomes besides skip. A session of that name
+whose single pane is managed but lacks the options is the crash window
+between `new-session` and `set-option`: the options are set and the stage is
+done. Anything else with that name, another pane count or different
+options, fails the stage as a name in use rather than being adopted.
 
 A failed stage stops the sequence with `ok: false` and the stage name; the
 worktree is left in place for a retry. The command id is client chosen. The
@@ -118,12 +148,33 @@ while the command runs attaches to the running stream, and a repeated id
 after it finished replays the result. A dropped bridge during `add` is
 therefore retried by sending the same message again.
 
-`rm` kills the managed session, then `git worktree remove` the root. A dirty
-worktree is refused unless `force` is set. The branch is left alone; merging,
-rebasing and deleting branches stay ordinary Git.
+`rm` checks first and destroys second: `git status --porcelain` in the root,
+and a dirty worktree is refused before anything is touched unless `force` is
+set. Only then does it kill the managed session and `git worktree remove` the
+root. A refused `rm` leaves the agent running. The branch is left alone;
+merging, rebasing and deleting branches stay ordinary Git.
+
+The local workspace session is the client's to clean up: after a successful
+`rm` the client kills the tagged local session, switching away first if it
+is the current one. A tagged local session whose workspace no longer exists
+on its host, because the worktree was removed by hand or from another
+machine, is listed by `ls` as stale, and `rm` on a stale entry kills the
+local session and nothing else.
 
 `worktrees` is not a request. Worktree records arrive in the subscription
-stream like agents, with upsert and remove.
+stream like agents. The record:
+
+```
+{id, environment_id, repo, branch, root, session, updated_at}
+```
+
+`id` is `<environment_id>/worktree/<repo>/<branch>`, stable for the life of
+the worktree and opaque to clients. `session` is the managed session name
+when one exists for it, else empty, so `ls` can pair the two records without
+matching on cwd. The envelope grows three fields alongside the agent ones:
+`worktrees` in a snapshot, `worktree` in an upsert, `worktree_id` in a
+remove. A milestone-one client ignores them; a milestone-two client reads
+the `worktrees` capability before expecting them.
 
 ## Client
 
@@ -144,7 +195,9 @@ uses today, tags it with `@laatmux_workspace`, and switches to it. Outside
 tmux it creates the session detached and prints how to attach.
 
 `ls` merges agents and worktrees per host. A worktree without an agent shows
-as such, which is the state after the agent exits or after `settle`.
+as such, which is the state after the agent exits or when the worktree was
+made by hand. Settled workspaces keep their agent and are only grouped
+differently, see below.
 
 ## Jump and the workspace session
 
@@ -158,16 +211,21 @@ managed side keeps one session, one window, one pane.
 
 `laatmux shell`, meant to be bound in the user's tmux config, runs inside a
 workspace session and opens a shell at the worktree root on the worktree's
-host: a local shell, or `ssh -t host 'cd <root> && exec $SHELL -l'`. The
-window is tagged `@laatmux_shell`; a second invocation selects it rather than
-opening another. Outside a workspace session it says so.
+host: a local window started in the root, or an ssh window. The remote
+command is built with the same quoting `jump` uses for its attach command:
+`cd` and the single-quoted root, then a literal `&& exec "$SHELL" -l` so
+the root passes through as one argument whatever it contains and `$SHELL`
+expands on the remote side. The window is tagged `@laatmux_shell`; a second
+invocation selects it rather than opening another. Outside a workspace
+session it says so.
 
 ## Settle
 
 `settle` and `unsettle` set and clear `@laatmux_settled` on the local
 workspace session. `ls` and the sidebar list settled workspaces in a
-collapsed section. Nothing else changes: the worktree, the managed session
-and the agent stay. Automatic resurfacing is not decided here.
+collapsed section, each still paired with its agent. Nothing else changes:
+the worktree, the managed session and the agent stay. Automatic resurfacing
+is not decided here.
 
 ## Order of work
 
