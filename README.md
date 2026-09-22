@@ -11,11 +11,12 @@ designed in [docs/milestone-two.md](docs/milestone-two.md).
 | Package | What |
 |---|---|
 | `cmd/laatmux` | CLI: `serve`, `bridge`, `new`, `ls`, `watch`, `jump`, `hosts`, `repos`, `explain` |
-| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags |
-| `internal/daemon` | polls the configured tmux servers, derives agent state, streams snapshot + upserts |
+| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent and worktree records |
+| `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm` |
+| `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
-| `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` |
+| `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` in one invocation, `kill-session`, branch encoding for session names |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge` |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
 | `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon; `.laatmux.yaml` per repository |
@@ -70,8 +71,8 @@ Host names, agent keys and repository names are labels: `A-Z a-z 0-9 _ -`,
 nothing else, since they end up in session names, ids and directory names.
 A host named after its ssh alias, and a repository named from its source,
 must pass the same rule or the config is rejected asking for an explicit
-`name`. `repos` and `worktrees` have no defaults; a host without them
-cannot `add`. A repository's name is derived from its source: the last path
+`name`. `repos` and `worktrees` have no defaults, and must be absolute or
+start with `~`; a host without them cannot `add`. A repository's name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
 (`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
 to prefix, the first six hex digits of the source's SHA-256 are appended.
@@ -91,9 +92,60 @@ setup: ["pnpm install"]      # each runs at least once; must tolerate a rerun
 Each `setup` entry runs as `sh -c <string>` in the worktree root. The
 last-used host and agent per repository are state, not config: they live in
 `$LAATMUX_HOME/last.json`, keyed by source, and are updated under a lock
-with an atomic rename. The rest of milestone two, the daemon's `add` and the
-client commands that use all of this, is designed in
+with an atomic rename. The daemon side of `add` and `rm` is built, see
+below; the client commands that use it (`add`, `rm`, `path`, the workspace
+session, `jump` switched to it) are designed in
 [docs/milestone-two.md](docs/milestone-two.md) and not yet built.
+
+## Worktrees and add, daemon side
+
+The daemon on a host with `repos` and `worktrees` advertises `worktrees`,
+and with the managed server also `add` and `rm`. Git is the source of
+truth; labels only place new things.
+
+- **Worktree records** arrive in the subscription stream next to agents:
+  `worktrees` in a snapshot, `worktree` in an upsert, `worktree_id` in a
+  remove. Every two seconds the daemon finds each known repository's
+  checkout under `repos` by its `origin`, asks it for
+  `git worktree list --porcelain`, and publishes the entries under
+  `worktrees/`. Prunable entries, whose directory is gone, are not
+  published; a detached worktree has an empty branch. The record's
+  `session` is the managed session whose single pane records the root in
+  `@laatmux_cwd`, joined from the pane poll, so an agent exiting updates
+  the record without a git call. Origin reads are cached by the mtime of
+  `.git/config`, so an idle poll spawns one git process per known
+  repository. The id is `<environment_id>/worktree/<root>`.
+- **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
+  stages in the note, each step skipped by inspection: resolve, clone
+  (refused when `<repos>/<name>` exists with another origin), fetch,
+  worktree (`set-head --auto` and prune; a remote branch is tracked, an
+  existing local branch used as is, a new one made with `--no-track` from
+  `origin/HEAD`; the root registered on another branch or the branch
+  checked out elsewhere fails the stage), copy (through a temporary file
+  renamed into place), setup (markers under the worktree's git directory,
+  keyed by index and hash of the command), agent (one tmux invocation,
+  skipped when a managed session already runs in the root, refused as a
+  name in use when the intended name runs elsewhere). Progress streams as
+  `{type: progress, id, stage, state, detail}` with state `start`, `done`,
+  `skip` or `output`; the result carries `stage` on failure, and
+  `session`, `pane_id` and `root` on success. `repo` is the source or the
+  label as the daemon's own config knows it; the key is `agent_name`
+  because `agent` is the upsert's record in the same envelope.
+- **`rm`** `{type: rm, id, repo, branch, root, force}` removes the worktree
+  through git, which refuses a dirty or locked one without `force` and
+  says why, then kills every managed session whose pane records the
+  root. Both steps skip when already done, so a repeat is `ok`. Only a
+  worktree under `worktrees/` is removed, by branch or by root; one the
+  user made elsewhere is left alone, as is the branch. Send `root` from
+  the record whenever it is known: it is what reaches a session whose
+  worktree is already gone, since a branch alone maps to no root then.
+- **Retry and serialization**: commands run under the daemon's context
+  and outlive the connection that sent them. Ids are kept for five
+  minutes; the same id while a command runs attaches to its stream, and
+  afterwards replays the result. `add` is serialized per repository
+  source, so adds for different repositories run in parallel; `rm` takes
+  every repository's lock while it resolves and removes, since its root
+  checks ask every checkout, and so waits for any add in flight.
 
 ## Which tmux servers the daemon polls
 
@@ -254,6 +306,32 @@ request mouse mode, so ordinary clicks stay with the local tmux. A real click
 in a real terminal was not part of the spike; to do it, run the probe in a
 managed pane, click in the attach pane and expect `^[[<0;12;5M` with the
 column and row of the click.
+
+## Milestone two, step 3, on the VM
+
+Against the Debian VM through the ssh bridge with raw protocol messages,
+since the client commands are not built yet: a first `add` cloned a local
+bare repository into `~/src/proj`, made the branch and worktree, ran both
+setup commands and started the agent in a tagged session, and the worktree
+record named the session. Then, in order: a half-written copy temp file and
+a removed setup marker left behind as if by a crash, after which the retry
+finished the copy, reran only the unmarked command and skipped the agent
+stage by root, and the same id sent again replayed the identical stream
+without running anything. A branch whose committed `.laatmux.yaml` fails
+stopped at `setup` with the command's output and left the worktree; the
+file fixed in the worktree itself was read on the retry. A hand-made session
+under the intended name on another root failed the `agent` stage as a name
+in use, and once killed the retry started the agent with every other step
+skipped. `rm` on a worktree with an untracked file was refused with git's
+message and the session left running; with `force` the worktree went and the
+session was killed; a repeat was `ok`; a detached worktree made by hand was
+removed by root alone. A worktree directory deleted by hand disappeared from
+the listing, and the next `add` pruned it, registered it again, reran setup
+because the markers died with the git directory, and found the surviving
+session by root. Two `add`s on the public laatmux repository at once, one
+starting Claude Code over an HTTPS clone, ran one after the other under the
+per-repository lock; the snapshot showed Claude blocked on the trust dialog
+and four worktree records each with its session.
 
 ## Not yet verified
 

@@ -27,8 +27,20 @@ type Setup struct {
 	Setup []string `yaml:"setup"`
 }
 
+// SetupFieldError is a .laatmux.yaml entry that failed validation, with
+// the field it belongs to, "copy" or "setup", so add can report the
+// stage that failed rather than the one that read the file.
+type SetupFieldError struct {
+	Field string
+	Err   error
+}
+
+func (e *SetupFieldError) Error() string { return SetupFile + ": " + e.Field + ": " + e.Err.Error() }
+func (e *SetupFieldError) Unwrap() error { return e.Err }
+
 // LoadSetup reads <root>/.laatmux.yaml. A missing file means nothing to
-// copy and nothing to run.
+// copy and nothing to run. An entry that fails validation is returned as
+// a *SetupFieldError naming its field.
 func LoadSetup(root string) (Setup, error) {
 	var s Setup
 	b, err := os.ReadFile(filepath.Join(root, SetupFile))
@@ -43,12 +55,12 @@ func LoadSetup(root string) (Setup, error) {
 	}
 	for _, p := range s.Copy {
 		if err := checkCopyPath(p); err != nil {
-			return s, fmt.Errorf("%s: copy: %w", SetupFile, err)
+			return s, &SetupFieldError{Field: "copy", Err: err}
 		}
 	}
 	for i, cmd := range s.Setup {
 		if strings.TrimSpace(cmd) == "" {
-			return s, fmt.Errorf("%s: setup: entry %d is empty", SetupFile, i+1)
+			return s, &SetupFieldError{Field: "setup", Err: fmt.Errorf("entry %d is empty", i+1)}
 		}
 	}
 	return s, nil

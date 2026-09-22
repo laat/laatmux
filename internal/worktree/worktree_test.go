@@ -1,0 +1,750 @@
+package worktree
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
+)
+
+// fixture is a bare "remote" with one commit on main, a .laatmux.yaml that
+// copies .envrc and runs two setup commands, and a store whose repos and
+// worktrees directories are empty.
+type fixture struct {
+	t      *testing.T
+	remote string
+	store  *Store
+	repo   Repo
+	ctx    context.Context
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	if runtime.GOOS == "darwin" {
+		// /var is a symlink to /private/var; git registers real paths.
+		if real, err := filepath.EvalSymlinks(base); err == nil {
+			base = real
+		}
+	}
+	remote := filepath.Join(base, "remote.git")
+	seed := filepath.Join(base, "seed")
+	run(t, base, "git", "init", "-q", "--bare", "--initial-branch=main", remote)
+	run(t, base, "git", "init", "-q", "--initial-branch=main", seed)
+	run(t, seed, "git", "config", "user.email", "t@example.com")
+	run(t, seed, "git", "config", "user.name", "t")
+	write(t, filepath.Join(seed, "README"), "hello\n")
+	write(t, filepath.Join(seed, config.SetupFile), "copy: [.envrc, missing.txt]\nsetup: [\"echo one >> log\", \"echo two >> log\"]\n")
+	run(t, seed, "git", "add", ".")
+	run(t, seed, "git", "commit", "-q", "-m", "init")
+	run(t, seed, "git", "push", "-q", remote, "main")
+	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
+	store := New(dirs, []config.Repo{{Source: remote, Name: "proj"}})
+	return &fixture{t: t, remote: remote, store: store, repo: store.Repos[0], ctx: context.Background()}
+}
+
+func run(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type step struct{ stage, state, detail string }
+
+func (f *fixture) add(branch string) (Added, []step, error) {
+	var steps []step
+	a, err := f.store.Add(f.ctx, f.repo, branch, func(stage, state, detail string) {
+		if state != protocol.StateOutput {
+			steps = append(steps, step{stage, state, detail})
+		}
+	})
+	return a, steps, err
+}
+
+func (f *fixture) checkout() string {
+	c, ok, err := f.store.Checkout(f.ctx, f.repo)
+	if err != nil || !ok {
+		f.t.Fatalf("checkout: %v %v", ok, err)
+	}
+	return c
+}
+
+func hasStep(steps []step, stage, state, detailPrefix string) bool {
+	for _, s := range steps {
+		if s.stage == stage && s.state == state && strings.HasPrefix(s.detail, detailPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func stageOf(t *testing.T, err error) string {
+	t.Helper()
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("not a stage error: %v", err)
+	}
+	return se.Stage
+}
+
+func TestAddFromNothing(t *testing.T) {
+	f := newFixture(t)
+	// The main checkout is placed at <repos>/<name>, and the first add
+	// clones it. .envrc lives only in the checkout, not in git.
+	a, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Checkout != f.store.Dirs.Checkout("proj") {
+		t.Fatalf("checkout %s", a.Checkout)
+	}
+	if a.Root != f.store.Dirs.Worktree("proj", "task") {
+		t.Fatalf("root %s", a.Root)
+	}
+	for _, want := range []step{
+		{protocol.StageClone, protocol.StateDone, "cloned"},
+		{protocol.StageFetch, protocol.StateDone, "fetched"},
+		{protocol.StageWorktree, protocol.StateDone, "branch task from origin/HEAD"},
+		{protocol.StageWorktree, protocol.StateDone, "worktree at " + a.Root},
+		{protocol.StageCopy, protocol.StateSkip, ".envrc not in " + a.Checkout},
+		{protocol.StageCopy, protocol.StateSkip, "missing.txt not in"},
+		{protocol.StageSetup, protocol.StateDone, "echo one >> log"},
+		{protocol.StageSetup, protocol.StateDone, "echo two >> log"},
+	} {
+		if !hasStep(steps, want.stage, want.state, want.detail) {
+			t.Errorf("missing step %+v in %+v", want, steps)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\n" {
+		t.Fatalf("setup log %q", b)
+	}
+	// The new branch has no upstream: push must not target main.
+	if out, err := exec.Command("git", "-C", a.Root, "rev-parse", "--abbrev-ref", "task@{upstream}").CombinedOutput(); err == nil {
+		t.Fatalf("task has upstream %s", out)
+	}
+	recs, err := f.store.List(f.ctx)
+	if err != nil || len(recs) != 1 || recs[0].Branch != "task" || recs[0].Root != a.Root || recs[0].Repo != "proj" {
+		t.Fatalf("list: %+v %v", recs, err)
+	}
+}
+
+// A second add of the same branch skips every step: the note's "two adds
+// for the same workspace" and "retry after a dropped bridge".
+func TestAddAgainSkipsEverything(t *testing.T) {
+	f := newFixture(t)
+	first, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(f.t, filepath.Join(first.Checkout, ".envrc"), "export A=1\n")
+	again, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Root != first.Root {
+		t.Fatalf("root changed: %s -> %s", first.Root, again.Root)
+	}
+	for _, want := range []step{
+		{protocol.StageClone, protocol.StateSkip, "checkout exists"},
+		{protocol.StageWorktree, protocol.StateSkip, "branch task exists"},
+		{protocol.StageWorktree, protocol.StateSkip, "worktree registered at " + first.Root},
+		{protocol.StageSetup, protocol.StateSkip, "echo one >> log (done before)"},
+		{protocol.StageSetup, protocol.StateSkip, "echo two >> log (done before)"},
+	} {
+		if !hasStep(steps, want.stage, want.state, want.detail) {
+			t.Errorf("missing step %+v in %+v", want, steps)
+		}
+	}
+	// .envrc appeared in the checkout between the two adds: copied now,
+	// since the target did not exist. Setup did not rerun.
+	if b, _ := os.ReadFile(filepath.Join(again.Root, ".envrc")); string(b) != "export A=1\n" {
+		t.Fatalf(".envrc %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(again.Root, "log")); string(b) != "one\ntwo\n" {
+		t.Fatalf("setup reran: %q", b)
+	}
+}
+
+// The checkout is found by origin, not by directory name: a clone made by
+// hand under another name is used, and no second clone is made.
+func TestCheckoutFoundByOrigin(t *testing.T) {
+	f := newFixture(t)
+	other := filepath.Join(f.store.Dirs.Repos, "elsewhere")
+	run(t, "", "git", "clone", "-q", f.remote, other)
+	// A directory with the label's name but a different origin must not be
+	// mistaken for the checkout, and must not be cloned over.
+	decoy := f.store.Dirs.Checkout("proj")
+	run(t, f.store.Dirs.Repos, "git", "init", "-q", decoy)
+	run(t, decoy, "git", "remote", "add", "origin", "https://example.com/x.git")
+	a, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Checkout != other {
+		t.Fatalf("checkout %s, want %s", a.Checkout, other)
+	}
+	if !hasStep(steps, protocol.StageClone, protocol.StateSkip, "checkout exists") {
+		t.Fatalf("steps %+v", steps)
+	}
+}
+
+func TestCloneRefusesForeignDirectory(t *testing.T) {
+	f := newFixture(t)
+	decoy := f.store.Dirs.Checkout("proj")
+	run(t, "", "git", "init", "-q", decoy)
+	run(t, decoy, "git", "remote", "add", "origin", "https://example.com/x.git")
+	_, _, err := f.add("task")
+	if stageOf(t, err) != protocol.StageClone || !strings.Contains(err.Error(), "origin https://example.com/x.git") {
+		t.Fatalf("err %v", err)
+	}
+	write(t, filepath.Join(decoy, "x"), "")
+	os.RemoveAll(filepath.Join(decoy, ".git"))
+	_, _, err = f.add("task")
+	if stageOf(t, err) != protocol.StageClone || !strings.Contains(err.Error(), "not a checkout") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// A remote branch is tracked; a local branch made by hand is used as is; a
+// branch checked out elsewhere, or in the main checkout, fails the stage.
+func TestBranchCases(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	// remote branch
+	run(t, c, "git", "push", "-q", "origin", "main:refs/heads/remote-only")
+	a, steps, err := f.add("remote-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasStep(steps, protocol.StageWorktree, protocol.StateDone, "branch remote-only tracks origin/remote-only") {
+		t.Fatalf("steps %+v", steps)
+	}
+	if up := strings.TrimSpace(run(t, a.Root, "git", "rev-parse", "--abbrev-ref", "remote-only@{upstream}")); up != "origin/remote-only" {
+		t.Fatalf("upstream %s", up)
+	}
+	// local branch made by hand, from an earlier crashed attempt
+	run(t, c, "git", "branch", "by-hand", "main")
+	_, steps, err = f.add("by-hand")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasStep(steps, protocol.StageWorktree, protocol.StateSkip, "branch by-hand exists, used as is") {
+		t.Fatalf("steps %+v", steps)
+	}
+	// checked out in the main checkout
+	_, _, err = f.add("main")
+	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "main checkout") {
+		t.Fatalf("err %v", err)
+	}
+	// checked out at a worktree outside the worktrees directory
+	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "elsewhere")
+	run(t, c, "git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
+	_, _, err = f.add("outside")
+	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "checked out at "+elsewhere) {
+		t.Fatalf("err %v", err)
+	}
+	// ByBranch does not hand that worktree to rm either.
+	if rec, co, found, err := f.store.ByBranch(f.ctx, f.repo, "outside"); err != nil || found || co != c {
+		t.Fatalf("ByBranch outside: %+v %s %v %v", rec, co, found, err)
+	}
+	if rec, _, found, err := f.store.ByBranch(f.ctx, f.repo, "by-hand"); err != nil || !found || rec.Root != f.store.Dirs.Worktree("proj", "by-hand") {
+		t.Fatalf("ByBranch by-hand: %+v %v %v", rec, found, err)
+	}
+	// the root taken by a worktree on another branch
+	run(t, c, "git", "worktree", "add", "-q", "-b", "squatter", f.store.Dirs.Worktree("proj", "wanted"), "main")
+	_, _, err = f.add("wanted")
+	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "not wanted") {
+		t.Fatalf("err %v", err)
+	}
+	// bad names never reach git
+	for _, bad := range []string{"", "-x", "a..b", "x/", "a b"} {
+		if _, _, err := f.add(bad); err == nil || stageOf(t, err) != protocol.StageResolve {
+			t.Errorf("branch %q: %v", bad, err)
+		}
+	}
+}
+
+// A worktree whose directory was deleted outside git is prunable: not
+// listed, and a repeat add prunes it and makes the directory again.
+func TestPrunableWorktree(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(a.Root)
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 0 {
+		t.Fatalf("list after delete: %+v %v", recs, err)
+	}
+	again, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Root != a.Root || !hasStep(steps, protocol.StageWorktree, protocol.StateDone, "worktree at "+a.Root) {
+		t.Fatalf("root %s steps %+v", again.Root, steps)
+	}
+	if b, _ := os.ReadFile(filepath.Join(again.Root, "log")); string(b) != "one\ntwo\n" {
+		t.Fatalf("setup after prune %q", b)
+	}
+}
+
+// A crash halfway through a copy leaves the temporary file, not the
+// target; the retry finishes the copy. A crash after a setup command's
+// effects but before its marker reruns the command.
+func TestCrashedCopyAndSetup(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(a.Checkout, ".envrc"), "export A=1\n")
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc.123456"), "export A=")
+	// Files of the repository's own that merely resemble the temporary
+	// name must survive the copy: the bare name, a non-numeric suffix,
+	// and a directory.
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc"), "mine")
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc.backup"), "backup")
+	os.Mkdir(filepath.Join(a.Root, ".laatmux-copy-.envrc.7"), 0o755)
+	markers, err := markerDir(f.ctx, a.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(markers, "setup-1-"+hash("echo two >> log")))
+	_, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, ".envrc")); string(b) != "export A=1\n" {
+		t.Fatalf(".envrc %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, ".laatmux-copy-.envrc.123456")); err == nil {
+		t.Fatal("stale temporary copy left behind")
+	}
+	for name, want := range map[string]string{".laatmux-copy-.envrc": "mine", ".laatmux-copy-.envrc.backup": "backup"} {
+		if b, _ := os.ReadFile(filepath.Join(a.Root, name)); string(b) != want {
+			t.Fatalf("%s clobbered: %q", name, b)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(a.Root, ".laatmux-copy-.envrc.7")); err != nil || !fi.IsDir() {
+		t.Fatal("directory resembling a temporary removed")
+	}
+	if !hasStep(steps, protocol.StageSetup, protocol.StateSkip, "echo one >> log") || !hasStep(steps, protocol.StageSetup, protocol.StateDone, "echo two >> log") {
+		t.Fatalf("steps %+v", steps)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\ntwo\n" {
+		t.Fatalf("log %q", b)
+	}
+}
+
+// A failing setup command fails the stage with its output, leaves the
+// worktree, and does not write its marker; a changed command has a new
+// marker and runs.
+func TestSetupFailureAndChange(t *testing.T) {
+	f := newFixture(t)
+	seedSetup := func(content string) {
+		c := f.checkout()
+		write(t, filepath.Join(c, config.SetupFile), content)
+		run(t, c, "git", "add", config.SetupFile)
+		run(t, c, "git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "setup")
+		run(t, c, "git", "push", "-q", "origin", "main")
+	}
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	seedSetup("setup: [\"echo ok >> log\", \"echo boom >&2; exit 3\"]\n")
+	_, _, err := f.add("task")
+	if stageOf(t, err) != protocol.StageSetup || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "exit status 3") {
+		t.Fatalf("err %v", err)
+	}
+	root := f.store.Dirs.Worktree("proj", "task")
+	if _, err := os.Stat(root); err != nil {
+		t.Fatal("worktree removed after setup failure")
+	}
+	// Fix the command on the branch itself: the worktree's own file is read.
+	write(t, filepath.Join(root, config.SetupFile), "setup: [\"echo ok >> log\", \"echo fixed >> log\"]\n")
+	_, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasStep(steps, protocol.StageSetup, protocol.StateSkip, "echo ok >> log") || !hasStep(steps, protocol.StageSetup, protocol.StateDone, "echo fixed >> log") {
+		t.Fatalf("steps %+v", steps)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "log")); string(b) != "ok\nfixed\n" {
+		t.Fatalf("log %q", b)
+	}
+}
+
+func TestListAndFindAndRemove(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	// A detached worktree made by hand under the worktrees directory is
+	// listed with an empty branch; one outside the directory is not.
+	detached := f.store.Dirs.Worktree("proj", "detached")
+	run(t, c, "git", "worktree", "add", "-q", "--detach", detached)
+	run(t, c, "git", "worktree", "add", "-q", "--detach", filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside"))
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || recs[0].Root != detached || recs[0].Branch != "" || recs[1].Root != a.Root || recs[1].Branch != "feature/x" {
+		t.Fatalf("list %+v", recs)
+	}
+	rec, checkout, ok, err := f.store.Find(f.ctx, detached)
+	if err != nil || !ok || checkout != c || rec.Repo != "proj" {
+		t.Fatalf("find: %+v %s %v %v", rec, checkout, ok, err)
+	}
+	if _, _, ok, _ := f.store.Find(f.ctx, c); ok {
+		t.Fatal("main checkout found as a worktree")
+	}
+	if _, _, ok, _ := f.store.Find(f.ctx, filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")); ok {
+		t.Fatal("worktree outside the worktrees directory found")
+	}
+	// Dirty: refused without force, with git's message; removed with it.
+	write(t, filepath.Join(a.Root, "untracked"), "x")
+	if removed, err := Remove(f.ctx, c, a.Root, false); err == nil || removed {
+		t.Fatalf("dirty remove: %v %v", removed, err)
+	}
+	if removed, err := Remove(f.ctx, c, a.Root, true); err != nil || !removed {
+		t.Fatalf("forced remove: %v %v", removed, err)
+	}
+	if _, err := os.Stat(a.Root); err == nil {
+		t.Fatal("root still exists")
+	}
+	// Gone: a retry skips.
+	if removed, err := Remove(f.ctx, c, a.Root, false); err != nil || removed {
+		t.Fatalf("repeat remove: %v %v", removed, err)
+	}
+	// The branch is left alone.
+	run(t, c, "git", "rev-parse", "--verify", "refs/heads/feature/x")
+}
+
+func TestParseWorktrees(t *testing.T) {
+	out := "worktree /r/main\x00HEAD abc\x00branch refs/heads/main\x00\x00worktree /r/w1\x00HEAD abc\x00branch refs/heads/feature/x\x00\x00worktree /r/w2\x00HEAD abc\x00detached\x00prunable gitdir file points to non-existent location\x00\x00worktree /r/b\x00bare\x00\x00worktree /r/odd\nname\x00HEAD abc\x00branch refs/heads/nl\x00\x00"
+	got := parseWorktrees(out)
+	want := []Entry{
+		{Root: "/r/main", Branch: "main"},
+		{Root: "/r/w1", Branch: "feature/x"},
+		{Root: "/r/w2", Detached: true, Prunable: true},
+		{Root: "/r/b", Bare: true},
+		{Root: "/r/odd\nname", Branch: "nl"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %+v want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// A name lookup wins over a source lookup, as in config, so a bare local
+// source equal to another entry's label does not hijack it.
+func TestRepoLookupNameFirst(t *testing.T) {
+	s := New(config.Dirs{}, []config.Repo{{Source: "proj", Name: "other"}, {Source: "git@x:a/proj.git", Name: "proj"}})
+	if r, ok := s.Repo("proj"); !ok || r.Source != "git@x:a/proj.git" {
+		t.Fatalf("Repo(proj) = %+v %v", r, ok)
+	}
+	if r, ok := s.Repo("git@x:a/proj.git"); !ok || r.Name != "proj" {
+		t.Fatalf("Repo(source) = %+v %v", r, ok)
+	}
+}
+
+// An output line longer than a Scanner's limit must neither hang the
+// stage nor be lost: it is truncated, the rest of the output still
+// arrives, and the command's exit status is what is reported.
+func TestRunStreamingLongLine(t *testing.T) {
+	var lines []string
+	report := func(_, state, detail string) {
+		if state == protocol.StateOutput {
+			lines = append(lines, detail)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runStreaming(context.Background(), t.TempDir(), report, "setup", os.Environ(),
+			"sh", "-c", "head -c 2097152 /dev/zero | tr '\\0' x; echo; echo tail; exit 3")
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exit status 3") {
+			t.Fatalf("err %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("runStreaming hung on a long line")
+	}
+	if len(lines) != 2 || len(lines[0]) != maxLine+3 || !strings.HasSuffix(lines[0], "...") || lines[1] != "tail" {
+		t.Fatalf("lines: %d, first %d bytes, last %q", len(lines), len(lines[0]), lines[len(lines)-1])
+	}
+}
+
+// A checkout whose .git/config cannot be read is an error, not a
+// repository without a checkout: polling must not drop its records and rm
+// must not take its worktrees as already gone.
+func TestCheckoutStatErrorPropagates(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(a.Checkout, ".git")
+	if err := os.Chmod(gitDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(gitDir, 0o755) })
+	f.store.origins = map[string]originEntry{}
+	if _, _, err := f.store.Checkout(f.ctx, f.repo); err == nil {
+		t.Fatal("unreadable checkout taken as absent")
+	}
+	if _, err := f.store.List(f.ctx); err == nil {
+		t.Fatal("List hid the unreadable checkout")
+	}
+	if _, _, _, err := f.store.Find(f.ctx, a.Root); err == nil {
+		t.Fatal("Find took the unreadable checkout as absent")
+	}
+}
+
+func TestOwns(t *testing.T) {
+	s := New(config.Dirs{Repos: "/r", Worktrees: "/w/trees/"}, nil)
+	cases := map[string]bool{
+		"/w/trees/proj/task":        true,
+		"/w/trees/proj/a/../b":      true,
+		"/w/trees":                  false,
+		"/w/trees/":                 false,
+		"/w/trees/..":               false,
+		"/w/trees/../outside":       false,
+		"/w/trees/proj/../../x":     false,
+		"/w/treesX/proj":            false,
+		"/w/trees/..hidden":         true,
+		"relative/w/trees/proj":     false,
+		"/other/w/trees/proj":       false,
+		"/w/trees/proj/../../trees": false,
+	}
+	for root, want := range cases {
+		if got := s.Owns(root); got != want {
+			t.Errorf("Owns(%q) = %v, want %v", root, got, want)
+		}
+	}
+}
+
+// Cleanup reads the destination directory literally: a directory whose
+// name is a glob pattern must not reach into its siblings.
+func TestRemoveStaleTempsLiteralDir(t *testing.T) {
+	base := t.TempDir()
+	sib := filepath.Join(base, "a")
+	pat := filepath.Join(base, "[ab]")
+	write(t, filepath.Join(sib, ".laatmux-copy-.envrc.123456"), "other worktree's copy")
+	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.654321"), "stale")
+	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.backup"), "kept")
+	removeStaleTemps(pat, ".envrc")
+	if _, err := os.Stat(filepath.Join(sib, ".laatmux-copy-.envrc.123456")); err != nil {
+		t.Fatal("sibling directory's file removed")
+	}
+	if _, err := os.Stat(filepath.Join(pat, ".laatmux-copy-.envrc.654321")); err == nil {
+		t.Fatal("stale temporary kept")
+	}
+	if _, err := os.Stat(filepath.Join(pat, ".laatmux-copy-.envrc.backup")); err != nil {
+		t.Fatal("backup removed")
+	}
+}
+
+// Symlinks are resolved on both sides: a link under the worktrees
+// directory that leaves it is not owned, a link into it is, an alias of
+// the directory itself is, and a deleted worktree still resolves through
+// the links above it.
+func TestOwnsResolvesSymlinks(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, outside := filepath.Join(base, "wt"), filepath.Join(base, "outside")
+	for _, d := range []string{filepath.Join(wt, "real"), outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Symlink(outside, filepath.Join(wt, "escape"))
+	os.Symlink(filepath.Join(wt, "real"), filepath.Join(wt, "inward"))
+	os.Symlink(wt, filepath.Join(base, "alias"))
+	os.Symlink(filepath.Join(wt, "missing"), filepath.Join(wt, "dangling"))
+	os.Symlink(filepath.Join(wt, "loop2"), filepath.Join(wt, "loop1"))
+	os.Symlink(filepath.Join(wt, "loop1"), filepath.Join(wt, "loop2"))
+	s := New(config.Dirs{Repos: base, Worktrees: filepath.Join(base, "alias")}, nil)
+	cases := map[string]bool{
+		// A prefix that exists but cannot be resolved fails closed.
+		filepath.Join(wt, "dangling", "task"):        false,
+		filepath.Join(wt, "loop1", "task"):           false,
+		filepath.Join(wt, "escape", "scratch"):       false,
+		filepath.Join(wt, "escape"):                  false,
+		filepath.Join(wt, "inward", "task"):          true,
+		filepath.Join(wt, "real", "task"):            true,
+		filepath.Join(base, "alias", "proj", "task"): true,
+		filepath.Join(wt, "gone", "deleted", "deep"): true,
+		filepath.Join(base, "alias", "escape", "x"):  false,
+		outside:                      false,
+		filepath.Join(base, "alias"): false,
+	}
+	if os.Getuid() != 0 {
+		noperm := filepath.Join(wt, "noperm")
+		os.Mkdir(noperm, 0)
+		t.Cleanup(func() { os.Chmod(noperm, 0o755) })
+		cases[filepath.Join(noperm, "task")] = false
+	}
+	for root, want := range cases {
+		if got := s.Owns(root); got != want {
+			t.Errorf("Owns(%q) = %v, want %v", root, got, want)
+		}
+	}
+}
+
+// A symlink already sitting at <worktrees>/<name> would carry a new
+// worktree outside the directory; add refuses at the worktree stage
+// before creating anything.
+func TestAddRefusesSymlinkedRepoDir(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(f.store.Dirs.Worktrees, "proj"))
+	if err := os.Symlink(outside, filepath.Join(f.store.Dirs.Worktrees, "proj")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := f.add("task")
+	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "outside the worktrees directory") {
+		t.Fatalf("err %v", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("worktree created outside: %v", entries)
+	}
+}
+
+// A worktree whose path contains a newline is listed whole, root intact.
+func TestListWorktreeWithNewlineInPath(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	odd := filepath.Join(f.store.Dirs.Worktrees, "proj", "odd\nname")
+	run(t, a.Checkout, "git", "worktree", "add", "-q", "-b", "nl", odd, "main")
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range recs {
+		if r.Root == odd && r.Branch == "nl" {
+			found = true
+		}
+		if strings.HasPrefix(odd, r.Root) && r.Root != odd {
+			t.Fatalf("truncated root %q", r.Root)
+		}
+	}
+	if !found {
+		t.Fatalf("worktree with newline not listed: %+v", recs)
+	}
+}
+
+// An invalid setup entry fails the setup stage, an invalid copy entry the
+// copy stage, though one read of the file serves both.
+func TestSetupFileErrorsNameTheirStage(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	for _, tc := range []struct{ branch, content, stage string }{
+		{"bad-setup", "setup: [\" \"]\n", protocol.StageSetup},
+		{"bad-copy", "copy: [../x]\n", protocol.StageCopy},
+		{"bad-yaml", "copy: [\n", protocol.StageCopy},
+	} {
+		run(t, c, "git", "checkout", "-q", "-b", tc.branch, "main")
+		write(t, filepath.Join(c, config.SetupFile), tc.content)
+		run(t, c, "git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", tc.branch)
+		run(t, c, "git", "push", "-q", "origin", tc.branch)
+		run(t, c, "git", "checkout", "-q", "main")
+		_, _, err := f.add(tc.branch)
+		if got := stageOf(t, err); got != tc.stage {
+			t.Errorf("%s: stage %s, want %s (%v)", tc.branch, got, tc.stage, err)
+		}
+	}
+}
+
+// With the repos directory under the worktrees one, the main checkout
+// satisfies Owns but is not a worktree: it is not listed.
+func TestMainCheckoutNotListed(t *testing.T) {
+	f := newFixture(t)
+	f.store.Dirs.Repos = filepath.Join(f.store.Dirs.Worktrees, "checkouts")
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("list %+v", recs)
+	}
+}
+
+// One scan of the repos directory serves every repository: with many
+// known repositories a poll stats each checkout once, not once per repo.
+func TestCheckoutsScannedOnce(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("task"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		f.store.Repos = append(f.store.Repos, Repo{Source: fmt.Sprintf("/nowhere/%d.git", i), Name: fmt.Sprintf("r%d", i)})
+	}
+	checkouts, err := f.store.Checkouts(f.ctx)
+	if err != nil || len(checkouts) != 1 {
+		t.Fatalf("checkouts %v %v", checkouts, err)
+	}
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 {
+		t.Fatalf("list %+v %v", recs, err)
+	}
+}

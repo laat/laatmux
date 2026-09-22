@@ -167,6 +167,8 @@ func TestParseRejects(t *testing.T) {
 		"hosts:\n  - name: a\n  - name: b\n":                                   "more than one entry without ssh",
 		"hosts:\n  - name: a\n    repos: ~/code\n":                             "repos but not worktrees",
 		"hosts:\n  - name: a\n    worktrees: ~/wt\n":                           "worktrees but not repos",
+		"hosts:\n  - name: a\n    repos: code\n    worktrees: ~/wt\n":          "repos \"code\" must be absolute or start with ~",
+		"hosts:\n  - name: a\n    repos: /c\n    worktrees: ./wt\n":            "worktrees \"./wt\" must be absolute or start with ~",
 		"agents:\n  my.agent:\n    cmd: [x]\n":                                 "not a valid label",
 		"agents:\n  claude: {}\n":                                              "has no cmd",
 		"repos:\n  - a/b\n  - a/b\n":                                           "listed twice",

@@ -25,6 +25,9 @@ const (
 	TypeUpsert    = "upsert"    // daemon -> client, one agent changed or appeared
 	TypeRemove    = "remove"    // daemon -> client, one agent disappeared
 	TypeNew       = "new"       // client -> daemon, create a managed session
+	TypeAdd       = "add"       // client -> daemon, create a worktree and start an agent in it
+	TypeRm        = "rm"        // client -> daemon, remove a worktree and its managed session
+	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
 	TypePong      = "pong"
@@ -33,8 +36,32 @@ const (
 
 // Capabilities a daemon may advertise.
 const (
-	CapStatus = "status" // subscribe / snapshot / upsert / remove
-	CapNew    = "new"    // the new command
+	CapStatus    = "status"    // subscribe / snapshot / upsert / remove
+	CapNew       = "new"       // the new command
+	CapWorktrees = "worktrees" // worktree records in the subscription stream
+	CapAdd       = "add"       // the add command
+	CapRm        = "rm"        // the rm command
+)
+
+// Progress states, in Message.State of a progress message. A stage may
+// report several steps; each step ends in done or skip, and a step that
+// runs a command may stream its output first.
+const (
+	StateStart  = "start"  // a mutating step began; Detail names it
+	StateDone   = "done"   // the step completed
+	StateSkip   = "skip"   // the step was already done; Detail says how that was seen
+	StateOutput = "output" // one line of a setup command's output, in Detail
+)
+
+// Stages of add, in order. A result carries the stage that failed.
+const (
+	StageResolve  = "resolve"
+	StageClone    = "clone"
+	StageFetch    = "fetch"
+	StageWorktree = "worktree"
+	StageCopy     = "copy"
+	StageSetup    = "setup"
+	StageAgent    = "agent"
 )
 
 // Activity is what the agent on screen appears to be doing.
@@ -87,6 +114,20 @@ type Agent struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// Worktree is one git worktree on one host, under the host's configured
+// worktree directory, in a checkout of a known repository. Git is the
+// source of truth: a worktree made by hand is listed, one removed by hand
+// disappears, and one whose directory is gone (prunable) is not published.
+type Worktree struct {
+	ID            string    `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
+	EnvironmentID string    `json:"environment_id"`
+	Repo          string    `json:"repo"`              // repository label from the host's config
+	Branch        string    `json:"branch"`            // "" for a detached worktree
+	Root          string    `json:"root"`              // absolute path as git registered it
+	Session       string    `json:"session,omitempty"` // managed session whose pane records Root, else ""
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // Message is the single envelope. Fields are used per Type; unused ones are
 // omitted on the wire.
 type Message struct {
@@ -101,10 +142,13 @@ type Message struct {
 	Capabilities  []string `json:"capabilities,omitempty"`
 
 	// snapshot / upsert / remove
-	Seq     uint64  `json:"seq,omitempty"`
-	Agents  []Agent `json:"agents,omitempty"`
-	Agent   *Agent  `json:"agent,omitempty"`
-	AgentID string  `json:"agent_id,omitempty"`
+	Seq        uint64     `json:"seq,omitempty"`
+	Agents     []Agent    `json:"agents,omitempty"`
+	Agent      *Agent     `json:"agent,omitempty"`
+	AgentID    string     `json:"agent_id,omitempty"`
+	Worktrees  []Worktree `json:"worktrees,omitempty"`
+	Worktree   *Worktree  `json:"worktree,omitempty"`
+	WorktreeID string     `json:"worktree_id,omitempty"`
 
 	// commands and results
 	ID      string   `json:"id,omitempty"` // client-chosen command id
@@ -115,6 +159,25 @@ type Message struct {
 	Error   string   `json:"error,omitempty"`
 	Session string   `json:"session,omitempty"`
 	PaneID  string   `json:"pane_id,omitempty"`
+
+	// add and rm
+	Repo   string `json:"repo,omitempty"`   // repository source or label, as the daemon's config knows it
+	Branch string `json:"branch,omitempty"` // branch and worktree name
+	// AgentName is the configured agent to start; Cmd, when set, is the
+	// command instead. The key is agent_name because agent is the upsert's
+	// record in this envelope.
+	AgentName string `json:"agent_name,omitempty"`
+	// Root on rm is the worktree root from the record. It is what reaches
+	// a managed session whose worktree is already gone, since a branch
+	// alone cannot be mapped to a root then; send it whenever it is known.
+	// Alone, it removes a detached worktree. On a result: the worktree root.
+	Root  string `json:"root,omitempty"`
+	Force bool   `json:"force,omitempty"` // rm: remove a dirty or locked worktree
+
+	// progress, and the failed stage in a result
+	Stage  string `json:"stage,omitempty"`
+	State  string `json:"state,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Conn is a line-oriented JSON connection. Writes are serialized.
