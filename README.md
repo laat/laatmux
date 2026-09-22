@@ -11,13 +11,13 @@ managed sessions, and jump.
 |---|---|
 | `cmd/laatmux` | CLI: `serve`, `bridge`, `new`, `ls`, `watch`, `jump`, `hosts`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags |
-| `internal/daemon` | polls one tmux server, derives agent state, streams snapshot + upserts |
+| `internal/daemon` | polls the configured tmux servers, derives agent state, streams snapshot + upserts |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge` |
 | `internal/home` | state dir, environment id, runtime file, startup lock |
-| `internal/config` | `~/.config/laatmux/config.yaml` |
+| `internal/config` | `~/.config/laatmux/config.yaml`: hosts for clients, `tmux_servers` for this machine's daemon |
 
 ## Run
 
@@ -29,6 +29,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
 ./laatmux new work --cwd ~/code/foo -- claude # managed session on the laatmux tmux server
 ./laatmux jump mac/work                       # focus or open the attached pane
+./laatmux jump --server default mac/notes     # switch to an observed session in this machine's tmux
 ```
 
 Config, one entry per host; omit `ssh` for this machine:
@@ -39,12 +40,43 @@ hosts:
   - name: box
     ssh: box          # ssh alias, ControlMaster assumed
     bin: laatmux      # remote binary, must be on PATH of a non-interactive shell
+tmux_servers: [laatmux, default]   # what this machine's daemon watches
 ```
 
-The daemon watches the `laatmux` tmux server (`tmux -L laatmux`) by default and
-configures it explicitly: prefix and prefix2 off, status off, mouse off, root
-and prefix key tables unbound. `--tmux-socket default` watches the default
-server instead, which is what the sandboxed dev loop uses.
+`hosts` is read by clients. `tmux_servers` is read by the daemon on the
+machine the file lives on, so the laptop's config cannot change what a remote
+daemon watches; each host's own config does that. The default is the managed
+`laatmux` server alone. `laatmux serve --tmux-servers laatmux,default`
+overrides the file; `--tmux-socket` is the older spelling of the same flag.
+
+## Which tmux servers the daemon polls
+
+Decided in issue #3: status for any tmux server the host config names; attach
+only to managed sessions.
+
+- The `laatmux` server (`tmux -L laatmux`) is the managed one. The daemon
+  configures it explicitly (prefix and prefix2 off, status off, mouse off,
+  root and prefix key tables unbound) and `new` creates sessions there. A
+  daemon whose list leaves it out does not advertise the `new` capability.
+- Every other server in `tmux_servers`, the user's `default` included, is
+  observed read-only: `list-panes` and `capture-pane`, nothing else. No
+  workmux config, state or hooks are read.
+- Agent ids are `<environment_id>/<server>/<pane_id>` and records carry the
+  server, so `%1` on two servers cannot collide. Clients treat the id as
+  opaque; a daemon from before this change sends no server, which clients read
+  as `laatmux`.
+- Only panes with an identified agent instance, alive or gone, are published.
+  Shells and other tools' panes never appear on any server, and their title
+  churn produces no traffic.
+- `ls` shows agents on the managed server as `@host` and others as
+  `@host/server`, which is what `jump --server` takes. Jump to a session on
+  this machine's default server is a `switch-client`, since it is already in
+  the user's tmux. Jump to a remote host's default server, or to any other
+  unmanaged server, is refused.
+
+The intended policy from issue #1: the laptop watches its default server plus
+the managed server; remote hosts watch only the managed server, with the
+laptop providing the UI.
 
 ## Model
 
@@ -79,7 +111,8 @@ server instead, which is what the sandboxed dev loop uses.
   pid: global options, every global hook, session-level overrides of the
   isolation options, and both key tables. A cold start also passes
   `-f /dev/null`. `new` refuses a session that comes up with more than one
-  pane. Protocol: a daemon with a different protocol number is refused; within
+  pane. Only the `laatmux` server is ever reconciled; the other servers the
+  daemon polls are the user's and are read only. Protocol: a daemon with a different protocol number is refused; within
   a number, clients branch on capabilities.
 - **Daemon startup** is arbitrated by a kernel-held flock. Snapshots wait for
   the first complete poll. A subscriber that falls behind is disconnected so it
@@ -93,7 +126,7 @@ The sandbox denies unix socket binds, new tmux servers and `ps`. Use:
 ```sh
 export LAATMUX_HOME=$PWD/.spike
 export LAATMUX_CONFIG=$PWD/.spike/config.yaml
-export LAATMUX_SERVE_ARGS="--listen tcp:127.0.0.1:0 --tmux-socket default"
+export LAATMUX_SERVE_ARGS="--listen tcp:127.0.0.1:0 --tmux-servers default"
 ```
 
 ## Verified

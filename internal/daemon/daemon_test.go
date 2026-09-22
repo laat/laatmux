@@ -77,7 +77,7 @@ func TestSubscribeWaitsForDiscovery(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	d.mu.Lock()
-	d.agents["%1"] = protocol.Agent{ID: "env/%1"}
+	d.agents["laatmux/%1"] = protocol.Agent{ID: "env/laatmux/%1"}
 	d.mu.Unlock()
 	d.discoveredOnce.Do(func() { close(d.discovered) })
 	select {

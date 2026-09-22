@@ -18,8 +18,36 @@ type Server struct {
 	Path string // -S, wins over Name
 }
 
-// LaatmuxServer is the dedicated server managed agents live on.
+// LaatmuxServer is the dedicated server managed agents live on. It is the
+// only server laatmux configures or creates sessions on; every other server
+// is watched read-only.
 var LaatmuxServer = Server{Name: "laatmux"}
+
+// Parse reads a server spec as config and flags write it: "default" or ""
+// is the default server, a value containing "/" is a -S socket path, and
+// anything else is a -L name.
+func Parse(v string) Server {
+	switch {
+	case v == "default" || v == "":
+		return Server{}
+	case strings.Contains(v, "/"):
+		return Server{Path: v}
+	default:
+		return Server{Name: v}
+	}
+}
+
+// Label names the server in agent ids and listings: the -S path, the -L
+// name, or "default". Parse(s.Label()) == s.
+func (s Server) Label() string {
+	switch {
+	case s.Path != "":
+		return s.Path
+	case s.Name != "":
+		return s.Name
+	}
+	return "default"
+}
 
 func (s Server) args(a ...string) []string {
 	var pre []string
@@ -160,8 +188,10 @@ func (s Server) Capture(ctx context.Context, paneID string, n int) ([]string, er
 	return lines, nil
 }
 
-// Managed is true for a server laatmux owns and may configure.
-func (s Server) Managed() bool { return s.Path != "" || s.Name != "" }
+// Managed is true for the server laatmux owns and may configure. A named
+// server that is not LaatmuxServer belongs to the user, like the default
+// server, and is never configured.
+func (s Server) Managed() bool { return s == LaatmuxServer }
 
 // EnsureConfigured applies the managed-server configuration. A cold start
 // uses -f /dev/null so the user's config never loads, but that only skips
@@ -169,10 +199,10 @@ func (s Server) Managed() bool { return s.Path != "" || s.Name != "" }
 // bindings) remain, so everything is set explicitly here as well. It is also
 // applied when adopting a server that was started by hand, since the plan
 // allows `tmux -L laatmux new` as manual setup. Idempotent. Never call this
-// on the user's default server.
+// on a server the user owns; it refuses any server but LaatmuxServer.
 func (s Server) EnsureConfigured(ctx context.Context) error {
 	if !s.Managed() {
-		return fmt.Errorf("tmux: refusing to configure the default server")
+		return fmt.Errorf("tmux: refusing to configure unmanaged server %s", s.Label())
 	}
 	cmds := [][]string{
 		{"set-option", "-g", "prefix", "None"},

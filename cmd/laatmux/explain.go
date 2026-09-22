@@ -24,7 +24,7 @@ func cmdExplain(ctx context.Context, args []string) error {
 	if fs.NArg() < 1 {
 		return errors.New("usage: laatmux explain [--tmux-socket s] <pane-id>")
 	}
-	srv := parseServer(*sock)
+	srv := tmux.Parse(*sock)
 	panes, err := srv.ListPanes(ctx)
 	if err != nil {
 		return err

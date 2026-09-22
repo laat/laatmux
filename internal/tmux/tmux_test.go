@@ -12,3 +12,22 @@ func TestShellJoin(t *testing.T) {
 		t.Fatalf("got %s want %s", got, want)
 	}
 }
+
+func TestParseLabelRoundTrip(t *testing.T) {
+	for _, v := range []string{"default", "laatmux", "work", "/tmp/tmux-1/sock"} {
+		if got := Parse(v).Label(); got != v {
+			t.Fatalf("Parse(%q).Label() = %q", v, got)
+		}
+	}
+	if Parse("") != (Server{}) || Parse("default") != (Server{}) {
+		t.Fatal("empty and default are not the default server")
+	}
+	if !Parse("laatmux").Managed() {
+		t.Fatal("laatmux not managed")
+	}
+	for _, v := range []string{"default", "work", "/tmp/tmux-1/sock"} {
+		if Parse(v).Managed() {
+			t.Fatalf("%q reported managed", v)
+		}
+	}
+}

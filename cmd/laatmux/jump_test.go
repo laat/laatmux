@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // A fake ssh on PATH scripted through an env var: exit code, stderr, delay.
@@ -60,4 +61,34 @@ func TestCheckSessionTimesOut(t *testing.T) {
 		t.Fatal("preflight did not honour the deadline")
 	}
 	_ = errors.New
+}
+
+// Issue 3, option B: only the managed server is attached; the local default
+// server is switched to; a remote default server or any other server is
+// refused as unmanaged.
+func TestJumpMode(t *testing.T) {
+	mac := client.Host{Name: "mac"}
+	vm := client.Host{Name: "vm", SSH: "vm"}
+	cases := []struct {
+		h    client.Host
+		srv  string
+		want jumpKind
+		err  string
+	}{
+		{mac, "laatmux", jumpAttach, ""},
+		{vm, "laatmux", jumpAttach, ""},
+		{mac, "default", jumpSwitch, ""},
+		{vm, "default", 0, "vm/x: on vm's default tmux server"},
+		{mac, "work", 0, "tmux server work is not managed"},
+		{vm, "/tmp/sock", 0, "tmux server /tmp/sock is not managed"},
+	}
+	for _, c := range cases {
+		got, err := jumpMode(c.h, tmux.Parse(c.srv), "x")
+		switch {
+		case c.err == "" && (err != nil || got != c.want):
+			t.Errorf("%s --server %s: got %v, %v", c.h.Name, c.srv, got, err)
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s --server %s: got %v, want %q", c.h.Name, c.srv, err, c.err)
+		}
+	}
 }

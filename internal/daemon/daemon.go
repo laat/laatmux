@@ -1,7 +1,11 @@
-// Package daemon is the per-host laatmux server. It polls one tmux server,
-// derives agent state for every pane, and streams snapshots and updates to
-// subscribers. Detection never crosses the network: a daemon only ever looks
-// at its own host's tmux.
+// Package daemon is the per-host laatmux server. It polls the tmux servers
+// the host config names, derives agent state for every pane with an
+// identified agent, and streams snapshots and updates to subscribers.
+// Detection never crosses the network: a daemon only ever looks at its own
+// host's tmux.
+//
+// Only the managed laatmux server is ever configured or created on. Every
+// other server, the user's default one included, is observed read-only.
 package daemon
 
 import (
@@ -29,14 +33,32 @@ const (
 	subscriberBuffer  = 256
 )
 
-// Panes is the tmux side of the daemon. tmux.Server implements it; tests
-// supply a fake.
+// Panes is the tmux side of one watched server. tmux.Server implements it;
+// tests supply a fake.
 type Panes interface {
 	ListPanes(ctx context.Context) ([]tmux.Pane, error)
 	Capture(ctx context.Context, paneID string, n int) ([]string, error)
 	EnsureConfigured(ctx context.Context) error
 	NewSession(ctx context.Context, o tmux.NewSessionOpts) (string, error)
-	Managed() bool
+}
+
+// Target is one tmux server the daemon watches.
+type Target struct {
+	Label string // tmux.Server.Label(); part of every agent id from this server
+	Tmux  Panes
+	// Managed marks the server laatmux owns: reconciled on discovery and the
+	// destination of new. At most one target is managed. The rest are read
+	// with list-panes and capture-pane only.
+	Managed bool
+}
+
+// Targets wraps servers for Config.Targets.
+func Targets(servers ...tmux.Server) []Target {
+	out := make([]Target, 0, len(servers))
+	for _, s := range servers {
+		out = append(out, Target{Label: s.Label(), Tmux: s, Managed: s.Managed()})
+	}
+	return out
 }
 
 // Processes is the process-table side. The procs package implements it;
@@ -52,8 +74,7 @@ func (osProcs) Find(tty string) (procs.Identity, bool, error)      { return proc
 func (osProcs) Exists(tty string, id procs.Identity) (bool, error) { return procs.Exists(tty, id) }
 
 type Config struct {
-	Server        tmux.Server
-	Tmux          Panes     // defaults to Server
+	Targets       []Target  // defaults to the managed laatmux server alone
 	Procs         Processes // defaults to the OS process table
 	Interval      time.Duration
 	CaptureLines  int
@@ -63,28 +84,38 @@ type Config struct {
 	Logger        *log.Logger
 }
 
-// Daemon holds the derived state for one tmux server.
+// Daemon holds the derived state for every watched tmux server.
 type Daemon struct {
-	cfg Config
+	cfg     Config
+	targets []*target
+	managed *target // nil when the laatmux server is not watched
 
 	mu     sync.Mutex
 	seq    uint64
-	agents map[string]protocol.Agent // by pane id
-	panes  map[string]*paneState
+	agents map[string]protocol.Agent // by pane key, published records only
+	panes  map[string]*paneState     // by pane key, every pane seen
 	subs   map[*subscriber]struct{}
 
-	// discovered closes after the first complete poll, so a snapshot is never
-	// an empty or partial view of a host that has panes.
+	// discovered closes after the first complete poll of every server, so a
+	// snapshot is never an empty or partial view of a host that has panes.
 	discovered     chan struct{}
 	discoveredOnce sync.Once
+}
 
+type target struct {
+	Target
 	// configuredServer is the tmux server pid the managed configuration was
 	// last applied to. A different pid is a new server, started by hand or
 	// by new-session, and gets reconciled on discovery.
 	configuredServer int
 }
 
+// paneKey identifies a pane across servers. Pane ids are per server, so
+// %1 on the laatmux server and %1 on the default server are different panes.
+func paneKey(label, paneID string) string { return label + "/" + paneID }
+
 type paneState struct {
+	target       *target
 	identity     procs.Identity
 	hasIdentity  bool // an agent instance is known; it may be gone
 	gone         bool // the known instance no longer exists
@@ -111,13 +142,13 @@ func New(cfg Config) *Daemon {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
-	if cfg.Tmux == nil {
-		cfg.Tmux = cfg.Server
+	if len(cfg.Targets) == 0 {
+		cfg.Targets = Targets(tmux.LaatmuxServer)
 	}
 	if cfg.Procs == nil {
 		cfg.Procs = osProcs{}
 	}
-	return &Daemon{
+	d := &Daemon{
 		cfg:    cfg,
 		agents: map[string]protocol.Agent{},
 		panes:  map[string]*paneState{},
@@ -125,6 +156,22 @@ func New(cfg Config) *Daemon {
 
 		discovered: make(chan struct{}),
 	}
+	for _, t := range cfg.Targets {
+		tt := &target{Target: t}
+		d.targets = append(d.targets, tt)
+		if t.Managed && d.managed == nil {
+			d.managed = tt
+		}
+	}
+	return d
+}
+
+func (d *Daemon) capabilities() []string {
+	caps := []string{protocol.CapStatus}
+	if d.managed != nil {
+		caps = append(caps, protocol.CapNew)
+	}
+	return caps
 }
 
 // Run polls until ctx is done.
@@ -147,70 +194,82 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 }
 
+// poll runs one cycle over every server. A server that is down or absent is
+// not an error: its panes are removed. Any other failure on one server is
+// reported after the others have been polled, and keeps discovery pending.
 func (d *Daemon) poll(ctx context.Context) error {
 	now := time.Now()
-	panes, err := d.cfg.Tmux.ListPanes(ctx)
+	var first error
+	for _, t := range d.targets {
+		if err := d.pollTarget(ctx, t, now); err != nil && first == nil {
+			first = fmt.Errorf("%s: %w", t.Label, err)
+		}
+	}
+	return first
+}
+
+func (d *Daemon) pollTarget(ctx context.Context, t *target, now time.Time) error {
+	panes, err := t.Tmux.ListPanes(ctx)
 	if err != nil {
 		if tmux.NoServer(err) {
-			d.removeAll(now)
-			d.configuredServer = 0
+			d.removeUnseen(t, nil)
+			t.configuredServer = 0
 			return nil
 		}
 		return err
 	}
 	// A managed server started by hand, or restarted, has the user's config
-	// and default bindings. Reconcile once per server instance.
-	if len(panes) > 0 && d.cfg.Tmux.Managed() && panes[0].ServerPID != d.configuredServer {
-		if err := d.cfg.Tmux.EnsureConfigured(ctx); err != nil {
+	// and default bindings. Reconcile once per server instance. Unmanaged
+	// servers are the user's and are never touched.
+	if len(panes) > 0 && t.Managed && panes[0].ServerPID != t.configuredServer {
+		if err := t.Tmux.EnsureConfigured(ctx); err != nil {
 			d.cfg.Logger.Printf("configure managed server: %v", err)
 		} else {
-			d.configuredServer = panes[0].ServerPID
+			t.configuredServer = panes[0].ServerPID
 		}
 	}
 	seen := map[string]bool{}
 	for _, p := range panes {
-		seen[p.ID] = true
-		d.observe(ctx, p, now)
+		seen[paneKey(t.Label, p.ID)] = true
+		d.observe(ctx, t, p, now)
 	}
-	d.mu.Lock()
-	var removed []string
-	for id := range d.agents {
-		if !seen[id] {
-			removed = append(removed, id)
-		}
-	}
-	for _, id := range removed {
-		delete(d.agents, id)
-		delete(d.panes, id)
-		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, AgentID: d.agentID(id)})
-	}
-	d.mu.Unlock()
+	d.removeUnseen(t, seen)
 	return nil
 }
 
-func (d *Daemon) removeAll(now time.Time) {
+// removeUnseen forgets this server's panes that are not in seen. A remove is
+// broadcast only for panes that were published.
+func (d *Daemon) removeUnseen(t *target, seen map[string]bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for id := range d.agents {
-		delete(d.agents, id)
-		delete(d.panes, id)
+	for key, st := range d.panes {
+		if st.target != t || seen[key] {
+			continue
+		}
+		delete(d.panes, key)
+		if _, had := d.agents[key]; !had {
+			continue
+		}
+		delete(d.agents, key)
 		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, AgentID: d.agentID(id)})
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, AgentID: d.agentID(key)})
 	}
 }
 
-func (d *Daemon) agentID(paneID string) string { return d.cfg.EnvironmentID + "/" + paneID }
+func (d *Daemon) agentID(key string) string { return d.cfg.EnvironmentID + "/" + key }
 
-// observe runs one detection cycle for one pane and publishes a change if any.
-func (d *Daemon) observe(ctx context.Context, p tmux.Pane, now time.Time) {
+// observe runs one detection cycle for one pane and publishes a change if
+// any. A pane is published once an agent instance has been identified in it;
+// shells and other tools' panes never appear, on any server.
+func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.Time) {
+	key := paneKey(t.Label, p.ID)
 	d.mu.Lock()
-	st, ok := d.panes[p.ID]
+	st, ok := d.panes[key]
 	if !ok {
-		st = &paneState{activity: protocol.Unknown, activityAt: now}
-		d.panes[p.ID] = st
+		st = &paneState{target: t, activity: protocol.Unknown, activityAt: now}
+		d.panes[key] = st
 	}
-	prev, had := d.agents[p.ID]
+	prev, had := d.agents[key]
 	d.mu.Unlock()
 
 	// Liveness and identity. A verified instance is only checked for
@@ -248,18 +307,19 @@ func (d *Daemon) observe(ctx context.Context, p tmux.Pane, now time.Time) {
 			st.activityAt = now
 		}
 	}
-	liveness := protocol.None
-	switch {
-	case st.hasIdentity && !st.gone:
-		liveness = protocol.Alive
-	case st.hasIdentity:
+	if !st.hasIdentity {
+		// Nothing identified yet; keep watching without publishing.
+		return
+	}
+	liveness := protocol.Alive
+	if st.gone {
 		liveness = protocol.Gone
 	}
 
 	// Screen and title.
 	var res detect.Result
-	if st.hasIdentity && !st.gone {
-		screen, cerr := d.cfg.Tmux.Capture(ctx, p.ID, d.cfg.CaptureLines)
+	if !st.gone {
+		screen, cerr := t.Tmux.Capture(ctx, p.ID, d.cfg.CaptureLines)
 		if cerr != nil {
 			// An unavailable screen is not an empty screen. Keep the last
 			// activity rather than letting the idle fallback erase a prompt.
@@ -276,8 +336,9 @@ func (d *Daemon) observe(ctx context.Context, p tmux.Pane, now time.Time) {
 
 	// Build the record and publish on change.
 	a := protocol.Agent{
-		ID:            d.agentID(p.ID),
+		ID:            d.agentID(key),
 		EnvironmentID: d.cfg.EnvironmentID,
+		Server:        t.Label,
 		Session:       p.Session,
 		Window:        p.WindowIndex,
 		PaneID:        p.ID,
@@ -292,18 +353,15 @@ func (d *Daemon) observe(ctx context.Context, p tmux.Pane, now time.Time) {
 		ActivityAt:    st.activityAt,
 		UpdatedAt:     now,
 	}
-	if st.hasIdentity {
-		a.Agent = st.identity.Agent
-		a.Identity = &protocol.Identity{PID: st.identity.PID, StartUnix: st.identity.Start.Unix(), Comm: st.identity.Comm, LeaderPID: st.identity.LeaderPID}
-	}
-	_ = prev
+	a.Agent = st.identity.Agent
+	a.Identity = &protocol.Identity{PID: st.identity.PID, StartUnix: st.identity.Start.Unix(), Comm: st.identity.Comm, LeaderPID: st.identity.LeaderPID}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if had && sameRecord(prev, a) {
 		return
 	}
-	d.agents[p.ID] = a
+	d.agents[key] = a
 	d.seq++
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &a})
 }
@@ -458,7 +516,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 		EnvironmentID: d.cfg.EnvironmentID,
 		Version:       d.cfg.Version,
 		Host:          d.cfg.Host,
-		Capabilities:  []string{protocol.CapStatus, protocol.CapNew},
+		Capabilities:  d.capabilities(),
 	}
 	if err := pc.Write(hello); err != nil {
 		return
@@ -502,8 +560,16 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				}
 			}()
 		case protocol.TypeNew:
+			// Sessions are only ever created on the managed server.
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-			paneID, err := d.cfg.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+			if d.managed == nil {
+				res.Error = "this daemon does not watch the managed laatmux tmux server"
+				if err := pc.Write(res); err != nil {
+					return
+				}
+				continue
+			}
+			paneID, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
 			if err != nil {
 				res.Error = err.Error()
 			} else {

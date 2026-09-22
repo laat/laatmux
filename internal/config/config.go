@@ -5,18 +5,54 @@
 //	  - name: box
 //	    ssh: box              # ssh alias, ControlMaster assumed
 //	    bin: ~/.local/bin/laatmux   # optional, default "laatmux" on PATH
+//	tmux_servers: [laatmux, default]  # what this machine's daemon watches
+//
+// hosts is read by clients; tmux_servers by the daemon on the machine the
+// file lives on. Each host's daemon reads its own file, so the laptop's
+// config cannot change what a remote daemon watches.
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
 	Hosts []client.Host `yaml:"hosts"`
+	// TmuxServers are the tmux servers the daemon on this machine polls,
+	// as Parse reads them. Empty means the managed laatmux server only.
+	// Only the laatmux server is configured or created on; the rest are
+	// observed read-only.
+	TmuxServers []string `yaml:"tmux_servers"`
+}
+
+// Servers resolves TmuxServers, or the default when it is empty.
+func (c Config) Servers() ([]tmux.Server, error) {
+	return ParseServers(c.TmuxServers)
+}
+
+// ParseServers turns server specs into servers, rejecting duplicates. An
+// empty list is the managed laatmux server alone.
+func ParseServers(specs []string) ([]tmux.Server, error) {
+	if len(specs) == 0 {
+		return []tmux.Server{tmux.LaatmuxServer}, nil
+	}
+	seen := map[string]bool{}
+	out := make([]tmux.Server, 0, len(specs))
+	for _, v := range specs {
+		s := tmux.Parse(v)
+		if seen[s.Label()] {
+			return nil, fmt.Errorf("tmux_servers: %s listed twice", s.Label())
+		}
+		seen[s.Label()] = true
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // Path is the config file location. LAATMUX_CONFIG overrides.
