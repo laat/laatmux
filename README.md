@@ -13,8 +13,8 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 | Package | What |
 |---|---|
 | `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `path`, `ls`, `watch`, `jump`, `shell`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
-| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent and worktree records |
-| `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm` |
+| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
+| `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm`; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
@@ -225,8 +225,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   Settled workspaces are listed under `settled`, and a local workspace
   session whose worktree is gone from a connected host under `stale`, from
   which `rm` still works; a host whose snapshot has not arrived, or whose
-  daemon does not publish worktrees, says nothing about its workspaces. `watch` re-reads the local sessions on each
-  redraw.
+  daemon does not publish worktrees, says nothing about its workspaces.
+  `ls`, `watch`, `jump`, `path` and `rm` read the local daemon's merged
+  stream when it has one, see below; against an older daemon each dials
+  the hosts itself as before, and `watch` then re-reads the local
+  sessions on each redraw.
 - **`shell`** runs inside a workspace session and opens a window at the
   worktree root: started there for a local host, `ssh -t` with `cd` and
   the single-quoted root then `exec "$SHELL" -l` for a remote one. The
@@ -269,11 +272,71 @@ The intended policy from issue #1: the laptop watches its default server plus
 the managed server; remote hosts watch only the managed server, with the
 laptop providing the UI.
 
+## The merged stream
+
+Every client used to dial every host: a sidebar pane per window would be
+an ssh channel per host per window. The daemon on the machine the user
+sits at is the one process there, so it is the merge point. A daemon
+whose config has `hosts` advertises `merged`, and `subscribe` with
+`merged: true` gets one stream with every host's records:
+
+```
+-> {type: subscribe, merged: true}
+<- {type: snapshot, seq, hosts, agents, worktrees, sessions, sessions_error}
+<- {type: upsert, seq, host_status: {...}}          a host's connectivity changed
+<- {type: upsert, seq, agent | worktree: {...}}      as before, from any host
+<- {type: upsert, seq, local_session: {...}}         a local workspace session changed
+<- {type: remove, seq, host_name | agent_id | worktree_id | local_session_name}
+```
+
+- **Host records** `{name, ssh, environment_id, connected, listed, error,
+  version, capabilities, since}` are the connectivity axis, one per
+  configured host. `connected` is a live connection with a completed
+  hello; `listed` is that the host's records come from a snapshot of that
+  connection. Records from before a drop stay while `listed` is false,
+  so a listing shows what was last known with the host row saying `DOWN`
+  and ssh's own message. Absence is authoritative only when both bits are
+  set: a local session is stale only against a host that is connected,
+  listed and publishes worktrees, and `jump` reports a workspace missing
+  only from a listed host. The local host is itself, not a dial of its
+  own socket. Records are forwarded unchanged, ids included; a client maps
+  a record's `environment_id` to a host name through the host records.
+  `seq` is the merging daemon's own.
+- **Hosts follow the config file.** The daemon re-reads `hosts` on every
+  merged subscription, so a host added shows up on the next `ls`; one
+  removed gets a `remove` for its records and then its host record.
+- **Held only while wanted.** Remote subscriptions are opened by the
+  first merged subscriber and dropped 60 seconds after the last leaves,
+  so a laptop with no sidebar open holds no ssh channels; each remote
+  daemon sees one subscriber per laptop whatever the laptop shows. A host
+  that is down is redialled with the backoff `watch` used, 1 s doubling
+  to 30 s.
+- **Local sessions** are listed by the daemon while it has a merged
+  subscriber, once a second against the default server, and published as
+  `{name, key, host, source, branch, attach, settled}`, so a settle
+  reaches every subscriber within a second and a view needs no tmux
+  access of its own. The listing also runs once, synchronously, before
+  each merged snapshot, so the snapshot is as fresh as the connection. A
+  listing that fails for a reason other than no server puts its message
+  in `sessions_error`, which `ls` prints where the settled and stale
+  groups would be.
+- **One-shot clients wait for readiness.** The snapshot comes at once
+  with what the daemon knows, on a cold daemon the host rows alone. `ls`
+  reads on until every host is listed or carries an error, or 20 seconds
+  have passed, and marks the hosts still neither. `jump`, `path` and `rm`
+  wait the same way for the one host they act on and then talk to that
+  host directly, as before.
+- **Older daemons.** A local daemon without `merged` is an older build
+  still running; `ls`, `watch`, `jump`, `path` and `rm` fall back to
+  dialling each host. Plain `subscribe` still means this host's own
+  records, which is what a remote daemon serves to the merging one.
+
 ## Model
 
 - Three status axes, never collapsed: **activity** from the screen (working,
   blocked, idle, unknown), **liveness** of the identified process (alive, gone),
-  and **host connectivity**, which is client side only.
+  and **host connectivity**, which is client side: the merging daemon's
+  host records, never a field of an agent record.
 - **Identity** is the agent process, not the pane: pid plus start time, looked
   for among every process on the pane's tty, not only the foreground group, so
   a tool taking the foreground never replaces the agent. Only a process's own
@@ -466,6 +529,24 @@ the source tag intact; `rm` on a branch with no worktree whose local
 session by name carried another source and branch sent no root and left
 both that session and the other worktree alone, while the same session
 with no identity tags had its root sent and was killed.
+
+## Milestone three, step 2, on the VM
+
+The merged stream, with an isolated daemon (`LAATMUX_HOME=.spike`, a
+scratch copy of the config with hosts `mac` and `vm`) and the VM's daemon
+an older build without `merged`. `ls` through the local daemon listed
+both hosts in 1.8 s cold and left one `ssh -T ... laatmux bridge` behind;
+twenty `watch` processes at once held that one channel and one bridge on
+the VM. A host with an unresolvable alias appended to the config file
+showed up on the next `ls` and in every running `watch` as `DOWN` with
+ssh's own message, and was gone after its removal. Killing the bridge on
+the VM turned its row `DOWN  disconnected` with its worktrees still
+listed, then `connected (snapshot pending)`, then `connected`, within the
+backoff. `jump` on a worktree without a session answered in 25 ms from
+the stream with the `add` hint; `jump` on an unknown session was refused
+by the direct preflight as before. Seventy seconds after the last `watch`
+was killed there was no ssh channel on the laptop and no bridge on the
+VM, and the next `ls` reconnected in 1.3 s.
 
 ## Not yet verified
 

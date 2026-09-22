@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -106,6 +109,27 @@ func cmdServe(ctx context.Context, args []string) error {
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
 		Store: store, Agents: agents,
+		// The merged stream: the hosts are re-read from the file on every
+		// merged subscription, and the local sessions listed from the
+		// default server.
+		Hosts: func() ([]client.Host, error) {
+			cfg, err := config.Load()
+			if err != nil {
+				return nil, err
+			}
+			hosts := make([]client.Host, 0, len(cfg.Hosts))
+			for _, h := range cfg.Hosts {
+				hosts = append(hosts, h.Host)
+			}
+			return hosts, nil
+		},
+		Sessions: func(ctx context.Context) ([]protocol.Session, error) {
+			locals, err := workspace.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return workspace.Records(locals), nil
+		},
 	})
 	errc := make(chan error, 2)
 	go func() { errc <- d.Run(ctx) }()

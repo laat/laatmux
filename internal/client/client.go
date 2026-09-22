@@ -38,6 +38,17 @@ type Conn struct {
 	pc    *protocol.Conn
 	close func()
 	once  sync.Once
+	diag  *tailBuffer // ssh's stderr; nil for a local connection
+}
+
+// Diag is what the transport has written to stderr so far, trimmed: for a
+// remote host, ssh's own messages, which say why a connection failed or
+// dropped when the protocol only sees EOF. "" for a local connection.
+func (c *Conn) Diag() string {
+	if c.diag == nil {
+		return ""
+	}
+	return c.diag.String()
 }
 
 // Close tears the connection down. Safe to call concurrently and repeatedly:
@@ -80,15 +91,53 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 			"-o", "ServerAliveInterval=15",
 			"-o", "ServerAliveCountMax=3",
 			h.SSH, bin+" bridge")
-		cmd.Stderr = os.Stderr
+		// ssh's stderr is kept rather than passed through: a client shows
+		// it in the host's row, and the merging daemon puts it in the host
+		// record, where the user sees it. On the terminal it would
+		// interleave with the listing, or land in the daemon's log.
+		diag := &tailBuffer{}
+		cmd.Stderr = diag
 		var err error
 		r, w, close, err = startProcessTransport(cmd)
 		if err != nil {
 			return nil, fmt.Errorf("ssh %s: %w", h.SSH, err)
 		}
+		c := &Conn{Host: h, pc: protocol.NewConnRW(r, w), close: close, diag: diag}
+		return completeHello(ctx, c)
 	}
-	c := &Conn{Host: h, pc: protocol.NewConnRW(r, w), close: close}
-	return completeHello(ctx, c)
+	return Connect(ctx, h, r, w, close)
+}
+
+// Connect completes the hello exchange over an open transport: r and w
+// carry the protocol, close tears the transport down. It is what Dial does
+// once a connection is up, exposed so a daemon under test can be dialled
+// over a pipe.
+func Connect(ctx context.Context, h Host, r io.Reader, w io.Writer, close func()) (*Conn, error) {
+	return completeHello(ctx, &Conn{Host: h, pc: protocol.NewConnRW(r, w), close: close})
+}
+
+// tailBuffer keeps the last tailKeep bytes written to it.
+type tailBuffer struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+const tailKeep = 4096
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > tailKeep {
+		t.b = append([]byte(nil), t.b[len(t.b)-tailKeep:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.b))
 }
 
 // completeHello sends the client hello and validates the daemon's reply.
@@ -118,6 +167,12 @@ func completeHello(ctx context.Context, c *Conn) (*Conn, error) {
 	case x := <-ch:
 		if x.err != nil {
 			c.Close()
+			// Closing reaps ssh, so its stderr is complete: a refused
+			// connection or a missing remote binary is in it, and is
+			// what the user needs to see rather than EOF.
+			if d := c.Diag(); d != "" {
+				return nil, fmt.Errorf("%s: %s", h.Name, d)
+			}
 			return nil, fmt.Errorf("%s: %w", h.Name, x.err)
 		}
 		if x.m.Type != protocol.TypeHello {

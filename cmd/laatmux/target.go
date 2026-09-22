@@ -155,18 +155,28 @@ func hostFor(cfg config.Config, flag string, repo config.Repo) (config.Host, hom
 	return h, lr, nil
 }
 
-// snapshot dials the host and returns the daemon's hello and its first
-// snapshot. The connection is closed; commands open their own.
+// snapshot returns the host's daemon's hello and a snapshot of its
+// records, through the local daemon's merged stream when it has one: the
+// records are already there while a sidebar holds the stream open, and
+// on a cold daemon the wait is the connection the direct dial would have
+// made. A host the local daemon's config lacks, or a daemon without the
+// capability, falls back to dialling the host. The connection is closed;
+// commands open their own.
 func snapshot(ctx context.Context, h client.Host, needCap string) (hello, snap protocol.Message, err error) {
+	if c, ok := dialMerged(ctx); ok {
+		hello, snap, ok, err := mergedSnapshot(ctx, c, h, needCap)
+		c.Close()
+		if ok {
+			return hello, snap, err
+		}
+	}
 	c, err := client.Dial(ctx, h)
 	if err != nil {
 		return hello, snap, err
 	}
 	defer c.Close()
-	for _, cap := range []string{protocol.CapStatus, needCap} {
-		if cap != "" && !protocol.Has(c.Hello.Capabilities, cap) {
-			return hello, snap, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, cap)
-		}
+	if err := needCaps(h, c.Hello, needCap); err != nil {
+		return hello, snap, err
 	}
 	sctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
 	defer cancel()
@@ -175,6 +185,40 @@ func snapshot(ctx context.Context, h client.Host, needCap string) (hello, snap p
 		return hello, snap, fmt.Errorf("%s: %w", h.Name, err)
 	}
 	return c.Hello, snap, nil
+}
+
+// mergedSnapshot waits on the merged stream for the one host until it is
+// listed or has failed. Not ok when the stream has no such host.
+func mergedSnapshot(ctx context.Context, c *client.Conn, h client.Host, needCap string) (hello, snap protocol.Message, ok bool, err error) {
+	m := newMerged()
+	pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool {
+		st, ok := m.hosts[h.Name]
+		return !ok || st.ready()
+	})
+	if err != nil {
+		return hello, snap, true, err
+	}
+	for _, n := range pending {
+		if n == h.Name {
+			return hello, snap, true, fmt.Errorf("%s: no snapshot from the local daemon after %s", h.Name, snapshotTimeout)
+		}
+	}
+	hello, snap, ok, err = m.hostSnapshot(h.Name)
+	if !ok || err != nil {
+		return hello, snap, ok, err
+	}
+	return hello, snap, true, needCaps(h, hello, needCap)
+}
+
+// needCaps checks the hello for status and the capability the command
+// needs.
+func needCaps(h client.Host, hello protocol.Message, needCap string) error {
+	for _, cap := range []string{protocol.CapStatus, needCap} {
+		if cap != "" && !protocol.Has(hello.Capabilities, cap) {
+			return fmt.Errorf("%s: daemon %s does not support %s", h.Name, hello.Version, cap)
+		}
+	}
+	return nil
 }
 
 // findWorktree returns the record for a branch of a repository, by source:

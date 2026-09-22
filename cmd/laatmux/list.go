@@ -15,14 +15,24 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
-// merged is the client-side merge of every host's stream. Host connectivity
-// is a separate axis from agent state and lives here, not in the records.
+// merged is the client's view of every host's stream: fed from the local
+// daemon's merged stream when it has one, else merged here from a
+// connection per host. Host connectivity is a separate axis from agent
+// state and lives here, not in the records.
 type merged struct {
 	mu        sync.Mutex
 	agents    map[string]protocol.Agent    // by agent id
 	worktrees map[string]protocol.Worktree // by worktree id
 	hosts     map[string]hostState         // by host name
 	byHost    map[string]string            // agent or worktree id -> host name
+	// sessions are the local workspace sessions as the merged stream
+	// publishes them; nil on the direct path, where the client lists
+	// them itself. sessionsErr is the daemon's listing failure, if any.
+	sessions    map[string]protocol.Session
+	sessionsErr string
+	// daemonErr says the local daemon's merged stream is down, on watch,
+	// while it reconnects; the last state stays on screen.
+	daemonErr string
 	change    chan struct{}
 }
 
@@ -38,6 +48,19 @@ type hostState struct {
 	// records are unknown, not absent, and nothing of its is stale.
 	Worktrees bool
 	Listed    bool
+	Caps      []string // the daemon's capabilities, from its hello
+}
+
+// ready reports whether a one-shot client can stop waiting on the host:
+// its records are listed or it has failed. A host that is connecting, or
+// connected with its snapshot pending, is neither.
+func (h hostState) ready() bool { return h.Listed || h.Error != "" }
+
+// fromStatus is the host record of the merged stream as this view holds
+// it.
+func fromStatus(st protocol.HostStatus) hostState {
+	return hostState{Connected: st.Connected, Error: st.Error, Version: st.Version, EnvID: st.EnvironmentID,
+		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities}
 }
 
 func newMerged() *merged {
@@ -285,12 +308,20 @@ func (m *merged) render(locals []workspace.Local) string {
 		hostNames = append(hostNames, n)
 	}
 	sort.Strings(hostNames)
+	if m.daemonErr != "" {
+		fmt.Fprintf(&b, "local daemon  DOWN  %s\n", m.daemonErr)
+	}
 	for _, n := range hostNames {
 		st := m.hosts[n]
-		if st.Connected {
+		switch {
+		case st.Connected && st.Listed:
 			fmt.Fprintf(&b, "%s  connected  %s\n", n, st.Version)
-		} else {
+		case st.Connected:
+			fmt.Fprintf(&b, "%s  connected  %s  (snapshot pending)\n", n, st.Version)
+		case st.Error != "":
 			fmt.Fprintf(&b, "%s  DOWN  %s\n", n, st.Error)
+		default:
+			fmt.Fprintf(&b, "%s  connecting\n", n)
 		}
 	}
 	main, settled := m.rows(locals)
@@ -313,6 +344,11 @@ func (m *merged) render(locals []workspace.Local) string {
 			_, root := workspace.SplitKey(l.Key)
 			fmt.Fprintf(&b, "  %-40s no worktree %s on %s\n", l.Name, root, l.Host)
 		}
+	}
+	if m.sessionsErr != "" {
+		// An incomplete listing says so where the settled and stale
+		// groups would be, rather than looking complete.
+		fmt.Fprintf(&b, "\nlocal sessions not listed: %s\n", m.sessionsErr)
 	}
 	return b.String()
 }
@@ -397,6 +433,19 @@ func cmdLs(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
+	// The local daemon merges the hosts' streams when it can; a daemon
+	// without the capability is an older build still running, and each
+	// host is dialled from here as before.
+	if c, ok := dialMerged(ctx); ok {
+		defer c.Close()
+		pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool { return len(m.pending()) == 0 })
+		if err != nil {
+			return err
+		}
+		m.timedOut(pending, snapshotTimeout)
+		fmt.Print(m.render(m.locals()))
+		return nil
+	}
 	var wg sync.WaitGroup
 	for _, h := range cfg.Hosts {
 		wg.Add(1)
@@ -438,15 +487,25 @@ func cmdWatch(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
-	for _, h := range cfg.Hosts {
-		go m.follow(ctx, h.Host)
+	direct := true
+	if c, ok := dialMerged(ctx); ok {
+		direct = false
+		go m.followMerged(ctx, c)
+	} else {
+		for _, h := range cfg.Hosts {
+			go m.follow(ctx, h.Host)
+		}
 	}
 	t := time.NewTicker(5 * time.Second) // refresh relative times
 	defer t.Stop()
 	for {
-		// Settled and stale come from the local sessions, read on each
-		// redraw so a settle from another pane shows on the next change.
-		locals, _ := workspace.List(ctx)
+		// Settled and stale come from the local sessions: from the merged
+		// stream, or on the direct path read on each redraw so a settle
+		// from another pane shows on the next change.
+		locals := m.locals()
+		if direct {
+			locals, _ = workspace.List(ctx)
+		}
 		fmt.Print("\033[H\033[2J" + m.render(locals))
 		select {
 		case <-ctx.Done():
