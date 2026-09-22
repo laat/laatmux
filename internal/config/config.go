@@ -199,6 +199,9 @@ func (c *Config) validateHosts() error {
 			}
 		}
 		if !ValidLabel(h.Name) {
+			if from == "name" {
+				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, labelChars)
+			}
 			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, labelChars)
 		}
 		if j, dup := seen[h.Name]; dup {

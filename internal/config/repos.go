@@ -24,6 +24,9 @@ type Repo struct {
 // optional name.
 func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
+		if n.Tag != "!!str" {
+			return fmt.Errorf("repos: line %d: source must be a string, got %s", n.Line, strings.TrimPrefix(n.Tag, "!!"))
+		}
 		r.Source = n.Value
 		return nil
 	}
@@ -45,10 +48,31 @@ func (r Repo) MarshalYAML() (any, error) {
 	return map[string]string{"source": r.Source, "name": r.Name}, nil
 }
 
-// Repo finds a known repository by name or source.
+// Repo finds a known repository by name, else by source. Names are
+// unique and sources are unique, but a bare local source can equal another
+// entry's name, so the name match is taken first, independent of list
+// order.
 func (c Config) Repo(nameOrSource string) (Repo, bool) {
+	if r, ok := c.RepoByName(nameOrSource); ok {
+		return r, true
+	}
+	return c.RepoBySource(nameOrSource)
+}
+
+// RepoByName finds a known repository by its label.
+func (c Config) RepoByName(name string) (Repo, bool) {
 	for _, r := range c.Repos {
-		if r.Name == nameOrSource || r.Source == nameOrSource {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Repo{}, false
+}
+
+// RepoBySource finds a known repository by its source, its identity.
+func (c Config) RepoBySource(source string) (Repo, bool) {
+	for _, r := range c.Repos {
+		if r.Source == source {
 			return r, true
 		}
 	}

@@ -39,12 +39,13 @@ func cmdRepos(ctx context.Context, args []string) error {
 		fmt.Fprintf(w, "%s\t%s\n", r.Name, r.Source)
 		lr := last.Get(r.Source)
 		for _, h := range cfg.Hosts {
-			d, err := h.Dirs()
-			if err != nil {
-				fmt.Fprintf(w, "  %s\tno repos and worktrees configured, cannot add\n", h.Name)
-				continue
+			if d, err := h.Dirs(); err != nil {
+				// A host can lose its directories after being used, and
+				// last.json still names it; say so rather than hide it.
+				fmt.Fprintf(w, "  %s\tno repos and worktrees configured, cannot add", h.Name)
+			} else {
+				fmt.Fprintf(w, "  %s\t%s\t%s", h.Name, d.Checkout(r.Name), d.Worktree(r.Name, "<branch>"))
 			}
-			fmt.Fprintf(w, "  %s\t%s\t%s", h.Name, d.Checkout(r.Name), d.Worktree(r.Name, "<branch>"))
 			if lr.Host == h.Name {
 				fmt.Fprint(w, "\tlast used")
 				if lr.Agent != "" {

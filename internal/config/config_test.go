@@ -117,6 +117,31 @@ func TestParseFull(t *testing.T) {
 	}
 }
 
+// A bare local source can equal another entry's name. The name wins,
+// whichever order the list is in.
+func TestRepoLookupNameBeforeSource(t *testing.T) {
+	a := "repos:\n  - source: foo\n    name: local-foo\n  - https://example.com/org/foo.git\n"
+	b := "repos:\n  - https://example.com/org/foo.git\n  - source: foo\n    name: local-foo\n"
+	for _, in := range []string{a, b} {
+		c, err := Parse([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r, ok := c.Repo("foo"); !ok || r.Source != "https://example.com/org/foo.git" {
+			t.Errorf("%q: Repo(foo) = %+v %v, want the entry named foo", in, r, ok)
+		}
+		if r, ok := c.RepoBySource("foo"); !ok || r.Name != "local-foo" {
+			t.Errorf("%q: RepoBySource(foo) = %+v %v", in, r, ok)
+		}
+		if r, ok := c.RepoByName("local-foo"); !ok || r.Source != "foo" {
+			t.Errorf("%q: RepoByName(local-foo) = %+v %v", in, r, ok)
+		}
+		if _, ok := c.RepoByName("nope"); ok {
+			t.Errorf("%q: RepoByName(nope) found", in)
+		}
+	}
+}
+
 func TestExpandDirs(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	d := Dirs{Repos: "~/code", Worktrees: "/abs/wt"}.Expand()
@@ -131,6 +156,9 @@ func TestExpandDirs(t *testing.T) {
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
 		"hosts:\n  - ssh: my.box\n":                                            "ssh alias",
+		"hosts:\n  - name: my.box\n":                                           "name \"my.box\" is not a valid label",
+		"repos:\n  - 123\n":                                                    "source must be a string, got int",
+		"repos:\n  - true\n":                                                   "source must be a string, got bool",
 		"hosts:\n  - name: a\n  - name: a\n    ssh: a\n":                       "listed twice",
 		"hosts:\n  - name: a\n  - name: b\n":                                   "more than one entry without ssh",
 		"hosts:\n  - name: a\n    repos: ~/code\n":                             "repos but not worktrees",
