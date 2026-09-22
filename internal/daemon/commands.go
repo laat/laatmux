@@ -272,7 +272,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				if err != nil {
 					return err
 				}
-				if taken {
+				if taken && (rec.Source != repo.Source || rec.Branch != m.Branch) {
 					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
 				}
 			}

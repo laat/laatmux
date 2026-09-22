@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
@@ -105,7 +106,14 @@ func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
 func (s *Store) origin(ctx context.Context, dir string) (string, bool, error) {
 	fi, err := os.Stat(filepath.Join(dir, ".git", "config"))
 	if err != nil {
-		return "", false, nil
+		// Only a missing file proves this is not a main checkout. A
+		// permission or I/O failure on one that exists is an error: taken
+		// as absence, polling would drop its records and rm would take
+		// the worktree as already gone.
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("%s: %w", dir, err)
 	}
 	s.mu.Lock()
 	c, cached := s.origins[dir]
@@ -281,9 +289,11 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 }
 
 // ByBranch locates the worktree for a branch of repo under the worktrees
-// directory. A worktree on the branch elsewhere, the main checkout
-// included, does not count. Not found is (Record{}, checkout, false, nil)
-// with the checkout still reported when it exists.
+// directory, for rm. A worktree on the branch elsewhere, the main checkout
+// included, does not count. A prunable registration, whose directory was
+// deleted by hand, does: it is what rm prunes, and its root is what finds
+// the orphaned session. Not found is (Record{}, checkout, false, nil) with
+// the checkout still reported when it exists.
 func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record, string, bool, error) {
 	checkout, ok, err := s.Checkout(ctx, repo)
 	if err != nil || !ok {
@@ -294,7 +304,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 		return Record{}, checkout, false, err
 	}
 	for _, e := range entries {
-		if e.Branch == branch && !e.Prunable && e.Root != checkout && s.Owns(e.Root) {
+		if e.Branch == branch && e.Root != checkout && s.Owns(e.Root) {
 			return Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, checkout, true, nil
 		}
 	}
@@ -303,7 +313,9 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 
 // Remove unregisters and deletes a worktree through git, which is the
 // judge of whether it may go: without force a dirty, locked or submodule
-// worktree is refused with git's message. Skips when root is not a
+// worktree is refused with git's message. A registration whose directory
+// is already gone is removed the same way: git drops just that entry,
+// where prune would sweep every stale one. Skips when root is not a
 // registered worktree of the checkout, so a retry is a no-op.
 func Remove(ctx context.Context, checkout, root string, force bool) (removed bool, err error) {
 	entries, err := ListWorktrees(ctx, checkout)

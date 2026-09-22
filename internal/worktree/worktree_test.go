@@ -496,3 +496,32 @@ func TestRunStreamingLongLine(t *testing.T) {
 		t.Fatalf("lines: %d, first %d bytes, last %q", len(lines), len(lines[0]), lines[len(lines)-1])
 	}
 }
+
+// A checkout whose .git/config cannot be read is an error, not a
+// repository without a checkout: polling must not drop its records and rm
+// must not take its worktrees as already gone.
+func TestCheckoutStatErrorPropagates(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(a.Checkout, ".git")
+	if err := os.Chmod(gitDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(gitDir, 0o755) })
+	f.store.origins = map[string]originEntry{}
+	if _, _, err := f.store.Checkout(f.ctx, f.repo); err == nil {
+		t.Fatal("unreadable checkout taken as absent")
+	}
+	if _, err := f.store.List(f.ctx); err == nil {
+		t.Fatal("List hid the unreadable checkout")
+	}
+	if _, _, _, err := f.store.Find(f.ctx, a.Root); err == nil {
+		t.Fatal("Find took the unreadable checkout as absent")
+	}
+}

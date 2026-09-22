@@ -520,3 +520,37 @@ func TestCommandOutputBounded(t *testing.T) {
 		t.Fatalf("%d events, tail %+v", n, c.events[n-3:])
 	}
 }
+
+// A worktree whose directory was deleted by hand keeps a prunable
+// registration and, here, a session. rm by repo and branch, with or
+// without the root, prunes the registration and kills the session.
+func TestRmPrunableWorktree(t *testing.T) {
+	d, ft, _, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	for _, b := range []string{"one", "two"} {
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "add-" + b, Repo: remote, Branch: b, Cmd: []string{"true"}})
+		if res, _ := result(t, pc, "add-"+b); !res.OK {
+			t.Fatalf("add %s: %+v", b, res)
+		}
+	}
+	roots := map[string]string{}
+	for _, p := range ft.panes {
+		roots[p.Session] = p.Cwd
+		os.RemoveAll(p.Cwd)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "one", Root: roots["proj/one"]})
+	if res, _ := result(t, pc, "r1"); !res.OK || res.Root != roots["proj/one"] {
+		t.Fatalf("rm one: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "two"})
+	if res, _ := result(t, pc, "r2"); !res.OK || res.Root != roots["proj/two"] {
+		t.Fatalf("rm two: %+v", res)
+	}
+	if len(ft.panes) != 0 || len(ft.killed) != 2 {
+		t.Fatalf("panes %+v killed %v", ft.panes, ft.killed)
+	}
+	d.pollWorktrees(context.Background())
+	if wts := d.Worktrees(); len(wts) != 0 {
+		t.Fatalf("worktrees %+v", wts)
+	}
+}
