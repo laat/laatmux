@@ -317,3 +317,41 @@ func Bridge(ctx context.Context, r io.Reader, w io.Writer) error {
 		return nil
 	}
 }
+
+// Stream sends a command and follows its progress until the result, calling
+// onProgress for each progress message with the command's id. A transport
+// failure before the result closes the connection and returns it; the
+// caller may dial again and send the same id, which the daemon answers by
+// replaying what it already sent and following. A result with ok false is
+// returned with its error, as Request does.
+func (c *Conn) Stream(ctx context.Context, m protocol.Message, onProgress func(protocol.Message)) (protocol.Message, error) {
+	defer c.CloseOnDone(ctx)()
+	if err := c.pc.Write(m); err != nil {
+		return protocol.Message{}, err
+	}
+	for {
+		r, err := c.pc.Read()
+		if err != nil {
+			if ctx.Err() != nil {
+				return protocol.Message{}, ctx.Err()
+			}
+			return protocol.Message{}, err
+		}
+		if r.ID != m.ID {
+			continue
+		}
+		switch r.Type {
+		case protocol.TypeProgress:
+			if onProgress != nil {
+				onProgress(r)
+			}
+		case protocol.TypeError:
+			return r, errors.New(r.Error)
+		case protocol.TypeResult:
+			if !r.OK {
+				return r, errors.New(r.Error)
+			}
+			return r, nil
+		}
+	}
+}

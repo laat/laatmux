@@ -1,6 +1,7 @@
 // laatmux: git worktrees and coding agents across hosts, from tmux.
 //
 // Milestone one: status daemon, sidebar, launcher, jump.
+// Milestone two: worktrees and workspaces: add, rm, path, shell, settle.
 package main
 
 import (
@@ -37,8 +38,20 @@ func main() {
 		err = cmdLs(ctx, os.Args[2:])
 	case "watch":
 		err = cmdWatch(ctx, os.Args[2:])
+	case "add":
+		err = cmdAdd(ctx, os.Args[2:])
+	case "rm":
+		err = cmdRm(ctx, os.Args[2:])
+	case "path":
+		err = cmdPath(ctx, os.Args[2:])
 	case "jump":
 		err = cmdJump(ctx, os.Args[2:])
+	case "shell":
+		err = cmdShell(ctx, os.Args[2:])
+	case "settle":
+		err = cmdSettle(ctx, os.Args[2:])
+	case "unsettle":
+		err = cmdUnsettle(ctx, os.Args[2:])
 	case "hosts":
 		err = cmdHosts(ctx, os.Args[2:])
 	case "repos":
@@ -64,10 +77,19 @@ func usage() {
 
   serve     run the per-host daemon (polls the configured tmux servers, serves status)
   bridge    connect stdio to the local daemon (what ssh runs on a remote host)
-  new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]
-  ls        list agents across configured hosts
+  add       laatmux add <branch> [--repo r] [--host h] [--agent a] [-- <cmd>...]
+            worktree and agent on the host, then the local workspace session
+  rm        laatmux rm <repo>/<branch> [--host h] [--force]     remove the worktree, its sessions
+            laatmux rm --root <path> --host h [--force]          a detached worktree
+  path      laatmux path <repo>/<branch> [--host h]             the worktree root on the host
+  ls        workspaces and agents across configured hosts
   watch     live list, redraws on change (sidebar)
-  jump      laatmux jump [--server s] <host>/<session>   focus or open a pane attached to it
+  jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
+            laatmux jump [--server default] <host>/<session>   a session that is no worktree's
+  shell     a shell at the worktree root, in the workspace session this runs from
+  settle    laatmux settle [<host>/<repo>/<branch>]     collapse the workspace in ls
+  unsettle  laatmux unsettle [<host>/<repo>/<branch>]
+  new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]   managed session, no worktree
   hosts     reachability and daemon version per host
   repos     known repositories and where each lands on each host
   explain   laatmux explain <pane-id>       show detection inputs and decision

@@ -122,6 +122,7 @@ type Worktree struct {
 	ID            string    `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
 	EnvironmentID string    `json:"environment_id"`
 	Repo          string    `json:"repo"`              // repository label from the host's config
+	Source        string    `json:"source,omitempty"`  // repository source, the identity; "" from older daemons
 	Branch        string    `json:"branch"`            // "" for a detached worktree
 	Root          string    `json:"root"`              // absolute path as git registered it
 	Session       string    `json:"session,omitempty"` // managed session whose pane records Root, else ""

@@ -10,14 +10,15 @@ designed in [docs/milestone-two.md](docs/milestone-two.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `new`, `ls`, `watch`, `jump`, `hosts`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `path`, `ls`, `watch`, `jump`, `shell`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent and worktree records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm` |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` in one invocation, `kill-session`, branch encoding for session names |
-| `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge` |
+| `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge`; request and streamed command |
+| `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
 | `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon; `.laatmux.yaml` per repository |
 
@@ -25,13 +26,20 @@ designed in [docs/milestone-two.md](docs/milestone-two.md).
 
 ```sh
 go build -o laatmux ./cmd/laatmux
-./laatmux ls        # starts the local daemon on demand, lists agents
+./laatmux ls        # starts the local daemon on demand, lists workspaces and agents
 ./laatmux watch     # live, redraws on change
 ./laatmux hosts     # reachability, daemon version, capabilities
 ./laatmux repos     # each known repository's name and where it lands on each host
+./laatmux add fix-ls                          # worktree and agent for the repo of the current directory, on the last-used host
+./laatmux add fix-ls --repo proj --host vm --agent claude
+./laatmux path proj/fix-ls                    # the worktree root on its host
+./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
+./laatmux shell                               # a shell at the worktree root, from inside a workspace session
+./laatmux settle                              # collapse this workspace in ls; unsettle brings it back
+./laatmux rm proj/fix-ls [--force]            # remove the worktree, its managed session and the local session
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
-./laatmux new work --cwd ~/code/foo -- claude # managed session on the laatmux tmux server
-./laatmux jump mac/work                       # focus or open the attached pane
+./laatmux new work --cwd ~/code/foo -- claude # managed session without a worktree
+./laatmux jump mac/work                       # a local session attached to it
 ./laatmux jump --server default mac/notes     # switch to an observed session in this machine's tmux
 ```
 
@@ -92,10 +100,9 @@ setup: ["pnpm install"]      # each runs at least once; must tolerate a rerun
 Each `setup` entry runs as `sh -c <string>` in the worktree root. The
 last-used host and agent per repository are state, not config: they live in
 `$LAATMUX_HOME/last.json`, keyed by source, and are updated under a lock
-with an atomic rename. The daemon side of `add` and `rm` is built, see
-below; the client commands that use it (`add`, `rm`, `path`, the workspace
-session, `jump` switched to it) are designed in
-[docs/milestone-two.md](docs/milestone-two.md) and not yet built.
+with an atomic rename. The design is in
+[docs/milestone-two.md](docs/milestone-two.md); both sides are built, see
+the two sections below.
 
 ## Worktrees and add, daemon side
 
@@ -109,7 +116,8 @@ truth; labels only place new things.
   checkout under `repos` by its `origin`, asks it for
   `git worktree list --porcelain`, and publishes the entries under
   `worktrees/`. Prunable entries, whose directory is gone, are not
-  published; a detached worktree has an empty branch. The record's
+  published; a detached worktree has an empty branch. The record carries
+  the repository's label and its source. The record's
   `session` is the managed session whose single pane records the root in
   `@laatmux_cwd`, joined from the pane poll, so an agent exiting updates
   the record without a git call. Origin reads are cached by the mtime of
@@ -146,6 +154,87 @@ truth; labels only place new things.
   source, so adds for different repositories run in parallel; `rm` takes
   every repository's lock while it resolves and removes, since its root
   checks ask every checkout, and so waits for any add in flight.
+
+## Workspaces, client side
+
+A workspace is one worktree, one managed agent session on its host and one
+local session on the laptop. The local session lives in the user's default
+tmux server, named `<host>/<repo>/<encoded branch>`, with one window
+running the attach command (`env -u TMUX tmux -L laatmux attach` locally,
+the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
+`<environment_id>/<root>`, the workspace key, `@laatmux_host`, and
+`@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
+pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions are
+matched on the key, never the name, so a renamed host or repository label
+still finds its session. The host tag is refreshed on every reuse, and the
+source and branch whenever the reuse knows them: the worktree record
+carries the source from the daemon, so `jump` never derives it from a
+label that may mean another repository on this machine. The session is
+created detached and tagged in one tmux command sequence, then the attach
+pane is tagged by the id `new-session` printed, since the user's hooks may
+split the window at once. The pane runs a placeholder until then, so it
+cannot exit before `remain-on-exit` is set on it; the attach command
+replaces the placeholder in the same sequence as the tags, and an attach
+that fails at once leaves a dead pane for the next `jump` to respawn.
+
+- **`add <branch>`** resolves the repository from `--repo`, else from the
+  current directory: its git origin is matched against the known sources,
+  since identity is the source and a checkout keeps its directory after a
+  label change; an origin that is not configured is an error rather than
+  a guess from the directory name; only a directory with no origin falls
+  back to its place under the local host's `repos` or `worktrees`, the
+  more specific first, where the next path component is the label. Host
+  and agent come from
+  their flags, else `last.json`, else the config's default order. The
+  command id is chosen once per invocation; a transport failure mid-way
+  dials again with the same id, and the daemon's replay is printed once.
+  Progress prints one line per step. On success `last.json` is updated
+  and the workspace session is created, or found by key; inside the
+  default tmux server the client switches to it, elsewhere it prints how
+  to attach, with the default server selected explicitly, and inside
+  another tmux server it says to detach first.
+- **`rm <repo>/<branch>`** sends the root along whenever it is known: from
+  the host's record, or, when the worktree is already gone, from the key
+  of the local session found by its source and branch tags; a session
+  found by name is accepted only when it carries no identity tags at all,
+  never when they name another workspace. Git's refusal of a dirty worktree comes back as the error
+  with everything left in place; `--force` removes it. After an `ok` the
+  local session with that key is killed, switching away first if it is the
+  current one. `rm --root <path> --host h` removes a detached worktree.
+- **`path <repo>/<branch>`** prints the root from the host's records.
+  Records are matched by source, since the host's label for a source may
+  differ from this machine's; a record from a daemon without the source
+  is matched by label. `rm` finds its record the same way.
+- **`jump <host>/<repo>/<branch>`** switches to the workspace session,
+  creating it from the record when missing, respawning a dead attach pane,
+  and opening a new attach window when the pane is gone altogether. A
+  managed session that is no worktree's, one `new` made, is reached the
+  same way through a session named `<host>/<session>` tagged
+  `@laatmux_attach`. The repository in the target is read as this
+  machine's label first, then the host's, and the target after the host
+  may also be the managed session's name, with the branch encoded, which
+  is how a worktree detached in place is still reached. The local
+  session's name follows the managed session's. `--server default` still
+  switches to an observed session on this machine's tmux.
+- **`ls`** joins each host's worktrees with its agents by the managed
+  session the record names. A worktree shows `no agent` when its session
+  has no identified agent and `no session` when it has none; a managed
+  agent with no worktree says so; observed agents name their server.
+  Settled workspaces are listed under `settled`, and a local workspace
+  session whose worktree is gone from a connected host under `stale`, from
+  which `rm` still works; a host whose snapshot has not arrived, or whose
+  daemon does not publish worktrees, says nothing about its workspaces. `watch` re-reads the local sessions on each
+  redraw.
+- **`shell`** runs inside a workspace session and opens a window at the
+  worktree root: started there for a local host, `ssh -t` with `cd` and
+  the single-quoted root then `exec "$SHELL" -l` for a remote one. The
+  window is tagged `@laatmux_shell`; a second call selects it. Meant to
+  be bound in the user's tmux config, as
+  `bind-key S run-shell 'laatmux shell'`: a `run-shell` job has `TMUX`
+  naming the session the key was pressed in but no `TMUX_PANE`, and the
+  session is resolved from either.
+- **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
+  workspace session they run from, or the one named.
 
 ## Which tmux servers the daemon polls
 
@@ -269,8 +358,14 @@ tests under `-race`.
 
 ## Jump and attach spike
 
-Run from a scratch tmux session so the user's view stayed untouched. Local
-and remote:
+Milestone one's jump opened an attach window in whatever session it ran
+from; milestone two replaced that with the workspace session above, and
+the first and sixth findings below describe the old behaviour: jump now
+switches to the workspace session, and a dead attach stays as a dead pane
+under `remain-on-exit` until the next jump respawns it. The attach command
+and the transport findings, keys, size, two attachments, the preflight and
+mouse, carried over unchanged. Run from a scratch tmux session so the
+user's view stayed untouched. Local and remote:
 
 - First `jump` opens a window in the session it was run from and tags the
   pane; a second `jump` focuses that window instead of opening another.
@@ -332,6 +427,43 @@ session by root. Two `add`s on the public laatmux repository at once, one
 starting Claude Code over an HTTPS clone, ran one after the other under the
 per-repository lock; the snapshot showed Claude blocked on the trust dialog
 and four worktree records each with its session.
+
+## Milestone two, steps 4 and 5, on the VM
+
+From the laptop with a scratch config naming the VM as the only host and a
+`sleep` agent, run outside tmux so nothing switched the user's client:
+`add` streamed every stage and created the tagged local session; a repeat
+`add` skipped every step and found the session by key; `path` printed the
+root; `jump` on a worktree without a session said how to start one, and on
+an unknown name reported no such session. `shell` run with `TMUX_PANE` set
+to the workspace's attach pane opened an ssh window at the root on the VM,
+a second call selected it, and outside a workspace session it said so.
+`settle` moved the row under `settled` in `ls` and `unsettle` by name
+cleared it. Killing the attach pane's ssh left it dead and `jump`
+respawned it; a session whose attach pane had been closed got a new attach
+window on the next `jump`. `rm` was refused with git's message while
+`setup.log` was untracked and the sessions stayed; `rm --force` removed
+the worktree, killed the managed session and the local one. A worktree
+removed by hand on the VM showed the local session under `stale`, and `rm`
+on it returned `ok`, killed the surviving managed session by root and the
+local session. A detached worktree was removed with `--root`.
+
+The user's tmux config splits every new session with a sidebar pane, which
+is why the attach pane is tagged by id rather than taken as the active
+pane.
+
+After review, on the VM: a stale `@laatmux_host` set by hand on a
+workspace session was refreshed by the next `jump`; a workspace session
+renamed by hand whose worktree was then removed on the VM was found by its
+source and branch tags, and `rm` killed the surviving managed session by
+root and the renamed local session; `add` run from a checkout whose origin
+is not configured refused with the origin named rather than guessing from
+the directory. Then, with the source in the record: `add` under a local
+label that differs from the host's, and `jump` by the host's label, left
+the source tag intact; `rm` on a branch with no worktree whose local
+session by name carried another source and branch sent no root and left
+both that session and the other worktree alone, while the same session
+with no identity tags had its root sent and was killed.
 
 ## Not yet verified
 

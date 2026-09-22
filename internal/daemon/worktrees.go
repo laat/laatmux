@@ -122,12 +122,13 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			ID:            d.worktreeID(r.Root),
 			EnvironmentID: d.cfg.EnvironmentID,
 			Repo:          r.Repo,
+			Source:        r.Source,
 			Branch:        r.Branch,
 			Root:          r.Root,
 			Session:       d.managedRoots[r.Root],
 			UpdatedAt:     now,
 		}
-		if prev, had := d.worktrees[r.Root]; had && prev.Repo == w.Repo && prev.Branch == w.Branch && prev.Session == w.Session {
+		if prev, had := d.worktrees[r.Root]; had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.Session == w.Session {
 			continue
 		}
 		d.worktrees[r.Root] = w
