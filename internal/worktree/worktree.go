@@ -251,8 +251,14 @@ func (s *Store) Owns(root string) bool {
 	if !filepath.IsAbs(root) {
 		return false
 	}
-	root = resolveExisting(filepath.Clean(root))
-	dir := resolveExisting(filepath.Clean(s.Dirs.Worktrees))
+	root, ok := resolveExisting(filepath.Clean(root))
+	if !ok {
+		return false
+	}
+	dir, ok := resolveExisting(filepath.Clean(s.Dirs.Worktrees))
+	if !ok {
+		return false
+	}
 	rel, err := filepath.Rel(dir, root)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
 		return false
@@ -262,19 +268,31 @@ func (s *Store) Owns(root string) bool {
 
 // resolveExisting resolves symlinks in the longest existing prefix of p
 // and keeps the rest as given, so a path whose worktree directory is
-// already deleted still resolves through the links above it.
-func resolveExisting(p string) string {
+// already deleted still resolves through the links above it. It fails
+// closed: a component is peeled only when Lstat proves it absent, and a
+// prefix that exists but cannot be resolved, for a permission error, a
+// dangling link or a loop, is reported as unresolvable rather than taken
+// lexically, since Owns gates removal.
+func resolveExisting(p string) (string, bool) {
 	rest := ""
 	for cur := p; ; {
-		if real, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(real, rest)
+		if _, err := os.Lstat(cur); err != nil {
+			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+				return "", false
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				return "", false
+			}
+			rest = filepath.Join(filepath.Base(cur), rest)
+			cur = parent
+			continue
 		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
+		real, err := filepath.EvalSymlinks(cur)
+		if err != nil {
+			return "", false
 		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
+		return filepath.Join(real, rest), true
 	}
 }
 

@@ -602,8 +602,14 @@ func TestOwnsResolvesSymlinks(t *testing.T) {
 	os.Symlink(outside, filepath.Join(wt, "escape"))
 	os.Symlink(filepath.Join(wt, "real"), filepath.Join(wt, "inward"))
 	os.Symlink(wt, filepath.Join(base, "alias"))
+	os.Symlink(filepath.Join(wt, "missing"), filepath.Join(wt, "dangling"))
+	os.Symlink(filepath.Join(wt, "loop2"), filepath.Join(wt, "loop1"))
+	os.Symlink(filepath.Join(wt, "loop1"), filepath.Join(wt, "loop2"))
 	s := New(config.Dirs{Repos: base, Worktrees: filepath.Join(base, "alias")}, nil)
 	cases := map[string]bool{
+		// A prefix that exists but cannot be resolved fails closed.
+		filepath.Join(wt, "dangling", "task"):        false,
+		filepath.Join(wt, "loop1", "task"):           false,
 		filepath.Join(wt, "escape", "scratch"):       false,
 		filepath.Join(wt, "escape"):                  false,
 		filepath.Join(wt, "inward", "task"):          true,
@@ -613,6 +619,12 @@ func TestOwnsResolvesSymlinks(t *testing.T) {
 		filepath.Join(base, "alias", "escape", "x"):  false,
 		outside:                      false,
 		filepath.Join(base, "alias"): false,
+	}
+	if os.Getuid() != 0 {
+		noperm := filepath.Join(wt, "noperm")
+		os.Mkdir(noperm, 0)
+		t.Cleanup(func() { os.Chmod(noperm, 0o755) })
+		cases[filepath.Join(noperm, "task")] = false
 	}
 	for root, want := range cases {
 		if got := s.Owns(root); got != want {
