@@ -96,22 +96,27 @@ func parseSessions(out string) []Local {
 	return locals
 }
 
-// Current is the session the calling process runs in, found through
-// TMUX_PANE. Not inside tmux is an error saying so.
+// Current is the session the calling process runs in: the pane's session
+// when TMUX_PANE is set, as it is for a process in a pane, else the
+// session TMUX names, which is what a run-shell job from a key binding
+// gets. Not inside tmux is an error saying so.
 func Current(ctx context.Context) (Local, error) {
-	pane := os.Getenv("TMUX_PANE")
-	if os.Getenv("TMUX") == "" || pane == "" {
+	if os.Getenv("TMUX") == "" {
 		return Local{}, errors.New("not inside tmux")
 	}
-	// The pane is looked up on the server TMUX names, which may not be
-	// the default one; the zero server follows TMUX.
-	out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "-t", pane, sessionFormat)
+	// The lookup is on the server TMUX names, which may not be the
+	// default one; the zero server follows TMUX.
+	args := []string{"display-message", "-p"}
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		args = append(args, "-t", pane)
+	}
+	out, err := (tmux.Server{}).Run(ctx, append(args, sessionFormat)...)
 	if err != nil {
 		return Local{}, err
 	}
 	locals := parseSessions(string(out))
 	if len(locals) != 1 {
-		return Local{}, fmt.Errorf("cannot find the session of pane %s", pane)
+		return Local{}, errors.New("cannot find the current tmux session")
 	}
 	return locals[0], nil
 }

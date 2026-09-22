@@ -221,13 +221,17 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   agent with no worktree says so; observed agents name their server.
   Settled workspaces are listed under `settled`, and a local workspace
   session whose worktree is gone from a connected host under `stale`, from
-  which `rm` still works. `watch` re-reads the local sessions on each
+  which `rm` still works; a host whose snapshot has not arrived says
+  nothing about its workspaces yet. `watch` re-reads the local sessions on each
   redraw.
 - **`shell`** runs inside a workspace session and opens a window at the
   worktree root: started there for a local host, `ssh -t` with `cd` and
   the single-quoted root then `exec "$SHELL" -l` for a remote one. The
   window is tagged `@laatmux_shell`; a second call selects it. Meant to
-  be bound in the user's tmux config.
+  be bound in the user's tmux config, as
+  `bind-key S run-shell 'laatmux shell'`: a `run-shell` job has `TMUX`
+  naming the session the key was pressed in but no `TMUX_PANE`, and the
+  session is resolved from either.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
 

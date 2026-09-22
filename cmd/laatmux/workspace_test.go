@@ -138,8 +138,15 @@ func TestRender(t *testing.T) {
 		{Name: "vm/proj/old", Key: "env1//r/old", Host: "vm", Settled: true},
 		{Name: "vm/proj/gone", Key: "env1//r/gone", Host: "vm"},
 		{Name: "box/proj/x", Key: "env2//r/x", Host: "box"},
+		{Name: "slow/proj/y", Key: "env3//r/y", Host: "slow"},
 	}
+	// A connected host whose snapshot has not arrived yet says nothing
+	// about its workspaces.
+	m.setHost("slow", hostState{Connected: true, Version: "v", EnvID: "env3"})
 	out := m.render(locals)
+	if strings.Contains(out, "slow/proj/y") {
+		t.Errorf("workspace on a host before its snapshot listed as stale:\n%s", out)
+	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	find := func(sub string) int {
 		for i, l := range lines {

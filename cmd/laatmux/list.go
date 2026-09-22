@@ -32,6 +32,9 @@ type hostState struct {
 	Version   string
 	EnvID     string
 	Since     time.Time
+	// Listed is set once the host's snapshot has arrived. Until then its
+	// records are unknown, not absent, and nothing of its is stale.
+	Listed bool
 }
 
 func newMerged() *merged {
@@ -57,6 +60,10 @@ func (m *merged) apply(host string, msg protocol.Message) {
 	m.mu.Lock()
 	switch msg.Type {
 	case protocol.TypeSnapshot:
+		if st, ok := m.hosts[host]; ok {
+			st.Listed = true
+			m.hosts[host] = st
+		}
 		for id, h := range m.byHost {
 			if h == host {
 				delete(m.agents, id)
@@ -239,8 +246,8 @@ func (m *merged) rows(locals []workspace.Local) (main, settled []row) {
 
 // stale lists local workspace sessions whose workspace no longer exists on
 // its host: the worktree was removed by hand or from another machine. A
-// host that is down cannot say, so its sessions are not stale. Called
-// with m.mu held.
+// host that is down, or whose snapshot has not arrived, cannot say, so
+// its sessions are not stale. Called with m.mu held.
 func (m *merged) stale(locals []workspace.Local) []workspace.Local {
 	roots := map[string]bool{} // key
 	for _, w := range m.worktrees {
@@ -248,7 +255,7 @@ func (m *merged) stale(locals []workspace.Local) []workspace.Local {
 	}
 	up := map[string]bool{} // environment id
 	for _, st := range m.hosts {
-		if st.Connected && st.EnvID != "" {
+		if st.Connected && st.Listed && st.EnvID != "" {
 			up[st.EnvID] = true
 		}
 	}
