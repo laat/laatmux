@@ -315,6 +315,17 @@ that is not running is an empty list, not an error. The records are sent
 once per change, so settle and unsettle reach every sidebar within a
 second, and the view needs no tmux access beyond `switch-client` on jump.
 
+A merged snapshot is never sent with session records from before the
+subscriber arrived. The daemon runs `list-sessions` once, synchronously,
+before writing each merged snapshot, so the snapshot's `sessions` are as
+fresh as the connection, whether the poll had been idle for an hour or
+was never started; the call is local and takes milliseconds. A
+`list-sessions` that fails for a reason other than no server puts its
+message in the snapshot as `sessions_error`, and `ls` prints it where the
+settled and stale groups would be, so an incomplete listing says so
+rather than looking complete. The readiness wait in `ls` therefore covers
+hosts only; the sessions are complete by construction.
+
 Config, in the laptop's `~/.config/laatmux/config.yaml`:
 
 ```yaml
@@ -468,20 +479,27 @@ cancelled.
 Runs use the daemon's command plumbing from milestone two, with two
 changes to it that `add` and `rm` take as well.
 
-Starting and following become different messages. Today a repeated id
-attaches to a running command, replays a finished one for five minutes,
-and starts the command when the id is unknown, which is what makes a
-redial after a dropped bridge a plain resend. That is right for `add` and
-`rm`, whose every step is skipped by inspection, and wrong for `run`: an
-unknown id after a daemon restart or after the five minutes would run
-`pnpm db:seed` a second time. So the first send is the command and every
-redial is `{type: follow, id, after}`. `follow` on a known id attaches or
-replays as today. `follow` on an unknown id returns `{type: result, ok:
-false, error: unknown command}`; the `add` and `rm` clients then resend
-the command, since re-executing them is safe, and the `run` client
-prints that the outcome is unknown and exits 255, because the process may
-be running still, may have finished, or may never have started, and only
-the user can tell which. Under a clean daemon shutdown, `SIGTERM`, runs
+Starting and following become different messages, under a new
+capability `follow`. Today a repeated id attaches to a running command,
+replays a finished one for five minutes, and starts the command when the
+id is unknown, which is what makes a redial after a dropped bridge a
+plain resend. That is right for `add` and `rm`, whose every step is
+skipped by inspection, and wrong for `run`: an unknown id after a daemon
+restart or after the five minutes would run `pnpm db:seed` a second time.
+So the first send is the command and every redial is `{type: follow, id,
+after}`. `follow` on a known id attaches or replays as today. `follow` on
+an unknown id returns `{type: result, ok: false, error: unknown command}`;
+the `add` and `rm` clients then resend the command as a new execution
+under the same id, with their replay cursor reset to zero since the new
+execution numbers from 1 again, and the `run` client prints that the
+outcome is unknown and exits 255, because the process may be running
+still, may have finished, or may never have started, and only the user
+can tell which. A daemon that does not advertise `follow` is an older
+build: it still takes `add` and `rm`, emits unnumbered progress and would
+reject `follow` as an unknown type, so against it the client keeps
+today's resend and positional filter, and `run` is refused before it
+starts, as any missing capability is. A daemon with `run` always has
+`follow`. Under a clean daemon shutdown, `SIGTERM`, runs
 are cancelled like `cancel` does, so a restart for an upgrade leaves no
 orphan. A daemon that crashes leaves its runs going, in their own process
 groups, unknown to the daemon that replaces it; the note says so and
@@ -518,19 +536,22 @@ a deleted directory is laatmux's own and is treated like the session,
 and, like the session, it is not touched until git has agreed to the
 removal.
 
-The daemon keeps a registry of runs by root under its mutex, and the two
-sides interlock on it. A run resolves its root, then under the mutex
-checks that the root is not marked removed and registers itself, then
-starts the process; a run registered before it has started is still
-cancellable, and a cancel then means the process is never started. `rm`,
-after git has removed the worktree, under the same mutex marks the root
-removed and takes the list of its runs, then cancels them outside the
-mutex and waits. A run that resolved before the removal and reaches
-registration after the mark is refused with `worktree removed`, so
-nothing escapes the sweep by timing. The mark lives until an `add`
-registers a worktree at that root again, which `add` clears in its
-worktree stage, on the same daemon. `rm` already holds every repository
-lock, so no `add` reuses the root before `rm` has returned.
+The daemon keeps a registry of runs by root under its mutex, with a
+removal generation per root, and the two sides interlock on it. A run
+reads the root's generation under the mutex before it resolves, resolves
+against git outside it, then under the mutex registers itself only if the
+generation is unchanged, then starts the process; a run registered before
+it has started is still cancellable, and a cancel then means the process
+is never started. `rm`, after git has removed the worktree, under the same
+mutex bumps the generation and takes the list of the root's runs, then
+cancels them outside the mutex and waits. A run that resolved before the
+removal and reaches registration after the bump is refused with
+`worktree removed; retry`, whether or not an `add` or a hand-made
+`git worktree add` has put a worktree back at that root meanwhile: the
+request was for the old one. A generation, unlike a flag, needs no one to
+clear it, so a worktree recreated by hand takes runs like any other,
+which is what git being the source of truth requires. `rm` holds every
+repository lock, so no `add` reuses the root before `rm` has returned.
 
 ## Client changes, collected
 
