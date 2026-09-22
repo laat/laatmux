@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +222,58 @@ func TestLabelUnderNested(t *testing.T) {
 		if got != want || ok != (want != "") {
 			t.Errorf("labelUnder(%q) = %q, %v; want %q", dir, got, ok, want)
 		}
+	}
+}
+
+func TestLocalRepoArg(t *testing.T) {
+	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}}
+	cases := []struct {
+		w    protocol.Worktree
+		want string
+	}{
+		{protocol.Worktree{Repo: "proj", Source: "git@x:o/proj.git"}, "mine"},
+		{protocol.Worktree{Repo: "proj", Source: "git@x:o/unknown.git"}, "git@x:o/unknown.git"},
+		{protocol.Worktree{Repo: "proj"}, "proj"},
+	}
+	for _, c := range cases {
+		if got := localRepoArg(cfg, c.w); got != c.want {
+			t.Errorf("localRepoArg(%+v) = %q, want %q", c.w, got, c.want)
+		}
+	}
+}
+
+// Only git's own word that there is no origin, or no repository, lets
+// resolution fall back to the directory label; a git that cannot run or
+// read the repository is an error.
+func TestOriginOf(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if o, err := originOf(ctx, dir); err != nil || o != "" {
+		t.Errorf("no repository: %q %v", o, err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	if o, err := originOf(ctx, dir); err != nil || o != "" {
+		t.Errorf("no origin: %q %v", o, err)
+	}
+	run("remote", "add", "origin", "git@x:o/proj.git")
+	if o, err := originOf(ctx, dir); err != nil || o != "git@x:o/proj.git" {
+		t.Errorf("origin: %q %v", o, err)
+	}
+	// A repository git cannot read is an error, not a missing origin.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := originOf(ctx, dir); err == nil {
+		t.Error("broken config read as no origin")
+	}
+	t.Setenv("PATH", t.TempDir())
+	if _, err := originOf(ctx, dir); err == nil {
+		t.Error("missing git read as no origin")
 	}
 }

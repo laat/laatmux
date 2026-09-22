@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,8 +51,11 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 	if err != nil {
 		return config.Repo{}, err
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-C", cwd, "config", "--get", "remote.origin.url").Output(); err == nil {
-		origin := strings.TrimSpace(string(out))
+	origin, err := originOf(ctx, cwd)
+	if err != nil {
+		return config.Repo{}, err
+	}
+	if origin != "" {
 		if r, ok := cfg.RepoBySource(origin); ok {
 			return r, nil
 		}
@@ -90,6 +94,35 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// originOf is the git origin of the repository dir is in, "" when git
+// positively reports none: the key is unset (exit 1) or dir is in no
+// repository (exit 128 with git's message). Anything else, git missing or
+// a repository it cannot read, is an error, so a directory whose identity
+// cannot be inspected is never resolved from its label instead.
+func originOf(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)), nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		switch {
+		case exit.ExitCode() == 1:
+			return "", nil
+		case exit.ExitCode() == 128 && strings.Contains(stderr.String(), "not a git repository"):
+			return "", nil
+		}
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = err.Error()
+	}
+	return "", fmt.Errorf("%s: cannot read git origin: %s", dir, msg)
 }
 
 func repoList(cfg config.Config) string {

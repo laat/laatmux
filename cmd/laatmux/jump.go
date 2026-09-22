@@ -78,7 +78,10 @@ func cmdJump(ctx context.Context, args []string) error {
 	spec := workspace.Spec{Host: h.Host}
 	if w, ok := matchWorktree(snap.Worktrees, cfg, rest); ok {
 		if w.Session == "" {
-			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, w.Repo, h.Name)
+			// The hint's --repo is resolved against this machine's config,
+			// so it names the source as this machine knows it, not by the
+			// host's label.
+			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, localRepoArg(cfg, w), h.Name)
 		}
 		// A detached worktree has no <repo>/<branch> form; it is reached
 		// by its session name.
@@ -111,6 +114,20 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	return focus(ctx, name, created)
+}
+
+// localRepoArg is what --repo takes for the record's repository on this
+// machine: its label here when the source is known, else the source
+// itself, which --repo also accepts, else the host's label from a daemon
+// that sends no source.
+func localRepoArg(cfg config.Config, w protocol.Worktree) string {
+	if w.Source == "" {
+		return w.Repo
+	}
+	if r, ok := cfg.RepoBySource(w.Source); ok {
+		return r.Name
+	}
+	return w.Source
 }
 
 // matchWorktree finds the worktree a jump target names after the host,
