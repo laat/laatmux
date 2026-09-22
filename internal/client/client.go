@@ -62,8 +62,29 @@ func (c *Conn) Close() {
 	})
 }
 
-func (c *Conn) Write(m protocol.Message) error  { return c.pc.Write(m) }
-func (c *Conn) Read() (protocol.Message, error) { return c.pc.Read() }
+// Write and Read speak the protocol. A transport error carries what ssh
+// has said so far, since it is no longer passed through to stderr: a
+// "Connection closed by remote host" belongs in the error every caller
+// prints, not only in the ones that ask for Diag.
+func (c *Conn) Write(m protocol.Message) error { return c.wrap(c.pc.Write(m)) }
+func (c *Conn) Read() (protocol.Message, error) {
+	m, err := c.pc.Read()
+	return m, c.wrap(err)
+}
+
+// wrap adds the transport's diagnostic to err. Best effort: ssh may not
+// have written its reason yet when its stdout closes; a caller that has
+// closed the connection, and so reaped ssh, reads the complete text with
+// Diag.
+func (c *Conn) wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	if d := c.Diag(); d != "" {
+		return fmt.Errorf("%w (ssh: %s)", err, d)
+	}
+	return err
+}
 
 // Dial connects and completes the hello exchange.
 func Dial(ctx context.Context, h Host) (*Conn, error) {

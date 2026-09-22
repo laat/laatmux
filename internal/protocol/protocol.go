@@ -151,7 +151,7 @@ type HostStatus struct {
 	Error         string    `json:"error,omitempty"` // why it is not connected; "" while connecting
 	Version       string    `json:"version,omitempty"`
 	Capabilities  []string  `json:"capabilities,omitempty"`
-	Since         time.Time `json:"since"` // when Connected, Listed or Error last changed
+	Since         time.Time `json:"since"` // when the record last changed
 }
 
 // Local reports whether the host is the merging daemon's own machine.

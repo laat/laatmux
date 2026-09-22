@@ -155,16 +155,20 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 			}
 			stop()
 			c.Close()
-			m.setHost(h.Name, hostState{Error: "disconnected"})
+			// Closing reaps ssh, so its stderr is complete and says
+			// why, where the protocol only saw EOF.
+			msg := "disconnected"
+			if d := c.Diag(); d != "" {
+				msg += ": " + d
+			}
+			m.setHost(h.Name, hostState{Error: msg})
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, followBackoffMax)
 	}
 }
 

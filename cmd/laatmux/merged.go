@@ -130,9 +130,7 @@ func (m *merged) followMerged(ctx context.Context, c *client.Conn) {
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < followBackoffMax {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, followBackoffMax)
 	}
 }
 

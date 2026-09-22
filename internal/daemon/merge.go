@@ -373,9 +373,7 @@ func (d *Daemon) follow(ctx context.Context, mh *mergedHost) {
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < reconnectMax {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, reconnectMax)
 	}
 }
 
