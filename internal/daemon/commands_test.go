@@ -398,7 +398,7 @@ func TestRmLeavesExternalWorktree(t *testing.T) {
 		t.Fatal("external worktree removed")
 	}
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Root: elsewhere, Force: true})
-	if res, _ := result(t, pc, "r2"); !res.OK {
+	if res, _ := result(t, pc, "r2"); res.OK || !strings.Contains(res.Error, "not under the worktrees directory") {
 		t.Fatalf("rm by root: %+v", res)
 	}
 	if _, err := os.Stat(elsewhere); err != nil {
@@ -552,5 +552,27 @@ func TestRmPrunableWorktree(t *testing.T) {
 	d.pollWorktrees(context.Background())
 	if wts := d.Worktrees(); len(wts) != 0 {
 		t.Fatalf("worktrees %+v", wts)
+	}
+}
+
+// rm by a root outside the worktrees directory is refused before the
+// session step: a session new made with that cwd is not rm's to kill.
+func TestRmRootOutsideRefused(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ft.panes = []tmux.Pane{{Session: "scratch", ID: "%7", Cwd: "/tmp/scratch", Managed: true}}
+	pc := conn(t, d)
+	for _, m := range []protocol.Message{
+		{Type: protocol.TypeRm, ID: "r1", Root: "/tmp/scratch"},
+		{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "x", Root: "/tmp/scratch"},
+		{Type: protocol.TypeRm, ID: "r3", Root: store.Dirs.Worktrees + "/../scratch"},
+		{Type: protocol.TypeRm, ID: "r4", Root: "relative"},
+	} {
+		pc.Write(m)
+		if res, _ := result(t, pc, m.ID); res.OK || !strings.Contains(res.Error, "not under the worktrees directory") {
+			t.Fatalf("rm %s: %+v", m.ID, res)
+		}
+	}
+	if len(ft.panes) != 1 {
+		t.Fatal("session outside the worktrees directory killed")
 	}
 }

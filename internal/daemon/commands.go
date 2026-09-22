@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -254,6 +255,16 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		}
 
 		root, checkout := m.Root, ""
+		if root != "" {
+			// The client's root, cleaned so it compares with what git
+			// registered and the pane recorded. Only a root under the
+			// worktrees directory is a target: sessions elsewhere, made by
+			// new with any cwd, are not rm's to kill.
+			root = filepath.Clean(root)
+			if !d.cfg.Store.Owns(root) {
+				return fmt.Errorf("%s is not under the worktrees directory %s", root, d.cfg.Store.Dirs.Worktrees)
+			}
+		}
 		switch {
 		case m.Branch != "":
 			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)

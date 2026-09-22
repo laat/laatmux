@@ -243,16 +243,24 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 // Owns reports whether root is inside the worktrees directory: the only
 // worktrees the daemon publishes, adopts for a branch, or removes. Git
 // registers real paths, so the directory is compared both as configured
-// and with symlinks resolved.
+// and with symlinks resolved. The check is by path component, not by
+// string prefix, so a root a client sends with ".." in it is judged by
+// where it lands, and a relative root is never owned.
 func (s *Store) Owns(root string) bool {
-	dirs := []string{s.Dirs.Worktrees}
-	if real, err := filepath.EvalSymlinks(s.Dirs.Worktrees); err == nil && real != s.Dirs.Worktrees {
+	if !filepath.IsAbs(root) {
+		return false
+	}
+	root = filepath.Clean(root)
+	dirs := []string{filepath.Clean(s.Dirs.Worktrees)}
+	if real, err := filepath.EvalSymlinks(s.Dirs.Worktrees); err == nil && real != dirs[0] {
 		dirs = append(dirs, real)
 	}
 	for _, d := range dirs {
-		if strings.HasPrefix(root, strings.TrimSuffix(d, "/")+"/") {
-			return true
+		rel, err := filepath.Rel(d, root)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
 		}
+		return true
 	}
 	return false
 }

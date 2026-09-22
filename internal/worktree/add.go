@@ -272,16 +272,29 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	// A fixed temporary name: a copy that crashed halfway leaves it behind,
-	// and the retry overwrites it rather than adding another.
-	tmp := filepath.Join(filepath.Dir(dst), ".laatmux-copy-"+filepath.Base(dst))
+	// The temporary file is created exclusively with a random suffix, so
+	// it can never truncate a file the repository happens to contain. A
+	// copy that crashed halfway leaves its temporary behind; the retry
+	// removes those first, matching the pattern only.
+	pattern := ".laatmux-copy-" + filepath.Base(dst) + ".*"
+	if stale, err := filepath.Glob(filepath.Join(filepath.Dir(dst), pattern)); err == nil {
+		for _, p := range stale {
+			os.Remove(p)
+		}
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fi.Mode().Perm())
+	out, err := os.CreateTemp(filepath.Dir(dst), pattern)
 	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+		out.Close()
+		os.Remove(tmp)
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {

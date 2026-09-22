@@ -328,7 +328,10 @@ func TestCrashedCopyAndSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(a.Checkout, ".envrc"), "export A=1\n")
-	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc"), "export A=")
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc.123456"), "export A=")
+	// A file of the repository's own that merely looks like the temporary
+	// name must survive the copy.
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc"), "mine")
 	markers, err := markerDir(f.ctx, a.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -341,8 +344,11 @@ func TestCrashedCopyAndSetup(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(a.Root, ".envrc")); string(b) != "export A=1\n" {
 		t.Fatalf(".envrc %q", b)
 	}
-	if _, err := os.Stat(filepath.Join(a.Root, ".laatmux-copy-.envrc")); err == nil {
-		t.Fatal("temporary copy left behind")
+	if left, _ := filepath.Glob(filepath.Join(a.Root, ".laatmux-copy-.envrc.*")); len(left) != 0 {
+		t.Fatalf("temporary copy left behind: %v", left)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, ".laatmux-copy-.envrc")); string(b) != "mine" {
+		t.Fatalf("repository file clobbered: %q", b)
 	}
 	if !hasStep(steps, protocol.StageSetup, protocol.StateSkip, "echo one >> log") || !hasStep(steps, protocol.StageSetup, protocol.StateDone, "echo two >> log") {
 		t.Fatalf("steps %+v", steps)
@@ -523,5 +529,28 @@ func TestCheckoutStatErrorPropagates(t *testing.T) {
 	}
 	if _, _, _, err := f.store.Find(f.ctx, a.Root); err == nil {
 		t.Fatal("Find took the unreadable checkout as absent")
+	}
+}
+
+func TestOwns(t *testing.T) {
+	s := New(config.Dirs{Repos: "/r", Worktrees: "/w/trees/"}, nil)
+	cases := map[string]bool{
+		"/w/trees/proj/task":        true,
+		"/w/trees/proj/a/../b":      true,
+		"/w/trees":                  false,
+		"/w/trees/":                 false,
+		"/w/trees/..":               false,
+		"/w/trees/../outside":       false,
+		"/w/trees/proj/../../x":     false,
+		"/w/treesX/proj":            false,
+		"/w/trees/..hidden":         true,
+		"relative/w/trees/proj":     false,
+		"/other/w/trees/proj":       false,
+		"/w/trees/proj/../../trees": false,
+	}
+	for root, want := range cases {
+		if got := s.Owns(root); got != want {
+			t.Errorf("Owns(%q) = %v, want %v", root, got, want)
+		}
 	}
 }
