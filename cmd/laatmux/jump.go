@@ -54,7 +54,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		return errors.New("jump must run inside the local tmux")
 	}
 	local := tmux.Server{}
-	how, err := jumpMode(h, tmux.Parse(*server), session)
+	how, err := jumpMode(h.Host, tmux.Parse(*server), session)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func cmdJump(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	attachCmd := attachCommand(h, session)
+	attachCmd := attachCommand(h.Host, session)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
 		if len(f) != 5 || f[0] != tag {
@@ -99,7 +99,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		}
 		if f[4] == "1" {
 			// remain-on-exit kept a dead attachment; bring it back in place.
-			if err := checkSession(ctx, h, session); err != nil {
+			if err := checkSession(ctx, h.Host, session); err != nil {
 				return err
 			}
 			if _, err := local.Run(ctx, "respawn-pane", "-k", "-t", f[3], attachCmd); err != nil {
@@ -118,7 +118,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := checkSession(ctx, h, session); err != nil {
+	if err := checkSession(ctx, h.Host, session); err != nil {
 		return err
 	}
 	out, err = local.Run(ctx, "new-window", "-t", hereSession+":", "-n", session, "-P", "-F", "#{pane_id}", attachCmd)

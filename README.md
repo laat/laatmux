@@ -10,15 +10,15 @@ designed in [docs/milestone-two.md](docs/milestone-two.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `new`, `ls`, `watch`, `jump`, `hosts`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `new`, `ls`, `watch`, `jump`, `hosts`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags |
 | `internal/daemon` | polls the configured tmux servers, derives agent state, streams snapshot + upserts |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge` |
-| `internal/home` | state dir, environment id, runtime file, startup lock |
-| `internal/config` | `~/.config/laatmux/config.yaml`: hosts for clients, `tmux_servers` for this machine's daemon |
+| `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
+| `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon; `.laatmux.yaml` per repository |
 
 ## Run
 
@@ -27,6 +27,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux ls        # starts the local daemon on demand, lists agents
 ./laatmux watch     # live, redraws on change
 ./laatmux hosts     # reachability, daemon version, capabilities
+./laatmux repos     # each known repository's name and where it lands on each host
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
 ./laatmux new work --cwd ~/code/foo -- claude # managed session on the laatmux tmux server
 ./laatmux jump mac/work                       # focus or open the attached pane
@@ -38,17 +39,61 @@ Config, one entry per host; omit `ssh` for this machine:
 ```yaml
 hosts:
   - name: mac
+    repos: ~/code             # main checkouts live in <repos>/<name>
+    worktrees: ~/worktrees    # worktrees live in <worktrees>/<name>/<branch>
   - name: box
-    ssh: box          # ssh alias, ControlMaster assumed
-    bin: laatmux      # remote binary, must be on PATH of a non-interactive shell
+    ssh: box                  # ssh alias, ControlMaster assumed
+    bin: laatmux              # remote binary, must be on PATH of a non-interactive shell
+    repos: ~/src
+    worktrees: ~/src/worktrees
 tmux_servers: [laatmux, default]   # what this machine's daemon watches
+agents:
+  claude:
+    cmd: [claude]
+  claude-safe:
+    cmd: [claude-safe]        # sandboxing is the launch command's business
+repos:                        # the known set
+  - git@github.com:laat/laatmux.git
+  - source: https://github.com/laat/other.git
+    name: notes               # optional; otherwise derived from the source
 ```
 
-`hosts` is read by clients. `tmux_servers` is read by the daemon on the
-machine the file lives on, so the laptop's config cannot change what a remote
-daemon watches; each host's own config does that. The default is the managed
-`laatmux` server alone. `laatmux serve --tmux-servers laatmux,default`
-overrides the file; `--tmux-socket` is the older spelling of the same flag.
+`hosts`, `agents` and `repos` are read by clients. `tmux_servers` and the
+local host's `repos` and `worktrees` are read by the daemon on the machine
+the file lives on, so the laptop's config cannot change what a remote daemon
+watches or where it clones; each host's own config does that. The default
+server list is the managed `laatmux` server alone.
+`laatmux serve --tmux-servers laatmux,default` overrides the file;
+`--tmux-socket` is the older spelling of the same flag.
+
+Host names, agent keys and repository names are labels: `A-Z a-z 0-9 _ -`,
+nothing else, since they end up in session names, ids and directory names.
+A host named after its ssh alias, and a repository named from its source,
+must pass the same rule or the config is rejected asking for an explicit
+`name`. `repos` and `worktrees` have no defaults; a host without them
+cannot `add`. A repository's name is derived from its source: the last path
+component without `.git`; on a collision each is prefixed with its org
+(`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
+to prefix, the first six hex digits of the source's SHA-256 are appended.
+The derivation is deterministic, so every host derives the same name from
+the same list, and duplicate sources or duplicate final names are rejected.
+Identity is the source, not the name: the name only places new things.
+`laatmux repos` shows each name next to its checkout and worktree paths per
+host, as configured, so a `~` is the host's own.
+
+Shared setup lives in `.laatmux.yaml` at the repository root, committed:
+
+```yaml
+copy: [.envrc, .env.local]   # from the main checkout, skipped when present
+setup: ["pnpm install"]      # each runs at least once; must tolerate a rerun
+```
+
+Each `setup` entry runs as `sh -c <string>` in the worktree root. The
+last-used host and agent per repository are state, not config: they live in
+`$LAATMUX_HOME/last.json`, keyed by source, and are updated under a lock
+with an atomic rename. The rest of milestone two, the daemon's `add` and the
+client commands that use all of this, is designed in
+[docs/milestone-two.md](docs/milestone-two.md) and not yet built.
 
 ## Which tmux servers the daemon polls
 
