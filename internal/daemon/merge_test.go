@@ -448,16 +448,84 @@ func TestMergedSessions(t *testing.T) {
 	mu.Unlock()
 	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.LocalSessionName == "here/w" })
 
-	// A listing that fails keeps the records and says so in the snapshot.
+	// A listing that fails keeps the records, tells the subscriber, and
+	// says so in the next snapshot; a listing that works again clears it.
 	mu.Lock()
 	listErr = errors.New("tmux: permission denied")
 	mu.Unlock()
-	time.Sleep(30 * time.Millisecond)
+	until(t, c, pc, func(m protocol.Message) bool {
+		return m.Type == protocol.TypeUpsert && m.SessionsError == "tmux: permission denied"
+	})
 	c2, pc2, snap := f.subscribe(t, ctx)
 	defer c2.Close()
 	_ = pc2
 	if snap.SessionsError != "tmux: permission denied" || len(snap.Sessions) != 1 {
 		t.Errorf("snapshot after failed listing = %+v %q", snap.Sessions, snap.SessionsError)
+	}
+	mu.Lock()
+	listErr = nil
+	mu.Unlock()
+	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeUpsert && m.SessionsListed })
+}
+
+// A merged subscriber dropped for falling behind counts as gone: when it
+// was the last, the idle timer runs and the remote connection closes.
+func TestMergedOverflowStartsIdle(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	until(t, c, pc, hostStatus("vm", listed))
+	f.remote.mu.Lock()
+	rc := f.remote.conns[len(f.remote.conns)-1]
+	f.remote.mu.Unlock()
+
+	// Overflow without reading: the pipe is unbuffered, so the writer
+	// blocks on the first message and the channel fills.
+	f.local.mu.Lock()
+	for i := 0; i < subscriberBuffer+8; i++ {
+		f.local.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "x"}})
+	}
+	n := len(f.local.msubs)
+	f.local.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d merged subscribers after overflow, want none", n)
+	}
+	rc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := rc.Read(make([]byte, 1)); err == nil {
+		t.Fatal("remote connection still open after overflow and idle")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("remote connection not closed within the idle time after an overflow")
+	}
+}
+
+// Subscriptions arriving together, with the config changing under them,
+// leave the host set as the last read had it; run under -race.
+func TestMergedConcurrentSubscriptions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"})
+			} else {
+				f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"}, client.Host{Name: "box", SSH: "box"})
+			}
+			c, _, _ := f.subscribe(t, ctx)
+			c.Close()
+		}(i)
+	}
+	wg.Wait()
+	f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"})
+	c, _, snap := f.subscribe(t, ctx)
+	defer c.Close()
+	if len(snap.Hosts) != 2 {
+		t.Errorf("hosts after the last read = %+v", snap.Hosts)
 	}
 }
 

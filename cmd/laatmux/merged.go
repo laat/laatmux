@@ -45,10 +45,18 @@ func (m *merged) readMerged(ctx context.Context, c *client.Conn, wait time.Durat
 	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err != nil {
 		return nil, err
 	}
+	snapshot := false
 	for {
 		msg, err := c.Read()
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				if !snapshot {
+					// Nothing arrived, not even the host rows: the
+					// daemon is stuck before its first poll, or the
+					// sessions listing hangs. An empty listing would
+					// look complete.
+					return nil, fmt.Errorf("local daemon: no snapshot after %s", wait)
+				}
 				break
 			}
 			if ctx.Err() != nil {
@@ -58,6 +66,9 @@ func (m *merged) readMerged(ctx context.Context, c *client.Conn, wait time.Durat
 		}
 		if msg.Type == protocol.TypeError {
 			return nil, fmt.Errorf("local daemon: %s", msg.Error)
+		}
+		if msg.Type == protocol.TypeSnapshot {
+			snapshot = true
 		}
 		m.applyMerged(msg)
 		m.mu.Lock()
@@ -76,46 +87,62 @@ func (m *merged) readMerged(ctx context.Context, c *client.Conn, wait time.Durat
 // daemon with backoff when it goes away, which a restart for an upgrade
 // does. The last state stays on screen with the daemon row saying so.
 func (m *merged) followMerged(ctx context.Context, c *client.Conn) {
-	backoff := time.Second
+	backoff := followBackoffMin
 	for ctx.Err() == nil {
+		var ok bool
 		if c == nil {
-			var ok bool
-			if c, ok = dialMerged(ctx); !ok {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
+			c, ok = dialMerged(ctx)
+		} else {
+			ok = true
+		}
+		if ok {
+			// The backoff resets on a snapshot, not on a connection: a
+			// daemon that answers the hello and then drops the
+			// subscription every time is retried as slowly as one that
+			// does not answer at all.
+			stop := c.CloseOnDone(ctx)
+			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err == nil {
+				for {
+					msg, err := c.Read()
+					if err != nil {
+						break
+					}
+					if msg.Type == protocol.TypeError {
+						m.setDaemonErr(msg.Error)
+						break
+					}
+					if msg.Type == protocol.TypeSnapshot {
+						backoff = followBackoffMin
+					}
+					m.setDaemonErr("")
+					m.applyMerged(msg)
 				}
-				if backoff < 30*time.Second {
-					backoff *= 2
-				}
-				continue
+			}
+			stop()
+			c.Close()
+			c = nil
+			if ctx.Err() == nil && m.daemonErrIs("") {
+				m.setDaemonErr("disconnected; reconnecting")
 			}
 		}
-		backoff = time.Second
-		stop := c.CloseOnDone(ctx)
-		if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err == nil {
-			for {
-				msg, err := c.Read()
-				if err != nil {
-					break
-				}
-				if msg.Type == protocol.TypeError {
-					m.setDaemonErr(msg.Error)
-					break
-				}
-				m.setDaemonErr("")
-				m.applyMerged(msg)
-			}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
 		}
-		stop()
-		c.Close()
-		c = nil
-		if ctx.Err() == nil && m.daemonErrIs("") {
-			m.setDaemonErr("disconnected; reconnecting")
+		if backoff < followBackoffMax {
+			backoff *= 2
 		}
 	}
 }
+
+// followBackoff is the wait between attempts to reach the local daemon's
+// merged stream, doubling from the min to the max. A variable so a test
+// can shorten it.
+var (
+	followBackoffMin = time.Second
+	followBackoffMax = 30 * time.Second
+)
 
 func (m *merged) setDaemonErr(s string) {
 	m.mu.Lock()
@@ -175,6 +202,12 @@ func (m *merged) applyMerged(msg protocol.Message) {
 				m.sessions = map[string]protocol.Session{}
 			}
 			m.sessions[s.Name] = *s
+		}
+		if msg.SessionsError != "" {
+			m.sessionsErr = msg.SessionsError
+		}
+		if msg.SessionsListed {
+			m.sessionsErr = ""
 		}
 	case protocol.TypeRemove:
 		if msg.HostName != "" {

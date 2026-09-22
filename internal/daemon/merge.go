@@ -56,21 +56,20 @@ type mergedHost struct {
 // listed once, synchronously, so the snapshot's sessions are as fresh as
 // the connection whether the poll had been idle or never started.
 func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber, protocol.Message) {
+	// The config read and the listing are serialized with their
+	// application, against the poll and against another subscription,
+	// so neither is ever applied after a newer one.
+	d.subMu.Lock()
 	hosts, err := d.cfg.Hosts()
 	if err != nil {
 		// Keep the last host set: a config that does not parse is
 		// reported by the client, which reads the same file.
 		d.logOnce(&d.lastHostsErr, "hosts: %v", err)
-		hosts = nil
-	}
-	// The listing and its application are serialized against the poll,
-	// so two listings never apply out of order.
-	d.sessMu.Lock()
-	sessions, serr := d.listSessions(ctx)
-	d.mu.Lock()
-	if err == nil {
+	} else {
 		d.lastHostsErr = ""
 	}
+	sessions, serr := d.listSessions(ctx)
+	d.mu.Lock()
 	if d.midle != nil {
 		d.midle.Stop()
 		d.midle = nil
@@ -88,7 +87,7 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 		}
 	}
 	d.applySessionsLocked(sessions, serr)
-	d.sessMu.Unlock()
+	d.subMu.Unlock()
 	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop, merged: true}
 	d.msubs[s] = struct{}{}
 	snap := d.mergedSnapshotLocked()
@@ -96,16 +95,25 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 	return s, snap
 }
 
-// mergedUnsubscribe removes a subscriber and, when it was the last, starts
-// the idle timer that drops the remote subscriptions.
+// mergedUnsubscribe removes a subscriber whose connection ended.
 func (d *Daemon) mergedUnsubscribe(s *subscriber) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.msubs[s]; !ok {
-		return
+	if _, ok := d.msubs[s]; ok {
+		d.mergedGoneLocked(s, false)
 	}
+}
+
+// mergedGoneLocked removes a merged subscriber, closing its transport
+// when it is being dropped for falling behind, and starts the idle timer
+// when it was the last. Both ways out go through here, so a subscriber
+// dropped by overflow starts the timer as one that hung up does.
+func (d *Daemon) mergedGoneLocked(s *subscriber, dropped bool) {
 	delete(d.msubs, s)
 	close(s.ch)
+	if dropped && s.drop != nil {
+		go s.drop()
+	}
 	if len(d.msubs) == 0 && d.mctx != nil && d.midle == nil {
 		d.midle = time.AfterFunc(d.cfg.MergedIdle, d.mergedIdle)
 	}
@@ -242,11 +250,7 @@ func (d *Daemon) mbroadcastLocked(m protocol.Message) {
 		select {
 		case s.ch <- m:
 		default:
-			delete(d.msubs, s)
-			close(s.ch)
-			if s.drop != nil {
-				go s.drop()
-			}
+			d.mergedGoneLocked(s, true)
 		}
 	}
 }
@@ -427,7 +431,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 }
 
 // listSessions runs the configured listing; a daemon without one has no
-// sessions. Called with d.sessMu held.
+// sessions. Called with d.subMu held.
 func (d *Daemon) listSessions(ctx context.Context) ([]protocol.Session, error) {
 	if d.cfg.Sessions == nil {
 		return nil, nil
@@ -454,26 +458,36 @@ func (d *Daemon) runSessions(ctx context.Context) {
 		if n == 0 {
 			continue
 		}
-		d.sessMu.Lock()
+		d.subMu.Lock()
 		recs, err := d.listSessions(ctx)
 		if ctx.Err() == nil {
 			d.mu.Lock()
 			d.applySessionsLocked(recs, err)
 			d.mu.Unlock()
 		}
-		d.sessMu.Unlock()
+		d.subMu.Unlock()
 	}
 }
 
 // applySessionsLocked publishes the difference between the last listing
 // and this one. A listing that fails is an unavailable observation: the
-// records are kept and the error goes in the next snapshot.
+// records are kept, and the failure is published once, as its recovery
+// is, so a subscriber knows its sessions are the last listed rather than
+// the current ones.
 func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 	if err != nil {
-		d.logOnce(&d.sessionsErr, "sessions: %v", err)
+		if msg := err.Error(); msg != d.sessionsErr {
+			d.cfg.Logger.Printf("sessions: %v", err)
+			d.sessionsErr = msg
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, SessionsError: msg})
+		}
 		return
 	}
-	d.sessionsErr = ""
+	if d.sessionsErr != "" {
+		d.cfg.Logger.Printf("sessions: listed again")
+		d.sessionsErr = ""
+		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, SessionsListed: true})
+	}
 	seen := map[string]bool{}
 	for _, s := range recs {
 		seen[s.Name] = true

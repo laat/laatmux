@@ -141,8 +141,8 @@ type Daemon struct {
 	mnames       []string
 	msessions    map[string]protocol.Session
 	sessionsErr  string
-	lastHostsErr string
-	sessMu       sync.Mutex // serializes session listings with their application
+	lastHostsErr string     // under subMu
+	subMu        sync.Mutex // serializes a subscription's config read and session listing with the poll
 	mctx         context.Context
 	mcancel      context.CancelFunc
 	midle        *time.Timer

@@ -199,9 +199,11 @@ type Message struct {
 
 	// merged snapshot / upsert / remove. The host record and the local
 	// session record are keyed by name; a remove names the one gone.
-	// SessionsError is in a merged snapshot when the local sessions could
-	// not be listed for a reason other than no server, so an incomplete
-	// listing says so.
+	// SessionsError, in a snapshot or an upsert, is that the local
+	// sessions could not be listed for a reason other than no server, so
+	// an incomplete listing says so; the records are the last listed.
+	// SessionsListed in an upsert is that a listing succeeded again and
+	// the error is cleared.
 	Hosts            []HostStatus `json:"hosts,omitempty"`
 	HostStatus       *HostStatus  `json:"host_status,omitempty"`
 	HostName         string       `json:"host_name,omitempty"`
@@ -209,6 +211,7 @@ type Message struct {
 	LocalSession     *Session     `json:"local_session,omitempty"`
 	LocalSessionName string       `json:"local_session_name,omitempty"`
 	SessionsError    string       `json:"sessions_error,omitempty"`
+	SessionsListed   bool         `json:"sessions_listed,omitempty"`
 
 	// commands and results
 	ID      string   `json:"id,omitempty"` // client-chosen command id
