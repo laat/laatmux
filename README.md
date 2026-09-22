@@ -4,7 +4,9 @@ Git worktrees and coding agents across hosts, from tmux. The plan is
 [issue #1](https://github.com/laat/laatmux/issues/1). This is the milestone-one
 spike: a per-host status daemon, a merged multi-host listing, a launcher for
 managed sessions, and jump. Milestone two, worktrees and workspaces, is
-designed in [docs/milestone-two.md](docs/milestone-two.md).
+designed in [docs/milestone-two.md](docs/milestone-two.md) and built.
+Milestone three, the sidebar, the dashboard, `split` and `run`, is designed
+in [docs/milestone-three.md](docs/milestone-three.md).
 
 ## Layout
 
