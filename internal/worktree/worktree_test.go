@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -272,6 +273,13 @@ func TestBranchCases(t *testing.T) {
 	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "checked out at "+elsewhere) {
 		t.Fatalf("err %v", err)
 	}
+	// ByBranch does not hand that worktree to rm either.
+	if rec, co, found, err := f.store.ByBranch(f.ctx, f.repo, "outside"); err != nil || found || co != c {
+		t.Fatalf("ByBranch outside: %+v %s %v %v", rec, co, found, err)
+	}
+	if rec, _, found, err := f.store.ByBranch(f.ctx, f.repo, "by-hand"); err != nil || !found || rec.Root != f.store.Dirs.Worktree("proj", "by-hand") {
+		t.Fatalf("ByBranch by-hand: %+v %v %v", rec, found, err)
+	}
 	// the root taken by a worktree on another branch
 	run(t, c, "git", "worktree", "add", "-q", "-b", "squatter", f.store.Dirs.Worktree("proj", "wanted"), "main")
 	_, _, err = f.add("wanted")
@@ -408,6 +416,9 @@ func TestListAndFindAndRemove(t *testing.T) {
 	if _, _, ok, _ := f.store.Find(f.ctx, c); ok {
 		t.Fatal("main checkout found as a worktree")
 	}
+	if _, _, ok, _ := f.store.Find(f.ctx, filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")); ok {
+		t.Fatal("worktree outside the worktrees directory found")
+	}
 	// Dirty: refused without force, with git's message; removed with it.
 	write(t, filepath.Join(a.Root, "untracked"), "x")
 	if removed, err := Remove(f.ctx, c, a.Root, false); err == nil || removed {
@@ -443,5 +454,45 @@ func TestParseWorktrees(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("entry %d: got %+v want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// A name lookup wins over a source lookup, as in config, so a bare local
+// source equal to another entry's label does not hijack it.
+func TestRepoLookupNameFirst(t *testing.T) {
+	s := New(config.Dirs{}, []config.Repo{{Source: "proj", Name: "other"}, {Source: "git@x:a/proj.git", Name: "proj"}})
+	if r, ok := s.Repo("proj"); !ok || r.Source != "git@x:a/proj.git" {
+		t.Fatalf("Repo(proj) = %+v %v", r, ok)
+	}
+	if r, ok := s.Repo("git@x:a/proj.git"); !ok || r.Name != "proj" {
+		t.Fatalf("Repo(source) = %+v %v", r, ok)
+	}
+}
+
+// An output line longer than a Scanner's limit must neither hang the
+// stage nor be lost: it is truncated, the rest of the output still
+// arrives, and the command's exit status is what is reported.
+func TestRunStreamingLongLine(t *testing.T) {
+	var lines []string
+	report := func(_, state, detail string) {
+		if state == protocol.StateOutput {
+			lines = append(lines, detail)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runStreaming(context.Background(), t.TempDir(), report, "setup", os.Environ(),
+			"sh", "-c", "head -c 2097152 /dev/zero | tr '\\0' x; echo; echo tail; exit 3")
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exit status 3") {
+			t.Fatalf("err %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("runStreaming hung on a long line")
+	}
+	if len(lines) != 2 || len(lines[0]) != maxLine+3 || !strings.HasSuffix(lines[0], "...") || lines[1] != "tail" {
+		t.Fatalf("lines: %d, first %d bytes, last %q", len(lines), len(lines[0]), lines[len(lines)-1])
 	}
 }

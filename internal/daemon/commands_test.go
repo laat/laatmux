@@ -371,3 +371,65 @@ func TestWorktreeRecords(t *testing.T) {
 		t.Fatalf("remove %+v", rm)
 	}
 }
+
+// rm by repo and branch only touches worktrees under the worktrees
+// directory: a worktree the user made elsewhere on that branch is not
+// the daemon's to remove, and the result is ok with nothing done.
+func TestRmLeavesExternalWorktree(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	repo, _ := store.Repo(remote)
+	if _, err := store.Add(ctx, repo, "first", nil); err != nil {
+		t.Fatal(err)
+	}
+	checkout, _, _ := store.Checkout(ctx, repo)
+	elsewhere := filepath.Join(filepath.Dir(store.Dirs.Repos), "elsewhere")
+	cmd := exec.Command("git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
+	cmd.Dir = checkout
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "outside", Force: true})
+	if res, _ := result(t, pc, "r1"); !res.OK || res.Root != "" {
+		t.Fatalf("rm: %+v", res)
+	}
+	if _, err := os.Stat(elsewhere); err != nil {
+		t.Fatal("external worktree removed")
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Root: elsewhere, Force: true})
+	if res, _ := result(t, pc, "r2"); !res.OK {
+		t.Fatalf("rm by root: %+v", res)
+	}
+	if _, err := os.Stat(elsewhere); err != nil {
+		t.Fatal("external worktree removed by root")
+	}
+}
+
+// A finished command is forgotten after its TTL without another command
+// arriving, and the id is then fresh again.
+func TestCommandEviction(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	d.commandTTL = 50 * time.Millisecond
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
+	if res, _ := result(t, pc, "c1"); !res.OK {
+		t.Fatalf("add: %+v", res)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d.mu.Lock()
+		_, kept := d.cmds["c1"]
+		d.mu.Unlock()
+		if !kept {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command not evicted after its TTL")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, fresh := d.command("c1"); !fresh {
+		t.Fatal("evicted id not fresh")
+	}
+}

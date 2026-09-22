@@ -167,8 +167,12 @@ type Message struct {
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.
 	AgentName string `json:"agent_name,omitempty"`
-	Root      string `json:"root,omitempty"`  // rm: alternative to repo and branch; result: the worktree root
-	Force     bool   `json:"force,omitempty"` // rm: remove a dirty or locked worktree
+	// Root on rm is the worktree root from the record. It is what reaches
+	// a managed session whose worktree is already gone, since a branch
+	// alone cannot be mapped to a root then; send it whenever it is known.
+	// Alone, it removes a detached worktree. On a result: the worktree root.
+	Root  string `json:"root,omitempty"`
+	Force bool   `json:"force,omitempty"` // rm: remove a dirty or locked worktree
 
 	// progress, and the failed stage in a result
 	Stage  string `json:"stage,omitempty"`

@@ -115,8 +115,9 @@ type Daemon struct {
 	lastListErr  string            // logged once per change
 	poke         chan struct{}
 
-	cmds  map[string]*command    // recent add and rm by id
-	locks map[string]*sync.Mutex // per repository source
+	cmds       map[string]*command    // recent add and rm by id
+	locks      map[string]*sync.Mutex // per repository source
+	commandTTL time.Duration
 
 	// discovered closes after the first complete poll of every server and
 	// of git, so a snapshot is never an empty or partial view of a host
@@ -187,6 +188,7 @@ func New(cfg Config) *Daemon {
 		poke:         make(chan struct{}, 1),
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
+		commandTTL:   DefaultCommandTTL,
 
 		discovered: make(chan struct{}),
 	}

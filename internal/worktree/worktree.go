@@ -58,15 +58,17 @@ func New(dirs config.Dirs, repos []config.Repo) *Store {
 	return s
 }
 
-// Repo finds a known repository by source, else by name.
-func (s *Store) Repo(sourceOrName string) (Repo, bool) {
+// Repo finds a known repository by name, else by source: the same order as
+// config.Config.Repo, since a bare local source can equal another entry's
+// label.
+func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 	for _, r := range s.Repos {
-		if r.Source == sourceOrName {
+		if r.Name == nameOrSource {
 			return r, true
 		}
 	}
 	for _, r := range s.Repos {
-		if r.Name == sourceOrName {
+		if r.Source == nameOrSource {
 			return r, true
 		}
 	}
@@ -220,7 +222,7 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 			continue
 		}
 		for _, e := range entries {
-			if e.Prunable || e.Bare || !s.underWorktrees(e.Root) {
+			if e.Prunable || e.Bare || !s.Owns(e.Root) {
 				continue
 			}
 			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
@@ -230,10 +232,11 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 	return records, errors.Join(errs...)
 }
 
-// underWorktrees reports whether root is inside the worktrees directory.
-// Git registers real paths, so the directory is compared both as
-// configured and with symlinks resolved.
-func (s *Store) underWorktrees(root string) bool {
+// Owns reports whether root is inside the worktrees directory: the only
+// worktrees the daemon publishes, adopts for a branch, or removes. Git
+// registers real paths, so the directory is compared both as configured
+// and with symlinks resolved.
+func (s *Store) Owns(root string) bool {
 	dirs := []string{s.Dirs.Worktrees}
 	if real, err := filepath.EvalSymlinks(s.Dirs.Worktrees); err == nil && real != s.Dirs.Worktrees {
 		dirs = append(dirs, real)
@@ -247,8 +250,13 @@ func (s *Store) underWorktrees(root string) bool {
 }
 
 // Find locates a registered worktree by root across every known
-// repository's checkout. Used by rm on a root-only target.
+// repository's checkout, under the worktrees directory only. Used by rm
+// on a root-only target; a worktree elsewhere is not the daemon's to
+// remove.
 func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, error) {
+	if !s.Owns(root) {
+		return Record{}, "", false, nil
+	}
 	for _, r := range s.Repos {
 		checkout, ok, err := s.Checkout(ctx, r)
 		if err != nil || !ok {
@@ -265,6 +273,27 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 		}
 	}
 	return Record{}, "", false, nil
+}
+
+// ByBranch locates the worktree for a branch of repo under the worktrees
+// directory. A worktree on the branch elsewhere, the main checkout
+// included, does not count. Not found is (Record{}, checkout, false, nil)
+// with the checkout still reported when it exists.
+func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record, string, bool, error) {
+	checkout, ok, err := s.Checkout(ctx, repo)
+	if err != nil || !ok {
+		return Record{}, "", false, err
+	}
+	entries, err := ListWorktrees(ctx, checkout)
+	if err != nil {
+		return Record{}, checkout, false, err
+	}
+	for _, e := range entries {
+		if e.Branch == branch && !e.Prunable && e.Root != checkout && s.Owns(e.Root) {
+			return Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, checkout, true, nil
+		}
+	}
+	return Record{}, checkout, false, nil
 }
 
 // Remove unregisters and deletes a worktree through git, which is the
@@ -337,11 +366,41 @@ func hash(s string) string {
 	return hex.EncodeToString(sum[:6])
 }
 
-// streamLines feeds each line of r to fn, without the newline.
+// maxLine caps what one reported output line keeps; the rest of a longer
+// line is read and dropped, so the producer never blocks on the pipe.
+const maxLine = 64 * 1024
+
+// streamLines feeds each line of r to fn, without the newline, and reads
+// r to its end whatever the line lengths: a Scanner would stop at its
+// buffer limit and leave the writer blocked on the pipe.
 func streamLines(r io.Reader, fn func(string)) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1<<20)
-	for sc.Scan() {
-		fn(strings.TrimRight(sc.Text(), "\r"))
+	br := bufio.NewReader(r)
+	var line []byte
+	truncated := false
+	for {
+		part, isPrefix, err := br.ReadLine()
+		if err != nil {
+			if len(line) > 0 {
+				fn(string(line))
+			}
+			return
+		}
+		if len(line) < maxLine {
+			line = append(line, part...)
+			if len(line) > maxLine {
+				line = line[:maxLine]
+				truncated = true
+			}
+		} else {
+			truncated = true
+		}
+		if isPrefix {
+			continue
+		}
+		if truncated {
+			line = append(line, "..."...)
+		}
+		fn(string(line))
+		line, truncated = line[:0], false
 	}
 }

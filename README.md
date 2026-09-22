@@ -71,8 +71,8 @@ Host names, agent keys and repository names are labels: `A-Z a-z 0-9 _ -`,
 nothing else, since they end up in session names, ids and directory names.
 A host named after its ssh alias, and a repository named from its source,
 must pass the same rule or the config is rejected asking for an explicit
-`name`. `repos` and `worktrees` have no defaults; a host without them
-cannot `add`. A repository's name is derived from its source: the last path
+`name`. `repos` and `worktrees` have no defaults, and must be absolute or
+start with `~`; a host without them cannot `add`. A repository's name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
 (`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
 to prefix, the first six hex digits of the source's SHA-256 are appended.
@@ -134,8 +134,11 @@ truth; labels only place new things.
 - **`rm`** `{type: rm, id, repo, branch, root, force}` removes the worktree
   through git, which refuses a dirty or locked one without `force` and
   says why, then kills every managed session whose pane records the
-  root. Both steps skip when already done, so a repeat is `ok`. The
-  branch is left alone.
+  root. Both steps skip when already done, so a repeat is `ok`. Only a
+  worktree under `worktrees/` is removed, by branch or by root; one the
+  user made elsewhere is left alone, as is the branch. Send `root` from
+  the record whenever it is known: it is what reaches a session whose
+  worktree is already gone, since a branch alone maps to no root then.
 - **Retry and serialization**: commands run under the daemon's context
   and outlive the connection that sent them. Ids are kept for five
   minutes; the same id while a command runs attaches to its stream, and

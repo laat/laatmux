@@ -69,7 +69,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		// Only a worktree under the worktrees directory is the worktree
 		// for the branch; one elsewhere fails the worktree stage below.
 		for _, e := range entries {
-			if e.Branch == branch && !e.Prunable && s.underWorktrees(e.Root) {
+			if e.Branch == branch && !e.Prunable && s.Owns(e.Root) {
 				a.Root = e.Root
 			}
 		}
@@ -174,7 +174,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 			return a, fail(stage, err)
 		}
 		for _, e := range entries {
-			if e.Branch == branch && s.underWorktrees(e.Root) {
+			if e.Branch == branch && s.Owns(e.Root) {
 				a.Root = e.Root
 			}
 		}

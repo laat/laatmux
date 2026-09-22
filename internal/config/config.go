@@ -215,6 +215,14 @@ func (c *Config) validateHosts() error {
 			return fmt.Errorf("hosts: %s has %s but not %s; set both or neither", h.Name,
 				pick(h.Repos != "", "repos", "worktrees"), pick(h.Repos != "", "worktrees", "repos"))
 		}
+		// The daemon has no meaningful working directory, and git
+		// registers absolute paths, so a relative directory could never
+		// match what git reports.
+		for _, kv := range [][2]string{{"repos", h.Repos}, {"worktrees", h.Worktrees}} {
+			if kv[1] != "" && !filepath.IsAbs(kv[1]) && kv[1] != "~" && !strings.HasPrefix(kv[1], "~/") {
+				return fmt.Errorf("hosts: %s: %s %q must be absolute or start with ~", h.Name, kv[0], kv[1])
+			}
+		}
 	}
 	if locals > 1 {
 		return errors.New("hosts: more than one entry without ssh; only one host is this machine")

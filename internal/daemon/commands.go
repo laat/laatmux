@@ -13,9 +13,9 @@ import (
 	"github.com/laat/laatmux/internal/worktree"
 )
 
-// commandTTL is how long a finished command's outcome is kept, so a client
-// that lost its bridge can repeat the id and get the result back.
-const commandTTL = 5 * time.Minute
+// DefaultCommandTTL is how long a finished command's outcome is kept, so a
+// client that lost its bridge can repeat the id and get the result back.
+const DefaultCommandTTL = 5 * time.Minute
 
 // command is one add or rm in flight or recently finished. Its events,
 // progress then the result, are appended as they happen; a connection
@@ -74,21 +74,25 @@ func (c *command) stream(pc *protocol.Conn) error {
 func (d *Daemon) command(id string) (*command, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	now := time.Now()
-	for k, c := range d.cmds {
-		c.mu.Lock()
-		expired := c.done && now.Sub(c.doneAt) > commandTTL
-		c.mu.Unlock()
-		if expired {
-			delete(d.cmds, k)
-		}
-	}
 	if c, ok := d.cmds[id]; ok {
 		return c, false
 	}
 	c := newCommand()
 	d.cmds[id] = c
 	return c, true
+}
+
+// evict forgets a finished command once its TTL has passed, whether or
+// not any other command arrives meanwhile. The identity check keeps a
+// timer from evicting a newer command under the same id.
+func (d *Daemon) evict(id string, c *command) {
+	time.AfterFunc(d.commandTTL, func() {
+		d.mu.Lock()
+		if d.cmds[id] == c {
+			delete(d.cmds, id)
+		}
+		d.mu.Unlock()
+	})
 }
 
 // repoLock serializes commands per repository: fetch and worktree add
@@ -198,44 +202,50 @@ func (d *Daemon) agentStage(ctx context.Context, repo worktree.Repo, branch, roo
 
 // runRm removes a worktree, then every managed session whose pane records
 // its root. Each step is inspected, so a retry after a crash between them
-// finishes the job and a target where both skip is ok.
+// finishes the job and a target where both skip is ok. The repository
+// lock is taken before the target is resolved, so an add in flight on the
+// same repository is seen complete, not half done.
+//
+// Root is what reaches the session step once the worktree is gone: a
+// branch alone can no longer be mapped to a root then, and by design the
+// pane records only the root. Clients send the root from the record.
 func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
-		root, checkout, source := m.Root, "", ""
-		if root == "" {
-			repo, ok := d.cfg.Store.Repo(m.Repo)
-			if !ok {
+		var repo worktree.Repo
+		byBranch := m.Root == ""
+		if byBranch {
+			var ok bool
+			if repo, ok = d.cfg.Store.Repo(m.Repo); !ok {
 				return fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
 			}
 			if m.Branch == "" {
 				return errors.New("rm needs a branch or a root")
 			}
-			source = repo.Source
-			co, found, err := d.cfg.Store.Checkout(ctx, repo)
+		} else if rec, _, found, err := d.cfg.Store.Find(ctx, m.Root); err != nil {
+			return err
+		} else if found {
+			repo = worktree.Repo{Source: rec.Source, Name: rec.Repo}
+		}
+		if repo.Source != "" {
+			l := d.repoLock(repo.Source)
+			l.Lock()
+			defer l.Unlock()
+		}
+		// Resolve under the lock; what was seen before it may have changed.
+		root, checkout := m.Root, ""
+		if byBranch {
+			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
 			if err != nil {
 				return err
 			}
 			if found {
-				entries, err := worktree.ListWorktrees(ctx, co)
-				if err != nil {
-					return err
-				}
-				for _, e := range entries {
-					if e.Branch == m.Branch && e.Root != co && !e.Prunable {
-						root, checkout = e.Root, co
-					}
-				}
+				root, checkout = rec.Root, co
 			}
-		} else if rec, co, found, err := d.cfg.Store.Find(ctx, root); err != nil {
+		} else if _, co, found, err := d.cfg.Store.Find(ctx, root); err != nil {
 			return err
 		} else if found {
-			checkout, source = co, rec.Source
-		}
-		if source != "" {
-			l := d.repoLock(source)
-			l.Lock()
-			defer l.Unlock()
+			checkout = co
 		}
 		if root == "" {
 			// Nothing registered for the branch and no root to match
@@ -286,6 +296,7 @@ func (d *Daemon) finish(c *command, res protocol.Message, err error) {
 	}
 	d.pokeWorktrees()
 	c.emit(res)
+	d.evict(res.ID, c)
 }
 
 func stageErr(stage string, err error) error { return &worktree.StageError{Stage: stage, Err: err} }
