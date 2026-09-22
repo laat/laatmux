@@ -5,24 +5,31 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
-// jump focuses the local pane attached to <host>/<session>, opening one in
-// the session jump was run from if none exists. Local and remote are the same
-// operation: managed agents live on the dedicated laatmux server, which the
-// user's tmux cannot switch-client into, so both attach through a pane.
+// jump switches to the local workspace session for <host>/<repo>/<branch>,
+// creating it from the host's record when it is missing. The workspace
+// session is the unit: one local session per worktree, its first window
+// attached to the managed session on the host. Local and remote are the
+// same operation, since managed agents live on the dedicated laatmux
+// server, which the user's tmux cannot switch-client into.
+//
+// A managed session that is no worktree's, one that new made, is reached
+// the same way through a local session named <host>/<session>, tagged as
+// a plain attachment rather than a workspace.
 //
 // With --server default the session is one the daemon merely observes on
-// this machine's own tmux. It is already in the user's server, so jump is a
-// switch-client. An observed session on any other server, or on a remote
+// this machine's own tmux. It is already in the user's server, so jump is
+// a switch-client. An observed session on any other server, or on a remote
 // host, is refused: attach is only ever done to sessions laatmux created.
 func cmdJump(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("jump", flag.ContinueOnError)
@@ -31,15 +38,15 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return errors.New("usage: laatmux jump [--server s] <host>/<session>")
+		return errors.New("usage: laatmux jump [--server s] <host>/<repo>/<branch> | <host>/<session>")
 	}
 	target := fs.Arg(0)
 	if err := fs.Parse(fs.Args()[1:]); err != nil {
 		return err
 	}
-	hostName, session, ok := strings.Cut(target, "/")
+	hostName, rest, ok := strings.Cut(target, "/")
 	if !ok {
-		session, hostName = hostName, ""
+		rest, hostName = hostName, ""
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -49,95 +56,66 @@ func cmdJump(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", hostName)
 	}
-	here := os.Getenv("TMUX_PANE")
-	if os.Getenv("TMUX") == "" || here == "" {
-		return errors.New("jump must run inside the local tmux")
-	}
-	local := tmux.Server{}
-	how, err := jumpMode(h.Host, tmux.Parse(*server), session)
+	how, err := jumpMode(h.Host, tmux.Parse(*server), rest)
 	if err != nil {
 		return err
 	}
 	if how == jumpSwitch {
 		// A client belongs to one server, so switching only works when the
-		// server jump runs in is the default one. Compare socket paths as
-		// tmux reports them rather than trusting the inherited TMUX value.
-		def := tmux.DefaultServer
-		if !def.HasSession(ctx, session) {
-			return fmt.Errorf("%s/%s: no such session on the default tmux server", h.Name, session)
+		// server jump runs in is the default one.
+		if !workspace.Server.HasSession(ctx, rest) {
+			return fmt.Errorf("%s/%s: no such session on the default tmux server", h.Name, rest)
 		}
-		same, err := sameServer(ctx, local, def)
-		if err != nil {
+		if !workspace.Inside(ctx) {
+			return fmt.Errorf("%s/%s: is on the default tmux server; run jump from a client of it", h.Name, rest)
+		}
+		return workspace.Switch(ctx, rest)
+	}
+	hello, snap, err := snapshot(ctx, h.Host, "")
+	if err != nil {
+		return err
+	}
+	spec := workspace.Spec{Host: h.Host}
+	if w, ok := matchWorktree(snap.Worktrees, rest); ok {
+		if w.Session == "" {
+			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, w.Repo, h.Name)
+		}
+		spec.Managed = w.Session
+		spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
+		spec.Key = workspace.Key(hello.EnvironmentID, w.Root)
+	} else {
+		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
 		}
-		if !same {
-			return fmt.Errorf("%s/%s: is on the default tmux server, but jump was run from another server (%s); run it from a client of the default server", h.Name, session, os.Getenv("TMUX"))
-		}
-		_, err = def.Run(ctx, "switch-client", "-t", "="+session)
-		return err
+		spec.Managed = rest
+		spec.Name = h.Name + "/" + rest
 	}
-	// The session jump runs in is where a new attach window goes. Using the
-	// pane rather than the current client keeps jump deterministic when run
-	// from a script or a sidebar.
-	out, err := local.Run(ctx, "display-message", "-p", "-t", here, "#{session_name}")
+	name, created, err := workspace.Ensure(ctx, spec)
 	if err != nil {
 		return err
 	}
-	hereSession := strings.TrimSpace(string(out))
-	tag := h.Name + "/" + session
+	return focus(ctx, name, created)
+}
 
-	// Reuse an existing attachment, alive or dead.
-	out, err = local.Run(ctx, "list-panes", "-a", "-F", strings.Join([]string{"#{@laatmux_attach}", "#{session_name}", "#{window_id}", "#{pane_id}", "#{pane_dead}"}, tmux.Sep))
-	if err != nil {
-		return err
-	}
-	attachCmd := attachCommand(h.Host, session)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, tmux.Sep)
-		if len(f) != 5 || f[0] != tag {
+// matchWorktree finds the worktree a jump target names after the host:
+// <repo>/<branch> as written, or the managed session's name, which is the
+// same with the branch encoded.
+func matchWorktree(ws []protocol.Worktree, rest string) (protocol.Worktree, bool) {
+	for _, w := range ws {
+		if w.Branch == "" {
 			continue
 		}
-		if f[4] == "1" {
-			// remain-on-exit kept a dead attachment; bring it back in place.
-			if err := checkSession(ctx, h.Host, session); err != nil {
-				return err
-			}
-			if _, err := local.Run(ctx, "respawn-pane", "-k", "-t", f[3], attachCmd); err != nil {
-				return err
-			}
-		}
-		if f[1] != hereSession {
-			if _, err := local.Run(ctx, "switch-client", "-t", f[1]); err != nil {
-				return err
-			}
-		}
-		if _, err := local.Run(ctx, "select-window", "-t", f[2]); err != nil {
-			return err
-		}
-		_, err := local.Run(ctx, "select-pane", "-t", f[3])
-		return err
-	}
-
-	if err := checkSession(ctx, h.Host, session); err != nil {
-		return err
-	}
-	out, err = local.Run(ctx, "new-window", "-t", hereSession+":", "-n", session, "-P", "-F", "#{pane_id}", attachCmd)
-	if err != nil {
-		return err
-	}
-	paneID := strings.TrimSpace(string(out))
-	for _, kv := range [][2]string{{"@laatmux_attach", tag}, {"@laatmux_host", h.Name}} {
-		if _, err := local.Run(ctx, "set-option", "-p", "-t", paneID, kv[0], kv[1]); err != nil {
-			return err
+		if w.Repo+"/"+w.Branch == rest || (w.Session != "" && w.Session == rest) {
+			return w, true
 		}
 	}
-	return nil
+	return protocol.Worktree{}, false
 }
 
 type jumpKind int
 
 const (
-	jumpAttach jumpKind = iota // open or focus an attach pane onto the managed server
+	jumpAttach jumpKind = iota // a local session attached to the managed server
 	jumpSwitch                 // switch-client within this machine's default server
 )
 
@@ -155,31 +133,6 @@ func jumpMode(h client.Host, srv tmux.Server, session string) (jumpKind, error) 
 	default:
 		return 0, fmt.Errorf("%s/%s: tmux server %s is not managed by laatmux; attach is limited to managed sessions", h.Name, session, srv.Label())
 	}
-}
-
-// sameServer reports whether two selectors reach the same tmux server.
-func sameServer(ctx context.Context, a, b tmux.Server) (bool, error) {
-	pa, err := a.Run(ctx, "display-message", "-p", "#{socket_path}")
-	if err != nil {
-		return false, err
-	}
-	pb, err := b.Run(ctx, "display-message", "-p", "#{socket_path}")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(string(pa)) == strings.TrimSpace(string(pb)), nil
-}
-
-// attachCommand is the shell command an attach pane runs. TMUX is unset so
-// the inner tmux does not refuse to nest; -u tells it the terminal is UTF-8.
-func attachCommand(h client.Host, session string) string {
-	attach := append([]string{"tmux", "-u"}, tmux.LaatmuxServer.AttachArgsBare(session)...)
-	if h.Local() {
-		return tmux.ShellJoin(append([]string{"env", "-u", "TMUX"}, attach...))
-	}
-	return tmux.ShellJoin([]string{"ssh", "-t",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-		h.SSH, tmux.ShellJoin(attach)})
 }
 
 // checkSession fails early when the target session does not exist, so jump
