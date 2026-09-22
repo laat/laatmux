@@ -187,6 +187,11 @@ func (d *Daemon) agentStage(ctx context.Context, repo worktree.Repo, branch, roo
 	if err != nil {
 		return "", "", err
 	}
+	// Refresh the session join now, so the record the poke publishes
+	// names the session rather than waiting for the next pane poll.
+	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {
+		d.setManagedRoots(panes, time.Now())
+	}
 	report(stage, protocol.StateDone, "session "+name+" pane "+paneID)
 	return name, paneID, nil
 }
