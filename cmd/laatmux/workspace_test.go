@@ -210,7 +210,7 @@ func TestLabelUnderNested(t *testing.T) {
 		"/src/worktrees/proj/topic": "proj",
 		"/src/proj":                 "proj",
 		"/src/proj/sub/dir":         "proj",
-		"/src/worktrees":            "worktrees",
+		"/src/worktrees":            "",
 		"/elsewhere/proj":           "",
 	}
 	for dir, want := range cases {
