@@ -13,9 +13,12 @@ import (
 
 // cmdRm removes a worktree and its managed session on the host, then the
 // local workspace session. The root is sent whenever it is known, from the
-// host's record or, when the worktree is already gone, from the tag of the
+// host's record or, when the worktree is already gone, from the key of the
 // local session, since a branch alone maps to no root then; that is what
-// reaches a managed session whose worktree was removed by hand.
+// reaches a managed session whose worktree was removed by hand. The local
+// session is found by its source and branch tags, which survive a renamed
+// host or label, and by name only for a session tagged before those
+// existed.
 func cmdRm(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
 	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
@@ -67,7 +70,11 @@ func cmdRm(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
-			if l, ok := workspace.ByName(locals, workspace.SessionName(h.Name, repo.Name, branch)); ok && l.Workspace() {
+			l, ok := workspace.FindWorktree(locals, hello.EnvironmentID, repo.Source, branch)
+			if !ok {
+				l, ok = workspace.ByName(locals, workspace.SessionName(h.Name, repo.Name, branch))
+			}
+			if ok && l.Workspace() {
 				if env, root := workspace.SplitKey(l.Key); env == hello.EnvironmentID {
 					req.Root = root
 				}

@@ -30,10 +30,14 @@ func splitRepoBranch(target string) (repo, branch string, err error) {
 }
 
 // resolveRepo picks the repository: the flag, by name or source, else the
-// one the current directory belongs to on the local host: under its
-// repos or worktrees directory, the next path component is the label;
-// failing that, the directory's git origin is matched against the known
-// sources, which also finds a checkout whose label has since changed.
+// one the current directory belongs to on the local host. Identity is the
+// source, so the directory's git origin is matched against the known
+// sources first; that also finds a checkout whose label has since
+// changed. Only a directory with no origin at all falls back to its place
+// under the local host's repos or worktrees directory, where the next
+// path component is the label. An origin that is not a known source is
+// an error, not a fall back to the label: the label may belong to another
+// source by now.
 func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Repo, error) {
 	if flag != "" {
 		r, ok := cfg.Repo(flag)
@@ -46,25 +50,40 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 	if err != nil {
 		return config.Repo{}, err
 	}
-	if local, ok := cfg.Local(); ok {
-		if d, err := local.Dirs(); err == nil {
-			d = d.Expand()
-			for _, dir := range []string{d.Repos, d.Worktrees} {
-				if rest, ok := strings.CutPrefix(cwd+"/", dir+"/"); ok {
-					label, _, _ := strings.Cut(rest, "/")
-					if r, ok := cfg.RepoByName(label); ok {
-						return r, nil
-					}
-				}
-			}
-		}
-	}
 	if out, err := exec.CommandContext(ctx, "git", "-C", cwd, "config", "--get", "remote.origin.url").Output(); err == nil {
-		if r, ok := cfg.RepoBySource(strings.TrimSpace(string(out))); ok {
+		origin := strings.TrimSpace(string(out))
+		if r, ok := cfg.RepoBySource(origin); ok {
+			return r, nil
+		}
+		return config.Repo{}, fmt.Errorf("%s has origin %s, which is not a configured repository; use --repo (configured: %s)", cwd, origin, repoList(cfg))
+	}
+	if label, ok := labelUnder(cfg, cwd); ok {
+		if r, ok := cfg.RepoByName(label); ok {
 			return r, nil
 		}
 	}
 	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (configured: %s)", cwd, repoList(cfg))
+}
+
+// labelUnder is the path component after the local host's repos or
+// worktrees directory when dir is under one of them.
+func labelUnder(cfg config.Config, dir string) (string, bool) {
+	local, ok := cfg.Local()
+	if !ok {
+		return "", false
+	}
+	d, err := local.Dirs()
+	if err != nil {
+		return "", false
+	}
+	d = d.Expand()
+	for _, base := range []string{d.Repos, d.Worktrees} {
+		if rest, ok := strings.CutPrefix(dir+"/", base+"/"); ok {
+			label, _, _ := strings.Cut(rest, "/")
+			return label, label != ""
+		}
+	}
+	return "", false
 }
 
 func repoList(cfg config.Config) string {
@@ -142,26 +161,44 @@ func stream(ctx context.Context, h client.Host, needCap string, m protocol.Messa
 		f.reset()
 		c, err := client.Dial(ctx, h)
 		if err != nil {
-			return hello, res, err
+			// A redial after a started attempt is a transport failure
+			// like any other and spends the same budget.
+			if attempt == 1 || attempt == attempts || ctx.Err() != nil {
+				return hello, res, err
+			}
+			fmt.Fprintf(os.Stderr, "laatmux: %s: reconnect failed (%v); retrying\n", h.Name, err)
+			if err := pause(ctx); err != nil {
+				return hello, res, err
+			}
+			continue
 		}
 		if !protocol.Has(c.Hello.Capabilities, needCap) {
 			c.Close()
 			return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, needCap)
 		}
+		hello = c.Hello
 		res, err = c.Stream(ctx, m, f.pass)
 		c.Close()
 		// A result, ok or not, ends it: Stream returns the daemon's
 		// refusals with the result message. Only a transport failure,
 		// which has no message, is retried.
 		if err == nil || res.Type != "" || ctx.Err() != nil || attempt == attempts {
-			return c.Hello, res, err
+			return hello, res, err
 		}
 		fmt.Fprintf(os.Stderr, "laatmux: %s: connection lost (%v); reconnecting to follow %s\n", h.Name, err, m.Type)
-		select {
-		case <-ctx.Done():
-			return c.Hello, res, ctx.Err()
-		case <-time.After(time.Second):
+		if err := pause(ctx); err != nil {
+			return hello, res, err
 		}
+	}
+}
+
+// pause waits a second between attempts, or returns when ctx ends.
+func pause(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Second):
+		return nil
 	}
 }
 

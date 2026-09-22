@@ -39,6 +39,20 @@ func TestMatchWorktree(t *testing.T) {
 	if w, ok := matchWorktree(ws, "proj/main"); !ok || w.Session != "" {
 		t.Errorf("worktree without session: %+v %v", w, ok)
 	}
+	// A branch written as is wins over another branch's encoded session
+	// name, in either record order.
+	ambiguous := []protocol.Worktree{
+		{Repo: "proj", Branch: "a.b", Root: "/r/dot", Session: "proj/a%2eb"},
+		{Repo: "proj", Branch: "a%2eb", Root: "/r/pct", Session: "proj/a%252eb"},
+	}
+	for _, order := range [][]protocol.Worktree{ambiguous, {ambiguous[1], ambiguous[0]}} {
+		if w, ok := matchWorktree(order, "proj/a%2eb"); !ok || w.Root != "/r/pct" {
+			t.Errorf("raw branch target: %+v %v", w, ok)
+		}
+		if w, ok := matchWorktree(order, "proj/a.b"); !ok || w.Root != "/r/dot" {
+			t.Errorf("dotted branch target: %+v %v", w, ok)
+		}
+	}
 }
 
 // ls pairs a worktree with the agent in its managed session, lists a

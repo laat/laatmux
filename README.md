@@ -161,17 +161,23 @@ local session on the laptop. The local session lives in the user's default
 tmux server, named `<host>/<repo>/<encoded branch>`, with one window
 running the attach command (`env -u TMUX tmux -L laatmux attach` locally,
 the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
-`<environment_id>/<root>`, the workspace key, and `@laatmux_host`; the
-attach pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions
-are matched on the key, never the name, so a renamed host or repository
-label still finds its session. The session is created detached and tagged
-in one tmux command sequence, then the attach pane is tagged by the id
-`new-session` printed, since the user's hooks may split the window at once.
+`<environment_id>/<root>`, the workspace key, `@laatmux_host`, and
+`@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
+pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions are
+matched on the key, never the name, so a renamed host or repository label
+still finds its session, and the host, source and branch tags are
+refreshed on every reuse so they do not go stale after one. The session is
+created detached and tagged in one tmux command sequence, then the attach
+pane is tagged by the id `new-session` printed, since the user's hooks may
+split the window at once.
 
 - **`add <branch>`** resolves the repository from `--repo`, else from the
-  current directory: under the local host's `repos` or `worktrees`, the
-  next path component is the label; failing that, the directory's git
-  origin is matched against the known sources. Host and agent come from
+  current directory: its git origin is matched against the known sources,
+  since identity is the source and a checkout keeps its directory after a
+  label change; an origin that is not configured is an error rather than
+  a guess from the directory name; only a directory with no origin falls
+  back to its place under the local host's `repos` or `worktrees`, where
+  the next path component is the label. Host and agent come from
   their flags, else `last.json`, else the config's default order. The
   command id is chosen once per invocation; a transport failure mid-way
   dials again with the same id, and the daemon's replay is printed once.
@@ -180,8 +186,8 @@ in one tmux command sequence, then the attach pane is tagged by the id
   default tmux server the client switches to it, elsewhere it prints how
   to attach.
 - **`rm <repo>/<branch>`** sends the root along whenever it is known: from
-  the host's record, or, when the worktree is already gone, from the local
-  session's tag. Git's refusal of a dirty worktree comes back as the error
+  the host's record, or, when the worktree is already gone, from the key
+  of the local session found by its source and branch tags. Git's refusal of a dirty worktree comes back as the error
   with everything left in place; `--force` removes it. After an `ok` the
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
@@ -333,9 +339,13 @@ tests under `-race`.
 ## Jump and attach spike
 
 Milestone one's jump opened an attach window in whatever session it ran
-from; milestone two replaced that with the workspace session above. The
-attach command and the findings below carried over. Run from a scratch
-tmux session so the user's view stayed untouched. Local and remote:
+from; milestone two replaced that with the workspace session above, and
+the first and sixth findings below describe the old behaviour: jump now
+switches to the workspace session, and a dead attach stays as a dead pane
+under `remain-on-exit` until the next jump respawns it. The attach command
+and the transport findings, keys, size, two attachments, the preflight and
+mouse, carried over unchanged. Run from a scratch tmux session so the
+user's view stayed untouched. Local and remote:
 
 - First `jump` opens a window in the session it was run from and tags the
   pane; a second `jump` focuses that window instead of opening another.
@@ -421,6 +431,14 @@ local session. A detached worktree was removed with `--root`.
 The user's tmux config splits every new session with a sidebar pane, which
 is why the attach pane is tagged by id rather than taken as the active
 pane.
+
+After review, on the VM: a stale `@laatmux_host` set by hand on a
+workspace session was refreshed by the next `jump`; a workspace session
+renamed by hand whose worktree was then removed on the VM was found by its
+source and branch tags, and `rm` killed the surviving managed session by
+root and the renamed local session; `add` run from a checkout whose origin
+is not configured refused with the origin named rather than guessing from
+the directory.
 
 ## Not yet verified
 

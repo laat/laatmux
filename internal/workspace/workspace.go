@@ -8,7 +8,12 @@
 // what a local session is matched on: neither the host name nor the
 // repository label is in it, so the session still matches its workspace
 // after either is renamed. The session name, <host>/<repo>/<encoded
-// branch>, is for display and for switching by name.
+// branch>, is for display and for switching by name. @laatmux_repo, the
+// repository source, and @laatmux_branch identify the worktree when its
+// record is gone from the host: that is how rm finds the root of a stale
+// workspace. The host, source and branch tags are refreshed every time
+// the session is reused, so a renamed host or label does not go stale in
+// them.
 //
 // A local session may instead carry @laatmux_attach = <host>/<session>:
 // an attachment to a managed session that is not a worktree's, made by
@@ -52,6 +57,8 @@ type Local struct {
 	Name    string
 	Key     string // @laatmux_workspace
 	Host    string // @laatmux_host
+	Source  string // @laatmux_repo, the repository source; "" when unknown
+	Branch  string // @laatmux_branch
 	Attach  string // @laatmux_attach, for a plain attachment
 	Settled bool   // @laatmux_settled
 }
@@ -61,6 +68,7 @@ func (l Local) Workspace() bool { return l.Key != "" }
 
 var sessionFormat = strings.Join([]string{
 	"#{session_name}", "#{@laatmux_workspace}", "#{@laatmux_host}", "#{@laatmux_attach}", "#{@laatmux_settled}",
+	"#{@laatmux_repo}", "#{@laatmux_branch}",
 }, tmux.Sep)
 
 // List returns every session on the default server. No server running is
@@ -80,10 +88,10 @@ func parseSessions(out string) []Local {
 	var locals []Local
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		f := strings.Split(line, tmux.Sep)
-		if len(f) < 5 || f[0] == "" {
+		if len(f) < 7 || f[0] == "" {
 			continue
 		}
-		locals = append(locals, Local{Name: f[0], Key: f[1], Host: f[2], Attach: f[3], Settled: f[4] != ""})
+		locals = append(locals, Local{Name: f[0], Key: f[1], Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
 	}
 	return locals
 }
@@ -106,6 +114,17 @@ func Current(ctx context.Context) (Local, error) {
 		return Local{}, fmt.Errorf("cannot find the session of pane %s", pane)
 	}
 	return locals[0], nil
+}
+
+// FindWorktree returns the workspace session for a branch of a repository
+// on the host with the environment id, by its tags.
+func FindWorktree(locals []Local, environmentID, source, branch string) (Local, bool) {
+	for _, l := range locals {
+		if env, _ := SplitKey(l.Key); l.Workspace() && env == environmentID && l.Source == source && l.Branch == branch && source != "" {
+			return l, true
+		}
+	}
+	return Local{}, false
 }
 
 // Find returns the session with the key, or the plain attachment with the
@@ -138,16 +157,19 @@ type Spec struct {
 	Managed string      // managed session name on the host
 	Name    string      // local session name
 	Key     string      // workspace key; "" for a plain attachment
+	Source  string      // repository source, when known
+	Branch  string
 }
 
 // Ensure finds the local session for the spec, or creates it: one window
 // running the attach command, with the session tagged in the same tmux
 // command sequence so it is never observable untagged, then the attach
 // pane tagged by id. An existing session is found by its key, or by its
-// attach tag for a plain attachment, whatever its name; a dead attach pane
-// in it is respawned. A session with the intended name that is not it is a
-// name in use. The name of the session, existing or new, and whether it
-// was created are returned.
+// attach tag for a plain attachment, whatever its name; its host, source
+// and branch tags are refreshed, since it may predate a rename, and a
+// dead attach pane in it is respawned. A session with the intended name
+// that is not it is a name in use. The name of the session, existing or
+// new, and whether it was created are returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	locals, err := List(ctx)
 	if err != nil {
@@ -158,6 +180,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		attach = s.Host.Name + "/" + s.Managed
 	}
 	if l, ok := Find(locals, s.Key, attach); ok {
+		if _, err := Server.Run(ctx, tagArgs(l.Name, s)...); err != nil {
+			return "", false, err
+		}
 		return l.Name, false, ensureAttach(ctx, l.Name, s)
 	}
 	if l, ok := ByName(locals, s.Name); ok {
@@ -177,7 +202,8 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	} else {
 		args = append(args, ";", "set-option", "-t", s.Name, "@laatmux_attach", attach)
 	}
-	args = append(args, ";", "set-option", "-t", s.Name, "@laatmux_host", s.Host.Name)
+	args = append(args, ";")
+	args = append(args, tagArgs(s.Name, s)...)
 	out, err := Server.Run(ctx, args...)
 	if err != nil {
 		return "", false, err
@@ -190,6 +216,17 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		return "", false, err
 	}
 	return s.Name, true, nil
+}
+
+// tagArgs is the tmux command sequence that sets the routing and identity
+// tags on a session: the host, and for a workspace the source and branch.
+func tagArgs(name string, s Spec) []string {
+	args := []string{"set-option", "-t", name, "@laatmux_host", s.Host.Name}
+	if s.Key != "" {
+		args = append(args, ";", "set-option", "-t", name, "@laatmux_repo", s.Source,
+			";", "set-option", "-t", name, "@laatmux_branch", s.Branch)
+	}
+	return args
 }
 
 func tagAttachPane(ctx context.Context, paneID string) error {

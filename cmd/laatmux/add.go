@@ -81,8 +81,9 @@ func cmdAdd(ctx context.Context, args []string) error {
 	}
 	name, created, err := workspace.Ensure(ctx, workspace.Spec{
 		Host: h.Host, Managed: res.Session,
-		Name: workspace.SessionName(h.Name, repo.Name, branch),
-		Key:  workspace.Key(hello.EnvironmentID, res.Root),
+		Name:   workspace.SessionName(h.Name, repo.Name, branch),
+		Key:    workspace.Key(hello.EnvironmentID, res.Root),
+		Source: repo.Source, Branch: branch,
 	})
 	if err != nil {
 		return err

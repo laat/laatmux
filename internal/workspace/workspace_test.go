@@ -25,9 +25,9 @@ func TestSessionName(t *testing.T) {
 func TestParseSessions(t *testing.T) {
 	sep := tmux.Sep
 	out := strings.Join([]string{
-		strings.Join([]string{"vm/proj/fix", "env1/root/a", "vm", "", "1"}, sep),
-		strings.Join([]string{"mac/work", "", "mac", "mac/work", ""}, sep),
-		strings.Join([]string{"notes", "", "", "", ""}, sep),
+		strings.Join([]string{"vm/proj/fix", "env1/root/a", "vm", "", "1", "git@x:o/proj.git", "fix"}, sep),
+		strings.Join([]string{"mac/work", "", "mac", "mac/work", "", "", ""}, sep),
+		strings.Join([]string{"notes", "", "", "", "", "", ""}, sep),
 		"",
 	}, "\n")
 	locals := parseSessions(out)
@@ -35,8 +35,18 @@ func TestParseSessions(t *testing.T) {
 		t.Fatalf("got %d sessions: %+v", len(locals), locals)
 	}
 	ws := locals[0]
-	if !ws.Workspace() || ws.Key != "env1/root/a" || ws.Host != "vm" || !ws.Settled {
+	if !ws.Workspace() || ws.Key != "env1/root/a" || ws.Host != "vm" || !ws.Settled || ws.Source != "git@x:o/proj.git" || ws.Branch != "fix" {
 		t.Errorf("workspace session parsed as %+v", ws)
+	}
+	// Found by identity tags whatever the name, and not across hosts.
+	if l, ok := FindWorktree(locals, "env1", "git@x:o/proj.git", "fix"); !ok || l.Name != "vm/proj/fix" {
+		t.Errorf("FindWorktree: %+v %v", l, ok)
+	}
+	if _, ok := FindWorktree(locals, "env2", "git@x:o/proj.git", "fix"); ok {
+		t.Error("FindWorktree matched another environment")
+	}
+	if _, ok := FindWorktree(locals, "env1", "", ""); ok {
+		t.Error("FindWorktree matched an untagged session")
 	}
 	if at := locals[1]; at.Workspace() || at.Attach != "mac/work" || at.Settled {
 		t.Errorf("attach session parsed as %+v", at)

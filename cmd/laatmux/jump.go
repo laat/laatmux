@@ -83,6 +83,12 @@ func cmdJump(ctx context.Context, args []string) error {
 		spec.Managed = w.Session
 		spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
 		spec.Key = workspace.Key(hello.EnvironmentID, w.Root)
+		spec.Branch = w.Branch
+		// The record carries the host's label; the source comes from this
+		// machine's config, and is left empty when the labels differ.
+		if r, ok := cfg.RepoByName(w.Repo); ok {
+			spec.Source = r.Source
+		}
 	} else {
 		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
@@ -99,13 +105,17 @@ func cmdJump(ctx context.Context, args []string) error {
 
 // matchWorktree finds the worktree a jump target names after the host:
 // <repo>/<branch> as written, or the managed session's name, which is the
-// same with the branch encoded.
+// same with the branch encoded. A branch written as is wins: with branches
+// a.b and a%2eb, the target proj/a%2eb is the second branch, not the
+// first's session name, whatever order the records arrive in.
 func matchWorktree(ws []protocol.Worktree, rest string) (protocol.Worktree, bool) {
 	for _, w := range ws {
-		if w.Branch == "" {
-			continue
+		if w.Branch != "" && w.Repo+"/"+w.Branch == rest {
+			return w, true
 		}
-		if w.Repo+"/"+w.Branch == rest || (w.Session != "" && w.Session == rest) {
+	}
+	for _, w := range ws {
+		if w.Branch != "" && w.Session != "" && w.Session == rest {
 			return w, true
 		}
 	}
