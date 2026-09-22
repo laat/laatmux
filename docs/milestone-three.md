@@ -92,7 +92,7 @@ The merged snapshot and stream:
 The host record:
 
 ```
-{name, ssh, environment_id, connected, error, version, capabilities, since}
+{name, ssh, environment_id, connected, listed, error, version, capabilities, since}
 ```
 
 `environment_id` is empty until the host has answered a hello once. Agent
@@ -102,6 +102,28 @@ rewriting records. Ids are unchanged, so nothing a client stored breaks.
 `seq` is the merging daemon's own sequence over the merged stream; the
 remote sequences are consumed by it and never forwarded, so a subscriber
 that falls behind is disconnected and resnapshots exactly as today.
+
+`connected` and `listed` are the two readiness bits `watch` keeps per host
+today. `connected` is a live connection with a completed hello. `listed`
+is that the host's records in the merged stream come from a snapshot of
+the current connection: it is false from the moment a merged subscription
+first brings the host in, or the connection drops, until the next
+snapshot from that host has replaced every record of that host's in one
+step, as `apply` does today. Cached records from before a drop stay
+visible while `listed` is false, so the sidebar shows what was last known
+with the host row saying `DOWN`. Absence is authoritative only when both
+bits are set: `ls` and the views mark a local session stale only when its
+host is connected, listed and has the `worktrees` capability, which is the
+rule in `stale` today, and `jump` reports a workspace missing only from a
+listed host.
+
+One-shot consumers wait for readiness. The merged snapshot is sent at
+once with what the daemon knows, which on a cold daemon is nothing but
+the host rows. `ls` then reads upserts until every host is listed or
+carries an error, or 20 seconds have passed, and prints, naming the hosts
+that are still neither, which is what its per-host snapshot timeout does
+today. `jump` and `path` wait the same way for the one host they need.
+The views draw whatever has arrived and let the host rows say the rest.
 
 Plain `subscribe` without `merged` keeps meaning this host's own records,
 which is what a laptop's daemon serves to a remote laptop, should that
@@ -223,9 +245,10 @@ laatmux sidebar attach <window-id>     # add a pane to one window, called by a h
 laatmux sidebar reap                   # close sidebar panes left alone, called by a hook
 ```
 
-`on` walks every window on the default server and, where no pane carries
-`@laatmux_sidebar`, splits one off the left edge, full height, at the
-configured width, with focus left where it was:
+`on` first installs hooks on the server, then walks every window on the
+default server and, where no pane carries `@laatmux_sidebar`, splits one
+off the left edge, full height, at the configured width, with focus left
+where it was:
 
 ```
 split-window -d -h -b -f -l <width> -t <window> laatmux sidebar pane \;
@@ -234,9 +257,16 @@ set-option -p -t <new pane> @laatmux_sidebar 1
 
 The pane id comes from `-P -F '#{pane_id}'` and is tagged in the same
 sequence, so a sidebar pane is never observable untagged, as for the
-attach pane in milestone two. Then it installs hooks on the server, each
-at an index laatmux owns so `off` removes exactly what `on` set and the
-user's own hooks at other indexes stay:
+attach pane in milestone two. Hooks go in before the walk so a window
+made during the walk is caught by its hook rather than missed by both;
+`attach` skipping a window that has a pane makes the overlap harmless.
+Every check-and-create, in `on` and in `attach`, runs under an exclusive
+`flock` on `$LAATMUX_HOME/sidebar.lock`, since two `attach`es for the same
+window, or an `attach` racing `on`, would each see no tagged pane and make
+two. `attach` also reads the hooks under that lock and does nothing when
+they are gone: an `attach` that was queued behind `off` must not put a
+pane back. The hooks, each at an index laatmux owns so `off` removes
+exactly what `on` set and the user's own hooks at other indexes stay:
 
 | Hook | Runs |
 |---|---|
@@ -254,8 +284,9 @@ sidebar process does not poll for it. The indexes are a constant and the
 hooks are `-g`, on the server, so a new session is covered from its first
 window.
 
-`off` unsets those four hooks and kills every pane tagged `@laatmux_sidebar`.
-`toggle` looks for the hooks: present means on. A sidebar pane whose
+`off`, under the same lock, unsets those four hooks and then kills every
+pane tagged `@laatmux_sidebar`. `toggle` looks for the hooks: present
+means on. A sidebar pane whose
 process exits, on `q` or a crash, is gone from that window until a new
 window is made or `on` runs again; that is the intended way to dismiss one
 window's sidebar.
@@ -267,18 +298,22 @@ the ages. It does not read local sessions itself.
 
 Settled and stale come from tags on local sessions. Today `watch` lists
 the local sessions on every redraw. With a client per window that is a
-`tmux list-sessions` per window per change. The merging daemon's poll of
-the default server already runs `list-panes -a` every 300 ms for status;
-it adds the session options to that same format string and publishes
-local workspace sessions as records in the merged stream:
+`tmux list-sessions` per window per change. While it has a merged
+subscriber, the merging daemon runs the `list-sessions` that
+`workspace.List` runs today against the default server once a second and
+publishes local workspace sessions as records in the merged stream:
 
 ```
 {name, key, host, source, branch, attach, settled}
 ```
 
-The record is what `workspace.List` parses today, sent once per change.
-Settle and unsettle then reach every sidebar within a poll, and the view
-needs no tmux access beyond `switch-client` on jump.
+This is its own poll, not a rider on the status poll: `tmux_servers`
+defaults to the managed server alone, and a laptop that does not observe
+its default server still has its workspace sessions there. Reading
+session options is observation like `list-panes` is, and a default server
+that is not running is an empty list, not an error. The records are sent
+once per change, so settle and unsettle reach every sidebar within a
+second, and the view needs no tmux access beyond `switch-client` on jump.
 
 Config, in the laptop's `~/.config/laatmux/config.yaml`:
 
@@ -430,14 +465,40 @@ status, and `laatmux run` exits with it. `ok: false` with `error` is for
 laatmux's own failures: no such worktree, the command not found, the run
 cancelled.
 
-Runs use the daemon's command plumbing from milestone two: the id is
-client chosen, a repeated id attaches to the running stream or replays a
-finished one for five minutes, and the client redials with the same id
-when the bridge drops. One change to that plumbing: `add` drops output
-past 1 MiB for good, since setup output is a diagnostic. A run's output
-is the point, so past the retained megabyte a run keeps streaming live to
-its current followers and only replay loses it; a client that reconnects
-after that point gets one line saying so before the live tail.
+Runs use the daemon's command plumbing from milestone two, with two
+changes to it that `add` and `rm` take as well.
+
+Starting and following become different messages. Today a repeated id
+attaches to a running command, replays a finished one for five minutes,
+and starts the command when the id is unknown, which is what makes a
+redial after a dropped bridge a plain resend. That is right for `add` and
+`rm`, whose every step is skipped by inspection, and wrong for `run`: an
+unknown id after a daemon restart or after the five minutes would run
+`pnpm db:seed` a second time. So the first send is the command and every
+redial is `{type: follow, id, after}`. `follow` on a known id attaches or
+replays as today. `follow` on an unknown id returns `{type: result, ok:
+false, error: unknown command}`; the `add` and `rm` clients then resend
+the command, since re-executing them is safe, and the `run` client
+prints that the outcome is unknown and exits 255, because the process may
+be running still, may have finished, or may never have started, and only
+the user can tell which. Under a clean daemon shutdown, `SIGTERM`, runs
+are cancelled like `cancel` does, so a restart for an upgrade leaves no
+orphan. A daemon that crashes leaves its runs going, in their own process
+groups, unknown to the daemon that replaces it; the note says so and
+does not try to adopt them.
+
+Progress messages carry `n`, a per-command sequence from 1, and a client
+keeps the highest it has seen. `follow` sends it as `after`, the daemon
+replays from `after + 1`, and the client drops anything at or below its
+mark, so the replay filter counts nothing and a shorter replay cannot
+swallow live output. This replaces the positional `replayFilter`, which
+assumes every replay is a prefix of the same stream. Retention is then
+free to differ per command. `add` keeps dropping output past 1 MiB for
+good, since setup output is a diagnostic. A run's output is the point, so
+past the retained megabyte a run keeps streaming live to its current
+followers and forgets the oldest lines for replay; a `follow` whose
+`after` is below the oldest retained `n` gets one `{state: gap, n, detail:
+"<count> lines dropped"}` at the right position before the retained tail.
 
 `cancel` is new and is for `run` alone. Ctrl-C in `laatmux run` sends it
 and waits for the result; the daemon sends `SIGTERM` to the process group
@@ -450,10 +511,26 @@ letting them finish is the safe thing.
 
 Runs take no repository lock; they do not touch the main checkout and a
 long one must not block `add`. `rm` gains one step: after git has removed
-the worktree, before or alongside killing its sessions, the daemon cancels
-every run whose root is that root. A process in a deleted directory is
-laatmux's own and is treated like the session, and, like the session, it
-is not touched until git has agreed to the removal.
+the worktree and before killing its sessions, the daemon cancels every
+run whose root is that root and waits for each to exit, so the `ok` the
+client gets means nothing of laatmux's is left in the root. A process in
+a deleted directory is laatmux's own and is treated like the session,
+and, like the session, it is not touched until git has agreed to the
+removal.
+
+The daemon keeps a registry of runs by root under its mutex, and the two
+sides interlock on it. A run resolves its root, then under the mutex
+checks that the root is not marked removed and registers itself, then
+starts the process; a run registered before it has started is still
+cancellable, and a cancel then means the process is never started. `rm`,
+after git has removed the worktree, under the same mutex marks the root
+removed and takes the list of its runs, then cancels them outside the
+mutex and waits. A run that resolved before the removal and reaches
+registration after the mark is refused with `worktree removed`, so
+nothing escapes the sweep by timing. The mark lives until an `add`
+registers a worktree at that root again, which `add` clears in its
+worktree stage, on the same daemon. `rm` already holds every repository
+lock, so no `add` reuses the root before `rm` has returned.
 
 ## Client changes, collected
 
