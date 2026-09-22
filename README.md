@@ -142,8 +142,10 @@ truth; labels only place new things.
 - **Retry and serialization**: commands run under the daemon's context
   and outlive the connection that sent them. Ids are kept for five
   minutes; the same id while a command runs attaches to its stream, and
-  afterwards replays the result. Commands are serialized per repository
-  source and run in parallel across repositories.
+  afterwards replays the result. `add` is serialized per repository
+  source, so adds for different repositories run in parallel; `rm` takes
+  every repository's lock while it resolves and removes, since its root
+  checks ask every checkout, and so waits for any add in flight.
 
 ## Which tmux servers the daemon polls
 

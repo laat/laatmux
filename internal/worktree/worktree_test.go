@@ -453,13 +453,14 @@ func TestListAndFindAndRemove(t *testing.T) {
 }
 
 func TestParseWorktrees(t *testing.T) {
-	out := "worktree /r/main\nHEAD abc\nbranch refs/heads/main\n\nworktree /r/w1\nHEAD abc\nbranch refs/heads/feature/x\n\nworktree /r/w2\nHEAD abc\ndetached\nprunable gitdir file points to non-existent location\n\nworktree /r/b\nbare\n"
+	out := "worktree /r/main\x00HEAD abc\x00branch refs/heads/main\x00\x00worktree /r/w1\x00HEAD abc\x00branch refs/heads/feature/x\x00\x00worktree /r/w2\x00HEAD abc\x00detached\x00prunable gitdir file points to non-existent location\x00\x00worktree /r/b\x00bare\x00\x00worktree /r/odd\nname\x00HEAD abc\x00branch refs/heads/nl\x00\x00"
 	got := parseWorktrees(out)
 	want := []Entry{
 		{Root: "/r/main", Branch: "main"},
 		{Root: "/r/w1", Branch: "feature/x"},
 		{Root: "/r/w2", Detached: true, Prunable: true},
 		{Root: "/r/b", Bare: true},
+		{Root: "/r/odd\nname", Branch: "nl"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
@@ -655,5 +656,32 @@ func TestAddRefusesSymlinkedRepoDir(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Fatalf("worktree created outside: %v", entries)
+	}
+}
+
+// A worktree whose path contains a newline is listed whole, root intact.
+func TestListWorktreeWithNewlineInPath(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	odd := filepath.Join(f.store.Dirs.Worktrees, "proj", "odd\nname")
+	run(t, a.Checkout, "git", "worktree", "add", "-q", "-b", "nl", odd, "main")
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range recs {
+		if r.Root == odd && r.Branch == "nl" {
+			found = true
+		}
+		if strings.HasPrefix(odd, r.Root) && r.Root != odd {
+			t.Fatalf("truncated root %q", r.Root)
+		}
+	}
+	if !found {
+		t.Fatalf("worktree with newline not listed: %+v", recs)
 	}
 }

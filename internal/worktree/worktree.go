@@ -148,18 +148,22 @@ type Entry struct {
 }
 
 // ListWorktrees asks a checkout for its worktrees, the main one first.
+// The output is NUL-terminated (-z), since a path may contain a newline
+// and porcelain prints paths verbatim.
 func ListWorktrees(ctx context.Context, checkout string) ([]Entry, error) {
-	out, err := git(ctx, checkout, "worktree", "list", "--porcelain")
+	out, err := git(ctx, checkout, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return nil, err
 	}
 	return parseWorktrees(out), nil
 }
 
+// parseWorktrees reads `git worktree list --porcelain -z`: each attribute
+// line is NUL-terminated and an empty one ends a record.
 func parseWorktrees(out string) []Entry {
 	var entries []Entry
 	var cur *Entry
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(out, "\x00") {
 		if line == "" {
 			if cur != nil {
 				entries = append(entries, *cur)
