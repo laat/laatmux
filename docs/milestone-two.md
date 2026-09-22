@@ -8,7 +8,7 @@ Milestone one observes agents; this milestone creates them.
 ## The workflow
 
 1. Pick a repository from the configured set.
-2. Pick a host where that repository has a path.
+2. Pick a host. The repository is cloned there on first use.
 3. Pick an agent.
 4. Name the task. That is the branch and the worktree name.
 5. The daemon on that host creates the worktree, copies files, runs setup,
@@ -20,10 +20,22 @@ current directory, the host and agent last used for that repository.
 
 ## Config
 
-Personal config in `~/.config/laatmux/config.yaml`, next to `hosts` and
-`tmux_servers`:
+Personal config in `~/.config/laatmux/config.yaml`. More is configured per
+host and less per repository: a repository is just a known source, and each
+host says once where checkouts and worktrees go.
 
 ```yaml
+hosts:
+  - name: mac
+    repos: ~/code             # main checkouts live in <repos>/<name>
+    worktrees: ~/worktrees    # worktrees live in <worktrees>/<name>/<branch>
+  - name: vm
+    ssh: vm
+    repos: ~/src
+    worktrees: ~/src/worktrees
+
+tmux_servers: [laatmux, default]
+
 agents:
   claude:
     cmd: [claude]
@@ -32,28 +44,34 @@ agents:
   claude-safe:
     cmd: [claude-safe]        # sandboxing is the launch command's business
 
-repos:
-  laatmux:
-    paths:                    # main checkout per host name
-      mac: ~/code/laatmux
-      vm: ~/src/laatmux
-    worktrees: .worktrees     # under the main checkout; this is the default
-    host: mac                 # default host; optional
-    agent: claude             # default agent; optional
+repos:                        # the known set; a list for now, discovery later
+  - git@github.com:laat/laatmux.git
+  - https://github.com/laat/other.git
 ```
 
-Repository paths and agent commands are personal because they differ per
-person and per host. The daemon on a host reads the same file that host
-has, and finds its own paths under its own host name, the entry in `hosts`
-without `ssh`.
+A repository's name is the last path component of its source without
+`.git`, so the list above knows `laatmux` and `other`. Two sources with the
+same name are a config error. A repository's main checkout on a host is
+`<repos>/<name>`; if it is missing when `add` runs there, the daemon clones
+it, so any host can be picked. A worktree's root is
+`<worktrees>/<name>/<branch>`, outside the checkout, so nothing needs
+excluding from git status. Per-repository overrides of these paths are not
+in this milestone and can be a list added later. `repos` and `worktrees`
+have no defaults: a host without them cannot `add`, and the error names the
+host.
 
-Host names and repository keys are labels the user picks, and they end up
-in session names, workspace keys and ids, so `Load` validates them: one or
-more of `A-Z a-z 0-9 _ -`, nothing else. A host whose name defaults from
-its ssh alias must satisfy the same rule, else the config is rejected with
-a message asking for an explicit `name`. `agents` keys follow the same rule.
-With `/`, `.`, `:` and `%` excluded from labels, a `/`-joined name or id is
-parsed unambiguously from the left, and only the branch needs encoding.
+The daemon on a host reads the same file that host has, and finds its own
+directories under its own entry, the one in `hosts` without `ssh`. Paths
+are expanded for `~` on that host.
+
+Host names, repository names and agent keys are labels that end up in
+session names, workspace keys, ids and directory names, so `Load` validates
+them: one or more of `A-Z a-z 0-9 _ -`, nothing else. A host whose name
+defaults from its ssh alias must satisfy the same rule, else the config is
+rejected with a message asking for an explicit `name`. A repository whose
+derived name does not conform is rejected the same way. With `/`, `.`, `:`
+and `%` excluded from labels, a `/`-joined name or id is parsed
+unambiguously from the left, and only the branch needs encoding.
 
 Shared setup in `.laatmux.yaml` at the repository root, committed:
 
@@ -63,17 +81,23 @@ setup: ["pnpm install"]               # each runs at least once; must tolerate a
 ```
 
 It is read from the new worktree after checkout, so a branch carries its own
-setup. A missing file means nothing to copy and nothing to run.
+setup. A missing file means nothing to copy and nothing to run. Each `setup`
+entry is one string run as `sh -c <string>` in the worktree root, with the
+`.laatmux.yaml` author responsible for its quoting; this matches how such
+commands are written and keeps the file free of argv arrays. `agents.cmd`
+stays an argv array because laatmux builds the tmux command from it.
 
 Last-used host and agent per repository are state, not config. They live in
-`$LAATMUX_HOME/last.json` on the laptop and are written by `add`.
+`$LAATMUX_HOME/last.json` on the laptop and are written by `add` under an
+exclusive `flock` around the read, modify and write, with the write going to
+a temporary file renamed into place. Two concurrent `add`s therefore keep
+each other's defaults, and a crash mid-write leaves the old file.
 
 Defaults are deterministic or absent, never "the first" of a YAML mapping.
-Host: the flag, else `last.json`, else the repository's `host`, else the
-local host if the repository has a path there, else the only host that has
-one, else an error naming the candidates. Agent: the flag, else `last.json`,
-else the repository's `agent`, else the only configured agent, else an
-error naming them.
+Host: the flag, else `last.json`, else the local host if it has `repos` and
+`worktrees`, else the only host that has them, else an error naming the
+candidates. Agent: the flag, else `last.json`, else the only configured
+agent, else an error naming them.
 
 ## The workspace record
 
@@ -83,7 +107,7 @@ current directory.
 
 | Field | Where it is authoritative |
 |---|---|
-| repo, branch, root | the host's git: `git worktree list --porcelain` in each configured repository, filtered to its `worktrees` directory; branch is empty for a detached worktree |
+| repo, branch, root | the host's git: `git worktree list --porcelain` in each known repository's checkout under `<repos>`, filtered to roots under `<worktrees>/<name>/`; branch is empty for a detached worktree; `prunable` entries are not published |
 | host | the daemon that answers, by environment id |
 | managed session | the host's managed tmux server: the pane carries `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd`, set at creation as `@laatmux_cwd` is today |
 | local session | the laptop's default tmux server: the session carries `@laatmux_workspace` = `<environment_id>/<repo>/<branch>` and `@laatmux_host` = the configured host name |
@@ -97,7 +121,10 @@ routing and display.
 No workspace file is kept on either side. Git is the source of truth for
 worktrees, as the model says, so a worktree made by hand in the right
 directory is listed and can be removed, and a worktree removed by hand
-disappears from the listing. The daemon lists worktrees the same way it
+disappears from the listing. A worktree whose directory was deleted outside
+git stays registered as `prunable`; the poller treats those as absent and
+does not publish them, and `add` runs `git worktree prune` before its
+registration check so a stale registration never counts as done. The daemon lists worktrees the same way it
 lists panes: by polling, published to subscribers as `worktree` records
 next to `agent` records, so `ls` shows a worktree whose agent has exited or
 was never started. A detached worktree in the directory is listed with an
@@ -131,26 +158,37 @@ back to milestone-one behaviour.
 ```
 -> {type: add, id, repo, branch, agent, cmd: [...]}
 <- {type: progress, id, stage, state, detail}   zero or more
-<- {type: result, id, ok, error, session, pane_id, root}
+<- {type: result, id, ok, error, stage, session, pane_id, root}
 ```
+
+`stage` in a result is set on failure to the stage that failed, so a client
+never parses it out of `error`.
 
 Stages, in order. Every step that mutates something has its own check, so
 a retry after a crash skips exactly what is done and finishes what is not:
 
 | Stage | Step | Skipped when |
 |---|---|---|
-| resolve | repository path for this host, worktree root, agent command | never |
-| fetch | `git fetch origin` in the main checkout | never; it is cheap and the branch base must be fresh |
-| worktree | `git remote set-head origin --auto` | never; it is a symref update |
-| | `git worktree add -b <branch> <root> origin/HEAD` | root is a registered worktree on that branch |
-| | the `worktrees` directory line in `.git/info/exclude` | the line is present |
+| resolve | checkout path `<repos>/<name>`, root `<worktrees>/<name>/<branch>`, agent command | never |
+| clone | `git clone <source> <checkout>` | the checkout exists and its `origin` is the source; a different origin fails the stage |
+| fetch | `git fetch origin` in the checkout | never; it is cheap and the branch base must be fresh |
+| worktree | `git remote set-head origin --auto`, `git worktree prune` | never; symref update and cleanup |
+| | branch: `git branch --track <branch> origin/<branch>` if the remote branch exists, else `git branch <branch> origin/HEAD` | the local branch exists, from an earlier attempt or made by hand; it is used as is and the progress line says so |
+| | registration: `git worktree add <root> <branch>` | root is registered on that branch; registered on another branch, or the branch is checked out elsewhere, fails the stage |
 | copy | each `copy` entry from the main checkout, written to a temporary file in the target directory and renamed into place | the target exists; it can only exist complete |
 | setup | each `setup` command in the root, in order, output streamed as detail; after each success a marker named by the command's index and hash is written under the worktree's git directory | that command's marker exists; a changed command has a new hash and runs again |
 | agent | one tmux invocation: `new-session` and every `set-option` for the pane, `\;`-separated, so the session is never observable without its options | a session of that name exists with one pane carrying matching `@laatmux_repo`, `@laatmux_branch` and `@laatmux_cwd` |
 
-Details behind the checks. `git fetch origin` does not update
-`origin/HEAD`, so `set-head --auto` refreshes it and the branch base is the
-remote's current default branch, not the one recorded at clone time. The
+Details behind the checks. Branch creation and worktree registration are
+two steps because `git worktree add -b` is not atomic: a failure to create
+the directory leaves the branch behind, and a retry with `-b` would then
+fail on the existing branch. Creating the branch first and registering
+without `-b` makes the retry pick the branch up. It also gives `add` on an
+existing branch, local or remote, for free, which is the ordinary way to
+open a worktree for a branch someone else started. `git fetch origin` does
+not update `origin/HEAD`, so `set-head --auto` refreshes it and the branch
+base is the remote's current default branch, not the one recorded at clone
+time. The
 worktree's git directory is what `git -C <root> rev-parse --git-dir`
 returns, never derived from the branch name: git picks it, `feature/task`
 gets `.git/worktrees/task`, and duplicate basenames get suffixes. The
@@ -192,24 +230,36 @@ daemon per host by the startup lock, so the lock is in-process.
 ```
 
 `root` is an alternative to `repo` and `branch` for a detached worktree.
+Removal is two steps, each inspected, so a retry after a crash between them
+finishes the job:
+
+| Step | Does | Skipped when |
+|---|---|---|
+| worktree | `git worktree remove <root>`, with `--force --force` when `force` is set | the root is not a registered worktree |
+| session | kill every managed session whose pane carries `@laatmux_cwd` equal to the root | none does |
+
 Git is the judge of whether a worktree may go, and nothing is killed until
-it has gone: `rm` runs `git worktree remove <root>` first, with
-`--force --force` when `force` is set, and only after git has removed the
-directory does it kill the managed session. Without `force`, git refuses a
-dirty worktree, untracked files, a locked worktree and a submodule the same
-way it does at the command line, and the refusal is returned as the error
-with the agent still running. With `force`, all of those are removed. A
-target that is already absent, no worktree and no session, is `ok`, so a
-retry after a dropped bridge is a no-op and the client can go on to its own
-cleanup. Ids replay as for `add`. The branch is left alone; merging,
-rebasing and deleting branches stay ordinary Git.
+it has gone. Without `force`, git refuses a dirty worktree, untracked files,
+a locked worktree and a submodule the same way it does at the command line,
+and the refusal is returned as the error with the agent still running. With
+`force`, all of those are removed. The session step matches on the pane's
+recorded root, never on the session name, so a session someone made by hand
+with the same name is left alone, and a session left behind when the daemon
+died after the worktree step is found and killed on the retry. A target
+where both steps skip is `ok`, so a retry after a dropped bridge is a no-op
+and the client can go on to its own cleanup. Ids replay as for `add`, and
+a retry after a daemon restart, when the id cache is gone, is safe for the
+same reason. The branch is left alone; merging, rebasing and deleting
+branches stay ordinary Git.
 
 The local workspace session is the client's to clean up: after an `ok`
 `rm` the client kills the tagged local session, switching away first if it
 is the current one. A tagged local session whose workspace no longer exists
 on its host, because the worktree was removed by hand or from another
-machine, is listed by `ls` as stale, and `rm` on a stale entry kills the
-local session and nothing else.
+machine, is listed by `ls` as stale, and `rm` on a stale entry sends the
+`rm` to the host anyway, which kills any matching managed session and
+returns `ok`, then kills the local session. An agent whose recorded root is
+no longer a worktree shows in `ls` as orphaned for the same reason.
 
 `worktrees` is not a request. Worktree records arrive in the subscription
 stream like agents. The record:
@@ -282,8 +332,9 @@ is not decided here.
 ## Order of work
 
 1. This note, and the issue 3 decision recorded in issue #1.
-2. Config: `agents`, `repos`, `.laatmux.yaml`, `last.json`, with a
-   `laatmux repos` command that shows how each repository resolves per host.
+2. Config: per-host `repos` and `worktrees`, `agents`, the `repos` list,
+   `.laatmux.yaml`, `last.json`, with a `laatmux repos` command that shows
+   each known repository's name and where it lands on each host.
 3. Daemon: worktree polling and records, then `add` with staged progress,
    verified on the VM against a hostile checkout state: existing worktree,
    dirty setup, crashed mid-copy.
