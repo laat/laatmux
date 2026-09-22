@@ -24,20 +24,41 @@ type Repo struct {
 // optional name.
 func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
-		if n.Tag != "!!str" {
-			return fmt.Errorf("repos: line %d: source must be a string, got %s", n.Line, strings.TrimPrefix(n.Tag, "!!"))
+		if err := stringScalar("source", n); err != nil {
+			return err
 		}
 		r.Source = n.Value
 		return nil
 	}
 	var m struct {
-		Source string `yaml:"source"`
-		Name   string `yaml:"name"`
+		Source yaml.Node `yaml:"source"`
+		Name   yaml.Node `yaml:"name"`
 	}
 	if err := n.Decode(&m); err != nil {
 		return err
 	}
-	r.Source, r.Name, r.Explicit = m.Source, m.Name, m.Name != ""
+	if err := stringScalar("source", &m.Source); err != nil {
+		return err
+	}
+	if !m.Name.IsZero() {
+		if err := stringScalar("name", &m.Name); err != nil {
+			return err
+		}
+	}
+	r.Source, r.Name, r.Explicit = m.Source.Value, m.Name.Value, m.Name.Value != ""
+	return nil
+}
+
+// stringScalar rejects a YAML value that is not a plain string, so an
+// unquoted number or boolean is an error rather than stringified. A
+// missing node is left for later validation to report.
+func stringScalar(field string, n *yaml.Node) error {
+	if n.IsZero() {
+		return nil
+	}
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
+		return fmt.Errorf("repos: line %d: %s must be a string, got %s", n.Line, field, strings.TrimPrefix(n.Tag, "!!"))
+	}
 	return nil
 }
 
