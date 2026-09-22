@@ -275,13 +275,10 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	// The temporary file is created exclusively with a random suffix, so
 	// it can never truncate a file the repository happens to contain. A
 	// copy that crashed halfway leaves its temporary behind; the retry
-	// removes those first, matching the pattern only.
+	// removes those first, and only those: names of exactly the form
+	// CreateTemp produces, read from the directory literally.
+	removeStaleTemps(filepath.Dir(dst), filepath.Base(dst))
 	pattern := ".laatmux-copy-" + filepath.Base(dst) + ".*"
-	if stale, err := filepath.Glob(filepath.Join(filepath.Dir(dst), pattern)); err == nil {
-		for _, p := range stale {
-			os.Remove(p)
-		}
-	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -312,6 +309,26 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	}
 	report(stage, protocol.StateDone, rel)
 	return nil
+}
+
+// removeStaleTemps deletes leftovers of crashed copies of base in dir:
+// regular files named .laatmux-copy-<base>.<digits>, the shape
+// os.CreateTemp gives them. Anything else, such as a .backup a user kept
+// under a similar name, is not laatmux's and stays. The directory is read,
+// not globbed, so its name is taken literally.
+func removeStaleTemps(dir, base string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := ".laatmux-copy-" + base + "."
+	for _, e := range entries {
+		suffix, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok || !e.Type().IsRegular() || suffix == "" || strings.Trim(suffix, "0123456789") != "" {
+			continue
+		}
+		os.Remove(filepath.Join(dir, e.Name()))
+	}
 }
 
 // markerDir is <git-dir>/laatmux for the worktree: what git reports as the

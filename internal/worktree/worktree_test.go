@@ -329,9 +329,12 @@ func TestCrashedCopyAndSetup(t *testing.T) {
 	}
 	write(t, filepath.Join(a.Checkout, ".envrc"), "export A=1\n")
 	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc.123456"), "export A=")
-	// A file of the repository's own that merely looks like the temporary
-	// name must survive the copy.
+	// Files of the repository's own that merely resemble the temporary
+	// name must survive the copy: the bare name, a non-numeric suffix,
+	// and a directory.
 	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc"), "mine")
+	write(t, filepath.Join(a.Root, ".laatmux-copy-.envrc.backup"), "backup")
+	os.Mkdir(filepath.Join(a.Root, ".laatmux-copy-.envrc.7"), 0o755)
 	markers, err := markerDir(f.ctx, a.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -344,11 +347,16 @@ func TestCrashedCopyAndSetup(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(a.Root, ".envrc")); string(b) != "export A=1\n" {
 		t.Fatalf(".envrc %q", b)
 	}
-	if left, _ := filepath.Glob(filepath.Join(a.Root, ".laatmux-copy-.envrc.*")); len(left) != 0 {
-		t.Fatalf("temporary copy left behind: %v", left)
+	if _, err := os.Stat(filepath.Join(a.Root, ".laatmux-copy-.envrc.123456")); err == nil {
+		t.Fatal("stale temporary copy left behind")
 	}
-	if b, _ := os.ReadFile(filepath.Join(a.Root, ".laatmux-copy-.envrc")); string(b) != "mine" {
-		t.Fatalf("repository file clobbered: %q", b)
+	for name, want := range map[string]string{".laatmux-copy-.envrc": "mine", ".laatmux-copy-.envrc.backup": "backup"} {
+		if b, _ := os.ReadFile(filepath.Join(a.Root, name)); string(b) != want {
+			t.Fatalf("%s clobbered: %q", name, b)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(a.Root, ".laatmux-copy-.envrc.7")); err != nil || !fi.IsDir() {
+		t.Fatal("directory resembling a temporary removed")
 	}
 	if !hasStep(steps, protocol.StageSetup, protocol.StateSkip, "echo one >> log") || !hasStep(steps, protocol.StageSetup, protocol.StateDone, "echo two >> log") {
 		t.Fatalf("steps %+v", steps)
@@ -552,5 +560,26 @@ func TestOwns(t *testing.T) {
 		if got := s.Owns(root); got != want {
 			t.Errorf("Owns(%q) = %v, want %v", root, got, want)
 		}
+	}
+}
+
+// Cleanup reads the destination directory literally: a directory whose
+// name is a glob pattern must not reach into its siblings.
+func TestRemoveStaleTempsLiteralDir(t *testing.T) {
+	base := t.TempDir()
+	sib := filepath.Join(base, "a")
+	pat := filepath.Join(base, "[ab]")
+	write(t, filepath.Join(sib, ".laatmux-copy-.envrc.123456"), "other worktree's copy")
+	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.654321"), "stale")
+	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.backup"), "kept")
+	removeStaleTemps(pat, ".envrc")
+	if _, err := os.Stat(filepath.Join(sib, ".laatmux-copy-.envrc.123456")); err != nil {
+		t.Fatal("sibling directory's file removed")
+	}
+	if _, err := os.Stat(filepath.Join(pat, ".laatmux-copy-.envrc.654321")); err == nil {
+		t.Fatal("stale temporary kept")
+	}
+	if _, err := os.Stat(filepath.Join(pat, ".laatmux-copy-.envrc.backup")); err != nil {
+		t.Fatal("backup removed")
 	}
 }
