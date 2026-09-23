@@ -3,11 +3,11 @@ S..| ! laatmux/fix-ls               ‹@vm›
 S..|   claude  blocked  2m
 S..|   Permission to run pnpm test in p
 SD.|───────────────────────────────────
-...| * remote-notes         ‹@vm/default›
+...| ⟨⠋⟩ remote-notes         ‹@vm/default›
 ...|   codex  working  1s
 ...|   remote
 .D.|───────────────────────────────────
-...|>* proj/task                   @mac
+...|>⟨⠋⟩ proj/task                   @mac
 ...|   codex  working  8s
 ...|   Editing src/api.ts
 .D.|───────────────────────────────────

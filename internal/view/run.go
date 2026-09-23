@@ -19,7 +19,9 @@ type Host struct {
 	Act func(m *Model, a Action) (done bool)
 }
 
-// tick is how often the ages are redrawn.
+// tick is how often the ages are redrawn. The spinner on a working row
+// is redrawn every spinTick, and only while a visible row spins, so an
+// idle pane costs nothing between the ticks.
 const tick = 5 * time.Second
 
 // escapeWait is how long a bare escape, or the start of a sequence, is
@@ -29,7 +31,8 @@ const escapeWait = 50 * time.Millisecond
 
 // Run draws the model and handles keys until the host is done, q is
 // pressed, or ctx ends. The rows are refreshed on every change signal
-// and the ages every five seconds; a resize redraws. An overlay that
+// and the ages every five seconds, the spinner ten times a second while
+// a working row is on the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
 func Run(ctx context.Context, t *Term, m *Model, h Host) error {
@@ -74,10 +77,14 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		return false
 	}
 	var dec Decoder
-	var flush <-chan time.Time
+	var flush, spin <-chan time.Time
 	h.Refresh(m)
 	draw()
 	for {
+		spin = nil
+		if m.Spinning() {
+			spin = time.After(spinTick)
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -87,6 +94,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 				return nil
 			}
 		case <-tk.C:
+		case <-spin:
 		case <-winch:
 		case <-flush:
 			flush = nil

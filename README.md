@@ -476,6 +476,11 @@ is switched to.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
+- In both, a working row's mark spins: braille frames in cyan, one per
+  tenth of a second from the clock, so every pane spins in step; the
+  view redraws at that rate only while a working row is on the list. A
+  working agent that is gone, or on a host that is down, keeps the
+  plain `*`, as `ls` always prints it.
 - In both, the selection follows the viewer's own row, the session the
   sidebar pane sits in or the popup was opened from, wherever the sort
   moves it, and rests on nothing when no row is that session, so `Enter`
