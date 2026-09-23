@@ -429,7 +429,7 @@ func TestCommandEviction(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, fresh := d.command("c1"); !fresh {
+	if _, fresh := d.command("c1", nil); !fresh {
 		t.Fatal("evicted id not fresh")
 	}
 }
@@ -516,7 +516,7 @@ func TestCommandOutputBounded(t *testing.T) {
 	c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: "setup", State: protocol.StateDone, Detail: "cmd"})
 	c.emit(protocol.Message{Type: protocol.TypeResult, OK: true})
 	n := len(c.events)
-	if n != maxOutput/len(line)+2 || !strings.Contains(c.events[n-2].Detail, "dropped") || c.events[n-1].State != protocol.StateDone || !c.done || c.result.Type != protocol.TypeResult {
+	if n != maxOutput/cost(line)+2 || !strings.Contains(c.events[n-2].Detail, "dropped") || c.events[n-1].State != protocol.StateDone || !c.done || c.result.Type != protocol.TypeResult {
 		t.Fatalf("%d events, tail %+v", n, c.events[n-2:])
 	}
 	for i, e := range c.events {

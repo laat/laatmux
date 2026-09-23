@@ -159,18 +159,26 @@ truth; labels only place new things.
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
   `repo` and `branch` are given, theirs. No shell, no tty, stdin at
-  `/dev/null`, the daemon's environment, its own process group. Output
+  `/dev/null`, the daemon's environment, its own process group; the
+  process exiting while a child of its holds the pipes ends the run a
+  second later with the process's status. Output
   streams as `{type: progress, id, n, stage: run, state: output, fd,
   detail}` one line per message, `fd` 1 or 2, a partial last line at
   exit; the result is `ok` with `exit` when the process exited at all,
   `ok: false` with `error` for laatmux's own failures. The two streams
   are read as two pipes, so the order between a stdout line and a
   stderr line is not kept, as with any pipe pair; within one it is.
-  Output is text: binary is mangled by the line split. `{type: cancel,
+  Output is text: binary is mangled by the line split, and a line past
+  64 KiB is cut there with `...` appended, as setup output is, so one
+  very long JSON line arrives cut. `{type: cancel,
   id}` sends `SIGTERM` to the process group, `SIGKILL` five seconds
-  later, and the result says `cancelled`; a cancel that lands before the
-  process has started means it never starts. A clean daemon shutdown
-  cancels its runs the same way and waits for them. Runs take no
+  later unless every member of the group has gone, and the result says
+  `cancelled` once it has; the group is watched, not the child, since a
+  descendant that ignores the signal outlives its parent. A cancel that
+  lands before the process has started means it never starts. A clean
+  daemon shutdown, on a signal or a failure, closes the registry so no
+  run starts after it, cancels its runs the same way and waits for
+  them. Runs take no
   repository lock. `rm`, once git has removed the worktree and before it
   kills the sessions, cancels every run in that root and waits, so its
   `ok` means nothing of laatmux's is left there. The two interlock on a
@@ -187,9 +195,15 @@ truth; labels only place new things.
   `rm` clients then resend the command as a new execution, `run` reports
   the outcome unknown. Retention differs per command: `add` and `rm`
   drop output past 1 MiB for good after one line saying so; a run keeps
-  streaming live past it and forgets its oldest lines for replay, and a
+  streaming past it and forgets its oldest lines for replay, and a
   follow from before the retained tail gets one `{state: gap, n,
   detail: "<count> lines dropped"}` numbered as the last dropped line.
+  The ring is the one buffer, so a connected follower that falls more
+  than the budget behind, on a slow link, gets a gap the same way: the
+  process is never stalled by a reader, as a slow subscriber of the
+  status stream is dropped rather than throttling the daemon. Each line
+  is charged its bytes plus 64 for the message around it, so a stream
+  of empty lines is bounded too.
   Without the capability the client's older path holds: the same id
   resent attaches to a running command and replays a finished one from
   the start, filtered by position.

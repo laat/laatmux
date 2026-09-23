@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -171,12 +172,17 @@ func TestRmCancelsRuns(t *testing.T) {
 	}
 	// The interlock: a run registered under the generation from before
 	// the removal is refused, one that reads it afresh is not.
-	if err := d.registerRun(&runJob{root: root, cancel: make(chan struct{}), done: make(chan struct{})}, 0); err == nil || !strings.Contains(err.Error(), "worktree removed") {
+	stale := newRunJob()
+	stale.root = root
+	if err := d.registerRun(stale, 0); err == nil || !strings.Contains(err.Error(), "worktree removed") {
 		t.Fatalf("stale registration: %v", err)
 	}
-	if err := d.registerRun(&runJob{root: root, cancel: make(chan struct{}), done: make(chan struct{})}, d.runGen(root)); err != nil {
+	r := newRunJob()
+	r.root = root
+	if err := d.registerRun(r, d.runGen(root)); err != nil {
 		t.Fatalf("fresh registration: %v", err)
 	}
+	d.unregisterRun(r)
 }
 
 // A cancel that lands after registration and before the start means
@@ -185,7 +191,8 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
-	r := &runJob{root: root, cancel: make(chan struct{}), done: make(chan struct{})}
+	r := newRunJob()
+	r.root = root
 	r.requestCancel()
 	marker := root + "/started"
 	if _, err := d.runProcess(context.Background(), r, []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
@@ -193,6 +200,94 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("process started after cancel")
+	}
+	// The daemon's own context ending before the start is the same.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.runProcess(ctx, newRunJob(), []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
+		t.Fatalf("err %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("process started after shutdown")
+	}
+	// A cancel sent on the heels of the run, before the daemon has
+	// started anything, finds the job: the result is cancelled and no
+	// process is left.
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", "sleep 30; touch " + marker}})
+	pc.Write(protocol.Message{Type: protocol.TypeCancel, ID: "r1"})
+	if res, _ := result(t, pc, "r1"); res.OK || res.Error != protocol.ErrCancelled {
+		t.Fatalf("run then cancel: %+v", res)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("process ran on after cancel")
+	}
+}
+
+// A cancelled run is over only when its whole process group is: a
+// parent that dies on SIGTERM leaves a child that ignores it, and the
+// child gets SIGKILL after the delay, before the result.
+func TestRunCancelKillsGroup(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	d.killDelay = 300 * time.Millisecond
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	token := fmt.Sprintf("laatmux-run-test-%d", os.Getpid())
+	// The token is the inner shell's $0, so it is on its command line.
+	script := fmt.Sprintf(`sh -c 'trap "" TERM; echo ready; sleep 30' %s & wait`, token)
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", script}})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.State == protocol.StateOutput && m.Detail == "ready" {
+			break
+		}
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeCancel, ID: "r1"})
+	if res, _ := result(t, pc, "r1"); res.OK || res.Error != protocol.ErrCancelled {
+		t.Fatalf("result %+v", res)
+	}
+	if out, _ := exec.Command("pgrep", "-f", token).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		t.Fatalf("group member survived the cancel: pids %s", out)
+	}
+}
+
+// A process that exits while a child of its holds the pipes ends the
+// run with the process's status after the wait delay, not as a failure.
+func TestRunExitWithPipesHeld(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", "sleep 3 & echo bg; exit 2"}})
+	res, progress := result(t, pc, "r1")
+	if !res.OK || res.Exit != 2 || !hasProgress(progress, protocol.StageRun, protocol.StateOutput, "bg") {
+		t.Fatalf("result %+v progress %+v", res, progress)
+	}
+}
+
+// Once StopRuns has begun, a run that resolved before it cannot
+// register, so nothing starts after the shutdown took its list.
+func TestStopRunsClosesRegistry(t *testing.T) {
+	d, _, _, _ := newAddDaemon(t)
+	d.StopRuns(context.Background())
+	r := newRunJob()
+	r.root = "/r"
+	if err := d.registerRun(r, 0); err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("registration after stop: %v", err)
+	}
+}
+
+// Empty and short lines are charged for the message around them, so a
+// run of them is bounded like long lines are.
+func TestRunRingBoundsEmptyLines(t *testing.T) {
+	c := newCommand("x")
+	c.ring = true
+	for i := 0; i < 4*maxOutput/eventCost; i++ {
+		c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: protocol.StageRun, State: protocol.StateOutput, FD: 1})
+	}
+	if len(c.events) > maxOutput/eventCost || c.outBytes > maxOutput {
+		t.Fatalf("retained %d events, %d bytes", len(c.events), c.outBytes)
 	}
 }
 

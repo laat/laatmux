@@ -21,9 +21,14 @@ const DefaultCommandTTL = 5 * time.Minute
 // maxOutput bounds the output one command retains for replay. Past it,
 // add and rm drop output for good after one line saying so, since setup
 // output is a diagnostic; a run forgets its oldest lines instead and
-// keeps streaming to its live followers, since its output is the point.
-// Step and result messages are always kept, and there are few of them.
-const maxOutput = 1 << 20
+// keeps streaming to its followers, since its output is the point. Step
+// and result messages are always kept, and there are few of them. Each
+// line is charged its bytes plus eventCost for the message around it,
+// so a stream of empty lines is bounded too.
+const (
+	maxOutput = 1 << 20
+	eventCost = 64
+)
 
 // command is one add, rm or run in flight or recently finished. Its
 // progress is numbered from 1 and appended as it happens, and the result
@@ -42,8 +47,8 @@ type command struct {
 	done      bool
 	doneAt    time.Time
 	result    protocol.Message
-	// cancel stops a run; nil for add and rm.
-	cancel func()
+	// job is the run this command is; nil for add and rm.
+	job *runJob
 }
 
 func newCommand(id string) *command {
@@ -51,6 +56,9 @@ func newCommand(id string) *command {
 	c.cond = sync.NewCond(&c.mu)
 	return c
 }
+
+// cost is what an output line counts against the budget.
+func cost(line string) int { return len(line) + eventCost }
 
 // emit appends a progress message, numbering it, or records the result.
 func (c *command) emit(m protocol.Message) {
@@ -64,7 +72,7 @@ func (c *command) emit(m protocol.Message) {
 		return
 	}
 	if m.State == protocol.StateOutput {
-		c.outBytes += len(m.Detail)
+		c.outBytes += cost(m.Detail)
 		if c.outBytes > maxOutput && !c.ring {
 			if c.truncated {
 				c.mu.Unlock()
@@ -79,7 +87,7 @@ func (c *command) emit(m protocol.Message) {
 	c.events = append(c.events, m)
 	for c.ring && c.outBytes > maxOutput && len(c.events) > 1 {
 		if c.events[0].State == protocol.StateOutput {
-			c.outBytes -= len(c.events[0].Detail)
+			c.outBytes -= cost(c.events[0].Detail)
 		}
 		c.events[0] = protocol.Message{}
 		c.events = c.events[1:]
@@ -92,6 +100,10 @@ func (c *command) emit(m protocol.Message) {
 // future, then the result, until a write fails. A follower behind the
 // retained tail gets one gap message for the lines between its mark and
 // the tail, numbered as the last of them, so its mark moves past them.
+// That holds for a follower that is connected but slow as well: the ring
+// is the one buffer, so a reader more than the budget behind loses what
+// it did not take, as a slow subscriber of the status stream is dropped,
+// and the process is never stalled by a reader.
 func (c *command) stream(pc *protocol.Conn, after uint64) error {
 	last := after
 	for {
@@ -126,15 +138,20 @@ func (c *command) stream(pc *protocol.Conn, after uint64) error {
 	}
 }
 
-// command returns the command for id, creating it when unknown. The
-// caller runs a new one; an existing one is only followed.
-func (d *Daemon) command(id string) (*command, bool) {
+// command returns the command for id, creating it when unknown, with
+// init run on it before any other connection can see it, so a cancel
+// that arrives at once finds the job. The caller runs a new one; an
+// existing one is only followed.
+func (d *Daemon) command(id string, init func(*command)) (*command, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if c, ok := d.cmds[id]; ok {
 		return c, false
 	}
 	c := newCommand(id)
+	if init != nil {
+		init(c)
+	}
 	d.cmds[id] = c
 	return c, true
 }

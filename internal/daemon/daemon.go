@@ -135,6 +135,7 @@ type Daemon struct {
 	// once git has removed the worktree; see runs.go.
 	runs      map[string]map[*runJob]struct{}
 	rootGen   map[string]uint64
+	stopping  bool // StopRuns has begun; no run registers after it
 	killDelay time.Duration
 
 	// The merged stream: its own sequence and subscribers, the hosts by
@@ -750,7 +751,12 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			// rather than starting it again, which is what an older client
 			// relies on after a lost bridge; a client with follow sends
 			// that instead.
-			c, fresh := d.command(m.ID)
+			c, fresh := d.command(m.ID, func(c *command) {
+				if m.Type == protocol.TypeRun {
+					c.ring = true
+					c.job = newRunJob()
+				}
+			})
 			if fresh {
 				switch m.Type {
 				case protocol.TypeAdd:
@@ -758,7 +764,6 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				case protocol.TypeRm:
 					go d.runRm(ctx, m, c)
 				default:
-					c.ring = true
 					go d.runRun(ctx, m, c)
 				}
 			}

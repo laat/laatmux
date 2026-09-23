@@ -7,15 +7,17 @@ import (
 	"os"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
 // cmdSplit splits a pane: in a workspace session the new pane is a shell
 // at the worktree root on the worktree's host, a local shell started
 // there or ssh with cd; anywhere else it is the plain split, in the
-// pane's current directory, so a binding of it loses nothing. Meant to
-// replace the user's split bindings, which pass the pane id since a
-// run-shell job has no TMUX_PANE:
+// pane's current directory, so a binding of it loses nothing. The pane
+// is looked up, and split, on the server TMUX names. Meant to replace
+// the user's split bindings, which pass the pane id since a run-shell
+// job has no TMUX_PANE:
 //
 //	bind | run-shell "laatmux split -h '#{pane_id}'"
 //	bind - run-shell "laatmux split -v '#{pane_id}'"
@@ -62,7 +64,10 @@ func cmdSplit(ctx context.Context, args []string) error {
 			return fmt.Errorf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
 		}
 	}
-	_, err = workspace.Server.Run(ctx, splitArgs(dir, paneID, cwd, l, h)...)
+	// The split runs on the server the lookup used, the one TMUX names:
+	// a pane id is per server, and a binding pressed in another server
+	// must not split the default server's pane of the same id.
+	_, err = (tmux.Server{}).Run(ctx, splitArgs(dir, paneID, cwd, l, h)...)
 	return err
 }
 

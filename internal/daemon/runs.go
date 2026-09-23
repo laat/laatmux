@@ -33,6 +33,10 @@ type runJob struct {
 	done      chan struct{} // closed when the result has been recorded
 }
 
+func newRunJob() *runJob {
+	return &runJob{cancel: make(chan struct{}), done: make(chan struct{})}
+}
+
 // requestCancel marks the run cancelled and wakes it. Idempotent.
 func (r *runJob) requestCancel() {
 	r.mu.Lock()
@@ -56,10 +60,15 @@ func (d *Daemon) runGen(root string) uint64 {
 // registerRun adds r to the root's runs when the generation it resolved
 // under still holds. A bumped generation means the worktree the request
 // named was removed meanwhile, whether or not another has been made at
-// the same root since: the request was for the old one.
+// the same root since: the request was for the old one. Nothing
+// registers once the daemon is stopping, so a run that resolved while
+// StopRuns took its list cannot start after it.
 func (d *Daemon) registerRun(r *runJob, gen uint64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.stopping {
+		return errors.New("daemon shutting down")
+	}
 	if d.rootGen[r.root] != gen {
 		return errors.New("worktree removed; retry")
 	}
@@ -102,16 +111,18 @@ func (d *Daemon) cancelRunsIn(root string) {
 // finished. A cancel for an add, an rm or an unknown id does nothing.
 func (d *Daemon) cancelCommand(id string) {
 	c, ok := d.lookup(id)
-	if !ok || c.cancel == nil {
+	if !ok || c.job == nil {
 		return
 	}
-	c.cancel()
+	c.job.requestCancel()
 }
 
-// StopRuns cancels every run and waits for them, bounded by ctx: what a
-// clean shutdown does, so a restart for an upgrade leaves no orphan.
+// StopRuns closes the registry, cancels every run and waits for them,
+// bounded by ctx: what a clean shutdown does, so a restart for an
+// upgrade leaves no orphan.
 func (d *Daemon) StopRuns(ctx context.Context) {
 	d.mu.Lock()
+	d.stopping = true
 	var rs []*runJob
 	for _, m := range d.runs {
 		for r := range m {
@@ -140,8 +151,7 @@ func (d *Daemon) StopRuns(ctx context.Context) {
 // not touch the main checkout, and a long one must not block add.
 func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-	r := &runJob{cancel: make(chan struct{}), done: make(chan struct{})}
-	c.cancel = r.requestCancel
+	r := c.job
 	defer close(r.done)
 	err := func() error {
 		if len(m.Cmd) == 0 {
@@ -227,7 +237,7 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 		}
 	}
 	r.mu.Lock()
-	if r.cancelled {
+	if r.cancelled || ctx.Err() != nil {
 		r.mu.Unlock()
 		return 0, errors.New(protocol.ErrCancelled)
 	}
@@ -268,26 +278,52 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 		return 0, errors.New(protocol.ErrCancelled)
 	}
 	if werr != nil {
+		// The process exited but a child of its kept the pipes past the
+		// delay: the exit status is the process's own.
 		var ee *exec.ExitError
-		if !errors.As(werr, &ee) {
+		if !errors.As(werr, &ee) && !errors.Is(werr, exec.ErrWaitDelay) {
 			return 0, werr
 		}
 	}
 	return exitStatus(cmd.ProcessState), nil
 }
 
-// terminate stops the process group, SIGTERM then SIGKILL after the kill
-// delay unless it has exited, and returns what Wait said.
+// terminate stops the process group: SIGTERM, then SIGKILL after the
+// kill delay unless every member has gone. The leader exiting does not
+// end it, since a descendant that ignores the signal survives its
+// parent, so the group is watched, not the child, and the return waits
+// for the group to be empty, bounded, so a cancelled result and an rm
+// that waited for it mean nothing is left. Returns what Wait said.
 func (d *Daemon) terminate(cmd *exec.Cmd, waited <-chan error) error {
 	pgid := cmd.Process.Pid
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	select {
-	case err := <-waited:
-		return err
-	case <-time.After(d.killDelay):
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		return <-waited
+	deadline := time.Now().Add(d.killDelay)
+	var werr error
+	exited := false
+	for (!exited || groupAlive(pgid)) && time.Now().Before(deadline) {
+		select {
+		case werr = <-waited:
+			exited = true
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
+	if !exited || groupAlive(pgid) {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		if !exited {
+			werr = <-waited
+		}
+		for i := 0; i < 100 && groupAlive(pgid); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return werr
+}
+
+// groupAlive reports whether any process is left in the group. A group
+// the daemon may not signal still exists.
+func groupAlive(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // exitStatus is the process's exit code, or 128 plus the signal that
