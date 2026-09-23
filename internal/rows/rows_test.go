@@ -104,8 +104,17 @@ func TestBuild(t *testing.T) {
 	if r := byName["proj/down"]; !r.HostDown || !r.Dim {
 		t.Errorf("host down not dim: %+v", r)
 	}
-	if r := byName["vm/proj/gone"]; !r.Stale || !r.Dim || r.State() != "no worktree" || r.Local == nil {
+	if r := byName["vm/proj/gone"]; !r.Stale || !r.Dim || r.State() != "no worktree" || r.Local == nil || r.Host != "vm" {
 		t.Errorf("stale: %+v", r)
+	}
+	// A stale session tagged with a host's old name is the host's that
+	// answers for its environment id now.
+	renamed := Build(Input{
+		Hosts:  []Host{{Name: "box", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm"}},
+	})
+	if len(renamed.Stale) != 1 || renamed.Stale[0].Host != "box" || renamed.Stale[0].HostDown {
+		t.Errorf("stale row after a host rename: %+v", renamed.Stale)
 	}
 	if r := byName["proj (detached) /r/det"]; r.Worktree == nil {
 		t.Errorf("detached worktree: %+v", r)

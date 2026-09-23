@@ -412,6 +412,17 @@ func TestWidth(t *testing.T) {
 	if w := width("日本"); w != 4 {
 		t.Errorf("wide = %d", w)
 	}
+	// An emoji is two cells; a variation selector, a skin tone and a
+	// joiner add none, so a joined sequence measures as its base emoji.
+	if w := width("\U0001f600"); w != 2 {
+		t.Errorf("emoji = %d", w)
+	}
+	if w := width("\U0001f44d\U0001f3fd"); w != 2 {
+		t.Errorf("emoji with skin tone = %d", w)
+	}
+	if w := width("\u2764\ufe0f"); w != 1 {
+		t.Errorf("heart with variation selector = %d", w)
+	}
 	if got := fit("ab日本c", 4); got != "ab日" {
 		t.Errorf("fit = %q", got)
 	}

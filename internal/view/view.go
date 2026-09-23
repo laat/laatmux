@@ -468,7 +468,12 @@ func ANSI(l Line) string {
 }
 
 // width is the number of terminal cells s takes: wide East Asian and
-// emoji runes count two, combining marks none, everything else one.
+// emoji runes count two, combining marks, joiners, variation selectors
+// and skin-tone modifiers none, everything else one. An approximation
+// of what the terminal does, without a grapheme library: a title with
+// a joined emoji sequence may measure wide by a cell or two, and the
+// line is trimmed to the measure, so the worst case is a short title,
+// not a wrapped line.
 func width(s string) int {
 	n := 0
 	for _, r := range s {
@@ -483,7 +488,8 @@ func runeWidth(r rune) int {
 		return 0
 	case r < 0x300:
 		return 1
-	case r >= 0x300 && r <= 0x36f, r >= 0x200b && r <= 0x200f, r == 0xfe0f:
+	case r >= 0x300 && r <= 0x36f, r >= 0x200b && r <= 0x200f, r >= 0xfe00 && r <= 0xfe0f,
+		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef:
 		return 0
 	case r >= 0x1100 && r <= 0x115f,
 		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,
@@ -492,8 +498,7 @@ func runeWidth(r rune) int {
 		r >= 0xfe30 && r <= 0xfe4f,
 		r >= 0xff00 && r <= 0xff60,
 		r >= 0xffe0 && r <= 0xffe6,
-		r >= 0x1f300 && r <= 0x1f64f,
-		r >= 0x1f900 && r <= 0x1f9ff,
+		r >= 0x1f000 && r <= 0x1faff,
 		r >= 0x20000 && r <= 0x3fffd:
 		return 2
 	}

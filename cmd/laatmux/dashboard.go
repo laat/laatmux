@@ -153,11 +153,12 @@ func (m *merged) fill(v *view.Model, current string) {
 // default server is refused as jump refuses it. A worktree with no
 // session cannot be jumped to: the message is the add line that would
 // start one. A stale row's session exists locally and is switched to.
-// The view runs inside the default tmux server, so switch-client is
-// always allowed.
+// The view is meant to run inside the default tmux server, where
+// switch-client is allowed; run elsewhere, a dashboard in a plain
+// terminal say, the message says how to attach instead.
 func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Stale {
-		return workspace.Switch(ctx, r.Local.Name)
+		return switchTo(ctx, r.Local.Name)
 	}
 	if r.Host == "" {
 		return errors.New(r.Name + ": no configured host claims this record")
@@ -179,7 +180,7 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 			return err
 		}
 		if how == jumpSwitch {
-			return workspace.Switch(ctx, r.Agent.Session)
+			return switchTo(ctx, r.Agent.Session)
 		}
 		spec = workspace.Spec{Host: h.Host, Managed: r.Agent.Session, Name: h.Name + "/" + r.Agent.Session}
 	default:
@@ -188,6 +189,15 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	name, _, err := workspace.Ensure(ctx, spec)
 	if err != nil {
 		return err
+	}
+	return switchTo(ctx, name)
+}
+
+// switchTo makes the session current for the client the view runs in,
+// or says how to attach when the view is not inside the default server.
+func switchTo(ctx context.Context, name string) error {
+	if !workspace.Inside(ctx) {
+		return fmt.Errorf("%s is on the default tmux server; attach with: %s", name, workspace.AttachHint(name))
 	}
 	return workspace.Switch(ctx, name)
 }

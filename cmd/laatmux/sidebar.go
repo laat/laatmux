@@ -55,20 +55,22 @@ func cmdSidebar(ctx context.Context, args []string) error {
 	if sub != "attach" && len(args) > 0 {
 		return usage
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
+	// The config is read only where its width and layout are needed, so
+	// off and reap still clean up while the file is broken.
 	switch sub {
 	case "toggle", "on", "off":
-		return sidebarSwitch(ctx, cfg, sub)
+		return sidebarSwitch(ctx, sub)
 	case "pane":
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
 		return sidebarPane(ctx, cfg)
 	case "attach":
 		if len(args) != 1 {
 			return usage
 		}
-		return sidebarAttach(ctx, cfg, args[0])
+		return sidebarAttach(ctx, args[0])
 	case "reap":
 		return sidebarReap(ctx)
 	}
@@ -77,7 +79,7 @@ func cmdSidebar(ctx context.Context, args []string) error {
 
 // sidebarSwitch turns the sidebar on or off. Toggle reads the hooks:
 // present means on.
-func sidebarSwitch(ctx context.Context, cfg config.Config, sub string) error {
+func sidebarSwitch(ctx context.Context, sub string) error {
 	unlock, err := sidebarLock()
 	if err != nil {
 		return err
@@ -97,6 +99,10 @@ func sidebarSwitch(ctx context.Context, cfg config.Config, sub string) error {
 	if sub == "off" {
 		for _, h := range sidebarHooks {
 			if _, err := workspace.Server.Run(ctx, "set-hook", "-gu", h.hook); err != nil {
+				if tmux.NoServer(err) {
+					// Nothing to turn off; hooks die with the server.
+					return nil
+				}
 				return err
 			}
 		}
@@ -110,6 +116,10 @@ func sidebarSwitch(ctx context.Context, cfg config.Config, sub string) error {
 			}
 		}
 		return nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 	// Hooks go in before the walk, so a window made during the walk is
 	// caught by its hook rather than missed by both; attach skipping a
@@ -142,7 +152,7 @@ func sidebarSwitch(ctx context.Context, cfg config.Config, sub string) error {
 // sidebarAttach adds a pane to one window, from a hook. Under the lock
 // it reads the hooks and does nothing when they are gone: an attach that
 // was queued behind off must not put a pane back.
-func sidebarAttach(ctx context.Context, cfg config.Config, window string) error {
+func sidebarAttach(ctx context.Context, window string) error {
 	unlock, err := sidebarLock()
 	if err != nil {
 		return err
@@ -150,6 +160,10 @@ func sidebarAttach(ctx context.Context, cfg config.Config, window string) error 
 	defer unlock()
 	on, err := sidebarHooksSet(ctx)
 	if err != nil || !on {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
 		return err
 	}
 	return sidebarAdd(ctx, cfg, window)
@@ -162,15 +176,23 @@ func sidebarAttach(ctx context.Context, cfg config.Config, window string) error 
 // after-split-window hook of the user's runs between the two commands
 // of a sequence and may select or split another pane, which would then
 // carry the tag and be killed by off. The lock is held from the check to
-// the tag, so no attach sees the pane untagged. Called with the lock
-// held.
+// the tag, so no attach sees the pane untagged. A dead sidebar pane, kept
+// by a remain-on-exit the pane inherited before its own was set, is
+// killed and replaced. Called with the lock held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{"+sidebarTag+"}")
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}")
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(string(out)) != "" {
-		return nil
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) != 3 || f[1] == "" {
+			continue
+		}
+		if f[2] != "1" {
+			return nil
+		}
+		_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[0])
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -186,7 +208,11 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	if !strings.HasPrefix(id, "%") {
 		return fmt.Errorf("split-window printed %q, not a pane id", id)
 	}
-	_, err = workspace.Server.Run(ctx, "set-option", "-p", "-t", id, sidebarTag, "1")
+	// remain-on-exit off on the pane itself: a global on would keep a
+	// sidebar that exited as a dead tagged pane, which attach would take
+	// for a live one.
+	_, err = workspace.Server.Run(ctx, "set-option", "-p", "-t", id, sidebarTag, "1",
+		";", "set-option", "-p", "-t", id, "remain-on-exit", "off")
 	return err
 }
 
@@ -213,7 +239,9 @@ func sidebarReap(ctx context.Context) error {
 		}
 	}
 	for _, p := range panes {
-		if p.sidebar && !alive[p.window] {
+		// A dead sidebar pane is never wanted: its process is gone and
+		// the tag would keep attach from adding a live one.
+		if p.sidebar && (!alive[p.window] || p.dead) {
 			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
 		}
 	}
@@ -294,6 +322,6 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, LocalHost: localHostName(cfg)}
+	m := &view.Model{Layout: layout, LocalHost: localHostName(cfg), Hint: "v layout  / filter  f all  q quit"}
 	return runView(ctx, cfg, c, m, false)
 }

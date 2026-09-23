@@ -273,7 +273,10 @@ func Build(in Input) Rows {
 			continue
 		}
 		if env, _ := workspace.SplitKey(l.Key); up[env] {
-			rows = append(rows, Row{Host: l.Host, Name: l.Name, Local: l, Stale: true, Settled: l.Settled})
+			// The host is the one that answers for the environment id
+			// now, not the name the session was tagged with, which a
+			// renamed host leaves behind.
+			rows = append(rows, Row{Host: byEnv[env], Name: l.Name, Local: l, Stale: true, Settled: l.Settled})
 		}
 	}
 	for i := range rows {
