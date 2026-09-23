@@ -63,9 +63,9 @@ func (c Config) DefaultAgent(flag, last string) (string, Agent, error) {
 			return last, a, nil
 		}
 	}
-	if c.DefaultAgent != "" {
-		if a, ok := c.Agents[c.DefaultAgent]; ok {
-			return c.DefaultAgent, a, nil
+	if c.DefaultAgentName != "" {
+		if a, ok := c.Agents[c.DefaultAgentName]; ok {
+			return c.DefaultAgentName, a, nil
 		}
 	}
 	switch len(c.Agents) {
