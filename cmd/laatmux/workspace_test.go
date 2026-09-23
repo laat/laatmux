@@ -126,10 +126,10 @@ func TestRender(t *testing.T) {
 	now := time.Now()
 	m.apply("vm", protocol.Message{Type: protocol.TypeSnapshot,
 		Agents: []protocol.Agent{
-			{ID: "env1/laatmux/%1", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
-			{ID: "env1/laatmux/%2", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
-			{ID: "env1/laatmux/%3", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Managed: true},
-			{ID: "env1/default/%4", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now},
+			{ID: "env1/laatmux/%1", EnvironmentID: "env1", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
+			{ID: "env1/laatmux/%2", EnvironmentID: "env1", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
+			{ID: "env1/laatmux/%3", EnvironmentID: "env1", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Managed: true},
+			{ID: "env1/default/%4", EnvironmentID: "env1", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "env1/worktree//r/fix", EnvironmentID: "env1", Repo: "proj", Branch: "fix", Root: "/r/fix", Session: "proj/fix"},

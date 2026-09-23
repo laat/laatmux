@@ -12,7 +12,7 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `path`, `ls`, `watch`, `jump`, `shell`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm`; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -21,8 +21,10 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` in one invocation, `kill-session`, branch encoding for session names |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge`; request and streamed command |
 | `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |
+| `internal/rows` | the rows the listing, the sidebar and the dashboard share: worktrees joined with agents and local sessions, dim state, groups |
+| `internal/view` | the list view: pure renderer for the tile and compact layouts, keys and mouse, raw mode, the draw loop |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
-| `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon; `.laatmux.yaml` per repository |
+| `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon, `sidebar`; `.laatmux.yaml` per repository |
 
 ## Run
 
@@ -226,6 +228,7 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   session whose worktree is gone from a connected host under `stale`, from
   which `rm` still works; a host whose snapshot has not arrived, or whose
   daemon does not publish worktrees, says nothing about its workspaces.
+  The rows are the same the sidebar and the dashboard show, see below.
   `ls`, `watch`, `jump`, `path` and `rm` read the local daemon's merged
   stream when it has one, see below; against an older daemon each dials
   the hosts itself as before, and `watch` then re-reads the local
@@ -240,6 +243,86 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   session is resolved from either.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
+
+## Sidebar and dashboard
+
+The listing, the sidebar and the dashboard show the same rows, built in
+`internal/rows`: each host's worktrees joined with its agents by the
+managed session the record names, then managed agents with no worktree,
+then observed agents on other servers, then local workspace sessions
+whose worktree is gone from a host that is connected, listed and
+publishes worktrees. Local sessions are joined in by key, or by the
+attach tag for a `new` session's attachment, so a row knows its local
+session, whether it is settled, and whether it is the one the viewer is
+in. A row is dim from measured axes only: no identified agent, an agent
+that is gone, a host that is down, a stale session, a settled workspace.
+Age is shown, never judged. The order is blocked, working, idle, then
+rows without a live agent, most recent activity first within a group;
+settled rows sit in a collapsed group at the bottom, stale rows after
+them.
+
+The view, in `internal/view`, is a tmux pane's worth of terminal: raw
+mode through termios, ANSI for cursor, dim and reverse, SGR mouse
+reporting for clicks and the wheel, no TUI library. The renderer is a
+pure function from rows, size and selection to lines and is tested
+against golden files for both layouts. `tiles` is three lines per row:
+the mark and `<repo>/<branch>` with the host tag right-aligned and dim
+for every host but the local one, the agent with its activity and age,
+the pane title trimmed to the width; a row without an agent has two
+lines, the second `no session`, `no agent` or `no worktree`. `compact`
+is one line per row, two in the dashboard, which has room for the
+title. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
+`Enter` jumps, `1`..`9` jump to the nth row of the selection's group,
+`v` toggles the layout, `/` filters by name or host and `Esc` clears,
+`f` shows and hides the settled and stale groups, `q` quits. A click
+jumps to the row under it; the wheel moves the selection. Hosts that
+are not connected and listed, and a local daemon that is down, are
+lines above the list.
+
+Jump from the view is `jump`'s logic in-process against the merged
+records: a workspace row switches to its local session, creating it from
+the record when missing; a `new` session's row does the same through a
+plain attachment; an observed agent on this machine's default server is
+a `switch-client`; one on a remote host's default server is refused with
+`jump`'s message; a worktree with no session shows the `add` line that
+would start one in the footer. A stale row's session exists locally and
+is switched to.
+
+- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets four
+  server hooks at indexes laatmux owns, `after-new-window[9101]` and
+  `after-new-session[9102]` running `sidebar attach '#{window_id}'`,
+  `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
+  then walks every window on the default server and splits a pane off
+  the left edge of each that has none, full height, at the configured
+  width, running `sidebar pane`. The pane is tagged `@laatmux_sidebar`
+  in the same tmux command sequence as the split and focus is put back
+  with `last-pane`, so a sidebar pane is never observable untagged and
+  the user's own hooks may split the window meanwhile. Every
+  check-and-create runs under an exclusive flock on
+  `$LAATMUX_HOME/sidebar.lock`, and `attach` reads the hooks under it
+  and does nothing when they are gone, so an attach queued behind `off`
+  puts no pane back. `reap` kills a sidebar pane that is alone in its
+  window, counting a dead pane kept by `remain-on-exit`, such as a
+  workspace's attach pane, as the window's. `off` unsets the four hooks
+  and kills every tagged pane. `toggle` reads the hooks. The hook
+  commands name the binary by its absolute path. `q` in a sidebar pane
+  closes it; that window has no sidebar until a new window is made or
+  `on` runs again.
+- **`sidebar pane`** is one client of the local daemon's merged stream,
+  in the configured layout, marking the session it sits in from
+  `TMUX_PANE`, redrawing on every change and every five seconds for the
+  ages, staying after a jump. It reads no local sessions itself: settled
+  and stale come from the stream.
+- **`dashboard`** is the same view filling whatever it runs in, compact
+  with titles by default, `--layout tiles` otherwise. A jump exits, so
+  under `display-popup -E` the popup closes:
+  `bind-key C-s display-popup -E -w 90% -h 80% -T ' laatmux ' 'laatmux dashboard'`.
+- Both refuse a local daemon without `merged` with what to do; a sidebar
+  per window is the case the capability exists for. `watch` stays the
+  plain scrolling list for a terminal that is not a tmux pane.
+
+Config: `sidebar: {width: 35, layout: tiles}`; width is at least 10,
+layout `tiles` or `compact`.
 
 ## Which tmux servers the daemon polls
 
@@ -549,6 +632,28 @@ the stream with the `add` hint; `jump` on an unknown session was refused
 by the direct preflight as before. Seventy seconds after the last `watch`
 was killed there was no ssh channel on the laptop and no bridge on the
 VM, and the next `ls` reconnected in 1.3 s.
+
+## Milestone three, step 3, under tmux
+
+The sidebar and the dashboard, on an isolated default server
+(`TMUX_TMPDIR` pointed at a scratch directory) started with the user's
+tmux.conf and given a hook like their sidebar's that splits a pane off
+every new window and session, against the laptop's real daemon. `sidebar
+on` in a server with two windows set the four hooks and left each window
+with a 35-column tagged pane on the left running `sidebar pane`, focus on
+the pane that had it, in 0.8 s. A new window and a new session each got
+a sidebar through the hooks with the other hook's pane beside it; a
+second `attach` on a window that has one changed nothing. `hook_window`
+and `hook_session` expand to nothing in after-hooks on tmux 3.6a, so the
+hooks use `window_id`, which is the new window in both. In the pane, `j`
+moved the reverse-video selection, `v` switched to compact, `Enter` on a
+worktree without a session put the `add` line in the footer, `/bro`
+filtered to the one matching row and `Esc` restored the list, host tags
+for the remote host were dim. Killing a window's other panes ran `reap`
+and the window was gone within a second. `off` removed the hooks and
+every tagged pane. `dashboard` in a window drew the compact layout with
+the hint line, kept the `add` message on a failed jump, and `q` closed
+it. `ls` printed as before from the shared rows.
 
 ## Not yet verified
 

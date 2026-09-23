@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -37,6 +38,7 @@ type merged struct {
 }
 
 type hostState struct {
+	Local     bool // this machine, as the config says
 	Connected bool
 	Error     string
 	Version   string
@@ -59,7 +61,7 @@ func (h hostState) ready() bool { return h.Listed || h.Error != "" }
 // fromStatus is the host record of the merged stream as this view holds
 // it.
 func fromStatus(st protocol.HostStatus) hostState {
-	return hostState{Connected: st.Connected, Error: st.Error, Version: st.Version, EnvID: st.EnvironmentID,
+	return hostState{Local: st.Local(), Connected: st.Connected, Error: st.Error, Version: st.Version, EnvID: st.EnvironmentID,
 		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities}
 }
 
@@ -136,12 +138,12 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 		c, err := client.Dial(ctx, h)
 		switch {
 		case err != nil:
-			m.setHost(h.Name, hostState{Error: err.Error()})
+			m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
 		case !protocol.Has(c.Hello.Capabilities, protocol.CapStatus):
 			c.Close()
-			m.setHost(h.Name, hostState{Error: "daemon " + c.Hello.Version + " has no status capability"})
+			m.setHost(h.Name, hostState{Local: h.Local(), Error: "daemon " + c.Hello.Version + " has no status capability"})
 		default:
-			m.setHost(h.Name, hostState{Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
+			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
 			backoff = time.Second
 			stop := c.CloseOnDone(ctx)
 			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe}); err == nil {
@@ -161,7 +163,7 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 			if d := c.Diag(); d != "" {
 				msg += ": " + d
 			}
-			m.setHost(h.Name, hostState{Error: msg})
+			m.setHost(h.Name, hostState{Local: h.Local(), Error: msg})
 		}
 		select {
 		case <-ctx.Done():
@@ -172,106 +174,26 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 	}
 }
 
-func activityRank(a protocol.Activity) int {
-	switch a {
-	case protocol.Blocked:
-		return 0
-	case protocol.Working:
-		return 1
-	case protocol.Idle:
-		return 2
-	default:
-		return 3
+// input is the rows package's view of the merged state, with the local
+// sessions and the viewer's session. Called with m.mu held.
+func (m *merged) input(locals []workspace.Local, current string) rows.Input {
+	in := rows.Input{Locals: locals, Current: current}
+	for name, st := range m.hosts {
+		in.Hosts = append(in.Hosts, rows.Host{Name: name, Local: st.Local, EnvironmentID: st.EnvID,
+			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees, Error: st.Error})
 	}
-}
-
-// row is one line of the listing: a worktree with or without its agent,
-// or an agent with no worktree.
-type row struct {
-	host     string
-	name     string // <repo>/<branch>, or the agent's session
-	worktree *protocol.Worktree
-	agent    *protocol.Agent
-	settled  bool
-}
-
-func (r row) rank() int {
-	if r.agent == nil {
-		return 4
+	// Records are attributed by the host each came from, which on the
+	// direct path is the connection and on the merged path the host
+	// record's environment id; the rows package attributes by
+	// environment id, so a record whose host has none is left out of
+	// the input's hosts' view and shows without a host.
+	for _, a := range m.agents {
+		in.Agents = append(in.Agents, a)
 	}
-	return activityRank(r.agent.Activity)
-}
-
-// rows joins each host's worktrees with its agents: a worktree pairs with
-// the agent on the managed server in the session the record names. What
-// is left over is listed on its own: a worktree without an agent, which is
-// the state after the agent exits or when the worktree was made by hand,
-// and an agent without a worktree. Settled rows come from the local
-// sessions. Called with m.mu held.
-func (m *merged) rows(locals []workspace.Local) (main, settled []row) {
-	settledKeys := map[string]bool{}
-	for _, l := range locals {
-		if l.Workspace() && l.Settled {
-			settledKeys[l.Key] = true
-		}
+	for _, w := range m.worktrees {
+		in.Worktrees = append(in.Worktrees, w)
 	}
-	bySession := map[string]*protocol.Agent{} // host + managed session -> agent
-	for id := range m.agents {
-		a := m.agents[id]
-		if serverOf(a) == tmux.LaatmuxServer.Label() {
-			bySession[m.byHost[id]+"\x00"+a.Session] = &a
-		}
-	}
-	used := map[*protocol.Agent]bool{}
-	var rows []row
-	for id := range m.worktrees {
-		w := m.worktrees[id]
-		host := m.byHost[id]
-		r := row{host: host, worktree: &w, settled: settledKeys[workspace.Key(w.EnvironmentID, w.Root)]}
-		if w.Branch == "" {
-			r.name = w.Repo + " (detached) " + w.Root
-		} else {
-			r.name = w.Repo + "/" + w.Branch
-		}
-		if w.Session != "" {
-			if a := bySession[host+"\x00"+w.Session]; a != nil {
-				r.agent, used[a] = a, true
-			}
-		}
-		rows = append(rows, r)
-	}
-	for _, a := range bySession {
-		if !used[a] {
-			rows = append(rows, row{host: m.byHost[a.ID], name: a.Session, agent: a})
-		}
-	}
-	for id := range m.agents {
-		a := m.agents[id]
-		if serverOf(a) != tmux.LaatmuxServer.Label() {
-			rows = append(rows, row{host: m.byHost[id], name: a.Session, agent: &a})
-		}
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		ri, rj := rows[i].rank(), rows[j].rank()
-		if ri != rj {
-			return ri < rj
-		}
-		if rows[i].agent != nil && rows[j].agent != nil && !rows[i].agent.ActivityAt.Equal(rows[j].agent.ActivityAt) {
-			return rows[i].agent.ActivityAt.After(rows[j].agent.ActivityAt)
-		}
-		if rows[i].host != rows[j].host {
-			return rows[i].host < rows[j].host
-		}
-		return rows[i].name < rows[j].name
-	})
-	for _, r := range rows {
-		if r.settled {
-			settled = append(settled, r)
-		} else {
-			main = append(main, r)
-		}
-	}
-	return main, settled
+	return in
 }
 
 // stale lists local workspace sessions whose workspace no longer exists on
@@ -280,26 +202,10 @@ func (m *merged) rows(locals []workspace.Local) (main, settled []row) {
 // not publish worktrees cannot say, so its sessions are not stale. Called
 // with m.mu held.
 func (m *merged) stale(locals []workspace.Local) []workspace.Local {
-	roots := map[string]bool{} // key
-	for _, w := range m.worktrees {
-		roots[workspace.Key(w.EnvironmentID, w.Root)] = true
-	}
-	up := map[string]bool{} // environment id
-	for _, st := range m.hosts {
-		if st.Connected && st.Worktrees && st.Listed && st.EnvID != "" {
-			up[st.EnvID] = true
-		}
-	}
 	var out []workspace.Local
-	for _, l := range locals {
-		if !l.Workspace() || roots[l.Key] {
-			continue
-		}
-		if env, _ := workspace.SplitKey(l.Key); up[env] {
-			out = append(out, l)
-		}
+	for _, r := range rows.Build(m.input(locals, "")).Stale {
+		out = append(out, *r.Local)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -328,25 +234,25 @@ func (m *merged) render(locals []workspace.Local) string {
 			fmt.Fprintf(&b, "%s  connecting\n", n)
 		}
 	}
-	main, settled := m.rows(locals)
+	rs := rows.Build(m.input(locals, ""))
 	now := time.Now()
-	if len(main) > 0 {
+	if len(rs.Main) > 0 {
 		b.WriteString("\n")
 	}
-	for _, r := range main {
-		m.renderRow(&b, r, now)
+	for _, r := range rs.Main {
+		renderRow(&b, r, now)
 	}
-	if len(settled) > 0 {
+	if len(rs.Settled) > 0 {
 		b.WriteString("\nsettled\n")
-		for _, r := range settled {
-			m.renderRow(&b, r, now)
+		for _, r := range rs.Settled {
+			renderRow(&b, r, now)
 		}
 	}
-	if stale := m.stale(locals); len(stale) > 0 {
+	if len(rs.Stale) > 0 {
 		b.WriteString("\nstale\n")
-		for _, l := range stale {
-			_, root := workspace.SplitKey(l.Key)
-			fmt.Fprintf(&b, "  %-40s no worktree %s on %s\n", l.Name, root, l.Host)
+		for _, r := range rs.Stale {
+			_, root := workspace.SplitKey(r.Local.Key)
+			fmt.Fprintf(&b, "  %-40s no worktree %s on %s\n", r.Name, root, r.Host)
 		}
 	}
 	if m.sessionsErr != "" {
@@ -361,42 +267,24 @@ func (m *merged) render(locals []workspace.Local) string {
 // name, where it is, and the agent's last change and title. A worktree
 // without an agent, or without a session, says so; so does a managed
 // agent with no worktree.
-func (m *merged) renderRow(b *strings.Builder, r row, now time.Time) {
-	hs := m.hosts[r.host]
-	where := r.host
+func renderRow(b *strings.Builder, r rows.Row, now time.Time) {
+	where := r.Host
 	note := ""
-	if !hs.Connected {
+	if r.HostDown {
 		note += " (host down)"
 	}
-	if r.agent == nil {
+	if r.Agent == nil {
 		// A managed session with no identified agent, or no session at
 		// all: the worktree was made by hand, or its session was killed.
-		state := "no session"
-		if r.worktree.Session != "" {
-			state = "no agent"
-		}
-		fmt.Fprintf(b, "  %-15s %-32s @%s%s\n", state, r.name, where, note)
+		fmt.Fprintf(b, "  %-15s %-32s @%s%s\n", r.State(), r.Name, where, note)
 		return
 	}
-	a := r.agent
-	mark := " "
-	switch a.Activity {
-	case protocol.Blocked:
-		mark = "!"
-	case protocol.Working:
-		mark = "*"
-	case protocol.Idle:
-		mark = "-"
-	}
+	a := r.Agent
 	if a.Liveness == protocol.Gone {
 		note = " (gone)" + note
 	}
-	if r.worktree == nil && a.Managed {
+	if r.Worktree == nil && a.Managed {
 		note = " (no worktree)" + note
-	}
-	agent := a.Agent
-	if agent == "" {
-		agent = "shell"
 	}
 	title := strings.TrimSpace(a.Title)
 	if len(title) > 48 {
@@ -405,30 +293,10 @@ func (m *merged) renderRow(b *strings.Builder, r row, now time.Time) {
 	// Agents on the managed server are the common case and show the
 	// host alone; anything else names its server, which is also what
 	// jump --server takes.
-	if srv := serverOf(*a); srv != tmux.LaatmuxServer.Label() {
+	if srv := rows.Server(*a); srv != tmux.LaatmuxServer.Label() {
 		where += "/" + srv
 	}
-	fmt.Fprintf(b, "%s %-8s %-6s %-32s @%s%s  %s  %s\n", mark, a.Activity, agent, r.name, where, note, ago(now.Sub(a.ActivityAt)), title)
-}
-
-// serverOf is the agent's tmux server label. Daemons from before servers
-// were carried in records only ever watched the managed server.
-func serverOf(a protocol.Agent) string {
-	if a.Server == "" {
-		return tmux.LaatmuxServer.Label()
-	}
-	return a.Server
-}
-
-func ago(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%2ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%2dm", int(d.Minutes()))
-	default:
-		return fmt.Sprintf("%2dh", int(d.Hours()))
-	}
+	fmt.Fprintf(b, "%s %-8s %-6s %-32s @%s%s  %s  %s\n", r.Mark(), a.Activity, r.AgentName(), r.Name, where, note, rows.Ago(now.Sub(a.ActivityAt)), title)
 }
 
 func cmdLs(ctx context.Context, args []string) error {
@@ -457,20 +325,20 @@ func cmdLs(ctx context.Context, args []string) error {
 			defer wg.Done()
 			c, err := client.Dial(ctx, h.Host)
 			if err != nil {
-				m.setHost(h.Name, hostState{Error: err.Error()})
+				m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
 				return
 			}
 			defer c.Close()
 			if !protocol.Has(c.Hello.Capabilities, protocol.CapStatus) {
-				m.setHost(h.Name, hostState{Error: "daemon " + c.Hello.Version + " has no status capability"})
+				m.setHost(h.Name, hostState{Local: h.Local(), Error: "daemon " + c.Hello.Version + " has no status capability"})
 				return
 			}
-			m.setHost(h.Name, hostState{Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
+			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
 			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			snap, err := c.Snapshot(sctx)
 			if err != nil {
-				m.setHost(h.Name, hostState{Error: err.Error()})
+				m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
 				return
 			}
 			m.apply(h.Name, snap)

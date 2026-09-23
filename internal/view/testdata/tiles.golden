@@ -1,0 +1,40 @@
+..B|box  DOWN  ssh: connect to host box
+S..| ! laatmux/fix-ls               ‹@vm›
+S..|   claude  blocked  2m
+S..|   Permission to run pnpm test in p
+SD.|───────────────────────────────────
+...| * remote-notes         ‹@vm/default›
+...|   codex  working  1s
+...|   remote
+.D.|───────────────────────────────────
+...|>* proj/task                   @mac
+...|   codex  working  8s
+...|   Editing src/api.ts
+.D.|───────────────────────────────────
+.D.| * proj/down                   ‹@box›
+.D.|   claude  working  10m
+.D.|   last seen
+.D.|───────────────────────────────────
+...| - scratch                     @mac
+...|   shell  idle  40s
+...|   zsh
+.D.|───────────────────────────────────
+...| - notes               @mac/default
+...|   claude  idle  5m
+...|   notes
+.D.|───────────────────────────────────
+...| - proj/other                   ‹@vm›
+...|   claude  idle  1h
+...|   ✳ Done. 日本語のタイトル that is
+.D.|───────────────────────────────────
+.D.| - proj/dead                    ‹@vm›
+.D.|   claude  idle (gone)  3h
+.D.|   
+.D.|───────────────────────────────────
+.D.|   proj/spike                  @mac
+.D.|   no session
+.D.|───────────────────────────────────
+.D.|   proj/shell                   ‹@vm›
+.D.|   no agent
+.D.|───────────────────────────────────
+.D.|v layout  / filter  f all  q quit

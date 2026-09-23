@@ -362,3 +362,20 @@ func TestLoadSetup(t *testing.T) {
 		}
 	}
 }
+
+// The sidebar section: defaults when absent, validated when present.
+func TestSidebarConfig(t *testing.T) {
+	c, err := Parse([]byte("hosts:\n  - name: mac\n"))
+	if err != nil || c.Sidebar.Columns() != DefaultSidebarWidth || c.Sidebar.Layout != "" {
+		t.Fatalf("defaults: %+v %v", c.Sidebar, err)
+	}
+	c, err = Parse([]byte("sidebar:\n  width: 40\n  layout: compact\n"))
+	if err != nil || c.Sidebar.Columns() != 40 || c.Sidebar.Layout != "compact" {
+		t.Fatalf("set: %+v %v", c.Sidebar, err)
+	}
+	for _, bad := range []string{"sidebar:\n  width: 5\n", "sidebar:\n  width: -1\n", "sidebar:\n  layout: wide\n"} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

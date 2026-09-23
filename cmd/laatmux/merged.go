@@ -282,6 +282,11 @@ func (m *merged) timedOut(names []string, wait time.Duration) {
 func (m *merged) locals() []workspace.Local {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.localsLocked()
+}
+
+// localsLocked is locals with m.mu held.
+func (m *merged) localsLocked() []workspace.Local {
 	out := make([]workspace.Local, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		out = append(out, workspace.Local(s))

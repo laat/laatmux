@@ -270,12 +270,14 @@ exactly what `on` set and the user's own hooks at other indexes stay:
 
 | Hook | Runs |
 |---|---|
-| `after-new-window[9101]` | `laatmux sidebar attach '#{hook_window}'` |
-| `after-new-session[9102]` | `laatmux sidebar attach '#{hook_session}:'`, the session's first window |
+| `after-new-window[9101]` | `laatmux sidebar attach '#{window_id}'` |
+| `after-new-session[9102]` | `laatmux sidebar attach '#{window_id}'`, the session's first window |
 | `pane-exited[9103]`, `after-kill-pane[9104]` | `laatmux sidebar reap` |
 
-`attach` is idempotent, so a window that already has a sidebar is left
-alone whatever fires. `reap` lists every window and kills a sidebar pane
+In an `after-` hook the formats expand for the window the command made,
+so `#{window_id}` is the new window in both hooks; `hook_window` and
+`hook_session` are empty there on tmux 3.6. `attach` is idempotent, so a
+window that already has a sidebar is left alone whatever fires. `reap` lists every window and kills a sidebar pane
 that is alone in its window, so a window whose real pane exited closes at
 once instead of surviving as a sidebar. The user has this exact script
 under a `pane-exited` hook today, because the previous sidebar noticed

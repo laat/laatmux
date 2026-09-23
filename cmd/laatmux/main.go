@@ -2,6 +2,7 @@
 //
 // Milestone one: status daemon, sidebar, launcher, jump.
 // Milestone two: worktrees and workspaces: add, rm, path, shell, settle.
+// Milestone three: the merged stream, sidebar, dashboard, split, run.
 package main
 
 import (
@@ -48,6 +49,10 @@ func main() {
 		err = cmdJump(ctx, os.Args[2:])
 	case "shell":
 		err = cmdShell(ctx, os.Args[2:])
+	case "sidebar":
+		err = cmdSidebar(ctx, os.Args[2:])
+	case "dashboard":
+		err = cmdDashboard(ctx, os.Args[2:])
 	case "settle":
 		err = cmdSettle(ctx, os.Args[2:])
 	case "unsettle":
@@ -83,7 +88,10 @@ func usage() {
             laatmux rm --root <path> --host h [--force]          a detached worktree
   path      laatmux path <repo>/<branch> [--host h]             the worktree root on the host
   ls        workspaces and agents across configured hosts
-  watch     live list, redraws on change (sidebar)
+  watch     live list, redraws on change, for a plain terminal
+  sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
+            laatmux sidebar pane | attach <window> | reap      what the pane and the hooks run
+  dashboard the list in a popup: Enter jumps and closes it; for display-popup -E
   jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
             laatmux jump [--server default] <host>/<session>   a session that is no worktree's
   shell     a shell at the worktree root, in the workspace session this runs from
