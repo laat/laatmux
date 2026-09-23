@@ -72,6 +72,7 @@ agents:
     cmd: [claude]
   claude-safe:
     cmd: [claude-safe]        # sandboxing is the launch command's business
+default_agent: claude         # what add starts when --agent and last.json say nothing
 repos:                        # the known set
   - git@github.com:laat/laatmux.git
   - source: https://github.com/laat/other.git
@@ -251,7 +252,8 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   back to its place under the local host's `repos` or `worktrees`, the
   more specific first, where the next path component is the label. Host
   and agent come from
-  their flags, else `last.json`, else the config's default order. The
+  their flags, else `last.json`, else for the agent `default_agent`, else
+  the only candidate, else an error naming the candidates. The
   command id is chosen once per invocation; a transport failure mid-way
   dials again and follows the id from the last numbered progress seen,
   or against an older daemon resends it and prints the replay once.

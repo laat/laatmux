@@ -329,6 +329,27 @@ func TestDefaultAgent(t *testing.T) {
 	if n, _, err := c1.DefaultAgent("", ""); err != nil || n != "codex" {
 		t.Fatalf("only: %s %v", n, err)
 	}
+	// A configured default: after the flag and the last-used agent,
+	// before the refusal; one that names no agent fails to load.
+	cd, err := Parse([]byte("agents:\n  claude:\n    cmd: [claude]\n  cc-safe:\n    cmd: [claude-safe]\ndefault_agent: claude\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := cd.DefaultAgent("", ""); err != nil || n != "claude" {
+		t.Fatalf("default: %s %v", n, err)
+	}
+	if n, _, err := cd.DefaultAgent("", "cc-safe"); err != nil || n != "cc-safe" {
+		t.Fatalf("last over default: %s %v", n, err)
+	}
+	if n, _, err := cd.DefaultAgent("cc-safe", "claude"); err != nil || n != "cc-safe" {
+		t.Fatalf("flag over both: %s %v", n, err)
+	}
+	if n, _, err := cd.DefaultAgent("", "gone"); err != nil || n != "claude" {
+		t.Fatalf("stale last, default: %s %v", n, err)
+	}
+	if _, err := Parse([]byte("agents:\n  claude:\n    cmd: [claude]\ndefault_agent: nope\n")); err == nil || !strings.Contains(err.Error(), "default_agent") || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("default naming no agent: %v", err)
+	}
 	c0, _ := Parse(nil)
 	if _, _, err := c0.DefaultAgent("", ""); err == nil {
 		t.Fatal("no agents accepted")

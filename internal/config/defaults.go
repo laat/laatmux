@@ -46,8 +46,10 @@ func (c Config) DefaultHost(flag, last string) (Host, error) {
 }
 
 // DefaultAgent picks the agent add uses: the flag, else the last-used
-// agent for the repository, else the only configured agent, else an error
-// naming them. A last-used agent no longer configured is passed over.
+// agent for the repository, else the configured default_agent, else the
+// only configured agent, else an error naming them. A last-used agent no
+// longer configured is passed over. The dashboard's agent picker
+// preselects the same choice.
 func (c Config) DefaultAgent(flag, last string) (string, Agent, error) {
 	if flag != "" {
 		a, ok := c.Agents[flag]
@@ -59,6 +61,11 @@ func (c Config) DefaultAgent(flag, last string) (string, Agent, error) {
 	if last != "" {
 		if a, ok := c.Agents[last]; ok {
 			return last, a, nil
+		}
+	}
+	if c.DefaultAgent != "" {
+		if a, ok := c.Agents[c.DefaultAgent]; ok {
+			return c.DefaultAgent, a, nil
 		}
 	}
 	switch len(c.Agents) {
