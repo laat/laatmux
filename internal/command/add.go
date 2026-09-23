@@ -40,7 +40,9 @@ type Added struct {
 // Run sends the add to the host, following its progress through r,
 // then records the host and agent as the repository's last used and
 // makes sure the local workspace session exists. A failed stage is a
-// *StageError.
+// *StageError. When the host's side succeeded and the local steps then
+// failed, the result carries the root and managed session with the
+// error, so the caller can say what exists.
 func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
 		return Added{}, errors.New("add needs a host, a repository and a branch")

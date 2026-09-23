@@ -309,6 +309,11 @@ func (d *dash) runAdd(m *view.Model) {
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
+		if err != nil && res.Root != "" {
+			// The host's side is done; what failed is local, and the
+			// message must say the worktree and agent exist.
+			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", f.repo.Name, f.branch, f.host.Name, res.Root, err)
+		}
 		return err
 	}, func(m *view.Model) bool {
 		if err := switchTo(d.ctx, res.Session); err != nil {

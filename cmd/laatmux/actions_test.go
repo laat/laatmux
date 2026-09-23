@@ -256,6 +256,33 @@ func TestRmPartialSuccess(t *testing.T) {
 	}
 }
 
+// An add whose host side succeeded and whose local session then
+// failed returns the root and managed session with the error, so the
+// CLI prints the ready line before the error and the dashboard says
+// what exists.
+func TestAddPartialSuccess(t *testing.T) {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapAdd}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeAdd {
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/x", Session: "proj/x"})
+		}
+		return true
+	})
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho 'tmux: boom' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	add := command.Add{Host: config.Host{Host: client.Host{Name: "lab"}}, Repo: config.Repo{Source: "git@x:o/proj.git", Name: "proj"}, Branch: "x", Agent: "claude"}
+	res, err := add.Run(context.Background(), command.Discard{})
+	if err == nil || res.Root != "/w/proj/x" || res.Managed != "proj/x" || res.Session != "" || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	last, err := home.ReadLast()
+	if err != nil || last.Get("git@x:o/proj.git").Host != "lab" {
+		t.Errorf("last.json not written before the local failure: %+v %v", last, err)
+	}
+}
+
 // x asks about the selected worktree, naming it and its root, with the
 // request built from the record: by source and branch when this
 // machine knows the repository, by root alone when it does not, and
