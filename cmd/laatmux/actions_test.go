@@ -157,6 +157,29 @@ func TestAddFlowDefaults(t *testing.T) {
 		t.Fatalf("agent picker preselected %q", p.Choices[p.Selected].Label)
 	}
 
+	// No last-used agent for the repository: the configured default is
+	// preselected; without one, the first agent.
+	p.Handle(view.Key{Kind: view.KeyEsc})
+	d.act(m, m.Poll())
+	if err := home.UpdateLast(func(l *home.Last) { l.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm"}) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ def, want string }{{"codex", "codex"}, {"", "claude"}} {
+		cfg.DefaultAgentName = c.def
+		d.cfg = cfg
+		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+		for i := 0; i < 2; i++ {
+			m.Overlay.(*view.Picker).Handle(view.Key{Kind: view.KeyEnter})
+			d.act(m, m.Poll())
+		}
+		p = m.Overlay.(*view.Picker)
+		if p.Title != "add: agent" || p.Choices[p.Selected].Label != c.want {
+			t.Fatalf("default_agent %q: agent picker preselected %q", c.def, p.Choices[p.Selected].Label)
+		}
+		p.Handle(view.Key{Kind: view.KeyEsc})
+		d.act(m, m.Poll())
+	}
+
 	// One agent and one able host: both pickers are skipped.
 	cfg.Agents = map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}
 	cfg.Hosts = cfg.Hosts[1:2]

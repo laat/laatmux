@@ -109,6 +109,11 @@ type Config struct {
 	// observed read-only.
 	TmuxServers []string         `yaml:"tmux_servers"`
 	Agents      map[string]Agent `yaml:"agents"`
+	// DefaultAgentName is the agent add starts when neither --agent nor the
+	// repository's last-used agent says: agents is a map and has no
+	// order, and without this the first add for every repository asks
+	// for the flag. It must name a configured agent.
+	DefaultAgentName string `yaml:"default_agent"`
 	// Repos is the known set of repositories. Load fills in derived names.
 	Repos []Repo `yaml:"repos"`
 	// Sidebar is the sidebar pane on this machine's tmux.
@@ -275,6 +280,11 @@ func (c *Config) validateAgents() error {
 		}
 		if len(a.Cmd) == 0 || a.Cmd[0] == "" {
 			return fmt.Errorf("agents: %s has no cmd", name)
+		}
+	}
+	if c.DefaultAgentName != "" {
+		if _, ok := c.Agents[c.DefaultAgentName]; !ok {
+			return fmt.Errorf("default_agent: %q is not a configured agent (configured: %s)", c.DefaultAgentName, c.agentList())
 		}
 	}
 	return nil
