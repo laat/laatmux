@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/laat/laatmux/internal/config"
@@ -32,11 +33,20 @@ func cmdRepos(ctx context.Context, args []string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	defer w.Flush()
+	if len(cfg.Copy) > 0 {
+		fmt.Fprintf(w, "copy, every worktree on this machine\t%s\n\n", strings.Join(cfg.Copy, "  "))
+	}
 	for i, r := range cfg.Repos {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\t%s\n", r.Name, r.Source)
+		if len(r.Copy) > 0 {
+			fmt.Fprintf(w, "  copy\t%s\n", strings.Join(r.Copy, "  "))
+		}
+		if len(r.Setup) > 0 {
+			fmt.Fprintf(w, "  setup\t%s\n", strings.Join(r.Setup, "  "))
+		}
 		lr := last.Get(r.Source)
 		for _, h := range cfg.Hosts {
 			if d, err := h.Dirs(); err != nil {

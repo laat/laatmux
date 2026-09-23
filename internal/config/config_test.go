@@ -1,6 +1,7 @@
 package config
 
 import (
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,5 +399,47 @@ func TestSidebarConfig(t *testing.T) {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// The machine's own copy rules and a repository's own copy and setup
+// come from the config, validated as the committed file's are, with
+// globs allowed.
+func TestCopyAndSetupConfig(t *testing.T) {
+	c, err := Parse([]byte("copy: [\"**/.envrc.cache.enc\", .envrc]\nrepos:\n  - source: git@x:o/proj.git\n    copy: [\"config/*.local\"]\n    setup: [\"pnpm install\"]\n  - git@x:o/other.git\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(c.Copy, ",") != "**/.envrc.cache.enc,.envrc" {
+		t.Errorf("copy: %v", c.Copy)
+	}
+	if r := c.Repos[0]; strings.Join(r.Copy, ",") != "config/*.local" || strings.Join(r.Setup, ",") != "pnpm install" || r.Name != "proj" {
+		t.Errorf("repo: %+v", r)
+	}
+	if r := c.Repos[1]; len(r.Copy) != 0 || len(r.Setup) != 0 {
+		t.Errorf("plain repo: %+v", r)
+	}
+	for _, bad := range []struct{ yaml, want string }{
+		{"copy: [../x]\n", "leaves the repository root"},
+		{"copy: [/etc/x]\n", "absolute"},
+		{"copy: [\"a**b\"]\n", "whole path segment"},
+		{"copy: [\"[a\"]\n", "syntax"},
+		{"copy: [\"\"]\n", "empty"},
+		{"repos:\n  - source: git@x:o/p.git\n    copy: [../x]\n", "repos: git@x:o/p.git: copy"},
+		{"repos:\n  - source: git@x:o/p.git\n    setup: [\" \"]\n", "setup: entry 1 is empty"},
+	} {
+		if _, err := Parse([]byte(bad.yaml)); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%q: %v, want %q", bad.yaml, err, bad.want)
+		}
+	}
+	for p, glob := range map[string]bool{".envrc": false, "**/.envrc": true, "a/*.x": true, "a?": true, "[ab]": true, "dir/file": false} {
+		if IsGlob(p) != glob {
+			t.Errorf("IsGlob(%q) = %v", p, !glob)
+		}
+	}
+	// A repository with its own steps marshals as a mapping.
+	out, err := yaml.Marshal(c.Repos)
+	if err != nil || !strings.Contains(string(out), "copy:") || !strings.Contains(string(out), "pnpm install") || !strings.Contains(string(out), "- git@x:o/other.git") {
+		t.Errorf("marshal: %s %v", out, err)
 	}
 }

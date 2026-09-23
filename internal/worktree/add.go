@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -204,20 +206,50 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		return a, fail(protocol.StageCopy, err)
 	}
 
+	// The committed steps first, then this host's for the repository,
+	// then this host's for every worktree; a glob names what the main
+	// checkout has that matches it.
 	stage = protocol.StageCopy
-	for _, rel := range setup.Copy {
-		if err := copyFile(ctx, checkout, a.Root, rel, report); err != nil {
-			return a, fail(stage, err)
+	var rules []string
+	rules = append(rules, setup.Copy...)
+	rules = append(rules, repo.Copy...)
+	rules = append(rules, s.Copy...)
+	var listed []string
+	for _, entry := range rules {
+		if !config.IsGlob(entry) {
+			if err := copyFile(ctx, checkout, a.Root, entry, report); err != nil {
+				return a, fail(stage, err)
+			}
+			continue
+		}
+		if listed == nil {
+			if listed, err = listFiles(ctx, checkout); err != nil {
+				return a, fail(stage, err)
+			}
+		}
+		matched := 0
+		for _, rel := range listed {
+			if !MatchGlob(entry, rel) {
+				continue
+			}
+			matched++
+			if err := copyFile(ctx, checkout, a.Root, rel, report); err != nil {
+				return a, fail(stage, err)
+			}
+		}
+		if matched == 0 {
+			report(stage, protocol.StateSkip, entry+" matches nothing in "+checkout)
 		}
 	}
 
 	stage = protocol.StageSetup
-	if len(setup.Setup) > 0 {
+	commands := append(append([]string(nil), setup.Setup...), repo.Setup...)
+	if len(commands) > 0 {
 		markers, err := markerDir(ctx, a.Root)
 		if err != nil {
 			return a, fail(stage, err)
 		}
-		for i, cmd := range setup.Setup {
+		for i, cmd := range commands {
 			marker := filepath.Join(markers, "setup-"+strconv.Itoa(i)+"-"+hash(cmd))
 			if _, err := os.Stat(marker); err == nil {
 				report(stage, protocol.StateSkip, cmd+" (done before)")
@@ -405,4 +437,60 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// listFiles is what git knows of the main checkout, for a glob to match
+// against: the files it tracks and the untracked files it does not
+// ignore, plus the ignored files, which is where a personal env cache
+// sits, with ignored directories collapsed to one entry each, so a **
+// never walks node_modules and nothing inside an ignored directory is
+// matched. Directories are left out; a glob names files.
+func listFiles(ctx context.Context, checkout string) ([]string, error) {
+	var out []string
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--cached", "--others", "--exclude-standard"},
+		{"ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"},
+	} {
+		res, err := git(ctx, checkout, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range strings.Split(res, "\x00") {
+			if p == "" || strings.HasSuffix(p, "/") {
+				continue
+			}
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// MatchGlob matches a slash-separated path against a copy glob: ** is a
+// whole segment standing for zero or more segments, every other segment
+// is path.Match syntax and matches one segment. Neither * nor ? crosses
+// a slash.
+func MatchGlob(pattern, p string) bool {
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
+}
+
+func matchSegments(pat, segs []string) bool {
+	for len(pat) > 0 {
+		if pat[0] == "**" {
+			for i := 0; i <= len(segs); i++ {
+				if matchSegments(pat[1:], segs[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(segs) == 0 {
+			return false
+		}
+		if ok, err := path.Match(pat[0], segs[0]); err != nil || !ok {
+			return false
+		}
+		pat, segs = pat[1:], segs[1:]
+	}
+	return len(segs) == 0
 }

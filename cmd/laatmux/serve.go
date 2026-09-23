@@ -83,6 +83,7 @@ func cmdServe(ctx context.Context, args []string) error {
 		hostname = local.Name
 		if dirs, err := local.Dirs(); err == nil {
 			store = worktree.New(dirs.Expand(), cfg.Repos)
+			store.Copy = cfg.Copy
 		}
 	}
 	for name, a := range cfg.Agents {

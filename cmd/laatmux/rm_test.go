@@ -70,7 +70,7 @@ func TestRmCurrent(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		if got.Host.Name != c.want.Host.Name || got.Repo != c.want.Repo || got.Branch != c.want.Branch || got.Root != c.want.Root || got.Environment != c.want.Environment || got.Force {
+		if got.Host.Name != c.want.Host.Name || got.Repo.Source != c.want.Repo.Source || got.Branch != c.want.Branch || got.Root != c.want.Root || got.Environment != c.want.Environment || got.Force {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
 		}
 	}

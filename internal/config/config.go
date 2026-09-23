@@ -116,6 +116,11 @@ type Config struct {
 	DefaultAgentName string `yaml:"default_agent"`
 	// Repos is the known set of repositories. Load fills in derived names.
 	Repos []Repo `yaml:"repos"`
+	// Copy is this machine's own copy rules for every worktree it makes:
+	// files personal to the machine, gitignored, that no committed
+	// .laatmux.yaml should name. Each entry is a path relative to the
+	// repository root or a glob over the main checkout; see CheckCopy.
+	Copy []string `yaml:"copy"`
 	// Sidebar is the sidebar pane on this machine's tmux.
 	Sidebar Sidebar `yaml:"sidebar"`
 }
@@ -207,6 +212,23 @@ func Parse(b []byte) (Config, error) {
 	}
 	if err := deriveNames(c.Repos); err != nil {
 		return c, err
+	}
+	for _, e := range c.Copy {
+		if err := CheckCopy(e); err != nil {
+			return c, fmt.Errorf("copy: %w", err)
+		}
+	}
+	for _, r := range c.Repos {
+		for _, e := range r.Copy {
+			if err := CheckCopy(e); err != nil {
+				return c, fmt.Errorf("repos: %s: copy: %w", r.Source, err)
+			}
+		}
+		for i, cmd := range r.Setup {
+			if strings.TrimSpace(cmd) == "" {
+				return c, fmt.Errorf("repos: %s: setup: entry %d is empty", r.Source, i+1)
+			}
+		}
 	}
 	if c.Sidebar.Width < 0 || c.Sidebar.Width > 0 && c.Sidebar.Width < 10 {
 		return c, fmt.Errorf("sidebar: width %d must be at least 10", c.Sidebar.Width)

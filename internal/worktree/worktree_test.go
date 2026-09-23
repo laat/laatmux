@@ -748,3 +748,92 @@ func TestCheckoutsScannedOnce(t *testing.T) {
 		t.Fatalf("list %+v %v", recs, err)
 	}
 }
+
+// A copy glob matches slash-separated paths segment by segment, ** for
+// any number of segments; * and ? stay within a segment.
+func TestMatchGlob(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"**/.envrc.cache.enc", ".envrc.cache.enc", true},
+		{"**/.envrc.cache.enc", "apps/web/.envrc.cache.enc", true},
+		{"**/.envrc.cache.enc", "apps/web/.envrc", false},
+		{"*.enc", ".envrc.cache.enc", true},
+		{"*.enc", "apps/.envrc.cache.enc", false},
+		{"apps/*/.envrc", "apps/web/.envrc", true},
+		{"apps/*/.envrc", "apps/web/x/.envrc", false},
+		{"apps/**", "apps/web/x/.envrc", true},
+		{"apps/**", "apps", true},
+		{"config/*.local", "config/db.local", true},
+		{"config/*.local", "config/db.local.bak", false},
+		{"[ab].txt", "a.txt", true},
+		{"**", "anything/at/all", true},
+	}
+	for _, c := range cases {
+		if got := MatchGlob(c.pattern, c.path); got != c.want {
+			t.Errorf("MatchGlob(%q, %q) = %v", c.pattern, c.path, got)
+		}
+	}
+}
+
+// The store's copy rules and a repository's own copy and setup run after
+// the committed ones: a glob finds the ignored files of the main
+// checkout wherever they sit, but nothing inside an ignored directory,
+// and a literal path is copied as before; a personal setup command runs
+// after the committed commands, once.
+func TestAddPersonalCopyAndSetup(t *testing.T) {
+	f := newFixture(t)
+	checkout, _, _ := f.store.Checkout(f.ctx, f.repo)
+	if checkout == "" {
+		a, err := f.store.Add(f.ctx, f.repo, "first", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkout = a.Checkout
+	}
+	write(t, filepath.Join(checkout, ".gitignore"), "*.enc\nnode_modules/\n")
+	write(t, filepath.Join(checkout, ".envrc.cache.enc"), "root secret")
+	write(t, filepath.Join(checkout, "apps", "web", ".envrc.cache.enc"), "web secret")
+	write(t, filepath.Join(checkout, "node_modules", "dep", ".envrc.cache.enc"), "never")
+	write(t, filepath.Join(checkout, "notes.txt"), "untracked")
+	write(t, filepath.Join(checkout, "config", "db.local"), "local")
+	f.store.Copy = []string{"**/.envrc.cache.enc", "nothing/*.here"}
+	f.store.Repos[0].Copy = []string{"notes.txt", "config/*.local"}
+	f.store.Repos[0].Setup = []string{"echo personal >> log"}
+	repo := f.store.Repos[0]
+	var reports []string
+	a, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]string{".envrc.cache.enc": "root secret", "apps/web/.envrc.cache.enc": "web secret", "notes.txt": "untracked", "config/db.local": "local"} {
+		if b, err := os.ReadFile(filepath.Join(a.Root, rel)); err != nil || string(b) != want {
+			t.Errorf("%s: %q %v", rel, b, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, "node_modules", "dep", ".envrc.cache.enc")); err == nil {
+		t.Error("a file inside an ignored directory was copied")
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\n" {
+		t.Errorf("setup order: %q", b)
+	}
+	joined := strings.Join(reports, "\n")
+	if !strings.Contains(joined, "copy skip nothing/*.here matches nothing") || !strings.Contains(joined, "setup done echo personal >> log") {
+		t.Errorf("reports:\n%s", joined)
+	}
+	// A retry copies nothing again and reruns no command.
+	reports = nil
+	if _, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reports {
+		if strings.HasPrefix(r, "copy done") || strings.HasPrefix(r, "setup start") {
+			t.Errorf("retry redid: %s", r)
+		}
+	}
+}

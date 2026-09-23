@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -54,7 +55,7 @@ func LoadSetup(root string) (Setup, error) {
 		return s, fmt.Errorf("%s: %w", SetupFile, err)
 	}
 	for _, p := range s.Copy {
-		if err := checkCopyPath(p); err != nil {
+		if err := CheckCopy(p); err != nil {
 			return s, &SetupFieldError{Field: "copy", Err: err}
 		}
 	}
@@ -66,10 +67,13 @@ func LoadSetup(root string) (Setup, error) {
 	return s, nil
 }
 
-// checkCopyPath keeps copy entries inside the checkout: relative, and no
-// .. component, since the same relative path names the file in the main
-// checkout and in the worktree.
-func checkCopyPath(p string) error {
+// CheckCopy validates a copy entry, in the committed file or the
+// config: inside the checkout, relative with no .. component, since the
+// same relative path names the file in the main checkout and in the
+// worktree; and, when it is a glob, well formed: path.Match syntax per
+// segment, with ** only as a whole segment, where it stands for zero or
+// more segments.
+func CheckCopy(p string) error {
 	if p == "" {
 		return fmt.Errorf("empty path")
 	}
@@ -80,6 +84,18 @@ func checkCopyPath(p string) error {
 		if part == ".." {
 			return fmt.Errorf("%s leaves the repository root", p)
 		}
+		if part == "**" {
+			continue
+		}
+		if strings.Contains(part, "**") {
+			return fmt.Errorf("%s: ** must be a whole path segment", p)
+		}
+		if _, err := path.Match(part, ""); err != nil {
+			return fmt.Errorf("%s: %v", p, err)
+		}
 	}
 	return nil
 }
+
+// IsGlob reports whether a copy entry is a pattern rather than a path.
+func IsGlob(p string) bool { return strings.ContainsAny(p, "*?[") }
