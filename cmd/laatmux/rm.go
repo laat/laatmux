@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -43,13 +44,21 @@ func cmdRm(ctx context.Context, args []string) error {
 		if !cur.Workspace() {
 			return fmt.Errorf("%s is not a workspace session; name <repo>/<branch> or give --root", cur.Name)
 		}
+		// The host is the one the session's tag names; a tag from
+		// before a rename names nothing, and then the host is whichever
+		// configured one answers as the key's environment, which is how
+		// the dashboard finds it.
+		var hello, snap protocol.Message
 		h, ok := cfg.Find(cur.Host)
-		if !ok {
-			return fmt.Errorf("workspace session %s is on host %q, which is not configured", cur.Name, cur.Host)
-		}
-		hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
-		if err != nil {
-			return err
+		if ok {
+			if hello, snap, err = snapshot(ctx, h.Host, protocol.CapRm); err != nil {
+				return err
+			}
+		} else {
+			env, _ := workspace.SplitKey(cur.Key)
+			if h, hello, snap, err = hostByEnvironment(ctx, cfg, env); err != nil {
+				return fmt.Errorf("workspace session %s is on host %q, which is not configured, and %w", cur.Name, cur.Host, err)
+			}
 		}
 		if rm, err = rmCurrent(cfg, cur, h, hello.EnvironmentID, snap.Worktrees); err != nil {
 			return err
@@ -105,6 +114,31 @@ func cmdRm(ctx context.Context, args []string) error {
 		fmt.Printf("killed local session %s\n", name)
 	}
 	return err
+}
+
+// hostByEnvironment finds the configured host whose daemon answers as
+// the environment, with its hello and snapshot: each host is asked in
+// config order, through the merged stream where the local daemon has
+// one, so a host row already there costs nothing, else by dialling.
+// A host that cannot be reached is passed over; none answering is an
+// error naming the environment.
+func hostByEnvironment(ctx context.Context, cfg config.Config, env string) (config.Host, protocol.Message, protocol.Message, error) {
+	var errs []string
+	for _, h := range cfg.Hosts {
+		hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if hello.EnvironmentID == env {
+			return h, hello, snap, nil
+		}
+	}
+	msg := fmt.Sprintf("no configured host answers as environment %s", env)
+	if len(errs) > 0 {
+		msg += " (" + strings.Join(errs, "; ") + ")"
+	}
+	return config.Host{}, protocol.Message{}, protocol.Message{}, errors.New(msg)
 }
 
 // rmArgs is rm's command line. A target or a root given as the empty

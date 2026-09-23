@@ -270,7 +270,9 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   current one. `rm --root <path> --host h` removes a detached worktree.
 - **`rm`** with no target, inside a workspace session, removes that
   workspace: the root from the session's key, on the host the session's
-  tag names, which must answer as the environment the key names, since
+  tag names, or, when that tag names no configured host any more, the
+  host that answers as the key's environment, as the dashboard routes
+  a row; the host must answer as the environment the key names, since
   a host entry moved to another machine must not remove that machine's
   worktree at the same path, and every connection of the command is
   held to that. The host's worktree record for the root gives the
