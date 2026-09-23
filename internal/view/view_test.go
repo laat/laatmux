@@ -732,8 +732,13 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	m = model(now)
 	m.Layout, m.Width = Compact, 80
 	m.SetRows(rows.Build(fixtureInput(now)))
+	m.Filter = "proj/task" // the one row is the live working one
 	m.Header = []string{"one", "two"}
-	m.Height = 2
+	m.Height = 4 // headers, the body line, footer: the mark is drawn
+	if lines := m.Render(); len(lines) != 4 || !m.Spinning() {
+		t.Fatalf("one working row under two headers: %d lines, spinning=%v", len(lines), m.Spinning())
+	}
+	m.Height = 2 // the headers alone: the body line is cut off
 	if lines := m.Render(); len(lines) != 2 || m.Spinning() {
 		t.Fatalf("headers filling the terminal: %d lines, spinning=%v", len(lines), m.Spinning())
 	}
