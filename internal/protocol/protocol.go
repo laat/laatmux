@@ -173,15 +173,23 @@ type Worktree struct {
 // answered a hello once; agent and worktree records carry theirs, and a
 // client maps it to the host name through these records.
 type HostStatus struct {
-	Name          string    `json:"name"`
-	SSH           string    `json:"ssh,omitempty"` // "" is the merging daemon's own machine
-	EnvironmentID string    `json:"environment_id,omitempty"`
-	Connected     bool      `json:"connected"`
-	Listed        bool      `json:"listed"`
-	Error         string    `json:"error,omitempty"` // why it is not connected; "" while connecting
-	Version       string    `json:"version,omitempty"`
-	Capabilities  []string  `json:"capabilities,omitempty"`
-	Since         time.Time `json:"since"` // when the record last changed
+	Name          string `json:"name"`
+	SSH           string `json:"ssh,omitempty"` // "" is the merging daemon's own machine
+	EnvironmentID string `json:"environment_id,omitempty"`
+	Connected     bool   `json:"connected"`
+	Listed        bool   `json:"listed"`
+	Error         string `json:"error,omitempty"` // why it is not connected; "" while connecting
+	// Reconnecting is that a connection that was up has dropped and the
+	// daemon is dialling again; Error says what ended it. It holds until
+	// the next dial's outcome: a host that answers again clears it with
+	// the error, one that refuses keeps the error alone. A one-shot
+	// client waits on a reconnecting host as on one still connecting,
+	// since a daemon restarted for an upgrade is back within seconds,
+	// where ssh's own errors mean the host is not reachable now.
+	Reconnecting bool      `json:"reconnecting,omitempty"`
+	Version      string    `json:"version,omitempty"`
+	Capabilities []string  `json:"capabilities,omitempty"`
+	Since        time.Time `json:"since"` // when the record last changed
 }
 
 // Local reports whether the host is the merging daemon's own machine.

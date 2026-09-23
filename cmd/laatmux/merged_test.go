@@ -115,3 +115,31 @@ func TestMergedTimedOutAndStale(t *testing.T) {
 		t.Error("sessions error not printed")
 	}
 }
+
+// A host is ready when listed or failed; a dropped connection being
+// dialled again is neither, and the header says the reconnect is on.
+func TestHostReady(t *testing.T) {
+	cases := []struct {
+		st    hostState
+		ready bool
+		down  string
+	}{
+		{hostState{Listed: true, Connected: true}, true, ""},
+		{hostState{Error: "ssh: refused"}, true, "ssh: refused"},
+		{hostState{Error: "disconnected", Reconnecting: true}, false, "disconnected (reconnecting)"},
+		{hostState{Connected: true}, false, ""},
+		{hostState{}, false, ""},
+	}
+	for _, c := range cases {
+		if got := c.st.ready(); got != c.ready {
+			t.Errorf("%+v ready = %v", c.st, got)
+		}
+		if got := c.st.down(); got != c.down {
+			t.Errorf("%+v down = %q", c.st, got)
+		}
+	}
+	st := fromStatus(protocol.HostStatus{Name: "vm", Error: "disconnected", Reconnecting: true})
+	if st.ready() || !st.Reconnecting {
+		t.Errorf("fromStatus: %+v", st)
+	}
+}

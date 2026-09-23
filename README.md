@@ -502,9 +502,15 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
 - **One-shot clients wait for readiness.** The snapshot comes at once
   with what the daemon knows, on a cold daemon the host rows alone. `ls`
   reads on until every host is listed or carries an error, or 20 seconds
-  have passed, and marks the hosts still neither. `jump`, `path` and `rm`
-  wait the same way for the one host they act on and then talk to that
-  host directly, as before.
+  have passed, and marks the hosts still neither. `jump`, `path`, `rm`
+  and `run` wait the same way for the one host they act on and then talk
+  to that host directly, as before. A connection that was up and dropped
+  is not an error to stop on: the host record carries `reconnecting`
+  from the drop until the next dial's outcome, and a client waits on it
+  as on a host still connecting, since a daemon restarted for an upgrade
+  is back within seconds; ssh's own errors, a refused connection or a
+  missing binary, end the wait at once as before. The header line says
+  `DOWN disconnected (reconnecting)` meanwhile.
 - **Older daemons.** A local daemon without `merged` is an older build
   still running; `ls`, `watch`, `jump`, `path` and `rm` fall back to
   dialling each host. Plain `subscribe` still means this host's own

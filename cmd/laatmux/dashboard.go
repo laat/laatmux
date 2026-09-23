@@ -137,7 +137,7 @@ func (m *merged) fill(v *view.Model, current string) {
 		case st.Connected:
 			v.Header = append(v.Header, n+"  connected  (snapshot pending)")
 		case st.Error != "":
-			v.Header = append(v.Header, n+"  DOWN  "+st.Error)
+			v.Header = append(v.Header, n+"  DOWN  "+st.down())
 		default:
 			v.Header = append(v.Header, n+"  connecting")
 		}

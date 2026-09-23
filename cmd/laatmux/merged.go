@@ -306,7 +306,9 @@ func (m *merged) localsLocked() []workspace.Local {
 // hostSnapshot is one host's part of the merged state as the direct path
 // would have fetched it: a hello built from the host record and a
 // snapshot of its records. Not ok when the host is not in the stream; an
-// error when the host is down, as the direct dial would have failed.
+// error when the host is down, as the direct dial would have failed. A
+// host still reconnecting when the caller stopped waiting is down with
+// its error as well; the caller names it as pending first.
 func (m *merged) hostSnapshot(name string) (hello, snap protocol.Message, ok bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -315,7 +317,7 @@ func (m *merged) hostSnapshot(name string) (hello, snap protocol.Message, ok boo
 		return hello, snap, false, nil
 	}
 	if st.Error != "" {
-		return hello, snap, true, fmt.Errorf("%s: %s", name, st.Error)
+		return hello, snap, true, fmt.Errorf("%s: %s", name, st.down())
 	}
 	hello = protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: st.EnvID, Version: st.Version, Host: name, Capabilities: st.Caps}
 	snap.Type = protocol.TypeSnapshot

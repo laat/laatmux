@@ -151,6 +151,47 @@ func TestMergedSnapshotWaitsForHost(t *testing.T) {
 	}
 }
 
+// A host whose connection dropped and is being dialled again is waited
+// for, as a cold host is, and the snapshot arrives once it is back; a
+// host whose dial failed is an error at once.
+func TestMergedSnapshotWaitsThroughReconnect(t *testing.T) {
+	caps := []string{"status", "worktrees"}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type != protocol.TypeSubscribe {
+			return true
+		}
+		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+			{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{"status", "merged"}},
+			{Name: "vm", SSH: "vm", EnvironmentID: "venv", Error: "disconnected", Reconnecting: true, Version: "v1", Capabilities: caps},
+		}})
+		time.Sleep(50 * time.Millisecond)
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 2, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: caps}})
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 3, Worktree: &protocol.Worktree{ID: "venv/worktree//r/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/r/y"}})
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: caps}})
+		return true
+	})
+	hello, snap, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees)
+	if err != nil || hello.EnvironmentID != "venv" || len(snap.Worktrees) != 1 {
+		t.Fatalf("through a reconnect: %+v %+v %v", hello, snap, err)
+	}
+	// The dial failed: ssh's error, no reconnect under way, fail at once.
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "vm", SSH: "vm", Error: "ssh: connect to host vm port 22: Connection refused"},
+			}})
+		}
+		return true
+	})
+	start := time.Now()
+	if _, _, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees); err == nil || !strings.Contains(err.Error(), "Connection refused") {
+		t.Fatalf("refused dial: %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("a refused dial was waited on")
+	}
+}
+
 // A daemon that answers the hello but never sends the snapshot is a
 // timeout, not an empty listing.
 func TestReadMergedTimesOutWithoutSnapshot(t *testing.T) {

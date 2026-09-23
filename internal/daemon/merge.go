@@ -154,7 +154,7 @@ func (d *Daemon) mergedIdle(gen uint64) {
 			mh.cancel = nil
 		}
 		if !mh.host.Local() {
-			mh.status.Connected, mh.status.Listed, mh.status.Error, mh.status.Since = false, false, "", now
+			mh.status.Connected, mh.status.Listed, mh.status.Error, mh.status.Reconnecting, mh.status.Since = false, false, "", false, now
 		}
 	}
 }
@@ -334,17 +334,17 @@ func (d *Daemon) follow(ctx context.Context, mh *mergedHost) {
 			// the host record already carries.
 			msg := strings.TrimPrefix(err.Error(), mh.host.Name+": ")
 			d.setHostStatus(ctx, mh, func(st *protocol.HostStatus) {
-				st.Connected, st.Listed, st.Error = false, false, msg
+				st.Connected, st.Listed, st.Error, st.Reconnecting = false, false, msg, false
 			})
 		case !protocol.Has(c.Hello.Capabilities, protocol.CapStatus):
 			c.Close()
 			d.setHostStatus(ctx, mh, func(st *protocol.HostStatus) {
-				st.Connected, st.Listed, st.Error = false, false, "daemon "+c.Hello.Version+" has no status capability"
+				st.Connected, st.Listed, st.Error, st.Reconnecting = false, false, "daemon "+c.Hello.Version+" has no status capability", false
 			})
 		default:
 			hello := c.Hello
 			d.setHostStatus(ctx, mh, func(st *protocol.HostStatus) {
-				st.Connected, st.Listed, st.Error = true, false, ""
+				st.Connected, st.Listed, st.Error, st.Reconnecting = true, false, "", false
 				st.EnvironmentID, st.Version, st.Capabilities = hello.EnvironmentID, hello.Version, hello.Capabilities
 			})
 			backoff = d.cfg.ReconnectMin
@@ -360,12 +360,16 @@ func (d *Daemon) follow(ctx context.Context, mh *mergedHost) {
 			}
 			stop()
 			c.Close()
+			// A connection that was up has dropped: the record says so
+			// and that the next dial is coming, so a client that needs
+			// the host waits for it rather than failing on a daemon
+			// restarting. The dial's outcome replaces both.
 			msg := "disconnected"
 			if diag := c.Diag(); diag != "" {
 				msg += ": " + diag
 			}
 			d.setHostStatus(ctx, mh, func(st *protocol.HostStatus) {
-				st.Connected, st.Listed, st.Error = false, false, msg
+				st.Connected, st.Listed, st.Error, st.Reconnecting = false, false, msg, true
 			})
 		}
 		select {
