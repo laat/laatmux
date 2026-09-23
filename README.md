@@ -47,6 +47,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux run -- make                         # inside a workspace session, that workspace
 ./laatmux settle                              # collapse this workspace in ls; unsettle brings it back
 ./laatmux rm proj/fix-ls [--force]            # remove the worktree, its managed session and the local session
+./laatmux rm                                  # inside a workspace session: that workspace
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
 ./laatmux new work --cwd ~/code/foo -- claude # managed session without a worktree
 ./laatmux jump mac/work                       # a local session attached to it
@@ -267,6 +268,13 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   with everything left in place; `--force` removes it. After an `ok` the
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
+- **`rm`** with no target, inside a workspace session, removes that
+  workspace: the root from the session's key, the repository and branch
+  from its source and branch tags when this machine's config knows the
+  source, else the root alone as `--root` does, on the host the session's
+  tag names. That is how the dashboard's `x` resolves a row whose record
+  is gone, and what a binding needs:
+  `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
 - **`path <repo>/<branch>`** prints the root from the host's records.
   Records are matched by source, since the host's label for a source may
   differ from this machine's; a record from a daemon without the source
