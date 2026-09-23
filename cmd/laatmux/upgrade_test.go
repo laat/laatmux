@@ -47,7 +47,7 @@ func TestParsePlatform(t *testing.T) {
 // daemon with the new binary; the binary is the word the bridge runs.
 func TestInstallScript(t *testing.T) {
 	s := installScript("~/.local/bin/laatmux")
-	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `[ -s "$tmp" ] && "$tmp" version 2>/dev/null | grep -q '^laatmux ' ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
+	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `v=$("$tmp" version 2>/dev/null) && [ "${v#laatmux }" != "$v" ] ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
 		}
@@ -100,7 +100,7 @@ func TestInstallFile(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "laatmux")
 	os.WriteFile(dst, []byte("old"), 0o755)
-	for name, content := range map[string]string{"garbage": "not a binary", "empty": "", "silent": "#!/bin/sh\nexit 0\n"} {
+	for name, content := range map[string]string{"garbage": "not a binary", "empty": "", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux broken\nexit 7\n"} {
 		bad := filepath.Join(dir, name)
 		os.WriteFile(bad, []byte(content), 0o644)
 		err := installFile(context.Background(), bad, dst)
@@ -111,7 +111,7 @@ func TestInstallFile(t *testing.T) {
 			t.Fatalf("destination replaced by the %s candidate", name)
 		}
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 4 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 5 {
 		t.Fatalf("temporary left behind: %v", entries)
 	}
 	good := filepath.Join(dir, "good")
@@ -138,7 +138,7 @@ func TestInstallScriptRuns(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for name, input := range map[string]string{"empty": "", "garbage": "not a binary\n", "silent": "#!/bin/sh\nexit 0\n"} {
+	for name, input := range map[string]string{"empty": "", "garbage": "not a binary\n", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux broken\nexit 7\n"} {
 		out, err := run(input)
 		if err == nil || !strings.Contains(out, "left as it was") {
 			t.Fatalf("%s: %v\n%s", name, err, out)
@@ -221,6 +221,68 @@ func TestStop(t *testing.T) {
 			t.Fatalf("%s daemon: %v\n%s", mode, err, out)
 		}
 	}
+	// A daemon that holds the lock but answers on no socket is one
+	// shutting down, its listener gone before its runs: stop waits for
+	// the lock to leave its hands rather than reporting no daemon.
+	held := exec.Command(os.Args[0], "-test.run=TestStop")
+	held.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held")
+	if err := held.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer held.Process.Kill()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if pid, _ := home.Holder(); pid == held.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("held daemon did not take the lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- cmdStop(context.Background(), nil) }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("stop returned while the lock was held: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	held.Process.Signal(syscall.SIGTERM)
+	if err := <-stopped; err != nil {
+		t.Fatalf("stop after the holder left: %v", err)
+	}
+	held.Wait()
+	// The legacy fallback signals the pid of the record that was
+	// dialled, not whatever the runtime file says by then.
+	legacy := exec.Command(os.Args[0], "-test.run=TestStop")
+	legacy.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=legacy")
+	if err := legacy.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Process.Kill()
+	var rt home.Runtime
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var err error
+		if rt, err = home.ReadRuntime(); err == nil && rt.PID == legacy.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("legacy daemon did not come up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	nc, err := client.DialAddress(rt.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.WriteRuntime(home.Runtime{Address: rt.Address, PID: bystander.Process.Pid, Version: "replacement"})
+	if err := stopDaemon(context.Background(), nc, rt); err != nil {
+		t.Fatalf("stop legacy with a replaced record: %v", err)
+	}
+	legacy.Wait()
+	if !home.Alive(bystander.Process.Pid) {
+		t.Fatal("the replacement's pid was signalled")
+	}
+	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
 	}
@@ -238,6 +300,13 @@ func testDaemon(mode string) {
 		err = cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"})
 	case "legacy":
 		err = legacyServe(ctx)
+	case "held":
+		// The lock alone: a daemon whose listener is gone already.
+		var l *home.Lock
+		if l, err = home.TryLock(); err == nil {
+			<-ctx.Done()
+			l.Release()
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

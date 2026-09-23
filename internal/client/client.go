@@ -353,9 +353,16 @@ func dialRuntime() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	network, addr, ok := strings.Cut(rt.Address, ":")
+	return DialAddress(rt.Address)
+}
+
+// DialAddress connects to a daemon at a runtime file's address, so a
+// caller that read the record itself talks to the daemon that record
+// names.
+func DialAddress(address string) (net.Conn, error) {
+	network, addr, ok := strings.Cut(address, ":")
 	if !ok {
-		return nil, fmt.Errorf("laatmux: bad runtime address %q", rt.Address)
+		return nil, fmt.Errorf("laatmux: bad runtime address %q", address)
 	}
 	return net.DialTimeout(network, addr, 2*time.Second)
 }

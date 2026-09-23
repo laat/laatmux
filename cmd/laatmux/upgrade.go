@@ -272,10 +272,10 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 // the new binary. The path is the word the bridge runs, so a path under
 // ~ is the remote home and a bare name is found on the remote PATH. The
 // file goes to a fresh temporary name beside the old one, is checked to
-// answer version as laatmux does, which a build for the wrong platform,
-// a truncated copy or an empty file fails, since sh would run an empty
-// file as a script that succeeds, and only then renamed over the old
-// one: the
+// answer version as laatmux does and exit 0, which a build for the
+// wrong platform, a truncated copy or an empty file fails, since sh
+// would run an empty file as a script that succeeds, and only then
+// renamed over the old one: the
 // install is atomic, a running daemon keeps its own inode, and a
 // candidate that does not run leaves the working binary as it was. Two
 // installs at once each have their own temporary file.
@@ -296,7 +296,7 @@ func installScript(bin string) string {
 		`trap 'rm -f "$tmp"' EXIT`,
 		`cat > "$tmp"`,
 		`chmod +x "$tmp"`,
-		`[ -s "$tmp" ] && "$tmp" version 2>/dev/null | grep -q '^laatmux ' || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
+		`v=$("$tmp" version 2>/dev/null) && [ "${v#laatmux }" != "$v" ] || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
 		`mv -f "$tmp" "$bin"`,
 		`"$bin" stop`,
 	}, "; ")
