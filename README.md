@@ -6,7 +6,9 @@ spike: a per-host status daemon, a merged multi-host listing, a launcher for
 managed sessions, and jump. Milestone two, worktrees and workspaces, is
 designed in [docs/milestone-two.md](docs/milestone-two.md) and built.
 Milestone three, the sidebar, the dashboard, `split` and `run`, is designed
-in [docs/milestone-three.md](docs/milestone-three.md).
+in [docs/milestone-three.md](docs/milestone-three.md) and built. Milestone
+four, the task form and the background add, is designed in
+[docs/milestone-four.md](docs/milestone-four.md).
 
 ## Layout
 
