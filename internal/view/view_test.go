@@ -535,15 +535,21 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m.Follow = true
 	in := fixtureInput(now)
 	m.SetRows(rows.Build(in))
-	// Filter to rows that are not the viewer's: nothing is selected,
-	// and Enter and s have nothing to act on.
+	// Filter to rows that are not the viewer's: rows remain, none is
+	// selected, and Enter has nothing to act on.
+	m.Handle(Key{Rune: '/'})
 	for _, r := range "notes" {
-		m.Handle(Key{Rune: '/'})
-		m.Filtering = true
 		m.Handle(Key{Kind: KeyRune, Rune: r})
+	}
+	m.Handle(Key{Kind: KeyEnter}) // leaves the filter typing, keeps the filter
+	if vis := m.Visible(); len(vis) == 0 || m.Filter != "notes" {
+		t.Fatalf("filter %q left %d rows", m.Filter, len(vis))
 	}
 	if got := m.Selection(); got != nil || !m.Follow {
 		t.Fatalf("filtered away: %+v follow=%v", got, m.Follow)
+	}
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+		t.Fatalf("Enter with the viewer's row filtered away: %+v", a)
 	}
 	m.Handle(Key{Kind: KeyEsc})
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
