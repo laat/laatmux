@@ -82,12 +82,19 @@ of the add, is answered to a `follow` with `interrupted` and the state
 recorded, and the relay resends the add under the same id, which the
 host resumes: the steps by inspection, the allocation and the launch by
 the journal. Only an id the journal has never seen is a new add, and
-then only if it is young: every add carries `submitted_at`, and the
-host refuses one older than the sweep's thirty days with `submission
-expired`, so a resend that arrives after its tombstone is gone can
-never execute; the relay shows it as `outcome unknown`. A daemon that
-dies between writing a decision and writing its outcome leaves a state
-that is reported as `unknown` and never resolved by guessing.
+only while its submission is young, by a contract the two clocks can
+keep: the relay owns a lifetime, seven days from submit by the
+laptop's clock, carried on every resend as `submitted_at` unchanged,
+after which it stops resending and shows `outcome unknown`; the host
+owns retention, thirty days by its own clock from the moment it first
+saw the id, which the sweep respects; and the host refuses an add
+whose `submitted_at` is more than a day in its future or more than the
+retention in its past with `submission expired`. A resend inside the
+relay's seven days reaches a host whose tombstone is inside its thirty,
+unless the clocks disagree by more than three weeks, which the future
+check catches from the other side. A daemon that dies between writing
+a decision and writing its outcome leaves a state that is reported as
+`unknown` and never resolved by guessing.
 
 ## Where the background add lives
 
@@ -226,8 +233,13 @@ pending record:
   session already in the root and was not a resend of the launch that
   made it, `session existed`, the case of `a` on a worktree row that
   has a session, or of a branch reused on purpose. Needs the user.
-- `unknown`: a crash window above. Needs the user, and no daemon
-  delivers again on its own.
+- `unknown`: a crash window above, or an error after a side effect
+  may have taken: `new-session` failing after the session was made,
+  which the managed server's configuration step can do, or the paste
+  done and Enter refused. Needs the user, and no daemon delivers again
+  on its own. `not delivered` is reserved for what provably did not
+  transfer: the pane never ready, so nothing was pasted, or the paste
+  refused before it began.
 
 Nothing is inferred from a session's existence. The skip path takes the
 journal's word: a resend under a known id resumes the recorded state; a
@@ -392,19 +404,27 @@ the rows to hide the worktree row behind the pending one, and by the
 views to offer `p` and `x`: the add succeeded and the delivery state is
 `delivered` or `none`. A record that is complete is retired on a
 worktree listing that is after the result, which the host makes
-provable: its worktree listings are numbered, `listing` counts each
-poll that succeeded, the poll and its publication run under one lock
-so an older observation never overwrites a newer, a snapshot carries
-the number of the listing it reflects, and `finish` runs a poll before
-it emits the result and puts the number of the first successful
-listing after the mutation on the result, waiting for one if the poll
-at hand fails. The relay, on its own connection, takes plain snapshots
-after the result until one carries that number or a higher. A worktree
-at the root in that snapshot hands the row over to the worktree row,
-once the merged stream shows it too, and the file goes; no worktree at
-the root is `done, worktree gone`, a row that needs the user only to
-be dismissed, and the file stays until then. Until such a snapshot the
-row says `done, awaiting the listing`. While a
+provable without ever holding the result for it: its worktree listings
+are numbered within a daemon generation, `listing` is the generation,
+the daemon's start, and a count of the polls that succeeded in it, the
+poll and its publication run under one lock so an older observation
+never overwrites a newer, a snapshot carries the listing it reflects,
+and the result carries the barrier, the count after the last listing
+that completed before the add's mutation, in the current generation.
+`finish` pokes a poll as today and emits the result at once; a listing
+that fails leaves the count where it was and the host row's error
+saying why, and the barrier stands. The relay, on its own connection,
+takes plain snapshots after the result until one satisfies the barrier:
+the same generation at that count or higher, or any later generation
+with a successful listing, since a daemon that started after the
+mutation lists after it. A worktree at the root in that snapshot hands
+the row over to the worktree row, once the merged stream shows it too,
+and the file goes; no worktree at the root is `done, worktree gone`, a
+row that needs the user only to be dismissed, and the file stays until
+then. Until such a snapshot the row says `done, awaiting the listing`,
+with the host's listing error when there is one, and the outcome is
+already reported: the foreground command returns, the relay's channel
+closes, only the retirement waits. While a
 pending record exists that is not retired, the worktree row for the
 same environment and root is not drawn: the pending row stands for it,
 with more to say.
@@ -421,13 +441,22 @@ alias, and after a refresh it takes the row whose id is the anchor's
 id, else the row whose id is the anchor's alias, which is the worktree
 row once the pending one has gone, else the row whose alias is the
 anchor's id, and re-anchors on what it found. The pair lives in the
-model, so it survives a refresh that coalesced the intermediate state
-and a resnapshot that never showed both rows at once. So a task
-selected during `clone` stays selected when the root arrives, when the
-worktree row takes over, and through the reorder the sort makes; two
-pending records for one explicit branch are two rows with two ids and
-one alias, the anchor follows the one that was selected, and the
-worktree row is hidden while either stands.
+model, so it survives a refresh that coalesced the intermediate state.
+A view may never have seen the alias at all: a row selected during
+`clone` has no root yet, and the record may be retired before the next
+refresh, or while the view was disconnected. So the handoff is carried
+by the stream as well: the `remove` of a retired record names the
+worktree id it became, and a merged snapshot carries the recent
+handoffs, the last hour's pairs of command id and worktree id, which
+the merged client keeps in a map of its own that a resnapshot merges
+into rather than replaces. The model's anchor lookup consults that map
+last: an anchor whose id is a command the map has retired re-anchors
+on the worktree row it names. So a task selected during `clone` stays
+selected when the root arrives, when the worktree row takes over, and
+through the reorder the sort makes, whether or not the view saw the
+steps between; two pending records for one explicit branch are two
+rows with two ids and one alias, the anchor follows the one that was
+selected, and the worktree row is hidden while either stands.
 
 A pending record that needs the user stays until dismissed, through
 laptop daemon restarts, with its outcome and reason in the file; a
@@ -453,9 +482,9 @@ The merged stream carries the pending records with the host, agent and
 session records:
 
 ```
-<- {type: snapshot, seq, hosts, agents, worktrees, sessions, pendings: [...]}
+<- {type: snapshot, seq, hosts, agents, worktrees, sessions, pendings: [...], handoffs: [{id, worktree_id}]}
 <- {type: upsert, seq, pending: {...}}
-<- {type: remove, seq, pending_id}
+<- {type: remove, seq, pending_id, worktree_id}    worktree_id when retired into a worktree row
 ```
 
 The pending record, without the prompt:
@@ -478,24 +507,26 @@ again.
 On the host, under a new capability `task`:
 
 ```
--> {type: add, ..., prompt, generated, submitted_at}
+-> {type: add, ..., prompt, generated, submitted_at}       submitted_at unchanged on every resend
 <- {type: progress, id, n, stage: allocate, state: done, detail, branch, root}
-<- {type: result, id, ok, root, session, pane_id, branch, prompt: <state>, listing, error}
+<- {type: result, id, ok, root, session, pane_id, branch, prompt: <state>, listing: {generation, n}, error}
 -> {type: prompt, id, attempt, prompt}
 <- {type: result, id, attempt, ok, prompt: <state>, error}
 -> {type: follow, id, attempt, after}              an attempt whose reply was lost
 <- {type: result, id, ok: false, error: interrupted, stage}   a journaled add the daemon died in
 <- {type: result, id, ok: false, error: submission expired}   an add older than the journal keeps
-<- {type: snapshot, seq, listing, ...}             the host's own stream, numbered listings
+<- {type: snapshot, seq, listing: {generation, n}, ...}   the host's own stream, numbered listings
 ```
 
 The delivery state is `none`, `delivered`, `not delivered` or
 `unknown`, with the reason in `error` where there is one. `generated`
 asks the host to allocate the branch; `branch` and `root` on the
 `allocate` progress line and on the result are the ones used;
-`listing` on the result is the number of the first successful worktree
-listing after the add's mutation, and on a snapshot the number of the
-listing it reflects. A `prompt` message is a command like `add`, with
+`listing` on the result is the barrier, the daemon generation and the
+count a successful listing after the add's mutation will reach, and on
+a snapshot the generation and count of the listing it reflects; a
+later generation with any successful listing satisfies a barrier from
+an earlier one. A `prompt` message is a command like `add`, with
 the journal behind it: a repeated attempt is answered from the record,
 `follow` with an attempt reattaches to one in flight, and `follow` with
 an attempt the host never saw is answered `unknown attempt`, on which
@@ -519,9 +550,9 @@ sent.
    typed-in delivery through the detector's readiness with the bound
    identity and a `Paste` on the managed server, the attempts and their
    states, adoption on `p` where no target was recorded, the `prompt`
-   message with `follow`, the numbered listings and the poll before the
-   result, the sweep of attempt buffers at start, `add -p` in the CLI
-   printing the state. Verified on the
+   message with `follow`, the numbered listings by generation and the
+   barrier on the result, the sweep of attempt buffers at start, `add
+   -p` in the CLI printing the state. Verified on the
    VM with `claude` taking the prompt positionally, with a `cmd` without
    the placeholder, with the daemon killed between `launching` and
    `launched` leaving `unknown`, with a resend under a known id keeping
@@ -530,9 +561,10 @@ sent.
 3. The relay in the laptop's daemon: `add` with `relay`, the pending
    file before the answer, the environment bound at accept or at first
    contact, the pending records in the merged stream, the follow with
-   backoff and the resend on `interrupted`, re-follow on restart, the
-   snapshots after the result up to its listing number and the
-   retirement rule, the prompt scrubbed on completion, `dismiss`, the
+   backoff and the resend on `interrupted`, the seven-day lifetime,
+   re-follow on restart, the snapshots after the result up to its
+   barrier and the retirement rule, the handoffs on `remove` and in
+   snapshots, the prompt scrubbed on completion, `dismiss`, the
    `prompt` message with attempts persisted first, `add --detach`.
    Verified with the laptop daemon restarted mid-add and mid-attempt,
    the host's daemon restarted mid-add, and the host unreachable for
@@ -541,7 +573,8 @@ sent.
    tests, the branch proposal, `compose`, the dashboard's `a` on it with
    the foreground fallback for an older daemon.
 5. The pending rows in the rows package and both views, the join by
-   environment and root, the anchor pair in the model, the completion
+   environment and root, the anchor pair in the model with the handoff
+   map, the completion
    predicate, `p` and `x`; verified under the user's tmux config with a
    submit from the popup and the row followed through to the agent
    working on the prompt.
