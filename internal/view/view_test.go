@@ -316,6 +316,21 @@ func TestDecoderSplit(t *testing.T) {
 	if got := d.Flush(); len(got) != 0 {
 		t.Errorf("flushed partial mouse report = %+v", got)
 	}
+	// Its tail arriving after the flush is swallowed through the final
+	// byte; the key after it is read.
+	if got := d.Feed([]byte("5M")); len(got) != 0 {
+		t.Errorf("late tail of a mouse report = %+v", got)
+	}
+	if got := d.Feed([]byte("j")); len(got) != 1 || got[0].Rune != 'j' {
+		t.Errorf("key after a swallowed tail = %+v", got)
+	}
+	if got := d.Feed([]byte("\x1b[<0;1")); len(got) != 0 {
+		t.Errorf("second partial report = %+v", got)
+	}
+	d.Flush()
+	if got := d.Feed([]byte("2;3Mk")); len(got) != 1 || got[0].Rune != 'k' {
+		t.Errorf("tail and key in one read = %+v", got)
+	}
 	if got := d.Feed([]byte("\x1bO")); len(got) != 0 {
 		t.Errorf("partial SS3 read at once: %+v", got)
 	}

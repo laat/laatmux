@@ -34,12 +34,28 @@ const (
 // a lone escape is the escape key and the rest are read as bytes.
 type Decoder struct {
 	pending []byte
+	// discard is set when Flush dropped an incomplete escape sequence:
+	// the rest of it may still arrive, and is swallowed through its
+	// final byte rather than read as the keys its bytes spell.
+	discard bool
 }
 
 // Feed adds input and returns the keys complete so far. Pending reports
 // whether bytes are held back; the caller flushes them after a short
 // wait, since a bare escape looks like the start of a sequence.
 func (d *Decoder) Feed(b []byte) []Key {
+	if d.discard {
+		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e.
+		i := 0
+		for i < len(b) && (b[i] < 0x40 || b[i] > 0x7e) {
+			i++
+		}
+		if i == len(b) {
+			return nil
+		}
+		b = b[i+1:]
+		d.discard = false
+	}
 	d.pending = append(d.pending, b...)
 	keys, rest := parse(d.pending, false)
 	d.pending = rest
@@ -50,9 +66,12 @@ func (d *Decoder) Feed(b []byte) []Key {
 func (d *Decoder) Pending() bool { return len(d.pending) > 0 }
 
 // Flush reads the held bytes as they are: a bare escape is the escape
-// key; an incomplete sequence or rune is dropped, never read as the
-// keys its bytes spell.
+// key; an incomplete sequence is dropped and its continuation, should
+// it arrive, discarded; an incomplete rune is dropped.
 func (d *Decoder) Flush() []Key {
+	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
+		d.discard = true
+	}
 	keys, _ := parse(d.pending, true)
 	d.pending = nil
 	return keys
