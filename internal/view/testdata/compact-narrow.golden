@@ -1,5 +1,5 @@
 ..B|box  DOWN  ssh: connect to host box port
-S..|>* working  codex   proj/task   @mac  8s
+S..|>⟨⠋⟩ working  codex   proj/task   @mac  8s
 .D.| * working  claude  proj/down   ‹@box› 10m
 ...| - idle     claude  proj/other   ‹@vm›  1h
 .D.| - idle     claude  proj/de ‹@vm›  3h gone

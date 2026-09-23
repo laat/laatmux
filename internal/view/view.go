@@ -234,10 +234,53 @@ func (m *Model) clamp(n int) {
 	}
 }
 
-// Span is a run of text with its own attributes.
+// Span is a run of text with its own attributes. Fg is an SGR colour
+// code, 0 for the terminal's own.
 type Span struct {
 	Text string
 	Dim  bool
+	Fg   int
+}
+
+// The spinner a working row's mark cycles through: braille frames as
+// workmux drew them, in cyan, one frame per spinTick from the clock,
+// so the panes in every window spin in step. It replaces the "*" ls
+// prints for a live working agent in the views only; a dim row, whose
+// agent is gone or whose host is down, keeps the mark.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const (
+	spinTick  = 100 * time.Millisecond
+	spinnerFg = 36 // cyan
+)
+
+// spins reports whether the row's mark is the spinner: a live working
+// agent on a row that is not dim.
+func spins(r rows.Row) bool {
+	return r.Agent != nil && !r.Dim && r.Agent.Activity == protocol.Working && r.Agent.Liveness == protocol.Alive
+}
+
+// Spinning reports whether any visible row spins, so the host ticks
+// the spinner only while there is one to draw.
+func (m *Model) Spinning() bool {
+	for _, it := range m.Visible() {
+		if spins(*it.Row) {
+			return true
+		}
+	}
+	return false
+}
+
+// mark is the row's mark as a span: the spinner frame for Now on a
+// spinning row, else the mark ls prints.
+func (m *Model) mark(r rows.Row) Span {
+	if spins(r) {
+		// A zero Now, before the first draw, is a negative count.
+		n := int64(len(spinnerFrames))
+		i := (m.Now.UnixNano()/int64(spinTick))%n + n
+		return Span{Text: spinnerFrames[i%n], Fg: spinnerFg}
+	}
+	return Span{Text: r.Mark()}
 }
 
 // Line is one drawn line: spans and line-wide attributes.
@@ -386,7 +429,8 @@ func (m *Model) age(r rows.Row) string {
 func (m *Model) tile(r rows.Row) []Line {
 	w := m.Width
 	where := m.where(r)
-	head := m.gutter(r) + r.Mark() + " "
+	mark := m.mark(r)
+	head := m.gutter(r) + mark.Text + " "
 	nameW := w - width(head) - width(where.Text) - 1
 	first := Line{Dim: r.Dim}
 	if nameW < 4 {
@@ -394,7 +438,7 @@ func (m *Model) tile(r rows.Row) []Line {
 	} else {
 		name := fit(r.Name, nameW)
 		gap := w - width(head) - width(name) - width(where.Text)
-		first.Spans = []Span{{Text: head + name + strings.Repeat(" ", gap)}, where}
+		first.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: " " + name + strings.Repeat(" ", gap)}, where}
 	}
 	lines := []Line{first}
 	if r.Agent == nil {
@@ -413,7 +457,8 @@ func (m *Model) tile(r rows.Row) []Line {
 func (m *Model) compact(r rows.Row) []Line {
 	w := m.Width
 	where := m.where(r)
-	left := m.gutter(r) + r.Mark() + " "
+	mark := m.mark(r)
+	left := m.gutter(r) + mark.Text + " "
 	age := ""
 	if r.Agent == nil {
 		left += fmt.Sprintf("%-16s ", r.State())
@@ -430,7 +475,8 @@ func (m *Model) compact(r rows.Row) []Line {
 		line.Spans = []Span{{Text: fit(left+r.Name, w)}}
 	} else {
 		name := fit(r.Name, nameW)
-		line.Spans = []Span{{Text: left + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
+		rest := left[len(m.gutter(r))+len(mark.Text):]
+		line.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: rest + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
 	}
 	lines := []Line{line}
 	if m.Titles && r.Agent != nil {
@@ -454,7 +500,8 @@ func Text(lines []Line) string {
 
 // Debug is the lines with their attributes made visible, for golden
 // tests: a flag column with S for the selection, D for a dim line, B
-// for bold, then the text with dim spans between ‹ and ›.
+// for bold, then the text with dim spans between ‹ and › and coloured
+// spans between ⟨ and ⟩.
 func Debug(lines []Line) string {
 	var b strings.Builder
 	for _, l := range lines {
@@ -471,9 +518,12 @@ func Debug(lines []Line) string {
 		b.Write(flags)
 		b.WriteByte('|')
 		for _, s := range l.Spans {
-			if s.Dim {
+			switch {
+			case s.Dim:
 				b.WriteString("‹" + s.Text + "›")
-			} else {
+			case s.Fg != 0:
+				b.WriteString("⟨" + s.Text + "⟩")
+			default:
 				b.WriteString(s.Text)
 			}
 		}
@@ -482,7 +532,9 @@ func Debug(lines []Line) string {
 	return b.String()
 }
 
-// ANSI encodes a line for the terminal, ending with a reset.
+// ANSI encodes a line for the terminal, ending with a reset. A span's
+// own attribute, dim or a colour, is set for the span and the line's
+// restored after it.
 func ANSI(l Line) string {
 	var b strings.Builder
 	attrs := func() {
@@ -498,8 +550,13 @@ func ANSI(l Line) string {
 	}
 	attrs()
 	for _, s := range l.Spans {
-		if s.Dim && !l.Dim {
-			b.WriteString("\x1b[2m")
+		if (s.Dim && !l.Dim) || s.Fg != 0 {
+			if s.Dim && !l.Dim {
+				b.WriteString("\x1b[2m")
+			}
+			if s.Fg != 0 {
+				fmt.Fprintf(&b, "\x1b[%dm", s.Fg)
+			}
 			b.WriteString(s.Text)
 			b.WriteString("\x1b[0m")
 			attrs()

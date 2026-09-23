@@ -606,3 +606,71 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 		t.Fatalf("empty list: %+v follow=%v", got, m.Follow)
 	}
 }
+
+// A live working row's mark is the spinner frame for the clock, in
+// colour; the frame advances every spinTick and wraps; a gone or dim
+// working agent keeps the plain mark; Spinning says whether a tick is
+// wanted at all.
+func TestSpinner(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	in := fixtureInput(now)
+	m.SetRows(rows.Build(in))
+	if !m.Spinning() {
+		t.Fatal("working rows and no spinning")
+	}
+	frameOf := func(name string, at time.Time) Span {
+		m.Now = at
+		for _, it := range m.Visible() {
+			if it.Row.Name == name {
+				return m.mark(*it.Row)
+			}
+		}
+		t.Fatalf("no row %s", name)
+		return Span{}
+	}
+	first := frameOf("proj/task", now)
+	if first.Fg != spinnerFg || first.Text != spinnerFrames[0] {
+		t.Fatalf("frame at t0: %+v", first)
+	}
+	if next := frameOf("proj/task", now.Add(spinTick)); next.Text != spinnerFrames[1] || next.Fg != spinnerFg {
+		t.Fatalf("frame at t0+tick: %+v", next)
+	}
+	if wrapped := frameOf("proj/task", now.Add(time.Duration(len(spinnerFrames))*spinTick)); wrapped.Text != spinnerFrames[0] {
+		t.Fatalf("frame after a full cycle: %+v", wrapped)
+	}
+	// A zero Now, before the first draw, is a frame too, not a panic.
+	if z := frameOf("proj/task", time.Time{}); z.Fg != spinnerFg || z.Text == "" {
+		t.Fatalf("frame at the zero time: %+v", z)
+	}
+	// Working but dim, on the down host: the plain mark.
+	if down := frameOf("proj/down", now); down.Text != "*" || down.Fg != 0 {
+		t.Fatalf("dim working row: %+v", down)
+	}
+	if blocked := frameOf("laatmux/fix-ls", now); blocked.Text != "!" || blocked.Fg != 0 {
+		t.Fatalf("blocked row: %+v", blocked)
+	}
+	// Every working agent gone: nothing spins.
+	for i := range in.Agents {
+		if in.Agents[i].Activity == protocol.Working {
+			in.Agents[i].Liveness = protocol.Gone
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if m.Spinning() {
+		t.Fatal("gone agents spin")
+	}
+	// The colour reaches the terminal and the plain text does not
+	// carry it.
+	l := Line{Spans: []Span{{Text: ">"}, {Text: "⠋", Fg: spinnerFg}, {Text: " x"}}}
+	if got := ANSI(l); !strings.Contains(got, "\x1b[36m⠋\x1b[0m") || !strings.HasSuffix(got, " x\x1b[0m") {
+		t.Errorf("ANSI: %q", got)
+	}
+	if got := Text([]Line{l}); got != ">⠋ x\n" {
+		t.Errorf("Text: %q", got)
+	}
+	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨⠋⟩ x") {
+		t.Errorf("Debug: %q", got)
+	}
+}
