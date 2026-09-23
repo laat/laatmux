@@ -331,6 +331,21 @@ func TestDecoderSplit(t *testing.T) {
 	if got := d.Feed([]byte("2;3Mk")); len(got) != 1 || got[0].Rune != 'k' {
 		t.Errorf("tail and key in one read = %+v", got)
 	}
+	// A fresh report while discarding is a new sequence, read whole, not
+	// a tail whose digits leak out.
+	d.Feed([]byte("\x1b[<0;1"))
+	d.Flush()
+	if got := d.Feed([]byte("\x1b[<0;12;5M")); len(got) != 1 || got[0].Kind != KeyMouse || got[0].X != 12 {
+		t.Errorf("fresh report during discard = %+v", got)
+	}
+	d.Feed([]byte("\x1bO"))
+	d.Flush()
+	if got := d.Feed([]byte("\x1b")); len(got) != 0 || !d.Pending() {
+		t.Errorf("fresh escape during discard = %+v", got)
+	}
+	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc {
+		t.Errorf("flushed fresh escape = %+v", got)
+	}
 	if got := d.Feed([]byte("\x1bO")); len(got) != 0 {
 		t.Errorf("partial SS3 read at once: %+v", got)
 	}

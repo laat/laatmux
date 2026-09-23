@@ -45,15 +45,20 @@ type Decoder struct {
 // wait, since a bare escape looks like the start of a sequence.
 func (d *Decoder) Feed(b []byte) []Key {
 	if d.discard {
-		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e.
+		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e. A
+		// fresh escape means the dropped sequence never completed; it
+		// starts a new one and is parsed from there.
 		i := 0
-		for i < len(b) && (b[i] < 0x40 || b[i] > 0x7e) {
+		for i < len(b) && (b[i] < 0x40 || b[i] > 0x7e) && b[i] != 0x1b {
 			i++
 		}
 		if i == len(b) {
 			return nil
 		}
-		b = b[i+1:]
+		if b[i] != 0x1b {
+			i++
+		}
+		b = b[i:]
 		d.discard = false
 	}
 	d.pending = append(d.pending, b...)
