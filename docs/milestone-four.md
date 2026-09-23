@@ -272,7 +272,13 @@ verified live agent, records it as the target and delivers; no such
 session, or an agent not verified, is `not delivered: no agent to
 deliver to`. `p` is offered only on a row whose state is `not
 delivered` or `unknown` with the prompt retained and no attempt
-unresolved. `x` dismisses the row and deletes the file. `jump`
+unresolved. It has an end: a `prompt` message for an id whose journal
+entry the host has swept, thirty days after the add ended, is answered
+`recovery expired`, the row says so, and `p` is withdrawn from it; the
+prompt is still the user's, in the pending file, and `laatmux tasks
+show <id>` prints it to stdout so it can be pasted by hand, as `tasks`
+lists the pending records with their states; `x` then dismisses the
+row. `x` dismisses the row and deletes the file. `jump`
 works on the row meanwhile, since the agent is up. `laatmux add -p` in
 the foreground prints the delivery state as its last line and exits 0
 when the add succeeded whatever the delivery, since the worktree and
@@ -408,8 +414,11 @@ views to offer `p` and `x`: the add succeeded and the delivery state is
 `delivered` or `none`. A record that is complete is retired on a
 worktree listing that began after the result's mutation, which the host
 makes provable without ever holding the result for it. The host counts
-its git mutations: `revision`, under the daemon's mutex, stepped when
-an add or an rm has changed what git registers. A poll reads the
+observations owed: `revision`, under the daemon's mutex, stepped at the
+end of every add that succeeded, whether it made the worktree, resumed
+one or adopted one made by hand, since a listing older than the add
+cannot stand for its outcome whatever git's registration did, and
+stepped by `rm` when it removed one. A poll reads the
 revision before it reads git and publishes its listing stamped with
 that revision and the daemon generation, the daemon's start; the poll
 and its publication run under one lock so an older observation never
@@ -568,8 +577,9 @@ sent.
    typed-in delivery through the detector's readiness with the bound
    identity and a `Paste` on the managed server, the attempts and their
    states, adoption on `p` where no target was recorded, the `prompt`
-   message with `follow`, the mutation revision and the stamped
-   listings with the barrier on the result, the sweep of attempt
+   message with `follow`, the observation revision stepped by every
+   successful add and the stamped listings with the barrier on the
+   result, `recovery expired` for a prompt whose journal is swept, the sweep of attempt
    buffers at start, the lifetime in the send path, `add -p` in the CLI
    printing the state. Verified on the
    VM with `claude` taking the prompt positionally, with a `cmd` without
@@ -583,8 +593,9 @@ sent.
    backoff and the resend on `interrupted`, the seven-day lifetime,
    re-follow on restart, the snapshots after the result up to its
    barrier and the retirement rule, the handoffs written before the
-   removal, on `remove` and in snapshots, the prompt scrubbed on completion, `dismiss`, the
-   `prompt` message with attempts persisted first, `add --detach`.
+   removal, on `remove` and in snapshots, the prompt scrubbed on
+   completion, `dismiss`, the `prompt` message with attempts persisted
+   first, `add --detach`, `tasks` and `tasks show`.
    Verified with the laptop daemon restarted mid-add and mid-attempt,
    the host's daemon restarted mid-add, and the host unreachable for
    longer than the client's three attempts.
