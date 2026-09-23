@@ -30,6 +30,7 @@ const (
 	TypeRun       = "run"       // client -> daemon, run a command in a worktree and stream its output
 	TypeFollow    = "follow"    // client -> daemon, attach to a command sent earlier under the same id
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
+	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
@@ -53,6 +54,11 @@ const (
 	// CapRun is the run command, with cancel. A daemon with run has
 	// follow.
 	CapRun = "run"
+	// CapShutdown is the shutdown message: the daemon exits as on
+	// SIGTERM, cancelling its runs and waiting for them. stop uses it
+	// so the process it ends is the daemon that answered, not a pid a
+	// file remembers.
+	CapShutdown = "shutdown"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.
@@ -214,13 +220,16 @@ type Session struct {
 type Message struct {
 	Type string `json:"type"`
 
-	// hello
+	// hello. PID is the daemon's, so a client that read a runtime record
+	// can see that the daemon it reached is the one the record names;
+	// a socket path is reused by the next daemon.
 	Protocol      int      `json:"protocol,omitempty"`
 	Client        string   `json:"client,omitempty"`
 	EnvironmentID string   `json:"environment_id,omitempty"`
 	Version       string   `json:"version,omitempty"`
 	Host          string   `json:"host,omitempty"`
 	Capabilities  []string `json:"capabilities,omitempty"`
+	PID           int      `json:"pid,omitempty"`
 
 	// subscribe. Merged asks for every configured host's records in one
 	// stream; without it the daemon sends its own host's records only.

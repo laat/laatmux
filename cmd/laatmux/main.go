@@ -66,6 +66,10 @@ func main() {
 		err = cmdUnsettle(ctx, os.Args[2:])
 	case "hosts":
 		err = cmdHosts(ctx, os.Args[2:])
+	case "upgrade":
+		err = cmdUpgrade(ctx, os.Args[2:])
+	case "stop":
+		err = cmdStop(ctx, os.Args[2:])
 	case "repos":
 		err = cmdRepos(ctx, os.Args[2:])
 	case "explain":
@@ -117,7 +121,9 @@ func usage() {
   settle    laatmux settle [<host>/<repo>/<branch>]     collapse the workspace in ls
   unsettle  laatmux unsettle [<host>/<repo>/<branch>]
   new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]   managed session, no worktree
-  hosts     reachability and daemon version per host
+  hosts     reachability and daemon version per host; marks daemons that differ from this build
+  upgrade   laatmux upgrade <host>... [--src dir] [--bin file]   build for the host, install, restart its daemon
+  stop      end this machine's daemon cleanly; the next command starts one again
   repos     known repositories and where each lands on each host
   explain   laatmux explain <pane-id>       show detection inputs and decision
   version

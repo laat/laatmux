@@ -12,7 +12,7 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -33,7 +33,9 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 go build -o laatmux ./cmd/laatmux
 ./laatmux ls        # starts the local daemon on demand, lists workspaces and agents
 ./laatmux watch     # live, redraws on change
-./laatmux hosts     # reachability, daemon version, capabilities
+./laatmux hosts     # reachability, daemon version, capabilities; marks daemons that differ from this build
+./laatmux upgrade vm    # build for the host from this checkout, install over ssh, restart its daemon
+./laatmux stop      # end this machine's daemon cleanly; the next command starts one again
 ./laatmux repos     # each known repository's name and where it lands on each host
 ./laatmux add fix-ls                          # worktree and agent for the repo of the current directory, on the last-used host
 ./laatmux add fix-ls --repo proj --host vm --agent claude
@@ -323,6 +325,52 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   disconnects leaves the run going, as an `add` keeps going.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
+
+## Upgrading a host
+
+`laatmux upgrade <host>...` puts this checkout's build on a host and
+restarts its daemon. It asks the host for `uname -sm`, builds for that
+platform with `CGO_ENABLED=0` and the version from `git describe`, once
+per platform per run (`--bin` installs a binary built elsewhere, `--src`
+names the checkout when the command runs from another directory; flags
+go before, between or after the hosts), then streams the binary over the
+same ssh alias the client uses into an `sh` script: written to a fresh
+temporary name beside the configured `bin`, checked to answer
+`version` as laatmux does, one line with the protocol and nothing after
+it, exit 0, which a build for the wrong platform, a truncated copy or
+an empty file fails (an empty file would run as a shell script that
+succeeds) and then leaves the working binary as it was, and renamed
+over it, so the install is atomic, the running daemon keeps its own
+inode and two installs at once do not share a file; then `laatmux stop`
+with the new binary. The `bin` is the same shell word the bridge runs:
+a path under `~` is the remote home, anything else one quoted word, a
+bare name found on the remote PATH, so a bare name cannot be
+reinstalled once the binary is gone, there being no path to put it at;
+set `bin` to a path for that. `stop` reaches the daemon over its
+socket, without starting one, and sends `shutdown`, capability
+`shutdown`, which the daemon answers and then exits on as it does on
+`SIGTERM`, cancelling its runs and waiting for them; the process that
+ends is the one that answered the hello, never a pid a file remembers,
+which a crash can leave for another process to inherit. The runtime
+record is read once and its address dialled, and the daemon's hello
+carries its pid, so a replacement that took the same socket path
+between the read and the dial is seen and the record read again. A
+daemon from before the message has no pid in its hello and gets
+`SIGTERM` at the record's pid when the record still stands. A daemon
+that holds the startup lock but answers on no socket is starting or
+shutting down, and `stop` keeps trying to reach it while that holder has
+the lock. Then `stop` waits for the lock to leave that daemon's hands,
+released by the kernel when it exits, reaped or not, or taken by a
+replacement a client started meanwhile. The next connection starts the new build, and
+`upgrade` makes that connection last and prints the version. Nothing
+before that connection needs a daemon on the host, so a host whose
+daemon is stopped or whose binary is gone is upgraded too; the script
+says what the old binary was. Each remote step is bounded, so a host
+that stops answering is reported and skipped rather than holding the
+others. The local host is upgraded in place of the running executable
+the same way. `hosts` marks every
+daemon whose build is not this client's, since versions are `git
+describe` strings, equal or not, never ordered.
 
 ## Sidebar and dashboard
 

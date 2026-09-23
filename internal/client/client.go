@@ -100,10 +100,6 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 		}
 		r, w, close = nc, nc, func() { nc.Close() }
 	} else {
-		bin := h.Bin
-		if bin == "" {
-			bin = "laatmux"
-		}
 		// ServerAlive turns a silent network loss into an ssh exit within
 		// about 45 s, so the client sees EOF and reconnects rather than
 		// showing a connected host with frozen state.
@@ -111,7 +107,7 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 			"-o", "BatchMode=yes",
 			"-o", "ServerAliveInterval=15",
 			"-o", "ServerAliveCountMax=3",
-			h.SSH, bin+" bridge")
+			h.SSH, RemoteBin(h.Bin)+" bridge")
 		// ssh's stderr is kept rather than passed through: a client shows
 		// it in the host's row, and the merging daemon puts it in the host
 		// record, where the user sees it. On the terminal it would
@@ -127,6 +123,31 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 		return completeHello(ctx, c)
 	}
 	return Connect(ctx, h, r, w, close)
+}
+
+// RemoteBin is the configured binary as a word for the remote login
+// shell: a path under ~ is the remote home, spelled so the shell expands
+// it whatever it does with quotes; anything else is quoted as one word,
+// a bare name included, which the shell then finds on its PATH. The
+// bridge and upgrade's install use the same word, so the binary the
+// bridge runs is the one upgrade replaces.
+func RemoteBin(bin string) string {
+	if bin == "" {
+		bin = "laatmux"
+	}
+	if rest, ok := strings.CutPrefix(bin, "~/"); ok {
+		return `"$HOME"/` + shellQuote(rest)
+	}
+	return shellQuote(bin)
+}
+
+// shellQuote makes s one word for a POSIX shell; a plain word stays as
+// it is.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~=") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Connect completes the hello exchange over an open transport: r and w
@@ -332,9 +353,16 @@ func dialRuntime() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	network, addr, ok := strings.Cut(rt.Address, ":")
+	return DialAddress(rt.Address)
+}
+
+// DialAddress connects to a daemon at a runtime file's address, so a
+// caller that read the record itself talks to the daemon that record
+// names.
+func DialAddress(address string) (net.Conn, error) {
+	network, addr, ok := strings.Cut(address, ":")
 	if !ok {
-		return nil, fmt.Errorf("laatmux: bad runtime address %q", rt.Address)
+		return nil, fmt.Errorf("laatmux: bad runtime address %q", address)
 	}
 	return net.DialTimeout(network, addr, 2*time.Second)
 }
