@@ -22,7 +22,9 @@ import (
 // display-popup -E: Enter jumps to the selected row and exits, so the
 // popup closes; q exits without. It is one client of the local daemon's
 // merged stream. The default layout is compact because a popup is wide
-// and short; the title line under each row uses the room.
+// and short; the title line under each row uses the room. Beyond the
+// shared keys it has actions: a adds through pickers, x and X remove,
+// s settles, S opens a shell; see actions.go.
 func cmdDashboard(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
 	layoutFlag := fs.String("layout", string(view.Compact), "tiles or compact")
@@ -45,15 +47,15 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, Titles: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  v layout  / filter  f settled  q quit"}
-	return runView(ctx, cfg, c, m, true)
+		Hint: "enter jump  a add  x rm  s settle  S shell  v layout  / filter  f settled  q quit"}
+	return runView(ctx, cfg, c, m, true, true)
 }
 
 // runView runs the view on the terminal against the merged stream. With
 // exitOnJump a successful jump ends the view, which is what a popup
-// wants; a sidebar pane stays. A jump that fails puts its message in
-// the footer either way.
-func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, exitOnJump bool) error {
+// wants; a sidebar pane stays. With actions the dashboard's keys are
+// live. A jump that fails puts its message in the footer either way.
+func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, exitOnJump, actions bool) error {
 	current := ""
 	if cur, err := workspace.Current(ctx); err == nil {
 		current = cur.Name
@@ -67,18 +69,18 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		return err
 	}
 	defer t.Close()
+	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump}
 	return view.Run(ctx, t, m, view.Host{
 		Changed: st.change,
 		Refresh: func(m *view.Model) { st.fill(m, current) },
 		Act: func(m *view.Model, a view.Action) bool {
-			if a.Kind != view.ActionJump {
-				return false
+			switch {
+			case a.Kind == view.ActionJump:
+				return d.jump(m, *m.Selection())
+			case actions:
+				return d.act(m, a)
 			}
-			if err := jumpRow(ctx, cfg, *m.Selection()); err != nil {
-				m.Message = err.Error()
-				return false
-			}
-			return exitOnJump
+			return false
 		},
 	})
 }

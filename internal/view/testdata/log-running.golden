@@ -1,0 +1,4 @@
+..B|add proj/x on vm with claude
+...|worktree  start /w/x
+...|worktree  done  /w/x
+.D.|running  (ctrl-c leaves it running on the host)

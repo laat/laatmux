@@ -29,7 +29,9 @@ const escapeWait = 50 * time.Millisecond
 
 // Run draws the model and handles keys until the host is done, q is
 // pressed, or ctx ends. The rows are refreshed on every change signal
-// and the ages every five seconds; a resize redraws.
+// and the ages every five seconds; a resize redraws. An overlay that
+// finishes on its own is noticed on the change signal, so a host that
+// ends one from another goroutine signals it.
 func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	keys := make(chan []byte)
 	go func() {
@@ -81,6 +83,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			return nil
 		case <-h.Changed:
 			h.Refresh(m)
+			if a := m.Poll(); a.Kind != ActionNone && h.Act(m, a) {
+				return nil
+			}
 		case <-tk.C:
 		case <-winch:
 		case <-flush:

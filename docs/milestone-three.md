@@ -352,11 +352,14 @@ The same view, filling whatever it is run in, with actions. Meant for
 jump is `switch-client` then exit:
 
 ```
-bind-key C-s display-popup -E -w 90% -h 80% -T ' laatmux ' 'laatmux dashboard'
+bind-key C-s display-popup -E -w 90% -h 80% -d '#{pane_current_path}' -T ' laatmux ' 'laatmux dashboard'
 ```
 
-The dashboard has room for a title line per row in compact layout and
-uses it; its default layout is compact because a popup is wide and short.
+`-d` matters: without it the popup starts in the session's directory,
+and the repository picker's default comes from the directory the popup
+runs in. The dashboard has room for a title line per row in compact
+layout and uses it; its default layout is compact because a popup is
+wide and short.
 Actions beyond the shared keys:
 
 | Key | Does |
@@ -366,16 +369,18 @@ Actions beyond the shared keys:
 | `s` | settle or unsettle the selected workspace |
 | `S` | open a shell window in the selected workspace and jump to it |
 
-Pickers are the deferred item from milestone two. Each is a list with the
-same keys as the main view and a filter that starts typing at once, over
-what the config has: repositories with their labels and sources, hosts
-that can `add`, agents. The defaults `laatmux add` would pick are
-preselected: the repository of the directory the popup was opened from
-when it is one, the host and agent from `last.json` for that repository,
-else the config's default order. Fewer than two candidates skips the
-picker for that step. The branch name is a text prompt with the same
-validation `add` applies. `Esc` in any step returns to the list with
-nothing done.
+Pickers are the deferred item from milestone two. Each is a list with a
+filter that starts typing at once, over what the config has:
+repositories with their labels and sources, hosts that can `add`,
+agents. Every printable key goes to the filter, so the letters do not
+navigate as they do in the main view; the arrows and the wheel move the
+selection, `Enter` and a click pick, `Esc` goes back. The defaults
+`laatmux add` would pick are preselected: the repository of the
+directory the popup was opened from when it is one, the host and agent
+from `last.json` for that repository, else the config's default order.
+Fewer than two candidates skips the picker for that step. The branch
+name is a text prompt with the same validation `add` applies. `Esc` in
+any step returns to the list with nothing done.
 
 The sequence then runs the `add` command exactly as the CLI does: the
 same command id rules, the same reconnect, the progress lines drawn in
@@ -384,10 +389,15 @@ session, writes `last.json`, and jumps. On failure the stage and error
 stay on screen until a key, then the list returns with the new worktree
 row in it, since the daemon publishes the worktree as soon as it is
 registered. `x` runs `rm` the same way, and a refusal from git stays on
-screen with the hint to use `X`. There is one implementation of each
-command, in a package the CLI and the dashboard both call, with the
-printing separated from the doing; today they are one function each in
-`cmd/laatmux` and this milestone splits them.
+screen with the hint to use `X`; on success the list returns at once
+with a line saying what went. There is one implementation of each
+command, in `internal/command`, which the CLI and the dashboard both
+call, with the printing separated from the doing: the CLI prints each
+progress line, the dashboard draws it. Resolving the inputs stays with
+the caller, since flags and a selected row are different vocabularies
+for the same request. `s` needs the row's local session to exist, since
+settled is a tag on it; `S` creates the session from the record when
+the row has none, as a jump would.
 
 The dashboard does not preview the agent's screen. Capture is a non-goal
 in issue #1, and the agent is one jump away in a pane that shows the

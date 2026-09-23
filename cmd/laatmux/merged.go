@@ -234,6 +234,14 @@ func (m *merged) applyMerged(msg protocol.Message) {
 	m.notify()
 }
 
+// hostOf is hostOfLocked under the lock: the configured host with the
+// environment id, "" when none has answered a hello with it.
+func (m *merged) hostOf(envID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hostOfLocked(envID)
+}
+
 // hostOfLocked maps a record's environment id to the configured host
 // with it. The daemon forwards records unchanged; the name is the
 // client's to look up.

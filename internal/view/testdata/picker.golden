@@ -1,0 +1,8 @@
+..B|add: repository
+...|> _
+...|  laatmux‹  git@github.com:laat/laatmux.git›
+S..|  proj‹  git@github.com:laat/proj.git›
+...|  other‹  https://example.com/o/other.git›
+...|
+...|
+.D.|type to filter  enter pick  esc back

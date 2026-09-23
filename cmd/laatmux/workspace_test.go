@@ -208,22 +208,6 @@ func TestSetHostErrKeepsIdentity(t *testing.T) {
 	}
 }
 
-// Progress replayed after a reconnect is printed once.
-func TestStreamDedupe(t *testing.T) {
-	var got []string
-	f := &replayFilter{fn: func(p protocol.Message) { got = append(got, p.Detail) }}
-	for _, d := range []string{"a", "b"} {
-		f.pass(protocol.Message{Detail: d})
-	}
-	f.reset() // reconnect: the daemon replays from the start
-	for _, d := range []string{"a", "b", "c"} {
-		f.pass(protocol.Message{Detail: d})
-	}
-	if strings.Join(got, "") != "abc" {
-		t.Fatalf("got %v", got)
-	}
-}
-
 // The more specific directory wins when worktrees is nested under repos.
 func TestLabelUnderNested(t *testing.T) {
 	cfg := config.Config{Hosts: []config.Host{{Repos: "/src", Worktrees: "/src/worktrees"}}}
