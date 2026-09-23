@@ -47,7 +47,7 @@ func TestParsePlatform(t *testing.T) {
 // daemon with the new binary; the binary is the word the bridge runs.
 func TestInstallScript(t *testing.T) {
 	s := installScript("~/.local/bin/laatmux")
-	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `v=$("$tmp" version 2>/dev/null) && [ "${v#laatmux }" != "$v" ] ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
+	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `v=$("$tmp" version 2>/dev/null) && case $v in "laatmux "*" protocol "*) ;; *) false;; esac ||`, `echo "binary was $("$bin" version 2>/dev/null || echo none)"`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
 		}
@@ -100,7 +100,7 @@ func TestInstallFile(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "laatmux")
 	os.WriteFile(dst, []byte("old"), 0o755)
-	for name, content := range map[string]string{"garbage": "not a binary", "empty": "", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux broken\nexit 7\n"} {
+	for name, content := range map[string]string{"garbage": "not a binary", "empty": "", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux x protocol 1\nexit 7\n", "partial": "#!/bin/sh\necho laatmux fake\n"} {
 		bad := filepath.Join(dir, name)
 		os.WriteFile(bad, []byte(content), 0o644)
 		err := installFile(context.Background(), bad, dst)
@@ -111,11 +111,11 @@ func TestInstallFile(t *testing.T) {
 			t.Fatalf("destination replaced by the %s candidate", name)
 		}
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 5 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 6 {
 		t.Fatalf("temporary left behind: %v", entries)
 	}
 	good := filepath.Join(dir, "good")
-	os.WriteFile(good, []byte("#!/bin/sh\necho laatmux stand-in\n"), 0o755)
+	os.WriteFile(good, []byte("#!/bin/sh\necho laatmux stand-in protocol 1\n"), 0o755)
 	if err := installFile(context.Background(), good, dst); err != nil {
 		t.Fatalf("good candidate: %v", err)
 	}
@@ -131,14 +131,14 @@ func TestInstallScriptRuns(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "laatmux")
 	os.WriteFile(bin, []byte("old"), 0o755)
-	standIn := "#!/bin/sh\ncase $1 in version) echo laatmux stand-in;; stop) echo stopped by stand-in;; esac\n"
+	standIn := "#!/bin/sh\ncase $1 in version) echo laatmux stand-in protocol 1;; stop) echo stopped by stand-in;; esac\n"
 	run := func(input string) (string, error) {
 		cmd := exec.Command("sh", "-c", installScript(bin))
 		cmd.Stdin = strings.NewReader(input)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for name, input := range map[string]string{"empty": "", "garbage": "not a binary\n", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux broken\nexit 7\n"} {
+	for name, input := range map[string]string{"empty": "", "garbage": "not a binary\n", "silent": "#!/bin/sh\nexit 0\n", "failing": "#!/bin/sh\necho laatmux x protocol 1\nexit 7\n", "partial": "#!/bin/sh\necho laatmux fake\n"} {
 		out, err := run(input)
 		if err == nil || !strings.Contains(out, "left as it was") {
 			t.Fatalf("%s: %v\n%s", name, err, out)
@@ -148,8 +148,11 @@ func TestInstallScriptRuns(t *testing.T) {
 		}
 	}
 	out, err := run(standIn)
-	if err != nil || !strings.Contains(out, "stopped by stand-in") {
+	if err != nil || !strings.Contains(out, "stopped by stand-in") || !strings.Contains(out, "binary was none") {
 		t.Fatalf("stand-in: %v\n%s", err, out)
+	}
+	if out, err := run(standIn); err != nil || !strings.Contains(out, "binary was laatmux stand-in protocol 1") {
+		t.Fatalf("second install: %v\n%s", err, out)
 	}
 	if b, _ := os.ReadFile(bin); string(b) != standIn {
 		t.Fatalf("binary after install: %q", b)

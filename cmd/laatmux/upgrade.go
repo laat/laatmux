@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -82,22 +83,30 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// upgradeHost upgrades one host: find it, build for it, install, stop
-// the old daemon, connect to the new one.
+// Bounds on the remote steps, so one host that stops answering is
+// reported and skipped rather than holding the others: the platform
+// query, the upload with its install, and the connection that starts
+// the new daemon. ssh's own connection timeout applies to each.
+const (
+	platformTimeout = 30 * time.Second
+	installTimeout  = 5 * time.Minute
+	restartTimeout  = 60 * time.Second
+	sshConnect      = "ConnectTimeout=15"
+)
+
+// upgradeHost upgrades one host: find its platform, build for it,
+// install, which stops the old daemon, then connect, which starts the
+// new one. Nothing before the last step needs a daemon on the host, so
+// a host whose daemon is stopped, or whose binary is gone, is upgraded
+// too; the install script says what the old binary was.
 func upgradeHost(ctx context.Context, h config.Host, b *builder) error {
-	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	c, err := client.Dial(dctx, h.Host)
-	cancel()
-	if err != nil {
-		return err
-	}
-	was := c.Hello.Version
-	c.Close()
 	var goos, goarch string
 	if h.Local() {
 		goos, goarch = runtime.GOOS, runtime.GOARCH
 	} else {
-		out, err := sshOutput(ctx, h.Host.SSH, "uname -sm")
+		pctx, cancel := context.WithTimeout(ctx, platformTimeout)
+		out, err := sshOutput(pctx, h.Host.SSH, "uname -sm")
+		cancel()
 		if err != nil {
 			return fmt.Errorf("platform: %w", err)
 		}
@@ -105,23 +114,25 @@ func upgradeHost(ctx context.Context, h config.Host, b *builder) error {
 			return err
 		}
 	}
-	file, version, err := b.build(ctx, goos, goarch)
+	file, ver, err := b.build(ctx, goos, goarch)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: installing %s for %s/%s (daemon was %s)\n", h.Name, version, goos, goarch, was)
+	fmt.Printf("%s: installing %s for %s/%s\n", h.Name, ver, goos, goarch)
+	ictx, cancel := context.WithTimeout(ctx, installTimeout)
 	if h.Local() {
-		if err := installLocal(ctx, file); err != nil {
-			return err
-		}
+		fmt.Printf("binary was %s\n", version)
+		err = installLocal(ictx, file)
 	} else {
-		if err := installRemote(ctx, h.Host, file); err != nil {
-			return err
-		}
+		err = installRemote(ictx, h.Host, file)
 	}
-	dctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	cancel()
+	if err != nil {
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, restartTimeout)
 	defer cancel()
-	c, err = client.Dial(dctx, h.Host)
+	c, err := client.Dial(rctx, h.Host)
 	if err != nil {
 		return fmt.Errorf("installed, but the new daemon did not answer: %w", err)
 	}
@@ -232,7 +243,7 @@ func parsePlatform(unameSM string) (goos, goarch string, err error) {
 
 // sshOutput runs a command on the host and returns its stdout.
 func sshOutput(ctx context.Context, alias, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", alias, command)
+	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", sshConnect, alias, command)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -253,7 +264,7 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", h.SSH, tmux.ShellJoin([]string{"sh", "-c", installScript(h.Bin)}))
+	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", sshConnect, h.SSH, tmux.ShellJoin([]string{"sh", "-c", installScript(h.Bin)}))
 	cmd.Stdin = f
 	cmd.Stdout = os.Stdout
 	var stderr bytes.Buffer
@@ -272,10 +283,10 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 // the new binary. The path is the word the bridge runs, so a path under
 // ~ is the remote home and a bare name is found on the remote PATH. The
 // file goes to a fresh temporary name beside the old one, is checked to
-// answer version as laatmux does and exit 0, which a build for the
-// wrong platform, a truncated copy or an empty file fails, since sh
-// would run an empty file as a script that succeeds, and only then
-// renamed over the old one: the
+// answer version as laatmux does, the whole line with the protocol, and
+// exit 0, which a build for the wrong platform, a truncated copy or an
+// empty file fails, since sh would run an empty file as a script that
+// succeeds, and only then renamed over the old one: the
 // install is atomic, a running daemon keeps its own inode, and a
 // candidate that does not run leaves the working binary as it was. Two
 // installs at once each have their own temporary file.
@@ -292,11 +303,12 @@ func installScript(bin string) string {
 		target,
 		`dir=$(dirname "$bin")`,
 		`mkdir -p "$dir"`,
+		`echo "binary was $("$bin" version 2>/dev/null || echo none)"`,
 		`tmp=$(mktemp "$dir/.laatmux.XXXXXX")`,
 		`trap 'rm -f "$tmp"' EXIT`,
 		`cat > "$tmp"`,
 		`chmod +x "$tmp"`,
-		`v=$("$tmp" version 2>/dev/null) && [ "${v#laatmux }" != "$v" ] || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
+		`v=$("$tmp" version 2>/dev/null) && case $v in "laatmux "*" protocol "*) ;; *) false;; esac || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
 		`mv -f "$tmp" "$bin"`,
 		`"$bin" stop`,
 	}, "; ")
@@ -319,6 +331,9 @@ func installLocal(ctx context.Context, file string) error {
 	fmt.Printf("installed at %s\n", exe)
 	return cmdStop(ctx, nil)
 }
+
+// versionLine is what laatmux version prints.
+var versionLine = regexp.MustCompile(`^laatmux \S+ protocol \d+\n`)
 
 // installFile copies file to a fresh temporary name beside dst, checks
 // that it answers version as laatmux does, and renames it over dst. A
@@ -351,7 +366,7 @@ func installFile(ctx context.Context, file, dst string) error {
 		return fail(fmt.Errorf("the new binary is empty; %s left as it was", dst))
 	}
 	out, err := exec.CommandContext(ctx, name, "version").Output()
-	if err != nil || !bytes.HasPrefix(out, []byte("laatmux ")) {
+	if err != nil || !versionLine.Match(out) {
 		return fail(fmt.Errorf("the new binary does not answer version as laatmux (%v: %q); %s left as it was", err, strings.TrimSpace(string(out)), dst))
 	}
 	if err := os.Rename(name, dst); err != nil {

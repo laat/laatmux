@@ -360,8 +360,13 @@ shutting down, and `stop` keeps trying to reach it while that holder has
 the lock. Then `stop` waits for the lock to leave that daemon's hands,
 released by the kernel when it exits, reaped or not, or taken by a
 replacement a client started meanwhile. The next connection starts the new build, and
-`upgrade` makes that connection last and prints the version. The local host is upgraded in
-place of the running executable the same way. `hosts` marks every
+`upgrade` makes that connection last and prints the version. Nothing
+before that connection needs a daemon on the host, so a host whose
+daemon is stopped or whose binary is gone is upgraded too; the script
+says what the old binary was. Each remote step is bounded, so a host
+that stops answering is reported and skipped rather than holding the
+others. The local host is upgraded in place of the running executable
+the same way. `hosts` marks every
 daemon whose build is not this client's, since versions are `git
 describe` strings, equal or not, never ordered.
 

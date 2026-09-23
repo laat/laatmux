@@ -67,6 +67,16 @@ func cmdStop(ctx context.Context, args []string) error {
 			return err
 		}
 		if holder == 0 {
+			// A daemon between taking the lock and writing its pid, or
+			// a lock file being rewritten, reads as no holder for an
+			// instant; a second reading a moment later tells it from a
+			// lock that is free.
+			time.Sleep(100 * time.Millisecond)
+			if holder, err = home.Holder(); err != nil {
+				return err
+			}
+		}
+		if holder == 0 {
 			fmt.Println("no daemon running")
 			return nil
 		}
