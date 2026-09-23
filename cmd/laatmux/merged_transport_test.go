@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // fakeDaemon stands in for the local daemon: a loopback listener the
@@ -252,5 +254,42 @@ func TestFollowMergedBacksOff(t *testing.T) {
 	}
 	if !m.daemonErrIs("disconnected; reconnecting") {
 		t.Error("daemon row not marked while reconnecting")
+	}
+}
+
+// A session whose host tag names nothing after a rename is routed by
+// the key's environment: the configured host whose daemon answers as
+// it, found through the merged stream's host rows.
+func TestHostByEnvironment(t *testing.T) {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{"status", "merged", "rm"}},
+				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Version: "v2", Capabilities: []string{"status", "worktrees", "rm"}},
+			}, Worktrees: []protocol.Worktree{{ID: "benv/worktree//r/x", EnvironmentID: "benv", Repo: "proj", Branch: "x", Root: "/r/x"}}})
+		}
+		return true
+	})
+	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "mac"}}, {Host: client.Host{Name: "box", SSH: "box"}}}}
+	h, hello, snap, err := hostByEnvironment(context.Background(), cfg, "benv")
+	if err != nil || h.Name != "box" || hello.Version != "v2" || len(snap.Worktrees) != 1 {
+		t.Fatalf("box by environment: %+v %+v %+v %v", h, hello, snap, err)
+	}
+	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "nope"); err == nil || !strings.Contains(err.Error(), "no configured host answers as environment nope") {
+		t.Fatalf("unknown environment: %v", err)
+	}
+	// A session's host: the tag when it names a configured host; else,
+	// for a renamed host or a session without the tag, the environment.
+	// An empty tag is not the local host, though Find("") is.
+	for _, c := range []struct {
+		host, want string
+	}{{"box", "box"}, {"old", "box"}, {"", "box"}} {
+		h, hello, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "benv//r/x", Host: c.host})
+		if err != nil || h.Name != c.want || hello.EnvironmentID != "benv" {
+			t.Errorf("tag %q: %+v %+v %v", c.host, h, hello, err)
+		}
+	}
+	if _, _, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "nope//r/x"}); err == nil || !strings.Contains(err.Error(), "carries no host tag") {
+		t.Errorf("no tag, unknown environment: %v", err)
 	}
 }

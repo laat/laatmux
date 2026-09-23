@@ -47,6 +47,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux run -- make                         # inside a workspace session, that workspace
 ./laatmux settle                              # collapse this workspace in ls; unsettle brings it back
 ./laatmux rm proj/fix-ls [--force]            # remove the worktree, its managed session and the local session
+./laatmux rm                                  # inside a workspace session: that workspace
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
 ./laatmux new work --cwd ~/code/foo -- claude # managed session without a worktree
 ./laatmux jump mac/work                       # a local session attached to it
@@ -267,6 +268,20 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   with everything left in place; `--force` removes it. After an `ok` the
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
+- **`rm`** with no target, inside a workspace session, removes that
+  workspace: the root from the session's key, on the host the session's
+  tag names, or, when that tag names no configured host any more, the
+  host that answers as the key's environment, as the dashboard routes
+  a row; the host must answer as the environment the key names, since
+  a host entry moved to another machine must not remove that machine's
+  worktree at the same path, and every connection of the command is
+  held to that. The host's worktree record for the root gives the
+  repository and branch, which the session's tags can misname after a
+  switch or a detach in the worktree; without a record the tags do,
+  when this machine's config knows the source, else the root alone as
+  `--root` does. That is how the dashboard's `x` resolves a row, and
+  what a binding needs:
+  `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
 - **`path <repo>/<branch>`** prints the root from the host's records.
   Records are matched by source, since the host's label for a source may
   differ from this machine's; a record from a daemon without the source

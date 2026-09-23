@@ -104,6 +104,7 @@ func usage() {
             worktree and agent on the host, then the local workspace session
   rm        laatmux rm <repo>/<branch> [--host h] [--force]     remove the worktree, its sessions
             laatmux rm --root <path> --host h [--force]          a detached worktree
+            laatmux rm [--force]           inside a workspace session: that workspace
   path      laatmux path <repo>/<branch> [--host h]             the worktree root on the host
   ls        workspaces and agents across configured hosts
   watch     live list, redraws on change, for a plain terminal
