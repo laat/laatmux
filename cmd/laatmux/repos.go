@@ -23,9 +23,15 @@ func cmdRepos(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux repos")
 	}
+	if len(cfg.Copy) > 0 {
+		fmt.Printf("copy, every worktree on this machine: %s\n", strings.Join(cfg.Copy, "  "))
+	}
 	if len(cfg.Repos) == 0 {
 		fmt.Printf("no repos configured in %s\n", config.Path())
 		return nil
+	}
+	if len(cfg.Copy) > 0 {
+		fmt.Println()
 	}
 	last, err := home.ReadLast()
 	if err != nil {
@@ -33,9 +39,6 @@ func cmdRepos(ctx context.Context, args []string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	defer w.Flush()
-	if len(cfg.Copy) > 0 {
-		fmt.Fprintf(w, "copy, every worktree on this machine\t%s\n\n", strings.Join(cfg.Copy, "  "))
-	}
 	for i, r := range cfg.Repos {
 		if i > 0 {
 			fmt.Fprintln(w)

@@ -218,6 +218,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	rules = append(rules, repo.Copy...)
 	rules = append(rules, s.Copy...)
 	var listed []string
+	listedOnce := false // an empty listing is a listing too
 	for _, entry := range rules {
 		if !config.IsGlob(entry) {
 			if err := copyFile(ctx, checkout, a.Root, entry, report); err != nil {
@@ -225,10 +226,11 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 			}
 			continue
 		}
-		if listed == nil {
+		if !listedOnce {
 			if listed, err = listFiles(ctx, checkout); err != nil {
 				return a, fail(stage, err)
 			}
+			listedOnce = true
 		}
 		matched := 0
 		for _, rel := range listed {
