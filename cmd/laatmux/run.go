@@ -23,9 +23,10 @@ import (
 // command is an argv array run directly, no shell; "-- sh -c '...'" is
 // how to get one. It runs with the daemon's environment, its stdin at
 // /dev/null and no tty. Ctrl-C sends a cancel and waits for the result;
-// a second Ctrl-C gives up on the connection and leaves the run to the
-// daemon, which stops it. The doing is command.Run; this is the flags,
-// the target and the printing.
+// a second Ctrl-C gives up on the connection, and says that the cancel
+// may not have reached the daemon, since a reconnect may have been in
+// progress. The doing is command.Run; this is the flags, the target and
+// the printing.
 func cmdRun(ctx context.Context, args []string) error {
 	before, cmd, ok := splitDashes(args)
 	usage := errors.New("usage: laatmux run [<repo>/<branch>] [--host h] -- <cmd>...")
@@ -124,7 +125,10 @@ func cmdRun(ctx context.Context, args []string) error {
 	case command.Cancelled(err):
 		return &exitError{code: 130, msg: "cancelled"}
 	case rctx.Err() != nil:
-		return &exitError{code: 130, msg: "gave up waiting; the daemon stops the run"}
+		// The cancel went on the connection that was open when the
+		// first signal came; during a reconnect there was none, so it
+		// may not have reached the daemon.
+		return &exitError{code: 130, msg: fmt.Sprintf("gave up waiting; the cancel may not have reached %s and the run may still be going there", run.Host.Name)}
 	}
 	return err
 }

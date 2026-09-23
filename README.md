@@ -159,9 +159,12 @@ truth; labels only place new things.
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
   `repo` and `branch` are given, theirs. No shell, no tty, stdin at
-  `/dev/null`, the daemon's environment, its own process group; the
-  process exiting while a child of its holds the pipes ends the run a
-  second later with the process's status. Output
+  `/dev/null`, the daemon's environment, its own process group. When
+  the process exits, whatever it left in its group is laatmux's own and
+  is stopped the way a cancel stops it, so a background child of a run
+  never outlives the result and `rm` never meets one; the process
+  exiting while such a child holds the pipes costs a second before
+  that. Output
   streams as `{type: progress, id, n, stage: run, state: output, fd,
   detail}` one line per message, `fd` 1 or 2, a partial last line at
   exit; the result is `ok` with `exit` when the process exited at all,
@@ -174,7 +177,8 @@ truth; labels only place new things.
   id}` sends `SIGTERM` to the process group, `SIGKILL` five seconds
   later unless every member of the group has gone, and the result says
   `cancelled` once it has; the group is watched, not the child, since a
-  descendant that ignores the signal outlives its parent. A cancel that
+  descendant that ignores the signal outlives its parent. A follower
+  whose connection ends is let go at once, not at the next event. A cancel that
   lands before the process has started means it never starts. A clean
   daemon shutdown, on a signal or a failure, closes the registry so no
   run starts after it, cancels its runs the same way and waits for
@@ -312,10 +316,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   stderr, so `laatmux run proj/x -- go test ./... | tail` behaves, and
   the exit status is the process's; 255 means the outcome is unknown, a
   lost connection whose follow found the daemon no longer knew the run;
-  130 is cancelled. Ctrl-C sends `cancel` and waits for the result, a
-  second Ctrl-C gives up waiting and leaves the daemon to stop it. A
-  client that just disconnects leaves the run going, as an `add` keeps
-  going.
+  130 is cancelled. Ctrl-C sends `cancel` and waits for the result; a
+  second Ctrl-C gives up waiting, and since the cancel went on the
+  connection open at the time, and during a reconnect there was none,
+  the message says the run may still be going. A client that just
+  disconnects leaves the run going, as an `add` keeps going.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
 

@@ -254,15 +254,76 @@ func TestRunCancelKillsGroup(t *testing.T) {
 }
 
 // A process that exits while a child of its holds the pipes ends the
-// run with the process's status after the wait delay, not as a failure.
+// run with the process's status after the wait delay, not as a failure,
+// and the child, laatmux's own, is stopped before the result rather
+// than left for no rm or shutdown to find.
 func TestRunExitWithPipesHeld(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
+	d.killDelay = 300 * time.Millisecond
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
-	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", "sleep 3 & echo bg; exit 2"}})
+	token := fmt.Sprintf("laatmux-run-bg-%d", os.Getpid())
+	// The ":" keeps the inner shell from replacing itself with sleep,
+	// so the token stays on a command line.
+	script := fmt.Sprintf(`sh -c 'trap "" TERM; sleep 30; :' %s & echo bg; exit 2`, token)
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", script}})
 	res, progress := result(t, pc, "r1")
 	if !res.OK || res.Exit != 2 || !hasProgress(progress, protocol.StageRun, protocol.StateOutput, "bg") {
 		t.Fatalf("result %+v progress %+v", res, progress)
+	}
+	if out, _ := exec.Command("pgrep", "-f", token).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		t.Fatalf("background child survived the result: pids %s", out)
+	}
+}
+
+// A follower whose connection ends while the command is quiet is let go
+// at once, not held until the next event.
+func TestFollowerReleasedOnDisconnect(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"sh", "-c", "echo up; sleep 30"}})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.State == protocol.StateOutput {
+			break
+		}
+	}
+	c, _ := d.lookup("r1")
+	server, client := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	go d.HandleConn(ctx, server, func() { server.Close() })
+	second := protocol.NewConn(client)
+	second.Read() // hello
+	second.Write(protocol.Message{Type: protocol.TypeFollow, ID: "r1", After: 0})
+	if m, err := second.Read(); err != nil || m.State != protocol.StateStart {
+		t.Fatalf("follow: %+v %v", m, err)
+	}
+	if m, err := second.Read(); err != nil || m.Detail != "up" {
+		t.Fatalf("follow: %+v %v", m, err)
+	}
+	followers := func() int {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.followers
+	}
+	if n := followers(); n != 2 {
+		t.Fatalf("%d followers, want 2", n)
+	}
+	client.Close()
+	cancel()
+	for deadline := time.Now().Add(3 * time.Second); followers() != 1; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d followers after the disconnect, want 1", followers())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeCancel, ID: "r1"})
+	if res, _ := result(t, pc, "r1"); res.Error != protocol.ErrCancelled {
+		t.Fatalf("result %+v", res)
 	}
 }
 
@@ -320,7 +381,7 @@ func TestRunRingReplay(t *testing.T) {
 	c.ring = true
 	server, client := net.Pipe()
 	live := protocol.NewConn(client)
-	go c.stream(protocol.NewConn(server), 0)
+	go c.stream(protocol.NewConn(server), 0, nil)
 	line := strings.Repeat("x", 1024)
 	total := 2*maxOutput/len(line) + 1
 	// The live follower, reading as fast as the lines come, sees every
@@ -350,7 +411,7 @@ func TestRunRingReplay(t *testing.T) {
 	// the tail, then the result.
 	for _, after := range []uint64{0, base - 5} {
 		server, client := net.Pipe()
-		go c.stream(protocol.NewConn(server), after)
+		go c.stream(protocol.NewConn(server), after, nil)
 		pc := protocol.NewConn(client)
 		m, _ := pc.Read()
 		if m.State != protocol.StateGap || m.N != base-1 || m.Detail != fmt.Sprintf("%d lines dropped", base-1-after) || m.ID != "x" {
@@ -375,7 +436,7 @@ func TestRunRingReplay(t *testing.T) {
 	}
 	// A follow from inside the tail gets no gap.
 	server, client = net.Pipe()
-	go c.stream(protocol.NewConn(server), base+2)
+	go c.stream(protocol.NewConn(server), base+2, nil)
 	pc := protocol.NewConn(client)
 	if m, _ := pc.Read(); m.N != base+3 || m.State != protocol.StateOutput {
 		t.Fatalf("inside the tail: %+v", m)

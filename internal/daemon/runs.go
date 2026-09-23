@@ -256,17 +256,22 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 	}
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
+	pgid := cmd.Process.Pid
 	var werr error
 	cancelled := false
 	select {
 	case werr = <-waited:
+		// The process is done; what it left in its group is laatmux's
+		// own, in a root rm may remove next, and goes with it. Its exit
+		// status stands.
+		werr = d.terminate(pgid, waited, werr, true)
 	case <-r.cancel:
 		cancelled = true
-		werr = d.terminate(cmd, waited)
+		werr = d.terminate(pgid, waited, nil, false)
 	case <-ctx.Done():
 		cancelled = true
 		r.requestCancel()
-		werr = d.terminate(cmd, waited)
+		werr = d.terminate(pgid, waited, nil, false)
 	}
 	// Wait closes the pipe writers once the copying is done or the
 	// delay has passed, which ends the readers.
@@ -288,19 +293,26 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 	return exitStatus(cmd.ProcessState), nil
 }
 
-// terminate stops the process group: SIGTERM, then SIGKILL after the
-// kill delay unless every member has gone. The leader exiting does not
-// end it, since a descendant that ignores the signal survives its
-// parent, so the group is watched, not the child, and the return waits
-// for the group to be empty, bounded, so a cancelled result and an rm
-// that waited for it mean nothing is left. Returns what Wait said.
-func (d *Daemon) terminate(cmd *exec.Cmd, waited <-chan error) error {
-	pgid := cmd.Process.Pid
+// terminate empties the process group: SIGTERM, then SIGKILL after the
+// kill delay unless every member has gone by then. The leader exiting
+// does not end the group, since a descendant that ignores the signal
+// survives its parent, so the group is watched, not the child, and the
+// return waits for the group to be empty, bounded, so a result and an
+// rm that waited for it mean nothing is left. exited says whether Wait
+// has returned already, with werr; otherwise it is read from waited.
+// Returns what Wait said. A group with nothing left in it returns at
+// once.
+func (d *Daemon) terminate(pgid int, waited <-chan error, werr error, exited bool) error {
+	if exited && !groupAlive(pgid) {
+		return werr
+	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	deadline := time.Now().Add(d.killDelay)
-	var werr error
-	exited := false
 	for (!exited || groupAlive(pgid)) && time.Now().Before(deadline) {
+		if exited {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 		select {
 		case werr = <-waited:
 			exited = true

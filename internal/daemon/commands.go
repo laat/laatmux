@@ -47,6 +47,7 @@ type command struct {
 	done      bool
 	doneAt    time.Time
 	result    protocol.Message
+	followers int // streams in progress, for tests
 	// job is the run this command is; nil for add and rm.
 	job *runJob
 }
@@ -97,18 +98,46 @@ func (c *command) emit(m protocol.Message) {
 }
 
 // stream writes every progress message past after to pc, retained and
-// future, then the result, until a write fails. A follower behind the
-// retained tail gets one gap message for the lines between its mark and
-// the tail, numbered as the last of them, so its mark moves past them.
-// That holds for a follower that is connected but slow as well: the ring
-// is the one buffer, so a reader more than the budget behind loses what
-// it did not take, as a slow subscriber of the status stream is dropped,
-// and the process is never stalled by a reader.
-func (c *command) stream(pc *protocol.Conn, after uint64) error {
+// future, then the result, until a write fails or quit closes, which is
+// the connection ending: a follower of a quiet command must not sleep
+// on until the next event. A follower behind the retained tail gets one
+// gap message for the lines between its mark and the tail, numbered as
+// the last of them, so its mark moves past them. That holds for a
+// follower that is connected but slow as well: the ring is the one
+// buffer, so a reader more than the budget behind loses what it did not
+// take, as a slow subscriber of the status stream is dropped, and the
+// process is never stalled by a reader.
+func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) error {
+	c.mu.Lock()
+	c.followers++
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.followers--
+		c.mu.Unlock()
+	}()
+	// The waker takes the lock, so it runs either before the wait below
+	// checked quit or after the wait has released the lock, never in
+	// between: the wait cannot miss it. A nil quit, from a test, never
+	// closes.
+	if quit != nil {
+		go func() {
+			<-quit
+			c.mu.Lock()
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		}()
+	}
 	last := after
 	for {
 		c.mu.Lock()
 		for !c.done && (len(c.events) == 0 || c.events[len(c.events)-1].N <= last) {
+			select {
+			case <-quit:
+				c.mu.Unlock()
+				return nil
+			default:
+			}
 			c.cond.Wait()
 		}
 		var batch []protocol.Message

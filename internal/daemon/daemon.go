@@ -645,6 +645,10 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 		})
 	}
 	defer drop()
+	// quit closes when this connection is done, so a command stream
+	// waiting for its next event lets go of the connection.
+	quit := make(chan struct{})
+	defer close(quit)
 	hello := protocol.Message{
 		Type:          protocol.TypeHello,
 		Protocol:      protocol.Version,
@@ -768,7 +772,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				}
 			}
 			go func() {
-				if err := c.stream(pc, 0); err != nil {
+				if err := c.stream(pc, 0, quit); err != nil {
 					drop()
 				}
 			}()
@@ -781,7 +785,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				continue
 			}
 			go func() {
-				if err := c.stream(pc, m.After); err != nil {
+				if err := c.stream(pc, m.After, quit); err != nil {
 					drop()
 				}
 			}()
