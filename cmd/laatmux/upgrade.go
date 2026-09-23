@@ -281,12 +281,15 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 // installScript is the sh script that installs the binary read from
 // stdin at the configured path on the host, then stops the daemon with
 // the new binary. The path is the word the bridge runs, so a path under
-// ~ is the remote home and a bare name is found on the remote PATH. The
-// file goes to a fresh temporary name beside the old one, is checked to
-// answer version as laatmux does, the whole line with the protocol, and
-// exit 0, which a build for the wrong platform, a truncated copy or an
-// empty file fails, since sh would run an empty file as a script that
-// succeeds, and only then renamed over the old one: the
+// ~ is the remote home and a bare name is found on the remote PATH,
+// which means a bare name cannot be reinstalled once the binary is
+// gone: there is no path to put it at, and the script says to set one.
+// The file goes to a fresh temporary name beside the old one, is
+// checked to answer version as laatmux does, one line with the
+// protocol and nothing after it, and exit 0, which a build for the
+// wrong platform, a truncated copy or an empty file fails, since sh
+// would run an empty file as a script that succeeds, and only then
+// renamed over the old one: the
 // install is atomic, a running daemon keeps its own inode, and a
 // candidate that does not run leaves the working binary as it was. Two
 // installs at once each have their own temporary file.
@@ -296,7 +299,7 @@ func installScript(bin string) string {
 	if strings.Contains(word, "/") {
 		target = "bin=" + word
 	} else {
-		target = `bin=$(command -v ` + word + `) || { echo ` + word + ` is not on the PATH of a non-interactive shell; set bin in the host config >&2; exit 1; }`
+		target = `bin=$(command -v ` + word + `) || { echo ` + word + ` "is not on the PATH of a non-interactive shell, so there is no path to install at; set bin in the host config to a path" >&2; exit 1; }`
 	}
 	return strings.Join([]string{
 		"set -e",
@@ -308,7 +311,7 @@ func installScript(bin string) string {
 		`trap 'rm -f "$tmp"' EXIT`,
 		`cat > "$tmp"`,
 		`chmod +x "$tmp"`,
-		`v=$("$tmp" version 2>/dev/null) && case $v in "laatmux "*" protocol "*) ;; *) false;; esac || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
+		`v=$("$tmp" version 2>/dev/null) && case $v in "laatmux "*" protocol "*) [ "$(printf %s "$v" | wc -l)" -eq 0 ];; *) false;; esac || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
 		`mv -f "$tmp" "$bin"`,
 		`"$bin" stop`,
 	}, "; ")
@@ -332,8 +335,8 @@ func installLocal(ctx context.Context, file string) error {
 	return cmdStop(ctx, nil)
 }
 
-// versionLine is what laatmux version prints.
-var versionLine = regexp.MustCompile(`^laatmux \S+ protocol \d+\n`)
+// versionLine is what laatmux version prints, and all of it.
+var versionLine = regexp.MustCompile(`^laatmux \S+ protocol \d+\n$`)
 
 // installFile copies file to a fresh temporary name beside dst, checks
 // that it answers version as laatmux does, and renames it over dst. A
