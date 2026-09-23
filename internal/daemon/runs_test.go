@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // addWorktree runs an add with no agent and returns the root.
@@ -100,6 +101,41 @@ func TestRunStreamsOutput(t *testing.T) {
 		if res, _ := result(t, pc, m.m.ID); res.OK || !strings.Contains(res.Error, m.want) {
 			t.Fatalf("%s: %+v, want %q", m.m.ID, res, m.want)
 		}
+	}
+}
+
+// A repository whose bare source equals another entry's label resolves
+// by the record's own source first, so a run for it is not taken for
+// the other entry; a source that is another repository's is refused.
+func TestRunRepoBySourceFirst(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	store.Repos = append(store.Repos, worktree.Repo{Source: "/nowhere/other.git", Name: remote})
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Repo: remote, Root: root, Cmd: []string{"true"}})
+	if res, _ := result(t, pc, "r1"); !res.OK {
+		t.Fatalf("run by source: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r2", Repo: "/nowhere/other.git", Root: root, Cmd: []string{"true"}})
+	if res, _ := result(t, pc, "r2"); res.OK || !strings.Contains(res.Error, "is a worktree of proj, not") {
+		t.Fatalf("run for another source: %+v", res)
+	}
+}
+
+// A daemon shutting down while a run resolves its worktree ends it as
+// cancelled, the outcome a cancel after the start has, not as git's
+// context error.
+func TestRunCancelledWhileResolving(t *testing.T) {
+	d, _, _, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c := newCommand("r1")
+	c.job = newRunJob()
+	d.runRun(ctx, protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"true"}}, c)
+	if c.result.OK || c.result.Error != protocol.ErrCancelled {
+		t.Fatalf("result %+v", c.result)
 	}
 }
 

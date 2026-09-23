@@ -175,7 +175,12 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		if !found {
 			return fmt.Errorf("%s is not a worktree of a known repository", root)
 		}
-		if m.Repo != "" {
+		if m.Repo != "" && rec.Source != m.Repo {
+			// The client sends the source; a source that is not the
+			// record's may still be a label, resolved as add resolves
+			// it. A bare source equal to another entry's label is the
+			// record's own source first, so it is never taken for the
+			// other entry.
 			repo, ok := d.cfg.Store.Repo(m.Repo)
 			if !ok {
 				return fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
@@ -201,9 +206,14 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		res.Exit = exit
 		return nil
 	}()
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// The daemon shut down while the run was resolving: git's
+		// context error is the same outcome as a cancel after the start.
+		res.Error = protocol.ErrCancelled
+	case err != nil:
 		res.Error = err.Error()
-	} else {
+	default:
 		res.OK = true
 	}
 	c.emit(res)
