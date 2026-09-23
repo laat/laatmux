@@ -335,16 +335,18 @@ per platform per run (`--bin` installs a binary built elsewhere, `--src`
 names the checkout when the command runs from another directory; flags
 go before, between or after the hosts), then streams the binary over the
 same ssh alias the client uses into an `sh` script: written to a fresh
-temporary name beside the configured `bin`, checked to run at all with
-`version` answering as laatmux does, which a build for the wrong
-platform, a truncated copy or an empty file fails (an empty file would
-run as a shell script that succeeds) and then leaves the working binary
-as it was, and renamed over
-it, so the install is atomic, the running daemon keeps its own inode
-and two installs at once do not share a file; then `laatmux stop` with
-the new binary. The `bin` is the same shell word the bridge runs: a
-path under `~` is the remote home, anything else one quoted word, a
-bare name found on the remote PATH. `stop` reaches the daemon over its
+temporary name beside the configured `bin`, checked to answer
+`version` as laatmux does, one line with the protocol and nothing after
+it, exit 0, which a build for the wrong platform, a truncated copy or
+an empty file fails (an empty file would run as a shell script that
+succeeds) and then leaves the working binary as it was, and renamed
+over it, so the install is atomic, the running daemon keeps its own
+inode and two installs at once do not share a file; then `laatmux stop`
+with the new binary. The `bin` is the same shell word the bridge runs:
+a path under `~` is the remote home, anything else one quoted word, a
+bare name found on the remote PATH, so a bare name cannot be
+reinstalled once the binary is gone, there being no path to put it at;
+set `bin` to a path for that. `stop` reaches the daemon over its
 socket, without starting one, and sends `shutdown`, capability
 `shutdown`, which the daemon answers and then exits on as it does on
 `SIGTERM`, cancelling its runs and waiting for them; the process that
