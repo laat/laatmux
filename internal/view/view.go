@@ -80,13 +80,7 @@ type Model struct {
 func (m *Model) SetRows(rs rows.Rows) {
 	m.Rows = rs
 	if m.Follow {
-		m.Selected = -1
-		for _, it := range m.Visible() {
-			if it.Row.Current {
-				m.Selected = it.Index
-				break
-			}
-		}
+		m.Selected = m.followed(m.Visible())
 		return
 	}
 	if m.anchor == "" {
@@ -194,10 +188,27 @@ func (m *Model) Visible() []Item {
 	return out
 }
 
-// Selection is the selected row, nil when the list is empty. It also
-// records the row as the anchor for the next SetRows.
+// followed is the index of the viewer's own row among the visible ones,
+// -1 when none is: the filter or a collapsed group can hide it.
+func (m *Model) followed(vis []Item) int {
+	for _, it := range vis {
+		if it.Row.Current {
+			return it.Index
+		}
+	}
+	return -1
+}
+
+// Selection is the selected row, nil when the list is empty or, while
+// Follow holds, when no visible row is the viewer's own. It also records
+// the row as the anchor for the next SetRows. While following, the
+// selection is found afresh on every read, so a filter typed or cleared
+// and a group expanded or collapsed move it as a refresh does.
 func (m *Model) Selection() *rows.Row {
 	vis := m.Visible()
+	if m.Follow {
+		m.Selected = m.followed(vis)
+	}
 	m.clamp(len(vis))
 	if len(vis) == 0 || m.Selected < 0 {
 		m.anchor = ""
