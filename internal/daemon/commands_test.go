@@ -429,7 +429,7 @@ func TestCommandEviction(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, fresh := d.command("c1"); !fresh {
+	if _, fresh := d.command("c1", nil); !fresh {
 		t.Fatal("evicted id not fresh")
 	}
 }
@@ -508,7 +508,7 @@ func TestRmLookupErrorKeepsSession(t *testing.T) {
 // Retained output is bounded: past the budget, lines are dropped after
 // one saying so, while step and result messages are always kept.
 func TestCommandOutputBounded(t *testing.T) {
-	c := newCommand()
+	c := newCommand("x")
 	line := strings.Repeat("x", 1024)
 	for i := 0; i < 2*maxOutput/len(line); i++ {
 		c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: "setup", State: protocol.StateOutput, Detail: line})
@@ -516,8 +516,13 @@ func TestCommandOutputBounded(t *testing.T) {
 	c.emit(protocol.Message{Type: protocol.TypeProgress, Stage: "setup", State: protocol.StateDone, Detail: "cmd"})
 	c.emit(protocol.Message{Type: protocol.TypeResult, OK: true})
 	n := len(c.events)
-	if n != maxOutput/len(line)+3 || !strings.Contains(c.events[n-3].Detail, "dropped") || c.events[n-2].State != protocol.StateDone || c.events[n-1].Type != protocol.TypeResult {
-		t.Fatalf("%d events, tail %+v", n, c.events[n-3:])
+	if n != maxOutput/cost(line)+2 || !strings.Contains(c.events[n-2].Detail, "dropped") || c.events[n-1].State != protocol.StateDone || !c.done || c.result.Type != protocol.TypeResult {
+		t.Fatalf("%d events, tail %+v", n, c.events[n-2:])
+	}
+	for i, e := range c.events {
+		if e.N != uint64(i+1) {
+			t.Fatalf("event %d numbered %d", i, e.N)
+		}
 	}
 }
 

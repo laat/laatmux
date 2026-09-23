@@ -52,7 +52,7 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 		id = ID("add")
 	}
 	req := protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: a.Repo.Source, Branch: a.Branch, AgentName: a.Agent, Cmd: a.Cmd}
-	hello, res, err := stream(ctx, a.Host.Host, protocol.CapAdd, req, r)
+	hello, res, err := stream(ctx, a.Host.Host, protocol.CapAdd, req, r, streamOpts{restart: true})
 	if err != nil {
 		return Added{}, failed("add", res, err)
 	}

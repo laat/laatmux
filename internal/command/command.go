@@ -1,4 +1,4 @@
-// Package command is the client side of add, rm and shell: one
+// Package command is the client side of add, rm, run and shell: one
 // implementation each, called by the CLI and by the dashboard. Each does
 // the work and reports through a Reporter; what is printed, and where,
 // is the caller's. Resolving the inputs, a repository from a directory
@@ -69,15 +69,21 @@ func ID(kind string) string {
 }
 
 // stream sends a command with progress to the host and returns its
-// result, dialing again with the same id when the transport fails
-// mid-way: the daemon replays what it already sent and follows, and the
-// reporter only sees messages not seen before. The hello of the
-// connection that delivered the result is returned with it.
-func stream(ctx context.Context, h client.Host, needCap string, m protocol.Message, r Reporter) (hello, res protocol.Message, err error) {
-	f := &replayFilter{fn: r.Progress}
+// result. When the transport fails mid-way it dials again and, against a
+// daemon with follow, follows the id from the last numbered progress it
+// saw; the daemon replays from there and the filter drops anything at or
+// below the mark. Against an older daemon the command is resent and the
+// replay filtered by position. A follow the daemon does not know the id
+// of is answered as the kind of command decides: add and rm resend the
+// command as a new execution, since every step of theirs is skipped by
+// inspection; run reports the outcome unknown, since the process may be
+// running still. The hello of the connection that delivered the result
+// is returned with it.
+func stream(ctx context.Context, h client.Host, needCap string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
+	f := &progressFilter{fn: r.Progress}
+	sent := false // the command may have reached a daemon
 	const attempts = 3
 	for attempt := 1; ; attempt++ {
-		f.reset()
 		c, err := client.Dial(ctx, h)
 		if err != nil {
 			// A redial after a started attempt is a transport failure
@@ -96,17 +102,95 @@ func stream(ctx context.Context, h client.Host, needCap string, m protocol.Messa
 			return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, needCap)
 		}
 		hello = c.Hello
-		res, err = c.Stream(ctx, m, f.pass)
+		follow := sent && protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
+		req := m
+		if follow {
+			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark}
+		}
+		f.numbered = protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
+		f.reset()
+		sent = true
+		res, err = exchange(ctx, c, req, o.cancel, f.pass)
 		c.Close()
-		// A result, ok or not, ends it: Stream returns the daemon's
-		// refusals with the result message. Only a transport failure,
-		// which has no message, is retried.
+		if follow && res.Type == protocol.TypeResult && !res.OK && res.Error == protocol.ErrUnknownCommand {
+			if !o.restart {
+				return hello, res, ErrOutcomeUnknown
+			}
+			// A new execution numbers from 1 again.
+			r.Note(fmt.Sprintf("%s: daemon no longer knows %s %s; sending it again", h.Name, m.Type, m.ID))
+			f.mark, f.seen, sent = 0, 0, false
+			attempt--
+			continue
+		}
+		// A result, ok or not, ends it: the daemon's refusals come with
+		// the result message. Only a transport failure, which has no
+		// message, is retried.
 		if err == nil || res.Type != "" || ctx.Err() != nil || attempt == attempts {
 			return hello, res, err
 		}
 		r.Note(fmt.Sprintf("%s: connection lost (%v); reconnecting to follow %s", h.Name, err, m.Type))
 		if err := pause(ctx); err != nil {
 			return hello, res, err
+		}
+	}
+}
+
+// streamOpts is what differs between the commands on a stream.
+type streamOpts struct {
+	// restart resends the command when a follow finds the id unknown.
+	restart bool
+	// cancel, when it receives or is closed, sends a cancel for the
+	// command on the current connection, and again on each reconnect,
+	// and the stream keeps waiting for the result.
+	cancel <-chan struct{}
+}
+
+// ErrOutcomeUnknown is a run whose daemon no longer knows the id after a
+// lost connection: the process may be running still, may have finished,
+// or may never have started.
+var ErrOutcomeUnknown = errors.New("outcome unknown: the daemon no longer knows the run; it may be running still, finished, or never started")
+
+// exchange sends one request on the connection and reads until its
+// result, passing progress to onProgress. A cancel that arrives is sent
+// after the request, never before it, so it cannot reach the daemon
+// ahead of the command it stops. Cancelling ctx closes the connection.
+func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel <-chan struct{}, onProgress func(protocol.Message)) (protocol.Message, error) {
+	defer c.CloseOnDone(ctx)()
+	if err := c.Write(req); err != nil {
+		return protocol.Message{}, err
+	}
+	if cancel != nil {
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			select {
+			case <-cancel:
+				_ = c.Write(protocol.Message{Type: protocol.TypeCancel, ID: req.ID})
+			case <-stop:
+			}
+		}()
+	}
+	for {
+		m, err := c.Read()
+		if err != nil {
+			if ctx.Err() != nil {
+				return protocol.Message{}, ctx.Err()
+			}
+			return protocol.Message{}, err
+		}
+		if m.ID != req.ID {
+			continue
+		}
+		switch m.Type {
+		case protocol.TypeProgress:
+			onProgress(m)
+		case protocol.TypeError:
+			return m, errors.New(m.Error)
+		case protocol.TypeResult:
+			if !m.OK {
+				return m, errors.New(m.Error)
+			}
+			return m, nil
 		}
 	}
 }
@@ -121,23 +205,41 @@ func pause(ctx context.Context) error {
 	}
 }
 
-// replayFilter passes each progress message on once across reconnects:
-// the daemon replays a command's stream from the start, so messages are
-// counted per connection and only those past the high-water mark are new.
-type replayFilter struct {
-	seen, n int
-	fn      func(protocol.Message)
+// progressFilter passes each progress message on once across
+// reconnects. Numbered progress, from a daemon with follow, passes when
+// its n is past the mark; unnumbered progress, from an older daemon that
+// replays a command's stream from the start, is counted per connection
+// and passes past the count seen. Both counters advance on every message
+// passed, so a redial that lands on the other kind of daemon still
+// filters.
+type progressFilter struct {
+	numbered bool   // the current connection numbers its progress
+	mark     uint64 // highest n passed
+	seen     int    // messages passed in all
+	n        int    // messages received on this connection
+	fn       func(protocol.Message)
 }
 
-func (f *replayFilter) reset() { f.n = 0 }
+func (f *progressFilter) reset() { f.n = 0 }
 
-func (f *replayFilter) pass(p protocol.Message) {
+func (f *progressFilter) pass(p protocol.Message) {
 	f.n++
-	if f.n > f.seen {
-		f.seen = f.n
-		if f.fn != nil {
-			f.fn(p)
+	if f.numbered {
+		if p.N <= f.mark {
+			return
 		}
+		f.mark = p.N
+	} else {
+		if f.n <= f.seen {
+			return
+		}
+		if p.N > f.mark {
+			f.mark = p.N
+		}
+	}
+	f.seen++
+	if f.fn != nil {
+		f.fn(p)
 	}
 }
 

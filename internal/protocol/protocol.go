@@ -27,6 +27,9 @@ const (
 	TypeNew       = "new"       // client -> daemon, create a managed session
 	TypeAdd       = "add"       // client -> daemon, create a worktree and start an agent in it
 	TypeRm        = "rm"        // client -> daemon, remove a worktree and its managed session
+	TypeRun       = "run"       // client -> daemon, run a command in a worktree and stream its output
+	TypeFollow    = "follow"    // client -> daemon, attach to a command sent earlier under the same id
+	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
@@ -41,6 +44,15 @@ const (
 	CapWorktrees = "worktrees" // worktree records in the subscription stream
 	CapAdd       = "add"       // the add command
 	CapRm        = "rm"        // the rm command
+	// CapFollow is numbered progress and the follow message: a client
+	// that lost its connection follows a command by id from the last n
+	// it saw, rather than resending the command. Without it a resend
+	// attaches to a running command and replays a finished one, and the
+	// progress is unnumbered.
+	CapFollow = "follow"
+	// CapRun is the run command, with cancel. A daemon with run has
+	// follow.
+	CapRun = "run"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.
@@ -55,6 +67,11 @@ const (
 	StateDone   = "done"   // the step completed
 	StateSkip   = "skip"   // the step was already done; Detail says how that was seen
 	StateOutput = "output" // one line of a setup command's output, in Detail
+	// StateGap is one message in place of output a follow cannot have:
+	// a run keeps a bounded tail for replay, and a follower whose after
+	// is before the tail gets a gap saying how many lines it missed, at
+	// the position they had.
+	StateGap = "gap"
 )
 
 // Stages of add, in order. A result carries the stage that failed.
@@ -66,7 +83,20 @@ const (
 	StageCopy     = "copy"
 	StageSetup    = "setup"
 	StageAgent    = "agent"
+	// StageRun is every progress message of a run: start with the root
+	// as detail, output with FD, gap.
+	StageRun = "run"
 )
+
+// ErrUnknownCommand is the result error a follow gets for an id the
+// daemon does not know: never sent, finished more than the retention
+// ago, or sent to a daemon since restarted. The add and rm clients then
+// resend their command; the run client reports the outcome unknown.
+const ErrUnknownCommand = "unknown command"
+
+// ErrCancelled is the result error of a run stopped by cancel, or by the
+// daemon shutting down.
+const ErrCancelled = "cancelled"
 
 // Activity is what the agent on screen appears to be doing.
 type Activity string
@@ -241,6 +271,16 @@ type Message struct {
 	Stage  string `json:"stage,omitempty"`
 	State  string `json:"state,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// N numbers a command's progress messages from 1, from a daemon
+	// with follow. After on a follow is the highest N the client has
+	// seen; the daemon replays from After+1.
+	N     uint64 `json:"n,omitempty"`
+	After uint64 `json:"after,omitempty"`
+	// FD on a run's output says which stream the line came from, 1 or
+	// 2. Exit on a run's result is the process's exit status; OK says
+	// whether it exited at all.
+	FD   int `json:"fd,omitempty"`
+	Exit int `json:"exit,omitempty"`
 }
 
 // Conn is a line-oriented JSON connection. Writes are serialized.
