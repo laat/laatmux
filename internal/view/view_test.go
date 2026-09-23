@@ -19,8 +19,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // gone agent, a worktree without a session, one without an agent, a
 // managed agent with no worktree, observed agents on the local and a
 // remote default server, a host down, a settled and a stale workspace.
-func fixture(now time.Time) rows.Rows {
-	return rows.Build(rows.Input{
+func fixture(now time.Time) rows.Rows { return rows.Build(fixtureInput(now)) }
+
+func fixtureInput(now time.Time) rows.Input {
+	return rows.Input{
 		Hosts: []rows.Host{
 			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true},
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true},
@@ -55,7 +57,7 @@ func fixture(now time.Time) rows.Rows {
 			{Name: "mac/scratch", Attach: "mac/scratch", Host: "mac"},
 		},
 		Current: "mac/proj/task",
-	})
+	}
 }
 
 func golden(t *testing.T, name, got string) {
@@ -306,6 +308,24 @@ func TestDecoderSplit(t *testing.T) {
 	if got := d.Flush(); len(got) != 0 {
 		t.Errorf("flushed partial rune = %+v", got)
 	}
+	// A mouse report cut short is dropped on flush, never read as an
+	// escape and the digits 1 and 2, which would jump.
+	if got := d.Feed([]byte("\x1b[<0;12;")); len(got) != 0 || !d.Pending() {
+		t.Errorf("partial mouse report read at once: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 0 {
+		t.Errorf("flushed partial mouse report = %+v", got)
+	}
+	if got := d.Feed([]byte("\x1bO")); len(got) != 0 {
+		t.Errorf("partial SS3 read at once: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 0 {
+		t.Errorf("flushed partial SS3 = %+v", got)
+	}
+	// Escape then a key that is no sequence is both, at once.
+	if got := d.Feed([]byte("\x1bj")); len(got) != 2 || got[0].Kind != KeyEsc || got[1].Rune != 'j' || d.Pending() {
+		t.Errorf("escape then j = %+v", got)
+	}
 	if got := Parse([]byte{0xc3, 'j'}); len(got) != 1 || got[0].Rune != 'j' {
 		t.Errorf("invalid byte then j = %+v", got)
 	}
@@ -320,36 +340,40 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 	m.Handle(Key{Rune: 'j'})
 	m.Handle(Key{Rune: 'j'})
 	was := m.Selection()
-	if was.Name != "proj/task" {
-		t.Fatalf("selected %q", was.Name)
+	if was.Name != "proj/task" || m.Selected != 2 {
+		t.Fatalf("selected %q at %d", was.Name, m.Selected)
 	}
-	// The blocked agent goes idle: proj/task moves to the top.
-	rs := fixture(now)
-	for i := range rs.Main {
-		if rs.Main[i].Name == "laatmux/fix-ls" {
-			rs.Main[i].Agent.Activity = protocol.Idle
+	// The blocked agent goes idle and the other working agent goes
+	// blocked: proj/task is now the first working row, index 1.
+	in := fixtureInput(now)
+	for i := range in.Agents {
+		switch in.Agents[i].Session {
+		case "laatmux/fix-ls":
+			in.Agents[i].Activity = protocol.Idle
+		case "remote-notes":
+			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
 	m.SetRows(rows.Build(rows.Input{}))
-	m.SetRows(rs)
-	if got := m.Selection(); got.Name != "proj/task" {
-		t.Errorf("after an empty refresh and a refresh: selected %q, index %d", got.Name, m.Selected)
-	}
-	// Rows re-sorted: the selection follows its row.
-	fx := fixture(now.Add(time.Hour))
-	m.SetRows(fx)
-	if got := m.Selection(); got.Name != "proj/task" {
-		t.Errorf("after reorder: selected %q", got.Name)
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got.Name != "proj/task" || m.Selected != 1 {
+		t.Errorf("after reorder: selected %q at %d, want proj/task at 1", got.Name, m.Selected)
 	}
 	// The row is gone: the index stays, clamped.
-	var without rows.Rows
-	for _, r := range fx.Main {
-		if r.Name != "proj/task" {
-			without.Main = append(without.Main, r)
+	for i := range in.Worktrees {
+		if in.Worktrees[i].Branch == "task" {
+			in.Worktrees = append(in.Worktrees[:i], in.Worktrees[i+1:]...)
+			break
 		}
 	}
-	m.SetRows(without)
-	if got := m.Selection(); got == nil || got.Name == "proj/task" || m.Selected != 2 {
+	for i := range in.Agents {
+		if in.Agents[i].Session == "proj/task" {
+			in.Agents = append(in.Agents[:i], in.Agents[i+1:]...)
+			break
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name == "proj/task" || m.Selected != 1 {
 		t.Errorf("after removal: %+v index %d", got, m.Selected)
 	}
 }

@@ -50,7 +50,8 @@ func (d *Decoder) Feed(b []byte) []Key {
 func (d *Decoder) Pending() bool { return len(d.pending) > 0 }
 
 // Flush reads the held bytes as they are: a bare escape is the escape
-// key, an incomplete sequence its bytes.
+// key; an incomplete sequence or rune is dropped, never read as the
+// keys its bytes spell.
 func (d *Decoder) Flush() []Key {
 	keys, _ := parse(d.pending, true)
 	d.pending = nil
@@ -65,7 +66,10 @@ func Parse(b []byte) []Key {
 }
 
 // parse splits b into keys. With flush false, bytes that may be the
-// start of an escape sequence or a rune are returned as rest instead.
+// start of an escape sequence or a rune are returned as rest instead;
+// with flush true a bare escape is the escape key and an incomplete
+// sequence is dropped, since a mouse report cut short would otherwise
+// read as an escape and digits, and digits jump.
 func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 	for len(b) > 0 {
 		c := b[0]
@@ -87,12 +91,14 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 				if !flush {
 					return keys, b
 				}
+				return keys, nil
 			}
 			if b[1] == 'O' {
 				if len(b) < 3 {
 					if !flush {
 						return keys, b
 					}
+					return keys, nil
 				} else {
 					// SS3 arrows, sent in application cursor mode.
 					switch b[2] {

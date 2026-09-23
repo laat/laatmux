@@ -193,8 +193,15 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 // sidebarReap kills a sidebar pane that is alone in its window, so a
 // window whose real pane exited closes at once instead of surviving as
 // a sidebar. A dead pane kept by remain-on-exit, such as a workspace's
-// attach pane, still counts as the window's: jump respawns it.
+// attach pane, still counts as the window's: jump respawns it. It takes
+// the lock so it never runs between a split and its tag, where it
+// would see a live untagged pane, leave the window, and not run again.
 func sidebarReap(ctx context.Context) error {
+	unlock, err := sidebarLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	panes, err := sidebarPanes(ctx)
 	if err != nil {
 		return err
