@@ -425,6 +425,9 @@ func TestCopyAndSetupConfig(t *testing.T) {
 		{"copy: [\"a**b\"]\n", "whole path segment"},
 		{"copy: [\"[a\"]\n", "syntax"},
 		{"copy: [\"\"]\n", "empty"},
+		{"copy: [\"./config/*.local\"]\n", "no empty or . segments"},
+		{"copy: [\"config//x\"]\n", "no empty or . segments"},
+		{"copy: [\"config/\"]\n", "no empty or . segments"},
 		{"repos:\n  - source: git@x:o/p.git\n    copy: [../x]\n", "repos: git@x:o/p.git: copy"},
 		{"repos:\n  - source: git@x:o/p.git\n    setup: [\" \"]\n", "setup: entry 1 is empty"},
 	} {

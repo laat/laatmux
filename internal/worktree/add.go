@@ -232,6 +232,12 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 			if !MatchGlob(entry, rel) {
 				continue
 			}
+			// A glob names whatever git lists: a submodule, a symlink,
+			// a directory are not files to copy and are passed over,
+			// where a literal entry naming one is an error.
+			if fi, err := os.Lstat(filepath.Join(checkout, rel)); err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
 			matched++
 			if err := copyFile(ctx, checkout, a.Root, rel, report); err != nil {
 				return a, fail(stage, err)
@@ -242,15 +248,26 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		}
 	}
 
+	// The committed commands, then this host's for the repository. Each
+	// list numbers its own markers, so a committed list that grows does
+	// not move a personal command onto another's marker.
 	stage = protocol.StageSetup
-	commands := append(append([]string(nil), setup.Setup...), repo.Setup...)
-	if len(commands) > 0 {
+	if len(setup.Setup) > 0 || len(repo.Setup) > 0 {
 		markers, err := markerDir(ctx, a.Root)
 		if err != nil {
 			return a, fail(stage, err)
 		}
-		for i, cmd := range commands {
-			marker := filepath.Join(markers, "setup-"+strconv.Itoa(i)+"-"+hash(cmd))
+		type step struct{ cmd, marker string }
+		var steps []step
+		for i, cmd := range setup.Setup {
+			steps = append(steps, step{cmd, "setup-" + strconv.Itoa(i) + "-" + hash(cmd)})
+		}
+		for i, cmd := range repo.Setup {
+			steps = append(steps, step{cmd, "setup-repo-" + strconv.Itoa(i) + "-" + hash(cmd)})
+		}
+		for _, st := range steps {
+			cmd := st.cmd
+			marker := filepath.Join(markers, st.marker)
 			if _, err := os.Stat(marker); err == nil {
 				report(stage, protocol.StateSkip, cmd+" (done before)")
 				continue
@@ -299,7 +316,11 @@ func branchOrDetached(e Entry) string {
 // copyFile copies one entry from the main checkout into the worktree,
 // through a temporary file in the target directory renamed into place, so
 // the target can only exist complete. Skipped when the target exists, and
-// when the source is not in the checkout.
+// when the source is not in the checkout. The source is read where it
+// resolves, and that must be inside the checkout: a symlink to a file
+// elsewhere is not copied, since the file was never the repository's;
+// and the target is written where its directory resolves, which must
+// be inside the worktree, so no symlink there leads the write out.
 func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) error {
 	stage := protocol.StageCopy
 	dst := filepath.Join(root, rel)
@@ -319,8 +340,14 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s: not a regular file", src)
 	}
+	if !within(checkout, src) {
+		return fmt.Errorf("%s resolves outside the checkout %s", rel, checkout)
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
+	}
+	if !within(root, filepath.Dir(dst)) {
+		return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
 	}
 	// The temporary file is created exclusively with a random suffix, so
 	// it can never truncate a file the repository happens to contain. A
@@ -437,6 +464,21 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// within reports whether p, with its symlinks resolved, is inside dir,
+// with dir's resolved too. A path that cannot be resolved is outside.
+func within(dir, p string) bool {
+	rp, ok := resolveExisting(filepath.Clean(p))
+	if !ok {
+		return false
+	}
+	rd, ok := resolveExisting(filepath.Clean(dir))
+	if !ok {
+		return false
+	}
+	rel, err := filepath.Rel(rd, rp)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // listFiles is what git knows of the main checkout, for a glob to match

@@ -123,8 +123,16 @@ A glob is matched against what git knows of the main checkout, the
 files it tracks or does not ignore plus the ignored files, which is
 where an encrypted env cache sits, with ignored directories collapsed,
 so `**/.envrc.cache.enc` finds the caches in every package and never
-walks `node_modules`. Each match is copied as a literal entry is,
-through a temporary file renamed into place, skipped when present. The
+walks `node_modules`. Each match that is a regular file is copied as
+a literal entry is, through a temporary file renamed into place,
+skipped when present; a symlink, a directory or a submodule a glob
+matches is passed over. Nothing is read from outside the checkout or
+written outside the worktree: a source is read where it resolves and a
+target written where its directory resolves, and either resolving out
+through a symlink is an error. The committed commands and a
+repository's own each number their own completion markers, so a
+committed list that grows does not move a personal command onto
+another's marker. The
 last-used host and agent per repository are state, not config: they live in
 `$LAATMUX_HOME/last.json`, keyed by source, and are updated under a lock
 with an atomic rename. The design is in

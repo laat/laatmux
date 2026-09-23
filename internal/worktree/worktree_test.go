@@ -836,4 +836,93 @@ func TestAddPersonalCopyAndSetup(t *testing.T) {
 			t.Errorf("retry redid: %s", r)
 		}
 	}
+	// The committed list growing does not move the personal command
+	// onto another marker: it is still done, and the new committed
+	// command runs.
+	write(t, filepath.Join(a.Root, config.SetupFile), "copy: [.envrc, missing.txt]\nsetup: [\"echo one >> log\", \"echo two >> log\", \"echo three >> log\"]\n")
+	reports = nil
+	if _, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\nthree\n" {
+		t.Errorf("markers after the committed list grew: %q", b)
+	}
+	// A personal command changed at the same index runs; the one that
+	// moved does not run again.
+	f.store.Repos[0].Setup = []string{"echo first >> log", "echo personal >> log"}
+	repo = f.store.Repos[0]
+	if _, err := f.store.Add(f.ctx, repo, "task", nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\nthree\nfirst\npersonal\n" {
+		t.Errorf("personal list changed: %q", b)
+	}
+}
+
+// A glob passes over what git lists that is not a file: a symlink, a
+// directory, a submodule's gitlink. A literal entry that is a symlink
+// to a file outside the checkout is refused, and a target whose
+// directory is a symlink out of the worktree is refused, so nothing is
+// read from or written to outside the two roots.
+func TestCopyStaysInsideRoots(t *testing.T) {
+	f := newFixture(t)
+	a, err := f.store.Add(f.ctx, f.repo, "first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := a.Checkout
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "secret"), "outside")
+	write(t, filepath.Join(checkout, ".gitignore"), "*.enc\nlinks/\n")
+	write(t, filepath.Join(checkout, "real.enc"), "real")
+	os.MkdirAll(filepath.Join(checkout, "links"), 0o755)
+	os.Symlink(filepath.Join(outside, "secret"), filepath.Join(checkout, "links", "link.enc"))
+	os.Symlink(filepath.Join(outside, "secret"), filepath.Join(checkout, "direct.enc"))
+	// A submodule: a gitlink git lists without a trailing slash.
+	sub := filepath.Join(t.TempDir(), "sub")
+	run(t, filepath.Dir(sub), "git", "init", "-q", "--initial-branch=main", sub)
+	run(t, sub, "git", "config", "user.email", "t@example.com")
+	run(t, sub, "git", "config", "user.name", "t")
+	write(t, filepath.Join(sub, "f"), "x")
+	run(t, sub, "git", "add", ".")
+	run(t, sub, "git", "commit", "-q", "-m", "sub")
+	run(t, checkout, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/lib")
+	f.store.Copy = []string{"**/*.enc", "vendor/**"}
+	var reports []string
+	b, err := f.store.Add(f.ctx, f.repo, "second", func(stage, state, detail string) { reports = append(reports, stage+" "+state+" "+detail) })
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(reports, "\n"))
+	}
+	if got, _ := os.ReadFile(filepath.Join(b.Root, "real.enc")); string(got) != "real" {
+		t.Errorf("real.enc: %q", got)
+	}
+	for _, rel := range []string{"links/link.enc", "direct.enc"} {
+		if _, err := os.Lstat(filepath.Join(b.Root, rel)); err == nil {
+			t.Errorf("%s: a symlink out of the checkout was copied by a glob", rel)
+		}
+	}
+	// A literal entry that is a symlink out of the checkout is refused.
+	f.store.Copy = []string{"direct.enc"}
+	if _, err := f.store.Add(f.ctx, f.repo, "third", nil); err == nil || !strings.Contains(err.Error(), "outside the checkout") {
+		t.Errorf("literal symlink out of the checkout: %v", err)
+	}
+	// A target directory that is a symlink out of the worktree is
+	// refused: nothing lands outside.
+	f.store.Copy = []string{"real.enc"}
+	c, err := f.store.Add(f.ctx, f.repo, "fourth", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(c.Root, "real.enc"))
+	f.store.Copy = []string{"esc/real.enc"}
+	write(t, filepath.Join(checkout, "esc", "real.enc"), "real")
+	os.Symlink(outside, filepath.Join(c.Root, "esc"))
+	if _, err := f.store.Add(f.ctx, f.repo, "fourth", nil); err == nil || !strings.Contains(err.Error(), "outside the worktree") {
+		t.Errorf("target directory out of the worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "real.enc")); err == nil {
+		t.Error("a file was written outside the worktree")
+	}
 }
