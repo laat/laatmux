@@ -52,6 +52,10 @@ func main() {
 		err = cmdJump(ctx, os.Args[2:])
 	case "shell":
 		err = cmdShell(ctx, os.Args[2:])
+	case "split":
+		err = cmdSplit(ctx, os.Args[2:])
+	case "run":
+		err = cmdRun(ctx, os.Args[2:])
 	case "sidebar":
 		err = cmdSidebar(ctx, os.Args[2:])
 	case "dashboard":
@@ -73,6 +77,13 @@ func main() {
 	default:
 		usage()
 		err = fmt.Errorf("unknown command %q", os.Args[1])
+	}
+	var ee *exitError
+	if errors.As(err, &ee) {
+		if ee.msg != "" {
+			fmt.Fprintln(os.Stderr, "laatmux:", ee.msg)
+		}
+		os.Exit(ee.code)
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "laatmux:", err)
@@ -99,6 +110,10 @@ func usage() {
   jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
             laatmux jump [--server default] <host>/<session>   a session that is no worktree's
   shell     a shell at the worktree root, in the workspace session this runs from
+  split     laatmux split [-h|-v] [<pane-id>]   split the pane; in a workspace session the new
+            pane is a shell at the worktree root on its host, elsewhere the plain split
+  run       laatmux run [<repo>/<branch>] [--host h] -- <cmd>...
+            run a command in the worktree root on its host, output streamed back, exit status kept
   settle    laatmux settle [<host>/<repo>/<branch>]     collapse the workspace in ls
   unsettle  laatmux unsettle [<host>/<repo>/<branch>]
   new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]   managed session, no worktree

@@ -11,10 +11,13 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
-// Progress replayed after a reconnect is passed on once.
+// Progress replayed after a reconnect is passed on once: by position
+// from a daemon that replays from the start, by number from one that
+// replays from the mark, and a redial that lands on the other kind
+// still filters.
 func TestStreamDedupe(t *testing.T) {
 	var got []string
-	f := &replayFilter{fn: func(p protocol.Message) { got = append(got, p.Detail) }}
+	f := &progressFilter{fn: func(p protocol.Message) { got = append(got, p.Detail) }}
 	for _, d := range []string{"a", "b"} {
 		f.pass(protocol.Message{Detail: d})
 	}
@@ -23,7 +26,36 @@ func TestStreamDedupe(t *testing.T) {
 		f.pass(protocol.Message{Detail: d})
 	}
 	if strings.Join(got, "") != "abc" {
-		t.Fatalf("got %v", got)
+		t.Fatalf("positional: got %v", got)
+	}
+
+	got = nil
+	f = &progressFilter{numbered: true, fn: func(p protocol.Message) { got = append(got, p.Detail) }}
+	for i, d := range []string{"a", "b"} {
+		f.pass(protocol.Message{N: uint64(i + 1), Detail: d})
+	}
+	f.reset() // reconnect: follow after 2, but a slow replay overlaps
+	for i, d := range []string{"b", "c", "d"} {
+		f.pass(protocol.Message{N: uint64(i + 2), Detail: d})
+	}
+	if strings.Join(got, "") != "abcd" || f.mark != 4 {
+		t.Fatalf("numbered: got %v mark %d", got, f.mark)
+	}
+	// A gap counts as the lines it stands for: the mark moves to its n.
+	f.pass(protocol.Message{N: 9, State: protocol.StateGap, Detail: "5 lines dropped"})
+	f.pass(protocol.Message{N: 10, Detail: "e"})
+	if strings.Join(got, "") != "abcd5 lines droppede" || f.mark != 10 {
+		t.Fatalf("gap: got %v mark %d", got, f.mark)
+	}
+	// The next connection is an older daemon: it replays everything
+	// unnumbered, and only what is past the count seen passes.
+	f.numbered = false
+	f.reset()
+	for _, d := range []string{"a", "b", "c", "d", "5 lines dropped", "e", "f"} {
+		f.pass(protocol.Message{Detail: d})
+	}
+	if strings.Join(got, "") != "abcd5 lines droppedef" {
+		t.Fatalf("downgrade: got %v", got)
 	}
 }
 
@@ -81,5 +113,23 @@ func TestDescribe(t *testing.T) {
 	}
 	if got := (Rm{Root: "/r/x"}).Describe(); got != "/r/x" {
 		t.Error(got)
+	}
+	r := Run{Host: config.Host{Host: client.Host{Name: "vm"}}, Repo: config.Repo{Name: "proj"}, Branch: "x", Root: "/r/x", Cmd: []string{"go", "test"}}
+	if got := r.Describe(); got != "run go test in proj/x on vm" {
+		t.Error(got)
+	}
+	r.Repo = config.Repo{}
+	if got := r.Describe(); got != "run go test in /r/x on vm" {
+		t.Error(got)
+	}
+}
+
+// A cancelled run is told apart from other refusals.
+func TestCancelled(t *testing.T) {
+	if !Cancelled(&StageError{Command: "run", Msg: protocol.ErrCancelled}) {
+		t.Error("cancelled not seen")
+	}
+	if Cancelled(&StageError{Command: "run", Msg: "no such worktree"}) || Cancelled(errors.New(protocol.ErrCancelled)) {
+		t.Error("false positive")
 	}
 }

@@ -15,38 +15,57 @@ import (
 )
 
 // DefaultCommandTTL is how long a finished command's outcome is kept, so a
-// client that lost its bridge can repeat the id and get the result back.
+// client that lost its bridge can follow the id and get the result back.
 const DefaultCommandTTL = 5 * time.Minute
 
-// maxOutput bounds the setup and clone output one command retains for
-// replay. Past it, output lines are dropped after one line saying so;
-// step and result messages are always kept, and there are few of them.
+// maxOutput bounds the output one command retains for replay. Past it,
+// add and rm drop output for good after one line saying so, since setup
+// output is a diagnostic; a run forgets its oldest lines instead and
+// keeps streaming to its live followers, since its output is the point.
+// Step and result messages are always kept, and there are few of them.
 const maxOutput = 1 << 20
 
-// command is one add or rm in flight or recently finished. Its events,
-// progress then the result, are appended as they happen; a connection
-// that sends the same id, while it runs or after, replays them and follows.
+// command is one add, rm or run in flight or recently finished. Its
+// progress is numbered from 1 and appended as it happens, and the result
+// kept apart; a follow replays what it retains past the follower's mark
+// and then keeps sending. Events are contiguous in N: a ring drops from
+// the front, so events[i].N is events[0].N + i.
 type command struct {
+	id        string
+	ring      bool // drop the oldest events past the budget rather than new output
 	mu        sync.Mutex
 	cond      *sync.Cond
 	events    []protocol.Message
+	next      uint64 // N of the next progress message
 	outBytes  int
 	truncated bool
 	done      bool
 	doneAt    time.Time
+	result    protocol.Message
+	// cancel stops a run; nil for add and rm.
+	cancel func()
 }
 
-func newCommand() *command {
-	c := &command{}
+func newCommand(id string) *command {
+	c := &command{id: id, next: 1}
 	c.cond = sync.NewCond(&c.mu)
 	return c
 }
 
+// emit appends a progress message, numbering it, or records the result.
 func (c *command) emit(m protocol.Message) {
 	c.mu.Lock()
+	if m.Type == protocol.TypeResult {
+		c.result = m
+		c.done = true
+		c.doneAt = time.Now()
+		c.mu.Unlock()
+		c.cond.Broadcast()
+		return
+	}
 	if m.State == protocol.StateOutput {
 		c.outBytes += len(m.Detail)
-		if c.outBytes > maxOutput {
+		if c.outBytes > maxOutput && !c.ring {
 			if c.truncated {
 				c.mu.Unlock()
 				return
@@ -55,35 +74,54 @@ func (c *command) emit(m protocol.Message) {
 			m.Detail = "(further output dropped: over 1 MiB)"
 		}
 	}
+	m.N = c.next
+	c.next++
 	c.events = append(c.events, m)
-	if m.Type == protocol.TypeResult {
-		c.done = true
-		c.doneAt = time.Now()
+	for c.ring && c.outBytes > maxOutput && len(c.events) > 1 {
+		if c.events[0].State == protocol.StateOutput {
+			c.outBytes -= len(c.events[0].Detail)
+		}
+		c.events[0] = protocol.Message{}
+		c.events = c.events[1:]
 	}
 	c.mu.Unlock()
 	c.cond.Broadcast()
 }
 
-// stream writes every event to pc, past and future, until the result has
-// been sent or a write fails.
-func (c *command) stream(pc *protocol.Conn) error {
-	i := 0
+// stream writes every progress message past after to pc, retained and
+// future, then the result, until a write fails. A follower behind the
+// retained tail gets one gap message for the lines between its mark and
+// the tail, numbered as the last of them, so its mark moves past them.
+func (c *command) stream(pc *protocol.Conn, after uint64) error {
+	last := after
 	for {
 		c.mu.Lock()
-		for i >= len(c.events) && !c.done {
+		for !c.done && (len(c.events) == 0 || c.events[len(c.events)-1].N <= last) {
 			c.cond.Wait()
 		}
-		batch := append([]protocol.Message(nil), c.events[i:]...)
-		done := c.done
+		var batch []protocol.Message
+		if n := len(c.events); n > 0 && c.events[n-1].N > last {
+			base := c.events[0].N
+			if last+1 < base {
+				batch = append(batch, protocol.Message{
+					Type: protocol.TypeProgress, ID: c.id, N: base - 1,
+					Stage: protocol.StageRun, State: protocol.StateGap,
+					Detail: fmt.Sprintf("%d lines dropped", base-1-last),
+				})
+				last = base - 1
+			}
+			batch = append(batch, c.events[last+1-base:]...)
+			last = c.events[n-1].N
+		}
+		done, res := c.done, c.result
 		c.mu.Unlock()
 		for _, m := range batch {
 			if err := pc.Write(m); err != nil {
 				return err
 			}
 		}
-		i += len(batch)
-		if done && i >= len(c.events) {
-			return nil
+		if done {
+			return pc.Write(res)
 		}
 	}
 }
@@ -96,9 +134,17 @@ func (d *Daemon) command(id string) (*command, bool) {
 	if c, ok := d.cmds[id]; ok {
 		return c, false
 	}
-	c := newCommand()
+	c := newCommand(id)
 	d.cmds[id] = c
 	return c, true
+}
+
+// lookup returns the command for id when the daemon still has it.
+func (d *Daemon) lookup(id string) (*command, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.cmds[id]
+	return c, ok
 }
 
 // evict forgets a finished command once its TTL has passed, whether or
@@ -306,6 +352,10 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				return err
 			}
 		}
+		// Git has agreed to the removal: what runs in the root is
+		// laatmux's own, like the session, and goes before it. The wait
+		// makes the ok mean nothing of laatmux's is left there.
+		d.cancelRunsIn(root)
 		panes, err := d.managed.Tmux.ListPanes(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {

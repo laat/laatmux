@@ -136,6 +136,12 @@ func cmdServe(ctx context.Context, args []string) error {
 	go func() { errc <- d.Serve(ctx, ln) }()
 	select {
 	case <-ctx.Done():
+		// A clean shutdown stops the runs the way cancel does, so a
+		// restart for an upgrade leaves no orphan; the wait is bounded
+		// by the kill delay plus a margin.
+		sctx, cancel := context.WithTimeout(context.Background(), daemon.DefaultKillDelay+5*time.Second)
+		defer cancel()
+		d.StopRuns(sctx)
 		return nil
 	case err := <-errc:
 		return err

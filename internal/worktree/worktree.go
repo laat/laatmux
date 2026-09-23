@@ -448,10 +448,12 @@ func hash(s string) string {
 // line is read and dropped, so the producer never blocks on the pipe.
 const maxLine = 64 * 1024
 
-// streamLines feeds each line of r to fn, without the newline, and reads
+// StreamLines feeds each line of r to fn, without the newline, and reads
 // r to its end whatever the line lengths: a Scanner would stop at its
-// buffer limit and leave the writer blocked on the pipe.
-func streamLines(r io.Reader, fn func(string)) {
+// buffer limit and leave the writer blocked on the pipe. A partial last
+// line is delivered at the end. The daemon streams a run's output with
+// it too.
+func StreamLines(r io.Reader, fn func(string)) {
 	br := bufio.NewReader(r)
 	var line []byte
 	truncated := false

@@ -12,14 +12,15 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
-| `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add` and `rm`; merges the configured hosts' streams into one for local clients |
+| `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` in one invocation, `kill-session`, branch encoding for session names |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge`; request and streamed command |
+| `internal/command` | the client side of `add`, `rm`, `run` and `shell`, one implementation each for the CLI and the dashboard, with the reconnect and follow logic |
 | `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |
 | `internal/rows` | the rows the listing, the sidebar and the dashboard share: worktrees joined with agents and local sessions, dim state, groups |
 | `internal/view` | the list view: pure renderer for the tile and compact layouts, keys and mouse, raw mode, the draw loop |
@@ -39,6 +40,9 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux path proj/fix-ls                    # the worktree root on its host
 ./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
 ./laatmux shell                               # a shell at the worktree root, from inside a workspace session
+./laatmux split -h '#{pane_id}'               # from a binding: split the pane; a workspace's new pane is a shell at the root on its host
+./laatmux run proj/fix-ls -- go test ./...    # run in the worktree root on its host, output and exit status streamed back
+./laatmux run -- make                         # inside a workspace session, that workspace
 ./laatmux settle                              # collapse this workspace in ls; unsettle brings it back
 ./laatmux rm proj/fix-ls [--force]            # remove the worktree, its managed session and the local session
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
@@ -151,13 +155,50 @@ truth; labels only place new things.
   user made elsewhere is left alone, as is the branch. Send `root` from
   the record whenever it is known: it is what reaches a session whose
   worktree is already gone, since a branch alone maps to no root then.
+- **`run`** `{type: run, id, repo, branch, root, cmd}`, capability `run`,
+  runs `cmd` as a subprocess of the daemon in `root`, which must be a
+  registered worktree of a known repository under `worktrees/` and, when
+  `repo` and `branch` are given, theirs. No shell, no tty, stdin at
+  `/dev/null`, the daemon's environment, its own process group. Output
+  streams as `{type: progress, id, n, stage: run, state: output, fd,
+  detail}` one line per message, `fd` 1 or 2, a partial last line at
+  exit; the result is `ok` with `exit` when the process exited at all,
+  `ok: false` with `error` for laatmux's own failures. The two streams
+  are read as two pipes, so the order between a stdout line and a
+  stderr line is not kept, as with any pipe pair; within one it is.
+  Output is text: binary is mangled by the line split. `{type: cancel,
+  id}` sends `SIGTERM` to the process group, `SIGKILL` five seconds
+  later, and the result says `cancelled`; a cancel that lands before the
+  process has started means it never starts. A clean daemon shutdown
+  cancels its runs the same way and waits for them. Runs take no
+  repository lock. `rm`, once git has removed the worktree and before it
+  kills the sessions, cancels every run in that root and waits, so its
+  `ok` means nothing of laatmux's is left there. The two interlock on a
+  removal generation per root: a run reads it before it asks git, and
+  registers only if it is unchanged; `rm` bumps it under the same mutex
+  it takes the root's runs under, so a run that resolved before the
+  removal is refused with `worktree removed; retry` whether or not a
+  worktree is back at that root.
+- **Follow and numbered progress**, capability `follow`: every progress
+  message carries `n`, from 1 per command, and a client that lost its
+  connection sends `{type: follow, id, after}` in place of the command;
+  the daemon replays from `after + 1` and keeps sending. An unknown id
+  gets `{type: result, ok: false, error: "unknown command"}`; `add` and
+  `rm` clients then resend the command as a new execution, `run` reports
+  the outcome unknown. Retention differs per command: `add` and `rm`
+  drop output past 1 MiB for good after one line saying so; a run keeps
+  streaming live past it and forgets its oldest lines for replay, and a
+  follow from before the retained tail gets one `{state: gap, n,
+  detail: "<count> lines dropped"}` numbered as the last dropped line.
+  Without the capability the client's older path holds: the same id
+  resent attaches to a running command and replays a finished one from
+  the start, filtered by position.
 - **Retry and serialization**: commands run under the daemon's context
   and outlive the connection that sent them. Ids are kept for five
-  minutes; the same id while a command runs attaches to its stream, and
-  afterwards replays the result. `add` is serialized per repository
-  source, so adds for different repositories run in parallel; `rm` takes
-  every repository's lock while it resolves and removes, since its root
-  checks ask every checkout, and so waits for any add in flight.
+  minutes. `add` is serialized per repository source, so adds for
+  different repositories run in parallel; `rm` takes every repository's
+  lock while it resolves and removes, since its root checks ask every
+  checkout, and so waits for any add in flight.
 
 ## Workspaces, client side
 
@@ -191,7 +232,8 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   and agent come from
   their flags, else `last.json`, else the config's default order. The
   command id is chosen once per invocation; a transport failure mid-way
-  dials again with the same id, and the daemon's replay is printed once.
+  dials again and follows the id from the last numbered progress seen,
+  or against an older daemon resends it and prints the replay once.
   Progress prints one line per step. On success `last.json` is updated
   and the workspace session is created, or found by key; inside the
   default tmux server the client switches to it, elsewhere it prints how
@@ -241,6 +283,25 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   `bind-key S run-shell 'laatmux shell'`: a `run-shell` job has `TMUX`
   naming the session the key was pressed in but no `TMUX_PANE`, and the
   session is resolved from either.
+- **`split [-h|-v] [<pane-id>]`** is the split binding for every window:
+  from the pane, passed in since a `run-shell` job has no `TMUX_PANE`, it
+  reads the session's tags on the server `TMUX` names. Not a workspace
+  session: `split-window -t <pane> -c '#{pane_current_path}'`, the plain
+  split. A workspace on the local host: `-c <root>`. On a remote host:
+  the ssh command `shell` builds. The new pane lands at the worktree
+  root, not the split pane's directory, and split panes carry no tags:
+  the session's decide, so a split of a split resolves the same way.
+- **`run [<repo>/<branch>] [--host h] -- <cmd>...`** runs the command in
+  the worktree root on its host: inside a workspace session that
+  workspace, from the session's key and tags; elsewhere the record found
+  as `path` finds it. stdout lines go to stdout and stderr lines to
+  stderr, so `laatmux run proj/x -- go test ./... | tail` behaves, and
+  the exit status is the process's; 255 means the outcome is unknown, a
+  lost connection whose follow found the daemon no longer knew the run;
+  130 is cancelled. Ctrl-C sends `cancel` and waits for the result, a
+  second Ctrl-C gives up waiting and leaves the daemon to stop it. A
+  client that just disconnects leaves the run going, as an `add` keeps
+  going.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
 
@@ -329,8 +390,8 @@ is switched to.
   the worktree; a refusal that asks for force carries the hint to use
   `X`. `s` settles or unsettles; `S` opens the shell window and jumps.
   The commands are `internal/command`, the same implementations the
-  CLI's `add`, `rm` and `shell` call, with the printing separated from
-  the doing.
+  CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
+  from the doing.
 - Both refuse a local daemon without `merged` with what to do; a sidebar
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
@@ -669,6 +730,31 @@ and the window was gone within a second. `off` removed the hooks and
 every tagged pane. `dashboard` in a window drew the compact layout with
 the hint line, kept the `add` message on a failed jump, and `q` closed
 it. `ls` printed as before from the shared rows.
+
+## Milestone three, step 5, on the VM
+
+With the VM's daemon rebuilt and a scratch laptop config naming its
+repositories, from the laptop: `run proj/step5 --host vm -- sh -c ...`
+printed the stdout line to stdout and the stderr line to stderr, the
+VM's hostname and the worktree root, and exited 4 as the command did.
+Ctrl-C during `sleep 100` printed `cancelling`, then `cancelled`, exit
+130, and no sleep was left on the VM. During a 12-line one-per-second
+run, `pkill -f "laatmux bridge"` on the VM made the client print
+`connection lost (EOF); reconnecting to follow run`; the output had all
+twelve lines once, in order, then `done`, exit 0. `SIGTERM` to the VM's
+daemon mid-run ended the run as `cancelled`, exit 130, with the process
+gone and the next client restarting the daemon. `rm proj/step5 --force`
+during a run returned ok after the run's client had printed
+`cancelled`, and the worktree was gone. On an isolated laptop daemon
+the same held, plus: inside a workspace session `run -- pwd` printed
+the root with no target named; `SIGKILL` to the daemon mid-run made the
+client reconnect, start a fresh daemon, follow, and exit 255 with the
+outcome-unknown message while the process kept running, as documented;
+`split -h` on the workspace's pane, by pane id with `TMUX` set as a
+`run-shell` job has it, opened a pane with its shell at the worktree
+root while the attach pane stayed where it was, and on a plain session
+opened one in the pane's directory; the bound form
+`run-shell "laatmux split -h '#{pane_id}'"` did the same.
 
 ## Not yet verified
 

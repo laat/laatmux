@@ -145,6 +145,27 @@ func Current(ctx context.Context) (Local, error) {
 	return locals[0], nil
 }
 
+// PaneSession is the session a pane is in, with its tags, and the pane's
+// current directory. The lookup is on the server TMUX names, as Current's
+// is, since a pane id is per server; split runs from a binding on the
+// user's server.
+func PaneSession(ctx context.Context, paneID string) (Local, string, error) {
+	out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "-t", paneID, sessionFormat+tmux.Sep+"#{pane_current_path}")
+	if err != nil {
+		return Local{}, "", err
+	}
+	line := strings.TrimRight(string(out), "\n")
+	f := strings.Split(line, tmux.Sep)
+	if len(f) != 8 {
+		return Local{}, "", errors.New("cannot find the session of pane " + paneID)
+	}
+	locals := parseSessions(strings.Join(f[:7], tmux.Sep) + "\n")
+	if len(locals) != 1 {
+		return Local{}, "", errors.New("cannot find the session of pane " + paneID)
+	}
+	return locals[0], f[7], nil
+}
+
 // FindWorktree returns the workspace session for a branch of a repository
 // on the host with the environment id, by its tags.
 func FindWorktree(locals []Local, environmentID, source, branch string) (Local, bool) {

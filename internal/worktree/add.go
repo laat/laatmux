@@ -383,7 +383,7 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		streamLines(pr, func(line string) {
+		StreamLines(pr, func(line string) {
 			report(stage, protocol.StateOutput, line)
 			tail = append(tail, line)
 			if len(tail) > 5 {

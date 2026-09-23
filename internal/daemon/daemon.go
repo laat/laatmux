@@ -128,9 +128,14 @@ type Daemon struct {
 	lastListErr  string            // logged once per change
 	poke         chan struct{}
 
-	cmds       map[string]*command    // recent add and rm by id
+	cmds       map[string]*command    // recent add, rm and run by id
 	locks      map[string]*sync.Mutex // per repository source
 	commandTTL time.Duration
+	// Runs by root, and the removal generation per root that rm bumps
+	// once git has removed the worktree; see runs.go.
+	runs      map[string]map[*runJob]struct{}
+	rootGen   map[string]uint64
+	killDelay time.Duration
 
 	// The merged stream: its own sequence and subscribers, the hosts by
 	// name and in config order, the local sessions, and the context the
@@ -231,6 +236,9 @@ func New(cfg Config) *Daemon {
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
 		commandTTL:   DefaultCommandTTL,
+		runs:         map[string]map[*runJob]struct{}{},
+		rootGen:      map[string]uint64{},
+		killDelay:    DefaultKillDelay,
 
 		msubs:     map[*subscriber]struct{}{},
 		mhosts:    map[string]*mergedHost{},
@@ -249,12 +257,12 @@ func New(cfg Config) *Daemon {
 }
 
 func (d *Daemon) capabilities() []string {
-	caps := []string{protocol.CapStatus}
+	caps := []string{protocol.CapStatus, protocol.CapFollow}
 	if d.managed != nil {
 		caps = append(caps, protocol.CapNew)
 	}
 	if d.cfg.Store != nil {
-		caps = append(caps, protocol.CapWorktrees)
+		caps = append(caps, protocol.CapWorktrees, protocol.CapRun)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm)
 		}
@@ -721,12 +729,12 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			if err := pc.Write(res); err != nil {
 				return
 			}
-		case protocol.TypeAdd, protocol.TypeRm:
+		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun:
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 			switch {
 			case d.cfg.Store == nil:
 				res.Error = "this host has no repos and worktrees directories configured"
-			case d.managed == nil:
+			case d.managed == nil && m.Type != protocol.TypeRun:
 				res.Error = "this daemon does not watch the managed laatmux tmux server"
 			case m.ID == "":
 				res.Error = "command id required"
@@ -738,20 +746,42 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				continue
 			}
 			// The command runs under the daemon's context and outlives
-			// this connection; the same id from any connection follows it.
+			// this connection. The same id from any connection follows it
+			// rather than starting it again, which is what an older client
+			// relies on after a lost bridge; a client with follow sends
+			// that instead.
 			c, fresh := d.command(m.ID)
 			if fresh {
-				if m.Type == protocol.TypeAdd {
+				switch m.Type {
+				case protocol.TypeAdd:
 					go d.runAdd(ctx, m, c)
-				} else {
+				case protocol.TypeRm:
 					go d.runRm(ctx, m, c)
+				default:
+					c.ring = true
+					go d.runRun(ctx, m, c)
 				}
 			}
 			go func() {
-				if err := c.stream(pc); err != nil {
+				if err := c.stream(pc, 0); err != nil {
 					drop()
 				}
 			}()
+		case protocol.TypeFollow:
+			c, ok := d.lookup(m.ID)
+			if !ok {
+				if err := pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}); err != nil {
+					return
+				}
+				continue
+			}
+			go func() {
+				if err := c.stream(pc, m.After); err != nil {
+					drop()
+				}
+			}()
+		case protocol.TypeCancel:
+			d.cancelCommand(m.ID)
 		default:
 			_ = pc.Write(protocol.Message{Type: protocol.TypeError, ID: m.ID, Error: fmt.Sprintf("unknown message type %q", m.Type)})
 		}
