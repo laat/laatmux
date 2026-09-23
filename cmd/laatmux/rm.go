@@ -22,44 +22,42 @@ import (
 // command.Rm, which the dashboard runs too; this is the flags, the
 // lookup of the root and the printing.
 func cmdRm(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
-	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
-	root := fs.String("root", "", "worktree root on the host, for a detached worktree")
-	force := fs.Bool("force", false, "remove a dirty or locked worktree")
-	if err := fs.Parse(args); err != nil {
+	a, err := parseRmArgs(args)
+	if err != nil {
 		return err
-	}
-	usage := errors.New("usage: laatmux rm <repo>/<branch> [--host h] [--force]\n       laatmux rm --root <path> --host h [--force]\n       laatmux rm [--force]           inside a workspace session: that workspace")
-	target := ""
-	if fs.NArg() > 0 {
-		target = fs.Arg(0)
-		if err := fs.Parse(fs.Args()[1:]); err != nil {
-			return err
-		}
-	}
-	if (target != "" && *root != "") || fs.NArg() > 0 {
-		return usage
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	rm := command.Rm{Force: *force, Root: *root}
-	if target == "" && *root == "" {
-		if *hostFlag != "" {
+	rm := command.Rm{Force: a.force, Root: a.root}
+	switch {
+	case !a.targetGiven && !a.rootGiven:
+		if a.host != "" {
 			return errors.New("--host goes with <repo>/<branch> or --root; inside a workspace session the target is the workspace")
 		}
 		cur, err := workspace.Current(ctx)
 		if err != nil {
 			return fmt.Errorf("laatmux rm must name <repo>/<branch>, give --root, or run inside a workspace session: %w", err)
 		}
-		if rm, err = rmCurrent(cfg, cur); err != nil {
+		if !cur.Workspace() {
+			return fmt.Errorf("%s is not a workspace session; name <repo>/<branch> or give --root", cur.Name)
+		}
+		h, ok := cfg.Find(cur.Host)
+		if !ok {
+			return fmt.Errorf("workspace session %s is on host %q, which is not configured", cur.Name, cur.Host)
+		}
+		hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
+		if err != nil {
 			return err
 		}
-		rm.Force = *force
+		if rm, err = rmCurrent(cfg, cur, h, hello.EnvironmentID, snap.Worktrees); err != nil {
+			return err
+		}
+		rm.Force = a.force
 		fmt.Printf("removing the workspace of this session, %s on %s (%s)\n", rm.Describe(), rm.Host.Name, rm.Root)
-	} else if target != "" {
-		repoLabel, branch, err := splitRepoBranch(target)
+	case a.targetGiven:
+		repoLabel, branch, err := splitRepoBranch(a.target)
 		if err != nil {
 			return err
 		}
@@ -67,7 +65,7 @@ func cmdRm(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
 		}
-		if rm.Host, _, err = hostFor(cfg, *hostFlag, repo); err != nil {
+		if rm.Host, _, err = hostFor(cfg, a.host, repo); err != nil {
 			return err
 		}
 		rm.Repo, rm.Branch = repo, branch
@@ -84,11 +82,11 @@ func cmdRm(ctx context.Context, args []string) error {
 			}
 			rm.Root = command.RootOf(locals, hello.EnvironmentID, rm.Host, repo, branch)
 		}
-	} else {
-		if *hostFlag == "" {
+	default:
+		if a.host == "" {
 			return errors.New("--root needs --host")
 		}
-		if rm.Host, err = cfg.DefaultHost(*hostFlag, ""); err != nil {
+		if rm.Host, err = cfg.DefaultHost(a.host, ""); err != nil {
 			return err
 		}
 	}
@@ -109,23 +107,76 @@ func cmdRm(ctx context.Context, args []string) error {
 	return err
 }
 
+// rmArgs is rm's command line. A target or a root given as the empty
+// string is given, not omitted: a script with an empty variable must
+// get the usage, not the removal of the workspace it runs in.
+type rmArgs struct {
+	target, root, host string
+	targetGiven        bool
+	rootGiven          bool
+	force              bool
+}
+
+var rmUsage = errors.New("usage: laatmux rm <repo>/<branch> [--host h] [--force]\n       laatmux rm --root <path> --host h [--force]\n       laatmux rm [--force]           inside a workspace session: that workspace")
+
+// parseRmArgs reads the flags, before and after the target.
+func parseRmArgs(args []string) (rmArgs, error) {
+	var a rmArgs
+	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
+	fs.StringVar(&a.host, "host", "", "host name; default the last used for the repository")
+	fs.StringVar(&a.root, "root", "", "worktree root on the host, for a detached worktree")
+	fs.BoolVar(&a.force, "force", false, "remove a dirty or locked worktree")
+	if err := fs.Parse(args); err != nil {
+		return a, err
+	}
+	if fs.NArg() > 0 {
+		a.target, a.targetGiven = fs.Arg(0), true
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return a, err
+		}
+	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "root" {
+			a.rootGiven = true
+		}
+	})
+	if fs.NArg() > 0 || (a.targetGiven && a.rootGiven) || (a.targetGiven && a.target == "") || (a.rootGiven && a.root == "") {
+		return a, rmUsage
+	}
+	return a, nil
+}
+
 // rmCurrent is the rm for the workspace session the command runs in,
-// resolved as the dashboard resolves a row from its session: the root
-// from the key, the repository and branch from the source and branch
-// tags when this machine's config knows the source, else the root alone
-// as --root does. The host is the one the session's tag names.
-func rmCurrent(cfg config.Config, cur workspace.Local) (command.Rm, error) {
+// resolved as the dashboard resolves a row: the host must answer as the
+// environment the session's key names, since a host entry given to
+// another machine would otherwise remove that machine's worktree at
+// the same path; the worktree record for the key's root, when the host
+// has one, gives the repository and branch, which the session's tags
+// can misname after a switch or a detach in the worktree; else the tags
+// give them when this machine's config knows the source, else the root
+// alone as --root does.
+func rmCurrent(cfg config.Config, cur workspace.Local, h config.Host, environmentID string, worktrees []protocol.Worktree) (command.Rm, error) {
 	if !cur.Workspace() {
 		return command.Rm{}, fmt.Errorf("%s is not a workspace session; name <repo>/<branch> or give --root", cur.Name)
 	}
-	h, ok := cfg.Find(cur.Host)
-	if !ok {
-		return command.Rm{}, fmt.Errorf("workspace session %s is on host %q, which is not configured", cur.Name, cur.Host)
-	}
-	rm := command.Rm{Host: h}
-	_, rm.Root = workspace.SplitKey(cur.Key)
-	if rm.Root == "" {
+	env, root := workspace.SplitKey(cur.Key)
+	if root == "" {
 		return command.Rm{}, fmt.Errorf("workspace session %s has no root in its key", cur.Name)
+	}
+	if environmentID != "" && env != environmentID {
+		return command.Rm{}, fmt.Errorf("workspace session %s is on environment %s, but host %s answers as %s; the host entry may have moved to another machine", cur.Name, env, h.Name, environmentID)
+	}
+	rm := command.Rm{Host: h, Root: root, Environment: env}
+	for _, w := range worktrees {
+		if w.Root != root || w.EnvironmentID != env {
+			continue
+		}
+		if repo, ok := cfg.RepoBySource(w.Source); ok {
+			rm.Repo, rm.Branch = repo, w.Branch
+		} else if repo, ok := cfg.RepoByName(w.Repo); ok && w.Source == "" {
+			rm.Repo, rm.Branch = repo, w.Branch
+		}
+		return rm, nil
 	}
 	if repo, ok := cfg.RepoBySource(cur.Source); ok && cur.Branch != "" {
 		rm.Repo, rm.Branch = repo, cur.Branch

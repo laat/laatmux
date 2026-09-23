@@ -101,6 +101,10 @@ func stream(ctx context.Context, h client.Host, needCap string, m protocol.Messa
 			c.Close()
 			return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, needCap)
 		}
+		if o.environment != "" && c.Hello.EnvironmentID != o.environment {
+			c.Close()
+			return hello, res, fmt.Errorf("%s: answers as environment %s, not %s the request was resolved for", h.Name, c.Hello.EnvironmentID, o.environment)
+		}
 		hello = c.Hello
 		follow := sent && protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
 		req := m
@@ -143,6 +147,10 @@ type streamOpts struct {
 	// command on the current connection, and again on each reconnect,
 	// and the stream keeps waiting for the result.
 	cancel <-chan struct{}
+	// environment, when set, is the environment id the daemon must
+	// answer as, on every connection; another is a refusal before the
+	// command is sent.
+	environment string
 }
 
 // ErrOutcomeUnknown is a run whose daemon no longer knows the id after a

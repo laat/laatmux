@@ -269,11 +269,16 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
 - **`rm`** with no target, inside a workspace session, removes that
-  workspace: the root from the session's key, the repository and branch
-  from its source and branch tags when this machine's config knows the
-  source, else the root alone as `--root` does, on the host the session's
-  tag names. That is how the dashboard's `x` resolves a row whose record
-  is gone, and what a binding needs:
+  workspace: the root from the session's key, on the host the session's
+  tag names, which must answer as the environment the key names, since
+  a host entry moved to another machine must not remove that machine's
+  worktree at the same path, and every connection of the command is
+  held to that. The host's worktree record for the root gives the
+  repository and branch, which the session's tags can misname after a
+  switch or a detach in the worktree; without a record the tags do,
+  when this machine's config knows the source, else the root alone as
+  `--root` does. That is how the dashboard's `x` resolves a row, and
+  what a binding needs:
   `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
 - **`path <repo>/<branch>`** prints the root from the host's records.
   Records are matched by source, since the host's label for a source may

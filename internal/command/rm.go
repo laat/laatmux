@@ -21,6 +21,11 @@ type Rm struct {
 	Root   string
 	Force  bool
 	ID     string
+	// Environment, when set, is the environment id the host must answer
+	// as, on every connection: the worktree was resolved for that
+	// machine, and a host entry moved to another machine must not remove
+	// that machine's worktree at the same path.
+	Environment string
 }
 
 // Removed is what an rm left behind: the root it acted on, "" when
@@ -49,7 +54,7 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 		id = ID("rm")
 	}
 	req := protocol.Message{Type: protocol.TypeRm, ID: id, Repo: m.Repo.Source, Branch: m.Branch, Root: m.Root, Force: m.Force}
-	hello, res, err := stream(ctx, m.Host.Host, protocol.CapRm, req, r, streamOpts{restart: true})
+	hello, res, err := stream(ctx, m.Host.Host, protocol.CapRm, req, r, streamOpts{restart: true, environment: m.Environment})
 	if err != nil {
 		return Removed{}, failed("rm", res, err)
 	}
