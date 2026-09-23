@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // fakeDaemon stands in for the local daemon: a loopback listener the
@@ -276,5 +277,19 @@ func TestHostByEnvironment(t *testing.T) {
 	}
 	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "nope"); err == nil || !strings.Contains(err.Error(), "no configured host answers as environment nope") {
 		t.Fatalf("unknown environment: %v", err)
+	}
+	// A session's host: the tag when it names a configured host; else,
+	// for a renamed host or a session without the tag, the environment.
+	// An empty tag is not the local host, though Find("") is.
+	for _, c := range []struct {
+		host, want string
+	}{{"box", "box"}, {"old", "box"}, {"", "box"}} {
+		h, hello, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "benv//r/x", Host: c.host})
+		if err != nil || h.Name != c.want || hello.EnvironmentID != "benv" {
+			t.Errorf("tag %q: %+v %+v %v", c.host, h, hello, err)
+		}
+	}
+	if _, _, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "nope//r/x"}); err == nil || !strings.Contains(err.Error(), "carries no host tag") {
+		t.Errorf("no tag, unknown environment: %v", err)
 	}
 }

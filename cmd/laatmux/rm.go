@@ -44,21 +44,9 @@ func cmdRm(ctx context.Context, args []string) error {
 		if !cur.Workspace() {
 			return fmt.Errorf("%s is not a workspace session; name <repo>/<branch> or give --root", cur.Name)
 		}
-		// The host is the one the session's tag names; a tag from
-		// before a rename names nothing, and then the host is whichever
-		// configured one answers as the key's environment, which is how
-		// the dashboard finds it.
-		var hello, snap protocol.Message
-		h, ok := cfg.Find(cur.Host)
-		if ok {
-			if hello, snap, err = snapshot(ctx, h.Host, protocol.CapRm); err != nil {
-				return err
-			}
-		} else {
-			env, _ := workspace.SplitKey(cur.Key)
-			if h, hello, snap, err = hostByEnvironment(ctx, cfg, env); err != nil {
-				return fmt.Errorf("workspace session %s is on host %q, which is not configured, and %w", cur.Name, cur.Host, err)
-			}
+		h, hello, snap, err := hostForSession(ctx, cfg, cur)
+		if err != nil {
+			return err
 		}
 		if rm, err = rmCurrent(cfg, cur, h, hello.EnvironmentID, snap.Worktrees); err != nil {
 			return err
@@ -114,6 +102,31 @@ func cmdRm(ctx context.Context, args []string) error {
 		fmt.Printf("killed local session %s\n", name)
 	}
 	return err
+}
+
+// hostForSession is the host a workspace session is on, with its hello
+// and snapshot: the one the session's tag names, when the tag names a
+// configured host. A tag from before a rename names nothing, and a
+// session from before the tag has none, which is not the local host
+// though Find would say so for an empty name; then the host is
+// whichever configured one answers as the key's environment, which is
+// how the dashboard routes a row.
+func hostForSession(ctx context.Context, cfg config.Config, cur workspace.Local) (config.Host, protocol.Message, protocol.Message, error) {
+	if cur.Host != "" {
+		if h, ok := cfg.Find(cur.Host); ok {
+			hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
+			return h, hello, snap, err
+		}
+	}
+	env, _ := workspace.SplitKey(cur.Key)
+	h, hello, snap, err := hostByEnvironment(ctx, cfg, env)
+	if err != nil {
+		if cur.Host == "" {
+			return h, hello, snap, fmt.Errorf("workspace session %s carries no host tag, and %w", cur.Name, err)
+		}
+		return h, hello, snap, fmt.Errorf("workspace session %s is on host %q, which is not configured, and %w", cur.Name, cur.Host, err)
+	}
+	return h, hello, snap, nil
 }
 
 // hostByEnvironment finds the configured host whose daemon answers as

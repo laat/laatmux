@@ -1,12 +1,17 @@
 package command
 
 import (
+	"context"
 	"errors"
+	"net"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -131,5 +136,113 @@ func TestCancelled(t *testing.T) {
 	}
 	if Cancelled(&StageError{Command: "run", Msg: "no such worktree"}) || Cancelled(errors.New(protocol.ErrCancelled)) {
 		t.Error("false positive")
+	}
+}
+
+// fakeDaemon answers as the local daemon: the runtime file names it, its
+// hello carries the environment and capabilities given per connection,
+// and it records the commands it gets. drop ends a connection after the
+// command instead of answering, which is a transport failure to the
+// client.
+type fakeDaemon struct {
+	mu       sync.Mutex
+	hellos   []protocol.Message // one per connection, in order; the last repeats
+	got      []protocol.Message
+	drop     int // connections to drop after the command, from the first
+	conns    int
+	listener net.Listener
+}
+
+func startFake(t *testing.T, drop int, hellos ...protocol.Message) *fakeDaemon {
+	t.Helper()
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	if err := home.WriteRuntime(home.Runtime{Address: "tcp:" + ln.Addr().String(), PID: os.Getpid(), Version: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeDaemon{hellos: hellos, drop: drop, listener: ln}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			n := f.conns
+			f.conns++
+			hello := f.hellos[min(n, len(f.hellos)-1)]
+			drop := n < f.drop
+			f.mu.Unlock()
+			go func() {
+				defer c.Close()
+				pc := protocol.NewConn(c)
+				hello.Type, hello.Protocol = protocol.TypeHello, protocol.Version
+				pc.Write(hello)
+				for {
+					m, err := pc.Read()
+					if err != nil {
+						return
+					}
+					if m.Type == protocol.TypeHello {
+						continue
+					}
+					f.mu.Lock()
+					f.got = append(f.got, m)
+					f.mu.Unlock()
+					if drop {
+						return
+					}
+					pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/r/x"})
+				}
+			}()
+		}
+	}()
+	return f
+}
+
+func (f *fakeDaemon) commands() []protocol.Message {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]protocol.Message(nil), f.got...)
+}
+
+// The environment a command was resolved for is held on every
+// connection: a daemon answering as another is refused before the
+// command is sent, on the first connection and on a reconnect after a
+// dropped one alike; the same environment throughout goes through.
+func TestStreamHoldsEnvironment(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}
+	req := protocol.Message{Type: protocol.TypeRm, ID: "r1", Root: "/r/x"}
+	host := client.Host{Name: "local"}
+
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "other", Capabilities: caps})
+	_, _, err := stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	if err == nil || !strings.Contains(err.Error(), "answers as environment other, not env") {
+		t.Fatalf("mismatch on the first connection: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("command sent to the wrong environment: %+v", got)
+	}
+
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps}, protocol.Message{EnvironmentID: "other", Capabilities: caps})
+	_, _, err = stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	if err == nil || !strings.Contains(err.Error(), "answers as environment other, not env") {
+		t.Fatalf("mismatch on the reconnect: %v", err)
+	}
+	if got := f.commands(); len(got) != 1 || got[0].Type != protocol.TypeRm {
+		t.Fatalf("after the reconnect: %+v", got)
+	}
+
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	hello, res, err := stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	if err != nil || !res.OK || hello.EnvironmentID != "env" {
+		t.Fatalf("same environment throughout: %+v %+v %v", hello, res, err)
+	}
+	if got := f.commands(); len(got) != 2 || got[1].Type != protocol.TypeFollow {
+		t.Fatalf("reconnect did not follow: %+v", got)
 	}
 }
