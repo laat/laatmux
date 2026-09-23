@@ -463,17 +463,20 @@ func (d *dash) shell(m *view.Model) bool {
 
 // localFor is the row's workspace session, made from the worktree
 // record when it does not exist yet. An existing session is routed by
-// the host the row is attributed to, through the environment id, not
-// by the host tag it was made with, which a renamed host leaves behind
-// as jump's tag refresh does.
+// the host that answers for its key's environment id now, not by the
+// host tag it was made with, which a renamed host leaves behind, and
+// not by the row's host: an observed agent on this machine's default
+// server sits in a local window of a workspace whose worktree may be
+// on another host, and the shell belongs where the worktree is.
 func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
 	if r.Stale {
 		return workspace.Local{}, errors.New(r.Name + ": its worktree is gone")
 	}
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
-		if r.Host != "" {
-			l.Host = r.Host
+		env, _ := workspace.SplitKey(l.Key)
+		if name := d.st.hostOf(env); name != "" {
+			l.Host = name
 		}
 		return l, nil
 	}

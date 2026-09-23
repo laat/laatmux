@@ -153,6 +153,11 @@ func TestWrap(t *testing.T) {
 	if got := wrap(strings.Repeat("x", 25), 10); len(got) != 3 || got[2] != "xxxxx" {
 		t.Errorf("mid-word = %q", got)
 	}
+	// Control characters never reach the terminal: an escape is dropped
+	// and a line break is a space.
+	if got := wrap("setup:\x1b[2Jfailed\nline two", 80); len(got) != 1 || got[0] != "setup:[2Jfailed line two" {
+		t.Errorf("control characters = %q", got)
+	}
 	// A wide rune at a width of one cell still moves on.
 	if got := wrap("日本x", 1); strings.Join(got, "|") != "日|本|x" {
 		t.Errorf("wide at width 1 = %q", got)

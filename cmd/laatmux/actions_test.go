@@ -199,15 +199,31 @@ func TestAddFlowRefusesBadLast(t *testing.T) {
 	}
 }
 
-// S on a row whose session was tagged with a host name since renamed
-// routes by the row's host, the one the environment id answers for now.
-func TestShellRoutesByRowHost(t *testing.T) {
+// S routes an existing session by the host that answers for its key's
+// environment id: not the tag a renamed host left on it, and not the
+// row's host, which for an agent observed in a local window of the
+// workspace is this machine while the worktree is on the other one.
+func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d.st.hosts["mac"] = hostState{Local: true, EnvID: "menv"}
+	d.st.hosts["vm"] = hostState{EnvID: "venv"}
 	r := rows.Row{Host: "vm", Name: "proj/task", Local: &workspace.Local{Name: "oldvm/proj/task", Key: "venv//w/proj/task", Host: "oldvm"}}
 	l, err := d.localFor(r)
 	if err != nil || l.Host != "vm" || l.Name != "oldvm/proj/task" {
-		t.Errorf("localFor = %+v, %v", l, err)
+		t.Errorf("renamed host: localFor = %+v, %v", l, err)
+	}
+	rs := rows.Build(rows.Input{
+		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/task", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive}},
+		Locals: []workspace.Local{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
+	})
+	if len(rs.Main) != 1 || rs.Main[0].Host != "mac" {
+		t.Fatalf("rows = %+v", rs.Main)
+	}
+	l, err = d.localFor(rs.Main[0])
+	if err != nil || l.Host != "vm" {
+		t.Errorf("observed agent in a workspace window: localFor = %+v, %v", l, err)
 	}
 	if _, err := d.localFor(rows.Row{Name: "s", Stale: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
 		t.Error("stale row accepted")
