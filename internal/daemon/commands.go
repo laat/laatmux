@@ -47,7 +47,7 @@ type command struct {
 	done      bool
 	doneAt    time.Time
 	result    protocol.Message
-	followers int // streams in progress, for tests
+	followers int // goroutines serving streams, the wakers included, for tests
 	// job is the run this command is; nil for add and rm.
 	job *runJob
 }
@@ -108,24 +108,35 @@ func (c *command) emit(m protocol.Message) {
 // take, as a slow subscriber of the status stream is dropped, and the
 // process is never stalled by a reader.
 func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) error {
-	c.mu.Lock()
-	c.followers++
-	c.mu.Unlock()
-	defer func() {
+	served := func() {
 		c.mu.Lock()
 		c.followers--
 		c.mu.Unlock()
-	}()
+	}
+	c.mu.Lock()
+	c.followers++
+	c.mu.Unlock()
+	defer served()
 	// The waker takes the lock, so it runs either before the wait below
 	// checked quit or after the wait has released the lock, never in
-	// between: the wait cannot miss it. A nil quit, from a test, never
-	// closes.
+	// between: the wait cannot miss it. It ends with the stream, so a
+	// connection that sends many commands does not collect one per
+	// finished command. A nil quit, from a test, never closes.
 	if quit != nil {
+		ended := make(chan struct{})
+		defer close(ended)
+		c.mu.Lock()
+		c.followers++
+		c.mu.Unlock()
 		go func() {
-			<-quit
-			c.mu.Lock()
-			c.cond.Broadcast()
-			c.mu.Unlock()
+			defer served()
+			select {
+			case <-quit:
+				c.mu.Lock()
+				c.cond.Broadcast()
+				c.mu.Unlock()
+			case <-ended:
+			}
 		}()
 	}
 	last := after

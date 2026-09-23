@@ -310,20 +310,34 @@ func TestFollowerReleasedOnDisconnect(t *testing.T) {
 		defer c.mu.Unlock()
 		return c.followers
 	}
-	if n := followers(); n != 2 {
-		t.Fatalf("%d followers, want 2", n)
+	// Two streams, each with its waker.
+	if n := followers(); n != 4 {
+		t.Fatalf("%d followers, want 4", n)
 	}
 	client.Close()
 	cancel()
-	for deadline := time.Now().Add(3 * time.Second); followers() != 1; {
+	for deadline := time.Now().Add(3 * time.Second); followers() != 2; {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d followers after the disconnect, want 1", followers())
+			t.Fatalf("%d followers after the disconnect, want 2", followers())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	pc.Write(protocol.Message{Type: protocol.TypeCancel, ID: "r1"})
 	if res, _ := result(t, pc, "r1"); res.Error != protocol.ErrCancelled {
 		t.Fatalf("result %+v", res)
+	}
+	// The result ends the stream and its waker, with the connection
+	// still open: a connection that sends many commands holds nothing
+	// of the finished ones.
+	for deadline := time.Now().Add(3 * time.Second); followers() != 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d followers after the result, want 0", followers())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePing})
+	if m, err := pc.Read(); err != nil || m.Type != protocol.TypePong {
+		t.Fatalf("connection after the result: %+v %v", m, err)
 	}
 }
 
