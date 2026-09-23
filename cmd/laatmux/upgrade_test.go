@@ -309,6 +309,23 @@ func TestStop(t *testing.T) {
 	if pid, _ := home.Holder(); pid != serve.Process.Pid {
 		t.Fatal("daemon stopped on a mismatched record")
 	}
+	// A record that keeps naming another pid at the daemon's address
+	// is retried within the bound, then reported, never spun on.
+	home.WriteRuntime(home.Runtime{Address: rt.Address, PID: bystander.Process.Pid, Version: "wrong"})
+	stopWait = time.Second
+	start = time.Now()
+	err = cmdStop(context.Background(), nil)
+	stopWait = 20 * time.Second
+	if err == nil || !strings.Contains(err.Error(), "not the daemon the runtime record names") {
+		t.Fatalf("persistent mismatch: %v", err)
+	}
+	if took := time.Since(start); took < time.Second || took > 5*time.Second {
+		t.Errorf("persistent mismatch took %s", took)
+	}
+	if pid, _ := home.Holder(); pid != serve.Process.Pid || !home.Alive(bystander.Process.Pid) {
+		t.Fatal("something was stopped on a persistently mismatched record")
+	}
+	home.WriteRuntime(rt)
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("stop: %v", err)
 	}

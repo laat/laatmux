@@ -16,8 +16,9 @@ import (
 
 // stopWait bounds how long stop waits for the daemon to exit: a clean
 // shutdown cancels its runs, SIGTERM then SIGKILL five seconds later,
-// and waits for them a few seconds more.
-const stopWait = 20 * time.Second
+// and waits for them a few seconds more. A variable so a test can
+// shorten it.
+var stopWait = 20 * time.Second
 
 // cmdStop ends this machine's daemon cleanly and waits for it to exit;
 // the next client starts one again, which after an upgrade is the new
@@ -48,13 +49,17 @@ func cmdStop(ctx context.Context, args []string) error {
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, home.ErrStale) {
 			return err
 		}
+		// Every way round the loop is bounded and paced the same: a
+		// record whose daemon is not the one that answers, and a
+		// holder that answers on no socket.
+		why := "answers on no socket"
 		if err == nil {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
 				err := stopDaemon(ctx, nc, rt)
 				if !errors.Is(err, errMoved) {
 					return err
 				}
-				continue
+				why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
 			}
 		}
 		holder, err := home.Holder()
@@ -66,7 +71,7 @@ func cmdStop(ctx context.Context, args []string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("daemon (pid %d) holds the lock but answers on no socket after %s", holder, stopWait)
+			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, stopWait)
 		}
 		select {
 		case <-ctx.Done():
