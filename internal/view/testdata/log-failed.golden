@@ -1,0 +1,8 @@
+..B|add proj/x on vm with claude
+...|resolve   done  git@x:o/proj.git
+...|worktree  start /w/x
+...|worktree  done  /w/x
+..B|rm failed: git worktree remove /w/x: fatal:
+..B|'/w/x' contains modified or untracked files, use
+..B|--force to delete it  (X force-removes)
+..B|failed  (any key returns)

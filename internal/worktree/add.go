@@ -49,7 +49,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 
 	// resolve
 	stage := protocol.StageResolve
-	if err := checkBranch(ctx, branch); err != nil {
+	if err := CheckBranch(ctx, branch); err != nil {
 		return a, fail(stage, err)
 	}
 	checkout, found, err := s.Checkout(ctx, repo)
@@ -236,8 +236,10 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	return a, nil
 }
 
-// checkBranch rejects names git would refuse, before anything is touched.
-func checkBranch(ctx context.Context, branch string) error {
+// CheckBranch rejects names git would refuse, before anything is touched.
+// The dashboard runs it on the laptop before sending an add; the daemon
+// runs it again on the host.
+func CheckBranch(ctx context.Context, branch string) error {
 	if branch == "" {
 		return errors.New("branch required")
 	}

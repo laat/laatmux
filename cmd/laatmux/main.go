@@ -94,7 +94,8 @@ func usage() {
   watch     live list, redraws on change, for a plain terminal
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
             laatmux sidebar pane | attach <window> | reap      what the pane and the hooks run
-  dashboard the list in a popup: Enter jumps and closes it; for display-popup -E
+  dashboard the list in a popup for display-popup -E: Enter jumps and closes it;
+            a adds through pickers, x/X removes, s settles, S opens a shell
   jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
             laatmux jump [--server default] <host>/<session>   a session that is no worktree's
   shell     a shell at the worktree root, in the workspace session this runs from

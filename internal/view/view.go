@@ -54,8 +54,14 @@ type Model struct {
 	ShowHidden bool // the settled and stale groups are expanded
 	Selected   int  // index into Visible
 	Message    string
-	scroll     int   // first body line drawn
-	hits       []int // body line -> index into Visible, -1 for none
+	// Confirm is a question in the footer; y answers it and any other
+	// key withdraws it. Tag says what was asked, for the host.
+	Confirm    string
+	ConfirmTag string
+	// Overlay, when set, takes the screen and the keys until Done.
+	Overlay Overlay
+	scroll  int   // first body line drawn
+	hits    []int // body line -> index into Visible, -1 for none
 	// anchor is the id of the selected row, so a refresh that reorders
 	// or removes rows keeps the selection on the same workspace rather
 	// than on the same index, which Enter would then jump to.
@@ -217,6 +223,9 @@ func (m *Model) Render() []Line {
 	if m.Width <= 0 || m.Height <= 0 {
 		return nil
 	}
+	if m.Overlay != nil {
+		return m.Overlay.Render(m.Width, m.Height)
+	}
 	var out []Line
 	for _, h := range m.Header {
 		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width)}}, Bold: true})
@@ -282,6 +291,8 @@ func (m *Model) Render() []Line {
 
 func (m *Model) footer() Line {
 	switch {
+	case m.Confirm != "":
+		return Line{Spans: []Span{{Text: fit(m.Confirm, m.Width)}}, Bold: true}
 	case m.Message != "":
 		return Line{Spans: []Span{{Text: fit(m.Message, m.Width)}}, Bold: true}
 	case m.Filtering:

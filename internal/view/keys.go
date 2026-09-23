@@ -224,17 +224,33 @@ type Action struct {
 type ActionKind int
 
 const (
-	ActionNone  ActionKind = iota
-	ActionQuit             // q, Ctrl-C
-	ActionJump             // Enter, a digit, a click: on Selection
-	ActionOther            // a key the model does not know; the host may
+	ActionNone    ActionKind = iota
+	ActionQuit               // q, Ctrl-C
+	ActionJump               // Enter, a digit, a click: on Selection
+	ActionOther              // a key the model does not know; the host may
+	ActionConfirm            // y on a Confirm; ConfirmTag says which
+	ActionOverlay            // the overlay is Done; the host reads and clears it
 )
 
 // Handle applies one key to the model and says what the host should
-// do. The message line clears on any key.
+// do. The message line clears on any key. With an overlay up the key
+// is the overlay's, and its finishing is the action. A confirm line
+// takes the next key: y confirms, anything else withdraws it.
 func (m *Model) Handle(k Key) Action {
 	m.Message = ""
 	if k.Kind < 0 {
+		return Action{}
+	}
+	if m.Overlay != nil {
+		m.Overlay.Handle(k)
+		return m.Poll()
+	}
+	if m.Confirm != "" {
+		m.Confirm = ""
+		if k.Kind == KeyRune && (k.Rune == 'y' || k.Rune == 'Y') {
+			return Action{Kind: ActionConfirm}
+		}
+		m.ConfirmTag = ""
 		return Action{}
 	}
 	if m.Filtering {
@@ -314,6 +330,21 @@ func (m *Model) Handle(k Key) Action {
 		}
 	}
 	return Action{}
+}
+
+// Poll is the action an overlay's finishing is, when it has: a host
+// whose overlay ends on its own, a command's log say, asks after every
+// change signal.
+func (m *Model) Poll() Action {
+	if m.Overlay != nil && m.Overlay.Done() {
+		return Action{Kind: ActionOverlay}
+	}
+	return Action{}
+}
+
+// Ask puts a question in the footer for the next key to answer.
+func (m *Model) Ask(question, tag string) {
+	m.Confirm, m.ConfirmTag = question, tag
 }
 
 func (m *Model) move(d int) {

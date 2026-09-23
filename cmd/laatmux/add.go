@@ -6,10 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
+	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
-	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -18,9 +17,9 @@ import (
 // it and opens the local workspace session. The repository comes from
 // --repo, else from the current directory; host and agent from their
 // flags, else the last used for the repository, else the config's
-// defaults. Progress prints one line per step. The command id is chosen
-// here and kept across reconnects, so a dropped bridge resumes the same
-// add rather than starting another.
+// defaults. Progress prints one line per step. The doing is
+// command.Add, which the dashboard runs too; this is the flags and the
+// printing.
 func cmdAdd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	repoFlag := fs.String("repo", "", "repository name or source; default from the current directory")
@@ -55,60 +54,22 @@ func cmdAdd(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	fmt.Printf("add %s/%s on %s", repo.Name, branch, h.Name)
-	if agentName != "" {
-		fmt.Printf(" with %s", agentName)
-	}
-	fmt.Println()
-	req := protocol.Message{Type: protocol.TypeAdd, ID: commandID("add"), Repo: repo.Source, Branch: branch, AgentName: agentName, Cmd: cmd}
-	hello, res, err := stream(ctx, h.Host, protocol.CapAdd, req, printProgress)
-	if err != nil {
-		if res.Stage != "" {
-			return fmt.Errorf("add failed at %s: %s", res.Stage, res.Error)
-		}
-		return err
-	}
-	fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, branch, res.Root, res.Session)
-	if err := home.UpdateLast(func(l *home.Last) {
-		cur := l.Get(repo.Source)
-		cur.Host = h.Name
-		if agentName != "" {
-			cur.Agent = agentName
-		}
-		l.Set(repo.Source, cur)
-	}); err != nil {
-		return err
-	}
-	name, created, err := workspace.Ensure(ctx, workspace.Spec{
-		Host: h.Host, Managed: res.Session,
-		Name:   workspace.SessionName(h.Name, repo.Name, branch),
-		Key:    workspace.Key(hello.EnvironmentID, res.Root),
-		Source: repo.Source, Branch: branch,
-	})
+	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: cmd}
+	fmt.Println(add.Describe())
+	res, err := add.Run(ctx, printer{})
 	if err != nil {
 		return err
 	}
-	return focus(ctx, name, created)
+	fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, branch, res.Root, res.Managed)
+	return focus(ctx, res.Session, res.Created)
 }
 
-// commandID is a client-chosen id for one command invocation: unique
-// across processes and time, and reused for every reconnect within it.
-func commandID(kind string) string {
-	return fmt.Sprintf("%s-%d-%d", kind, os.Getpid(), time.Now().UnixNano())
-}
+// printer is the CLI's Reporter: a line per step on stdout, transport
+// notes on stderr.
+type printer struct{}
 
-// printProgress writes one line per step: the stage, its state and the
-// detail; a setup command's output is indented under it.
-func printProgress(m protocol.Message) {
-	switch m.State {
-	case protocol.StateOutput:
-		fmt.Printf("%-9s   | %s\n", "", m.Detail)
-	case protocol.StateStart:
-		fmt.Printf("%-9s %-5s %s\n", m.Stage, "", m.Detail)
-	default:
-		fmt.Printf("%-9s %-5s %s\n", m.Stage, m.State, m.Detail)
-	}
-}
+func (printer) Progress(m protocol.Message) { fmt.Println(command.ProgressLine(m)) }
+func (printer) Note(s string)               { fmt.Fprintln(os.Stderr, "laatmux:", s) }
 
 // focus switches the calling client to the local session, or, outside
 // the default tmux server, says how to attach. Inside another tmux server

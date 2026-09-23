@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
@@ -15,12 +16,9 @@ import (
 // local workspace session. The root is sent whenever it is known, from the
 // host's record or, when the worktree is already gone, from the key of the
 // local session, since a branch alone maps to no root then; that is what
-// reaches a managed session whose worktree was removed by hand. The local
-// session is found by its source and branch tags, which survive a renamed
-// host or label. A session found by name instead is accepted only when it
-// carries no identity tags at all, from before they existed: tags that
-// name another source or branch mean the name has moved on to another
-// workspace, and its root must not be sent with this one's identity.
+// reaches a managed session whose worktree was removed by hand. The doing
+// is command.Rm, which the dashboard runs too; this is the flags, the
+// lookup of the root and the printing.
 func cmdRm(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
 	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
@@ -44,9 +42,7 @@ func cmdRm(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := protocol.Message{Type: protocol.TypeRm, ID: commandID("rm"), Force: *force, Root: *root}
-	var h config.Host
-	what := ""
+	rm := command.Rm{Force: *force, Root: *root}
 	if target != "" {
 		repoLabel, branch, err := splitRepoBranch(target)
 		if err != nil {
@@ -56,71 +52,42 @@ func cmdRm(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
 		}
-		if h, _, err = hostFor(cfg, *hostFlag, repo); err != nil {
+		if rm.Host, _, err = hostFor(cfg, *hostFlag, repo); err != nil {
 			return err
 		}
-		req.Repo, req.Branch = repo.Source, branch
-		what = repo.Name + "/" + branch
-		hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
+		rm.Repo, rm.Branch = repo, branch
+		hello, snap, err := snapshot(ctx, rm.Host.Host, protocol.CapRm)
 		if err != nil {
 			return err
 		}
 		if w, ok := findWorktree(snap.Worktrees, repo, branch); ok {
-			req.Root = w.Root
+			rm.Root = w.Root
 		} else {
 			locals, err := workspace.List(ctx)
 			if err != nil {
 				return err
 			}
-			l, ok := workspace.FindWorktree(locals, hello.EnvironmentID, repo.Source, branch)
-			if !ok {
-				l, ok = workspace.ByName(locals, workspace.SessionName(h.Name, repo.Name, branch))
-				ok = ok && l.Source == "" && l.Branch == ""
-			}
-			if ok && l.Workspace() {
-				if env, root := workspace.SplitKey(l.Key); env == hello.EnvironmentID {
-					req.Root = root
-				}
-			}
+			rm.Root = command.RootOf(locals, hello.EnvironmentID, rm.Host, repo, branch)
 		}
 	} else {
 		if *hostFlag == "" {
 			return errors.New("--root needs --host")
 		}
-		if h, err = cfg.DefaultHost(*hostFlag, ""); err != nil {
+		if rm.Host, err = cfg.DefaultHost(*hostFlag, ""); err != nil {
 			return err
 		}
-		what = *root
 	}
-	hello, res, err := stream(ctx, h.Host, protocol.CapRm, req, printProgress)
+	res, err := rm.Run(ctx, printer{})
 	if err != nil {
 		return err
 	}
-	root2 := res.Root
-	if root2 == "" {
-		root2 = req.Root
-	}
-	fmt.Printf("removed %s on %s", what, h.Name)
-	if root2 != "" {
-		fmt.Printf(" (%s)", root2)
+	fmt.Printf("removed %s on %s", rm.Describe(), rm.Host.Name)
+	if res.Root != "" {
+		fmt.Printf(" (%s)", res.Root)
 	}
 	fmt.Println()
-	if root2 == "" {
-		return nil
-	}
-	// The local workspace session is the client's to clean up.
-	locals, err := workspace.List(ctx)
-	if err != nil {
-		return err
-	}
-	key := workspace.Key(hello.EnvironmentID, root2)
-	for _, l := range locals {
-		if l.Key == key {
-			if err := workspace.Kill(ctx, l.Name); err != nil {
-				return err
-			}
-			fmt.Printf("killed local session %s\n", l.Name)
-		}
+	for _, name := range res.Killed {
+		fmt.Printf("killed local session %s\n", name)
 	}
 	return nil
 }

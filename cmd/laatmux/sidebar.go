@@ -323,5 +323,5 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, LocalHost: localHostName(cfg), Hint: "v layout  / filter  f all  q quit"}
-	return runView(ctx, cfg, c, m, false)
+	return runView(ctx, cfg, c, m, false, false)
 }
