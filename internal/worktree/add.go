@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -351,7 +352,10 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 		report(stage, protocol.StateSkip, rel+" exists")
 		return nil
 	}
-	in, err := co.Open(rel)
+	// Nonblocking, so a source that is a pipe with no writer does not
+	// hold the stage and the repository lock; the check below on what
+	// was opened rejects it.
+	in, err := co.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		switch {
 		case errors.Is(err, os.ErrNotExist):

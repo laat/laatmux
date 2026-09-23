@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -933,6 +934,24 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outside, "new", "nested", "real.enc")); err == nil {
 		t.Error("a file was written outside the worktree")
 	}
+	// A literal entry naming a pipe with no writer is refused at once,
+	// not waited on.
+	fifo := filepath.Join(checkout, "pipe.enc")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.store.Copy = []string{"pipe.enc"}
+	done := make(chan error, 1)
+	go func() { _, err := f.store.Add(f.ctx, f.repo, "sixth", nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("pipe as a source: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("opening a pipe with no writer blocked the copy")
+	}
+	os.Remove(fifo)
 	// A glob candidate whose lookup fails for a reason other than being
 	// gone fails the stage rather than being passed over in silence.
 	if os.Getuid() != 0 {
