@@ -29,16 +29,23 @@ import (
 )
 
 // Repo is a known repository: its source, the identity, and its label,
-// which places new clones and worktrees.
+// which places new clones and worktrees; Copy and Setup are this host's
+// own steps for its worktrees, from the host's config, run after the
+// committed ones.
 type Repo struct {
 	Source string
 	Name   string
+	Copy   []string
+	Setup  []string
 }
 
-// Store is one host's checkouts and worktrees.
+// Store is one host's checkouts and worktrees. Copy is the host's own
+// copy rules for every worktree, from its config, applied after a
+// repository's own.
 type Store struct {
 	Dirs  config.Dirs // expanded for this host
 	Repos []Repo
+	Copy  []string
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
@@ -54,7 +61,7 @@ type originEntry struct {
 func New(dirs config.Dirs, repos []config.Repo) *Store {
 	s := &Store{Dirs: dirs, origins: map[string]originEntry{}}
 	for _, r := range repos {
-		s.Repos = append(s.Repos, Repo{Source: r.Source, Name: r.Name})
+		s.Repos = append(s.Repos, Repo{Source: r.Source, Name: r.Name, Copy: r.Copy, Setup: r.Setup})
 	}
 	return s
 }

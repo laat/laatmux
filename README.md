@@ -77,6 +77,9 @@ repos:                        # the known set
   - git@github.com:laat/laatmux.git
   - source: https://github.com/laat/other.git
     name: notes               # optional; otherwise derived from the source
+    copy: ["config/*.local"]  # this machine's own steps for the repository's worktrees,
+    setup: ["pnpm install"]   # after the committed .laatmux.yaml's
+copy: ["**/.envrc.cache.enc"] # this machine's own copy rules for every worktree
 ```
 
 `hosts`, `agents` and `repos` are read by clients. `tmux_servers` and the
@@ -109,7 +112,27 @@ copy: [.envrc, .env.local]   # from the main checkout, skipped when present
 setup: ["pnpm install"]      # each runs at least once; must tolerate a rerun
 ```
 
-Each `setup` entry runs as `sh -c <string>` in the worktree root. The
+Each `setup` entry runs as `sh -c <string>` in the worktree root. What
+is personal to a machine goes in its config rather than the committed
+file: a top-level `copy` list applies to every worktree the machine's
+daemon makes, and a repository entry's `copy` and `setup` to that
+repository's, each run after the committed file's. A `copy` entry is a
+path relative to the repository root, or a glob: `*`, `?` and `[...]`
+within a path segment, `**` as a whole segment for any number of them.
+A glob is matched against what git knows of the main checkout, the
+files it tracks or does not ignore plus the ignored files, which is
+where an encrypted env cache sits, with ignored directories collapsed,
+so `**/.envrc.cache.enc` finds the caches in every package and never
+walks `node_modules`. Each match that is a regular file is copied as
+a literal entry is, through a temporary file renamed into place,
+skipped when present; a symlink, a directory or a submodule a glob
+matches is passed over. Nothing is read from outside the checkout or
+written outside the worktree: a source is read where it resolves and a
+target written where its directory resolves, and either resolving out
+through a symlink is an error. The committed commands and a
+repository's own each number their own completion markers, so a
+committed list that grows does not move a personal command onto
+another's marker. The
 last-used host and agent per repository are state, not config: they live in
 `$LAATMUX_HOME/last.json`, keyed by source, and are updated under a lock
 with an atomic rename. The design is in

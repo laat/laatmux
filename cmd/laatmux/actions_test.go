@@ -318,7 +318,7 @@ func TestRmFor(t *testing.T) {
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
 	want := command.Rm{Host: config.Host{Host: client.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
 		Repo: cfg.Repos[1], Branch: "task", Root: "/w/proj/task"}
-	if d.rm.Host.Name != want.Host.Name || d.rm.Repo != want.Repo || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
+	if d.rm.Host.Name != want.Host.Name || d.rm.Repo.Source != want.Repo.Source || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
 		t.Errorf("rm = %+v", d.rm)
 	}
 	if m.Confirm != "remove proj/task on vm (/w/proj/task)? y/n" || m.ConfirmTag != "rm" {
@@ -338,7 +338,7 @@ func TestRmFor(t *testing.T) {
 
 	selectRow(t, m, "vm/proj/gone")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
-	if d.rm.Repo != cfg.Repos[1] || d.rm.Branch != "gone" || d.rm.Root != "/w/proj/gone" || d.rm.Host.Name != "vm" {
+	if d.rm.Repo.Source != cfg.Repos[1].Source || d.rm.Branch != "gone" || d.rm.Root != "/w/proj/gone" || d.rm.Host.Name != "vm" {
 		t.Errorf("stale: rm = %+v", d.rm)
 	}
 	m.Handle(view.Key{Rune: 'n'})

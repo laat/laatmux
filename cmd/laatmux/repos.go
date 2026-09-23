@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/laat/laatmux/internal/config"
@@ -22,9 +23,15 @@ func cmdRepos(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux repos")
 	}
+	if len(cfg.Copy) > 0 {
+		fmt.Printf("copy, every worktree on this machine: %s\n", strings.Join(cfg.Copy, "  "))
+	}
 	if len(cfg.Repos) == 0 {
 		fmt.Printf("no repos configured in %s\n", config.Path())
 		return nil
+	}
+	if len(cfg.Copy) > 0 {
+		fmt.Println()
 	}
 	last, err := home.ReadLast()
 	if err != nil {
@@ -37,6 +44,12 @@ func cmdRepos(ctx context.Context, args []string) error {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\t%s\n", r.Name, r.Source)
+		if len(r.Copy) > 0 {
+			fmt.Fprintf(w, "  copy\t%s\n", strings.Join(r.Copy, "  "))
+		}
+		if len(r.Setup) > 0 {
+			fmt.Fprintf(w, "  setup\t%s\n", strings.Join(r.Setup, "  "))
+		}
 		lr := last.Get(r.Source)
 		for _, h := range cfg.Hosts {
 			if d, err := h.Dirs(); err != nil {

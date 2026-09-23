@@ -5,11 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -204,21 +209,79 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		return a, fail(protocol.StageCopy, err)
 	}
 
+	// The committed steps first, then this host's for the repository,
+	// then this host's for every worktree; a glob names what the main
+	// checkout has that matches it.
 	stage = protocol.StageCopy
-	for _, rel := range setup.Copy {
-		if err := copyFile(ctx, checkout, a.Root, rel, report); err != nil {
-			return a, fail(stage, err)
+	var rules []string
+	rules = append(rules, setup.Copy...)
+	rules = append(rules, repo.Copy...)
+	rules = append(rules, s.Copy...)
+	var listed []string
+	listedOnce := false // an empty listing is a listing too
+	for _, entry := range rules {
+		if !config.IsGlob(entry) {
+			if err := copyFile(ctx, checkout, a.Root, entry, report); err != nil {
+				return a, fail(stage, err)
+			}
+			continue
+		}
+		if !listedOnce {
+			if listed, err = listFiles(ctx, checkout); err != nil {
+				return a, fail(stage, err)
+			}
+			listedOnce = true
+		}
+		matched := 0
+		for _, rel := range listed {
+			if !MatchGlob(entry, rel) {
+				continue
+			}
+			// A glob names whatever git lists: a submodule, a symlink,
+			// a directory are not files to copy and are passed over,
+			// where a literal entry naming one is an error; a file gone
+			// since the listing is passed over too, anything else the
+			// lookup says is a failure like a literal copy's.
+			fi, err := os.Lstat(filepath.Join(checkout, rel))
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return a, fail(stage, err)
+			}
+			if !fi.Mode().IsRegular() {
+				continue
+			}
+			matched++
+			if err := copyFile(ctx, checkout, a.Root, rel, report); err != nil {
+				return a, fail(stage, err)
+			}
+		}
+		if matched == 0 {
+			report(stage, protocol.StateSkip, entry+" matches nothing in "+checkout)
 		}
 	}
 
+	// The committed commands, then this host's for the repository. Each
+	// list numbers its own markers, so a committed list that grows does
+	// not move a personal command onto another's marker.
 	stage = protocol.StageSetup
-	if len(setup.Setup) > 0 {
+	if len(setup.Setup) > 0 || len(repo.Setup) > 0 {
 		markers, err := markerDir(ctx, a.Root)
 		if err != nil {
 			return a, fail(stage, err)
 		}
+		type step struct{ cmd, marker string }
+		var steps []step
 		for i, cmd := range setup.Setup {
-			marker := filepath.Join(markers, "setup-"+strconv.Itoa(i)+"-"+hash(cmd))
+			steps = append(steps, step{cmd, "setup-" + strconv.Itoa(i) + "-" + hash(cmd)})
+		}
+		for i, cmd := range repo.Setup {
+			steps = append(steps, step{cmd, "setup-repo-" + strconv.Itoa(i) + "-" + hash(cmd)})
+		}
+		for _, st := range steps {
+			cmd := st.cmd
+			marker := filepath.Join(markers, st.marker)
 			if _, err := os.Stat(marker); err == nil {
 				report(stage, protocol.StateSkip, cmd+" (done before)")
 				continue
@@ -267,75 +330,125 @@ func branchOrDetached(e Entry) string {
 // copyFile copies one entry from the main checkout into the worktree,
 // through a temporary file in the target directory renamed into place, so
 // the target can only exist complete. Skipped when the target exists, and
-// when the source is not in the checkout.
+// when the source is not in the checkout. Every operation goes through
+// os.Root handles on the checkout and the worktree, which resolve the
+// relative path under the handle and refuse a symlink that leads out, at
+// the moment of the operation rather than in a check before it: a
+// symlink to a file elsewhere is not read, since the file was never the
+// repository's, and no symlink in the worktree leads a directory or a
+// write out of it.
 func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) error {
 	stage := protocol.StageCopy
-	dst := filepath.Join(root, rel)
-	if _, err := os.Lstat(dst); err == nil {
+	rel = filepath.Clean(rel)
+	co, err := os.OpenRoot(checkout)
+	if err != nil {
+		return err
+	}
+	defer co.Close()
+	wt, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer wt.Close()
+	if _, err := wt.Lstat(rel); err == nil {
 		report(stage, protocol.StateSkip, rel+" exists")
 		return nil
 	}
-	src := filepath.Join(checkout, rel)
-	fi, err := os.Stat(src)
+	// Nonblocking, so a source that is a pipe with no writer does not
+	// hold the stage and the repository lock; the check below on what
+	// was opened rejects it.
+	in, err := co.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			report(stage, protocol.StateSkip, rel+" not in "+checkout)
 			return nil
+		case isEscape(err):
+			return fmt.Errorf("%s resolves outside the checkout %s", rel, checkout)
 		}
 		return err
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s: not a regular file", src)
+	defer in.Close()
+	fi, err := in.Stat()
+	if err != nil {
+		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file", filepath.Join(checkout, rel))
+	}
+	dir := filepath.Dir(rel)
+	if err := wt.MkdirAll(dir, 0o755); err != nil {
+		if isEscape(err) {
+			return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+		}
 		return err
 	}
 	// The temporary file is created exclusively with a random suffix, so
 	// it can never truncate a file the repository happens to contain. A
 	// copy that crashed halfway leaves its temporary behind; the retry
 	// removes those first, and only those: names of exactly the form
-	// CreateTemp produces, read from the directory literally.
-	removeStaleTemps(filepath.Dir(dst), filepath.Base(dst))
-	pattern := ".laatmux-copy-" + filepath.Base(dst) + ".*"
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+	// tempName produces, read from the directory literally.
+	base := filepath.Base(rel)
+	removeStaleTemps(wt, dir, base)
+	var out *os.File
+	var tmp string
+	for i := 0; ; i++ {
+		tmp = filepath.Join(dir, tempName(base))
+		out, err = wt.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) || i >= 100 {
+			if isEscape(err) {
+				return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+			}
+			return err
+		}
 	}
-	defer in.Close()
-	out, err := os.CreateTemp(filepath.Dir(dst), pattern)
-	if err != nil {
-		return err
-	}
-	tmp := out.Name()
-	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+	fail := func(err error) error {
 		out.Close()
-		os.Remove(tmp)
+		wt.Remove(tmp)
 		return err
+	}
+	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+		return fail(err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
+		return fail(err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		wt.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+	if err := wt.Rename(tmp, rel); err != nil {
+		wt.Remove(tmp)
 		return err
 	}
 	report(stage, protocol.StateDone, rel)
 	return nil
 }
 
-// removeStaleTemps deletes leftovers of crashed copies of base in dir:
-// regular files named .laatmux-copy-<base>.<digits>, the shape
-// os.CreateTemp gives them. Anything else, such as a .backup a user kept
-// under a similar name, is not laatmux's and stays. The directory is read,
-// not globbed, so its name is taken literally.
-func removeStaleTemps(dir, base string) {
-	entries, err := os.ReadDir(dir)
+// isEscape reports whether an os.Root operation refused a path for
+// leading outside the root.
+func isEscape(err error) bool {
+	var pe *os.PathError
+	return errors.As(err, &pe) && strings.Contains(pe.Err.Error(), "escapes from parent")
+}
+
+// tempName is a temporary file name beside base with a random numeric
+// suffix, the shape removeStaleTemps recognises.
+func tempName(base string) string {
+	return ".laatmux-copy-" + base + "." + strconv.FormatUint(uint64(rand.Uint32()), 10)
+}
+
+// removeStaleTemps deletes leftovers of crashed copies of base in dir,
+// under the worktree root: regular files named
+// .laatmux-copy-<base>.<digits>, the shape tempName gives them. Anything
+// else, such as a .backup a user kept under a similar name, is not
+// laatmux's and stays. The directory is read, not globbed, so its name
+// is taken literally.
+func removeStaleTemps(wt *os.Root, dir, base string) {
+	entries, err := fs.ReadDir(wt.FS(), filepath.ToSlash(dir))
 	if err != nil {
 		return
 	}
@@ -345,7 +458,7 @@ func removeStaleTemps(dir, base string) {
 		if !ok || !e.Type().IsRegular() || suffix == "" || strings.Trim(suffix, "0123456789") != "" {
 			continue
 		}
-		os.Remove(filepath.Join(dir, e.Name()))
+		wt.Remove(filepath.Join(dir, e.Name()))
 	}
 }
 
@@ -405,4 +518,60 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// listFiles is what git knows of the main checkout, for a glob to match
+// against: the files it tracks and the untracked files it does not
+// ignore, plus the ignored files, which is where a personal env cache
+// sits, with ignored directories collapsed to one entry each, so a **
+// never walks node_modules and nothing inside an ignored directory is
+// matched. Directories are left out; a glob names files.
+func listFiles(ctx context.Context, checkout string) ([]string, error) {
+	var out []string
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--cached", "--others", "--exclude-standard"},
+		{"ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"},
+	} {
+		res, err := git(ctx, checkout, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range strings.Split(res, "\x00") {
+			if p == "" || strings.HasSuffix(p, "/") {
+				continue
+			}
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// MatchGlob matches a slash-separated path against a copy glob: ** is a
+// whole segment standing for zero or more segments, every other segment
+// is path.Match syntax and matches one segment. Neither * nor ? crosses
+// a slash.
+func MatchGlob(pattern, p string) bool {
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
+}
+
+func matchSegments(pat, segs []string) bool {
+	for len(pat) > 0 {
+		if pat[0] == "**" {
+			for i := 0; i <= len(segs); i++ {
+				if matchSegments(pat[1:], segs[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(segs) == 0 {
+			return false
+		}
+		if ok, err := path.Match(pat[0], segs[0]); err != nil || !ok {
+			return false
+		}
+		pat, segs = pat[1:], segs[1:]
+	}
+	return len(segs) == 0
 }

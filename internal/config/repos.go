@@ -18,6 +18,13 @@ type Repo struct {
 	// Explicit is set when the name came from the file rather than from
 	// derivation.
 	Explicit bool
+	// Copy and Setup are this machine's own steps for the repository's
+	// worktrees, run after the committed .laatmux.yaml's: files that are
+	// personal, like an encrypted env cache, and commands the repository
+	// does not carry. Copy entries take the globs the top-level copy
+	// list takes.
+	Copy  []string
+	Setup []string
 }
 
 // A list entry is either a source string or a mapping with source and an
@@ -33,6 +40,8 @@ func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
 	var m struct {
 		Source yaml.Node `yaml:"source"`
 		Name   yaml.Node `yaml:"name"`
+		Copy   []string  `yaml:"copy"`
+		Setup  []string  `yaml:"setup"`
 	}
 	if err := n.Decode(&m); err != nil {
 		return err
@@ -46,6 +55,7 @@ func (r *Repo) UnmarshalYAML(n *yaml.Node) error {
 		}
 	}
 	r.Source, r.Name, r.Explicit = m.Source.Value, m.Name.Value, m.Name.Value != ""
+	r.Copy, r.Setup = m.Copy, m.Setup
 	return nil
 }
 
@@ -63,10 +73,20 @@ func stringScalar(field string, n *yaml.Node) error {
 }
 
 func (r Repo) MarshalYAML() (any, error) {
-	if !r.Explicit {
+	if !r.Explicit && len(r.Copy) == 0 && len(r.Setup) == 0 {
 		return r.Source, nil
 	}
-	return map[string]string{"source": r.Source, "name": r.Name}, nil
+	m := map[string]any{"source": r.Source}
+	if r.Explicit {
+		m["name"] = r.Name
+	}
+	if len(r.Copy) > 0 {
+		m["copy"] = r.Copy
+	}
+	if len(r.Setup) > 0 {
+		m["setup"] = r.Setup
+	}
+	return m, nil
 }
 
 // Repo finds a known repository by name, else by source. Names are

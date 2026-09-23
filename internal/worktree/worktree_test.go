@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -574,7 +575,12 @@ func TestRemoveStaleTempsLiteralDir(t *testing.T) {
 	write(t, filepath.Join(sib, ".laatmux-copy-.envrc.123456"), "other worktree's copy")
 	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.654321"), "stale")
 	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.backup"), "kept")
-	removeStaleTemps(pat, ".envrc")
+	wt, err := os.OpenRoot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wt.Close()
+	removeStaleTemps(wt, "[ab]", ".envrc")
 	if _, err := os.Stat(filepath.Join(sib, ".laatmux-copy-.envrc.123456")); err != nil {
 		t.Fatal("sibling directory's file removed")
 	}
@@ -746,5 +752,218 @@ func TestCheckoutsScannedOnce(t *testing.T) {
 	}
 	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 {
 		t.Fatalf("list %+v %v", recs, err)
+	}
+}
+
+// A copy glob matches slash-separated paths segment by segment, ** for
+// any number of segments; * and ? stay within a segment.
+func TestMatchGlob(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"**/.envrc.cache.enc", ".envrc.cache.enc", true},
+		{"**/.envrc.cache.enc", "apps/web/.envrc.cache.enc", true},
+		{"**/.envrc.cache.enc", "apps/web/.envrc", false},
+		{"*.enc", ".envrc.cache.enc", true},
+		{"*.enc", "apps/.envrc.cache.enc", false},
+		{"apps/*/.envrc", "apps/web/.envrc", true},
+		{"apps/*/.envrc", "apps/web/x/.envrc", false},
+		{"apps/**", "apps/web/x/.envrc", true},
+		{"apps/**", "apps", true},
+		{"config/*.local", "config/db.local", true},
+		{"config/*.local", "config/db.local.bak", false},
+		{"[ab].txt", "a.txt", true},
+		{"**", "anything/at/all", true},
+	}
+	for _, c := range cases {
+		if got := MatchGlob(c.pattern, c.path); got != c.want {
+			t.Errorf("MatchGlob(%q, %q) = %v", c.pattern, c.path, got)
+		}
+	}
+}
+
+// The store's copy rules and a repository's own copy and setup run after
+// the committed ones: a glob finds the ignored files of the main
+// checkout wherever they sit, but nothing inside an ignored directory,
+// and a literal path is copied as before; a personal setup command runs
+// after the committed commands, once.
+func TestAddPersonalCopyAndSetup(t *testing.T) {
+	f := newFixture(t)
+	checkout, _, _ := f.store.Checkout(f.ctx, f.repo)
+	if checkout == "" {
+		a, err := f.store.Add(f.ctx, f.repo, "first", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkout = a.Checkout
+	}
+	write(t, filepath.Join(checkout, ".gitignore"), "*.enc\nnode_modules/\n")
+	write(t, filepath.Join(checkout, ".envrc.cache.enc"), "root secret")
+	write(t, filepath.Join(checkout, "apps", "web", ".envrc.cache.enc"), "web secret")
+	write(t, filepath.Join(checkout, "node_modules", "dep", ".envrc.cache.enc"), "never")
+	write(t, filepath.Join(checkout, "notes.txt"), "untracked")
+	write(t, filepath.Join(checkout, "config", "db.local"), "local")
+	f.store.Copy = []string{"**/.envrc.cache.enc", "nothing/*.here"}
+	f.store.Repos[0].Copy = []string{"notes.txt", "config/*.local"}
+	f.store.Repos[0].Setup = []string{"echo personal >> log"}
+	repo := f.store.Repos[0]
+	var reports []string
+	a, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]string{".envrc.cache.enc": "root secret", "apps/web/.envrc.cache.enc": "web secret", "notes.txt": "untracked", "config/db.local": "local"} {
+		if b, err := os.ReadFile(filepath.Join(a.Root, rel)); err != nil || string(b) != want {
+			t.Errorf("%s: %q %v", rel, b, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, "node_modules", "dep", ".envrc.cache.enc")); err == nil {
+		t.Error("a file inside an ignored directory was copied")
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\n" {
+		t.Errorf("setup order: %q", b)
+	}
+	joined := strings.Join(reports, "\n")
+	if !strings.Contains(joined, "copy skip nothing/*.here matches nothing") || !strings.Contains(joined, "setup done echo personal >> log") {
+		t.Errorf("reports:\n%s", joined)
+	}
+	// A retry copies nothing again and reruns no command.
+	reports = nil
+	if _, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reports {
+		if strings.HasPrefix(r, "copy done") || strings.HasPrefix(r, "setup start") {
+			t.Errorf("retry redid: %s", r)
+		}
+	}
+	// The committed list growing does not move the personal command
+	// onto another marker: it is still done, and the new committed
+	// command runs.
+	write(t, filepath.Join(a.Root, config.SetupFile), "copy: [.envrc, missing.txt]\nsetup: [\"echo one >> log\", \"echo two >> log\", \"echo three >> log\"]\n")
+	reports = nil
+	if _, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
+		reports = append(reports, stage+" "+state+" "+detail)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\nthree\n" {
+		t.Errorf("markers after the committed list grew: %q", b)
+	}
+	// A personal command changed at the same index runs; the one that
+	// moved does not run again.
+	f.store.Repos[0].Setup = []string{"echo first >> log", "echo personal >> log"}
+	repo = f.store.Repos[0]
+	if _, err := f.store.Add(f.ctx, repo, "task", nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.Root, "log")); string(b) != "one\ntwo\npersonal\nthree\nfirst\npersonal\n" {
+		t.Errorf("personal list changed: %q", b)
+	}
+}
+
+// A glob passes over what git lists that is not a file: a symlink, a
+// directory, a submodule's gitlink. A literal entry that is a symlink
+// to a file outside the checkout is refused, and a target whose
+// directory is a symlink out of the worktree is refused, so nothing is
+// read from or written to outside the two roots.
+func TestCopyStaysInsideRoots(t *testing.T) {
+	f := newFixture(t)
+	a, err := f.store.Add(f.ctx, f.repo, "first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := a.Checkout
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "secret"), "outside")
+	write(t, filepath.Join(checkout, ".gitignore"), "*.enc\nlinks/\n")
+	write(t, filepath.Join(checkout, "real.enc"), "real")
+	os.MkdirAll(filepath.Join(checkout, "links"), 0o755)
+	os.Symlink(filepath.Join(outside, "secret"), filepath.Join(checkout, "links", "link.enc"))
+	os.Symlink(filepath.Join(outside, "secret"), filepath.Join(checkout, "direct.enc"))
+	// A submodule: a gitlink git lists without a trailing slash.
+	sub := filepath.Join(t.TempDir(), "sub")
+	run(t, filepath.Dir(sub), "git", "init", "-q", "--initial-branch=main", sub)
+	run(t, sub, "git", "config", "user.email", "t@example.com")
+	run(t, sub, "git", "config", "user.name", "t")
+	write(t, filepath.Join(sub, "f"), "x")
+	run(t, sub, "git", "add", ".")
+	run(t, sub, "git", "commit", "-q", "-m", "sub")
+	run(t, checkout, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/lib")
+	f.store.Copy = []string{"**/*.enc", "vendor/**"}
+	var reports []string
+	b, err := f.store.Add(f.ctx, f.repo, "second", func(stage, state, detail string) { reports = append(reports, stage+" "+state+" "+detail) })
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(reports, "\n"))
+	}
+	if got, _ := os.ReadFile(filepath.Join(b.Root, "real.enc")); string(got) != "real" {
+		t.Errorf("real.enc: %q", got)
+	}
+	for _, rel := range []string{"links/link.enc", "direct.enc"} {
+		if _, err := os.Lstat(filepath.Join(b.Root, rel)); err == nil {
+			t.Errorf("%s: a symlink out of the checkout was copied by a glob", rel)
+		}
+	}
+	// A literal entry that is a symlink out of the checkout is refused.
+	f.store.Copy = []string{"direct.enc"}
+	if _, err := f.store.Add(f.ctx, f.repo, "third", nil); err == nil || !strings.Contains(err.Error(), "outside the checkout") {
+		t.Errorf("literal symlink out of the checkout: %v", err)
+	}
+	// A target directory that is a symlink out of the worktree is
+	// refused: nothing lands outside.
+	f.store.Copy = []string{"real.enc"}
+	c, err := f.store.Add(f.ctx, f.repo, "fourth", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(c.Root, "real.enc"))
+	f.store.Copy = []string{"esc/new/nested/real.enc"}
+	write(t, filepath.Join(checkout, "esc", "new", "nested", "real.enc"), "real")
+	os.Symlink(outside, filepath.Join(c.Root, "esc"))
+	if _, err := f.store.Add(f.ctx, f.repo, "fourth", nil); err == nil || !strings.Contains(err.Error(), "outside the worktree") {
+		t.Errorf("target directory out of the worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new")); err == nil {
+		t.Error("a directory was made outside the worktree")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new", "nested", "real.enc")); err == nil {
+		t.Error("a file was written outside the worktree")
+	}
+	// A literal entry naming a pipe with no writer is refused at once,
+	// not waited on.
+	fifo := filepath.Join(checkout, "pipe.enc")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.store.Copy = []string{"pipe.enc"}
+	done := make(chan error, 1)
+	go func() { _, err := f.store.Add(f.ctx, f.repo, "sixth", nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("pipe as a source: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("opening a pipe with no writer blocked the copy")
+	}
+	os.Remove(fifo)
+	// A glob candidate whose lookup fails for a reason other than being
+	// gone fails the stage rather than being passed over in silence.
+	if os.Getuid() != 0 {
+		locked := filepath.Join(checkout, "locked")
+		write(t, filepath.Join(locked, "x.enc"), "x")
+		run(t, checkout, "git", "add", "-f", "locked/x.enc")
+		os.Chmod(locked, 0)
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		f.store.Copy = []string{"**/*.enc"}
+		if _, err := f.store.Add(f.ctx, f.repo, "fifth", nil); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("unreadable candidate: %v", err)
+		}
+		os.Chmod(locked, 0o755)
 	}
 }
