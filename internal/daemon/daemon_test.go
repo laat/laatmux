@@ -108,3 +108,40 @@ func TestGoneAgentKeepsActivity(t *testing.T) {
 func detectUnknown() detect.Result {
 	return detect.Result{State: detect.Unknown, Reason: "no_known_agent"}
 }
+
+// shutdown ends the daemon as SIGTERM does, answered first; a daemon
+// without the hook refuses and does not advertise it.
+func TestShutdownMessage(t *testing.T) {
+	called := make(chan struct{}, 1)
+	d := New(Config{EnvironmentID: "env", Shutdown: func() { called <- struct{}{} }})
+	server, client := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.HandleConn(ctx, server, func() { server.Close() })
+	pc := protocol.NewConn(client)
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	if m, _ := pc.Read(); !protocol.Has(m.Capabilities, protocol.CapShutdown) {
+		t.Fatalf("hello %+v", m)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeShutdown, ID: "s1"})
+	if m, err := pc.Read(); err != nil || m.Type != protocol.TypeResult || !m.OK || m.ID != "s1" {
+		t.Fatalf("result %+v %v", m, err)
+	}
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown not called")
+	}
+	d = New(Config{EnvironmentID: "env"})
+	server, client = net.Pipe()
+	go d.HandleConn(ctx, server, func() { server.Close() })
+	pc = protocol.NewConn(client)
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	if m, _ := pc.Read(); protocol.Has(m.Capabilities, protocol.CapShutdown) {
+		t.Fatalf("hello %+v", m)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeShutdown, ID: "s2"})
+	if m, err := pc.Read(); err != nil || m.OK || m.Error == "" {
+		t.Fatalf("result %+v %v", m, err)
+	}
+}

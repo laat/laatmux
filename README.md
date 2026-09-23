@@ -336,20 +336,26 @@ names the checkout when the command runs from another directory; flags
 go before, between or after the hosts), then streams the binary over the
 same ssh alias the client uses into an `sh` script: written to a fresh
 temporary name beside the configured `bin`, checked to run at all with
-`version`, which a build for the wrong platform or a truncated copy
-fails and then leaves the working binary as it was, and renamed over
+`version` answering as laatmux does, which a build for the wrong
+platform, a truncated copy or an empty file fails (an empty file would
+run as a shell script that succeeds) and then leaves the working binary
+as it was, and renamed over
 it, so the install is atomic, the running daemon keeps its own inode
 and two installs at once do not share a file; then `laatmux stop` with
 the new binary. The `bin` is the same shell word the bridge runs: a
 path under `~` is the remote home, anything else one quoted word, a
-bare name found on the remote PATH. `stop` finds the daemon through the
-startup lock it holds, whose file carries the holder's own pid, rather
-than through the runtime file, whose pid a crash can leave for another
-process to inherit; it sends `SIGTERM`, the clean shutdown that cancels
-the daemon's runs and waits for them, and waits for the lock to be
-released, which the kernel does when the holder exits, reaped or not.
-The next connection starts the new build, and `upgrade` makes that
-connection last and prints the version. The local host is upgraded in
+bare name found on the remote PATH. `stop` reaches the daemon over its
+socket, without starting one, and sends `shutdown`, capability
+`shutdown`, which the daemon answers and then exits on as it does on
+`SIGTERM`, cancelling its runs and waiting for them; the process that
+ends is the one that answered the hello, never a pid a file remembers,
+which a crash can leave for another process to inherit. A daemon from
+before the message gets `SIGTERM` at the pid its runtime file names,
+the daemon that just answered on the socket that file names. `stop`
+then waits for the startup lock to leave that daemon's hands, released
+by the kernel when it exits, reaped or not, or taken by a replacement a
+client started meanwhile. The next connection starts the new build, and
+`upgrade` makes that connection last and prints the version. The local host is upgraded in
 place of the running executable the same way. `hosts` marks every
 daemon whose build is not this client's, since versions are `git
 describe` strings, equal or not, never ordered.

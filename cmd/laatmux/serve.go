@@ -105,10 +105,13 @@ func cmdServe(ctx context.Context, args []string) error {
 	} else {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
 	}
+	// The shutdown message ends the daemon the way a signal does.
+	ctx, shutdown := context.WithCancel(ctx)
+	defer shutdown()
 	d := daemon.New(daemon.Config{
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
-		Store: store, Agents: agents,
+		Store: store, Agents: agents, Shutdown: shutdown,
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,7 +16,9 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 func TestParsePlatform(t *testing.T) {
@@ -44,7 +47,7 @@ func TestParsePlatform(t *testing.T) {
 // daemon with the new binary; the binary is the word the bridge runs.
 func TestInstallScript(t *testing.T) {
 	s := installScript("~/.local/bin/laatmux")
-	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `"$tmp" version >/dev/null ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
+	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `[ -s "$tmp" ] && "$tmp" version 2>/dev/null | grep -q '^laatmux ' ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
 		}
@@ -90,62 +93,84 @@ func TestParseInterspersed(t *testing.T) {
 	}
 }
 
-// installFile refuses a candidate that does not run and leaves the
-// destination as it was; one that runs replaces it.
+// installFile refuses a candidate that does not answer version as
+// laatmux does, an empty file or a program that says nothing included,
+// and leaves the destination as it was; one that answers replaces it.
 func TestInstallFile(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "laatmux")
 	os.WriteFile(dst, []byte("old"), 0o755)
-	bad := filepath.Join(dir, "bad")
-	os.WriteFile(bad, []byte("not a binary"), 0o644)
-	err := installFile(context.Background(), bad, dst)
-	if err == nil || !strings.Contains(err.Error(), "does not run here") {
-		t.Fatalf("bad candidate: %v", err)
+	for name, content := range map[string]string{"garbage": "not a binary", "empty": "", "silent": "#!/bin/sh\nexit 0\n"} {
+		bad := filepath.Join(dir, name)
+		os.WriteFile(bad, []byte(content), 0o644)
+		err := installFile(context.Background(), bad, dst)
+		if err == nil || !strings.Contains(err.Error(), "left as it was") {
+			t.Fatalf("%s candidate: %v", name, err)
+		}
+		if b, _ := os.ReadFile(dst); string(b) != "old" {
+			t.Fatalf("destination replaced by the %s candidate", name)
+		}
 	}
-	if b, _ := os.ReadFile(dst); string(b) != "old" {
-		t.Fatal("destination replaced by a candidate that does not run")
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 2 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 4 {
 		t.Fatalf("temporary left behind: %v", entries)
 	}
-	good, err := exec.LookPath("true")
-	if err != nil {
-		t.Skip("no true")
-	}
+	good := filepath.Join(dir, "good")
+	os.WriteFile(good, []byte("#!/bin/sh\necho laatmux stand-in\n"), 0o755)
 	if err := installFile(context.Background(), good, dst); err != nil {
 		t.Fatalf("good candidate: %v", err)
 	}
-	if fi, err := os.Stat(dst); err != nil || fi.Mode().Perm()&0o100 == 0 || fi.Size() < 100 {
-		t.Fatalf("destination after install: %v %v", fi, err)
+	if b, err := os.ReadFile(dst); err != nil || !strings.Contains(string(b), "stand-in") {
+		t.Fatalf("destination after install: %q %v", b, err)
 	}
 }
 
-// hosts marks the daemons whose build is not this client's and says what
-// the mark means; with every build the same there is no mark and no
-// line.
-func TestHostsReport(t *testing.T) {
-	rows := []hostRow{{name: "mac", status: "ok  daemon abc"}, {name: "vm", status: "ok  daemon def", differs: true}, {name: "box", status: "unreachable: x"}}
-	out := hostsReport(rows, "abc")
-	if !strings.HasPrefix(out, "  mac ") || !strings.Contains(out, "\n* vm ") || !strings.Contains(out, "\n  box ") || !strings.Contains(out, "differs from this client's (abc)") {
-		t.Errorf("report:\n%s", out)
+// The install script, run by sh as it is on a host, replaces the binary
+// with a candidate that answers version and stops the daemon with it;
+// an empty or wrong candidate leaves the binary and no temporary.
+func TestInstallScriptRuns(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "laatmux")
+	os.WriteFile(bin, []byte("old"), 0o755)
+	standIn := "#!/bin/sh\ncase $1 in version) echo laatmux stand-in;; stop) echo stopped by stand-in;; esac\n"
+	run := func(input string) (string, error) {
+		cmd := exec.Command("sh", "-c", installScript(bin))
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
 	}
-	rows[1].differs = false
-	if out := hostsReport(rows, "abc"); strings.Contains(out, "*") {
-		t.Errorf("mark without a difference:\n%s", out)
+	for name, input := range map[string]string{"empty": "", "garbage": "not a binary\n", "silent": "#!/bin/sh\nexit 0\n"} {
+		out, err := run(input)
+		if err == nil || !strings.Contains(out, "left as it was") {
+			t.Fatalf("%s: %v\n%s", name, err, out)
+		}
+		if b, _ := os.ReadFile(bin); string(b) != "old" {
+			t.Fatalf("%s: binary replaced", name)
+		}
+	}
+	out, err := run(standIn)
+	if err != nil || !strings.Contains(out, "stopped by stand-in") {
+		t.Fatalf("stand-in: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(bin); string(b) != standIn {
+		t.Fatalf("binary after install: %q", b)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("temporary left behind: %v", entries)
 	}
 }
 
-// stop ends the daemon that holds the startup lock and waits for the
-// lock to go, so a daemon that exited but was not reaped counts as gone
-// and a pid the runtime file remembers is never signalled on its own.
+// stop reaches the daemon over its socket and asks it to shut down, or
+// sends SIGTERM to one from before the message, and waits for the lock
+// to leave that daemon's hands; a daemon that exited but was not reaped
+// counts as gone. A runtime file naming a process that answers on no
+// socket is no daemon, and that process is never signalled.
 func TestStop(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("no daemon: %v", err)
 	}
-	// A runtime file naming a live process that holds no lock: not the
-	// daemon, not signalled.
 	bystander := exec.Command("sleep", "30")
 	if err := bystander.Start(); err != nil {
 		t.Fatal(err)
@@ -156,65 +181,106 @@ func TestStop(t *testing.T) {
 		t.Fatalf("stale runtime with a live pid: %v", err)
 	}
 	if !home.Alive(bystander.Process.Pid) {
-		t.Fatal("a process that holds no lock was signalled")
+		t.Fatal("a process that answers on no socket was signalled")
 	}
-	// A stand-in daemon: this test binary holding the lock until
-	// SIGTERM. It is not reaped until after stop has returned, so the
-	// pid is a zombie while stop waits; the lock says it is gone.
-	holder := exec.Command(os.Args[0], "-test.run=TestStop")
-	holder.Env = append(os.Environ(), "LAATMUX_TEST_HOLD_LOCK=1")
-	out := &strings.Builder{}
-	holder.Stdout, holder.Stderr = out, out
-	if err := holder.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer holder.Process.Kill()
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		pid, err := home.Holder()
-		if err != nil {
+	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
+	// A real daemon, then one from before the shutdown message: each is
+	// this test binary in a helper mode, not reaped until stop has
+	// returned, so its pid is a zombie while stop waits.
+	for _, mode := range []string{"serve", "legacy"} {
+		d := exec.Command(os.Args[0], "-test.run=TestStop")
+		d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON="+mode)
+		out := &strings.Builder{}
+		d.Stdout, d.Stderr = out, out
+		if err := d.Start(); err != nil {
 			t.Fatal(err)
 		}
-		if pid == holder.Process.Pid {
-			break
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			pid, err := home.Holder()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, rerr := home.ReadRuntime(); pid == d.Process.Pid && rerr == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				d.Process.Kill()
+				t.Fatalf("%s daemon did not come up: %s", mode, out)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("stand-in did not take the lock: %s", out)
+		start := time.Now()
+		if err := cmdStop(context.Background(), nil); err != nil {
+			d.Process.Kill()
+			t.Fatalf("stop %s: %v\n%s", mode, err, out)
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	start := time.Now()
-	if err := cmdStop(context.Background(), nil); err != nil {
-		t.Fatalf("stop: %v", err)
-	}
-	if time.Since(start) > 5*time.Second {
-		t.Errorf("stop took %s", time.Since(start))
-	}
-	if err := holder.Wait(); err != nil {
-		t.Fatalf("stand-in: %v: %s", err, out)
+		if time.Since(start) > 5*time.Second {
+			t.Errorf("stop %s took %s", mode, time.Since(start))
+		}
+		if err := d.Wait(); err != nil {
+			t.Fatalf("%s daemon: %v\n%s", mode, err, out)
+		}
 	}
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
 	}
 }
 
-// holdLock is the stand-in daemon of TestStop: it takes the startup
-// lock and exits cleanly on SIGTERM.
-func holdLock() {
-	l, err := home.TryLock()
+// testDaemon is the stand-in daemon of TestStop: serve is the real
+// daemon with the shutdown message; legacy is one without it, ended by
+// SIGTERM.
+func testDaemon(mode string) {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer cancel()
+	var err error
+	switch mode {
+	case "serve":
+		err = cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"})
+	case "legacy":
+		err = legacyServe(ctx)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM)
-	<-sig
-	l.Release()
 	os.Exit(0)
 }
 
+// legacyServe is a daemon from before the shutdown message: the lock,
+// the runtime file, a listener, no Shutdown in its config.
+func legacyServe(ctx context.Context) error {
+	lock, err := home.TryLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	if err := home.WriteRuntime(home.Runtime{Address: "tcp:" + ln.Addr().String(), PID: os.Getpid(), Version: "legacy"}); err != nil {
+		return err
+	}
+	defer home.RemoveRuntime(os.Getpid())
+	d := daemon.New(daemon.Config{EnvironmentID: "legacy", Version: "legacy", Targets: []daemon.Target{{Label: "none", Tmux: noTmux{}}}})
+	go d.Serve(ctx, ln)
+	<-ctx.Done()
+	return nil
+}
+
+// noTmux is a server with no panes, so the legacy daemon polls nothing.
+type noTmux struct{}
+
+func (noTmux) ListPanes(context.Context) ([]tmux.Pane, error)                  { return nil, nil }
+func (noTmux) Capture(context.Context, string, int) ([]string, error)          { return nil, nil }
+func (noTmux) EnsureConfigured(context.Context) error                          { return nil }
+func (noTmux) NewSession(context.Context, tmux.NewSessionOpts) (string, error) { return "", nil }
+func (noTmux) KillSession(context.Context, string) error                       { return nil }
+
 func TestMain(m *testing.M) {
-	if os.Getenv("LAATMUX_TEST_HOLD_LOCK") != "" {
-		holdLock()
+	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
+		testDaemon(mode)
 	}
 	os.Exit(m.Run())
 }

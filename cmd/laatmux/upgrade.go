@@ -272,8 +272,10 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 // the new binary. The path is the word the bridge runs, so a path under
 // ~ is the remote home and a bare name is found on the remote PATH. The
 // file goes to a fresh temporary name beside the old one, is checked to
-// run at all with version, which a build for the wrong platform or a
-// truncated copy fails, and only then renamed over the old one: the
+// answer version as laatmux does, which a build for the wrong platform,
+// a truncated copy or an empty file fails, since sh would run an empty
+// file as a script that succeeds, and only then renamed over the old
+// one: the
 // install is atomic, a running daemon keeps its own inode, and a
 // candidate that does not run leaves the working binary as it was. Two
 // installs at once each have their own temporary file.
@@ -294,7 +296,7 @@ func installScript(bin string) string {
 		`trap 'rm -f "$tmp"' EXIT`,
 		`cat > "$tmp"`,
 		`chmod +x "$tmp"`,
-		`"$tmp" version >/dev/null || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
+		`[ -s "$tmp" ] && "$tmp" version 2>/dev/null | grep -q '^laatmux ' || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
 		`mv -f "$tmp" "$bin"`,
 		`"$bin" stop`,
 	}, "; ")
@@ -319,8 +321,8 @@ func installLocal(ctx context.Context, file string) error {
 }
 
 // installFile copies file to a fresh temporary name beside dst, checks
-// that it runs, and renames it over dst. A candidate that fails the
-// check is removed and dst is left as it was.
+// that it answers version as laatmux does, and renames it over dst. A
+// candidate that fails the check is removed and dst is left as it was.
 func installFile(ctx context.Context, file, dst string) error {
 	in, err := os.ReadFile(file)
 	if err != nil {
@@ -345,8 +347,12 @@ func installFile(ctx context.Context, file, dst string) error {
 	if err := tmp.Close(); err != nil {
 		return fail(err)
 	}
-	if out, err := exec.CommandContext(ctx, name, "version").CombinedOutput(); err != nil {
-		return fail(fmt.Errorf("the new binary does not run here (%v: %s); %s left as it was", err, strings.TrimSpace(string(out)), dst))
+	if len(in) == 0 {
+		return fail(fmt.Errorf("the new binary is empty; %s left as it was", dst))
+	}
+	out, err := exec.CommandContext(ctx, name, "version").Output()
+	if err != nil || !bytes.HasPrefix(out, []byte("laatmux ")) {
+		return fail(fmt.Errorf("the new binary does not answer version as laatmux (%v: %q); %s left as it was", err, strings.TrimSpace(string(out)), dst))
 	}
 	if err := os.Rename(name, dst); err != nil {
 		return fail(err)

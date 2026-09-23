@@ -105,6 +105,10 @@ type Config struct {
 	MergedIdle      time.Duration
 	SessionInterval time.Duration
 	ReconnectMin    time.Duration
+
+	// Shutdown ends the daemon as SIGTERM does, for the shutdown
+	// message; nil means no shutdown capability.
+	Shutdown func()
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -270,6 +274,9 @@ func (d *Daemon) capabilities() []string {
 	}
 	if d.cfg.Hosts != nil {
 		caps = append(caps, protocol.CapMerged)
+	}
+	if d.cfg.Shutdown != nil {
+		caps = append(caps, protocol.CapShutdown)
 	}
 	return caps
 }
@@ -791,6 +798,19 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			}()
 		case protocol.TypeCancel:
 			d.cancelCommand(m.ID)
+		case protocol.TypeShutdown:
+			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+			if d.cfg.Shutdown == nil {
+				res.Error = "this daemon has no shutdown capability"
+			} else {
+				res.OK = true
+			}
+			if err := pc.Write(res); err != nil {
+				return
+			}
+			if res.OK {
+				d.cfg.Shutdown()
+			}
 		default:
 			_ = pc.Write(protocol.Message{Type: protocol.TypeError, ID: m.ID, Error: fmt.Sprintf("unknown message type %q", m.Type)})
 		}

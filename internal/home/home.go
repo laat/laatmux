@@ -169,15 +169,16 @@ func TryLock() (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
-// Holder is the pid of the daemon holding the startup lock, 0 when no
-// one does. The holder wrote its own pid into the file when it took the
-// lock, so the answer names the process that has it now, not a pid a
-// runtime file remembers, which a crash can leave behind for another
-// process to inherit. The lock is released by the kernel when the holder
-// exits, reaped or not, so a zombie is gone here. The check takes the
-// lock for an instant when it is free; a daemon starting in that instant
-// loses it and its client waits out a start that is not coming, which a
-// stop racing a start is anyway.
+// Holder is the pid written into the startup lock file by its holder,
+// 0 when no one holds the lock. It says whether a daemon is there and
+// which, for a caller that compares it with a pid it knows: the lock is
+// released by the kernel when the holder exits, reaped or not, so a
+// daemon that is gone is gone here. The pid is not to be signalled on
+// its own: the file keeps its content when a probe holds the lock for an
+// instant, and a daemon between taking the lock and writing its pid is
+// read as none. The probe takes the lock for an instant when it is free;
+// a daemon starting in that instant loses it and its client waits out a
+// start that is not coming, which a stop racing a start is anyway.
 func Holder() (int, error) {
 	if err := ensure(); err != nil {
 		return 0, err
