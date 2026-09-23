@@ -184,7 +184,8 @@ ways for the prompt to get there, the first preferred:
   gets the argument removed, not an empty one. The argument is on the
   host's process list for as long as the agent runs, visible to another
   user of that host with `ps`; choosing the placeholder is choosing
-  that, and the README says so where the config is documented.
+  that, and the README will say so where the config is documented,
+  when step 2 lands the placeholder.
 
   ```yaml
   agents:
@@ -567,7 +568,7 @@ sent.
 ## Order of work
 
 1. This note.
-2. The journal and the prompt on the host: capability `prompt`, the
+2. The journal and the prompt on the host: capability `task`, the
    journal under the state directory with tombstones, `removed` from
    `rm` and the sweep, the age refusal, `follow` answered from it with
    `interrupted` for an unfinished entry, `generated` branches
