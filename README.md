@@ -317,7 +317,20 @@ is switched to.
 - **`dashboard`** is the same view filling whatever it runs in, compact
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:
-  `bind-key C-s display-popup -E -w 90% -h 80% -T ' laatmux ' 'laatmux dashboard'`.
+  `bind-key C-s display-popup -E -w 90% -h 80% -d '#{pane_current_path}' -T ' laatmux ' 'laatmux dashboard'`.
+  `-d` matters: the repository picker's default is the repository of
+  the directory the popup runs in, which without it is the session's.
+  Actions: `a` adds through pickers for repository, host and agent,
+  each skipped with one candidate and preselecting what `add` would
+  take, then a branch prompt with `add`'s validation; on a worktree row
+  without a session the pickers and the branch are pre-filled from the
+  record. The add runs with its progress in place of the list and jumps
+  on success; a failure stays until a key. `x` confirms then removes
+  the worktree; a refusal that asks for force carries the hint to use
+  `X`. `s` settles or unsettles; `S` opens the shell window and jumps.
+  The commands are `internal/command`, the same implementations the
+  CLI's `add`, `rm` and `shell` call, with the printing separated from
+  the doing.
 - Both refuse a local daemon without `merged` with what to do; a sidebar
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
