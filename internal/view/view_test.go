@@ -617,6 +617,7 @@ func TestSpinner(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	in := fixtureInput(now)
 	m.SetRows(rows.Build(in))
+	m.Render()
 	if !m.Spinning() {
 		t.Fatal("working rows and no spinning")
 	}
@@ -658,6 +659,7 @@ func TestSpinner(t *testing.T) {
 		}
 	}
 	m.SetRows(rows.Build(in))
+	m.Render()
 	if m.Spinning() {
 		t.Fatal("gone agents spin")
 	}
@@ -672,5 +674,79 @@ func TestSpinner(t *testing.T) {
 	}
 	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨⠋⟩ x") {
 		t.Errorf("Debug: %q", got)
+	}
+}
+
+// The spinner ticks only while a frame is on screen: working rows
+// scrolled off, or filtered out, or behind an overlay, are not ticked
+// for; and a narrow pane keeps the mark's colour in both layouts, down
+// to the two cells the gutter and the mark take.
+func TestSpinnerOnScreenAndNarrow(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 6 // header lines, a few body lines, footer
+	m.SetRows(rows.Build(fixtureInput(now)))
+	m.Render()
+	if !m.Spinning() {
+		t.Fatal("working rows at the top and no spinning")
+	}
+	m.Handle(Key{Rune: 'G'})
+	m.Render()
+	if m.Spinning() {
+		t.Fatal("working rows scrolled off and still spinning")
+	}
+	m.Handle(Key{Rune: 'g'})
+	m.Render()
+	if !m.Spinning() {
+		t.Fatal("scrolled back and not spinning")
+	}
+	m.Filter = "spike"
+	m.Render()
+	if m.Spinning() {
+		t.Fatal("working rows filtered out and still spinning")
+	}
+	m.Filter = ""
+	m.Overlay = NewPrompt("branch", "", nil)
+	m.Render()
+	if m.Spinning() {
+		t.Fatal("an overlay up and still spinning")
+	}
+	m.Overlay = nil
+	// Tiles, the blocked tile selected at the top: the first working
+	// tile's head line is the fifth body line, so five body lines show
+	// its mark and four cut the tile off above it.
+	m.Layout = Tiles
+	m.Handle(Key{Rune: 'g'})
+	m.Height = len(m.Header) + 5 + 1
+	m.Render()
+	if !m.Spinning() {
+		t.Fatalf("tile head on screen and not spinning:\n%s", Debug(m.Render()))
+	}
+	m.Height = len(m.Header) + 4 + 1
+	m.Render()
+	if m.Spinning() {
+		t.Fatalf("tile head clipped and still spinning:\n%s", Debug(m.Render()))
+	}
+	// Narrow: the coloured mark survives the fallback in both layouts,
+	// and no line is wider than the pane.
+	for _, layout := range []Layout{Compact, Tiles} {
+		for _, w := range []int{12, 6, 3, 2} {
+			m = model(now)
+			m.Layout, m.Width, m.Height = layout, w, 30
+			m.SetRows(rows.Build(fixtureInput(now)))
+			lines := m.Render()
+			if out := Debug(lines); !strings.Contains(out, "⟨") {
+				t.Errorf("layout %v width %d: no coloured mark:\n%s", layout, w, out)
+			}
+			for _, l := range lines {
+				if width(strings.TrimSuffix(Text([]Line{l}), "\n")) > w {
+					t.Errorf("layout %v width %d: line wider than the pane: %q", layout, w, Text([]Line{l}))
+				}
+			}
+		}
+		m = model(now)
+		m.Layout, m.Width, m.Height = layout, 1, 30
+		m.SetRows(rows.Build(fixtureInput(now)))
+		m.Render() // one cell: the gutter alone, no panic
 	}
 }

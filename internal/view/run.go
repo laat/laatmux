@@ -82,7 +82,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	draw()
 	for {
 		spin = nil
-		if m.Overlay == nil && m.Spinning() {
+		if m.Spinning() {
 			spin = time.After(spinTick)
 		}
 		select {

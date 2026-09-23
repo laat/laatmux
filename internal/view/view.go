@@ -71,6 +71,8 @@ type Model struct {
 	// or removes rows keeps the selection on the same workspace rather
 	// than on the same index, which Enter would then jump to.
 	anchor string
+	// spinning is whether the last Render drew a spinner frame.
+	spinning bool
 }
 
 // SetRows replaces the rows, keeping the selection on the row it was on
@@ -260,15 +262,25 @@ func spins(r rows.Row) bool {
 	return r.Agent != nil && !r.Dim && r.Agent.Activity == protocol.Working && r.Agent.Liveness == protocol.Alive
 }
 
-// Spinning reports whether any visible row spins, so the host ticks
-// the spinner only while there is one to draw.
-func (m *Model) Spinning() bool {
-	for _, it := range m.Visible() {
-		if spins(*it.Row) {
-			return true
-		}
+// Spinning reports whether the last Render drew a spinner, so the host
+// ticks the spinner only while one is on screen: a working row that is
+// filtered out, in a collapsed group, or scrolled off with its mark, is
+// not drawn and not ticked for.
+func (m *Model) Spinning() bool { return m.spinning }
+
+// marked is the head of a row as spans, the gutter, the mark with its
+// colour, and the rest, clipped to w cells so a narrow pane keeps the
+// mark's colour rather than flattening it into text.
+func marked(gutter string, mark Span, rest string, w int) []Span {
+	switch {
+	case w <= 0:
+		return nil
+	case w == 1:
+		return []Span{{Text: gutter}}
+	case w == 2:
+		return []Span{{Text: gutter}, mark}
 	}
-	return false
+	return []Span{{Text: gutter}, mark, {Text: fit(rest, w-2)}}
 }
 
 // mark is the row's mark as a span: the spinner frame for Now on a
@@ -296,6 +308,7 @@ func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 // Render draws the model into exactly Height lines of at most Width
 // cells each, and records which body line shows which row for the mouse.
 func (m *Model) Render() []Line {
+	m.spinning = false
 	if m.Width <= 0 || m.Height <= 0 {
 		return nil
 	}
@@ -354,6 +367,11 @@ func (m *Model) Render() []Line {
 		if j := m.scroll + i; j < len(lines) {
 			out = append(out, lines[j])
 			m.hits[i] = hits[j]
+			for _, sp := range lines[j].Spans {
+				if sp.Fg == spinnerFg {
+					m.spinning = true
+				}
+			}
 		} else {
 			out = append(out, plain(""))
 		}
@@ -434,7 +452,7 @@ func (m *Model) tile(r rows.Row) []Line {
 	nameW := w - width(head) - width(where.Text) - 1
 	first := Line{Dim: r.Dim}
 	if nameW < 4 {
-		first.Spans = []Span{{Text: fit(head+r.Name, w)}}
+		first.Spans = marked(m.gutter(r), mark, " "+r.Name, w)
 	} else {
 		name := fit(r.Name, nameW)
 		gap := w - width(head) - width(name) - width(where.Text)
@@ -471,11 +489,11 @@ func (m *Model) compact(r rows.Row) []Line {
 	}
 	nameW := w - width(left) - 1 - width(where.Text) - width(age)
 	line := Line{Dim: r.Dim}
+	rest := left[len(m.gutter(r))+len(mark.Text):]
 	if nameW < 4 {
-		line.Spans = []Span{{Text: fit(left+r.Name, w)}}
+		line.Spans = marked(m.gutter(r), mark, rest+r.Name, w)
 	} else {
 		name := fit(r.Name, nameW)
-		rest := left[len(m.gutter(r))+len(mark.Text):]
 		line.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: rest + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
 	}
 	lines := []Line{line}
