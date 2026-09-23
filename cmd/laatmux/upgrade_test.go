@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/home"
 )
 
@@ -33,12 +39,12 @@ func TestParsePlatform(t *testing.T) {
 	}
 }
 
-// The install script writes beside the configured binary and renames
-// over it, then stops the daemon with the new binary; a path under ~ is
-// the remote home, a bare name is looked up on the remote PATH.
+// The install script writes to a fresh temporary file beside the
+// configured binary, checks it runs, renames it over, then stops the
+// daemon with the new binary; the binary is the word the bridge runs.
 func TestInstallScript(t *testing.T) {
 	s := installScript("~/.local/bin/laatmux")
-	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `cat > "$bin.new"`, `mv -f "$bin.new" "$bin"`, `"$bin" stop`, "set -e"} {
+	for _, want := range []string{`bin="$HOME"/.local/bin/laatmux;`, `tmp=$(mktemp "$dir/.laatmux.XXXXXX")`, `trap 'rm -f "$tmp"' EXIT`, `cat > "$tmp"`, `"$tmp" version >/dev/null ||`, `mv -f "$tmp" "$bin"`, `"$bin" stop`, "set -e"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
 		}
@@ -49,6 +55,9 @@ func TestInstallScript(t *testing.T) {
 	if s := installScript("~/my bin/laatmux"); !strings.Contains(s, `bin="$HOME"/'my bin/laatmux';`) {
 		t.Errorf("path with a space: %s", s)
 	}
+	if s := installScript("/opt/my bin/laatmux"); !strings.Contains(s, `bin='/opt/my bin/laatmux';`) {
+		t.Errorf("absolute path with a space: %s", s)
+	}
 	for _, bin := range []string{"", "laatmux"} {
 		if s := installScript(bin); !strings.Contains(s, "bin=$(command -v laatmux) ||") || !strings.Contains(s, "set bin in the host config") {
 			t.Errorf("bare name %q: %s", bin, s)
@@ -56,6 +65,59 @@ func TestInstallScript(t *testing.T) {
 	}
 	if s := installScript("laat mux"); !strings.Contains(s, `command -v 'laat mux'`) {
 		t.Errorf("bare name with a space: %s", s)
+	}
+	// The install runs the same word the bridge does.
+	for _, bin := range []string{"~/.local/bin/laatmux", "/opt/my bin/laatmux", "laatmux"} {
+		if !strings.Contains(installScript(bin), client.RemoteBin(bin)) {
+			t.Errorf("%q: install and bridge disagree", bin)
+		}
+	}
+}
+
+// Flags come before, between or after the hosts.
+func TestParseInterspersed(t *testing.T) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	bin := fs.String("bin", "", "")
+	src := fs.String("src", "", "")
+	pos, err := parseInterspersed(fs, []string{"vm", "--bin", "/tmp/x", "box", "--src", "/s"})
+	if err != nil || strings.Join(pos, ",") != "vm,box" || *bin != "/tmp/x" || *src != "/s" {
+		t.Errorf("%v %v bin=%q src=%q", pos, err, *bin, *src)
+	}
+	fs = flag.NewFlagSet("t", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if _, err := parseInterspersed(fs, []string{"vm", "--nope"}); err == nil {
+		t.Error("unknown flag accepted")
+	}
+}
+
+// installFile refuses a candidate that does not run and leaves the
+// destination as it was; one that runs replaces it.
+func TestInstallFile(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "laatmux")
+	os.WriteFile(dst, []byte("old"), 0o755)
+	bad := filepath.Join(dir, "bad")
+	os.WriteFile(bad, []byte("not a binary"), 0o644)
+	err := installFile(context.Background(), bad, dst)
+	if err == nil || !strings.Contains(err.Error(), "does not run here") {
+		t.Fatalf("bad candidate: %v", err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "old" {
+		t.Fatal("destination replaced by a candidate that does not run")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 2 {
+		t.Fatalf("temporary left behind: %v", entries)
+	}
+	good, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true")
+	}
+	if err := installFile(context.Background(), good, dst); err != nil {
+		t.Fatalf("good candidate: %v", err)
+	}
+	if fi, err := os.Stat(dst); err != nil || fi.Mode().Perm()&0o100 == 0 || fi.Size() < 100 {
+		t.Fatalf("destination after install: %v %v", fi, err)
 	}
 }
 
@@ -74,25 +136,51 @@ func TestHostsReport(t *testing.T) {
 	}
 }
 
-// stop ends the daemon the runtime file names and waits for it; no
-// daemon, or a stale runtime file, is not an error.
+// stop ends the daemon that holds the startup lock and waits for the
+// lock to go, so a daemon that exited but was not reaped counts as gone
+// and a pid the runtime file remembers is never signalled on its own.
 func TestStop(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("no daemon: %v", err)
 	}
-	// A process standing in for the daemon: sleep dies on SIGTERM. It
-	// is reaped as it exits, as a detached daemon is by init, so the pid
-	// is gone rather than a zombie.
-	sleep := exec.Command("sleep", "30")
-	if err := sleep.Start(); err != nil {
+	// A runtime file naming a live process that holds no lock: not the
+	// daemon, not signalled.
+	bystander := exec.Command("sleep", "30")
+	if err := bystander.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer sleep.Process.Kill()
-	waited := make(chan error, 1)
-	go func() { waited <- sleep.Wait() }()
-	if err := home.WriteRuntime(home.Runtime{Address: "tcp:127.0.0.1:1", PID: sleep.Process.Pid, Version: "old"}); err != nil {
+	defer bystander.Process.Kill()
+	home.WriteRuntime(home.Runtime{Address: "tcp:127.0.0.1:1", PID: bystander.Process.Pid, Version: "old"})
+	if err := cmdStop(context.Background(), nil); err != nil {
+		t.Fatalf("stale runtime with a live pid: %v", err)
+	}
+	if !home.Alive(bystander.Process.Pid) {
+		t.Fatal("a process that holds no lock was signalled")
+	}
+	// A stand-in daemon: this test binary holding the lock until
+	// SIGTERM. It is not reaped until after stop has returned, so the
+	// pid is a zombie while stop waits; the lock says it is gone.
+	holder := exec.Command(os.Args[0], "-test.run=TestStop")
+	holder.Env = append(os.Environ(), "LAATMUX_TEST_HOLD_LOCK=1")
+	out := &strings.Builder{}
+	holder.Stdout, holder.Stderr = out, out
+	if err := holder.Start(); err != nil {
 		t.Fatal(err)
+	}
+	defer holder.Process.Kill()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		pid, err := home.Holder()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pid == holder.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stand-in did not take the lock: %s", out)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	start := time.Now()
 	if err := cmdStop(context.Background(), nil); err != nil {
@@ -101,21 +189,34 @@ func TestStop(t *testing.T) {
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("stop took %s", time.Since(start))
 	}
-	select {
-	case err := <-waited:
-		if err == nil {
-			t.Fatal("stand-in exited normally")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("stand-in still running")
-	}
-	// The runtime file is now stale: nothing to stop.
-	if err := cmdStop(context.Background(), nil); err != nil {
-		t.Fatalf("stale: %v", err)
+	if err := holder.Wait(); err != nil {
+		t.Fatalf("stand-in: %v: %s", err, out)
 	}
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
 	}
+}
+
+// holdLock is the stand-in daemon of TestStop: it takes the startup
+// lock and exits cleanly on SIGTERM.
+func holdLock() {
+	l, err := home.TryLock()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	<-sig
+	l.Release()
+	os.Exit(0)
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("LAATMUX_TEST_HOLD_LOCK") != "" {
+		holdLock()
+	}
+	os.Exit(m.Run())
 }
 
 // The source is the current directory only when it is the laatmux

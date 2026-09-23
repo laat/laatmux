@@ -31,10 +31,11 @@ func cmdUpgrade(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	src := fs.String("src", "", "laatmux checkout to build from; default the current directory when it is one")
 	bin := fs.String("bin", "", "a built binary to install instead of building; it must be for the host's platform")
-	if err := fs.Parse(args); err != nil {
+	names, err := parseInterspersed(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() < 1 {
+	if len(names) < 1 {
 		return errors.New("usage: laatmux upgrade <host>... [--src dir] [--bin file]")
 	}
 	cfg, err := config.Load()
@@ -42,7 +43,7 @@ func cmdUpgrade(ctx context.Context, args []string) error {
 		return err
 	}
 	var hosts []config.Host
-	for _, name := range fs.Args() {
+	for _, name := range names {
 		h, ok := cfg.Find(name)
 		if !ok {
 			return fmt.Errorf("unknown host %q", name)
@@ -62,6 +63,23 @@ func cmdUpgrade(ctx context.Context, args []string) error {
 		return fmt.Errorf("%d of %d hosts not upgraded", failed, len(hosts))
 	}
 	return nil
+}
+
+// parseInterspersed parses flags that come before, between and after
+// the positional arguments, which flag.Parse alone stops at, and returns
+// the positionals in order.
+func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return pos, nil
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
 }
 
 // upgradeHost upgrades one host: find it, build for it, install, stop
@@ -251,39 +269,40 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 
 // installScript is the sh script that installs the binary read from
 // stdin at the configured path on the host, then stops the daemon with
-// the new binary. A path under ~ is the remote home; a bare name is
-// found on the remote PATH, as the bridge finds it. The file is written
-// beside the old one and renamed over it, so a running daemon keeps its
-// own inode and the install is atomic; there is never a half-written
-// binary at the path, and no text-file-busy since nothing is written
-// into the old file.
+// the new binary. The path is the word the bridge runs, so a path under
+// ~ is the remote home and a bare name is found on the remote PATH. The
+// file goes to a fresh temporary name beside the old one, is checked to
+// run at all with version, which a build for the wrong platform or a
+// truncated copy fails, and only then renamed over the old one: the
+// install is atomic, a running daemon keeps its own inode, and a
+// candidate that does not run leaves the working binary as it was. Two
+// installs at once each have their own temporary file.
 func installScript(bin string) string {
-	if bin == "" {
-		bin = "laatmux"
-	}
+	word := client.RemoteBin(bin)
 	var target string
-	switch {
-	case strings.HasPrefix(bin, "~/"):
-		target = `bin="$HOME"/` + tmux.ShellJoin([]string{strings.TrimPrefix(bin, "~/")})
-	case strings.Contains(bin, "/"):
-		target = "bin=" + tmux.ShellJoin([]string{bin})
-	default:
-		q := tmux.ShellJoin([]string{bin})
-		target = `bin=$(command -v ` + q + `) || { echo ` + q + ` is not on the PATH of a non-interactive shell; set bin in the host config >&2; exit 1; }`
+	if strings.Contains(word, "/") {
+		target = "bin=" + word
+	} else {
+		target = `bin=$(command -v ` + word + `) || { echo ` + word + ` is not on the PATH of a non-interactive shell; set bin in the host config >&2; exit 1; }`
 	}
 	return strings.Join([]string{
 		"set -e",
 		target,
-		`mkdir -p "$(dirname "$bin")"`,
-		`cat > "$bin.new"`,
-		`chmod +x "$bin.new"`,
-		`mv -f "$bin.new" "$bin"`,
+		`dir=$(dirname "$bin")`,
+		`mkdir -p "$dir"`,
+		`tmp=$(mktemp "$dir/.laatmux.XXXXXX")`,
+		`trap 'rm -f "$tmp"' EXIT`,
+		`cat > "$tmp"`,
+		`chmod +x "$tmp"`,
+		`"$tmp" version >/dev/null || { echo "the new binary does not run here; $bin left as it was" >&2; exit 1; }`,
+		`mv -f "$tmp" "$bin"`,
 		`"$bin" stop`,
 	}, "; ")
 }
 
 // installLocal puts the binary in place of the running executable, then
-// stops this machine's daemon.
+// stops this machine's daemon. As on a host: a fresh temporary file
+// beside the executable, a version check, then the rename.
 func installLocal(ctx context.Context, file string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -292,17 +311,45 @@ func installLocal(ctx context.Context, file string) error {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
-	in, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(exe+".new", in, 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(exe+".new", exe); err != nil {
-		os.Remove(exe + ".new")
+	if err := installFile(ctx, file, exe); err != nil {
 		return err
 	}
 	fmt.Printf("installed at %s\n", exe)
 	return cmdStop(ctx, nil)
+}
+
+// installFile copies file to a fresh temporary name beside dst, checks
+// that it runs, and renames it over dst. A candidate that fails the
+// check is removed and dst is left as it was.
+func installFile(ctx context.Context, file, dst string) error {
+	in, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".laatmux.*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if _, err := tmp.Write(in); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fail(err)
+	}
+	if out, err := exec.CommandContext(ctx, name, "version").CombinedOutput(); err != nil {
+		return fail(fmt.Errorf("the new binary does not run here (%v: %s); %s left as it was", err, strings.TrimSpace(string(out)), dst))
+	}
+	if err := os.Rename(name, dst); err != nil {
+		return fail(err)
+	}
+	return nil
 }

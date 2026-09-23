@@ -105,3 +105,25 @@ func TestErrorsCarrySSHDiagnostic(t *testing.T) {
 		t.Errorf("local err = %v, want bare io.EOF", err)
 	}
 }
+
+// The remote binary is one shell word: a path under ~ is the remote
+// home, spelled so the shell expands it; anything else is quoted, so a
+// space or a shell character in the path is the path.
+func TestRemoteBin(t *testing.T) {
+	cases := map[string]string{
+		"":                     "laatmux",
+		"laatmux":              "laatmux",
+		"~/.local/bin/laatmux": `"$HOME"/.local/bin/laatmux`,
+		"~/my bin/laatmux":     `"$HOME"/'my bin/laatmux'`,
+		"/opt/lm/laatmux":      "/opt/lm/laatmux",
+		"/opt/my bin/laatmux":  `'/opt/my bin/laatmux'`,
+		"/opt/it's/laatmux":    `'/opt/it'\''s/laatmux'`,
+		"$HOME/bin/laatmux":    `'$HOME/bin/laatmux'`,
+		"laat mux":             `'laat mux'`,
+	}
+	for in, want := range cases {
+		if got := RemoteBin(in); got != want {
+			t.Errorf("%q: got %s want %s", in, got, want)
+		}
+	}
+}

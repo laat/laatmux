@@ -332,19 +332,27 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
 restarts its daemon. It asks the host for `uname -sm`, builds for that
 platform with `CGO_ENABLED=0` and the version from `git describe`, once
 per platform per run (`--bin` installs a binary built elsewhere, `--src`
-names the checkout when the command runs from another directory), then
-streams the binary over the same ssh alias the client uses into an `sh`
-script: written beside the configured `bin` and renamed over it, so the
-install is atomic and the running daemon keeps its own inode, then
-`laatmux stop` with the new binary. A `bin` under `~` is the remote
-home; a bare name is found on the remote PATH as the bridge finds it.
-`stop` sends the daemon `SIGTERM`, the clean shutdown that cancels its
-runs and waits for them, and waits for it to exit; the next connection
-starts the new build, and `upgrade` makes that connection last and
-prints the version. The local host is upgraded in place of the running
-executable the same way. `hosts` marks every daemon whose build is not
-this client's, since versions are `git describe` strings, equal or not,
-never ordered.
+names the checkout when the command runs from another directory; flags
+go before, between or after the hosts), then streams the binary over the
+same ssh alias the client uses into an `sh` script: written to a fresh
+temporary name beside the configured `bin`, checked to run at all with
+`version`, which a build for the wrong platform or a truncated copy
+fails and then leaves the working binary as it was, and renamed over
+it, so the install is atomic, the running daemon keeps its own inode
+and two installs at once do not share a file; then `laatmux stop` with
+the new binary. The `bin` is the same shell word the bridge runs: a
+path under `~` is the remote home, anything else one quoted word, a
+bare name found on the remote PATH. `stop` finds the daemon through the
+startup lock it holds, whose file carries the holder's own pid, rather
+than through the runtime file, whose pid a crash can leave for another
+process to inherit; it sends `SIGTERM`, the clean shutdown that cancels
+the daemon's runs and waits for them, and waits for the lock to be
+released, which the kernel does when the holder exits, reaped or not.
+The next connection starts the new build, and `upgrade` makes that
+connection last and prints the version. The local host is upgraded in
+place of the running executable the same way. `hosts` marks every
+daemon whose build is not this client's, since versions are `git
+describe` strings, equal or not, never ordered.
 
 ## Sidebar and dashboard
 

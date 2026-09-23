@@ -169,6 +169,36 @@ func TryLock() (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
+// Holder is the pid of the daemon holding the startup lock, 0 when no
+// one does. The holder wrote its own pid into the file when it took the
+// lock, so the answer names the process that has it now, not a pid a
+// runtime file remembers, which a crash can leave behind for another
+// process to inherit. The lock is released by the kernel when the holder
+// exits, reaped or not, so a zombie is gone here. The check takes the
+// lock for an instant when it is free; a daemon starting in that instant
+// loses it and its client waits out a start that is not coming, which a
+// stop racing a start is anyway.
+func Holder() (int, error) {
+	if err := ensure(); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(filepath.Join(Dir(), "daemon.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return 0, err
+		}
+		b, _ := io.ReadAll(f)
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		return pid, nil
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return 0, nil
+}
+
 func (l *Lock) Release() {
 	if l != nil && l.f != nil {
 		_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
