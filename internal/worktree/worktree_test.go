@@ -574,7 +574,12 @@ func TestRemoveStaleTempsLiteralDir(t *testing.T) {
 	write(t, filepath.Join(sib, ".laatmux-copy-.envrc.123456"), "other worktree's copy")
 	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.654321"), "stale")
 	write(t, filepath.Join(pat, ".laatmux-copy-.envrc.backup"), "kept")
-	removeStaleTemps(pat, ".envrc")
+	wt, err := os.OpenRoot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wt.Close()
+	removeStaleTemps(wt, "[ab]", ".envrc")
 	if _, err := os.Stat(filepath.Join(sib, ".laatmux-copy-.envrc.123456")); err != nil {
 		t.Fatal("sibling directory's file removed")
 	}
@@ -916,13 +921,30 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Remove(filepath.Join(c.Root, "real.enc"))
-	f.store.Copy = []string{"esc/real.enc"}
-	write(t, filepath.Join(checkout, "esc", "real.enc"), "real")
+	f.store.Copy = []string{"esc/new/nested/real.enc"}
+	write(t, filepath.Join(checkout, "esc", "new", "nested", "real.enc"), "real")
 	os.Symlink(outside, filepath.Join(c.Root, "esc"))
 	if _, err := f.store.Add(f.ctx, f.repo, "fourth", nil); err == nil || !strings.Contains(err.Error(), "outside the worktree") {
 		t.Errorf("target directory out of the worktree: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outside, "real.enc")); err == nil {
+	if _, err := os.Stat(filepath.Join(outside, "new")); err == nil {
+		t.Error("a directory was made outside the worktree")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new", "nested", "real.enc")); err == nil {
 		t.Error("a file was written outside the worktree")
+	}
+	// A glob candidate whose lookup fails for a reason other than being
+	// gone fails the stage rather than being passed over in silence.
+	if os.Getuid() != 0 {
+		locked := filepath.Join(checkout, "locked")
+		write(t, filepath.Join(locked, "x.enc"), "x")
+		run(t, checkout, "git", "add", "-f", "locked/x.enc")
+		os.Chmod(locked, 0)
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		f.store.Copy = []string{"**/*.enc"}
+		if _, err := f.store.Add(f.ctx, f.repo, "fifth", nil); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("unreadable candidate: %v", err)
+		}
+		os.Chmod(locked, 0o755)
 	}
 }

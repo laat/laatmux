@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path"
@@ -234,8 +236,17 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 			}
 			// A glob names whatever git lists: a submodule, a symlink,
 			// a directory are not files to copy and are passed over,
-			// where a literal entry naming one is an error.
-			if fi, err := os.Lstat(filepath.Join(checkout, rel)); err != nil || !fi.Mode().IsRegular() {
+			// where a literal entry naming one is an error; a file gone
+			// since the listing is passed over too, anything else the
+			// lookup says is a failure like a literal copy's.
+			fi, err := os.Lstat(filepath.Join(checkout, rel))
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return a, fail(stage, err)
+			}
+			if !fi.Mode().IsRegular() {
 				continue
 			}
 			matched++
@@ -316,85 +327,122 @@ func branchOrDetached(e Entry) string {
 // copyFile copies one entry from the main checkout into the worktree,
 // through a temporary file in the target directory renamed into place, so
 // the target can only exist complete. Skipped when the target exists, and
-// when the source is not in the checkout. The source is read where it
-// resolves, and that must be inside the checkout: a symlink to a file
-// elsewhere is not copied, since the file was never the repository's;
-// and the target is written where its directory resolves, which must
-// be inside the worktree, so no symlink there leads the write out.
+// when the source is not in the checkout. Every operation goes through
+// os.Root handles on the checkout and the worktree, which resolve the
+// relative path under the handle and refuse a symlink that leads out, at
+// the moment of the operation rather than in a check before it: a
+// symlink to a file elsewhere is not read, since the file was never the
+// repository's, and no symlink in the worktree leads a directory or a
+// write out of it.
 func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) error {
 	stage := protocol.StageCopy
-	dst := filepath.Join(root, rel)
-	if _, err := os.Lstat(dst); err == nil {
+	rel = filepath.Clean(rel)
+	co, err := os.OpenRoot(checkout)
+	if err != nil {
+		return err
+	}
+	defer co.Close()
+	wt, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer wt.Close()
+	if _, err := wt.Lstat(rel); err == nil {
 		report(stage, protocol.StateSkip, rel+" exists")
 		return nil
 	}
-	src := filepath.Join(checkout, rel)
-	fi, err := os.Stat(src)
+	in, err := co.Open(rel)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			report(stage, protocol.StateSkip, rel+" not in "+checkout)
 			return nil
+		case isEscape(err):
+			return fmt.Errorf("%s resolves outside the checkout %s", rel, checkout)
 		}
 		return err
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s: not a regular file", src)
-	}
-	if !within(checkout, src) {
-		return fmt.Errorf("%s resolves outside the checkout %s", rel, checkout)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	defer in.Close()
+	fi, err := in.Stat()
+	if err != nil {
 		return err
 	}
-	if !within(root, filepath.Dir(dst)) {
-		return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file", filepath.Join(checkout, rel))
+	}
+	dir := filepath.Dir(rel)
+	if err := wt.MkdirAll(dir, 0o755); err != nil {
+		if isEscape(err) {
+			return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+		}
+		return err
 	}
 	// The temporary file is created exclusively with a random suffix, so
 	// it can never truncate a file the repository happens to contain. A
 	// copy that crashed halfway leaves its temporary behind; the retry
 	// removes those first, and only those: names of exactly the form
-	// CreateTemp produces, read from the directory literally.
-	removeStaleTemps(filepath.Dir(dst), filepath.Base(dst))
-	pattern := ".laatmux-copy-" + filepath.Base(dst) + ".*"
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+	// tempName produces, read from the directory literally.
+	base := filepath.Base(rel)
+	removeStaleTemps(wt, dir, base)
+	var out *os.File
+	var tmp string
+	for i := 0; ; i++ {
+		tmp = filepath.Join(dir, tempName(base))
+		out, err = wt.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) || i >= 100 {
+			if isEscape(err) {
+				return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+			}
+			return err
+		}
 	}
-	defer in.Close()
-	out, err := os.CreateTemp(filepath.Dir(dst), pattern)
-	if err != nil {
-		return err
-	}
-	tmp := out.Name()
-	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+	fail := func(err error) error {
 		out.Close()
-		os.Remove(tmp)
+		wt.Remove(tmp)
 		return err
+	}
+	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+		return fail(err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
+		return fail(err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		wt.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+	if err := wt.Rename(tmp, rel); err != nil {
+		wt.Remove(tmp)
 		return err
 	}
 	report(stage, protocol.StateDone, rel)
 	return nil
 }
 
-// removeStaleTemps deletes leftovers of crashed copies of base in dir:
-// regular files named .laatmux-copy-<base>.<digits>, the shape
-// os.CreateTemp gives them. Anything else, such as a .backup a user kept
-// under a similar name, is not laatmux's and stays. The directory is read,
-// not globbed, so its name is taken literally.
-func removeStaleTemps(dir, base string) {
-	entries, err := os.ReadDir(dir)
+// isEscape reports whether an os.Root operation refused a path for
+// leading outside the root.
+func isEscape(err error) bool {
+	var pe *os.PathError
+	return errors.As(err, &pe) && strings.Contains(pe.Err.Error(), "escapes from parent")
+}
+
+// tempName is a temporary file name beside base with a random numeric
+// suffix, the shape removeStaleTemps recognises.
+func tempName(base string) string {
+	return ".laatmux-copy-" + base + "." + strconv.FormatUint(uint64(rand.Uint32()), 10)
+}
+
+// removeStaleTemps deletes leftovers of crashed copies of base in dir,
+// under the worktree root: regular files named
+// .laatmux-copy-<base>.<digits>, the shape tempName gives them. Anything
+// else, such as a .backup a user kept under a similar name, is not
+// laatmux's and stays. The directory is read, not globbed, so its name
+// is taken literally.
+func removeStaleTemps(wt *os.Root, dir, base string) {
+	entries, err := fs.ReadDir(wt.FS(), filepath.ToSlash(dir))
 	if err != nil {
 		return
 	}
@@ -404,7 +452,7 @@ func removeStaleTemps(dir, base string) {
 		if !ok || !e.Type().IsRegular() || suffix == "" || strings.Trim(suffix, "0123456789") != "" {
 			continue
 		}
-		os.Remove(filepath.Join(dir, e.Name()))
+		wt.Remove(filepath.Join(dir, e.Name()))
 	}
 }
 
@@ -464,21 +512,6 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 		return errors.New(msg)
 	}
 	return nil
-}
-
-// within reports whether p, with its symlinks resolved, is inside dir,
-// with dir's resolved too. A path that cannot be resolved is outside.
-func within(dir, p string) bool {
-	rp, ok := resolveExisting(filepath.Clean(p))
-	if !ok {
-		return false
-	}
-	rd, ok := resolveExisting(filepath.Clean(dir))
-	if !ok {
-		return false
-	}
-	rel, err := filepath.Rel(rd, rp)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // listFiles is what git knows of the main checkout, for a glob to match
