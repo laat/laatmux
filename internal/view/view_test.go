@@ -439,3 +439,86 @@ func TestWidth(t *testing.T) {
 		t.Error("ParseLayout accepted wide")
 	}
 }
+
+// With Follow the selection is the viewer's own row wherever the sort
+// puts it, and nothing when no row is that session; the first key that
+// moves the selection makes it the user's, anchored as before.
+func TestFollowSelection(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	m.Follow = true
+	in := fixtureInput(now)
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Current || m.Selected != 2 {
+		t.Fatalf("initial: %+v at %d", got, m.Selected)
+	}
+	// The sort moves the viewer's row: the selection follows.
+	for i := range in.Agents {
+		switch in.Agents[i].Session {
+		case "laatmux/fix-ls":
+			in.Agents[i].Activity = protocol.Idle
+		case "remote-notes":
+			in.Agents[i].Activity = protocol.Blocked
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || m.Selected != 1 {
+		t.Fatalf("after reorder: %+v at %d", got, m.Selected)
+	}
+	reversed := 0
+	for _, l := range m.Render() {
+		if l.Reverse {
+			reversed++
+		}
+	}
+	if reversed == 0 {
+		t.Fatal("followed row not drawn selected")
+	}
+	// No row is the viewer's session: nothing selected, nothing drawn
+	// selected, Enter does nothing; a digit counts the main group.
+	in.Current = ""
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got != nil || m.Selected != -1 {
+		t.Fatalf("no current row: %+v at %d", got, m.Selected)
+	}
+	for _, l := range m.Render() {
+		if l.Reverse {
+			t.Fatal("a row drawn selected with nothing selected")
+		}
+	}
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+		t.Fatalf("Enter with nothing selected: %+v", a)
+	}
+	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || m.Selected != 1 || m.Follow {
+		t.Fatalf("digit with nothing selected: %+v at %d follow=%v", a, m.Selected, m.Follow)
+	}
+	// Following again, then a key: the selection is the user's and a
+	// reorder keeps it on the row it was on, not on the viewer's.
+	m.Follow = true
+	in.Current = "mac/proj/task"
+	m.SetRows(rows.Build(in))
+	if m.Selected != 1 {
+		t.Fatalf("following again: %d", m.Selected)
+	}
+	m.Handle(Key{Rune: 'j'})
+	taken := m.Selection()
+	if m.Follow || taken == nil || taken.Name == "proj/task" || m.Selected != 2 {
+		t.Fatalf("after j: %+v at %d follow=%v", taken, m.Selected, m.Follow)
+	}
+	for i := range in.Agents {
+		if in.Agents[i].Session == "laatmux/fix-ls" {
+			in.Agents[i].Activity = protocol.Blocked
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != taken.Name {
+		t.Fatalf("user's selection moved: %+v, was %s", got, taken.Name)
+	}
+	// Without Follow the model is as it was: the first row selected.
+	m = model(now)
+	m.SetRows(rows.Build(fixtureInput(now)))
+	if m.Selected != 0 {
+		t.Fatalf("without follow: %d", m.Selected)
+	}
+}

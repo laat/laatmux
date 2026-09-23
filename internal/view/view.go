@@ -52,8 +52,13 @@ type Model struct {
 	Filter     string
 	Filtering  bool // typing into the filter
 	ShowHidden bool // the settled and stale groups are expanded
-	Selected   int  // index into Visible
-	Message    string
+	Selected   int  // index into Visible; -1 for none while Follow holds
+	// Follow keeps the selection on the viewer's own row, wherever the
+	// sort moves it, and on nothing when there is no such row, until a
+	// key or the wheel moves the selection; from then on the selection
+	// is the user's and stays on the row it was put on.
+	Follow  bool
+	Message string
 	// Confirm is a question in the footer; y answers it and any other
 	// key withdraws it. Tag says what was asked, for the host.
 	Confirm    string
@@ -70,9 +75,20 @@ type Model struct {
 
 // SetRows replaces the rows, keeping the selection on the row it was on
 // when that row is still visible; a row that is gone leaves the
-// selection at its index, clamped.
+// selection at its index, clamped. While Follow holds the selection is
+// the viewer's own row instead, or none.
 func (m *Model) SetRows(rs rows.Rows) {
 	m.Rows = rs
+	if m.Follow {
+		m.Selected = -1
+		for _, it := range m.Visible() {
+			if it.Row.Current {
+				m.Selected = it.Index
+				break
+			}
+		}
+		return
+	}
 	if m.anchor == "" {
 		return
 	}
@@ -183,7 +199,7 @@ func (m *Model) Visible() []Item {
 func (m *Model) Selection() *rows.Row {
 	vis := m.Visible()
 	m.clamp(len(vis))
-	if len(vis) == 0 {
+	if len(vis) == 0 || m.Selected < 0 {
 		m.anchor = ""
 		return nil
 	}
@@ -192,11 +208,17 @@ func (m *Model) Selection() *rows.Row {
 	return r
 }
 
+// clamp keeps the selection inside the list. A following selection may
+// be on nothing; a user's selection is on a row whenever there is one.
 func (m *Model) clamp(n int) {
 	if m.Selected >= n {
 		m.Selected = n - 1
 	}
 	if m.Selected < 0 {
+		if m.Follow {
+			m.Selected = -1
+			return
+		}
 		m.Selected = 0
 	}
 }

@@ -266,8 +266,10 @@ func (m *Model) Handle(k Key) Action {
 		case KeyRune:
 			m.Filter += string(k.Rune)
 		case KeyUp:
+			m.take()
 			m.move(-1)
 		case KeyDown:
+			m.take()
 			m.move(1)
 		case KeyCtrlC:
 			return Action{Kind: ActionQuit}
@@ -277,8 +279,10 @@ func (m *Model) Handle(k Key) Action {
 	}
 	switch k.Kind {
 	case KeyUp:
+		m.take()
 		m.move(-1)
 	case KeyDown:
+		m.take()
 		m.move(1)
 	case KeyEnter:
 		return m.jump()
@@ -289,22 +293,28 @@ func (m *Model) Handle(k Key) Action {
 		return Action{Kind: ActionQuit}
 	case KeyMouse:
 		if k.Wheel != 0 {
+			m.take()
 			m.move(k.Wheel)
 			return Action{}
 		}
 		if i := m.hit(k.Y); i >= 0 {
+			m.take()
 			m.Selected = i
 			return m.jump()
 		}
 	case KeyRune:
 		switch k.Rune {
 		case 'j':
+			m.take()
 			m.move(1)
 		case 'k':
+			m.take()
 			m.move(-1)
 		case 'g':
+			m.take()
 			m.Selected = 0
 		case 'G':
+			m.take()
 			m.Selected = len(m.Visible()) - 1
 			m.Selection()
 		case 'v':
@@ -322,6 +332,7 @@ func (m *Model) Handle(k Key) Action {
 			return Action{Kind: ActionQuit}
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
+				m.take()
 				m.Selected = i
 				return m.jump()
 			}
@@ -352,6 +363,10 @@ func (m *Model) move(d int) {
 	m.Selection()
 }
 
+// take makes the selection the user's: it stops following the viewer's
+// own row and stays where the user puts it.
+func (m *Model) take() { m.Follow = false }
+
 func (m *Model) jump() Action {
 	if m.Selection() == nil {
 		return Action{}
@@ -366,7 +381,11 @@ func (m *Model) nth(n int) (int, bool) {
 	if len(vis) == 0 {
 		return 0, false
 	}
-	g := vis[m.Selected].Group
+	// With nothing selected the digits count the main group.
+	g := GroupMain
+	if m.Selected >= 0 {
+		g = vis[m.Selected].Group
+	}
 	for _, it := range vis {
 		if it.Group != g {
 			continue

@@ -474,6 +474,12 @@ is switched to.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
+- In both, the selection follows the viewer's own row, the session the
+  sidebar pane sits in or the popup was opened from, wherever the sort
+  moves it, and rests on nothing when no row is that session, so `Enter`
+  does nothing and a digit counts the main group. The first key or
+  wheel step that moves the selection makes it the user's: from then on
+  it stays on the row it was put on across refreshes, as before.
 - Both refuse a local daemon without `merged` with what to do; a sidebar
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
