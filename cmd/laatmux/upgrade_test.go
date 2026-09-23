@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,9 +17,8 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
-	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
-	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/protocol"
 )
 
 func TestParsePlatform(t *testing.T) {
@@ -251,6 +251,68 @@ func TestStop(t *testing.T) {
 		t.Fatalf("stop after the holder left: %v", err)
 	}
 	held.Wait()
+	// A daemon still starting, the lock taken and the listener not up
+	// yet, is reached once it is and stopped, not waited out.
+	slow := exec.Command(os.Args[0], "-test.run=TestStop")
+	slow.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=slow")
+	if err := slow.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Process.Kill()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if pid, _ := home.Holder(); pid == slow.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("slow daemon did not take the lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	start := time.Now()
+	if err := cmdStop(context.Background(), nil); err != nil {
+		t.Fatalf("stop a starting daemon: %v", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("stop of a starting daemon took %s", took)
+	}
+	if err := slow.Wait(); err != nil {
+		t.Fatalf("slow daemon: %v", err)
+	}
+	// A daemon reached on a record's address that is not the record's
+	// daemon, by its hello's pid, is not stopped: the record is read
+	// again. The real daemon says its pid; here the record names the
+	// bystander.
+	serve := exec.Command(os.Args[0], "-test.run=TestStop")
+	serve.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=serve")
+	if err := serve.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer serve.Process.Kill()
+	var rt home.Runtime
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var err error
+		if rt, err = home.ReadRuntime(); err == nil && rt.PID == serve.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not come up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	nc, err := client.DialAddress(rt.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stopDaemon(context.Background(), nc, home.Runtime{Address: rt.Address, PID: bystander.Process.Pid}); !errors.Is(err, errMoved) {
+		t.Fatalf("mismatched record: %v", err)
+	}
+	if pid, _ := home.Holder(); pid != serve.Process.Pid {
+		t.Fatal("daemon stopped on a mismatched record")
+	}
+	if err := cmdStop(context.Background(), nil); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	serve.Wait()
 	// The legacy fallback signals the pid of the record that was
 	// dialled, not whatever the runtime file says by then.
 	legacy := exec.Command(os.Args[0], "-test.run=TestStop")
@@ -259,7 +321,6 @@ func TestStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer legacy.Process.Kill()
-	var rt home.Runtime
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		var err error
 		if rt, err = home.ReadRuntime(); err == nil && rt.PID == legacy.Process.Pid {
@@ -270,18 +331,25 @@ func TestStop(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	nc, err := client.DialAddress(rt.Address)
+	// A legacy daemon has no pid in its hello: the record must still
+	// stand when it answers, else it is read again and nothing is
+	// signalled.
+	nc, err = client.DialAddress(rt.Address)
 	if err != nil {
 		t.Fatal(err)
 	}
 	home.WriteRuntime(home.Runtime{Address: rt.Address, PID: bystander.Process.Pid, Version: "replacement"})
-	if err := stopDaemon(context.Background(), nc, rt); err != nil {
-		t.Fatalf("stop legacy with a replaced record: %v", err)
+	if err := stopDaemon(context.Background(), nc, rt); !errors.Is(err, errMoved) {
+		t.Fatalf("legacy with a replaced record: %v", err)
 	}
-	legacy.Wait()
 	if !home.Alive(bystander.Process.Pid) {
 		t.Fatal("the replacement's pid was signalled")
 	}
+	home.WriteRuntime(rt)
+	if err := cmdStop(context.Background(), nil); err != nil {
+		t.Fatalf("stop legacy: %v", err)
+	}
+	legacy.Wait()
 	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
@@ -307,6 +375,9 @@ func testDaemon(mode string) {
 			<-ctx.Done()
 			l.Release()
 		}
+	case "slow":
+		// The lock first, the listener a while later, as serve does.
+		err = legacyServeAfter(ctx, 800*time.Millisecond)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -317,12 +388,21 @@ func testDaemon(mode string) {
 
 // legacyServe is a daemon from before the shutdown message: the lock,
 // the runtime file, a listener, no Shutdown in its config.
-func legacyServe(ctx context.Context) error {
+func legacyServe(ctx context.Context) error { return legacyServeAfter(ctx, 0) }
+
+// legacyServeAfter is legacyServe with a pause between the lock and the
+// listener.
+func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 	lock, err := home.TryLock()
 	if err != nil {
 		return err
 	}
 	defer lock.Release()
+	select {
+	case <-time.After(pause):
+	case <-ctx.Done():
+		return nil
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -332,20 +412,30 @@ func legacyServe(ctx context.Context) error {
 		return err
 	}
 	defer home.RemoveRuntime(os.Getpid())
-	d := daemon.New(daemon.Config{EnvironmentID: "legacy", Version: "legacy", Targets: []daemon.Target{{Label: "none", Tmux: noTmux{}}}})
-	go d.Serve(ctx, ln)
+	// The hello of a daemon before the pid field and the shutdown
+	// message, answered by hand so this branch's daemon package does
+	// not make it current.
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				pc := protocol.NewConn(c)
+				pc.Write(protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "legacy", Version: "legacy", Capabilities: []string{protocol.CapStatus}})
+				for {
+					if _, err := pc.Read(); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
 	<-ctx.Done()
 	return nil
 }
-
-// noTmux is a server with no panes, so the legacy daemon polls nothing.
-type noTmux struct{}
-
-func (noTmux) ListPanes(context.Context) ([]tmux.Pane, error)                  { return nil, nil }
-func (noTmux) Capture(context.Context, string, int) ([]string, error)          { return nil, nil }
-func (noTmux) EnsureConfigured(context.Context) error                          { return nil }
-func (noTmux) NewSession(context.Context, tmux.NewSessionOpts) (string, error) { return "", nil }
-func (noTmux) KillSession(context.Context, string) error                       { return nil }
 
 func TestMain(m *testing.M) {
 	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {

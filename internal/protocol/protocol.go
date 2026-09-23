@@ -220,13 +220,16 @@ type Session struct {
 type Message struct {
 	Type string `json:"type"`
 
-	// hello
+	// hello. PID is the daemon's, so a client that read a runtime record
+	// can see that the daemon it reached is the one the record names;
+	// a socket path is reused by the next daemon.
 	Protocol      int      `json:"protocol,omitempty"`
 	Client        string   `json:"client,omitempty"`
 	EnvironmentID string   `json:"environment_id,omitempty"`
 	Version       string   `json:"version,omitempty"`
 	Host          string   `json:"host,omitempty"`
 	Capabilities  []string `json:"capabilities,omitempty"`
+	PID           int      `json:"pid,omitempty"`
 
 	// subscribe. Merged asks for every configured host's records in one
 	// stream; without it the daemon sends its own host's records only.

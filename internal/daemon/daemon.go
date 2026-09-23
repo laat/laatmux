@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -663,6 +664,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 		Version:       d.cfg.Version,
 		Host:          d.cfg.Host,
 		Capabilities:  d.capabilities(),
+		PID:           os.Getpid(),
 	}
 	if err := pc.Write(hello); err != nil {
 		return

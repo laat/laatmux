@@ -349,12 +349,17 @@ socket, without starting one, and sends `shutdown`, capability
 `shutdown`, which the daemon answers and then exits on as it does on
 `SIGTERM`, cancelling its runs and waiting for them; the process that
 ends is the one that answered the hello, never a pid a file remembers,
-which a crash can leave for another process to inherit. A daemon from
-before the message gets `SIGTERM` at the pid its runtime file names,
-the daemon that just answered on the socket that file names. `stop`
-then waits for the startup lock to leave that daemon's hands, released
-by the kernel when it exits, reaped or not, or taken by a replacement a
-client started meanwhile. The next connection starts the new build, and
+which a crash can leave for another process to inherit. The runtime
+record is read once and its address dialled, and the daemon's hello
+carries its pid, so a replacement that took the same socket path
+between the read and the dial is seen and the record read again. A
+daemon from before the message has no pid in its hello and gets
+`SIGTERM` at the record's pid when the record still stands. A daemon
+that holds the startup lock but answers on no socket is starting or
+shutting down, and `stop` keeps trying to reach it while that holder has
+the lock. Then `stop` waits for the lock to leave that daemon's hands,
+released by the kernel when it exits, reaped or not, or taken by a
+replacement a client started meanwhile. The next connection starts the new build, and
 `upgrade` makes that connection last and prints the version. The local host is upgraded in
 place of the running executable the same way. `hosts` marks every
 daemon whose build is not this client's, since versions are `git
