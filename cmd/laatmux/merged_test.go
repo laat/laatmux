@@ -93,6 +93,7 @@ func TestMergedTimedOutAndStale(t *testing.T) {
 		Hosts: []protocol.HostStatus{
 			{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
 			{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Capabilities: []string{"status", "worktrees"}},
+			{Name: "box", SSH: "box", EnvironmentID: "benv", Error: "disconnected", Reconnecting: true, Capabilities: []string{"status", "worktrees"}},
 		},
 		Sessions: []protocol.Session{
 			{Name: "mac/proj/gone", Key: "menv//w/proj/gone", Host: "mac"},
@@ -100,10 +101,18 @@ func TestMergedTimedOutAndStale(t *testing.T) {
 		},
 		SessionsError: "",
 	})
+	if p := m.pending(); len(p) != 2 || p[0] != "box" || p[1] != "vm" {
+		t.Fatalf("pending = %v", p)
+	}
 	m.timedOut(m.pending(), 20*time.Second)
 	out := m.render(m.locals())
 	if !strings.Contains(out, "vm  DOWN  no snapshot after 20s") {
 		t.Errorf("timed out host not marked:\n%s", out)
+	}
+	// A host still reconnecting when the wait ended is timed out the
+	// same way, and the state is terminal: the reconnect note is gone.
+	if !strings.Contains(out, "box  DOWN  no snapshot after 20s\n") || strings.Contains(out, "reconnecting") || !m.hosts["box"].ready() {
+		t.Errorf("reconnecting host after the timeout:\n%s", out)
 	}
 	if !strings.Contains(out, "mac/proj/gone") || strings.Contains(out, "vm/proj/maybe") {
 		t.Errorf("stale judged wrongly:\n%s", out)

@@ -273,13 +273,15 @@ func (m *merged) pending() []string {
 }
 
 // timedOut marks hosts a one-shot client gave up waiting on, so the
-// listing says which hosts it is not complete for.
+// listing says which hosts it is not complete for. The wait is over, so
+// a reconnect the host was in is no longer something to wait on, and the
+// state is terminal.
 func (m *merged) timedOut(names []string, wait time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, n := range names {
 		st := m.hosts[n]
-		st.Connected, st.Listed = false, false
+		st.Connected, st.Listed, st.Reconnecting = false, false, false
 		st.Error = fmt.Sprintf("no snapshot after %s", wait)
 		m.hosts[n] = st
 	}
