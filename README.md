@@ -294,14 +294,15 @@ is switched to.
   `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
   then walks every window on the default server and splits a pane off
   the left edge of each that has none, full height, at the configured
-  width, running `sidebar pane`. The pane is tagged `@laatmux_sidebar`
-  in the same tmux command sequence as the split and focus is put back
-  with `last-pane`, so a sidebar pane is never observable untagged and
-  the user's own hooks may split the window meanwhile. Every
-  check-and-create runs under an exclusive flock on
-  `$LAATMUX_HOME/sidebar.lock`, and `attach` reads the hooks under it
-  and does nothing when they are gone, so an attach queued behind `off`
-  puts no pane back. `reap` kills a sidebar pane that is alone in its
+  width, running `sidebar pane`. The split is detached, so focus stays
+  where it was, and the pane is tagged `@laatmux_sidebar` by the id
+  `split-window -P` printed, never as the window's active pane: an
+  `after-split-window` hook of the user's runs between the commands of a
+  sequence and may select or split another pane. Every check-and-create
+  runs under an exclusive flock on `$LAATMUX_HOME/sidebar.lock`, held
+  from the check to the tag, so no `attach` sees the pane untagged; and
+  `attach` reads the hooks under it and does nothing when they are gone,
+  so an attach queued behind `off` puts no pane back. `reap` kills a sidebar pane that is alone in its
   window, counting a dead pane kept by `remain-on-exit`, such as a
   workspace's attach pane, as the window's. `off` unsets the four hooks
   and kills every tagged pane. `toggle` reads the hooks. The hook
@@ -641,7 +642,8 @@ tmux.conf and given a hook like their sidebar's that splits a pane off
 every new window and session, against the laptop's real daemon. `sidebar
 on` in a server with two windows set the four hooks and left each window
 with a 35-column tagged pane on the left running `sidebar pane`, focus on
-the pane that had it, in 0.8 s. A new window and a new session each got
+the pane that had it, in 0.8 s, also with an `after-split-window` hook
+that selects the next pane. A new window and a new session each got
 a sidebar through the hooks with the other hook's pane beside it; a
 second `attach` on a window that has one changed nothing. `hook_window`
 and `hook_session` expand to nothing in after-hooks on tmux 3.6a, so the

@@ -130,6 +130,35 @@ func TestBuildAttribution(t *testing.T) {
 	}
 }
 
+// The join is by environment id: two hosts that are down keep their
+// records paired with their own agents, and the same session name on
+// two hosts never crosses.
+func TestBuildJoinByEnvironment(t *testing.T) {
+	now := time.Now()
+	got := Build(Input{
+		Hosts: []Host{{Name: "a", EnvironmentID: "aenv", Error: "down"}, {Name: "b", EnvironmentID: "benv", Error: "down"}},
+		Agents: []protocol.Agent{
+			{ID: "aenv/laatmux/%1", EnvironmentID: "aenv", Session: "proj/x", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "benv/laatmux/%1", EnvironmentID: "benv", Session: "proj/x", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "aenv/worktree//r/x", EnvironmentID: "aenv", Repo: "proj", Branch: "x", Root: "/r/x", Session: "proj/x"},
+			{ID: "benv/worktree//r/x", EnvironmentID: "benv", Repo: "proj", Branch: "x", Root: "/r/x", Session: "proj/x"},
+		},
+	})
+	if len(got.Main) != 2 {
+		t.Fatalf("rows = %+v", got.Main)
+	}
+	for _, r := range got.Main {
+		if r.Agent == nil || r.Agent.EnvironmentID != r.Worktree.EnvironmentID || !r.HostDown || !r.Dim {
+			t.Errorf("row %+v paired with %+v", r.Worktree, r.Agent)
+		}
+	}
+	if got.Main[0].ID() == got.Main[1].ID() {
+		t.Error("ids collide")
+	}
+}
+
 func TestAgo(t *testing.T) {
 	for d, want := range map[time.Duration]string{5 * time.Second: " 5s", 3 * time.Minute: " 3m", 26 * time.Hour: "26h", -time.Second: " 0s"} {
 		if got := Ago(d); got != want {

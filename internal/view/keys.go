@@ -3,6 +3,7 @@ package view
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Key is one input event: a rune, a special key, or a mouse event.
@@ -26,37 +27,84 @@ const (
 	KeyCtrlC
 )
 
-// Parse splits terminal input into keys. tmux writes each key's bytes
-// in one go, so a chunk that ends in a bare escape is the escape key
-// and a sequence is never split across chunks in practice; one that is
-// split is read as its bytes.
+// Decoder turns terminal input into keys across reads. Reads do not
+// preserve write boundaries: an escape sequence or a multi-byte rune can
+// arrive split, so bytes that could be the start of one are kept until
+// the rest arrives or Flush says nothing more is coming, at which point
+// a lone escape is the escape key and the rest are read as bytes.
+type Decoder struct {
+	pending []byte
+}
+
+// Feed adds input and returns the keys complete so far. Pending reports
+// whether bytes are held back; the caller flushes them after a short
+// wait, since a bare escape looks like the start of a sequence.
+func (d *Decoder) Feed(b []byte) []Key {
+	d.pending = append(d.pending, b...)
+	keys, rest := parse(d.pending, false)
+	d.pending = rest
+	return keys
+}
+
+// Pending reports whether Feed held bytes back.
+func (d *Decoder) Pending() bool { return len(d.pending) > 0 }
+
+// Flush reads the held bytes as they are: a bare escape is the escape
+// key, an incomplete sequence its bytes.
+func (d *Decoder) Flush() []Key {
+	keys, _ := parse(d.pending, true)
+	d.pending = nil
+	return keys
+}
+
+// Parse reads one complete chunk of input as keys, flushing what is
+// incomplete.
 func Parse(b []byte) []Key {
-	var keys []Key
+	keys, _ := parse(b, true)
+	return keys
+}
+
+// parse splits b into keys. With flush false, bytes that may be the
+// start of an escape sequence or a rune are returned as rest instead.
+func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 	for len(b) > 0 {
 		c := b[0]
 		switch {
 		case c == 0x1b:
 			if len(b) == 1 {
-				return append(keys, Key{Kind: KeyEsc})
+				if !flush {
+					return keys, b
+				}
+				return append(keys, Key{Kind: KeyEsc}), nil
 			}
 			if b[1] == '[' {
-				if k, n, ok := csi(b); ok {
+				k, n, ok := csi(b)
+				if ok {
 					keys = append(keys, k)
 					b = b[n:]
 					continue
 				}
+				if !flush {
+					return keys, b
+				}
 			}
-			if b[1] == 'O' && len(b) >= 3 {
-				// SS3 arrows, sent in application cursor mode.
-				switch b[2] {
-				case 'A':
-					keys = append(keys, Key{Kind: KeyUp})
-					b = b[3:]
-					continue
-				case 'B':
-					keys = append(keys, Key{Kind: KeyDown})
-					b = b[3:]
-					continue
+			if b[1] == 'O' {
+				if len(b) < 3 {
+					if !flush {
+						return keys, b
+					}
+				} else {
+					// SS3 arrows, sent in application cursor mode.
+					switch b[2] {
+					case 'A':
+						keys = append(keys, Key{Kind: KeyUp})
+						b = b[3:]
+						continue
+					case 'B':
+						keys = append(keys, Key{Kind: KeyDown})
+						b = b[3:]
+						continue
+					}
 				}
 			}
 			keys = append(keys, Key{Kind: KeyEsc})
@@ -73,22 +121,22 @@ func Parse(b []byte) []Key {
 		case c < 0x20:
 			b = b[1:]
 		default:
-			r, n := rune(c), 1
-			if c >= 0x80 {
-				r, n = decodeRune(b)
+			if !utf8.FullRune(b) {
+				if !flush {
+					return keys, b
+				}
+				// Never completed: drop the bytes rather than read them
+				// as anything.
+				return keys, nil
 			}
-			keys = append(keys, Key{Rune: r})
+			r, n := utf8.DecodeRune(b)
+			if r != utf8.RuneError {
+				keys = append(keys, Key{Rune: r})
+			}
 			b = b[n:]
 		}
 	}
-	return keys
-}
-
-func decodeRune(b []byte) (rune, int) {
-	for _, r := range string(b) {
-		return r, len(string(r))
-	}
-	return 0, 1
+	return keys, nil
 }
 
 // csi reads one CSI sequence at the start of b: arrows and SGR mouse

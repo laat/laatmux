@@ -79,6 +79,21 @@ func (r Rows) All() []Row {
 	return append(out, r.Stale...)
 }
 
+// ID identifies the row across rebuilds: the worktree's id, else the
+// agent's, else the local session's name. A view keeps its selection on
+// it while rows come and go.
+func (r Row) ID() string {
+	switch {
+	case r.Worktree != nil:
+		return r.Worktree.ID
+	case r.Agent != nil:
+		return r.Agent.ID
+	case r.Local != nil:
+		return "session/" + r.Local.Name
+	}
+	return r.Name
+}
+
 // Rank is the row's sort group: blocked, working, idle, unknown, then
 // rows without a live agent.
 func (r Row) Rank() int {
@@ -179,11 +194,14 @@ func Build(in Input) Rows {
 			byAttach[l.Attach] = l
 		}
 	}
-	bySession := map[string]*protocol.Agent{} // host + managed session -> agent
+	// The join is by environment id and managed session, never by host
+	// name: two hosts that are down, or that no host record claims,
+	// would otherwise share the empty name and pair the wrong agent.
+	bySession := map[string]*protocol.Agent{} // environment id + managed session -> agent
 	for i := range in.Agents {
 		a := &in.Agents[i]
 		if Server(*a) == tmux.LaatmuxServer.Label() {
-			bySession[byEnv[a.EnvironmentID]+"\x00"+a.Session] = a
+			bySession[a.EnvironmentID+"\x00"+a.Session] = a
 		}
 	}
 	used := map[*protocol.Agent]bool{}
@@ -199,7 +217,7 @@ func Build(in Input) Rows {
 			r.Name = w.Repo + "/" + w.Branch
 		}
 		if w.Session != "" {
-			if a := bySession[host+"\x00"+w.Session]; a != nil {
+			if a := bySession[w.EnvironmentID+"\x00"+w.Session]; a != nil {
 				r.Agent, used[a] = a, true
 			}
 		}

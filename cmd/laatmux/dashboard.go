@@ -118,7 +118,7 @@ func localHostName(cfg config.Config) string {
 func (m *merged) fill(v *view.Model, current string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	v.Rows = rows.Build(m.input(m.localsLocked(), current))
+	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
 		v.Header = append(v.Header, "local daemon  DOWN  "+m.daemonErr)

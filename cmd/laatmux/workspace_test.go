@@ -191,6 +191,23 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// On the direct path a host that drops keeps its identity, so its cached
+// records stay attributed to it and show as its with the host down.
+func TestSetHostErrKeepsIdentity(t *testing.T) {
+	m := newMerged()
+	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1", Worktrees: true})
+	m.apply("vm", protocol.Message{Type: protocol.TypeSnapshot,
+		Worktrees: []protocol.Worktree{{ID: "env1/worktree//r/x", EnvironmentID: "env1", Repo: "proj", Branch: "x", Root: "/r/x"}}})
+	m.setHostErr("vm", false, "disconnected")
+	out := m.render(nil)
+	if !strings.Contains(out, "vm  DOWN  disconnected") || !strings.Contains(out, "proj/x") || !strings.Contains(out, "@vm (host down)") {
+		t.Errorf("records lost their host:\n%s", out)
+	}
+	if st := m.hosts["vm"]; st.EnvID != "env1" || st.Version != "v" || st.Connected || st.Listed {
+		t.Errorf("host state = %+v", st)
+	}
+}
+
 // Progress replayed after a reconnect is printed once.
 func TestStreamDedupe(t *testing.T) {
 	var got []string

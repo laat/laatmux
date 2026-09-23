@@ -84,6 +84,19 @@ func (m *merged) setHost(name string, st hostState) {
 	m.notify()
 }
 
+// setHostErr marks the host down with the error, keeping what is known
+// of its identity: the environment id, version and capabilities from the
+// last hello, so its cached records stay attributed to it while it is
+// down, as the host record in the merged stream does.
+func (m *merged) setHostErr(name string, local bool, msg string) {
+	m.mu.Lock()
+	st := m.hosts[name]
+	st.Local, st.Connected, st.Listed, st.Error, st.Since = local, false, false, msg, time.Now()
+	m.hosts[name] = st
+	m.mu.Unlock()
+	m.notify()
+}
+
 func (m *merged) apply(host string, msg protocol.Message) {
 	m.mu.Lock()
 	switch msg.Type {
@@ -138,10 +151,10 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 		c, err := client.Dial(ctx, h)
 		switch {
 		case err != nil:
-			m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
+			m.setHostErr(h.Name, h.Local(), err.Error())
 		case !protocol.Has(c.Hello.Capabilities, protocol.CapStatus):
 			c.Close()
-			m.setHost(h.Name, hostState{Local: h.Local(), Error: "daemon " + c.Hello.Version + " has no status capability"})
+			m.setHostErr(h.Name, h.Local(), "daemon "+c.Hello.Version+" has no status capability")
 		default:
 			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
 			backoff = time.Second
@@ -163,7 +176,7 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 			if d := c.Diag(); d != "" {
 				msg += ": " + d
 			}
-			m.setHost(h.Name, hostState{Local: h.Local(), Error: msg})
+			m.setHostErr(h.Name, h.Local(), msg)
 		}
 		select {
 		case <-ctx.Done():
@@ -182,11 +195,8 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 		in.Hosts = append(in.Hosts, rows.Host{Name: name, Local: st.Local, EnvironmentID: st.EnvID,
 			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees, Error: st.Error})
 	}
-	// Records are attributed by the host each came from, which on the
-	// direct path is the connection and on the merged path the host
-	// record's environment id; the rows package attributes by
-	// environment id, so a record whose host has none is left out of
-	// the input's hosts' view and shows without a host.
+	// The rows package attributes records to hosts by environment id,
+	// which every host that has answered a hello has, connected or not.
 	for _, a := range m.agents {
 		in.Agents = append(in.Agents, a)
 	}
@@ -338,7 +348,7 @@ func cmdLs(ctx context.Context, args []string) error {
 			defer cancel()
 			snap, err := c.Snapshot(sctx)
 			if err != nil {
-				m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
+				m.setHostErr(h.Name, h.Local(), err.Error())
 				return
 			}
 			m.apply(h.Name, snap)

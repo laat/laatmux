@@ -156,9 +156,14 @@ func sidebarAttach(ctx context.Context, cfg config.Config, window string) error 
 }
 
 // sidebarAdd splits a sidebar pane off the left edge of the window, full
-// height, at the configured width, unless the window has one. The new
-// pane is tagged in the same command sequence, so it is never observable
-// untagged, and focus goes back where it was. Called with the lock held.
+// height, at the configured width, unless the window has one. The split
+// is detached so focus stays where it was, and the new pane is tagged
+// by the id split-window printed, not as the window's active pane: an
+// after-split-window hook of the user's runs between the two commands
+// of a sequence and may select or split another pane, which would then
+// carry the tag and be killed by off. The lock is held from the check to
+// the tag, so no attach sees the pane untagged. Called with the lock
+// held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{"+sidebarTag+"}")
 	if err != nil {
@@ -171,13 +176,17 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	if err != nil {
 		return err
 	}
-	// The split makes the new pane active, so the pane option set on the
-	// window's active pane in the same sequence lands on it, and
-	// last-pane restores the pane that was active.
-	_, err = workspace.Server.Run(ctx,
-		"split-window", "-h", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Columns()), "-t", window, tmux.ShellJoin([]string{exe, "sidebar", "pane"}),
-		";", "set-option", "-p", "-t", window, sidebarTag, "1",
-		";", "last-pane", "-t", window)
+	out, err = workspace.Server.Run(ctx,
+		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Columns()), "-t", window,
+		"-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))
+	if err != nil {
+		return err
+	}
+	id := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(id, "%") {
+		return fmt.Errorf("split-window printed %q, not a pane id", id)
+	}
+	_, err = workspace.Server.Run(ctx, "set-option", "-p", "-t", id, sidebarTag, "1")
 	return err
 }
 

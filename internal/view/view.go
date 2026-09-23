@@ -56,6 +56,26 @@ type Model struct {
 	Message    string
 	scroll     int   // first body line drawn
 	hits       []int // body line -> index into Visible, -1 for none
+	// anchor is the id of the selected row, so a refresh that reorders
+	// or removes rows keeps the selection on the same workspace rather
+	// than on the same index, which Enter would then jump to.
+	anchor string
+}
+
+// SetRows replaces the rows, keeping the selection on the row it was on
+// when that row is still visible; a row that is gone leaves the
+// selection at its index, clamped.
+func (m *Model) SetRows(rs rows.Rows) {
+	m.Rows = rs
+	if m.anchor == "" {
+		return
+	}
+	for _, it := range m.Visible() {
+		if it.Row.ID() == m.anchor {
+			m.Selected = it.Index
+			return
+		}
+	}
 }
 
 // Group is which group a row is in.
@@ -152,14 +172,18 @@ func (m *Model) Visible() []Item {
 	return out
 }
 
-// Selection is the selected row, nil when the list is empty.
+// Selection is the selected row, nil when the list is empty. It also
+// records the row as the anchor for the next SetRows.
 func (m *Model) Selection() *rows.Row {
 	vis := m.Visible()
 	m.clamp(len(vis))
 	if len(vis) == 0 {
+		m.anchor = ""
 		return nil
 	}
-	return vis[m.Selected].Row
+	r := vis[m.Selected].Row
+	m.anchor = r.ID()
+	return r
 }
 
 func (m *Model) clamp(n int) {

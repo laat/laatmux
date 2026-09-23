@@ -269,6 +269,91 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// Input split across reads: a multi-byte rune, an arrow and a mouse
+// report arrive whole once their bytes are in; a bare escape is held
+// until Flush, and an invalid byte is dropped, never a panic.
+func TestDecoderSplit(t *testing.T) {
+	for _, in := range []string{"ø", "\x1b[A", "\x1b[<0;12;5M", "j\x1b[Bk", "日本"} {
+		want := Parse([]byte(in))
+		for cut := 1; cut < len(in); cut++ {
+			var d Decoder
+			got := d.Feed([]byte(in[:cut]))
+			got = append(got, d.Feed([]byte(in[cut:]))...)
+			if d.Pending() {
+				t.Errorf("%q split at %d: still pending", in, cut)
+			}
+			if len(got) != len(want) {
+				t.Errorf("%q split at %d = %+v, want %+v", in, cut, got, want)
+				continue
+			}
+			for i := range got {
+				if got[i] != want[i] {
+					t.Errorf("%q split at %d: key %d = %+v, want %+v", in, cut, i, got[i], want[i])
+				}
+			}
+		}
+	}
+	var d Decoder
+	if got := d.Feed([]byte{0x1b}); len(got) != 0 || !d.Pending() {
+		t.Errorf("bare escape read at once: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc || d.Pending() {
+		t.Errorf("flushed escape = %+v", got)
+	}
+	if got := d.Feed([]byte{0xc3}); len(got) != 0 || !d.Pending() {
+		t.Errorf("partial rune read at once: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 0 {
+		t.Errorf("flushed partial rune = %+v", got)
+	}
+	if got := Parse([]byte{0xc3, 'j'}); len(got) != 1 || got[0].Rune != 'j' {
+		t.Errorf("invalid byte then j = %+v", got)
+	}
+}
+
+// A refresh that reorders or removes rows keeps the selection on the
+// same row, not the same index.
+func TestSetRowsKeepsSelection(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	m.Handle(Key{Rune: 'j'})
+	m.Handle(Key{Rune: 'j'})
+	was := m.Selection()
+	if was.Name != "proj/task" {
+		t.Fatalf("selected %q", was.Name)
+	}
+	// The blocked agent goes idle: proj/task moves to the top.
+	rs := fixture(now)
+	for i := range rs.Main {
+		if rs.Main[i].Name == "laatmux/fix-ls" {
+			rs.Main[i].Agent.Activity = protocol.Idle
+		}
+	}
+	m.SetRows(rows.Build(rows.Input{}))
+	m.SetRows(rs)
+	if got := m.Selection(); got.Name != "proj/task" {
+		t.Errorf("after an empty refresh and a refresh: selected %q, index %d", got.Name, m.Selected)
+	}
+	// Rows re-sorted: the selection follows its row.
+	fx := fixture(now.Add(time.Hour))
+	m.SetRows(fx)
+	if got := m.Selection(); got.Name != "proj/task" {
+		t.Errorf("after reorder: selected %q", got.Name)
+	}
+	// The row is gone: the index stays, clamped.
+	var without rows.Rows
+	for _, r := range fx.Main {
+		if r.Name != "proj/task" {
+			without.Main = append(without.Main, r)
+		}
+	}
+	m.SetRows(without)
+	if got := m.Selection(); got == nil || got.Name == "proj/task" || m.Selected != 2 {
+		t.Errorf("after removal: %+v index %d", got, m.Selected)
+	}
+}
+
 func TestWidth(t *testing.T) {
 	if w := width("日本"); w != 4 {
 		t.Errorf("wide = %d", w)

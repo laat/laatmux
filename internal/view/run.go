@@ -22,6 +22,11 @@ type Host struct {
 // tick is how often the ages are redrawn.
 const tick = 5 * time.Second
 
+// escapeWait is how long a bare escape, or the start of a sequence, is
+// held for the rest before it is read as the escape key. tmux writes a
+// sequence in one go, so the wait is only ever paid for the escape key.
+const escapeWait = 50 * time.Millisecond
+
 // Run draws the model and handles keys until the host is done, q is
 // pressed, or ctx ends. The rows are refreshed on every change signal
 // and the ages every five seconds; a resize redraws.
@@ -54,6 +59,20 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		m.Width, m.Height = t.Size()
 		t.Draw(m.Render())
 	}
+	handle := func(ks []Key) (done bool) {
+		for _, k := range ks {
+			a := m.Handle(k)
+			if a.Kind == ActionQuit {
+				return true
+			}
+			if a.Kind != ActionNone && h.Act(m, a) {
+				return true
+			}
+		}
+		return false
+	}
+	var dec Decoder
+	var flush <-chan time.Time
 	h.Refresh(m)
 	draw()
 	for {
@@ -64,18 +83,21 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			h.Refresh(m)
 		case <-tk.C:
 		case <-winch:
+		case <-flush:
+			flush = nil
+			if handle(dec.Flush()) {
+				return nil
+			}
 		case b, ok := <-keys:
 			if !ok {
 				return nil
 			}
-			for _, k := range Parse(b) {
-				a := m.Handle(k)
-				if a.Kind == ActionQuit {
-					return nil
-				}
-				if a.Kind != ActionNone && h.Act(m, a) {
-					return nil
-				}
+			if handle(dec.Feed(b)) {
+				return nil
+			}
+			flush = nil
+			if dec.Pending() {
+				flush = time.After(escapeWait)
 			}
 		}
 		draw()

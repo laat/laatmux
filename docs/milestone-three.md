@@ -251,13 +251,15 @@ off the left edge, full height, at the configured width, with focus left
 where it was:
 
 ```
-split-window -d -h -b -f -l <width> -t <window> laatmux sidebar pane \;
-set-option -p -t <new pane> @laatmux_sidebar 1
+split-window -d -h -b -f -l <width> -t <window> -P -F '#{pane_id}' laatmux sidebar pane
+set-option -p -t <printed pane id> @laatmux_sidebar 1
 ```
 
-The pane id comes from `-P -F '#{pane_id}'` and is tagged in the same
-sequence, so a sidebar pane is never observable untagged, as for the
-attach pane in milestone two. Hooks go in before the walk so a window
+The pane id comes from `-P -F '#{pane_id}'` and the tag goes on that id
+in the next command, both under the lock below, so no `attach` sees the
+pane untagged; a tag on the window's active pane in the same sequence
+would land wrong, since an `after-split-window` hook of the user's runs
+between the two commands and may select another pane. Hooks go in before the walk so a window
 made during the walk is caught by its hook rather than missed by both;
 `attach` skipping a window that has a pane makes the overlap harmless.
 Every check-and-create, in `on` and in `attach`, runs under an exclusive

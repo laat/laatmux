@@ -25,7 +25,10 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP too: a view in raw mode whose terminal goes away must run
+	// its deferred restore, and a client that loses its terminal
+	// mid-command stops like one that was interrupted.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 	var err error
 	switch os.Args[1] {
