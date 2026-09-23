@@ -293,7 +293,7 @@ func (m *Model) Handle(k Key) Action {
 			return Action{}
 		}
 		if i := m.hit(k.Y); i >= 0 {
-			m.Selected = i
+			m.moveTo(i)
 			return m.jump()
 		}
 	case KeyRune:
@@ -303,10 +303,9 @@ func (m *Model) Handle(k Key) Action {
 		case 'k':
 			m.move(-1)
 		case 'g':
-			m.Selected = 0
+			m.moveTo(0)
 		case 'G':
-			m.Selected = len(m.Visible()) - 1
-			m.Selection()
+			m.moveTo(len(m.Visible()) - 1)
 		case 'v':
 			if m.Layout == Tiles {
 				m.Layout = Compact
@@ -322,7 +321,7 @@ func (m *Model) Handle(k Key) Action {
 			return Action{Kind: ActionQuit}
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
-				m.Selected = i
+				m.moveTo(i)
 				return m.jump()
 			}
 		default:
@@ -347,8 +346,20 @@ func (m *Model) Ask(question, tag string) {
 	m.Confirm, m.ConfirmTag = question, tag
 }
 
-func (m *Model) move(d int) {
-	m.Selected += d
+func (m *Model) move(d int) { m.moveTo(m.Selected + d) }
+
+// moveTo puts the selection on the row at i, clamped. A move that puts
+// it on another row than it was on makes the selection the user's: it
+// stops following the viewer's own row and stays where the user put it.
+// A move that changes nothing, up from the first row or onto the row
+// already selected, leaves the following as it was.
+func (m *Model) moveTo(i int) {
+	n := len(m.Visible())
+	target := min(max(i, 0), n-1) // -1 on an empty list
+	if target != m.Selected {
+		m.Follow = false
+	}
+	m.Selected = target
 	m.Selection()
 }
 
@@ -366,7 +377,11 @@ func (m *Model) nth(n int) (int, bool) {
 	if len(vis) == 0 {
 		return 0, false
 	}
-	g := vis[m.Selected].Group
+	// With nothing selected the digits count the main group.
+	g := GroupMain
+	if m.Selected >= 0 {
+		g = vis[m.Selected].Group
+	}
 	for _, it := range vis {
 		if it.Group != g {
 			continue

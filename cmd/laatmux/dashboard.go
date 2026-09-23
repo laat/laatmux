@@ -46,7 +46,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, Titles: true, LocalHost: localHostName(cfg),
+	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
 		Hint: "enter jump  a add  x rm  s settle  S shell  v layout  / filter  f settled  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }

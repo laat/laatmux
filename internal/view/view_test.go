@@ -439,3 +439,170 @@ func TestWidth(t *testing.T) {
 		t.Error("ParseLayout accepted wide")
 	}
 }
+
+// With Follow the selection is the viewer's own row wherever the sort
+// puts it, and nothing when no row is that session; the first key that
+// moves the selection makes it the user's, anchored as before.
+func TestFollowSelection(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	m.Follow = true
+	in := fixtureInput(now)
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Current || m.Selected != 2 {
+		t.Fatalf("initial: %+v at %d", got, m.Selected)
+	}
+	// The sort moves the viewer's row: the selection follows.
+	for i := range in.Agents {
+		switch in.Agents[i].Session {
+		case "laatmux/fix-ls":
+			in.Agents[i].Activity = protocol.Idle
+		case "remote-notes":
+			in.Agents[i].Activity = protocol.Blocked
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || m.Selected != 1 {
+		t.Fatalf("after reorder: %+v at %d", got, m.Selected)
+	}
+	reversed := 0
+	for _, l := range m.Render() {
+		if l.Reverse {
+			reversed++
+		}
+	}
+	if reversed == 0 {
+		t.Fatal("followed row not drawn selected")
+	}
+	// No row is the viewer's session: nothing selected, nothing drawn
+	// selected, Enter does nothing; a digit counts the main group.
+	in.Current = ""
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got != nil || m.Selected != -1 {
+		t.Fatalf("no current row: %+v at %d", got, m.Selected)
+	}
+	for _, l := range m.Render() {
+		if l.Reverse {
+			t.Fatal("a row drawn selected with nothing selected")
+		}
+	}
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+		t.Fatalf("Enter with nothing selected: %+v", a)
+	}
+	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || m.Selected != 1 || m.Follow {
+		t.Fatalf("digit with nothing selected: %+v at %d follow=%v", a, m.Selected, m.Follow)
+	}
+	// Following again, then a key: the selection is the user's and a
+	// reorder keeps it on the row it was on, not on the viewer's.
+	m.Follow = true
+	in.Current = "mac/proj/task"
+	m.SetRows(rows.Build(in))
+	if m.Selected != 1 {
+		t.Fatalf("following again: %d", m.Selected)
+	}
+	m.Handle(Key{Rune: 'j'})
+	taken := m.Selection()
+	if m.Follow || taken == nil || taken.Name == "proj/task" || m.Selected != 2 {
+		t.Fatalf("after j: %+v at %d follow=%v", taken, m.Selected, m.Follow)
+	}
+	for i := range in.Agents {
+		if in.Agents[i].Session == "laatmux/fix-ls" {
+			in.Agents[i].Activity = protocol.Blocked
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got == nil || got.Name != taken.Name {
+		t.Fatalf("user's selection moved: %+v, was %s", got, taken.Name)
+	}
+	// Without Follow the model is as it was: the first row selected.
+	m = model(now)
+	m.SetRows(rows.Build(fixtureInput(now)))
+	if m.Selected != 0 {
+		t.Fatalf("without follow: %d", m.Selected)
+	}
+}
+
+// Following is found afresh on every read: a filter that hides the
+// viewer's row selects nothing rather than another row, clearing it
+// brings the row back, and a collapsed group hides it the same way. A
+// move that changes nothing, up from the first row, onto the selected
+// row, or on an empty list, keeps following.
+func TestFollowThroughFilterAndGroups(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	m.Follow = true
+	in := fixtureInput(now)
+	m.SetRows(rows.Build(in))
+	// Filter to rows that are not the viewer's: rows remain, none is
+	// selected, and Enter has nothing to act on.
+	m.Handle(Key{Rune: '/'})
+	for _, r := range "notes" {
+		m.Handle(Key{Kind: KeyRune, Rune: r})
+	}
+	m.Handle(Key{Kind: KeyEnter}) // leaves the filter typing, keeps the filter
+	if vis := m.Visible(); len(vis) == 0 || m.Filter != "notes" {
+		t.Fatalf("filter %q left %d rows", m.Filter, len(vis))
+	}
+	if got := m.Selection(); got != nil || !m.Follow {
+		t.Fatalf("filtered away: %+v follow=%v", got, m.Follow)
+	}
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+		t.Fatalf("Enter with the viewer's row filtered away: %+v", a)
+	}
+	m.Handle(Key{Kind: KeyEsc})
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
+		t.Fatalf("filter cleared: %+v follow=%v", got, m.Follow)
+	}
+	// The viewer's row settled: hidden in the collapsed group, shown
+	// when the group is expanded.
+	for i := range in.Locals {
+		if in.Locals[i].Name == "mac/proj/task" {
+			in.Locals[i].Settled = true
+		}
+	}
+	m.SetRows(rows.Build(in))
+	if got := m.Selection(); got != nil {
+		t.Fatalf("settled and collapsed: %+v", got)
+	}
+	m.Handle(Key{Rune: 'f'})
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
+		t.Fatalf("settled and expanded: %+v follow=%v", got, m.Follow)
+	}
+	m.Handle(Key{Rune: 'f'})
+	if got := m.Selection(); got != nil || !m.Follow {
+		t.Fatalf("collapsed again: %+v follow=%v", got, m.Follow)
+	}
+	// Moves that change nothing keep following: up from the first row,
+	// onto the selected row, on an empty list.
+	in = fixtureInput(now)
+	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/fix-ls", Key: "venv//r/fix-ls", Host: "vm"})
+	in.Current = "vm/laatmux/fix-ls"
+	m = model(now)
+	m.Layout, m.Width, m.Height = Compact, 80, 30
+	m.Follow = true
+	m.SetRows(rows.Build(in))
+	if m.Selected != 0 {
+		t.Fatalf("current first: %d", m.Selected)
+	}
+	m.Handle(Key{Kind: KeyUp})
+	m.Handle(Key{Rune: 'k'})
+	m.Handle(Key{Rune: 'g'})
+	m.Handle(Key{Kind: KeyMouse, Wheel: -1})
+	if a := m.Handle(Key{Rune: '1'}); a.Kind != ActionJump || !m.Follow || m.Selected != 0 {
+		t.Fatalf("moves that change nothing: %+v follow=%v at %d", a, m.Follow, m.Selected)
+	}
+	m.Handle(Key{Rune: 'j'})
+	if m.Follow || m.Selected != 1 {
+		t.Fatalf("a move that changes: follow=%v at %d", m.Follow, m.Selected)
+	}
+	m = model(now)
+	m.Follow = true
+	m.SetRows(rows.Build(rows.Input{}))
+	m.Handle(Key{Rune: 'j'})
+	m.Handle(Key{Rune: 'G'})
+	if got := m.Selection(); got != nil || !m.Follow {
+		t.Fatalf("empty list: %+v follow=%v", got, m.Follow)
+	}
+}
