@@ -33,7 +33,10 @@ type Removed struct {
 
 // Run sends the rm to the host, following its progress through r, then
 // kills the local workspace session for the root. A refusal, git's for
-// a dirty worktree say, is a *StageError with its message.
+// a dirty worktree say, is a *StageError with its message. When the
+// host's side succeeded and the local cleanup then failed, the result
+// carries the root with the error, so the caller can say what was
+// removed.
 func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	if m.Host.Name == "" {
 		return Removed{}, errors.New("rm needs a host")

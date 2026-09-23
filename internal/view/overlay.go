@@ -3,6 +3,7 @@ package view
 import (
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Overlay takes the screen and the keys while it is up: a picker, a
@@ -372,6 +373,11 @@ func wrap(s string, w int) []string {
 		}
 		line := fit(s, w)
 		cut := len(line)
+		if cut == 0 {
+			// A rune wider than the line: take it anyway, so the loop
+			// moves on.
+			_, cut = utf8.DecodeRuneInString(s)
+		}
 		if i := strings.LastIndexByte(line, ' '); i > 0 && width(line[:i]) >= w*2/3 {
 			cut = i
 		}

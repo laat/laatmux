@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +178,65 @@ func TestAddFlowDefaults(t *testing.T) {
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	if m.Overlay != nil || d.add != nil || m.Message != "no agents configured" {
 		t.Errorf("no agents: overlay=%v message=%q", m.Overlay, m.Message)
+	}
+}
+
+// last.json that cannot be read refuses the add before any picker,
+// since the add would otherwise fail on it after the host's side is
+// done.
+func TestAddFlowRefusesBadLast(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LAATMUX_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "last.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	m := dashModel(cfg)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	if m.Overlay != nil || d.add != nil || !strings.HasPrefix(m.Message, "last.json: ") {
+		t.Errorf("overlay=%v add=%v message=%q", m.Overlay, d.add, m.Message)
+	}
+}
+
+// S on a row whose session was tagged with a host name since renamed
+// routes by the row's host, the one the environment id answers for now.
+func TestShellRoutesByRowHost(t *testing.T) {
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	r := rows.Row{Host: "vm", Name: "proj/task", Local: &workspace.Local{Name: "oldvm/proj/task", Key: "venv//w/proj/task", Host: "oldvm"}}
+	l, err := d.localFor(r)
+	if err != nil || l.Host != "vm" || l.Name != "oldvm/proj/task" {
+		t.Errorf("localFor = %+v, %v", l, err)
+	}
+	if _, err := d.localFor(rows.Row{Name: "s", Stale: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
+		t.Error("stale row accepted")
+	}
+	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
+		t.Error("plain attachment accepted")
+	}
+}
+
+// An rm whose host side succeeded and whose local cleanup then failed
+// returns the root with the error, so the CLI prints the removal before
+// the error and the dashboard says what was removed.
+func TestRmPartialSuccess(t *testing.T) {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRm}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeRm {
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/task"})
+		}
+		return true
+	})
+	// A tmux that fails: the local session cannot be listed.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho 'tmux: boom' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	rm := command.Rm{Host: config.Host{Host: client.Host{Name: "lab"}}, Root: "/w/proj/task"}
+	res, err := rm.Run(context.Background(), command.Discard{})
+	if err == nil || res.Root != "/w/proj/task" || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("res=%+v err=%v", res, err)
 	}
 }
 

@@ -78,16 +78,18 @@ func cmdRm(ctx context.Context, args []string) error {
 		}
 	}
 	res, err := rm.Run(ctx, printer{})
-	if err != nil {
-		return err
+	// A root in the result means the host's side is done, whatever
+	// happened to the local session after; that is said before the
+	// error, so a destructive step that succeeded is never hidden.
+	if err == nil || res.Root != "" {
+		fmt.Printf("removed %s on %s", rm.Describe(), rm.Host.Name)
+		if res.Root != "" {
+			fmt.Printf(" (%s)", res.Root)
+		}
+		fmt.Println()
 	}
-	fmt.Printf("removed %s on %s", rm.Describe(), rm.Host.Name)
-	if res.Root != "" {
-		fmt.Printf(" (%s)", res.Root)
-	}
-	fmt.Println()
 	for _, name := range res.Killed {
 		fmt.Printf("killed local session %s\n", name)
 	}
-	return nil
+	return err
 }

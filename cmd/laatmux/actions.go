@@ -8,6 +8,7 @@ import (
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/view"
@@ -163,6 +164,7 @@ type addFlow struct {
 	hosts  []config.Host
 	agents []string
 	step   int // the step whose picker is up: 0 repository, 1 host, 2 agent
+	last   home.Last
 	repo   config.Repo
 	host   config.Host
 	agent  string
@@ -179,7 +181,10 @@ func (d *dash) startAdd(m *view.Model) {
 		}
 	}
 	// A step with nothing to pick from refuses before any picker is
-	// up, so nothing is chosen for an add that cannot be sent.
+	// up, so nothing is chosen for an add that cannot be sent. So does
+	// last.json that cannot be read: the CLI's add fails on it before
+	// sending, and the add's own update of it would fail after the
+	// worktree and agent exist on the host.
 	switch {
 	case len(f.repos) == 0:
 		m.Message = "no repositories configured"
@@ -191,6 +196,12 @@ func (d *dash) startAdd(m *view.Model) {
 		m.Message = "no agents configured"
 		return
 	}
+	last, err := home.ReadLast()
+	if err != nil {
+		m.Message = "last.json: " + err.Error()
+		return
+	}
+	f.last = last
 	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Stale {
 		f.preRepo, f.preHost, f.branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
 	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
@@ -241,7 +252,7 @@ func (d *dash) advanceAdd(m *view.Model) {
 			}
 			want := f.preHost
 			if want == "" {
-				if h, _, err := hostFor(d.cfg, "", f.repo); err == nil {
+				if h, err := d.cfg.DefaultHost("", f.last.Get(f.repo.Source).Host); err == nil {
 					want = h.Name
 				}
 			}
@@ -265,10 +276,8 @@ func (d *dash) advanceAdd(m *view.Model) {
 				continue
 			}
 			want := ""
-			if _, lr, err := hostFor(d.cfg, f.host.Name, f.repo); err == nil {
-				if name, _, err := d.cfg.DefaultAgent("", lr.Agent); err == nil {
-					want = name
-				}
+			if name, _, err := d.cfg.DefaultAgent("", f.last.Get(f.repo.Source).Agent); err == nil {
+				want = name
 			}
 			var cs []view.Choice
 			pre := 0
@@ -380,6 +389,11 @@ func (d *dash) startRm(m *view.Model) {
 	d.start(m, "rm "+what, func(r command.Reporter) error {
 		var err error
 		res, err = rm.Run(d.ctx, r)
+		if err != nil && res.Root != "" {
+			// The host's side is done; what failed is the local
+			// session, and the message must not read as a refusal.
+			return fmt.Errorf("removed %s; local session: %w", what, err)
+		}
 		return forceHint(err, rm.Force)
 	}, func(m *view.Model) bool {
 		msg := "removed " + what
@@ -448,13 +462,20 @@ func (d *dash) shell(m *view.Model) bool {
 }
 
 // localFor is the row's workspace session, made from the worktree
-// record when it does not exist yet.
+// record when it does not exist yet. An existing session is routed by
+// the host the row is attributed to, through the environment id, not
+// by the host tag it was made with, which a renamed host leaves behind
+// as jump's tag refresh does.
 func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
 	if r.Stale {
 		return workspace.Local{}, errors.New(r.Name + ": its worktree is gone")
 	}
 	if r.Local != nil && r.Local.Workspace() {
-		return *r.Local, nil
+		l := *r.Local
+		if r.Host != "" {
+			l.Host = r.Host
+		}
+		return l, nil
 	}
 	if r.Worktree == nil || r.Worktree.Session == "" {
 		return workspace.Local{}, errors.New(r.Name + ": not a workspace")
