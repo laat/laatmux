@@ -109,7 +109,7 @@ type Config struct {
 	// observed read-only.
 	TmuxServers []string         `yaml:"tmux_servers"`
 	Agents      map[string]Agent `yaml:"agents"`
-	// DefaultAgent is the agent add starts when neither --agent nor the
+	// DefaultAgentName is the agent add starts when neither --agent nor the
 	// repository's last-used agent says: agents is a map and has no
 	// order, and without this the first add for every repository asks
 	// for the flag. It must name a configured agent.
