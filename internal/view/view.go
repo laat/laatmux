@@ -1,0 +1,524 @@
+// Package view is the list view the sidebar pane and the dashboard popup
+// share: rows with a selection, a header of host problems and a footer,
+// drawn into a tmux pane's worth of terminal. The renderer is a pure
+// function from the model to lines, so the layouts are tested against
+// golden strings without a terminal; the terminal, raw mode and keys
+// are in term.go and run.go.
+package view
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/tmux"
+)
+
+// Layout is how a row is drawn.
+type Layout string
+
+const (
+	Tiles   Layout = "tiles"   // three lines per row, for a narrow sidebar
+	Compact Layout = "compact" // one line per row, two with titles
+)
+
+// ParseLayout reads a layout as config writes it; "" is Tiles.
+func ParseLayout(s string) (Layout, error) {
+	switch Layout(s) {
+	case "", Tiles:
+		return Tiles, nil
+	case Compact:
+		return Compact, nil
+	}
+	return "", fmt.Errorf("layout %q is not tiles or compact", s)
+}
+
+// Model is the state of one view.
+type Model struct {
+	Rows      rows.Rows
+	Layout    Layout
+	Titles    bool   // compact draws the pane title under each row
+	LocalHost string // the host whose tag is not dimmed
+	// Header lines are drawn above the list: hosts that are not
+	// connected and listed, the local daemon being down.
+	Header []string
+	// Hint is the footer when nothing else claims it.
+	Hint          string
+	Now           time.Time
+	Width, Height int
+
+	Filter     string
+	Filtering  bool // typing into the filter
+	ShowHidden bool // the settled and stale groups are expanded
+	Selected   int  // index into Visible
+	Message    string
+	scroll     int   // first body line drawn
+	hits       []int // body line -> index into Visible, -1 for none
+	// anchor is the id of the selected row, so a refresh that reorders
+	// or removes rows keeps the selection on the same workspace rather
+	// than on the same index, which Enter would then jump to.
+	anchor string
+}
+
+// SetRows replaces the rows, keeping the selection on the row it was on
+// when that row is still visible; a row that is gone leaves the
+// selection at its index, clamped.
+func (m *Model) SetRows(rs rows.Rows) {
+	m.Rows = rs
+	if m.anchor == "" {
+		return
+	}
+	for _, it := range m.Visible() {
+		if it.Row.ID() == m.anchor {
+			m.Selected = it.Index
+			return
+		}
+	}
+}
+
+// Group is which group a row is in.
+type Group int
+
+const (
+	GroupMain Group = iota
+	GroupSettled
+	GroupStale
+)
+
+// Item is one entry of the list as drawn: a row, or a group header.
+type Item struct {
+	Row    *rows.Row
+	Header string
+	Group  Group
+	// Index is the item's position among the selectable rows, -1 for
+	// a header.
+	Index int
+}
+
+// Items is the list as drawn: main rows, then the settled and stale
+// groups, collapsed to one header line unless ShowHidden. The filter
+// keeps rows whose name or host contains it, case-insensitively.
+func (m *Model) Items() []Item {
+	var out []Item
+	n := 0
+	add := func(rs []rows.Row, g Group) int {
+		added := 0
+		for i := range rs {
+			r := &rs[i]
+			if !m.matches(r) {
+				continue
+			}
+			out = append(out, Item{Row: r, Group: g, Index: n})
+			n++
+			added++
+		}
+		return added
+	}
+	add(m.Rows.Main, GroupMain)
+	settled, stale := m.count(m.Rows.Settled), m.count(m.Rows.Stale)
+	if settled+stale == 0 {
+		return out
+	}
+	if !m.ShowHidden {
+		var parts []string
+		if settled > 0 {
+			parts = append(parts, fmt.Sprintf("settled %d", settled))
+		}
+		if stale > 0 {
+			parts = append(parts, fmt.Sprintf("stale %d", stale))
+		}
+		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1})
+		return out
+	}
+	if settled > 0 {
+		out = append(out, Item{Header: "settled", Group: GroupSettled, Index: -1})
+		add(m.Rows.Settled, GroupSettled)
+	}
+	if stale > 0 {
+		out = append(out, Item{Header: "stale", Group: GroupStale, Index: -1})
+		add(m.Rows.Stale, GroupStale)
+	}
+	return out
+}
+
+func (m *Model) count(rs []rows.Row) int {
+	n := 0
+	for i := range rs {
+		if m.matches(&rs[i]) {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *Model) matches(r *rows.Row) bool {
+	if m.Filter == "" {
+		return true
+	}
+	f := strings.ToLower(m.Filter)
+	return strings.Contains(strings.ToLower(r.Name), f) || strings.Contains(strings.ToLower(r.Host), f)
+}
+
+// Visible is the selectable rows in display order.
+func (m *Model) Visible() []Item {
+	var out []Item
+	for _, it := range m.Items() {
+		if it.Row != nil {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// Selection is the selected row, nil when the list is empty. It also
+// records the row as the anchor for the next SetRows.
+func (m *Model) Selection() *rows.Row {
+	vis := m.Visible()
+	m.clamp(len(vis))
+	if len(vis) == 0 {
+		m.anchor = ""
+		return nil
+	}
+	r := vis[m.Selected].Row
+	m.anchor = r.ID()
+	return r
+}
+
+func (m *Model) clamp(n int) {
+	if m.Selected >= n {
+		m.Selected = n - 1
+	}
+	if m.Selected < 0 {
+		m.Selected = 0
+	}
+}
+
+// Span is a run of text with its own attributes.
+type Span struct {
+	Text string
+	Dim  bool
+}
+
+// Line is one drawn line: spans and line-wide attributes.
+type Line struct {
+	Spans   []Span
+	Dim     bool
+	Reverse bool
+	Bold    bool
+}
+
+func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
+
+// Render draws the model into exactly Height lines of at most Width
+// cells each, and records which body line shows which row for the mouse.
+func (m *Model) Render() []Line {
+	if m.Width <= 0 || m.Height <= 0 {
+		return nil
+	}
+	var out []Line
+	for _, h := range m.Header {
+		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width)}}, Bold: true})
+	}
+	body := m.Height - len(out) - 1
+	if body < 1 {
+		body = 1
+	}
+	var lines []Line
+	var hits []int
+	selStart, selEnd := -1, -1
+	m.Selection()
+	for _, it := range m.Items() {
+		var ls []Line
+		if it.Row == nil {
+			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width)}}, Dim: true}}
+		} else {
+			ls = m.row(*it.Row)
+			if it.Index == m.Selected {
+				selStart, selEnd = len(lines), len(lines)+len(ls)
+				for i := range ls {
+					ls[i].Reverse = true
+				}
+			}
+		}
+		for range ls {
+			hits = append(hits, it.Index)
+		}
+		lines = append(lines, ls...)
+	}
+	// Scroll so the selection is on screen, moving as little as
+	// possible; a separator after the selected tile may fall off.
+	if selStart >= 0 {
+		if selStart < m.scroll {
+			m.scroll = selStart
+		}
+		if selEnd > m.scroll+body {
+			m.scroll = selEnd - body
+		}
+	}
+	if m.scroll > len(lines)-body {
+		m.scroll = len(lines) - body
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	m.hits = make([]int, body)
+	for i := 0; i < body; i++ {
+		m.hits[i] = -1
+		if j := m.scroll + i; j < len(lines) {
+			out = append(out, lines[j])
+			m.hits[i] = hits[j]
+		} else {
+			out = append(out, plain(""))
+		}
+	}
+	for len(out) < m.Height-1 {
+		out = append(out, plain(""))
+	}
+	out = append(out, m.footer())
+	return out[:m.Height]
+}
+
+func (m *Model) footer() Line {
+	switch {
+	case m.Message != "":
+		return Line{Spans: []Span{{Text: fit(m.Message, m.Width)}}, Bold: true}
+	case m.Filtering:
+		return plain(fit("/"+m.Filter+"_", m.Width))
+	case m.Filter != "":
+		return plain(fit("/"+m.Filter+"  (esc clears)", m.Width))
+	}
+	return Line{Spans: []Span{{Text: fit(m.Hint, m.Width)}}, Dim: true}
+}
+
+// row draws one row in the current layout.
+func (m *Model) row(r rows.Row) []Line {
+	if m.Layout == Compact {
+		return m.compact(r)
+	}
+	return m.tile(r)
+}
+
+func (m *Model) gutter(r rows.Row) string {
+	if r.Current {
+		return ">"
+	}
+	return " "
+}
+
+// where is the host tag: @host, with the server after it for an agent
+// observed off the managed server, as ls prints it.
+func (m *Model) where(r rows.Row) Span {
+	host := r.Host
+	if host == "" {
+		host = "?"
+	}
+	s := "@" + host
+	if r.Agent != nil {
+		if srv := rows.Server(*r.Agent); srv != tmux.LaatmuxServer.Label() {
+			s += "/" + srv
+		}
+	}
+	return Span{Text: s, Dim: r.Host != m.LocalHost}
+}
+
+func (m *Model) activity(r rows.Row) string {
+	s := string(r.Agent.Activity)
+	if r.Agent.Liveness == protocol.Gone {
+		s += " (gone)"
+	}
+	return s
+}
+
+func (m *Model) age(r rows.Row) string {
+	return strings.TrimSpace(rows.Ago(m.Now.Sub(r.Agent.ActivityAt)))
+}
+
+// tile is three lines: the mark and name with the host tag right-aligned,
+// the agent with its activity and age, and the pane title; two lines
+// for a row without an agent, whose second says what it is instead.
+// A separator follows.
+func (m *Model) tile(r rows.Row) []Line {
+	w := m.Width
+	where := m.where(r)
+	head := m.gutter(r) + r.Mark() + " "
+	nameW := w - width(head) - width(where.Text) - 1
+	first := Line{Dim: r.Dim}
+	if nameW < 4 {
+		first.Spans = []Span{{Text: fit(head+r.Name, w)}}
+	} else {
+		name := fit(r.Name, nameW)
+		gap := w - width(head) - width(name) - width(where.Text)
+		first.Spans = []Span{{Text: head + name + strings.Repeat(" ", gap)}, where}
+	}
+	lines := []Line{first}
+	if r.Agent == nil {
+		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.State(), w)}}})
+	} else {
+		lines = append(lines,
+			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.AgentName()+"  "+m.activity(r)+"  "+m.age(r), w)}}},
+			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+strings.TrimSpace(r.Agent.Title), w)}}})
+	}
+	return append(lines, Line{Dim: true, Spans: []Span{{Text: strings.Repeat("─", w)}}})
+}
+
+// compact is one line: mark, activity, agent, name, host tag and age;
+// a row without an agent puts what it is in the activity and agent
+// columns. With Titles, the pane title follows on a second line.
+func (m *Model) compact(r rows.Row) []Line {
+	w := m.Width
+	where := m.where(r)
+	left := m.gutter(r) + r.Mark() + " "
+	age := ""
+	if r.Agent == nil {
+		left += fmt.Sprintf("%-16s ", r.State())
+	} else {
+		left += fmt.Sprintf("%-8s %-7s ", r.Agent.Activity, r.AgentName())
+		age = " " + rows.Ago(m.Now.Sub(r.Agent.ActivityAt))
+		if r.Agent.Liveness == protocol.Gone {
+			age += " gone"
+		}
+	}
+	nameW := w - width(left) - 1 - width(where.Text) - width(age)
+	line := Line{Dim: r.Dim}
+	if nameW < 4 {
+		line.Spans = []Span{{Text: fit(left+r.Name, w)}}
+	} else {
+		name := fit(r.Name, nameW)
+		line.Spans = []Span{{Text: left + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
+	}
+	lines := []Line{line}
+	if m.Titles && r.Agent != nil {
+		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("     "+strings.TrimSpace(r.Agent.Title), w)}}})
+	}
+	return lines
+}
+
+// Text is the lines as plain text, one per line, for tests and for a
+// terminal without attributes.
+func Text(lines []Line) string {
+	var b strings.Builder
+	for _, l := range lines {
+		for _, s := range l.Spans {
+			b.WriteString(s.Text)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// Debug is the lines with their attributes made visible, for golden
+// tests: a flag column with S for the selection, D for a dim line, B
+// for bold, then the text with dim spans between ‹ and ›.
+func Debug(lines []Line) string {
+	var b strings.Builder
+	for _, l := range lines {
+		flags := []byte("...")
+		if l.Reverse {
+			flags[0] = 'S'
+		}
+		if l.Dim {
+			flags[1] = 'D'
+		}
+		if l.Bold {
+			flags[2] = 'B'
+		}
+		b.Write(flags)
+		b.WriteByte('|')
+		for _, s := range l.Spans {
+			if s.Dim {
+				b.WriteString("‹" + s.Text + "›")
+			} else {
+				b.WriteString(s.Text)
+			}
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// ANSI encodes a line for the terminal, ending with a reset.
+func ANSI(l Line) string {
+	var b strings.Builder
+	attrs := func() {
+		if l.Reverse {
+			b.WriteString("\x1b[7m")
+		}
+		if l.Dim {
+			b.WriteString("\x1b[2m")
+		}
+		if l.Bold {
+			b.WriteString("\x1b[1m")
+		}
+	}
+	attrs()
+	for _, s := range l.Spans {
+		if s.Dim && !l.Dim {
+			b.WriteString("\x1b[2m")
+			b.WriteString(s.Text)
+			b.WriteString("\x1b[0m")
+			attrs()
+			continue
+		}
+		b.WriteString(s.Text)
+	}
+	b.WriteString("\x1b[0m")
+	return b.String()
+}
+
+// width is the number of terminal cells s takes: wide East Asian and
+// emoji runes count two, combining marks, joiners, variation selectors
+// and skin-tone modifiers none, everything else one. An approximation
+// of what the terminal does, without a grapheme library: a title with
+// a joined emoji sequence may measure wide by a cell or two, and the
+// line is trimmed to the measure, so the worst case is a short title,
+// not a wrapped line.
+func width(s string) int {
+	n := 0
+	for _, r := range s {
+		n += runeWidth(r)
+	}
+	return n
+}
+
+func runeWidth(r rune) int {
+	switch {
+	case r < 0x20, r == 0x7f:
+		return 0
+	case r < 0x300:
+		return 1
+	case r >= 0x300 && r <= 0x36f, r >= 0x200b && r <= 0x200f, r >= 0xfe00 && r <= 0xfe0f,
+		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef:
+		return 0
+	case r >= 0x1100 && r <= 0x115f,
+		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,
+		r >= 0xac00 && r <= 0xd7a3,
+		r >= 0xf900 && r <= 0xfaff,
+		r >= 0xfe30 && r <= 0xfe4f,
+		r >= 0xff00 && r <= 0xff60,
+		r >= 0xffe0 && r <= 0xffe6,
+		r >= 0x1f000 && r <= 0x1faff,
+		r >= 0x20000 && r <= 0x3fffd:
+		return 2
+	}
+	return 1
+}
+
+// fit trims s to at most w cells, dropping control characters.
+func fit(s string, w int) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		rw := runeWidth(r)
+		if rw == 0 && r < 0x20 || r == 0x7f {
+			continue
+		}
+		if n+rw > w {
+			break
+		}
+		b.WriteRune(r)
+		n += rw
+	}
+	return b.String()
+}

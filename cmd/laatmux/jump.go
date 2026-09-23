@@ -71,49 +71,60 @@ func cmdJump(ctx context.Context, args []string) error {
 		}
 		return workspace.Switch(ctx, rest)
 	}
-	hello, snap, err := snapshot(ctx, h.Host, "")
+	_, snap, err := snapshot(ctx, h.Host, "")
 	if err != nil {
 		return err
 	}
-	spec := workspace.Spec{Host: h.Host}
+	var spec workspace.Spec
 	if w, ok := matchWorktree(snap.Worktrees, cfg, rest); ok {
 		if w.Session == "" {
-			// The hint's --repo is resolved against this machine's config,
-			// so it names the source as this machine knows it, not by the
-			// host's label.
-			return fmt.Errorf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, localRepoArg(cfg, w), h.Name)
+			return errors.New(addHint(cfg, h, w))
 		}
-		// A detached worktree has no <repo>/<branch> form; it is reached
-		// by its session name.
-		spec.Managed = w.Session
-		// The managed session is <repo>/<encoded branch> as it was when
-		// add made it; the local name follows it rather than the record's
-		// branch, which is empty for a worktree detached since.
-		spec.Name = h.Name + "/" + w.Session
-		spec.Key = workspace.Key(hello.EnvironmentID, w.Root)
-		spec.Branch = w.Branch
-		// The source is the identity and comes from the record. A daemon
-		// from before records carried it leaves it to this machine's
-		// config, by the host's label, and empty when the labels differ;
-		// Ensure then keeps whatever the session already knows.
-		spec.Source = w.Source
-		if spec.Source == "" {
-			if r, ok := cfg.RepoByName(w.Repo); ok {
-				spec.Source = r.Source
-			}
-		}
+		spec = worktreeSpec(cfg, h, w)
 	} else {
 		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
 		}
-		spec.Managed = rest
-		spec.Name = h.Name + "/" + rest
+		spec = workspace.Spec{Host: h.Host, Managed: rest, Name: h.Name + "/" + rest}
 	}
 	name, created, err := workspace.Ensure(ctx, spec)
 	if err != nil {
 		return err
 	}
 	return focus(ctx, name, created)
+}
+
+// worktreeSpec is the local workspace session for a worktree record with
+// a managed session. A detached worktree has no <repo>/<branch> form; it
+// is reached by its session name. The managed session is <repo>/<encoded
+// branch> as it was when add made it; the local name follows it rather
+// than the record's branch, which is empty for a worktree detached
+// since. The source is the identity and comes from the record. A daemon
+// from before records carried it leaves it to this machine's config, by
+// the host's label, and empty when the labels differ; Ensure then keeps
+// whatever the session already knows.
+func worktreeSpec(cfg config.Config, h config.Host, w protocol.Worktree) workspace.Spec {
+	spec := workspace.Spec{
+		Host:    h.Host,
+		Managed: w.Session,
+		Name:    h.Name + "/" + w.Session,
+		Key:     workspace.Key(w.EnvironmentID, w.Root),
+		Branch:  w.Branch,
+		Source:  w.Source,
+	}
+	if spec.Source == "" {
+		if r, ok := cfg.RepoByName(w.Repo); ok {
+			spec.Source = r.Source
+		}
+	}
+	return spec
+}
+
+// addHint says a worktree has no managed session and how to start one.
+// The hint's --repo is resolved against this machine's config, so it
+// names the source as this machine knows it, not by the host's label.
+func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
+	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, localRepoArg(cfg, w), h.Name)
 }
 
 // localRepoArg is what --repo takes for the record's repository on this

@@ -17,6 +17,9 @@
 //	  - git@github.com:laat/laatmux.git
 //	  - source: https://github.com/laat/other.git
 //	    name: other
+//	sidebar:
+//	  width: 35               # columns; default 35
+//	  layout: tiles           # tiles or compact; default tiles
 //
 // hosts, agents and repos are read by clients; tmux_servers and the local
 // host's directories by the daemon on the machine the file lives on. Each
@@ -108,6 +111,26 @@ type Config struct {
 	Agents      map[string]Agent `yaml:"agents"`
 	// Repos is the known set of repositories. Load fills in derived names.
 	Repos []Repo `yaml:"repos"`
+	// Sidebar is the sidebar pane on this machine's tmux.
+	Sidebar Sidebar `yaml:"sidebar"`
+}
+
+// Sidebar configures the sidebar pane: its width in columns and which
+// layout it starts in. Zero values are the defaults.
+type Sidebar struct {
+	Width  int    `yaml:"width"`
+	Layout string `yaml:"layout"`
+}
+
+// DefaultSidebarWidth is the sidebar's width when the config sets none.
+const DefaultSidebarWidth = 35
+
+// Columns is the configured width, or the default.
+func (s Sidebar) Columns() int {
+	if s.Width <= 0 {
+		return DefaultSidebarWidth
+	}
+	return s.Width
 }
 
 // Servers resolves TmuxServers, or the default when it is empty.
@@ -179,6 +202,14 @@ func Parse(b []byte) (Config, error) {
 	}
 	if err := deriveNames(c.Repos); err != nil {
 		return c, err
+	}
+	if c.Sidebar.Width < 0 || c.Sidebar.Width > 0 && c.Sidebar.Width < 10 {
+		return c, fmt.Errorf("sidebar: width %d must be at least 10", c.Sidebar.Width)
+	}
+	switch c.Sidebar.Layout {
+	case "", "tiles", "compact":
+	default:
+		return c, fmt.Errorf("sidebar: layout %q is not tiles or compact", c.Sidebar.Layout)
 	}
 	return c, nil
 }

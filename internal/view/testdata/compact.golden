@@ -1,0 +1,30 @@
+..B|box  DOWN  ssh: connect to host box port 22: No route to host
+...| ! blocked  claude  laatmux/fix-ls                                                 ‹@vm›  2m
+...|     Permission to run pnpm test in packages/api?
+...| * working  codex   remote-notes                                           ‹@vm/default›  1s
+...|     remote
+S..|>* working  codex   proj/task                                                     @mac  8s
+S..|     Editing src/api.ts
+.D.| * working  claude  proj/down                                                     ‹@box› 10m
+.D.|     last seen
+...| - idle     shell   scratch                                                       @mac 40s
+...|     zsh
+...| - idle     claude  notes                                                 @mac/default  5m
+...|     notes
+...| - idle     claude  proj/other                                                     ‹@vm›  1h
+...|     ✳ Done. 日本語のタイトル that is long enough to be trimmed at the edge
+.D.| - idle     claude  proj/dead                                                 ‹@vm›  3h gone
+.D.|     
+.D.|   no session       proj/spike                                                        @mac
+.D.|   no agent         proj/shell                                                         ‹@vm›
+.D.|settled
+.D.| - idle     claude  proj/done                                                     @mac 26h
+.D.|     finished
+.D.|stale
+.D.|   no worktree      vm/proj/gone                                                       ‹@vm›
+...|
+...|
+...|
+...|
+...|
+.D.|enter jump  v layout  / filter  f settled  q quit
