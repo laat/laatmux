@@ -83,9 +83,12 @@ recorded, and the relay resends the add under the same id, which the
 host resumes: the steps by inspection, the allocation and the launch by
 the journal. Only an id the journal has never seen is a new add, and
 only while its submission is young, by a contract the two clocks can
-keep: the relay owns a lifetime, seven days from submit by the
-laptop's clock, carried on every resend as `submitted_at` unchanged,
-after which it stops resending and shows `outcome unknown`; the host
+keep: the sender owns a lifetime, seven days from submit by the
+laptop's clock, carried on every resend as `submitted_at` unchanged
+and enforced in the one send path every caller uses, the relay and
+the foreground `add` alike, which refuses to send or resend an add past
+it and shows `outcome unknown`, while a `follow`, which never executes
+anything, is asked at any age; the host
 owns retention, thirty days by its own clock from the moment it first
 saw the id, which the sweep respects; and the host refuses an add
 whose `submitted_at` is more than a day in its future or more than the
@@ -403,21 +406,24 @@ Complete is one predicate, used by the daemon to retire a record, by
 the rows to hide the worktree row behind the pending one, and by the
 views to offer `p` and `x`: the add succeeded and the delivery state is
 `delivered` or `none`. A record that is complete is retired on a
-worktree listing that is after the result, which the host makes
-provable without ever holding the result for it: its worktree listings
-are numbered within a daemon generation, `listing` is the generation,
-the daemon's start, and a count of the polls that succeeded in it, the
-poll and its publication run under one lock so an older observation
-never overwrites a newer, a snapshot carries the listing it reflects,
-and the result carries the barrier, the count after the last listing
-that completed before the add's mutation, in the current generation.
-`finish` pokes a poll as today and emits the result at once; a listing
-that fails leaves the count where it was and the host row's error
-saying why, and the barrier stands. The relay, on its own connection,
-takes plain snapshots after the result until one satisfies the barrier:
-the same generation at that count or higher, or any later generation
-with a successful listing, since a daemon that started after the
-mutation lists after it. A worktree at the root in that snapshot hands
+worktree listing that began after the result's mutation, which the host
+makes provable without ever holding the result for it. The host counts
+its git mutations: `revision`, under the daemon's mutex, stepped when
+an add or an rm has changed what git registers. A poll reads the
+revision before it reads git and publishes its listing stamped with
+that revision and the daemon generation, the daemon's start; the poll
+and its publication run under one lock so an older observation never
+overwrites a newer, and a snapshot carries the stamp of the listing it
+reflects. The result carries the barrier: the revision the add's
+mutation made, in the current generation. A poll that overlaps the
+mutation read git before it and carries the revision before, so it
+does not satisfy the barrier; the next one does. `finish` pokes a poll
+as today and emits the result at once; a listing that fails leaves the
+stamp where it was and the host row's error saying why, and the barrier
+stands. The relay, on its own connection, takes plain snapshots after
+the result until one satisfies the barrier: the same generation at that
+revision or higher, or any later generation with a successful listing,
+since a daemon that started after the mutation lists after it. A worktree at the root in that snapshot hands
 the row over to the worktree row, once the merged stream shows it too,
 and the file goes; no worktree at the root is `done, worktree gone`, a
 row that needs the user only to be dismissed, and the file stays until
@@ -445,18 +451,26 @@ model, so it survives a refresh that coalesced the intermediate state.
 A view may never have seen the alias at all: a row selected during
 `clone` has no root yet, and the record may be retired before the next
 refresh, or while the view was disconnected. So the handoff is carried
-by the stream as well: the `remove` of a retired record names the
-worktree id it became, and a merged snapshot carries the recent
-handoffs, the last hour's pairs of command id and worktree id, which
-the merged client keeps in a map of its own that a resnapshot merges
-into rather than replaces. The model's anchor lookup consults that map
-last: an anchor whose id is a command the map has retired re-anchors
-on the worktree row it names. So a task selected during `clone` stays
-selected when the root arrives, when the worktree row takes over, and
-through the reorder the sort makes, whether or not the view saw the
-steps between; two pending records for one explicit branch are two
-rows with two ids and one alias, the anchor follows the one that was
-selected, and the worktree row is hidden while either stands.
+by the stream as well: the `remove` of a retired record names, in a
+field of its own, the worktree id it became, and a merged snapshot
+carries the recent handoffs, the pairs of command id and worktree id
+retired in the last day, which the merged client keeps in a map of its
+own that a resnapshot merges into rather than replaces. The daemon
+writes a handoff to the retired record's file, which it keeps for that
+day, before it publishes the removal, so a daemon restarted in between
+still carries it. The model's anchor lookup consults the map last: an
+anchor whose id is a command the map has retired re-anchors on the
+worktree row it names. Beyond the day, or for a handoff the view never
+received, the anchor is not found, and then the selection is cleared
+rather than left at an index that another row has taken: a following
+view goes back to the viewer's own row, a user's selection to none. So
+a task selected during `clone` stays selected when the root arrives,
+when the worktree row takes over, and through the reorder the sort
+makes, whether or not the view saw the steps between, for a day after
+the handoff, and is dropped rather than misplaced after; two pending
+records for one explicit branch are two rows with two ids and one
+alias, the anchor follows the one that was selected, and the worktree
+row is hidden while either stands.
 
 A pending record that needs the user stays until dismissed, through
 laptop daemon restarts, with its outcome and reason in the file; a
@@ -482,10 +496,14 @@ The merged stream carries the pending records with the host, agent and
 session records:
 
 ```
-<- {type: snapshot, seq, hosts, agents, worktrees, sessions, pendings: [...], handoffs: [{id, worktree_id}]}
+<- {type: snapshot, seq, hosts, agents, worktrees, sessions, pendings: [...], handoffs: [{id, replaced_by}]}
 <- {type: upsert, seq, pending: {...}}
-<- {type: remove, seq, pending_id, worktree_id}    worktree_id when retired into a worktree row
+<- {type: remove, seq, pending_id, replaced_by}    replaced_by is the worktree id it retired into
 ```
+
+`replaced_by` is a field of its own: `worktree_id` on a `remove` means,
+to every client today, that a worktree is gone, and a retired pending
+record must not read as one to an older sidebar.
 
 The pending record, without the prompt:
 
@@ -509,13 +527,13 @@ On the host, under a new capability `task`:
 ```
 -> {type: add, ..., prompt, generated, submitted_at}       submitted_at unchanged on every resend
 <- {type: progress, id, n, stage: allocate, state: done, detail, branch, root}
-<- {type: result, id, ok, root, session, pane_id, branch, prompt: <state>, listing: {generation, n}, error}
+<- {type: result, id, ok, root, session, pane_id, branch, prompt: <state>, listing: {generation, revision}, error}
 -> {type: prompt, id, attempt, prompt}
 <- {type: result, id, attempt, ok, prompt: <state>, error}
 -> {type: follow, id, attempt, after}              an attempt whose reply was lost
 <- {type: result, id, ok: false, error: interrupted, stage}   a journaled add the daemon died in
 <- {type: result, id, ok: false, error: submission expired}   an add older than the journal keeps
-<- {type: snapshot, seq, listing: {generation, n}, ...}   the host's own stream, numbered listings
+<- {type: snapshot, seq, listing: {generation, revision}, ...}   the host's own stream, stamped listings
 ```
 
 The delivery state is `none`, `delivered`, `not delivered` or
@@ -523,10 +541,10 @@ The delivery state is `none`, `delivered`, `not delivered` or
 asks the host to allocate the branch; `branch` and `root` on the
 `allocate` progress line and on the result are the ones used;
 `listing` on the result is the barrier, the daemon generation and the
-count a successful listing after the add's mutation will reach, and on
-a snapshot the generation and count of the listing it reflects; a
-later generation with any successful listing satisfies a barrier from
-an earlier one. A `prompt` message is a command like `add`, with
+mutation revision the add made, and on a snapshot the generation and
+the revision the listing it reflects was read at; a listing at the
+barrier's revision or later in the same generation satisfies it, and
+so does any successful listing of a later generation. A `prompt` message is a command like `add`, with
 the journal behind it: a repeated attempt is answered from the record,
 `follow` with an attempt reattaches to one in flight, and `follow` with
 an attempt the host never saw is answered `unknown attempt`, on which
@@ -550,9 +568,10 @@ sent.
    typed-in delivery through the detector's readiness with the bound
    identity and a `Paste` on the managed server, the attempts and their
    states, adoption on `p` where no target was recorded, the `prompt`
-   message with `follow`, the numbered listings by generation and the
-   barrier on the result, the sweep of attempt buffers at start, `add
-   -p` in the CLI printing the state. Verified on the
+   message with `follow`, the mutation revision and the stamped
+   listings with the barrier on the result, the sweep of attempt
+   buffers at start, the lifetime in the send path, `add -p` in the CLI
+   printing the state. Verified on the
    VM with `claude` taking the prompt positionally, with a `cmd` without
    the placeholder, with the daemon killed between `launching` and
    `launched` leaving `unknown`, with a resend under a known id keeping
@@ -563,8 +582,8 @@ sent.
    contact, the pending records in the merged stream, the follow with
    backoff and the resend on `interrupted`, the seven-day lifetime,
    re-follow on restart, the snapshots after the result up to its
-   barrier and the retirement rule, the handoffs on `remove` and in
-   snapshots, the prompt scrubbed on completion, `dismiss`, the
+   barrier and the retirement rule, the handoffs written before the
+   removal, on `remove` and in snapshots, the prompt scrubbed on completion, `dismiss`, the
    `prompt` message with attempts persisted first, `add --detach`.
    Verified with the laptop daemon restarted mid-add and mid-attempt,
    the host's daemon restarted mid-add, and the host unreachable for
@@ -574,7 +593,7 @@ sent.
    the foreground fallback for an older daemon.
 5. The pending rows in the rows package and both views, the join by
    environment and root, the anchor pair in the model with the handoff
-   map, the completion
+   map and the selection cleared past it, the completion
    predicate, `p` and `x`; verified under the user's tmux config with a
    submit from the popup and the row followed through to the agent
    working on the prompt.
