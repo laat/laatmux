@@ -15,9 +15,10 @@ daemons stay the sources of truth, and nothing crosses the network
 except state and commands. What is new is that a command can outlive
 the client that sent it on the laptop's side too, that a prompt is
 part of starting an agent, with a delivery of its own that is never
-inferred from anything else, and that the host writes down what it
-did for a command before it does it, since a prompt delivered and a
-branch allocated are not things a retry can see by looking.
+inferred from anything else, and that the host writes down two things
+it decides for a command before it acts on them, since a prompt
+delivered and a branch allocated are not things a retry can see by
+looking.
 
 ## The workflow
 
@@ -42,39 +43,43 @@ branch allocated are not things a retry can see by looking.
 `laatmux add <branch> -p <prompt>` is the same from the CLI, in the
 foreground as today; `--detach` hands the add to the daemon and returns.
 
-## The host remembers what it did
+## The host remembers what it decided
 
-Every step of `add` today is skipped by inspection on a retry: a
-checkout, a branch, a worktree, a copied file, a setup marker, a
-session in the root are all there to be looked at, so a resend after a
-lost connection or a daemon restart finishes what was started and
-never does a step twice. Two things this milestone adds cannot be
-inspected. A branch allocated for a generated name looks like any
-other branch; a resend that allocates again makes `task-2` beside
-`task` and a second worktree for one task. A prompt delivered into a
-pane leaves nothing a daemon can see; a resend that finds the session
-cannot tell whether the prompt is in it, and delivering again is the
-same task twice, not delivering is a silent loss.
+`add`'s steps are retried by inspection: a checkout, a branch, a
+worktree, a copied file, a session in the root are there to be looked
+at, so a resend after a lost connection or a daemon restart finishes
+what was started. Setup commands are at least once, as milestone two
+says: a crash between a command's effects and its marker reruns it.
+Two things this milestone adds are neither inspectable nor safe to
+repeat. A branch allocated for a generated name looks like any other
+branch; a resend that allocates again makes `task-2` beside `task` and
+a second worktree for one task. A prompt delivered into a pane leaves
+nothing a daemon can see; a resend that finds the session cannot tell
+whether the prompt is in it, and delivering again is the same task
+twice, not delivering is a silent loss.
 
-So the host's daemon keeps a journal: one file per command id under
-`$LAATMUX_HOME/commands/`, written atomically before each side effect
-that inspection cannot see and rewritten after it, and read before
-anything is done for an id it has seen. It holds the command's
-identity, `source`, `agent`, whether the branch was generated, the
-allocated branch once it is, the root, and the session, the pane and
-the server instance the agent stage made, the agent's identity once
-observed, and the delivery state with its attempts. The in-memory
-command with its replay stays as it is for streaming; the journal is
-what a resend consults. Entries are removed when the worktree is
-removed by `rm`, and swept when their root is gone from git and their
-age is past a day, so the directory holds what is live and recent.
+So the host's daemon keeps a journal for those two decisions: one file
+per command id under `$LAATMUX_HOME/commands/`, written atomically
+before the decision is acted on and rewritten as it plays out, and read
+before anything is done for an id it has seen. An entry holds the
+command's identity, `source`, `agent`, whether the branch was
+generated, the allocated branch, the root, the launch state with the
+session, the pane and the server instance the agent stage made, the
+agent identity bound for delivery, the delivery state, and the
+attempts. The in-memory command with its replay stays as it is for
+streaming; the journal is what a resend and a `follow` consult when the
+memory has nothing. The journal does not make `add` exactly once: it
+protects the allocation and the delivery, nothing else.
 
-With the journal, a resend under a known id reuses the allocated branch
-and takes the recorded delivery state as the truth; a resend under an
-id the journal has never seen is a new add, as today. A daemon that
-dies between writing `attempting` and writing `delivered` leaves the
-state `unknown`, which is reported as such and never resolved by
-guessing.
+An entry outlives its worktree. `rm` marks it `removed`; a sweep
+deletes entries thirty days after they became terminal. Until then a
+`follow` for an id the memory has forgotten is answered from the
+entry's recorded result, and a resend under an id the journal knows is
+never a new add: it resumes the recorded state, and once the entry is
+terminal it is answered with the result, `removed` included, and does
+nothing. Only an id the journal has never seen is a new add. A daemon
+that dies between writing a decision and writing its outcome leaves a
+state that is reported as `unknown` and never resolved by guessing.
 
 ## Where the background add lives
 
@@ -117,17 +122,24 @@ host answering still has the task on disk, prompt included, and its
 successor picks it up. The client's answer says `accepted`, not started;
 the pending record says when the host has taken it.
 
+Every connection of a relay is pinned to the host's environment id, the
+check `stream` has today, so a host alias moved to another machine gets
+nothing. The id comes from the host row of the merged stream when the
+host has answered a hello before, and is written into the pending file
+at accept. A host never reached has no id yet; then the first hello
+binds it, the file is rewritten with it before the add is sent, and
+every later connection is held to it. That is the narrower guarantee
+for a host the laptop has never talked to: the machine that answers
+first is the one the task goes to.
+
 Connectivity is not outcome. The client's `stream` gives up after three
 lost connections, which is right for a user watching; the relay follows
 with the reconnect backoff the merged stream uses, for as long as the
 task is outstanding, and the pending record says `host unreachable,
-retrying` meanwhile, never failed. A `follow` the host no longer knows,
-after its five-minute retention or a restart, is resent as the client
-resends, and the host's journal makes the resend safe: the branch is
-the one allocated, the delivery state is the one recorded. Every
-connection of a relay, the first and each reconnect, is pinned to the
-environment id the pending record carries, with the check `stream`
-already has, so a host alias moved to another machine gets nothing.
+retrying` meanwhile, never failed. A `follow` the host answers from its
+journal is a `follow` like any other; a `follow` the host does not know
+at all, memory and journal, means the host never took the add, and the
+relay resends it, which is the one case a resend is a start.
 
 An older laptop daemon without `relay` gets the foreground add with its
 log overlay, from the dashboard's `a` and from `compose` alike, so the
@@ -161,57 +173,72 @@ ways for the prompt to get there, the first preferred:
   daemon's detector, after the startup grace, that says all of: the
   prompt box is on screen, `VisibleIdle`, not the idle the detector
   falls back to when nothing matches; the pane's identified agent is
-  alive, so a wrapper that became a shell after the agent died is not
-  typed into; and the pane is the one the journal names, on the server
-  instance it names, with the agent identity it recorded at the first
-  observation. The daemon loads the prompt into a tmux buffer named for
-  the attempt, pastes it with bracketed paste, sends Enter, deletes the
-  buffer, and does this once. A pane that is not ready within a minute
-  gets nothing.
+  alive and its identity is verified, not the tentative one an
+  environment hint gives before the agent's own process is found; and
+  the pane is the one the journal names, on the server instance it
+  names. That verified identity is bound into the journal at that
+  moment, before the first attempt, and every later attempt requires
+  the same one. The daemon loads the prompt into a tmux buffer named
+  for the attempt, pastes it with bracketed paste, sends Enter, deletes
+  the buffer, and does this once. A pane that is not ready within a
+  minute gets nothing.
+
+The agent stage is journaled as two transitions, whichever way the
+prompt goes. `launching` is written before `new-session`, with the
+root, the session name and whether the argv carries the prompt;
+`launched` after it returns, with the pane and the server instance. On
+the argv path `launched` is `delivered`: the process was started with
+the prompt as its argument, and that is the handoff. On the typed path
+delivery is a third and fourth transition, `attempting` before the
+paste and `delivered` or `not delivered` after it. A daemon that dies
+between `launching` and `launched` has started a session or not; a
+resend finds `launching`, and if a managed session is in the root it is
+this launch's and its state is `unknown`, since on the argv path the
+agent may have the prompt and on the typed path it does not, and no
+pane was recorded to type into; if no session is in the root the
+launch never happened and the resend launches. A daemon that dies
+between `attempting` and the outcome leaves `unknown`.
 
 Delivery is a state of its own, `prompt` in the result and in the
-pending record, and its attempts are journaled on the host:
+pending record:
 
-- `none`: the add carried no prompt. Complete.
-- `delivered`: the journal says an attempt reached Enter. Complete.
+- `none`: the add carried no prompt. Complete. Nothing else is `none`.
+- `delivered`: the journal says the argv launch returned, or an attempt
+  reached Enter. Complete.
 - `not delivered: <reason>`: the pane was not ready in time, the paste
-  failed before anything reached the pane, or the session existed
-  already and no attempt was ever made. Needs the user.
-- `unknown`: an attempt was written as `attempting` and no outcome
-  followed, the daemon died between the paste and the record, or the
-  journal for a session the resend found is missing. Needs the user,
-  and no daemon delivers again on its own.
+  failed before anything reached the pane, or the add found a managed
+  session already in the root and was not a resend of the launch that
+  made it, `session existed`, the case of `a` on a worktree row that
+  has a session, or of a branch reused on purpose. Needs the user.
+- `unknown`: a crash window above. Needs the user, and no daemon
+  delivers again on its own.
 
-The rules a resend follows are the journal's: a session the agent
-stage creates gets the prompt and the attempt is journaled around the
-paste, `attempting` before, `delivered` or `not delivered` after; a
-session found already in the root, the skip path, takes the journal's
-delivery state as it stands, `none` when the journal has no entry for
-the id, since then the session is the user's own or an older add's,
-and `unknown` when the entry says `attempting`. Nothing is inferred
-from the session's existence, and a session that has exited since is
-not recreated by a resend for delivery's sake: the agent stage skips by
-root only when a managed session is there, as today, and when none is
-there it makes one and delivers, which is the same task's first
-delivery unless the journal says otherwise.
+Nothing is inferred from a session's existence. The skip path takes the
+journal's word: a resend under a known id resumes the recorded state; a
+new id that finds a session is `session existed`; a known id whose
+entry has no launch recorded and finds a session is `session existed`
+too, since the launch was not this command's.
 
 A result whose delivery needs the user keeps the pending row, with the
 reason, and the prompt stays in the pending file until the user acts.
-`p` on the row starts a delivery attempt: `{type: prompt, id, attempt}`
-to the host, where `id` is the add's and `attempt` a number the relay
-increments, so the host journals it, serializes attempts per session,
-answers a repeat of the same attempt with its recorded outcome rather
-than pasting again, and lets the relay `follow` an attempt whose reply
-was lost. The host checks the target against the journal: the root
-must still be the worktree, the session's single pane the one recorded,
-the server instance the same, the agent identity the recorded one or
-none yet; a replacement session or agent is refused with `not
-delivered: session replaced`, and the user decides. `x` dismisses the
-row and deletes the file. `jump` works on the row meanwhile, since the
-agent is up. `laatmux add -p` in the foreground prints the delivery
-state as its last line and exits 0 when the add succeeded whatever the
-delivery, since the worktree and the agent are there; the state is what
-the user reads.
+`p` on the row starts a delivery attempt: the relay writes the attempt
+number into the pending file first, allows one unresolved attempt at a
+time, and sends `{type: prompt, id, attempt, prompt}` to the host, where
+the journal serializes attempts per session, answers a repeat of the
+same number with its recorded outcome rather than pasting again, and
+lets the relay `follow` an attempt whose reply was lost; a laptop daemon
+that restarts with an attempt unresolved follows it before anything
+else. The host checks the target against the journal: the root must
+still be the worktree, the session's single pane the one recorded, the
+server instance the same, the agent identity the bound one; a
+replacement session or agent is refused with `not delivered: session
+replaced`, and the user decides. `p` is offered only on a row whose
+state is `not delivered` or `unknown` with the prompt retained and no
+attempt unresolved. `x` dismisses the row and deletes the file. `jump`
+works on the row meanwhile, since the agent is up. `laatmux add -p` in
+the foreground prints the delivery state as its last line and exits 0
+when the add succeeded whatever the delivery, since the worktree and
+the agent are there; the state is what the user reads.
 
 The prompt is sensitive. It travels in the `add` message and the
 `prompt` message, over the same ssh as everything. On the laptop it is
@@ -244,16 +271,20 @@ one `-`, trimmed, cut at forty characters on a word boundary. It is a
 proposal. A generated name is submitted as such, and the host makes it
 unique in an `allocate` step of its own after `fetch`, when the local
 and remote branches are current and the repository lock is held so two
-forms cannot race: the first free of `<name>`, `<name>-2`, `<name>-3`
-against the local branches, the remote branches and the registered
-worktrees, written to the journal before the branch is made, so a
-resend takes the allocated name and never allocates again. The
-`allocate` progress line and the result carry the branch used, and the
-pending record shows it from then on. A name the user edited is
-explicit and behaves as `add <branch>` does today, reusing a branch
-that exists, which is what `a` on a worktree row without a session
-wants. `add`'s validation applies at submit, so a name git would refuse
-is refused in the form with the same message.
+adds cannot race: the first free of `<name>`, `<name>-2`, `<name>-3`
+against the local branches, the remote branches, the registered
+worktrees, and the names allocated by journal entries that are not
+terminal, which is what reserves a name between its allocation and its
+branch across a daemon death. The allocation is written to the journal
+before the branch is made, so a resend takes the allocated name and
+never allocates again, and an entry that ends terminal without its
+branch made releases the name. The `allocate` progress line and the
+result carry the branch used, and the pending record shows it from
+then on. A name the user edited is explicit and behaves as `add
+<branch>` does today, reusing a branch that exists, which is what `a`
+on a worktree row without a session wants. `add`'s validation applies
+at submit, so a name git would refuse is refused in the form with the
+same message.
 
 ## The form
 
@@ -318,41 +349,52 @@ progress, `host unreachable, retrying` while the relay cannot reach the
 host, `failed at <stage>` after a failure, `prompt not delivered` or
 `prompt delivery unknown` after a success without a complete delivery,
 `outcome unknown` when neither daemon can say what became of the add,
-`done, worktree gone` when the add completed and the worktree has since
-been removed; the title line is the detail or the reason. The row is
-not dim while running and dim once it needs the user, as a stale row is.
-`Enter` on a running one does nothing; on one with a session it jumps;
-`p` on one whose prompt is retained delivers it; `x` on one that needs
-the user dismisses it, with a confirm line.
+`done, awaiting the listing` between a success and the host's worktree
+listing that follows it, `done, worktree gone` when that listing has
+no worktree at the root; the title line is the detail or the reason.
+The row is not dim while running and dim once it needs the user, as a
+stale row is. `Enter` on a running one does nothing; on one with a
+session it jumps; `p` on one whose prompt is retained delivers it; `x`
+on one that needs the user dismisses it, with a confirm line.
 
 Complete is one predicate, used by the daemon to retire a record, by
 the rows to hide the worktree row behind the pending one, and by the
 views to offer `p` and `x`: the add succeeded and the delivery state is
-`delivered` or `none`. A record that is complete is retired, its file
-removed, once the host is listed in the merged stream and the worktree
-record for its environment and root is there, which hands the row over
-to the worktree row, with or without a session; or once the host is
-listed and the root is not among its worktrees, which is `done,
-worktree gone`, a row that needs the user only to be dismissed. Until
-then the pending row stands and the worktree row for the same
-environment and root is not drawn.
+`delivered` or `none`. A record that is complete is retired on a
+worktree listing that is causally after the result, which the host
+provides: `finish` runs the worktree poll before it emits the result,
+so the host's records from then on include the mutation, and the relay,
+on its own connection, takes one plain snapshot after the result and
+closes it. A worktree at the root in that snapshot hands the row over
+to the worktree row, once the merged stream shows it too, and the file
+goes; no worktree at the root is `done, worktree gone`, a row that
+needs the user only to be dismissed, and the file stays until then.
+Until the snapshot the row says `done, awaiting the listing`. While a
+pending record exists that is not retired, the worktree row for the
+same environment and root is not drawn: the pending row stands for it,
+with more to say.
 
 A pending record and the worktree row it will become are joined by
-identity, not by name: the record carries the host's environment id
-from the hello of the connection that carried the add, the repository
-source, and the root from the moment the host reports it, in a field
-of the `allocate` progress line. From that moment the pending row's id
-is the worktree row's, `<environment>/worktree/<root>`, so the view's
-selection anchor, which is the row id, needs no transfer: whichever
-message arrives first, and across a resnapshot, the same id names the
-task, and `Enter` after the change lands on the agent. Before the root
-is known the id is the command's.
+identity, not by name: the record carries the host's environment id,
+the repository source, and the root from the moment the host reports
+it, in a field of the `allocate` progress line, and the rows package
+joins on environment and root. The row's id is the command's, always;
+the view keeps its selection across the handover through an alias: a
+pending row whose root is known also answers to the worktree row's id,
+`<environment>/worktree/<root>`, and the model, looking for its anchor
+after a refresh, takes a row whose id or alias matches and re-anchors
+on the row's id. So a task selected during `clone` stays selected when
+the root arrives, when the worktree row takes over, across a
+resnapshot, and through the reorder the sort makes; two pending
+records for one explicit branch are two rows with two ids, and the
+worktree row is hidden while either stands.
 
 A pending record that needs the user stays until dismissed, through
 laptop daemon restarts, with its outcome and reason in the file; a
 daemon that starts and finds a record whose result is recorded does
-not resubmit it. One whose host is gone from the config stays too, with
-`host removed`, so nothing the user asked for disappears without them.
+not resubmit it, and one with an attempt unresolved follows the
+attempt. One whose host is gone from the config stays too, with `host
+removed`, so nothing the user asked for disappears without them.
 
 ## Protocol
 
@@ -381,16 +423,17 @@ The pending record, without the prompt:
 ```
 {id, host, environment_id, source, repo, branch, generated, agent,
  submitted_at, taken, reachable, stage, state, detail, root, session,
- done, error, prompt, attempt}
+ done, error, prompt, attempt, attempt_open}
 ```
 
 `taken` is that the host has the add; `reachable` is the relay's
 connection, the connectivity axis kept apart from the outcome as issue
 #1 wants; `stage`, `state` and `detail` are the last progress message's;
-`prompt` is the delivery state and `attempt` the number of the last
-attempt. Ids are the client's, `add-<pid>-<nanos>` as today, so a relay
-resent after a lost laptop daemon is the same id on the host and
-attaches rather than starts again.
+`prompt` is the delivery state, `attempt` the number of the last
+attempt and `attempt_open` that it is unresolved. Ids are the client's,
+`add-<pid>-<nanos>` as today, so a relay resent after a lost laptop
+daemon is the same id on the host and attaches rather than starts
+again.
 
 On the host, under a new capability `prompt`:
 
@@ -409,39 +452,46 @@ asks the host to allocate the branch; `branch` and `root` on the
 `allocate` progress line and on the result are the ones used. A `prompt`
 message is a command like `add`, with the journal behind it: a repeated
 attempt is answered from the record, and `follow` with an attempt
-reattaches to one in flight. A host without the capability refuses an
-add that carries a prompt, on the client's side, before it is sent.
+reattaches to one in flight. `follow` without an attempt, for an id the
+memory has forgotten, is answered from the journal's recorded result. A
+host without the capability refuses an add that carries a prompt, on
+the client's side, before it is sent.
 
 ## Order of work
 
 1. This note.
 2. The journal and the prompt on the host: capability `prompt`, the
-   journal under the state directory with its sweep, `generated`
-   branches in an `allocate` step after `fetch`, the field in the add
-   message, `{prompt}` in an agent's `cmd` with the argument redacted in
-   any tmux error, the typed-in delivery through the detector's
-   readiness with a `Paste` on the managed server, the attempts and
-   their states, the `prompt` message with `follow`, `add -p` in the CLI
-   printing the state. Verified on the VM with `claude` taking the
-   prompt positionally, with a `cmd` without the placeholder, with the
-   daemon restarted between the session and the delivery leaving
-   `unknown`, with a resend under a known id keeping its branch, and
-   with two generated names for one prompt.
+   journal under the state directory with tombstones, `removed` from
+   `rm` and the sweep, `follow` answered from it, `generated` branches
+   in an `allocate` step after `fetch` reserving against the journal,
+   the field in the add message, `{prompt}` in an agent's `cmd` with
+   the argument redacted in any tmux error, the launch transitions, the
+   typed-in delivery through the detector's readiness with the bound
+   identity and a `Paste` on the managed server, the attempts and their
+   states, the `prompt` message with `follow`, the worktree poll before
+   the result, `add -p` in the CLI printing the state. Verified on the
+   VM with `claude` taking the prompt positionally, with a `cmd` without
+   the placeholder, with the daemon killed between `launching` and
+   `launched` leaving `unknown`, with a resend under a known id keeping
+   its branch, with two generated names for one prompt, and with a
+   `follow` after `rm` answered `removed`.
 3. The relay in the laptop's daemon: `add` with `relay`, the pending
-   file before the answer, the pending records in the merged stream,
-   the follow with backoff and the environment pin, re-follow on
-   restart, the prompt scrubbed on completion, `dismiss`, the `prompt`
-   message forwarded with attempts, `add --detach`. Verified with the
-   laptop daemon restarted mid-add, the host's daemon restarted mid-add,
-   and the host unreachable for longer than the client's three attempts.
+   file before the answer, the environment bound at accept or at first
+   contact, the pending records in the merged stream, the follow with
+   backoff, re-follow on restart, the snapshot after the result and the
+   retirement rule, the prompt scrubbed on completion, `dismiss`, the
+   `prompt` message with attempts persisted first, `add --detach`.
+   Verified with the laptop daemon restarted mid-add and mid-attempt,
+   the host's daemon restarted mid-add, and the host unreachable for
+   longer than the client's three attempts.
 4. The form overlay with bracketed paste in the decoder and golden
    tests, the branch proposal, `compose`, the dashboard's `a` on it with
    the foreground fallback for an older daemon.
 5. The pending rows in the rows package and both views, the join by
-   environment and root with the shared id, the completion predicate,
-   `p` and `x`; verified under the user's tmux config with a submit from
-   the popup and the row followed through to the agent working on the
-   prompt.
+   environment and root, the alias for the anchor, the completion
+   predicate, `p` and `x`; verified under the user's tmux config with a
+   submit from the popup and the row followed through to the agent
+   working on the prompt.
 
 ## Out of scope
 
@@ -451,4 +501,5 @@ second prompt to a running agent beyond delivering the one it was
 started for. Background `run`. A queue of tasks per repository.
 Templates or history for prompts. Encrypting the pending file; it is
 the state directory's own protection, as `last.json` has. Journaling
-the steps of `add` that inspection already covers.
+the steps of `add` that inspection already covers, or making setup
+commands exactly once.
