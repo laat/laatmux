@@ -369,6 +369,10 @@ func TestMergedHostDownAndBack(t *testing.T) {
 			t.Errorf("record removed on drop: %+v", m)
 		}
 	}
+	// The drop says a dial is coming, so a client waits for it.
+	if st := *msgs[len(msgs)-1].HostStatus; !st.Reconnecting || st.Error != "disconnected" {
+		t.Errorf("drop not marked reconnecting: %+v", st)
+	}
 	// Cached records are in the next snapshot, with the host down.
 	c2, pc2, snap := f.subscribe(t, ctx)
 	defer c2.Close()
@@ -378,9 +382,10 @@ func TestMergedHostDownAndBack(t *testing.T) {
 	if len(snap.Agents) != 2 {
 		t.Errorf("cached records missing while down: %+v", snap.Agents)
 	}
-	// The retry fails with ssh's message in the record.
+	// The retry fails with ssh's message in the record, and the
+	// reconnect is over: the host is down for a client to stop on.
 	until(t, c2, pc2, hostStatus("vm", func(st protocol.HostStatus) bool {
-		return st.Error == "ssh: connect to host vm port 22: Connection refused"
+		return st.Error == "ssh: connect to host vm port 22: Connection refused" && !st.Reconnecting
 	}))
 
 	// Back: the remote has changed meanwhile; the snapshot replaces its
@@ -393,6 +398,9 @@ func TestMergedHostDownAndBack(t *testing.T) {
 	f.remote.down = nil
 	f.remote.mu.Unlock()
 	msgs = until(t, c, pc, hostStatus("vm", listed))
+	if st := *msgs[len(msgs)-1].HostStatus; st.Reconnecting || st.Error != "" {
+		t.Errorf("back but still marked down: %+v", st)
+	}
 	var removed, added bool
 	for _, m := range msgs {
 		if m.Type == protocol.TypeRemove && m.AgentID == "renv/laatmux/%1" {

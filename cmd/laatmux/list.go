@@ -41,9 +41,13 @@ type hostState struct {
 	Local     bool // this machine, as the config says
 	Connected bool
 	Error     string
-	Version   string
-	EnvID     string
-	Since     time.Time
+	// Reconnecting is that the error is a dropped connection the daemon
+	// is dialling again, from the merged stream; the direct path has no
+	// such state, its own backoff is in watch.
+	Reconnecting bool
+	Version      string
+	EnvID        string
+	Since        time.Time
 	// Worktrees is the daemon's worktrees capability; without it a
 	// snapshot carries no records and says nothing about worktrees.
 	// Listed is set once the host's snapshot has arrived. Until both, its
@@ -54,14 +58,25 @@ type hostState struct {
 }
 
 // ready reports whether a one-shot client can stop waiting on the host:
-// its records are listed or it has failed. A host that is connecting, or
-// connected with its snapshot pending, is neither.
-func (h hostState) ready() bool { return h.Listed || h.Error != "" }
+// its records are listed or it has failed. A host that is connecting,
+// connected with its snapshot pending, or reconnecting after a drop, is
+// neither: a daemon restarted for an upgrade is back within seconds,
+// and the wait is bounded by the snapshot timeout as for a cold host.
+func (h hostState) ready() bool { return h.Listed || (h.Error != "" && !h.Reconnecting) }
+
+// down is the host's error as a header line says it: with the reconnect
+// noted when one is under way.
+func (h hostState) down() string {
+	if h.Reconnecting {
+		return h.Error + " (reconnecting)"
+	}
+	return h.Error
+}
 
 // fromStatus is the host record of the merged stream as this view holds
 // it.
 func fromStatus(st protocol.HostStatus) hostState {
-	return hostState{Local: st.Local(), Connected: st.Connected, Error: st.Error, Version: st.Version, EnvID: st.EnvironmentID,
+	return hostState{Local: st.Local(), Connected: st.Connected, Error: st.Error, Reconnecting: st.Reconnecting, Version: st.Version, EnvID: st.EnvironmentID,
 		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities}
 }
 
@@ -91,7 +106,7 @@ func (m *merged) setHost(name string, st hostState) {
 func (m *merged) setHostErr(name string, local bool, msg string) {
 	m.mu.Lock()
 	st := m.hosts[name]
-	st.Local, st.Connected, st.Listed, st.Error, st.Since = local, false, false, msg, time.Now()
+	st.Local, st.Connected, st.Listed, st.Error, st.Reconnecting, st.Since = local, false, false, msg, false, time.Now()
 	m.hosts[name] = st
 	m.mu.Unlock()
 	m.notify()
@@ -239,7 +254,7 @@ func (m *merged) render(locals []workspace.Local) string {
 		case st.Connected:
 			fmt.Fprintf(&b, "%s  connected  %s  (snapshot pending)\n", n, st.Version)
 		case st.Error != "":
-			fmt.Fprintf(&b, "%s  DOWN  %s\n", n, st.Error)
+			fmt.Fprintf(&b, "%s  DOWN  %s\n", n, st.down())
 		default:
 			fmt.Fprintf(&b, "%s  connecting\n", n)
 		}
