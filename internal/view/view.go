@@ -367,11 +367,6 @@ func (m *Model) Render() []Line {
 		if j := m.scroll + i; j < len(lines) {
 			out = append(out, lines[j])
 			m.hits[i] = hits[j]
-			for _, sp := range lines[j].Spans {
-				if sp.Fg == spinnerFg {
-					m.spinning = true
-				}
-			}
 		} else {
 			out = append(out, plain(""))
 		}
@@ -380,7 +375,17 @@ func (m *Model) Render() []Line {
 		out = append(out, plain(""))
 	}
 	out = append(out, m.footer())
-	return out[:m.Height]
+	out = out[:m.Height]
+	// What spins is what is drawn: a body line the height cuts off
+	// below the header lines does not count.
+	for _, l := range out {
+		for _, sp := range l.Spans {
+			if sp.Fg == spinnerFg {
+				m.spinning = true
+			}
+		}
+	}
+	return out
 }
 
 func (m *Model) footer() Line {

@@ -727,6 +727,16 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	if m.Spinning() {
 		t.Fatalf("tile head clipped and still spinning:\n%s", Debug(m.Render()))
 	}
+	// Header lines that fill the terminal: the one body line the layout
+	// keeps is cut off by the height, and does not count.
+	m = model(now)
+	m.Layout, m.Width = Compact, 80
+	m.SetRows(rows.Build(fixtureInput(now)))
+	m.Header = []string{"one", "two"}
+	m.Height = 2
+	if lines := m.Render(); len(lines) != 2 || m.Spinning() {
+		t.Fatalf("headers filling the terminal: %d lines, spinning=%v", len(lines), m.Spinning())
+	}
 	// Narrow: the coloured mark survives the fallback in both layouts,
 	// and no line is wider than the pane.
 	for _, layout := range []Layout{Compact, Tiles} {
