@@ -12,7 +12,7 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -33,7 +33,9 @@ in [docs/milestone-three.md](docs/milestone-three.md).
 go build -o laatmux ./cmd/laatmux
 ./laatmux ls        # starts the local daemon on demand, lists workspaces and agents
 ./laatmux watch     # live, redraws on change
-./laatmux hosts     # reachability, daemon version, capabilities
+./laatmux hosts     # reachability, daemon version, capabilities; marks daemons that differ from this build
+./laatmux upgrade vm    # build for the host from this checkout, install over ssh, restart its daemon
+./laatmux stop      # end this machine's daemon cleanly; the next command starts one again
 ./laatmux repos     # each known repository's name and where it lands on each host
 ./laatmux add fix-ls                          # worktree and agent for the repo of the current directory, on the last-used host
 ./laatmux add fix-ls --repo proj --host vm --agent claude
@@ -323,6 +325,26 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   disconnects leaves the run going, as an `add` keeps going.
 - **`settle`** and **`unsettle`** set and clear `@laatmux_settled` on the
   workspace session they run from, or the one named.
+
+## Upgrading a host
+
+`laatmux upgrade <host>...` puts this checkout's build on a host and
+restarts its daemon. It asks the host for `uname -sm`, builds for that
+platform with `CGO_ENABLED=0` and the version from `git describe`, once
+per platform per run (`--bin` installs a binary built elsewhere, `--src`
+names the checkout when the command runs from another directory), then
+streams the binary over the same ssh alias the client uses into an `sh`
+script: written beside the configured `bin` and renamed over it, so the
+install is atomic and the running daemon keeps its own inode, then
+`laatmux stop` with the new binary. A `bin` under `~` is the remote
+home; a bare name is found on the remote PATH as the bridge finds it.
+`stop` sends the daemon `SIGTERM`, the clean shutdown that cancels its
+runs and waits for them, and waits for it to exit; the next connection
+starts the new build, and `upgrade` makes that connection last and
+prints the version. The local host is upgraded in place of the running
+executable the same way. `hosts` marks every daemon whose build is not
+this client's, since versions are `git describe` strings, equal or not,
+never ordered.
 
 ## Sidebar and dashboard
 
