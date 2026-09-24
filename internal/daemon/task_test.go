@@ -72,7 +72,7 @@ func shortWait(t *testing.T, d time.Duration) {
 // readEntry reads the journal file for id.
 func readEntry(t *testing.T, d *Daemon, id string) entry {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(d.journal.dir, fileName(id)))
+	b, err := os.ReadFile(filepath.Join(d.journal.dir, FileName(id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestAddArgvPrompt(t *testing.T) {
 			t.Fatalf("prompt in progress: %+v", p)
 		}
 	}
-	b, _ := os.ReadFile(filepath.Join(d.journal.dir, fileName("c1")))
+	b, _ := os.ReadFile(filepath.Join(d.journal.dir, FileName("c1")))
 	if strings.Contains(string(b), "sidebar") {
 		t.Fatalf("prompt in the journal:\n%s", b)
 	}
@@ -599,7 +599,7 @@ func TestJournalStartup(t *testing.T) {
 	dir := t.TempDir()
 	e := entry{ID: "x", Source: "s", Repo: "proj", Branch: "b", HasPrompt: true, Typing: true, Attempts: []attempt{{N: 1, State: attemptAttempting}}, FirstSeen: time.Now()}
 	b, _ := json.Marshal(e)
-	os.WriteFile(filepath.Join(dir, fileName("x")), b, 0o600)
+	os.WriteFile(filepath.Join(dir, FileName("x")), b, 0o600)
 	os.WriteFile(filepath.Join(dir, "junk.json"), []byte("{"), 0o600)
 	store, _ := newStore(t)
 	ft := &fakeServer{}
@@ -614,7 +614,7 @@ func TestJournalStartup(t *testing.T) {
 	// An attempt open before the paste was written is not delivered.
 	waiting := entry{ID: "w", Source: "s", Repo: "proj", Branch: "b", HasPrompt: true, Attempts: []attempt{{N: 1, State: attemptAttempting}}, FirstSeen: time.Now()}
 	b, _ = json.Marshal(waiting)
-	os.WriteFile(filepath.Join(dir, fileName("w")), b, 0o600)
+	os.WriteFile(filepath.Join(dir, FileName("w")), b, 0o600)
 	j, err := openJournal(dir, d.cfg.Logger)
 	if err != nil {
 		t.Fatal(err)
@@ -653,8 +653,8 @@ func TestJournalStartup(t *testing.T) {
 		t.Fatal("junk deleted")
 	}
 	// Ids that are not file names are hashed; safe ones are used as is.
-	if fileName("add-1-2") != "add-1-2.json" || !strings.HasPrefix(fileName("../x"), "h-") || !strings.HasPrefix(fileName(".hidden"), "h-") {
-		t.Fatalf("fileName %s %s", fileName("add-1-2"), fileName("../x"))
+	if FileName("add-1-2") != "add-1-2.json" || !strings.HasPrefix(FileName("../x"), "h-") || !strings.HasPrefix(FileName(".hidden"), "h-") {
+		t.Fatalf("fileName %s %s", FileName("add-1-2"), FileName("../x"))
 	}
 	// A daemon without a journal directory has no task capability and
 	// refuses a prompt at resolve.

@@ -648,7 +648,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	if err := set(func(e *entry) { e.Typing = true }); err != nil {
 		return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
 	}
-	buffer := attemptBufferPrefix + fileName(id) + "-" + strconv.Itoa(n)
+	buffer := attemptBufferPrefix + FileName(id) + "-" + strconv.Itoa(n)
 	err := d.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
 	// Whatever the paste did, the pane's observation is spent: the next
 	// delivery to it needs one made after this moment.

@@ -160,7 +160,7 @@ func (r *relay) writeLocked(p *pendingFile) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(r.dir, fileName(p.ID))
+	path := filepath.Join(r.dir, FileName(p.ID))
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -177,7 +177,7 @@ func (r *relay) removeLocked(id string) error {
 	if _, ok := r.recs[id]; !ok {
 		return nil
 	}
-	if err := os.Remove(filepath.Join(r.dir, fileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	delete(r.recs, id)
@@ -192,7 +192,7 @@ func (r *relay) sweep(now time.Time) {
 		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention {
 			continue
 		}
-		if err := os.Remove(filepath.Join(r.dir, fileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
 			r.logger.Printf("pending: sweep %s: %v", id, err)
 			continue
 		}
@@ -875,6 +875,10 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	switch {
 	case !ok:
 		res.Error = "no pending record " + id
+	case p.retired():
+		// Kept for its handoff, which a view may still need; the sweep
+		// takes it after the day.
+		res.Error = "the task " + id + " has handed over to its worktree row; nothing to dismiss"
 	case !p.Done:
 		res.Error = "the add is still running; it cannot be dismissed until it has an outcome"
 	case p.AttemptOpen:

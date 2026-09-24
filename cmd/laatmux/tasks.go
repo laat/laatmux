@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/command"
+	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -115,7 +116,10 @@ func TaskState(p protocol.Pending) string {
 // showTask prints the retained prompt of a pending record, read from
 // its file under the state directory.
 func showTask(id string) error {
-	b, err := os.ReadFile(filepath.Join(home.Dir(), "pending", id+".json"))
+	// The id names a file only through the daemon's mapping, which
+	// hashes anything that is not a plain name; a path is never built
+	// from it.
+	b, err := os.ReadFile(filepath.Join(home.Dir(), "pending", daemon.FileName(id)))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("no pending record %s", id)

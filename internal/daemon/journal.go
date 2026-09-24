@@ -192,9 +192,10 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 	return j, nil
 }
 
-// fileName is the entry's file: the id itself when it is safe as a
+// FileName is the file a command id is kept under, in the journal and
+// in the relay's pending directory: the id itself when it is safe as a
 // name, else a hash of it, so a client-chosen id never names a path.
-func fileName(id string) string {
+func FileName(id string) string {
 	safe := id != "" && id[0] != '.' && strings.IndexFunc(id, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.')
 	}) < 0
@@ -257,7 +258,7 @@ func (j *journal) writeLocked(e *entry) error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(j.dir, fileName(e.ID))
+	p := filepath.Join(j.dir, FileName(e.ID))
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -319,7 +320,7 @@ func (j *journal) sweep(now time.Time) {
 		if !e.terminal() || now.Sub(e.TerminalAt) < journalRetention {
 			continue
 		}
-		if err := os.Remove(filepath.Join(j.dir, fileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := os.Remove(filepath.Join(j.dir, FileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			j.logger.Printf("journal: sweep %s: %v", id, err)
 			continue
 		}

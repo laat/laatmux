@@ -113,7 +113,7 @@ func awaitMerged(t *testing.T, c net.Conn, pc *protocol.Conn, wait time.Duration
 // readPending reads a record's file.
 func readPending(t *testing.T, dir, id string) pendingFile {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(dir, fileName(id)))
+	b, err := os.ReadFile(filepath.Join(dir, FileName(id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,9 +195,16 @@ func TestRelayAdd(t *testing.T) {
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "t1", Relay: "vm", Repo: f.source(), Branch: "task", AgentName: "argv"}); !res.OK {
 		t.Fatalf("resubmit %+v", res)
 	}
+	// A retired record is not dismissed: its handoff is kept.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1"}); res.OK || !strings.Contains(res.Error, "handed over") {
+		t.Fatalf("dismiss retired %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err != nil {
+		t.Fatal("retired file dismissed")
+	}
 	// Swept after the retention.
 	f.local.relay.sweep(time.Now().Add(handoffRetention + time.Second))
-	if _, err := os.Stat(filepath.Join(f.dir, fileName("t1"))); err == nil {
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err == nil {
 		t.Fatal("retired file kept past the retention")
 	}
 }
@@ -254,7 +261,7 @@ func TestRelayResumesFiles(t *testing.T) {
 			p.SubmittedAt = time.Now()
 		}
 		b, _ := json.Marshal(p)
-		if err := os.WriteFile(filepath.Join(f.dir, fileName(p.ID)), b, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(f.dir, FileName(p.ID)), b, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,7 +380,7 @@ func TestRelayRefusalsAndDismiss(t *testing.T) {
 	if rm.ReplacedBy != "" {
 		t.Fatalf("dismiss remove %+v", rm)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, fileName("x3"))); err == nil {
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("x3"))); err == nil {
 		t.Fatal("file kept after dismiss")
 	}
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "x3"}); res.OK {
@@ -453,7 +460,7 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 	p := readPending(t, f.dir, "s1")
 	p.ReplacedBy, p.RetiredAt = "", time.Time{}
 	b, _ := json.Marshal(p)
-	os.WriteFile(filepath.Join(f.dir, fileName("s1")), b, 0o600)
+	os.WriteFile(filepath.Join(f.dir, FileName("s1")), b, 0o600)
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
 		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
@@ -553,7 +560,7 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	p := readPending(t, f.dir, "c1")
 	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent, p.Taken = false, false, false, "", time.Time{}, false, true
 	b, _ := json.Marshal(p)
-	os.WriteFile(filepath.Join(f.dir, fileName("c1")), b, 0o600)
+	os.WriteFile(filepath.Join(f.dir, FileName("c1")), b, 0o600)
 	bare := New(Config{EnvironmentID: "henv", Host: "vm", Version: "bare", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store})
 	discovered(bare)
 	bareRemote := newFakeRemote(t, f.ctx, bare)
