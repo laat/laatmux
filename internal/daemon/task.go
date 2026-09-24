@@ -584,22 +584,37 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		}
 	}
 	since := time.Now()
-	if _, why, replaced := d.awaitReady(ctx, &e, since); why != "" {
+	deadline := since.Add(readyWait)
+	var identity procs.Identity
+	for {
+		if _, why, replaced := d.awaitReady(ctx, &e, since, deadline); why != "" {
+			if replaced {
+				return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
+			}
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
+		}
+		unlock := d.lockDeliveries(e.Root)
+		if why := current(); why != "" {
+			unlock()
+			return record(protocol.DeliveryNotDelivered, why)
+		}
+		var why string
+		var replaced bool
+		identity, why, replaced = d.ready(&e, since)
+		if why == "" {
+			defer unlock()
+			break
+		}
+		unlock()
+		// The latest observation no longer says ready: another delivery
+		// pasted on it meanwhile, or the agent moved on. Wait for the
+		// next one, within the same deadline.
 		if replaced {
 			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 		}
-		return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
-	}
-	defer d.lockDeliveries(e.Root)()
-	if why := current(); why != "" {
-		return record(protocol.DeliveryNotDelivered, why)
-	}
-	identity, why, replaced := d.ready(&e, since)
-	if why != "" {
-		if replaced {
-			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
+		if time.Now().After(deadline) {
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
 		}
-		return record(protocol.DeliveryNotDelivered, "agent no longer ready: "+why)
 	}
 	if e.Identity == nil {
 		bound := protocol.Identity{PID: identity.PID, StartUnix: identity.Start.Unix(), Comm: identity.Comm, LeaderPID: identity.LeaderPID}
@@ -620,6 +635,11 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	}
 	buffer := attemptBufferPrefix + fileName(id) + "-" + strconv.Itoa(n)
 	err := d.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
+	// Whatever the paste did, the pane's observation is spent: the next
+	// delivery to it needs one made after this moment.
+	d.mu.Lock()
+	d.pasted[paneKey(d.managed.Label, e.PaneID)] = time.Now()
+	d.mu.Unlock()
 	if err == nil {
 		return record(protocol.DeliveryDelivered, "")
 	}
@@ -715,10 +735,11 @@ func (d *Daemon) adopt(ctx context.Context, root string) (tmux.Pane, string) {
 // observation, as deliver requires, and returns the verified identity;
 // else why it is not ready, and whether the target is gone for good:
 // the session or the server instance is not the recorded one, or the
-// agent is not the bound one. The observation must be from after since
-// and from after the agent's startup grace, by its own time: a fresh
-// look is what says the agent is ready, not time having passed since
-// an older one.
+// agent is not the bound one. The observation must be from after since,
+// from after the last paste into the pane, and from after the agent's
+// startup grace, by its own time: a fresh look is what says the agent
+// is ready, not time having passed since an older one, and one look
+// serves one paste.
 func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool) {
 	key := paneKey(d.managed.Label, e.PaneID)
 	d.mu.Lock()
@@ -731,6 +752,8 @@ func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool)
 	switch {
 	case !obs.at.After(since):
 		return obs.identity, "no observation since the wait began", false
+	case !obs.at.After(d.pasted[key]):
+		return obs.identity, "no observation since the last paste into the pane", false
 	case obs.session != e.Session || obs.serverPID != e.ServerPID:
 		return obs.identity, fmt.Sprintf("pane %s is in session %s on server %d, not %s on %d", e.PaneID, obs.session, obs.serverPID, e.Session, e.ServerPID), true
 	case d.sessionPanesLocked(e.Session) != 1:
@@ -748,9 +771,8 @@ func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool)
 }
 
 // awaitReady polls ready until it is, the target is gone for good, or
-// the wait is over.
-func (d *Daemon) awaitReady(ctx context.Context, e *entry, since time.Time) (procs.Identity, string, bool) {
-	deadline := since.Add(readyWait)
+// the deadline is past.
+func (d *Daemon) awaitReady(ctx context.Context, e *entry, since, deadline time.Time) (procs.Identity, string, bool) {
 	for {
 		identity, why, replaced := d.ready(e, since)
 		if why == "" || replaced || time.Now().After(deadline) {

@@ -40,6 +40,7 @@ type Add struct {
 
 // Added is what an add left behind.
 type Added struct {
+	Done    bool   // the host's add succeeded; Root and Managed are there
 	Root    string // the worktree root on the host
 	Branch  string // the branch used: the one allocated for a generated name
 	Managed string // the managed session on the host
@@ -75,7 +76,7 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 	}
 	req := a.Request(id)
 	hello, res, err := stream(ctx, a.Host.Host, a.Needs(), req, r, streamOpts{restart: true})
-	out := Added{Root: res.Root, Branch: res.Branch, Managed: res.Session, Prompt: res.Prompt, Reason: res.Error}
+	out := Added{Done: res.OK, Root: res.Root, Branch: res.Branch, Managed: res.Session, Prompt: res.Prompt, Reason: res.Error}
 	if out.Branch == "" {
 		out.Branch = a.Branch
 	}

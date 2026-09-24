@@ -157,10 +157,13 @@ type Daemon struct {
 	pollMu     sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
-	runs      map[string]map[*runJob]struct{}
-	rootGen   map[string]uint64
-	stopping  bool // StopRuns has begun; no run registers and no paste starts after it
-	pasting   int  // pastes in flight, which StopRuns waits for
+	runs     map[string]map[*runJob]struct{}
+	rootGen  map[string]uint64
+	stopping bool // StopRuns has begun; no run registers and no paste starts after it
+	pasting  int  // pastes in flight, which StopRuns waits for
+	// pasted is when a pane was last pasted into, by pane key: a
+	// delivery needs an observation made after it.
+	pasted    map[string]time.Time
 	killDelay time.Duration
 
 	// The merged stream: its own sequence and subscribers, the hosts by
@@ -280,6 +283,7 @@ func New(cfg Config) *Daemon {
 		commandTTL:   DefaultCommandTTL,
 		runs:         map[string]map[*runJob]struct{}{},
 		rootGen:      map[string]uint64{},
+		pasted:       map[string]time.Time{},
 		killDelay:    DefaultKillDelay,
 
 		msubs:     map[*subscriber]struct{}{},

@@ -51,10 +51,12 @@ func cmdAdd(ctx context.Context, args []string) error {
 	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
 	res, err := add.Run(ctx, printer{})
-	// A root in the result means the worktree and its agent exist on
-	// the host, whatever happened to last.json or the local session
-	// after; that is said before the error, so it is never hidden.
-	if res.Root != "" {
+	// A host result that succeeded means the worktree and its agent
+	// exist there, whatever happened to last.json or the local session
+	// after; that is said before the error, so it is never hidden. A
+	// result that failed may still name a root, a removed one say, and
+	// that is not ready.
+	if res.Done {
 		fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, res.Branch, res.Root, res.Managed)
 	}
 	// The delivery state is printed as soon as the host has said it,

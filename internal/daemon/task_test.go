@@ -889,53 +889,89 @@ func TestReadyJudgesObservationTime(t *testing.T) {
 	if _, why, _ := d.ready(e, since); !strings.Contains(why, "since the wait began") {
 		t.Fatalf("stale observation: %q", why)
 	}
+	// One observation serves one paste: after a paste into the pane the
+	// next delivery needs a newer one.
+	st.obs.at = start.Add(startupGrace + time.Second)
+	d.pasted[paneKey("laatmux", "%1")] = st.obs.at.Add(time.Millisecond)
+	if _, why, _ := d.ready(e, since); !strings.Contains(why, "since the last paste") {
+		t.Fatalf("observation before the paste: %q", why)
+	}
+	st.obs.at = st.obs.at.Add(time.Second)
+	if _, why, _ := d.ready(e, since); why != "" {
+		t.Fatalf("observation after the paste: %q", why)
+	}
 }
 
-// A daemon stopping starts no paste and waits for one in flight, so
-// the buffer is gone before the process ends.
-func TestStopWaitsForPaste(t *testing.T) {
-	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
-	release := make(chan struct{})
-	ft.set(func() { ft.pasteHold = release })
+// Two deliveries to one pane never share an observation: with one
+// observation made while both wait, one pastes on it and the other
+// waits for a newer one, which never comes, and says so; on a new
+// observation its next attempt is delivered.
+func TestDeliveriesDoNotShareObservation(t *testing.T) {
+	shortWait(t, 600*time.Millisecond)
+	store, remote := newStore(t)
+	ft := &fakeServer{screen: idleScreen}
+	d := New(Config{
+		EnvironmentID: "env", Host: "box",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
+		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
+		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
+		Commands: t.TempDir(),
+	})
+	ctx := context.Background()
 	pc := conn(t, d)
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
-	for {
-		m, err := pc.Read()
-		if err != nil {
-			t.Fatal(err)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	first, _ := result(t, pc, "c1")
+	if !first.OK {
+		t.Fatal(first.Error)
+	}
+	for _, id := range []string{"c2", "c3"} {
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: "task", AgentName: "claude", Prompt: id})
+		if res, _ := result(t, pc, id); !res.OK || res.Error != "session existed" {
+			t.Fatalf("%s: %+v", id, res)
 		}
-		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
-			break
+	}
+	// The first poll identifies the agent; the delivery needs a
+	// verified observation, which the second poll gives, made while
+	// both attempts wait.
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.markDiscovered(&d.panesDiscovered)
+	pc2, pc3 := conn(t, d), conn(t, d)
+	pc2.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c2", Attempt: 1, Prompt: "c2"})
+	pc3.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c3", Attempt: 1, Prompt: "c3"})
+	time.Sleep(100 * time.Millisecond)
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r2, _ := result(t, pc2, "c2")
+	r3, _ := result(t, pc3, "c3")
+	delivered, waited := 0, 0
+	for _, r := range []protocol.Message{r2, r3} {
+		switch {
+		case r.OK && r.Prompt == protocol.DeliveryDelivered:
+			delivered++
+		case r.OK && r.Prompt == protocol.DeliveryNotDelivered && strings.Contains(r.Error, "since the last paste"):
+			waited++
+		default:
+			t.Fatalf("%+v", r)
 		}
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		d.mu.Lock()
-		n := d.pasting
-		d.mu.Unlock()
-		if n == 1 || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if delivered != 1 || waited != 1 || len(ft.pastes) != 1 {
+		t.Fatalf("delivered %d waited %d pastes %d", delivered, waited, len(ft.pastes))
 	}
-	stopped := make(chan struct{})
-	go func() {
-		d.StopRuns(context.Background())
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("StopRuns returned during the paste")
-	case <-time.After(200 * time.Millisecond):
+	// A new observation, and the next attempt of the one that waited
+	// is delivered.
+	loser := "c3"
+	if r3.Prompt == protocol.DeliveryDelivered {
+		loser = "c2"
 	}
-	close(release)
-	<-stopped
-	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered {
-		t.Fatalf("%+v", res)
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: loser, Attempt: 2, Prompt: loser})
+	time.Sleep(100 * time.Millisecond)
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
 	}
-	// After the stop no paste starts.
-	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
-	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "shutting down") {
-		t.Fatalf("after stop: %+v", res)
+	if res, _ := result(t, pc, loser); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 2 {
+		t.Fatalf("%s on a new observation: %+v", loser, res)
 	}
 }
