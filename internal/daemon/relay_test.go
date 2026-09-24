@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -516,6 +517,11 @@ func TestRelayEarlyFailureAndOpenAttempt(t *testing.T) {
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "e2"}); res.OK || !strings.Contains(res.Error, "unresolved") {
 		t.Fatalf("dismiss with an attempt open %+v", res)
 	}
+	// A second p while the attempt is followed in the background is
+	// answered that it is open, not queued to open the next.
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "e2"}); res.OK || !strings.Contains(res.Error, "attempt 1 is open") {
+		t.Fatalf("second p %+v", res)
+	}
 	f.ft.set(func() { f.ft.screen = idleScreen })
 	f.remote.mu.Lock()
 	f.remote.down = nil
@@ -526,5 +532,53 @@ func TestRelayEarlyFailureAndOpenAttempt(t *testing.T) {
 	}
 	if e := readEntry(t, f.host, "e2"); len(e.Attempts) != 1 {
 		t.Fatalf("host entry %+v", e)
+	}
+}
+
+// A capability refusal after the add was sent is connectivity, not an
+// outcome: the relay waits for the host and follows the add once it is
+// back.
+func TestRelayRefusalAfterSend(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	// A host that answers without task: the fake remote's daemon with
+	// its journal gone.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "c1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "cap", AgentName: "argv", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	// As a record left sent and unfinished; the host that answers now
+	// is one without task, the same environment, as a daemon restarted
+	// without its journal directory would be.
+	p := readPending(t, f.dir, "c1")
+	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent = false, false, false, "", time.Time{}, true
+	b, _ := json.Marshal(p)
+	os.WriteFile(filepath.Join(f.dir, fileName("c1")), b, 0o600)
+	bare := New(Config{EnvironmentID: "henv", Host: "vm", Version: "bare", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store})
+	discovered(bare)
+	bareRemote := newFakeRemote(t, f.ctx, bare)
+	var mu sync.Mutex
+	current := bareRemote
+	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+		mu.Lock()
+		r := current
+		mu.Unlock()
+		return r.dial(ctx, h)
+	}
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.local = local
+	got := f.awaitRecord(t, "c1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "tasks not supported") })
+	if got.Done {
+		t.Fatalf("done on a refusal after the send: %+v", got)
+	}
+	mu.Lock()
+	current = f.remote
+	mu.Unlock()
+	if got := f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !got.OK || got.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("after the host is back: %+v", got)
 	}
 }

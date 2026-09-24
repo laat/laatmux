@@ -497,8 +497,12 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		}
 		c, p, err := d.relayConn(ctx, id)
 		if err != nil {
+			// A host that cannot take the task refuses it for good only
+			// while the add cannot have reached it; once sent, a
+			// handshake says nothing about the add's outcome, and the
+			// host is waited on as an unreachable one is.
 			var ref *refusal
-			if errors.As(err, &ref) {
+			if errors.As(err, &ref) && !p.Sent {
 				d.persist(ctx, id, func(p *pendingFile) {
 					p.Done, p.OK, p.Error, p.Reachable = true, false, ref.msg, true
 				})
@@ -781,11 +785,18 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 // stream to show the worktree, so the row is never gone before the
 // one it became is there.
 func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
-	p, ok := d.relay.get(id)
-	if !ok {
-		return
-	}
+	wait := d.cfg.ReconnectMin
 	for ctx.Err() == nil {
+		// The check, the write and the publication are one step under
+		// the relay's mutex, which a merged subscription takes for its
+		// snapshot: a viewer that arrives sees the record and, once it
+		// is gone, the worktree row it became.
+		d.relay.mu.Lock()
+		p, ok := d.relay.recs[id]
+		if !ok || p.retired() {
+			d.relay.mu.Unlock()
+			return
+		}
 		d.mu.Lock()
 		watching := d.mctx != nil
 		shown := false
@@ -797,24 +808,19 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			}
 		}
 		d.mu.Unlock()
-		if !watching || shown {
-			break
+		if watching && !shown {
+			// The merged stream's own connection to the host may be
+			// down while the relay's is up; the row stays until it
+			// shows the replacement, however long that is.
+			d.relay.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
 		}
-		// The merged stream's own connection to the host may be down
-		// while the relay's is up; the row stays until it shows the
-		// replacement, however long that is.
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	// The handoff must reach the disk before the removal is published;
-	// a write that fails is retried, the lock released in between.
-	wait := d.cfg.ReconnectMin
-	for ctx.Err() == nil {
 		now := time.Now()
-		d.relay.mu.Lock()
 		_, err := d.relay.updateLocked(id, true, func(p *pendingFile) {
 			p.Listed, p.ReplacedBy, p.RetiredAt, p.PromptText = true, worktreeID, now, ""
 		})
@@ -825,8 +831,11 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		if err == nil {
 			return
 		}
+		// The handoff must reach the disk before the removal is
+		// published; a write that fails is retried, everything checked
+		// again.
 		d.cfg.Logger.Printf("pending: %s: %v", id, err)
-		if _, ok := d.relay.get(id); !ok || !d.relayBackoff(ctx, &wait) {
+		if !d.relayBackoff(ctx, &wait) {
 			return
 		}
 	}
@@ -887,8 +896,19 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "this daemon has no relay capability"
 		return res
 	}
+	// An attempt in flight holds the lock, through every reconnect: a
+	// second request is answered that it is open, not queued behind it
+	// to open the next.
 	l := d.relay.attemptLock(id)
-	l.Lock()
+	if !l.TryLock() {
+		if p, ok := d.relay.get(id); ok {
+			res.Attempt = p.Attempt
+			res.Error = fmt.Sprintf("attempt %d is open; %s", p.Attempt, p.Unreachable)
+		} else {
+			res.Error = "no pending record " + id
+		}
+		return res
+	}
 	defer l.Unlock()
 	p, ok := d.relay.get(id)
 	switch {
