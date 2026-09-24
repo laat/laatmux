@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -682,19 +683,22 @@ func (d *Daemon) retire(ctx context.Context, id string) bool {
 			return true
 		}
 		if p.Barrier == nil || p.Root == "" {
-			// A host without a barrier cannot prove its listing; the
-			// record stays with what the result said.
-			_, ok := d.persist(ctx, id, func(p *pendingFile) { p.Listed = true })
-			return ok
+			// A result without a barrier cannot be listed for; the
+			// record stays awaiting a listing that says so.
+			d.setPending(id, false, func(p *pendingFile) { p.ListingError = "the result carries no listing barrier" })
+			return false
 		}
 		c, p, err := d.relayConn(ctx, id)
 		if err != nil {
+			// A host that cannot list for the task now, refused or
+			// unreachable, is waited on: the record says why, and the
+			// listing is still owed.
 			var ref *refusal
 			if errors.As(err, &ref) {
-				_, ok := d.persist(ctx, id, func(p *pendingFile) { p.Listed, p.Gone = true, false; p.Error = ref.msg })
-				return ok
+				d.setPending(id, false, func(p *pendingFile) { p.Reachable, p.ListingError = true, ref.msg })
+			} else {
+				d.unreachable(id, err)
 			}
-			d.unreachable(id, err)
 			if !d.relayBackoff(ctx, &wait) {
 				return false
 			}
@@ -805,16 +809,27 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	now := time.Now()
-	d.relay.mu.Lock()
-	defer d.relay.mu.Unlock()
-	if _, err := d.relay.updateLocked(id, true, func(p *pendingFile) {
-		p.Listed, p.ReplacedBy, p.RetiredAt, p.PromptText = true, worktreeID, now, ""
-	}); err != nil {
+	// The handoff must reach the disk before the removal is published;
+	// a write that fails is retried, the lock released in between.
+	wait := d.cfg.ReconnectMin
+	for ctx.Err() == nil {
+		now := time.Now()
+		d.relay.mu.Lock()
+		_, err := d.relay.updateLocked(id, true, func(p *pendingFile) {
+			p.Listed, p.ReplacedBy, p.RetiredAt, p.PromptText = true, worktreeID, now, ""
+		})
+		if err == nil {
+			d.publishRemoved(id, worktreeID)
+		}
+		d.relay.mu.Unlock()
+		if err == nil {
+			return
+		}
 		d.cfg.Logger.Printf("pending: %s: %v", id, err)
-		return
+		if _, ok := d.relay.get(id); !ok || !d.relayBackoff(ctx, &wait) {
+			return
+		}
 	}
-	d.publishRemoved(id, worktreeID)
 }
 
 // dismiss drops a record that needs the user: its file goes and the
@@ -827,10 +842,15 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		return res
 	}
 	// Under the record's attempt lock, so a prompt request cannot open
-	// an attempt between the check and the removal; and the check, the
-	// removal and its publication are one step under the relay's mutex.
+	// an attempt between the check and the removal; an attempt in
+	// flight holds it, and is the refusal, not a wait on the network.
+	// The check, the removal and its publication are one step under
+	// the relay's mutex.
 	l := d.relay.attemptLock(id)
-	l.Lock()
+	if !l.TryLock() {
+		res.Error = "a delivery attempt is unresolved; it cannot be dismissed until it has an outcome"
+		return res
+	}
 	defer l.Unlock()
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
@@ -895,52 +915,61 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "pending: the attempt could not be written"
 		return res
 	}
-	p = d.runAttemptLocked(ctx, id, false)
-	res.OK = true
+	p, resolved := d.runAttemptLocked(ctx, id, false, false)
 	res.Attempt = p.Attempt
+	if !resolved {
+		// The host cannot be reached now: the attempt stays open on
+		// disk and is followed in the background, and the answer says
+		// so rather than an outcome the host never gave.
+		res.Error = "attempt " + strconv.Itoa(p.Attempt) + " is open; " + p.Unreachable
+		go d.runAttempt(ctx, id)
+		return res
+	}
+	res.OK = true
 	res.Prompt, res.Error = p.Prompt, p.Error
 	go d.settle(ctx, id)
 	return res
 }
 
-// runAttempt follows the record's open attempt, one the last daemon
-// sent, under the record's attempt lock, then settles the record.
+// runAttempt follows the record's open attempt, one sent before, under
+// the record's attempt lock for as long as it takes, then settles the
+// record.
 func (d *Daemon) runAttempt(ctx context.Context, id string) {
 	l := d.relay.attemptLock(id)
 	l.Lock()
-	d.runAttemptLocked(ctx, id, true)
+	d.runAttemptLocked(ctx, id, true, true)
 	l.Unlock()
 	d.settle(ctx, id)
 }
 
 // runAttemptLocked sends the open attempt as a prompt message and
-// follows it until it has an outcome, with backoff on a host that
-// cannot be reached. With sent, the attempt was sent before, by the
-// daemon before this one, and is followed by number first; one the
-// host never saw is sent. Called with the attempt lock held.
-func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent bool) pendingFile {
-	wait := d.cfg.ReconnectMin
+// follows it until the host answers. With sent, the attempt was sent
+// before, by the daemon before this one, and is followed by number
+// first; one the host never saw is sent. An attempt is closed by the
+// host's answer alone: a host that cannot be reached, or that refuses
+// the connection, leaves it open, waited on with backoff when wait is
+// set, else reported as unresolved to the caller, who follows it in
+// the background. Called with the attempt lock held.
+func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait bool) (pendingFile, bool) {
+	backoff := d.cfg.ReconnectMin
 	for ctx.Err() == nil {
 		p, ok := d.relay.get(id)
 		if !ok || !p.AttemptOpen {
-			return p
+			return p, true
 		}
 		c, p, err := d.relayConn(ctx, id)
 		if err != nil {
-			var ref *refusal
-			if errors.As(err, &ref) {
-				p, _ = d.persist(ctx, id, func(p *pendingFile) {
-					p.AttemptOpen, p.Prompt, p.Error = false, protocol.DeliveryNotDelivered, ref.msg
-				})
-				return p
-			}
 			d.unreachable(id, err)
-			if !d.relayBackoff(ctx, &wait) {
-				return p
+			if !wait {
+				p, _ = d.relay.get(id)
+				return p, false
+			}
+			if !d.relayBackoff(ctx, &backoff) {
+				return p, false
 			}
 			continue
 		}
-		wait = d.cfg.ReconnectMin
+		backoff = d.cfg.ReconnectMin
 		d.setPending(id, false, func(p *pendingFile) { p.Reachable, p.Unreachable = true, "" })
 		req := protocol.Message{Type: protocol.TypePrompt, ID: id, Attempt: p.Attempt, Prompt: p.PromptText}
 		if sent {
@@ -951,8 +980,12 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent bool) pen
 		c.Close()
 		if err != nil {
 			d.unreachable(id, fmt.Errorf("connection lost: %v", err))
-			if !d.relayBackoff(ctx, &wait) {
-				return p
+			if !wait {
+				p, _ = d.relay.get(id)
+				return p, false
+			}
+			if !d.relayBackoff(ctx, &backoff) {
+				return p, false
 			}
 			continue
 		}
@@ -971,8 +1004,8 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent bool) pen
 				p.Error = res.Error
 			}
 		})
-		return p
+		return p, true
 	}
 	p, _ := d.relay.get(id)
-	return p
+	return p, false
 }

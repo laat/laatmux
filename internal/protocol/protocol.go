@@ -211,13 +211,15 @@ type Pending struct {
 // retires a complete record once the host's listing shows its
 // worktree; the views hide the worktree row behind a record that is
 // not complete and offer p and x on it.
-func (p Pending) Complete() bool { return p.Done && p.OK && p.Delivered() }
+func (p Pending) Complete() bool { return p.OK && p.Delivered() }
 
 // Delivered reports whether the prompt is with the agent, or there was
 // none: the relay scrubs the prompt from its file on it, whatever the
-// add did, and delivers no more.
+// add did, and delivers no more. Only the two states say so; an add
+// that failed before the agent stage has no delivery state, and its
+// prompt is kept.
 func (p Pending) Delivered() bool {
-	return p.Done && (p.Prompt == DeliveryDelivered || p.Prompt == DeliveryNone || p.Prompt == "")
+	return p.Done && (p.Prompt == DeliveryDelivered || p.Prompt == DeliveryNone)
 }
 
 // WorktreeID is the id of the worktree row the record becomes, "" until

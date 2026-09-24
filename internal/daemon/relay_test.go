@@ -482,3 +482,49 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 		t.Fatalf("file %+v", got)
 	}
 }
+
+// An add that fails before the agent stage has no delivery state, and
+// its prompt is kept for the user; an attempt on a host that cannot be
+// reached stays open, is refused to dismiss, and resolves when the
+// host is back.
+func TestRelayEarlyFailureAndOpenAttempt(t *testing.T) {
+	shortWait(t, 200*time.Millisecond)
+	f := newRelayFixture(t, []string{"loading"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "e1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "early", AgentName: "nope", Prompt: "keep me", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	p := f.awaitRecord(t, "e1", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if p.OK || p.Prompt != "" || p.PromptText != "keep me" || p.Delivered() || !strings.Contains(p.Error, "failed at resolve") {
+		t.Fatalf("early failure %+v", p)
+	}
+	// A typed add whose prompt was not delivered; then the host goes
+	// away and p is pressed.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "e2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "open", AgentName: "claude", Prompt: "later", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "e2", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	f.remote.mu.Lock()
+	f.remote.down = errors.New("down")
+	f.remote.mu.Unlock()
+	res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "e2"})
+	if res.OK || !strings.Contains(res.Error, "attempt 1 is open") || res.Attempt != 1 {
+		t.Fatalf("p while down %+v", res)
+	}
+	if p := readPending(t, f.dir, "e2"); !p.AttemptOpen || p.Attempt != 1 {
+		t.Fatalf("file %+v", p)
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "e2"}); res.OK || !strings.Contains(res.Error, "unresolved") {
+		t.Fatalf("dismiss with an attempt open %+v", res)
+	}
+	f.ft.set(func() { f.ft.screen = idleScreen })
+	f.remote.mu.Lock()
+	f.remote.down = nil
+	f.remote.mu.Unlock()
+	p = f.awaitRecord(t, "e2", 30*time.Second, func(p pendingFile) bool { return !p.AttemptOpen })
+	if p.Prompt != protocol.DeliveryDelivered || p.Attempt != 1 {
+		t.Fatalf("resolved %+v", p)
+	}
+	if e := readEntry(t, f.host, "e2"); len(e.Attempts) != 1 {
+		t.Fatalf("host entry %+v", e)
+	}
+}
