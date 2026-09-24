@@ -183,6 +183,18 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		for _, s := range msg.Sessions {
 			m.sessions[s.Name] = s
 		}
+		// The handoffs merge into what is known; a snapshot's list is
+		// the last day's, and a view may hold an anchor older than that.
+		m.pendings = map[string]protocol.Pending{}
+		for _, p := range msg.Pendings {
+			m.pendings[p.ID] = p
+		}
+		if m.handoffs == nil {
+			m.handoffs = map[string]string{}
+		}
+		for _, h := range msg.Handoffs {
+			m.handoffs[h.ID] = h.ReplacedBy
+		}
 	case protocol.TypeUpsert:
 		if st := msg.HostStatus; st != nil {
 			m.hosts[st.Name] = fromStatus(*st)
@@ -207,7 +219,22 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		if msg.SessionsListed {
 			m.sessionsErr = ""
 		}
+		if p := msg.Pending; p != nil {
+			if m.pendings == nil {
+				m.pendings = map[string]protocol.Pending{}
+			}
+			m.pendings[p.ID] = *p
+		}
 	case protocol.TypeRemove:
+		if msg.PendingID != "" {
+			delete(m.pendings, msg.PendingID)
+			if msg.ReplacedBy != "" {
+				if m.handoffs == nil {
+					m.handoffs = map[string]string{}
+				}
+				m.handoffs[msg.PendingID] = msg.ReplacedBy
+			}
+		}
 		if msg.HostName != "" {
 			delete(m.hosts, msg.HostName)
 			for id, h := range m.byHost {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
@@ -176,4 +177,77 @@ func (a Add) Describe() string {
 		s += " and a prompt"
 	}
 	return s
+}
+
+// Submit hands the add to this machine's daemon, which runs it in the
+// background against the host: the daemon writes the task to disk and
+// answers accepted, and the add's progress and outcome are a pending
+// record in the merged stream from then on. The repository's last-used
+// host and agent are recorded here, at submit, since the submit is the
+// choice. A daemon without the relay capability is an error saying so,
+// not a foreground add in disguise.
+func (a Add) Submit(ctx context.Context) (string, error) {
+	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
+		return "", errors.New("add needs a host, a repository and a branch")
+	}
+	id := a.ID
+	if id == "" {
+		id = ID("add")
+	}
+	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		return "", fmt.Errorf("the local daemon %s has no relay capability; the add can only run in the foreground", c.Hello.Version)
+	}
+	req := a.Request(id)
+	req.Relay, req.Name = a.Host.Name, a.Repo.Name
+	if _, err := c.Request(ctx, req); err != nil {
+		return "", err
+	}
+	err = home.UpdateLast(func(l *home.Last) {
+		cur := l.Get(a.Repo.Source)
+		cur.Host = a.Host.Name
+		if a.Agent != "" {
+			cur.Agent = a.Agent
+		}
+		l.Set(a.Repo.Source, cur)
+	})
+	return id, err
+}
+
+// Dismiss drops a pending record that needs the user from this
+// machine's daemon.
+func Dismiss(ctx context.Context, id string) error {
+	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		return fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
+	}
+	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, ID: id})
+	return err
+}
+
+// DeliverPending asks this machine's daemon to deliver a pending
+// record's prompt now, as its next attempt, and returns the delivery
+// state with its reason.
+func DeliverPending(ctx context.Context, id string) (state, reason string, err error) {
+	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	if err != nil {
+		return "", "", err
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		return "", "", fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
+	}
+	res, err := c.Request(ctx, protocol.Message{Type: protocol.TypePrompt, ID: id})
+	if err != nil {
+		return "", "", err
+	}
+	return res.Prompt, res.Error, nil
 }

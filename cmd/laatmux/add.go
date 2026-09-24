@@ -50,6 +50,14 @@ func cmdAdd(ctx context.Context, args []string) error {
 	branch, prompt := a.branch, a.prompt
 	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
+	if a.detach {
+		id, err := add.Submit(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("accepted %s; the daemon runs it, laatmux tasks shows it\n", id)
+		return nil
+	}
 	res, err := add.Run(ctx, printer{})
 	// A host result that succeeded means the worktree and its agent
 	// exist there, whatever happened to last.json or the local session
@@ -83,6 +91,7 @@ type addArgs struct {
 	prompt            string
 	branch            string
 	generated         bool
+	detach            bool
 	cmd               []string
 }
 
@@ -98,13 +107,14 @@ func parseAddArgs(args []string) (addArgs, error) {
 	fs.StringVar(&a.agent, "agent", "", "agent to start; default the last used for the repository")
 	fs.StringVar(&a.prompt, "p", "", "prompt the agent is started with")
 	fs.StringVar(&a.prompt, "prompt", "", "alias of -p")
+	fs.BoolVar(&a.detach, "detach", false, "hand the add to the local daemon and return; laatmux tasks shows it")
 	if i := slices.Index(args, "--"); i >= 0 {
 		args, a.cmd = args[:i], args[i+1:]
 	}
 	if err := fs.Parse(args); err != nil {
 		return a, err
 	}
-	usage := errors.New("usage: laatmux add [<branch>] [-p <prompt>] [--repo r] [--host h] [--agent a] [-- <cmd>...]")
+	usage := errors.New("usage: laatmux add [<branch>] [-p <prompt>] [--detach] [--repo r] [--host h] [--agent a] [-- <cmd>...]")
 	switch {
 	case fs.NArg() >= 1 && fs.Arg(0) != "":
 		a.branch = fs.Arg(0)

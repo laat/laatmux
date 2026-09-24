@@ -393,3 +393,42 @@ func TestAddKeepsHostOutcomeOnError(t *testing.T) {
 		t.Fatal("Complete")
 	}
 }
+
+// Submit hands the add to the local daemon with the host named and is
+// answered accepted; the repository's last-used host and agent are
+// recorded at submit. A daemon without relay refuses before sending.
+func TestSubmit(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapMerged, protocol.CapRelay}
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	add := Add{Host: config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "task", Generated: true, Prompt: "p", Agent: "claude"}
+	id, err := add.Submit(context.Background())
+	if err != nil || !strings.HasPrefix(id, "add-") {
+		t.Fatalf("%s %v", id, err)
+	}
+	got := f.commands()
+	if len(got) != 1 || got[0].Type != protocol.TypeAdd || got[0].Relay != "vm" || got[0].Name != "proj" || got[0].Repo != "s" || got[0].Prompt != "p" || !got[0].Generated || got[0].SubmittedAt.IsZero() {
+		t.Fatalf("commands %+v", got)
+	}
+	if l, _ := home.ReadLast(); l.Get("s").Host != "vm" || l.Get("s").Agent != "claude" {
+		t.Fatalf("last %+v", l)
+	}
+	if err := Dismiss(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	f.answer = func(m protocol.Message) protocol.Message {
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Prompt: protocol.DeliveryDelivered, Attempt: 1}
+	}
+	if state, _, err := DeliverPending(context.Background(), id); err != nil || state != protocol.DeliveryDelivered {
+		t.Fatalf("%s %v", state, err)
+	}
+	if got := f.commands(); len(got) != 3 || got[1].Type != protocol.TypeDismiss || got[2].Type != protocol.TypePrompt || got[2].Attempt != 0 {
+		t.Fatalf("commands %+v", got)
+	}
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapMerged}})
+	if _, err := add.Submit(context.Background()); err == nil || !strings.Contains(err.Error(), "no relay capability") {
+		t.Fatalf("without relay: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent without relay: %+v", got)
+	}
+}

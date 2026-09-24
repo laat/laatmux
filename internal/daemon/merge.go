@@ -307,6 +307,9 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 		m.Sessions = append(m.Sessions, s)
 	}
 	sort.Slice(m.Sessions, func(i, j int) bool { return m.Sessions[i].Name < m.Sessions[j].Name })
+	if d.relay != nil {
+		m.Pendings, m.Handoffs = d.relay.pendings()
+	}
 	return m
 }
 

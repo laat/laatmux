@@ -123,6 +123,7 @@ func TestParseAddArgs(t *testing.T) {
 		{[]string{"-p", "Fix the tests", "--agent", "claude"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", agent: "claude"}, false},
 		{[]string{"-p", "Fix the tests", "--", "claude", "--flag"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", cmd: []string{"claude", "--flag"}}, false},
 		{[]string{"fix", "--", "sleep", "3600"}, addArgs{branch: "fix", cmd: []string{"sleep", "3600"}}, false},
+		{[]string{"--detach", "-p", "Fix it"}, addArgs{branch: "fix-it", generated: true, prompt: "Fix it", detach: true}, false},
 		{nil, addArgs{}, true},
 		{[]string{""}, addArgs{}, true},
 		{[]string{"-p", "!!!"}, addArgs{}, true},
@@ -136,7 +137,7 @@ func TestParseAddArgs(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
+		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || got.detach != c.want.detach || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
 			t.Errorf("%v: got %+v %v, want %+v", c.args, got, err, c.want)
 		}
 	}

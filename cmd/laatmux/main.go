@@ -44,6 +44,8 @@ func main() {
 		err = cmdWatch(ctx, os.Args[2:])
 	case "add":
 		err = cmdAdd(ctx, os.Args[2:])
+	case "tasks":
+		err = cmdTasks(ctx, os.Args[2:])
 	case "rm":
 		err = cmdRm(ctx, os.Args[2:])
 	case "path":
@@ -102,7 +104,9 @@ func usage() {
   bridge    connect stdio to the local daemon (what ssh runs on a remote host)
   add       laatmux add [<branch>] [-p <prompt>] [--repo r] [--host h] [--agent a] [-- <cmd>...]
             worktree and agent on the host, then the local workspace session;
-            with -p the agent gets the prompt and the branch may be left out
+            with -p the agent gets the prompt and the branch may be left out;
+            --detach hands it to the local daemon and returns
+  tasks     laatmux tasks [show|dismiss|prompt <id>]   the background adds and their state
   rm        laatmux rm <repo>/<branch> [--host h] [--force]     remove the worktree, its sessions
             laatmux rm --root <path> --host h [--force]          a detached worktree
             laatmux rm [--force]           inside a workspace session: that workspace
