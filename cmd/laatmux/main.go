@@ -100,8 +100,9 @@ func usage() {
 
   serve     run the per-host daemon (polls the configured tmux servers, serves status)
   bridge    connect stdio to the local daemon (what ssh runs on a remote host)
-  add       laatmux add <branch> [--repo r] [--host h] [--agent a] [-- <cmd>...]
-            worktree and agent on the host, then the local workspace session
+  add       laatmux add [<branch>] [-p <prompt>] [--repo r] [--host h] [--agent a] [-- <cmd>...]
+            worktree and agent on the host, then the local workspace session;
+            with -p the agent gets the prompt and the branch may be left out
   rm        laatmux rm <repo>/<branch> [--host h] [--force]     remove the worktree, its sessions
             laatmux rm --root <path> --host h [--force]          a detached worktree
             laatmux rm [--force]           inside a workspace session: that workspace

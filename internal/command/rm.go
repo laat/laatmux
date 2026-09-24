@@ -54,7 +54,7 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 		id = ID("rm")
 	}
 	req := protocol.Message{Type: protocol.TypeRm, ID: id, Repo: m.Repo.Source, Branch: m.Branch, Root: m.Root, Force: m.Force}
-	hello, res, err := stream(ctx, m.Host.Host, protocol.CapRm, req, r, streamOpts{restart: true, environment: m.Environment})
+	hello, res, err := stream(ctx, m.Host.Host, []string{protocol.CapRm}, req, r, streamOpts{restart: true, environment: m.Environment})
 	if err != nil {
 		return Removed{}, failed("rm", res, err)
 	}

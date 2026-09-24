@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,23 +23,54 @@ import (
 // adds a managed pane tagged with the root, as the real one does;
 // KillSession removes it.
 type fakeServer struct {
+	mu     sync.Mutex
 	panes  []tmux.Pane
 	next   int
 	killed []string
+	// pastes records every Paste: the buffer, pane and text; pasteErr
+	// is returned instead when set; newErr fails NewSession; buffers
+	// is what DeleteBuffers was asked to clear.
+	pastes   []fakePaste
+	pasteErr error
+	newErr   error
+	buffers  []string
+	cmds     [][]string // the Cmd of every NewSession
+	server   int        // ServerPID of the panes made, 5 by default
+	screen   []string   // what Capture shows in every pane
 }
 
+type fakePaste struct{ buffer, pane, text string }
+
 func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return append([]tmux.Pane(nil), f.panes...), nil
 }
-func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) { return nil, nil }
-func (f *fakeServer) EnsureConfigured(context.Context) error                 { return nil }
+func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.screen...), nil
+}
+func (f *fakeServer) EnsureConfigured(context.Context) error { return nil }
 func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cmds = append(f.cmds, append([]string(nil), o.Cmd...))
+	if f.newErr != nil {
+		return "", f.newErr
+	}
 	f.next++
 	id := "%" + strconv.Itoa(f.next)
-	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, Managed: true, Host: o.Host, ServerPID: 5, TTY: "/dev/null"})
+	server := f.server
+	if server == 0 {
+		server = 5
+	}
+	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
 	return id, nil
 }
 func (f *fakeServer) KillSession(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.killed = append(f.killed, name)
 	kept := f.panes[:0]
 	for _, p := range f.panes {
@@ -47,6 +79,21 @@ func (f *fakeServer) KillSession(_ context.Context, name string) error {
 		}
 	}
 	f.panes = kept
+	return nil
+}
+func (f *fakeServer) Paste(_ context.Context, buffer, pane, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pasteErr != nil {
+		return f.pasteErr
+	}
+	f.pastes = append(f.pastes, fakePaste{buffer, pane, text})
+	return nil
+}
+func (f *fakeServer) DeleteBuffers(_ context.Context, prefix string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buffers = append(f.buffers, prefix)
 	return nil
 }
 
@@ -139,6 +186,7 @@ func newAddDaemon(t *testing.T) (*Daemon, *fakeServer, *worktree.Store, string) 
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
+		Commands: t.TempDir(),
 	})
 	return d, ft, store, remote
 }

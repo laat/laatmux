@@ -967,3 +967,57 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 		os.Chmod(locked, 0o755)
 	}
 }
+
+// ProposeBranch turns the first words of a prompt into a name git
+// accepts, cut on a word boundary; Allocate is the first free numbered
+// form; Branches lists local and remote names.
+func TestProposeAndAllocate(t *testing.T) {
+	cases := map[string]string{
+		"Make the sidebar follow the current row when the sort moves it": "make-the-sidebar-follow-the-current-row",
+		"  Fix: tests!! (again)  ":                                       "fix-tests-again",
+		"ÆØÅ æøå 42":                                                     "æøå-æøå-42",
+		"!!!":                                                            "",
+		"a-very-long-single-word-that-goes-past-forty-characters": "a-very-long-single-word-that-goes-past",
+		"short": "short",
+	}
+	for prompt, want := range cases {
+		if got := ProposeBranch(prompt); got != want {
+			t.Errorf("%q: got %q, want %q", prompt, got, want)
+		}
+		if want != "" {
+			if err := CheckBranch(context.Background(), want); err != nil {
+				t.Errorf("%q: %v", want, err)
+			}
+		}
+	}
+	taken := map[string]bool{"task": true, "task-2": true}
+	if got := Allocate("task", func(n string) bool { return taken[n] }); got != "task-3" {
+		t.Fatalf("allocate %s", got)
+	}
+	if got := Allocate("free", func(n string) bool { return taken[n] }); got != "free" {
+		t.Fatalf("allocate %s", got)
+	}
+	f := newFixture(t)
+	if _, _, err := f.add("feature"); err != nil {
+		t.Fatal(err)
+	}
+	local, rem, err := Branches(f.ctx, f.checkout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(local, ",") != "feature,main" || strings.Join(rem, ",") != "main" {
+		t.Fatalf("local %v remote %v", local, rem)
+	}
+	// Prepare, Place and Materialize are the parts of Add: the root is
+	// placed at the label's place, or where git has the branch.
+	p, err := f.store.Prepare(f.ctx, f.repo, nil)
+	if err != nil || !p.Found || p.Checkout != f.checkout() {
+		t.Fatalf("prepare %+v %v", p, err)
+	}
+	if root, err := f.store.Place(f.ctx, p, f.repo, "feature"); err != nil || root != f.store.Dirs.Worktree("proj", "feature") {
+		t.Fatalf("place %s %v", root, err)
+	}
+	if root, err := f.store.Place(f.ctx, p, f.repo, "new"); err != nil || root != f.store.Dirs.Worktree("proj", "new") {
+		t.Fatalf("place new %s %v", root, err)
+	}
+}

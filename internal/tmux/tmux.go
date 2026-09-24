@@ -4,7 +4,9 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -71,7 +73,15 @@ func (s Server) args(a ...string) []string {
 
 // Run executes a tmux command and returns stdout.
 func (s Server) Run(ctx context.Context, a ...string) ([]byte, error) {
+	return s.RunInput(ctx, nil, a...)
+}
+
+// RunInput executes a tmux command with stdin from in, for a command
+// that reads its input rather than taking it in its arguments, and
+// returns stdout.
+func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "tmux", s.args(a...)...)
+	cmd.Stdin = in
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -333,15 +343,18 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 	for _, kv := range opts {
 		args = append(args, ";", "set-option", "-p", "-t", target, kv[0], kv[1])
 	}
+	// From here on the session may exist whatever the error: the
+	// sequence runs to completion once submitted, and the steps after
+	// it act on a session that is there.
 	out, err := s.Run(ctx, args...)
 	if err != nil {
-		return "", err
+		return "", &SubmittedError{Err: err}
 	}
 	paneID = strings.TrimSpace(string(out))
 	if s.Managed() {
 		if notRunning != nil {
 			if err := s.EnsureConfigured(ctx); err != nil {
-				return paneID, err
+				return paneID, &SubmittedError{Err: err}
 			}
 		}
 		// The invariant is one session, one window, one pane. Anything
@@ -350,11 +363,94 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 		if pout, err := s.Run(ctx, "list-panes", "-s", "-t", "="+o.Name, "-F", "#{pane_id}"); err == nil {
 			if n := len(strings.Fields(string(pout))); n != 1 {
 				_, _ = s.Run(ctx, "kill-session", "-t", "="+o.Name)
-				return "", fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)
+				return "", &SubmittedError{Err: fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)}
 			}
 		}
 	}
 	return paneID, nil
+}
+
+// SubmittedError is a NewSession failure after new-session was
+// submitted to the server: the session, and the command in it, may
+// exist. An error before that point is plain, and nothing was started.
+type SubmittedError struct{ Err error }
+
+func (e *SubmittedError) Error() string { return e.Err.Error() }
+func (e *SubmittedError) Unwrap() error { return e.Err }
+
+// Submitted reports whether err is a launch that may have taken.
+func Submitted(err error) bool {
+	var se *SubmittedError
+	return errors.As(err, &se)
+}
+
+// Paste types text into a pane as one bracketed paste followed by Enter,
+// through a buffer named for the caller: load-buffer reads the text from
+// stdin, so it is never on a command line; paste-buffer -p sends it
+// bracketed, so an application that asked for bracketed paste takes it
+// as one insertion; send-keys Enter submits it; the buffer is deleted
+// whether or not the steps before succeeded. The error says how far it
+// got: a PasteError whose Step is "load" or "paste" means nothing
+// reached the pane, "enter" means the text did and the submit may not
+// have.
+func (s Server) Paste(ctx context.Context, buffer, paneID, text string) error {
+	defer s.Run(ctx, "delete-buffer", "-b", buffer)
+	if _, err := s.RunInput(ctx, strings.NewReader(text), "load-buffer", "-b", buffer, "-"); err != nil {
+		return &PasteError{Step: "load", Err: err}
+	}
+	if _, err := s.Run(ctx, "paste-buffer", "-p", "-b", buffer, "-t", paneID); err != nil {
+		return &PasteError{Step: "paste", Err: err}
+	}
+	if _, err := s.Run(ctx, "send-keys", "-t", paneID, "Enter"); err != nil {
+		return &PasteError{Step: "enter", Err: err}
+	}
+	return nil
+}
+
+// PasteError is a Paste that failed at Step.
+type PasteError struct {
+	Step string
+	Err  error
+}
+
+func (e *PasteError) Error() string { return "paste (" + e.Step + "): " + e.Err.Error() }
+func (e *PasteError) Unwrap() error { return e.Err }
+
+// DeleteBuffers deletes every buffer on the server whose name has the
+// prefix: what a Paste interrupted between loading and deleting leaves.
+// No server is nothing to delete.
+func (s Server) DeleteBuffers(ctx context.Context, prefix string) error {
+	out, err := s.Run(ctx, "list-buffers", "-F", "#{buffer_name}")
+	if err != nil {
+		if NoServer(err) {
+			return nil
+		}
+		return err
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name == "" || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if _, err := s.Run(ctx, "delete-buffer", "-b", name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Redact replaces every occurrence of secret in an error's text, bare
+// and as shellJoin quotes it, with placeholder, so a tmux error that
+// echoes its command line does not carry a prompt into a result or a
+// log. The error's type is lost; the caller has classified it already.
+func Redact(err error, secret, placeholder string) error {
+	if err == nil || secret == "" {
+		return err
+	}
+	msg := err.Error()
+	for _, form := range []string{shellJoin([]string{secret}), secret} {
+		msg = strings.ReplaceAll(msg, form, placeholder)
+	}
+	return errors.New(msg)
 }
 
 // KillSession kills the session with exactly this name.

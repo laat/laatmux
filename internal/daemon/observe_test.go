@@ -67,7 +67,9 @@ func (f *fakeTmux) EnsureConfigured(context.Context) error { f.configured++; ret
 func (f *fakeTmux) NewSession(context.Context, tmux.NewSessionOpts) (string, error) {
 	return "%0", nil
 }
-func (f *fakeTmux) KillSession(context.Context, string) error { return nil }
+func (f *fakeTmux) KillSession(context.Context, string) error           { return nil }
+func (f *fakeTmux) Paste(context.Context, string, string, string) error { return nil }
+func (f *fakeTmux) DeleteBuffers(context.Context, string) error         { return nil }
 
 // managed and unmanaged wrap a fake as the daemon's targets.
 func managed(ft *fakeTmux) []Target   { return []Target{{Label: "laatmux", Tmux: ft, Managed: true}} }

@@ -1,0 +1,621 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/laat/laatmux/internal/procs"
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
+)
+
+// idleScreen is a claude pane with its prompt box on screen: the
+// detector says idle, visible.
+var idleScreen = []string{
+	"⏺ Ready.",
+	"",
+	"───────────────────────────────────────────────────────────",
+	"❯ ",
+	"───────────────────────────────────────────────────────────",
+	"  F 5.1 laatmux (main) │ ctx 5%",
+}
+
+// taskDaemon is an add daemon whose managed server shows screen in
+// every pane and whose process table has a verified claude, polled in
+// the background so a delivery sees fresh observations.
+func taskDaemon(t *testing.T, screen []string, agents map[string][]string) (*Daemon, *fakeServer, *worktree.Store, string) {
+	t.Helper()
+	store, remote := newStore(t)
+	ft := &fakeServer{screen: screen}
+	if agents == nil {
+		agents = map[string][]string{"claude": {"claude"}}
+	}
+	d := New(Config{
+		EnvironmentID: "env", Host: "box",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
+		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
+		Store:   store, Agents: agents,
+		Commands: t.TempDir(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		for ctx.Err() == nil {
+			if d.poll(ctx) == nil {
+				d.markDiscovered(&d.panesDiscovered)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	return d, ft, store, remote
+}
+
+func shortWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	was := readyWait
+	readyWait = d
+	t.Cleanup(func() { readyWait = was })
+}
+
+// readEntry reads the journal file for id.
+func readEntry(t *testing.T, d *Daemon, id string) entry {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(d.journal.dir, fileName(id)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e entry
+	if err := json.Unmarshal(b, &e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func progressWith(ps []protocol.Message, stage, state string) (protocol.Message, bool) {
+	for _, p := range ps {
+		if p.Stage == stage && p.State == state {
+			return p, true
+		}
+	}
+	return protocol.Message{}, false
+}
+
+// The placeholder path: the prompt is one argument of the command, the
+// launch is the delivery, the start line names the placeholder, and
+// the journal has the transitions and no prompt.
+func TestAddArgvPrompt(t *testing.T) {
+	d, ft, store, remote := taskDaemon(t, nil, map[string][]string{"claude": {"claude", "--flag", PromptPlaceholder}})
+	pc := conn(t, d)
+	const secret = "make the sidebar\nfollow the current row"
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: secret, SubmittedAt: time.Now()})
+	res, progress := result(t, pc, "c1")
+	if !res.OK || res.Prompt != protocol.DeliveryDelivered || res.Error != "" || res.Branch != "task" || res.Listing == nil || res.Listing.Revision != 1 {
+		t.Fatalf("result %+v", res)
+	}
+	root := store.Dirs.Worktree("proj", "task")
+	if res.Root != root || res.Session != "proj/task" {
+		t.Fatalf("result %+v", res)
+	}
+	if len(ft.cmds) != 1 || strings.Join(ft.cmds[0], " ") != "claude --flag "+secret {
+		t.Fatalf("cmds %q", ft.cmds)
+	}
+	start, ok := progressWith(progress, protocol.StageAgent, protocol.StateStart)
+	if !ok || !strings.Contains(start.Detail, PromptPlaceholder) || strings.Contains(start.Detail, "sidebar") {
+		t.Fatalf("agent start %+v", start)
+	}
+	alloc, ok := progressWith(progress, protocol.StageAllocate, protocol.StateSkip)
+	if !ok || alloc.Branch != "task" || alloc.Root != root || !strings.Contains(alloc.Detail, "given") {
+		t.Fatalf("allocate %+v", alloc)
+	}
+	for _, p := range progress {
+		if strings.Contains(p.Detail, "sidebar") {
+			t.Fatalf("prompt in progress: %+v", p)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(d.journal.dir, fileName("c1")))
+	if strings.Contains(string(b), "sidebar") {
+		t.Fatalf("prompt in the journal:\n%s", b)
+	}
+	e := readEntry(t, d, "c1")
+	if e.Launch != launchLaunched || !e.ArgvPrompt || e.Delivery != protocol.DeliveryDelivered || e.PaneID != "%1" || e.ServerPID != 5 || e.Result == nil || !e.Result.OK || e.TerminalAt.IsZero() || !e.HasPrompt || !e.Allocated {
+		t.Fatalf("entry %+v", e)
+	}
+	// A resend under the id, once the memory has let it go, is answered
+	// from the journal: nothing runs.
+	d.forgetDone("c1")
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: secret, SubmittedAt: time.Now()})
+	again, ps := result(t, pc, "c1")
+	if !again.OK || again.Prompt != protocol.DeliveryDelivered || len(ps) != 0 || len(ft.cmds) != 1 {
+		t.Fatalf("resend %+v %d", again, len(ps))
+	}
+	// A cmd without the placeholder and no prompt gets the argument
+	// removed; with the placeholder and no prompt, removed too.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "plain", AgentName: "claude"})
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Prompt != protocol.DeliveryNone || strings.Join(ft.cmds[1], " ") != "claude --flag" {
+		t.Fatalf("no prompt: %+v cmds %q", res, ft.cmds)
+	}
+}
+
+// The typed path: the prompt is pasted once the detector sees the
+// prompt box with a verified agent in the recorded pane, the identity
+// is bound, and the buffer is named for the add.
+func TestAddTypedPrompt(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "do the thing"})
+	res, progress := result(t, pc, "c1")
+	if !res.OK || res.Prompt != protocol.DeliveryDelivered || res.Error != "" {
+		t.Fatalf("result %+v", res)
+	}
+	if len(ft.pastes) != 1 || ft.pastes[0].pane != "%1" || ft.pastes[0].text != "do the thing" || !strings.HasPrefix(ft.pastes[0].buffer, attemptBufferPrefix) {
+		t.Fatalf("pastes %+v", ft.pastes)
+	}
+	if !hasProgress(progress, protocol.StageAgent, protocol.StateDone, "prompt delivered") {
+		t.Fatalf("progress %+v", progress)
+	}
+	e := readEntry(t, d, "c1")
+	if e.Identity == nil || e.Identity.PID != claude.PID || e.Typing || e.Delivery != protocol.DeliveryDelivered || e.ArgvPrompt {
+		t.Fatalf("entry %+v", e)
+	}
+}
+
+// A pane that is not ready within the wait gets nothing: the prompt is
+// not delivered, with the reason, and the add is still ok.
+func TestAddTypedNotReady(t *testing.T) {
+	shortWait(t, 300*time.Millisecond)
+	d, ft, _, remote := taskDaemon(t, []string{"loading"}, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "do the thing"})
+	res, _ := result(t, pc, "c1")
+	if !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "not ready within") || !strings.Contains(res.Error, "prompt box") {
+		t.Fatalf("result %+v", res)
+	}
+	if len(ft.pastes) != 0 {
+		t.Fatalf("pasted %+v", ft.pastes)
+	}
+	// A paste refused before it began is not delivered; Enter refused
+	// after the paste is unknown.
+	ft.screen = idleScreen
+	ft.pasteErr = &tmux.PasteError{Step: "paste", Err: errors.New("no such pane")}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "two", AgentName: "claude", Prompt: "second"})
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "paste refused") {
+		t.Fatalf("paste refused: %+v", res)
+	}
+	ft.pasteErr = &tmux.PasteError{Step: "enter", Err: errors.New("gone")}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "three", AgentName: "claude", Prompt: "third"})
+	if res, _ := result(t, pc, "c3"); !res.OK || res.Prompt != protocol.DeliveryUnknown || !strings.Contains(res.Error, "Enter refused") {
+		t.Fatalf("enter refused: %+v", res)
+	}
+}
+
+// A session already in the root is adopted for the result, and the
+// prompt is not delivered: session existed. Without a prompt that is
+// none, as before.
+func TestAddSessionExisted(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNone {
+		t.Fatalf("first %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "again"})
+	res, _ := result(t, pc, "c2")
+	if !res.OK || res.Prompt != protocol.DeliveryNotDelivered || res.Error != "session existed" || res.Session != "proj/task" || len(ft.cmds) != 1 {
+		t.Fatalf("second %+v", res)
+	}
+	if e := readEntry(t, d, "c2"); e.Launch != launchNone || e.PaneID != "" {
+		t.Fatalf("entry %+v", e)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "task", AgentName: "claude"})
+	if res, _ := result(t, pc, "c3"); !res.OK || res.Prompt != protocol.DeliveryNone || res.Error != "" {
+		t.Fatalf("third %+v", res)
+	}
+}
+
+// Generated names are allocated after the fetch: the first free of the
+// proposal and its numbered forms against the branches, the worktrees
+// and the journal's unfinished entries, written before the branch is
+// made, and a resend under a known id keeps its name.
+func TestAddGenerated(t *testing.T) {
+	d, _, store, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	for i, want := range []string{"task", "task-2"} {
+		id := "g" + string(rune('1'+i))
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: "task", Generated: true, AgentName: "claude"})
+		res, progress := result(t, pc, id)
+		if !res.OK || res.Branch != want || res.Root != store.Dirs.Worktree("proj", want) {
+			t.Fatalf("%s: %+v", id, res)
+		}
+		alloc, ok := progressWith(progress, protocol.StageAllocate, protocol.StateDone)
+		if !ok || alloc.Branch != want || alloc.Root != res.Root {
+			t.Fatalf("%s: allocate %+v", id, alloc)
+		}
+	}
+	// A name reserved by an unfinished entry is skipped; the entry's
+	// own resend takes it, with allocate skipped.
+	if err := d.journal.create(entry{ID: "g3", Source: remote, Repo: "proj", Branch: "task-3", Generated: true, Allocated: true, Stage: protocol.StageWorktree, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "g4", Repo: remote, Branch: "task", Generated: true, AgentName: "claude"})
+	if res, _ := result(t, pc, "g4"); !res.OK || res.Branch != "task-4" {
+		t.Fatalf("g4: %+v", res)
+	}
+	// Before the resend, a follow says interrupted at the stage.
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "g3"})
+	if res, _ := result(t, pc, "g3"); res.OK || res.Error != protocol.ErrInterrupted || res.Stage != protocol.StageWorktree || res.Branch != "task-3" {
+		t.Fatalf("follow g3: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "g3", Repo: remote, Branch: "other-proposal", Generated: true, AgentName: "claude"})
+	res, progress := result(t, pc, "g3")
+	if !res.OK || res.Branch != "task-3" {
+		t.Fatalf("g3 resend: %+v", res)
+	}
+	if alloc, ok := progressWith(progress, protocol.StageAllocate, protocol.StateSkip); !ok || !strings.Contains(alloc.Detail, "allocated before") {
+		t.Fatalf("g3 allocate %+v", alloc)
+	}
+	// A proposal git refuses is refused at resolve.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "g5", Repo: remote, Branch: "bad..name", Generated: true, AgentName: "claude"})
+	if res, _ := result(t, pc, "g5"); res.OK || res.Stage != protocol.StageResolve {
+		t.Fatalf("g5: %+v", res)
+	}
+}
+
+// A launch the daemon died in is unknown: the resend materializes the
+// worktree, launches nothing, and says so.
+func TestAddLaunchInterrupted(t *testing.T) {
+	d, ft, store, remote := taskDaemon(t, nil, nil)
+	root := store.Dirs.Worktree("proj", "task")
+	if err := d.journal.create(entry{ID: "i1", Source: remote, Repo: "proj", Branch: "task", Allocated: true, HasPrompt: true, Root: root, Stage: protocol.StageAgent, Launch: launchLaunching, Session: "proj/task", FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	res, progress := result(t, pc, "i1")
+	if !res.OK || res.Prompt != protocol.DeliveryUnknown || !strings.Contains(res.Error, "restarted during the launch") || res.Session != "" || len(ft.cmds) != 0 {
+		t.Fatalf("result %+v cmds %q", res, ft.cmds)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatal("worktree not materialized")
+	}
+	if !hasProgress(progress, protocol.StageAgent, protocol.StateSkip, "daemon restarted") {
+		t.Fatalf("progress %+v", progress)
+	}
+	// A resend without the prompt of an add that had one is refused.
+	if err := d.journal.create(entry{ID: "i2", Source: remote, Repo: "proj", Branch: "two", Allocated: true, HasPrompt: true, Stage: protocol.StageFetch, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i2", Repo: remote, Branch: "two", AgentName: "claude"})
+	if res, _ := result(t, pc, "i2"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "must carry it") {
+		t.Fatalf("i2: %+v", res)
+	}
+	// Launched before, typed path, no attempt yet: the resend delivers.
+	ft.screen = idleScreen
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i3", Repo: remote, Branch: "three", AgentName: "claude"})
+	first, _ := result(t, pc, "i3")
+	if !first.OK {
+		t.Fatal(first.Error)
+	}
+	if err := d.journal.create(entry{ID: "i4", Source: remote, Repo: "proj", Branch: "three", Allocated: true, HasPrompt: true, Root: first.Root, Stage: protocol.StageAgent, Launch: launchLaunched, Session: first.Session, PaneID: first.PaneID, ServerPID: 5, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i4", Repo: remote, Branch: "three", AgentName: "claude", Prompt: "late"})
+	if res, _ := result(t, pc, "i4"); !res.OK || res.Prompt != protocol.DeliveryDelivered || res.Session != first.Session || len(ft.pastes) != 1 || ft.pastes[0].text != "late" {
+		t.Fatalf("i4: %+v pastes %+v", res, ft.pastes)
+	}
+}
+
+// rm marks the journal's entries at the root removed: a follow and a
+// resend are answered removed, a prompt message too, and the listing
+// revision steps.
+func TestRmMarksRemoved(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, _ := result(t, pc, "c1")
+	if !res.OK {
+		t.Fatal(res.Error)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: res.Root, Force: true})
+	if rres, _ := result(t, pc, "r1"); !rres.OK {
+		t.Fatal(rres.Error)
+	}
+	d.mu.Lock()
+	rev := d.revision
+	d.mu.Unlock()
+	if rev != 2 {
+		t.Fatalf("revision %d", rev)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1"})
+	if f, _ := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved || f.Root != res.Root {
+		t.Fatalf("follow %+v", f)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	if f, ps := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved || len(ps) != 0 {
+		t.Fatalf("resend %+v", f)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "x"})
+	if f, _ := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved {
+		t.Fatalf("prompt %+v", f)
+	}
+}
+
+// An add older than the retention, or from too far in the future, is
+// refused; a follow for an id the journal never saw is unknown command.
+func TestSubmissionExpired(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	for _, at := range []time.Time{time.Now().Add(-31 * 24 * time.Hour), time.Now().Add(2 * 24 * time.Hour)} {
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "old", Repo: remote, Branch: "task", AgentName: "claude", SubmittedAt: at})
+		if res, ps := result(t, pc, "old"); res.OK || res.Error != protocol.ErrSubmissionExpired || len(ps) != 0 {
+			t.Fatalf("%s: %+v", at, res)
+		}
+		d.mu.Lock()
+		delete(d.cmds, "old")
+		d.mu.Unlock()
+	}
+	if _, ok := d.journal.get("old"); ok {
+		t.Fatal("a refused add was journaled")
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "never"})
+	if res, _ := result(t, pc, "never"); res.Error != protocol.ErrUnknownCommand {
+		t.Fatalf("follow %+v", res)
+	}
+}
+
+// The prompt message: an attempt is delivered when the pane is ready,
+// a repeat of its number is answered from the record without a paste,
+// out-of-order numbers are refused, follow finds attempts, and an id
+// the journal lacks is recovery expired.
+func TestPromptMessage(t *testing.T) {
+	shortWait(t, 300*time.Millisecond)
+	d, ft, _, remote := taskDaemon(t, []string{"loading"}, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "do it"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered {
+		t.Fatalf("add %+v", res)
+	}
+	ft.mu.Lock()
+	ft.screen = idleScreen
+	ft.mu.Unlock()
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
+	res, _ := result(t, pc, "c1")
+	if !res.OK || res.Attempt != 1 || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 || !strings.HasSuffix(ft.pastes[0].buffer, "-1") {
+		t.Fatalf("attempt 1: %+v pastes %+v", res, ft.pastes)
+	}
+	e := readEntry(t, d, "c1")
+	if len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered || e.Delivery != protocol.DeliveryDelivered {
+		t.Fatalf("entry %+v", e)
+	}
+	// The command is remembered for a while; evict it so the repeat
+	// reaches the journal.
+	d.mu.Lock()
+	delete(d.cmds, promptKey("c1", 1))
+	d.mu.Unlock()
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 {
+		t.Fatalf("repeat: %+v pastes %d", res, len(ft.pastes))
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 3, Prompt: "do it"})
+	if res, _ := result(t, pc, "c1"); res.OK || !strings.Contains(res.Error, "not the next") {
+		t.Fatalf("attempt 3: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1", Attempt: 1})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Attempt != 1 || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("follow 1: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1", Attempt: 2})
+	if res, _ := result(t, pc, "c1"); res.OK || res.Error != protocol.ErrUnknownAttempt {
+		t.Fatalf("follow 2: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "gone", Attempt: 1, Prompt: "x"})
+	if res, _ := result(t, pc, "gone"); res.OK || res.Error != protocol.ErrRecoveryExpired {
+		t.Fatalf("gone: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "gone", Attempt: 1})
+	if res, _ := result(t, pc, "gone"); res.OK || res.Error != protocol.ErrRecoveryExpired {
+		t.Fatalf("follow gone: %+v", res)
+	}
+	// A second attempt on a replaced agent is refused as such: the
+	// bound identity is not the one in the pane.
+	d.journal.update("c1", func(e *entry) { e.Identity.PID = 999 })
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 2, Prompt: "do it"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "session replaced") || len(ft.pastes) != 1 {
+		t.Fatalf("attempt 2: %+v", res)
+	}
+}
+
+// A prompt message for an entry without a target adopts the managed
+// session in the root when it is the only one and has a verified agent,
+// and says no agent to deliver to otherwise.
+func TestPromptAdopts(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	first, _ := result(t, pc, "c1")
+	if !first.OK {
+		t.Fatal(first.Error)
+	}
+	// session existed: the add records no target.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "hello"})
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Error != "session existed" {
+		t.Fatalf("c2 %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c2", Attempt: 1, Prompt: "hello"})
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 || ft.pastes[0].pane != first.PaneID {
+		t.Fatalf("adopt: %+v pastes %+v", res, ft.pastes)
+	}
+	if e := readEntry(t, d, "c2"); e.PaneID != first.PaneID || e.Session != first.Session || e.Identity == nil {
+		t.Fatalf("entry %+v", e)
+	}
+	// No session in the root: nothing to adopt.
+	ft.KillSession(context.Background(), first.Session)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "two", AgentName: "claude"})
+	third, _ := result(t, pc, "c3")
+	ft.KillSession(context.Background(), third.Session)
+	if err := d.journal.create(entry{ID: "c4", Source: remote, Repo: "proj", Branch: "two", Allocated: true, HasPrompt: true, Root: third.Root, Result: &protocol.Message{OK: true}, TerminalAt: time.Now(), FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c4", Attempt: 1, Prompt: "hello"})
+	if res, _ := result(t, pc, "c4"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "no agent to deliver to") {
+		t.Fatalf("c4: %+v", res)
+	}
+}
+
+// Listings are stamped: the snapshot carries the generation and the
+// revision the listing was read at, and a result's barrier is passed by
+// the listing after it and not by one before.
+func TestListingStamp(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, nil, nil)
+	ctx := context.Background()
+	d.pollWorktrees(ctx)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeSubscribe})
+	snap, err := pc.Read()
+	if err != nil || snap.Type != protocol.TypeSnapshot || snap.Listing == nil || snap.Listing.Generation != d.generation || snap.Listing.Revision != 0 {
+		t.Fatalf("snapshot %+v %v", snap, err)
+	}
+	before := *snap.Listing
+	pc2 := conn(t, d)
+	pc2.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, _ := result(t, pc2, "c1")
+	if !res.OK || res.Listing == nil || res.Listing.Revision != 1 {
+		t.Fatalf("result %+v", res)
+	}
+	if before.Satisfies(*res.Listing) {
+		t.Fatal("a listing before the add satisfies its barrier")
+	}
+	d.pollWorktrees(ctx)
+	d.mu.Lock()
+	after := d.listing
+	d.mu.Unlock()
+	if !after.Satisfies(*res.Listing) {
+		t.Fatalf("listing %+v does not satisfy %+v", after, res.Listing)
+	}
+	if (protocol.Listing{Generation: d.generation + 1, Revision: 0}).Satisfies(*res.Listing) != true {
+		t.Fatal("a later generation does not satisfy")
+	}
+	// The stamp is published on the stream too.
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeUpsert && m.Listing != nil && m.Listing.Revision == 1 {
+			break
+		}
+	}
+}
+
+// A daemon that starts sweeps the attempt buffers and resolves what the
+// last one died in: a paste in progress is unknown.
+func TestJournalStartup(t *testing.T) {
+	dir := t.TempDir()
+	e := entry{ID: "x", Source: "s", Repo: "proj", Branch: "b", HasPrompt: true, Typing: true, Attempts: []attempt{{N: 1, State: attemptAttempting}}, FirstSeen: time.Now()}
+	b, _ := json.Marshal(e)
+	os.WriteFile(filepath.Join(dir, fileName("x")), b, 0o600)
+	os.WriteFile(filepath.Join(dir, "junk.json"), []byte("{"), 0o600)
+	store, _ := newStore(t)
+	ft := &fakeServer{}
+	d := New(Config{Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}}, Store: store, Commands: dir})
+	if !protocol.Has(d.capabilities(), protocol.CapTask) {
+		t.Fatal("no task capability")
+	}
+	got, ok := d.journal.get("x")
+	if !ok || got.Typing || got.Delivery != protocol.DeliveryUnknown || got.Attempts[0].State != protocol.DeliveryUnknown {
+		t.Fatalf("entry %+v", got)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go d.Run(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ft.mu.Lock()
+		n := len(ft.buffers)
+		ft.mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if len(ft.buffers) != 1 || ft.buffers[0] != attemptBufferPrefix {
+		t.Fatalf("buffers %v", ft.buffers)
+	}
+	// The sweep deletes what has been terminal for the retention and
+	// keeps the rest; the junk file is not laatmux's to delete.
+	d.journal.create(entry{ID: "old", Result: &protocol.Message{OK: true}, TerminalAt: time.Now().Add(-31 * 24 * time.Hour)})
+	d.journal.create(entry{ID: "new", Result: &protocol.Message{OK: true}, TerminalAt: time.Now()})
+	d.journal.sweep(time.Now())
+	if _, ok := d.journal.get("old"); ok {
+		t.Fatal("old entry kept")
+	}
+	if _, ok := d.journal.get("new"); !ok {
+		t.Fatal("new entry swept")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "junk.json")); err != nil {
+		t.Fatal("junk deleted")
+	}
+	// Ids that are not file names are hashed; safe ones are used as is.
+	if fileName("add-1-2") != "add-1-2.json" || !strings.HasPrefix(fileName("../x"), "h-") || !strings.HasPrefix(fileName(".hidden"), "h-") {
+		t.Fatalf("fileName %s %s", fileName("add-1-2"), fileName("../x"))
+	}
+	// A daemon without a journal directory has no task capability and
+	// refuses a prompt at resolve.
+	d2 := New(Config{Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: store})
+	if protocol.Has(d2.capabilities(), protocol.CapTask) {
+		t.Fatal("task capability without a journal")
+	}
+	pc := conn(t, d2)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: store.Repos[0].Source, Branch: "b", Cmd: []string{"true"}, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "task capability") {
+		t.Fatalf("no task: %+v", res)
+	}
+}
+
+// A tmux error that echoes the command line has the prompt replaced by
+// the placeholder; a failure after new-session was submitted is unknown
+// on the argv path, a failure before it is not delivered.
+func TestLaunchErrorRedacted(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, nil, map[string][]string{"claude": {"claude", PromptPlaceholder}})
+	ft.newErr = &tmux.SubmittedError{Err: errors.New("tmux new-session -d claude 'the secret' ; set-option: failed")}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "the secret"})
+	res, progress := result(t, pc, "c1")
+	if res.OK || res.Stage != protocol.StageAgent || res.Prompt != protocol.DeliveryUnknown || strings.Contains(res.Error, "secret") || !strings.Contains(res.Error, PromptPlaceholder) {
+		t.Fatalf("submitted: %+v", res)
+	}
+	for _, p := range progress {
+		if strings.Contains(p.Detail, "secret") {
+			t.Fatalf("prompt in progress %+v", p)
+		}
+	}
+	if e := readEntry(t, d, "c1"); strings.Contains(e.DeliveryError, "secret") || e.Delivery != protocol.DeliveryUnknown || e.Result == nil || e.Result.OK {
+		t.Fatalf("entry %+v", e)
+	}
+	ft.newErr = errors.New("tmux: cwd: no such directory")
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "two", AgentName: "claude", Prompt: "the secret"})
+	if res, _ := result(t, pc, "c2"); res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "cwd") {
+		t.Fatalf("plain: %+v", res)
+	}
+}
+
+func TestWithPrompt(t *testing.T) {
+	argv, ok := withPrompt([]string{"claude", PromptPlaceholder, "--x"}, "hi there")
+	if !ok || strings.Join(argv, "|") != "claude|hi there|--x" {
+		t.Fatalf("%v %v", argv, ok)
+	}
+	argv, ok = withPrompt([]string{"claude", PromptPlaceholder}, "")
+	if !ok || strings.Join(argv, "|") != "claude" {
+		t.Fatalf("%v %v", argv, ok)
+	}
+	argv, ok = withPrompt([]string{"claude"}, "hi")
+	if ok || strings.Join(argv, "|") != "claude" {
+		t.Fatalf("%v %v", argv, ok)
+	}
+}

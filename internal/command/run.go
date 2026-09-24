@@ -48,7 +48,7 @@ func (r Run) Run(ctx context.Context, rep Reporter) (Ran, error) {
 		id = ID("run")
 	}
 	req := protocol.Message{Type: protocol.TypeRun, ID: id, Repo: r.Repo.Source, Branch: r.Branch, Root: r.Root, Cmd: r.Cmd}
-	_, res, err := stream(ctx, r.Host.Host, protocol.CapRun, req, rep, streamOpts{cancel: r.Cancel})
+	_, res, err := stream(ctx, r.Host.Host, []string{protocol.CapRun}, req, rep, streamOpts{cancel: r.Cancel})
 	if err != nil {
 		if errors.Is(err, ErrOutcomeUnknown) {
 			return Ran{}, err

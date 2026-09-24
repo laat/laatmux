@@ -44,6 +44,11 @@ type Panes interface {
 	EnsureConfigured(ctx context.Context) error
 	NewSession(ctx context.Context, o tmux.NewSessionOpts) (string, error)
 	KillSession(ctx context.Context, name string) error
+	// Paste types text into a pane as one bracketed paste and Enter
+	// through the named buffer; DeleteBuffers deletes the buffers with
+	// the prefix. Both act on the managed server only.
+	Paste(ctx context.Context, buffer, paneID, text string) error
+	DeleteBuffers(ctx context.Context, prefix string) error
 }
 
 // Target is one tmux server the daemon watches.
@@ -94,6 +99,10 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
+	// Commands is the directory of the command journal, one file per
+	// add, which with Store and the managed server is the task
+	// capability; "" means none.
+	Commands string
 
 	// The merged stream. Hosts reads the configured hosts, on every
 	// merged subscription; nil means no merged capability. Dial connects
@@ -136,6 +145,16 @@ type Daemon struct {
 	cmds       map[string]*command    // recent add, rm and run by id
 	locks      map[string]*sync.Mutex // per repository source
 	commandTTL time.Duration
+	// The journal, nil without the task capability; the observation
+	// revision and the daemon generation that stamp listings, the
+	// stamp and error of the last listing, and the lock the poll and
+	// its publication run under.
+	journal    *journal
+	generation int64
+	revision   uint64
+	listing    protocol.Listing
+	listErr    string
+	pollMu     sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
 	runs      map[string]map[*runJob]struct{}
@@ -191,6 +210,22 @@ type paneState struct {
 	pendingIdle  *time.Time
 	pendingCount int
 	lastResult   detect.Result
+	// obs is what the last observation of the pane saw, for a delivery
+	// waiting on it; written and read under d.mu, where the rest of the
+	// state is the poll goroutine's own.
+	obs observation
+}
+
+// observation is one poll's view of a pane as a delivery needs it: when
+// it was made, where the pane is, whether a verified live agent is in
+// it and which, and whether the prompt box is on screen.
+type observation struct {
+	at        time.Time
+	session   string
+	serverPID int
+	verified  bool // an agent identified, alive, and not tentative
+	identity  procs.Identity
+	idle      bool // the detector saw the prompt box: VisibleIdle, not the fallback
 }
 
 type subscriber struct {
@@ -250,6 +285,7 @@ func New(cfg Config) *Daemon {
 		mhosts:    map[string]*mergedHost{},
 		msessions: map[string]protocol.Session{},
 
+		generation: time.Now().UnixNano(),
 		discovered: make(chan struct{}),
 	}
 	for _, t := range cfg.Targets {
@@ -257,6 +293,14 @@ func New(cfg Config) *Daemon {
 		d.targets = append(d.targets, tt)
 		if t.Managed && d.managed == nil {
 			d.managed = tt
+		}
+	}
+	if cfg.Commands != "" && cfg.Store != nil && d.managed != nil {
+		j, err := openJournal(cfg.Commands, cfg.Logger)
+		if err != nil {
+			cfg.Logger.Printf("journal: %v; task capability disabled", err)
+		} else {
+			d.journal = j
 		}
 	}
 	return d
@@ -271,6 +315,9 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm)
+		}
+		if d.journal != nil {
+			caps = append(caps, protocol.CapTask)
 		}
 	}
 	if d.cfg.Hosts != nil {
@@ -288,6 +335,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go d.runWorktrees(ctx)
 	} else {
 		d.markDiscovered(&d.worktreesDiscovered)
+	}
+	if d.journal != nil {
+		d.sweepBuffers(ctx)
+		go d.runJournal(ctx)
 	}
 	t := time.NewTicker(d.cfg.Interval)
 	defer t.Stop()
@@ -444,6 +495,9 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	}
 	if !st.hasIdentity {
 		// Nothing identified yet; keep watching without publishing.
+		d.mu.Lock()
+		st.obs = observation{at: now, session: p.Session, serverPID: p.ServerPID}
+		d.mu.Unlock()
 		return
 	}
 	liveness := protocol.Alive
@@ -493,6 +547,11 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	st.obs = observation{
+		at: now, session: p.Session, serverPID: p.ServerPID,
+		verified: !st.gone && !st.identity.Tentative, identity: st.identity,
+		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
+	}
 	if had && sameRecord(prev, a) {
 		return
 	}
@@ -602,7 +661,12 @@ func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	return s, protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked()}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked()}
+	if d.listed {
+		l := d.listing
+		snap.Listing, snap.ListingError = &l, d.listErr
+	}
+	return s, snap
 }
 
 func (d *Daemon) unsubscribe(s *subscriber) {
@@ -743,7 +807,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			if err := pc.Write(res); err != nil {
 				return
 			}
-		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun:
+		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun, protocol.TypePrompt:
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 			switch {
 			case d.cfg.Store == nil:
@@ -752,6 +816,12 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				res.Error = "this daemon does not watch the managed laatmux tmux server"
 			case m.ID == "":
 				res.Error = "command id required"
+			case m.Type == protocol.TypePrompt && d.journal == nil:
+				res.Error = "this daemon has no task capability"
+			case m.Type == protocol.TypePrompt && m.Attempt < 1:
+				res.Error = "attempt number required"
+			case m.Type == protocol.TypePrompt && m.Prompt == "":
+				res.Error = "prompt required"
 			}
 			if res.Error != "" {
 				if err := pc.Write(res); err != nil {
@@ -764,7 +834,11 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			// rather than starting it again, which is what an older client
 			// relies on after a lost bridge; a client with follow sends
 			// that instead.
-			c, fresh := d.command(m.ID, func(c *command) {
+			key := m.ID
+			if m.Type == protocol.TypePrompt {
+				key = promptKey(m.ID, m.Attempt)
+			}
+			c, fresh := d.command(key, func(c *command) {
 				if m.Type == protocol.TypeRun {
 					c.ring = true
 					c.job = newRunJob()
@@ -776,6 +850,8 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 					go d.runAdd(ctx, m, c)
 				case protocol.TypeRm:
 					go d.runRm(ctx, m, c)
+				case protocol.TypePrompt:
+					go d.runPrompt(ctx, m, c)
 				default:
 					go d.runRun(ctx, m, c)
 				}
@@ -786,9 +862,18 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				}
 			}()
 		case protocol.TypeFollow:
-			c, ok := d.lookup(m.ID)
+			key := m.ID
+			if m.Attempt > 0 {
+				key = promptKey(m.ID, m.Attempt)
+			}
+			c, ok := d.lookup(key)
 			if !ok {
-				if err := pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}); err != nil {
+				// The journal answers for what the memory has let go.
+				res := d.answerFollow(m)
+				if res == nil {
+					res = &protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}
+				}
+				if err := pc.Write(*res); err != nil {
 					return
 				}
 				continue

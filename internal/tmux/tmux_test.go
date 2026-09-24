@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -104,5 +106,25 @@ func TestEncodeBranch(t *testing.T) {
 	}
 	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
 		t.Errorf("SessionName = %q", got)
+	}
+}
+
+// Redact replaces the secret, bare and shell-quoted, in an error's text;
+// Submitted tells a launch that may have taken from one that did not.
+func TestRedactAndSubmitted(t *testing.T) {
+	err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", "the secret"})}, Msg: "the secret is bad"}
+	got := Redact(err, "the secret", "{prompt}").Error()
+	if strings.Contains(got, "secret") || strings.Count(got, "{prompt}") != 2 {
+		t.Fatalf("redacted %q", got)
+	}
+	if Redact(nil, "x", "y") != nil || Redact(err, "", "y") != err {
+		t.Fatal("nil or empty secret")
+	}
+	if !Submitted(&SubmittedError{Err: err}) || Submitted(err) {
+		t.Fatal("submitted")
+	}
+	var pe *PasteError
+	if e := (&PasteError{Step: "enter", Err: err}); !errors.As(fmt.Errorf("w: %w", e), &pe) || pe.Step != "enter" || !strings.HasPrefix(e.Error(), "paste (enter)") {
+		t.Fatalf("paste error %v", e)
 	}
 }
