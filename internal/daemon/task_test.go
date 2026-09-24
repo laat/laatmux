@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,8 +46,10 @@ func taskDaemon(t *testing.T, screen []string, agents map[string][]string) (*Dae
 		Commands: t.TempDir(),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	stopped := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-stopped })
 	go func() {
+		defer close(stopped)
 		for ctx.Err() == nil {
 			if d.poll(ctx) == nil {
 				d.markDiscovered(&d.panesDiscovered)
@@ -180,18 +183,23 @@ func TestAddTypedNotReady(t *testing.T) {
 	if len(ft.pastes) != 0 {
 		t.Fatalf("pasted %+v", ft.pastes)
 	}
-	// A paste refused before it began is not delivered; Enter refused
-	// after the paste is unknown.
-	ft.screen = idleScreen
-	ft.pasteErr = &tmux.PasteError{Step: "paste", Err: errors.New("no such pane")}
+	// A buffer that could not be loaded is not delivered; a paste or an
+	// Enter that failed may have run, so it is unknown.
+	ft.set(func() {
+		ft.screen = idleScreen
+		ft.pasteErr = &tmux.PasteError{Step: "load", Err: errors.New("no space")}
+	})
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "two", AgentName: "claude", Prompt: "second"})
 	if res, _ := result(t, pc, "c2"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "paste refused") {
-		t.Fatalf("paste refused: %+v", res)
+		t.Fatalf("load refused: %+v", res)
 	}
-	ft.pasteErr = &tmux.PasteError{Step: "enter", Err: errors.New("gone")}
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "three", AgentName: "claude", Prompt: "third"})
-	if res, _ := result(t, pc, "c3"); !res.OK || res.Prompt != protocol.DeliveryUnknown || !strings.Contains(res.Error, "Enter refused") {
-		t.Fatalf("enter refused: %+v", res)
+	for _, step := range []string{"paste", "enter"} {
+		ft.set(func() { ft.pasteErr = &tmux.PasteError{Step: step, Err: errors.New("gone")} })
+		id := "c-" + step
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: "b-" + step, AgentName: "claude", Prompt: "third"})
+		if res, _ := result(t, pc, id); !res.OK || res.Prompt != protocol.DeliveryUnknown || !strings.Contains(res.Error, "may have reached") {
+			t.Fatalf("%s refused: %+v", step, res)
+		}
 	}
 }
 
@@ -260,6 +268,16 @@ func TestAddGenerated(t *testing.T) {
 	if alloc, ok := progressWith(progress, protocol.StageAllocate, protocol.StateSkip); !ok || !strings.Contains(alloc.Detail, "allocated before") {
 		t.Fatalf("g3 allocate %+v", alloc)
 	}
+	// A branch that occupies the proposal's ref namespace takes the
+	// name too: task/sub rules out task.
+	checkout, _, _ := store.Checkout(context.Background(), store.Repos[0])
+	if out, err := exec.Command("git", "-C", checkout, "branch", "other/sub", "origin/HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "g6", Repo: remote, Branch: "other", Generated: true, AgentName: "claude"})
+	if res, _ := result(t, pc, "g6"); !res.OK || res.Branch != "other-2" {
+		t.Fatalf("g6: %+v", res)
+	}
 	// A proposal git refuses is refused at resolve.
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "g5", Repo: remote, Branch: "bad..name", Generated: true, AgentName: "claude"})
 	if res, _ := result(t, pc, "g5"); res.OK || res.Stage != protocol.StageResolve {
@@ -296,7 +314,7 @@ func TestAddLaunchInterrupted(t *testing.T) {
 		t.Fatalf("i2: %+v", res)
 	}
 	// Launched before, typed path, no attempt yet: the resend delivers.
-	ft.screen = idleScreen
+	ft.set(func() { ft.screen = idleScreen })
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i3", Repo: remote, Branch: "three", AgentName: "claude"})
 	first, _ := result(t, pc, "i3")
 	if !first.OK {
@@ -381,9 +399,7 @@ func TestPromptMessage(t *testing.T) {
 	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered {
 		t.Fatalf("add %+v", res)
 	}
-	ft.mu.Lock()
-	ft.screen = idleScreen
-	ft.mu.Unlock()
+	ft.set(func() { ft.screen = idleScreen })
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
 	res, _ := result(t, pc, "c1")
 	if !res.OK || res.Attempt != 1 || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 || !strings.HasSuffix(ft.pastes[0].buffer, "-1") {
@@ -531,6 +547,17 @@ func TestJournalStartup(t *testing.T) {
 	if !ok || got.Typing || got.Delivery != protocol.DeliveryUnknown || got.Attempts[0].State != protocol.DeliveryUnknown {
 		t.Fatalf("entry %+v", got)
 	}
+	// An attempt open before the paste was written is not delivered.
+	waiting := entry{ID: "w", Source: "s", Repo: "proj", Branch: "b", HasPrompt: true, Attempts: []attempt{{N: 1, State: attemptAttempting}}, FirstSeen: time.Now()}
+	b, _ = json.Marshal(waiting)
+	os.WriteFile(filepath.Join(dir, fileName("w")), b, 0o600)
+	j, err := openJournal(dir, d.cfg.Logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := j.get("w"); got.Delivery != protocol.DeliveryNotDelivered || got.Attempts[0].State != protocol.DeliveryNotDelivered {
+		t.Fatalf("waiting entry %+v", got)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go d.Run(ctx)
 	deadline := time.Now().Add(2 * time.Second)
@@ -617,5 +644,105 @@ func TestWithPrompt(t *testing.T) {
 	argv, ok = withPrompt([]string{"claude"}, "hi")
 	if ok || strings.Join(argv, "|") != "claude" {
 		t.Fatalf("%v %v", argv, ok)
+	}
+}
+
+// An rm during the typed delivery wait, with the repository lock
+// released, wins: the add's result is removed, not a success over the
+// tombstone, and the worktree is gone.
+func TestRmDuringDeliveryWait(t *testing.T) {
+	shortWait(t, 2*time.Second)
+	d, _, _, remote := taskDaemon(t, []string{"loading"}, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	var root string
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && m.Stage == protocol.StageAllocate {
+			root = m.Root
+		}
+		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
+			break
+		}
+	}
+	pc2 := conn(t, d)
+	pc2.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root, Force: true})
+	if res, _ := result(t, pc2, "r1"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	res, _ := result(t, pc, "c1")
+	if res.OK || res.Error != protocol.ErrRemoved {
+		t.Fatalf("add after rm: %+v", res)
+	}
+	if e := readEntry(t, d, "c1"); !e.Removed || e.Result != nil {
+		t.Fatalf("entry %+v", e)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1"})
+	if f, _ := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved {
+		t.Fatalf("follow %+v", f)
+	}
+	// A resumed add that finds its entry removed under the repository
+	// lock remakes nothing.
+	if err := d.journal.create(entry{ID: "c2", Source: remote, Repo: "proj", Branch: "gone", Allocated: true, Root: root, Stage: protocol.StageWorktree, Removed: true, TerminalAt: time.Now(), FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "gone", AgentName: "claude"})
+	if f, ps := result(t, pc, "c2"); f.OK || f.Error != protocol.ErrRemoved || len(ps) != 0 {
+		t.Fatalf("resend of removed: %+v %d", f, len(ps))
+	}
+}
+
+// A journal that cannot be written stops the add before its side
+// effects: no launch without launching on disk.
+func TestJournalWriteGatesLaunch(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	// The directory is made read-only once the entry exists, so the
+	// creation succeeds and the transitions fail.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && m.Stage == protocol.StageClone {
+			break
+		}
+	}
+	if err := os.Chmod(d.journal.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(d.journal.dir, 0o700) })
+	res, _ := result(t, pc, "c1")
+	if res.OK || len(ft.cmds) != 0 {
+		t.Fatalf("launched without a journal: %+v cmds %q", res, ft.cmds)
+	}
+	if !strings.Contains(res.Error, "journal") {
+		t.Fatalf("error %q", res.Error)
+	}
+}
+
+// A prompt message whose root is another repository's worktree now, or
+// another branch's, is refused as replaced: nothing is adopted there.
+func TestPromptRefusesReplacedWorktree(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, idleScreen, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	first, _ := result(t, pc, "c1")
+	if !first.OK {
+		t.Fatal(first.Error)
+	}
+	d.journal.update("c1", func(e *entry) { e.Source = "elsewhere" })
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "worktree replaced") {
+		t.Fatalf("%+v", res)
+	}
+	d.journal.update("c1", func(e *entry) { e.Source, e.Branch = remote, "renamed" })
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 2, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "now on branch task") {
+		t.Fatalf("%+v", res)
 	}
 }

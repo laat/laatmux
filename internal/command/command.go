@@ -73,7 +73,7 @@ func ID(kind string) string {
 // with the host's journal, which keeps an entry for thirty days. Past
 // it the outcome is unknown rather than a fresh add on a host that has
 // forgotten the id.
-const SenderLifetime = 7 * 24 * time.Hour
+var SenderLifetime = 7 * 24 * time.Hour
 
 // ErrSubmissionExpired is an add whose submission is older than the
 // sender lifetime: it is not sent again, and what became of it is not
@@ -102,9 +102,6 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 	sent := false // the command may have reached a daemon
 	const attempts = 3
 	for attempt := 1; ; attempt++ {
-		if !m.SubmittedAt.IsZero() && time.Since(m.SubmittedAt) > SenderLifetime {
-			return hello, res, ErrSubmissionExpired
-		}
 		c, err := client.Dial(ctx, h)
 		if err != nil {
 			// A redial after a started attempt is a transport failure
@@ -133,6 +130,11 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 		req := m
 		if follow {
 			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark, Attempt: o.attempt}
+		} else if !m.SubmittedAt.IsZero() && time.Since(m.SubmittedAt) > SenderLifetime {
+			// The lifetime bounds sends and resends of the command; a
+			// follow executes nothing and is asked at any age.
+			c.Close()
+			return hello, res, ErrSubmissionExpired
 		}
 		f.numbered = protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
 		f.reset()

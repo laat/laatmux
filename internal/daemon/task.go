@@ -77,11 +77,21 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 	}
 	if r.created {
 		now := time.Now()
-		r.set(func(e *entry) {
+		// An rm that ran while the add waited on its delivery, with the
+		// repository lock released, has removed the worktree and marked
+		// the entry: removed is the outcome then, of this result and of
+		// every follow, and the success is not recorded over it.
+		err := r.set(func(e *entry) {
+			if e.Removed {
+				return
+			}
 			rec := res
 			e.Result = &rec
 			e.TerminalAt = now
 		})
+		if err == nil && r.e.Removed {
+			res = r.e.recorded()
+		}
 	}
 	d.pokeWorktrees()
 	c.emit(res)
@@ -106,16 +116,19 @@ type addRun struct {
 }
 
 // set applies a change to the journal entry and keeps the local copy.
-func (r *addRun) set(change func(*entry)) {
+// A write that fails is returned: a decision that could not be written
+// must not be acted on, since the next daemon would not know it.
+func (r *addRun) set(change func(*entry)) error {
 	if !r.created {
-		return
+		return nil
 	}
 	e, err := r.d.journal.update(r.m.ID, change)
 	if err != nil {
 		r.d.cfg.Logger.Printf("journal: %s: %v", r.m.ID, err)
-		return
+		return err
 	}
 	r.e = e
+	return nil
 }
 
 // emit numbers and publishes one progress message, recording the stage
@@ -208,6 +221,20 @@ func (r *addRun) run(ctx context.Context) error {
 	r.lock = d.repoLock(repo.Source)
 	r.lock.Lock()
 	r.locked = true
+	// The journal is read again under the lock: an rm that held it
+	// meanwhile may have removed the worktree this add was resuming,
+	// and the entry with it, which no stage may then remake.
+	if r.created {
+		cur, ok := j.get(m.ID)
+		if !ok {
+			return stageErr(stage, errors.New("journal: the entry is gone"))
+		}
+		if cur.terminal() {
+			r.res = cur.recorded()
+			return errRecorded
+		}
+		r.e = cur
+	}
 	p, err := d.cfg.Store.Prepare(ctx, repo, r.report)
 	if err != nil {
 		return err
@@ -231,25 +258,25 @@ func (r *addRun) run(ctx context.Context) error {
 		if err != nil {
 			return stageErr(stage, err)
 		}
-		taken := map[string]bool{}
-		for _, n := range local {
-			taken[n] = true
-		}
-		for _, n := range remote {
-			taken[n] = true
-		}
+		var names []string
+		names = append(names, local...)
+		names = append(names, remote...)
 		for _, e := range entries {
 			if e.Branch != "" {
-				taken[e.Branch] = true
+				names = append(names, e.Branch)
 			}
 		}
-		for _, n := range j.reserved(repo.Source, m.ID) {
-			taken[n] = true
-		}
-		name := worktree.Allocate(branch, func(n string) bool { return taken[n] })
-		r.set(func(e *entry) { e.Branch, e.Allocated = name, true })
-		if !r.e.Allocated {
-			return stageErr(stage, errors.New("journal: the allocation could not be written"))
+		names = append(names, j.reserved(repo.Source, m.ID)...)
+		name := worktree.Allocate(branch, func(c string) bool {
+			for _, n := range names {
+				if worktree.RefConflict(n, c) {
+					return true
+				}
+			}
+			return false
+		})
+		if err := r.set(func(e *entry) { e.Branch, e.Allocated = name, true }); err != nil {
+			return stageErr(stage, fmt.Errorf("journal: the allocation could not be written: %w", err))
 		}
 		branch, r.branch = name, name
 		detail = "branch " + name
@@ -263,7 +290,9 @@ func (r *addRun) run(ctx context.Context) error {
 		return stageErr(stage, err)
 	}
 	r.root = root
-	r.set(func(e *entry) { e.Root = root })
+	if err := r.set(func(e *entry) { e.Root = root }); err != nil {
+		return stageErr(stage, fmt.Errorf("journal: %w", err))
+	}
 	r.res.Branch = branch
 	r.emit(protocol.Message{Stage: stage, State: state, Detail: detail, Branch: branch, Root: root})
 
@@ -362,9 +391,13 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		return r.failed(prompt, "launch refused", err)
 	}
 	r.report(stage, protocol.StateStart, "tmux new-session "+name+" "+tmux.ShellJoin(r.cmd))
-	r.set(func(e *entry) {
+	// launching is on disk before new-session, or new-session does not
+	// run: a launch the journal does not know cannot be told from none.
+	if err := r.set(func(e *entry) {
 		e.Launch, e.Session, e.ArgvPrompt = launchLaunching, name, placeholder && prompt != ""
-	})
+	}); err != nil {
+		return r.failed(prompt, "launch refused", fmt.Errorf("journal: %w", err))
+	}
 	paneID, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: r.root, Cmd: argv, Host: d.cfg.Host})
 	if err != nil {
 		submitted := tmux.Submitted(err)
@@ -387,7 +420,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		// names the session rather than waiting for the next pane poll.
 		d.setManagedRoots(panes, time.Now())
 	}
-	r.set(func(e *entry) {
+	err = r.set(func(e *entry) {
 		e.Launch, e.PaneID, e.ServerPID = launchLaunched, paneID, serverPID
 		switch {
 		case prompt == "":
@@ -398,6 +431,14 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	})
 	r.report(stage, protocol.StateDone, "session "+name+" pane "+paneID)
 	r.res.Session, r.res.PaneID = name, paneID
+	if err != nil {
+		// The session is there and launched could not be written: the
+		// next daemon reads launching, and so must this result.
+		if prompt == "" {
+			return protocol.DeliveryNone, "", nil
+		}
+		return protocol.DeliveryUnknown, "the launch could not be journaled: " + err.Error(), nil
+	}
 	switch {
 	case prompt == "":
 		return protocol.DeliveryNone, "", nil
@@ -452,15 +493,19 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	if !ok {
 		return protocol.DeliveryNotDelivered, "no journal entry"
 	}
-	set := func(change func(*entry)) {
-		if ne, err := j.update(id, change); err == nil {
-			e = ne
-		} else {
+	set := func(change func(*entry)) error {
+		ne, err := j.update(id, change)
+		if err != nil {
 			d.cfg.Logger.Printf("journal: %s: %v", id, err)
+			return err
 		}
+		e = ne
+		return nil
 	}
+	// record writes the outcome; an outcome that cannot be written after
+	// the paste is unknown to the next daemon, and so it is here.
 	record := func(state, reason string) (string, string) {
-		set(func(e *entry) {
+		err := set(func(e *entry) {
 			e.Delivery, e.DeliveryError, e.Typing = state, reason, false
 			if n > 0 {
 				if a := e.lastAttempt(); a != nil && a.N == n {
@@ -468,21 +513,35 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 				}
 			}
 		})
+		if err != nil && state == protocol.DeliveryDelivered {
+			return protocol.DeliveryUnknown, "delivered, but the outcome could not be journaled: " + err.Error()
+		}
 		return state, reason
 	}
 	if n > 0 {
-		set(func(e *entry) {
+		if err := set(func(e *entry) {
 			e.Attempts = append(e.Attempts, attempt{N: n, State: attemptAttempting, At: time.Now()})
-		})
+		}); err != nil {
+			return protocol.DeliveryNotDelivered, "journal: " + err.Error()
+		}
 	}
+	// Deliveries to one root are serialized, the add's own and the
+	// attempts alike: two adds that share a session, or an attempt
+	// beside one, must not both see the pane idle and interleave their
+	// pastes. The readiness check runs under the lock.
+	l := d.repoLock("deliver/" + e.Root)
+	l.Lock()
+	defer l.Unlock()
 	if e.PaneID == "" {
 		target, why := d.adopt(ctx, e.Root)
 		if why != "" {
 			return record(protocol.DeliveryNotDelivered, why)
 		}
-		set(func(e *entry) {
+		if err := set(func(e *entry) {
 			e.Launch, e.Session, e.PaneID, e.ServerPID = launchLaunched, target.Session, target.ID, target.ServerPID
-		})
+		}); err != nil {
+			return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
+		}
 	}
 	since := time.Now()
 	identity, why, replaced := d.awaitReady(ctx, &e, since)
@@ -494,23 +553,30 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	}
 	if e.Identity == nil {
 		bound := protocol.Identity{PID: identity.PID, StartUnix: identity.Start.Unix(), Comm: identity.Comm, LeaderPID: identity.LeaderPID}
-		set(func(e *entry) { e.Identity = &bound })
+		if err := set(func(e *entry) { e.Identity = &bound }); err != nil {
+			return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
+		}
 	}
-	// The attempt is on disk before the paste, so a daemon that dies in
-	// it leaves unknown, never a second paste.
-	set(func(e *entry) { e.Typing = true })
+	// The paste is on disk before it happens, or it does not happen: a
+	// daemon that dies in it leaves unknown, never a second paste.
+	if err := set(func(e *entry) { e.Typing = true }); err != nil {
+		return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
+	}
 	buffer := attemptBufferPrefix + fileName(id) + "-" + strconv.Itoa(n)
 	err := d.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
 	if err == nil {
 		return record(protocol.DeliveryDelivered, "")
 	}
+	// Only a failure to load the buffer proves nothing reached the
+	// pane. A paste-buffer or send-keys that failed may have been run by
+	// the server before its client was told, or killed after: unknown.
 	var pe *tmux.PasteError
-	enter := errors.As(err, &pe) && pe.Step == "enter"
+	load := errors.As(err, &pe) && pe.Step == "load"
 	err = tmux.Redact(err, prompt, PromptPlaceholder)
-	if enter {
-		return record(protocol.DeliveryUnknown, "paste done, Enter refused: "+err.Error())
+	if load {
+		return record(protocol.DeliveryNotDelivered, "paste refused: "+err.Error())
 	}
-	return record(protocol.DeliveryNotDelivered, "paste refused: "+err.Error())
+	return record(protocol.DeliveryUnknown, "paste may have reached the pane: "+err.Error())
 }
 
 // adopt finds the target for an entry without one: the managed session
@@ -653,15 +719,30 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		if next := len(e.Attempts) + 1; m.Attempt != next {
 			return fmt.Errorf("attempt %d is not the next; the journal has %d", m.Attempt, len(e.Attempts))
 		}
-		if _, _, found, err := d.cfg.Store.Find(ctx, e.Root); err != nil {
+		// The root must still be the worktree the add made: the same
+		// repository, and the branch when git still has one there. A
+		// root reused by another worktree since is not a target, and
+		// its agent is not adopted.
+		rec, _, found, err := d.cfg.Store.Find(ctx, e.Root)
+		if err != nil {
 			return err
-		} else if !found {
-			res.Prompt, res.Error = protocol.DeliveryNotDelivered, "worktree "+e.Root+" is gone"
-			j.update(m.ID, func(e *entry) {
+		}
+		refuse := ""
+		switch {
+		case !found:
+			refuse = "worktree " + e.Root + " is gone"
+		case rec.Source != e.Source:
+			refuse = "worktree " + e.Root + " is now a worktree of " + rec.Repo
+		case rec.Branch != "" && rec.Branch != e.Branch:
+			refuse = "worktree " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
+		}
+		if refuse != "" {
+			res.Prompt, res.Error = protocol.DeliveryNotDelivered, "worktree replaced: "+refuse
+			_, err := j.update(m.ID, func(e *entry) {
 				e.Attempts = append(e.Attempts, attempt{N: m.Attempt, State: res.Prompt, Error: res.Error, At: time.Now()})
 				e.Delivery, e.DeliveryError = res.Prompt, res.Error
 			})
-			return nil
+			return err
 		}
 		res.Prompt, res.Error = d.deliver(ctx, m.ID, m.Attempt, m.Prompt)
 		return nil

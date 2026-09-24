@@ -389,6 +389,14 @@ func Branches(ctx context.Context, checkout string) (local, remote []string, err
 	return local, remote, nil
 }
 
+// RefConflict reports whether a branch named existing rules out one
+// named candidate: the same name, or one a directory of the other in
+// the ref namespace, since refs/heads/task cannot exist beside
+// refs/heads/task/sub.
+func RefConflict(existing, candidate string) bool {
+	return existing == candidate || strings.HasPrefix(existing, candidate+"/") || strings.HasPrefix(candidate, existing+"/")
+}
+
 // Allocate is the first free of <name>, <name>-2, <name>-3 and on, where
 // taken says what is not free: the local and remote branches, the
 // registered worktrees, and the names other adds have allocated and

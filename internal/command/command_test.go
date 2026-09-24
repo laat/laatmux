@@ -297,6 +297,25 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 	if got := f.commands(); len(got) != 0 {
 		t.Fatalf("sent past the lifetime: %+v", got)
 	}
+	// The lifetime bounds sends and resends, not follows: an add sent
+	// in time is followed past it, and the resend the follow asks for
+	// is what the lifetime refuses.
+	was := SenderLifetime
+	SenderLifetime = 300 * time.Millisecond
+	defer func() { SenderLifetime = was }()
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		time.Sleep(400 * time.Millisecond)
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrInterrupted, Stage: protocol.StageFetch}
+	}
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) {
+		t.Fatalf("resend past the lifetime: %v", err)
+	}
+	if got := f.commands(); len(got) != 2 || got[0].Type != protocol.TypeAdd || got[1].Type != protocol.TypeFollow {
+		t.Fatalf("follow past the lifetime: %+v", got)
+	}
+	SenderLifetime = was
+
 	// A prompt or a generated branch needs task; a daemon without it is
 	// refused before the send.
 	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow}})

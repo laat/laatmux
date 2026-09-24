@@ -41,6 +41,14 @@ type fakeServer struct {
 
 type fakePaste struct{ buffer, pane, text string }
 
+// set changes the fake under its lock, as the tests must while the
+// daemon polls it.
+func (f *fakeServer) set(change func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change()
+}
+
 func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

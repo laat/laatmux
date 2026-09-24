@@ -79,23 +79,21 @@ func cmdAdd(ctx context.Context, args []string) error {
 	if res.Root != "" {
 		fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, res.Branch, res.Root, res.Managed)
 	}
-	if err != nil {
-		return err
-	}
-	if err := focus(ctx, res.Session, res.Created); err != nil {
-		return err
-	}
-	// The delivery state is the last line and the exit is 0 whatever
-	// it says: the worktree and the agent are there, and the state is
-	// what the user reads.
-	if prompt != "" {
+	// The delivery state is printed as soon as the host has said it,
+	// before any local failure, and the exit is 0 whatever it says when
+	// the rest went through: the worktree and the agent are there, and
+	// the state is what the user reads to decide about a resubmit.
+	if prompt != "" && res.Prompt != "" {
 		if res.Reason != "" {
 			fmt.Printf("prompt %s: %s\n", res.Prompt, res.Reason)
 		} else {
 			fmt.Printf("prompt %s\n", res.Prompt)
 		}
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	return focus(ctx, res.Session, res.Created)
 }
 
 // printer is the CLI's Reporter: a line per step on stdout, transport

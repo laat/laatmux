@@ -994,6 +994,14 @@ func TestProposeAndAllocate(t *testing.T) {
 	if got := Allocate("task", func(n string) bool { return taken[n] }); got != "task-3" {
 		t.Fatalf("allocate %s", got)
 	}
+	for _, c := range []struct {
+		existing, candidate string
+		want                bool
+	}{{"task", "task", true}, {"task/sub", "task", true}, {"task", "task/sub", true}, {"task-2", "task", false}, {"tasks", "task", false}} {
+		if got := RefConflict(c.existing, c.candidate); got != c.want {
+			t.Errorf("RefConflict(%q, %q) = %v", c.existing, c.candidate, got)
+		}
+	}
 	if got := Allocate("free", func(n string) bool { return taken[n] }); got != "free" {
 		t.Fatalf("allocate %s", got)
 	}

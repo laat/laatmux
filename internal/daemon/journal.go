@@ -151,10 +151,19 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 			logger.Printf("journal: %s: not an entry: %v", de.Name(), err)
 			continue
 		}
-		if e.Typing {
-			e.Delivery, e.DeliveryError, e.Typing = protocol.DeliveryUnknown, "daemon restarted during the paste", false
-			if a := e.lastAttempt(); a != nil && a.State == attemptAttempting {
-				a.State, a.Error = e.Delivery, e.DeliveryError
+		// A paste the daemon died in is unknown; an attempt it died in
+		// before the paste, waiting for the pane, is provably not
+		// delivered, since the paste is written before it happens.
+		a := e.lastAttempt()
+		open := a != nil && a.State == attemptAttempting
+		if e.Typing || open {
+			state, reason := protocol.DeliveryNotDelivered, "daemon restarted before the paste"
+			if e.Typing {
+				state, reason = protocol.DeliveryUnknown, "daemon restarted during the paste"
+			}
+			e.Delivery, e.DeliveryError, e.Typing = state, reason, false
+			if open {
+				a.State, a.Error = state, reason
 			}
 			if err := j.writeLocked(&e); err != nil {
 				logger.Printf("journal: %s: %v", de.Name(), err)
