@@ -204,8 +204,23 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 	}
 	req := a.Request(id)
 	req.Relay, req.Name = a.Host.Name, a.Repo.Name
-	if _, err := c.Request(ctx, req); err != nil {
-		return "", err
+	// The id is this submit's whatever happens: the daemon accepts it
+	// again and starts it if it is not running, so a lost answer is
+	// asked for again on a fresh connection, and an error after that
+	// still names the id the daemon may hold.
+	if res, err := c.Request(ctx, req); err != nil {
+		if res.Type != "" || ctx.Err() != nil {
+			return "", err
+		}
+		c.Close()
+		c, err = client.Dial(ctx, client.Host{Name: "local"})
+		if err != nil {
+			return id, fmt.Errorf("%s: the answer was lost and the daemon could not be reached again; laatmux tasks says whether it holds %s", err, id)
+		}
+		defer c.Close()
+		if _, err := c.Request(ctx, req); err != nil {
+			return id, err
+		}
 	}
 	err = home.UpdateLast(func(l *home.Last) {
 		cur := l.Get(a.Repo.Source)

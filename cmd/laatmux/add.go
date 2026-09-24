@@ -54,8 +54,11 @@ func cmdAdd(ctx context.Context, args []string) error {
 		// The daemon has the task once an id comes back, whatever the
 		// local bookkeeping after; a retry would submit another.
 		id, err := add.Submit(ctx)
-		if id != "" {
+		switch {
+		case err == nil:
 			fmt.Printf("accepted %s; the daemon runs it, laatmux tasks shows it\n", id)
+		case id != "":
+			fmt.Printf("submitted %s; laatmux tasks says whether the daemon holds it\n", id)
 		}
 		return err
 	}

@@ -424,6 +424,16 @@ func TestSubmit(t *testing.T) {
 	if got := f.commands(); len(got) != 3 || got[1].Type != protocol.TypeDismiss || got[2].Type != protocol.TypePrompt || got[2].Attempt != 0 {
 		t.Fatalf("commands %+v", got)
 	}
+	// The answer lost: the same id is asked for again on a fresh
+	// connection, and the daemon accepts it again.
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	id2, err := add.Submit(context.Background())
+	if err != nil || id2 == "" {
+		t.Fatalf("%s %v", id2, err)
+	}
+	if got := f.commands(); len(got) != 2 || got[0].ID != id2 || got[1].ID != id2 || got[1].Type != protocol.TypeAdd {
+		t.Fatalf("resubmit %+v", got)
+	}
 	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapMerged}})
 	if _, err := add.Submit(context.Background()); err == nil || !strings.Contains(err.Error(), "no relay capability") {
 		t.Fatalf("without relay: %v", err)

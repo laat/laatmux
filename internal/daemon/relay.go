@@ -71,13 +71,16 @@ type relay struct {
 	recs   map[string]*pendingFile
 	// attempts serializes the deliveries per record.
 	attempts map[string]*sync.Mutex
+	// running is the records whose add a goroutine is following, so a
+	// resubmit or a restart never starts a second.
+	running map[string]bool
 }
 
 func openRelay(dir string, logger *log.Logger) (*relay, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}}
+	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, running: map[string]bool{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -242,9 +245,13 @@ func (r *relay) pendingsLocked() ([]protocol.Pending, []protocol.Handoff) {
 
 // acceptRelay takes a relayed add: the pending file is written first,
 // atomically, then the answer says accepted, and the relay runs from
-// there. A host the config does not have, or one whose daemon is known
-// not to have the task capability, is refused here, before the file:
-// the form reads the same cached capability and says so before submit.
+// there, started by the caller once the answer is written, so the host
+// is contacted after the acceptance and not before. A host the config
+// does not have, or one whose daemon is known not to have the task
+// capability, is refused here, before the file: the form reads the
+// same cached capability and says so before submit. An id the relay
+// has is accepted again and started if it is not running, which is
+// how a client whose answer was lost gets its task run.
 func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	if d.relay == nil {
@@ -302,10 +309,28 @@ func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.M
 		return res
 	}
 	res.OK = true
-	if fresh {
-		go d.runPending(ctx, m.ID)
-	}
 	return res
+}
+
+// startPending starts the goroutine that follows the record's add,
+// unless one is running or the add has its outcome. Idempotent, so
+// the accept path and the resume at start share it.
+func (d *Daemon) startPending(ctx context.Context, id string) {
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	p, ok := d.relay.recs[id]
+	if !ok || p.Done || d.relay.running[id] {
+		return
+	}
+	d.relay.running[id] = true
+	go func() {
+		defer func() {
+			d.relay.mu.Lock()
+			delete(d.relay.running, id)
+			d.relay.mu.Unlock()
+		}()
+		d.runPending(ctx, id)
+	}()
 }
 
 // relayHost finds the configured host by name.
@@ -387,7 +412,7 @@ func (d *Daemon) startRelays(ctx context.Context) {
 	for _, p := range ps {
 		switch {
 		case !p.Done:
-			go d.runPending(ctx, p.ID)
+			d.startPending(ctx, p.ID)
 		case p.AttemptOpen:
 			go d.runAttempt(ctx, p.ID)
 		case p.OK:

@@ -847,8 +847,15 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			// The relay's messages: an add naming a host to run it on,
 			// and a prompt without an attempt number.
 			if m.Type == protocol.TypeAdd && m.Relay != "" {
-				if err := pc.Write(d.acceptRelay(ctx, m)); err != nil {
+				// The task runs once the answer is written: the host is
+				// contacted after the acceptance, and a client whose
+				// answer was lost resubmits the id and gets it started.
+				res := d.acceptRelay(ctx, m)
+				if err := pc.Write(res); err != nil {
 					return
+				}
+				if res.OK {
+					d.startPending(ctx, m.ID)
 				}
 				continue
 			}

@@ -195,6 +195,23 @@ func TestRelayAdd(t *testing.T) {
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "t1", Relay: "vm", Repo: f.source(), Branch: "task", AgentName: "argv"}); !res.OK {
 		t.Fatalf("resubmit %+v", res)
 	}
+	// Two submits of one id in flight start one runner.
+	f.remote.mu.Lock()
+	dials := f.remote.dials
+	f.remote.mu.Unlock()
+	for _, i := range []int{1, 2} {
+		_ = i
+		if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "t1b", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "twice", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+			t.Fatal(res.Error)
+		}
+	}
+	f.awaitRecord(t, "t1b", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	f.remote.mu.Lock()
+	added := f.remote.dials - dials
+	f.remote.mu.Unlock()
+	if added != 2 { // the add's connection and the listing's
+		t.Fatalf("%d dials for one task", added)
+	}
 	// A retired record is not dismissed: its handoff is kept.
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1"}); res.OK || !strings.Contains(res.Error, "handed over") {
 		t.Fatalf("dismiss retired %+v", res)
