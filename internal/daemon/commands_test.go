@@ -30,13 +30,14 @@ type fakeServer struct {
 	// pastes records every Paste: the buffer, pane and text; pasteErr
 	// is returned instead when set; newErr fails NewSession; buffers
 	// is what DeleteBuffers was asked to clear.
-	pastes   []fakePaste
-	pasteErr error
-	newErr   error
-	buffers  []string
-	cmds     [][]string // the Cmd of every NewSession
-	server   int        // ServerPID of the panes made, 5 by default
-	screen   []string   // what Capture shows in every pane
+	pastes    []fakePaste
+	pasteErr  error
+	pasteHold chan struct{} // when set, Paste blocks until it closes
+	newErr    error
+	buffers   []string
+	cmds      [][]string // the Cmd of every NewSession
+	server    int        // ServerPID of the panes made, 5 by default
+	screen    []string   // what Capture shows in every pane
 }
 
 type fakePaste struct{ buffer, pane, text string }
@@ -90,6 +91,12 @@ func (f *fakeServer) KillSession(_ context.Context, name string) error {
 	return nil
 }
 func (f *fakeServer) Paste(_ context.Context, buffer, pane, text string) error {
+	f.mu.Lock()
+	hold := f.pasteHold
+	f.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.pasteErr != nil {

@@ -498,13 +498,20 @@ func (r *addRun) typed(ctx context.Context) (string, string, error) {
 // deliver types the prompt into the pane the journal names for id, as
 // the add's own delivery when n is 0, else as attempt n of a prompt
 // message, and returns the delivery state with its reason. The pane
-// must be ready: a fresh observation by the detector, after the startup
-// grace, with the prompt box on screen, the agent identified and
-// verified, in the pane and on the server instance recorded; that
-// identity is bound before the first paste and required by every later
-// one. A pane not ready within the wait gets nothing. An entry without
-// a target adopts the managed session in the root when there is exactly
-// one and its single pane has a verified live agent.
+// must be ready: an observation by the detector made after the wait
+// began and after the startup grace, with the prompt box on screen,
+// the agent identified and seen alive by that poll, in the pane and on
+// the server instance recorded; that identity is bound before the first
+// paste and required by every later one. A pane not ready within the
+// wait gets nothing. An entry without a target adopts the managed
+// session in the root when there is exactly one and its single pane
+// has a verified live agent.
+//
+// The wait takes no lock. The paste does: under the root's delivery
+// lock, which rm holds for its removal, the entry is read again, the
+// root checked and the readiness confirmed on the latest observation,
+// so nothing is pasted into a root rm has taken or beside another
+// delivery's paste, and rm is never held up by a wait.
 func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (state, reason string) {
 	j := d.journal
 	e, ok := j.get(id)
@@ -543,43 +550,56 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 			return protocol.DeliveryNotDelivered, "journal: " + err.Error()
 		}
 	}
-	// Deliveries to one root are serialized, the add's own and the
-	// attempts alike: two adds that share a session, or an attempt
-	// beside one, must not both see the pane idle and interleave their
-	// pastes. The readiness check runs under the lock.
-	defer d.lockDeliveries(e.Root)()
-	// What was true before the wait for the lock may not be now: rm
-	// may have taken the worktree and marked the entry, and another add
-	// may have a session at the root. The entry is read again and the
-	// root checked under the lock, which rm holds for its own changes.
-	e, ok = j.get(id)
-	if !ok {
-		return protocol.DeliveryNotDelivered, "no journal entry"
-	}
-	if e.Removed {
-		return record(protocol.DeliveryNotDelivered, "worktree removed")
-	}
-	if why := d.worktreeReplaced(ctx, e); why != "" {
-		return record(protocol.DeliveryNotDelivered, why)
+	// current reads the entry again and checks the root, for the steps
+	// under the lock: rm's tombstone and a worktree replaced since are
+	// refusals.
+	current := func() string {
+		cur, ok := j.get(id)
+		if !ok {
+			return "no journal entry"
+		}
+		e = cur
+		if e.Removed {
+			return "worktree removed"
+		}
+		return d.worktreeReplaced(ctx, e)
 	}
 	if e.PaneID == "" {
+		unlock := d.lockDeliveries(e.Root)
+		if why := current(); why != "" {
+			unlock()
+			return record(protocol.DeliveryNotDelivered, why)
+		}
 		target, why := d.adopt(ctx, e.Root)
+		if why == "" {
+			if err := set(func(e *entry) {
+				e.Launch, e.Session, e.PaneID, e.ServerPID = launchLaunched, target.Session, target.ID, target.ServerPID
+			}); err != nil {
+				why = "journal: " + err.Error()
+			}
+		}
+		unlock()
 		if why != "" {
 			return record(protocol.DeliveryNotDelivered, why)
 		}
-		if err := set(func(e *entry) {
-			e.Launch, e.Session, e.PaneID, e.ServerPID = launchLaunched, target.Session, target.ID, target.ServerPID
-		}); err != nil {
-			return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
-		}
 	}
 	since := time.Now()
-	identity, why, replaced := d.awaitReady(ctx, &e, since)
-	if why != "" {
+	if _, why, replaced := d.awaitReady(ctx, &e, since); why != "" {
 		if replaced {
 			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 		}
 		return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
+	}
+	defer d.lockDeliveries(e.Root)()
+	if why := current(); why != "" {
+		return record(protocol.DeliveryNotDelivered, why)
+	}
+	identity, why, replaced := d.ready(&e, since)
+	if why != "" {
+		if replaced {
+			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
+		}
+		return record(protocol.DeliveryNotDelivered, "agent no longer ready: "+why)
 	}
 	if e.Identity == nil {
 		bound := protocol.Identity{PID: identity.PID, StartUnix: identity.Start.Unix(), Comm: identity.Comm, LeaderPID: identity.LeaderPID}
@@ -587,6 +607,12 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 			return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
 		}
 	}
+	// A daemon shutting down starts no paste, and waits for one it has
+	// started, so the buffer is deleted before the process ends.
+	if !d.beginDelivery() {
+		return record(protocol.DeliveryNotDelivered, "daemon shutting down")
+	}
+	defer d.endDelivery()
 	// The paste is on disk before it happens, or it does not happen: a
 	// daemon that dies in it leaves unknown, never a second paste.
 	if err := set(func(e *entry) { e.Typing = true }); err != nil {
@@ -607,6 +633,24 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		return record(protocol.DeliveryNotDelivered, "paste refused: "+err.Error())
 	}
 	return record(protocol.DeliveryUnknown, "paste may have reached the pane: "+err.Error())
+}
+
+// beginDelivery counts a paste about to start, unless the daemon is
+// stopping; endDelivery counts it done. StopRuns waits for the count.
+func (d *Daemon) beginDelivery() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopping {
+		return false
+	}
+	d.pasting++
+	return true
+}
+
+func (d *Daemon) endDelivery() {
+	d.mu.Lock()
+	d.pasting--
+	d.mu.Unlock()
 }
 
 // worktreeReplaced says why the entry's root is no longer the worktree
@@ -667,47 +711,50 @@ func (d *Daemon) adopt(ctx context.Context, root string) (tmux.Pane, string) {
 	return p, ""
 }
 
-// awaitReady waits for the entry's pane to be ready, as deliver
-// requires, and returns the verified identity; else why it was not,
-// and whether the target is gone for good: the session or the server
-// instance is not the recorded one, or the agent is not the bound one.
+// ready is one check of the entry's pane against the latest
+// observation, as deliver requires, and returns the verified identity;
+// else why it is not ready, and whether the target is gone for good:
+// the session or the server instance is not the recorded one, or the
+// agent is not the bound one. The observation must be from after since
+// and from after the agent's startup grace, by its own time: a fresh
+// look is what says the agent is ready, not time having passed since
+// an older one.
+func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool) {
+	key := paneKey(d.managed.Label, e.PaneID)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	st, ok := d.panes[key]
+	if !ok {
+		return procs.Identity{}, "pane " + e.PaneID + " not seen", false
+	}
+	obs := st.obs
+	switch {
+	case !obs.at.After(since):
+		return obs.identity, "no observation since the wait began", false
+	case obs.session != e.Session || obs.serverPID != e.ServerPID:
+		return obs.identity, fmt.Sprintf("pane %s is in session %s on server %d, not %s on %d", e.PaneID, obs.session, obs.serverPID, e.Session, e.ServerPID), true
+	case d.sessionPanesLocked(e.Session) != 1:
+		return obs.identity, fmt.Sprintf("session %s has %d panes", e.Session, d.sessionPanesLocked(e.Session)), true
+	case !obs.verified:
+		return obs.identity, "no verified agent in the pane", false
+	case e.Identity != nil && (obs.identity.PID != e.Identity.PID || obs.identity.Start.Unix() != e.Identity.StartUnix):
+		return obs.identity, fmt.Sprintf("agent pid %d is not the bound pid %d", obs.identity.PID, e.Identity.PID), true
+	case obs.at.Sub(obs.identity.Start) < startupGrace:
+		return obs.identity, "agent within its startup grace", false
+	case !obs.idle:
+		return obs.identity, "prompt box not on screen", false
+	}
+	return obs.identity, "", false
+}
+
+// awaitReady polls ready until it is, the target is gone for good, or
+// the wait is over.
 func (d *Daemon) awaitReady(ctx context.Context, e *entry, since time.Time) (procs.Identity, string, bool) {
 	deadline := since.Add(readyWait)
-	key := paneKey(d.managed.Label, e.PaneID)
 	for {
-		now := time.Now()
-		var why string
-		replaced := false
-		d.mu.Lock()
-		st, ok := d.panes[key]
-		switch {
-		case !ok:
-			why = "pane " + e.PaneID + " not seen"
-		case !st.obs.at.After(since):
-			why = "no observation since the wait began"
-		case st.obs.session != e.Session || st.obs.serverPID != e.ServerPID:
-			why, replaced = fmt.Sprintf("pane %s is in session %s on server %d, not %s on %d", e.PaneID, st.obs.session, st.obs.serverPID, e.Session, e.ServerPID), true
-		case d.sessionPanesLocked(e.Session) != 1:
-			why, replaced = fmt.Sprintf("session %s has %d panes", e.Session, d.sessionPanesLocked(e.Session)), true
-		case !st.obs.verified:
-			why = "no verified agent in the pane"
-		case e.Identity != nil && (st.obs.identity.PID != e.Identity.PID || st.obs.identity.Start.Unix() != e.Identity.StartUnix):
-			why, replaced = fmt.Sprintf("agent pid %d is not the bound pid %d", st.obs.identity.PID, e.Identity.PID), true
-		case now.Sub(st.obs.identity.Start) < startupGrace:
-			why = "agent within its startup grace"
-		case !st.obs.idle:
-			why = "prompt box not on screen"
-		}
-		identity := procs.Identity{}
-		if ok {
-			identity = st.obs.identity
-		}
-		d.mu.Unlock()
-		if why == "" {
-			return identity, "", false
-		}
-		if replaced || now.After(deadline) {
-			return procs.Identity{}, why, replaced
+		identity, why, replaced := d.ready(e, since)
+		if why == "" || replaced || time.Now().After(deadline) {
+			return identity, why, replaced
 		}
 		select {
 		case <-ctx.Done():

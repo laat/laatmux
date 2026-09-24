@@ -821,11 +821,12 @@ func TestLaunchRecordsServerFromNewSession(t *testing.T) {
 // not ready on it, whatever the last check said, so a prompt box left
 // by an agent that exited gets nothing.
 func TestDeliveryNeedsLivenessThisPoll(t *testing.T) {
-	shortWait(t, 400*time.Millisecond)
+	shortWait(t, 600*time.Millisecond)
 	store, remote := newStore(t)
-	ft := &fakeServer{screen: idleScreen}
-	// The first polls find claude; from then on the table is unreadable.
-	tables := []procTable{{procs: []procs.Proc{shell, claude}}, {procs: []procs.Proc{shell, claude}}, {err: errors.New("proc table unreadable")}}
+	// Nothing is idle while claude is found; by the time the prompt box
+	// shows, every process check fails.
+	ft := &fakeServer{screen: []string{"loading"}}
+	tables := []procTable{{procs: []procs.Proc{shell, claude}}, {err: errors.New("proc table unreadable")}}
 	d := New(Config{
 		EnvironmentID: "env", Host: "box",
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
@@ -847,8 +848,94 @@ func TestDeliveryNeedsLivenessThisPoll(t *testing.T) {
 	}()
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
+			break
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // the finding poll has happened
+	ft.set(func() { ft.screen = idleScreen })
 	res, _ := result(t, pc, "c1")
 	if !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "no verified agent") || len(ft.pastes) != 0 {
 		t.Fatalf("%+v pastes %+v", res, ft.pastes)
+	}
+}
+
+// Readiness is judged on the observation's own time: one made inside
+// the agent's startup grace does not become ready by time passing, a
+// later one does.
+func TestReadyJudgesObservationTime(t *testing.T) {
+	store, _ := newStore(t)
+	ft := &fakeServer{}
+	d := New(Config{Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}}, Store: store, Commands: t.TempDir()})
+	start := time.Now().Add(-10 * time.Second)
+	id := procs.Identity{Agent: "claude", PID: 7, Start: start, Comm: "claude"}
+	since := start
+	st := &paneState{target: d.managed, obs: observation{at: start.Add(time.Second), session: "s", serverPID: 5, verified: true, identity: id, idle: true}}
+	d.panes[paneKey("laatmux", "%1")] = st
+	e := &entry{Session: "s", PaneID: "%1", ServerPID: 5}
+	if _, why, _ := d.ready(e, since); !strings.Contains(why, "startup grace") {
+		t.Fatalf("pre-grace observation: %q", why)
+	}
+	st.obs.at = start.Add(startupGrace + time.Second)
+	if _, why, _ := d.ready(e, since); why != "" {
+		t.Fatalf("post-grace observation: %q", why)
+	}
+	st.obs.at = since
+	if _, why, _ := d.ready(e, since); !strings.Contains(why, "since the wait began") {
+		t.Fatalf("stale observation: %q", why)
+	}
+}
+
+// A daemon stopping starts no paste and waits for one in flight, so
+// the buffer is gone before the process ends.
+func TestStopWaitsForPaste(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
+	release := make(chan struct{})
+	ft.set(func() { ft.pasteHold = release })
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
+			break
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d.mu.Lock()
+		n := d.pasting
+		d.mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		d.StopRuns(context.Background())
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("StopRuns returned during the paste")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-stopped
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("%+v", res)
+	}
+	// After the stop no paste starts.
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "shutting down") {
+		t.Fatalf("after stop: %+v", res)
 	}
 }

@@ -159,7 +159,8 @@ type Daemon struct {
 	// once git has removed the worktree; see runs.go.
 	runs      map[string]map[*runJob]struct{}
 	rootGen   map[string]uint64
-	stopping  bool // StopRuns has begun; no run registers after it
+	stopping  bool // StopRuns has begun; no run registers and no paste starts after it
+	pasting   int  // pastes in flight, which StopRuns waits for
 	killDelay time.Duration
 
 	// The merged stream: its own sequence and subscribers, the hosts by
