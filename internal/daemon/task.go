@@ -585,6 +585,9 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	}
 	since := time.Now()
 	deadline := since.Add(readyWait)
+	d.mu.Lock()
+	d.waits++
+	d.mu.Unlock()
 	var identity procs.Identity
 	for {
 		if _, why, replaced := d.awaitReady(ctx, &e, since, deadline); why != "" {

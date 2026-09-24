@@ -937,10 +937,27 @@ func TestDeliveriesDoNotShareObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.markDiscovered(&d.panesDiscovered)
+	// awaitWaits returns once n deliveries have begun their wait, so
+	// the observation published next is after every since.
+	awaitWaits := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			d.mu.Lock()
+			w := d.waits
+			d.mu.Unlock()
+			if w >= n {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d deliveries waiting, want %d", w, n)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	pc2, pc3 := conn(t, d), conn(t, d)
 	pc2.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c2", Attempt: 1, Prompt: "c2"})
 	pc3.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c3", Attempt: 1, Prompt: "c3"})
-	time.Sleep(100 * time.Millisecond)
+	awaitWaits(2)
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -967,11 +984,60 @@ func TestDeliveriesDoNotShareObservation(t *testing.T) {
 		loser = "c2"
 	}
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: loser, Attempt: 2, Prompt: loser})
-	time.Sleep(100 * time.Millisecond)
+	awaitWaits(3)
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := result(t, pc, loser); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 2 {
 		t.Fatalf("%s on a new observation: %+v", loser, res)
+	}
+}
+
+// A daemon stopping starts no paste and waits for one in flight, so
+// the buffer is gone before the process ends.
+func TestStopWaitsForPaste(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
+	release := make(chan struct{})
+	ft.set(func() { ft.pasteHold = release })
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	for {
+		m, err := pc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
+			break
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d.mu.Lock()
+		n := d.pasting
+		d.mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		d.StopRuns(context.Background())
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("StopRuns returned during the paste")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-stopped
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("%+v", res)
+	}
+	// After the stop no paste starts.
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "shutting down") {
+		t.Fatalf("after stop: %+v", res)
 	}
 }

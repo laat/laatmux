@@ -162,8 +162,10 @@ type Daemon struct {
 	stopping bool // StopRuns has begun; no run registers and no paste starts after it
 	pasting  int  // pastes in flight, which StopRuns waits for
 	// pasted is when a pane was last pasted into, by pane key: a
-	// delivery needs an observation made after it.
+	// delivery needs an observation made after it. waits counts the
+	// deliveries that have begun waiting for a pane, for tests.
 	pasted    map[string]time.Time
+	waits     int
 	killDelay time.Duration
 
 	// The merged stream: its own sequence and subscribers, the hosts by
