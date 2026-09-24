@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -24,53 +25,30 @@ import (
 // prompt's delivery state is the last line. The doing is command.Add,
 // which the dashboard runs too; this is the flags and the printing.
 func cmdAdd(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("add", flag.ContinueOnError)
-	repoFlag := fs.String("repo", "", "repository name or source; default from the current directory")
-	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
-	agentFlag := fs.String("agent", "", "agent to start; default the last used for the repository")
-	var prompt string
-	fs.StringVar(&prompt, "p", "", "prompt the agent is started with")
-	fs.StringVar(&prompt, "prompt", "", "alias of -p")
-	if err := fs.Parse(args); err != nil {
+	a, err := parseAddArgs(args)
+	if err != nil {
 		return err
 	}
-	usage := errors.New("usage: laatmux add [<branch>] [-p <prompt>] [--repo r] [--host h] [--agent a] [-- <cmd>...]")
-	branch, generated := "", false
-	switch {
-	case fs.NArg() >= 1 && fs.Arg(0) != "":
-		branch = fs.Arg(0)
-		if err := fs.Parse(fs.Args()[1:]); err != nil {
-			return err
-		}
-	case prompt != "":
-		// No branch: a proposal from the prompt, allocated on the host.
-		branch, generated = worktree.ProposeBranch(prompt), true
-		if branch == "" {
-			return errors.New("no branch name can be made from the prompt; give one")
-		}
-	default:
-		return usage
-	}
-	cmd := fs.Args()
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	repo, err := resolveRepo(ctx, cfg, *repoFlag)
+	repo, err := resolveRepo(ctx, cfg, a.repo)
 	if err != nil {
 		return err
 	}
-	h, lr, err := hostFor(cfg, *hostFlag, repo)
+	h, lr, err := hostFor(cfg, a.host, repo)
 	if err != nil {
 		return err
 	}
 	agentName := ""
-	if len(cmd) == 0 {
-		if agentName, _, err = cfg.DefaultAgent(*agentFlag, lr.Agent); err != nil {
+	if len(a.cmd) == 0 {
+		if agentName, _, err = cfg.DefaultAgent(a.agent, lr.Agent); err != nil {
 			return err
 		}
 	}
-	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: cmd, Prompt: prompt, Generated: generated}
+	branch, prompt := a.branch, a.prompt
+	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
 	res, err := add.Run(ctx, printer{})
 	// A root in the result means the worktree and its agent exist on
@@ -94,6 +72,56 @@ func cmdAdd(ctx context.Context, args []string) error {
 		return err
 	}
 	return focus(ctx, res.Session, res.Created)
+}
+
+// addArgs is the add command line: the flags, the branch, given or
+// proposed from the prompt, and the command override after --.
+type addArgs struct {
+	repo, host, agent string
+	prompt            string
+	branch            string
+	generated         bool
+	cmd               []string
+}
+
+// parseAddArgs reads the command line. The command override after --
+// is taken off first, so it is never read as the optional branch:
+// `add -p x -- claude` runs claude under a proposed name. Flags come
+// before or after the branch.
+func parseAddArgs(args []string) (addArgs, error) {
+	var a addArgs
+	fs := flag.NewFlagSet("add", flag.ContinueOnError)
+	fs.StringVar(&a.repo, "repo", "", "repository name or source; default from the current directory")
+	fs.StringVar(&a.host, "host", "", "host name; default the last used for the repository")
+	fs.StringVar(&a.agent, "agent", "", "agent to start; default the last used for the repository")
+	fs.StringVar(&a.prompt, "p", "", "prompt the agent is started with")
+	fs.StringVar(&a.prompt, "prompt", "", "alias of -p")
+	if i := slices.Index(args, "--"); i >= 0 {
+		args, a.cmd = args[:i], args[i+1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return a, err
+	}
+	usage := errors.New("usage: laatmux add [<branch>] [-p <prompt>] [--repo r] [--host h] [--agent a] [-- <cmd>...]")
+	switch {
+	case fs.NArg() >= 1 && fs.Arg(0) != "":
+		a.branch = fs.Arg(0)
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return a, err
+		}
+		if fs.NArg() > 0 {
+			return a, usage
+		}
+	case a.prompt != "":
+		// No branch: a proposal from the prompt, allocated on the host.
+		a.branch, a.generated = worktree.ProposeBranch(a.prompt), true
+		if a.branch == "" {
+			return a, errors.New("no branch name can be made from the prompt; give one")
+		}
+	default:
+		return a, usage
+	}
+	return a, nil
 }
 
 // printer is the CLI's Reporter: a line per step on stdout, transport

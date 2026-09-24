@@ -64,7 +64,20 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 	err := r.run(ctx)
 	r.unlock()
 	if errors.Is(err, errRecorded) {
-		c.emit(r.res)
+		// The recorded result is published under the root's delivery
+		// lock, read again there: an rm that completed between the
+		// read and this point has made it removed, and the memory must
+		// not cache the success it replaced.
+		if r.e.Root != "" {
+			unlock := d.lockDeliveries(r.e.Root)
+			if cur, ok := d.journal.get(m.ID); ok && cur.terminal() {
+				r.res = cur.recorded()
+			}
+			c.emit(r.res)
+			unlock()
+		} else {
+			c.emit(r.res)
+		}
 		d.evict(m.ID, c)
 		return
 	}
@@ -172,7 +185,7 @@ func (r *addRun) run(ctx context.Context) error {
 	if j != nil {
 		if cur, ok := j.get(m.ID); ok {
 			if cur.terminal() {
-				r.res = cur.recorded()
+				r.e, r.res = cur, cur.recorded()
 				return errRecorded
 			}
 			r.e, known, r.created = cur, true, true
@@ -237,7 +250,7 @@ func (r *addRun) run(ctx context.Context) error {
 			return stageErr(stage, errors.New("journal: the entry is gone"))
 		}
 		if cur.terminal() {
-			r.res = cur.recorded()
+			r.e, r.res = cur, cur.recorded()
 			return errRecorded
 		}
 		r.e = cur

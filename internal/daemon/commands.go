@@ -338,6 +338,17 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			return nil
 		}
 		res.Root = root
+		// From the removal on, everything is under the root's delivery
+		// lock: git's removal, the sessions going, the journal's entries
+		// marked removed and the finished commands the memory holds for
+		// them dropped. A delivery holds the same lock across its
+		// readiness check and paste, so it never pastes into a root git
+		// has removed and, once it gets the lock, finds the tombstone
+		// rather than a replacement session; an add records and
+		// publishes its result under it, so no success is published
+		// between the mark and the drop.
+		unlockDeliveries := d.lockDeliveries(root)
+		defer unlockDeliveries()
 		if checkout != "" {
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
 			if err != nil {
@@ -348,6 +359,10 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				d.stepRevision()
 			}
 		}
+		// Git has agreed to the removal: what runs in the root is
+		// laatmux's own, like the session, and goes before it. The wait
+		// makes the ok mean nothing of laatmux's is left there.
+		d.cancelRunsIn(root)
 		// The journal's entries at the root are removed with it: a
 		// follow or a resend for one is answered removed from now on,
 		// which means the finished commands the memory still holds for
@@ -361,19 +376,6 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				return err
 			}
 		}
-		// Git has agreed to the removal: what runs in the root is
-		// laatmux's own, like the session, and goes before it. The wait
-		// makes the ok mean nothing of laatmux's is left there.
-		d.cancelRunsIn(root)
-		// The sessions go, the journal's entries at the root are marked
-		// removed and the finished commands the memory holds for them
-		// dropped, all under the root's delivery lock: a delivery that
-		// was waiting for the pane finds the tombstone when it gets the
-		// lock rather than a replacement session, and an add publishing
-		// its result does so before or after the tombstone, never
-		// between the mark and the drop.
-		unlockDeliveries := d.lockDeliveries(root)
-		defer unlockDeliveries()
 		panes, err := d.managed.Tmux.ListPanes(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Server addresses one tmux server: by -L name or -S path. The zero Server
@@ -421,7 +422,14 @@ func Submitted(err error) bool {
 // reached the pane, "enter" means the text did and the submit may not
 // have.
 func (s Server) Paste(ctx context.Context, buffer, paneID, text string) error {
-	defer s.Run(ctx, "delete-buffer", "-b", buffer)
+	defer func() {
+		// The deletion has its own bounded context: a ctx cancelled
+		// after the load, by the daemon shutting down, must not leave
+		// the text on the server.
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.Run(dctx, "delete-buffer", "-b", buffer)
+	}()
 	if _, err := s.RunInput(ctx, strings.NewReader(text), "load-buffer", "-b", buffer, "-"); err != nil {
 		return &PasteError{Step: "load", Err: err}
 	}

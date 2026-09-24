@@ -223,7 +223,7 @@ type observation struct {
 	at        time.Time
 	session   string
 	serverPID int
-	verified  bool // an agent identified, alive, and not tentative
+	verified  bool // an agent identified, not tentative, and seen alive by this poll's process check
 	identity  procs.Identity
 	idle      bool // the detector saw the prompt box: VisibleIdle, not the fallback
 }
@@ -462,13 +462,17 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	// existence, so a tool taking the foreground never replaces it. A
 	// tentative instance (env hint) is re-searched every poll so stronger
 	// evidence can replace it. A read error is an unavailable observation,
-	// not absence: nothing changes. An instance found again after being
-	// marked gone (a transient omission) is restored without a reset.
+	// not absence: nothing changes, but the observation this poll
+	// publishes for a delivery does not vouch for the agent. An instance
+	// found again after being marked gone (a transient omission) is
+	// restored without a reset.
+	checked := true
 	switch {
 	case st.hasIdentity && !st.gone && !st.identity.Tentative:
 		ok, err := d.cfg.Procs.Exists(p.TTY, st.identity)
 		if err != nil {
 			d.cfg.Logger.Printf("procs %s: %v", p.ID, err)
+			checked = false
 		} else if !ok {
 			st.gone = true
 		}
@@ -477,6 +481,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		switch {
 		case err != nil:
 			d.cfg.Logger.Printf("procs %s: %v", p.ID, err)
+			checked = false
 		case !found && st.hasIdentity && st.identity.Tentative:
 			st.gone = true
 		case found && st.hasIdentity && st.identity.Same(id):
@@ -549,7 +554,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	defer d.mu.Unlock()
 	st.obs = observation{
 		at: now, session: p.Session, serverPID: p.ServerPID,
-		verified: !st.gone && !st.identity.Tentative, identity: st.identity,
+		verified: checked && !st.gone && !st.identity.Tentative, identity: st.identity,
 		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
 	}
 	if had && sameRecord(prev, a) {

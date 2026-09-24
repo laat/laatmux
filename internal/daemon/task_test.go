@@ -816,3 +816,39 @@ func TestLaunchRecordsServerFromNewSession(t *testing.T) {
 		t.Fatalf("entry %+v", e)
 	}
 }
+
+// A poll whose process check failed vouches for no agent: the pane is
+// not ready on it, whatever the last check said, so a prompt box left
+// by an agent that exited gets nothing.
+func TestDeliveryNeedsLivenessThisPoll(t *testing.T) {
+	shortWait(t, 400*time.Millisecond)
+	store, remote := newStore(t)
+	ft := &fakeServer{screen: idleScreen}
+	// The first polls find claude; from then on the table is unreadable.
+	tables := []procTable{{procs: []procs.Proc{shell, claude}}, {procs: []procs.Proc{shell, claude}}, {err: errors.New("proc table unreadable")}}
+	d := New(Config{
+		EnvironmentID: "env", Host: "box",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
+		Procs:   &fakeProcs{tables: tables},
+		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
+		Commands: t.TempDir(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-stopped })
+	go func() {
+		defer close(stopped)
+		for ctx.Err() == nil {
+			if d.poll(ctx) == nil {
+				d.markDiscovered(&d.panesDiscovered)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	res, _ := result(t, pc, "c1")
+	if !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "no verified agent") || len(ft.pastes) != 0 {
+		t.Fatalf("%+v pastes %+v", res, ft.pastes)
+	}
+}
