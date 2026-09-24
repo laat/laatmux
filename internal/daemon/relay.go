@@ -114,6 +114,11 @@ func (r *relay) get(id string) (pendingFile, bool) {
 func (r *relay) create(p pendingFile) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.createLocked(p)
+}
+
+// createLocked is create with r.mu held.
+func (r *relay) createLocked(p pendingFile) (bool, error) {
 	if _, ok := r.recs[p.ID]; ok {
 		return false, nil
 	}
@@ -125,13 +130,14 @@ func (r *relay) create(p pendingFile) (bool, error) {
 	return true, nil
 }
 
-// update applies change to the record and writes it when write is set;
-// a change that is not written is the in-memory state only, which the
-// progress lines are, since a line of setup output is not worth a file
-// write and the next daemon follows the add anyway.
-func (r *relay) update(id string, write bool, change func(*pendingFile)) (pendingFile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// updateLocked applies change to the record and writes it when write
+// is set; a change that is not written is the in-memory state only,
+// which the progress lines are, since a line of setup output is not
+// worth a file write and the next daemon follows the add anyway.
+// Called with r.mu held: the mutation and its publication into the
+// stream are one step, so a snapshot or a removal never interleaves
+// with a stale upsert.
+func (r *relay) updateLocked(id string, write bool, change func(*pendingFile)) (pendingFile, error) {
 	p, ok := r.recs[id]
 	if !ok {
 		return pendingFile{}, errors.New("pending: no record " + id)
@@ -165,10 +171,8 @@ func (r *relay) writeLocked(p *pendingFile) error {
 	return nil
 }
 
-// remove deletes the record and its file.
-func (r *relay) remove(id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// removeLocked deletes the record and its file. Called with r.mu held.
+func (r *relay) removeLocked(id string) error {
 	if _, ok := r.recs[id]; !ok {
 		return nil
 	}
@@ -195,14 +199,18 @@ func (r *relay) sweep(now time.Time) {
 	}
 }
 
-// attemptLock serializes the deliveries of one record.
-func (r *relay) attemptLock(id string) *sync.Mutex {
+// attemptLock serializes the deliveries of one record, and dismiss
+// with them; settleLock serializes its settling.
+func (r *relay) attemptLock(id string) *sync.Mutex { return r.lock("attempt/" + id) }
+func (r *relay) settleLock(id string) *sync.Mutex  { return r.lock("settle/" + id) }
+
+func (r *relay) lock(key string) *sync.Mutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	l, ok := r.attempts[id]
+	l, ok := r.attempts[key]
 	if !ok {
 		l = &sync.Mutex{}
-		r.attempts[id] = l
+		r.attempts[key] = l
 	}
 	return l
 }
@@ -212,6 +220,11 @@ func (r *relay) attemptLock(id string) *sync.Mutex {
 func (r *relay) pendings() ([]protocol.Pending, []protocol.Handoff) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.pendingsLocked()
+}
+
+// pendingsLocked is pendings with r.mu held.
+func (r *relay) pendingsLocked() ([]protocol.Pending, []protocol.Handoff) {
 	var ps []protocol.Pending
 	var hs []protocol.Handoff
 	for _, p := range r.recs {
@@ -277,14 +290,18 @@ func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.M
 		ID: m.ID, Host: h.Name, EnvironmentID: env, Source: m.Repo, Repo: name, Branch: m.Branch, Generated: m.Generated,
 		Agent: m.AgentName, Cmd: m.Cmd, SubmittedAt: submitted, UpdatedAt: time.Now(),
 	}, PromptText: m.Prompt}
-	fresh, err := d.relay.create(p)
+	d.relay.mu.Lock()
+	fresh, err := d.relay.createLocked(p)
+	if err == nil && fresh {
+		d.publishPending(p.Pending)
+	}
+	d.relay.mu.Unlock()
 	if err != nil {
 		res.Error = "pending: " + err.Error()
 		return res
 	}
 	res.OK = true
 	if fresh {
-		d.publishPending(p.Pending)
 		go d.runPending(ctx, m.ID)
 	}
 	return res
@@ -304,7 +321,9 @@ func (d *Daemon) relayHost(name string) (client.Host, bool) {
 	return client.Host{}, false
 }
 
-// publishPending sends the record into the merged stream.
+// publishPending sends the record into the merged stream. Called with
+// the relay's mutex held, before the daemon's: that is the order the
+// merged snapshot takes them in too.
 func (d *Daemon) publishPending(p protocol.Pending) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -315,7 +334,7 @@ func (d *Daemon) publishPending(p protocol.Pending) {
 }
 
 // publishRemoved sends the record's removal, with the worktree id it
-// retired into when it did.
+// retired into when it did. Called with the relay's mutex held.
 func (d *Daemon) publishRemoved(id, replacedBy string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -325,15 +344,37 @@ func (d *Daemon) publishRemoved(id, replacedBy string) {
 	d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PendingID: id, ReplacedBy: replacedBy})
 }
 
-// setPending applies a change and publishes the record.
+// setPending applies a change and publishes the record, as one step
+// under the relay's mutex.
 func (d *Daemon) setPending(id string, write bool, change func(*pendingFile)) (pendingFile, bool) {
-	p, err := d.relay.update(id, write, change)
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	p, err := d.relay.updateLocked(id, write, change)
 	if err != nil {
 		d.cfg.Logger.Printf("pending: %s: %v", id, err)
 		return p, false
 	}
 	d.publishPending(p.Pending)
 	return p, true
+}
+
+// persist is setPending for a change that must reach the disk: the
+// write is retried with backoff until it does or ctx ends, since a
+// record left without its outcome would be followed by no one.
+func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFile)) (pendingFile, bool) {
+	wait := d.cfg.ReconnectMin
+	for {
+		p, ok := d.setPending(id, true, change)
+		if ok {
+			return p, true
+		}
+		if _, exists := d.relay.get(id); !exists {
+			return p, false
+		}
+		if !d.relayBackoff(ctx, &wait) {
+			return p, false
+		}
+	}
 }
 
 // startRelays resumes every record a daemon finds at start: an add
@@ -348,8 +389,10 @@ func (d *Daemon) startRelays(ctx context.Context) {
 			go d.runPending(ctx, p.ID)
 		case p.AttemptOpen:
 			go d.runAttempt(ctx, p.ID)
-		case p.OK && !p.Listed:
-			go d.retire(ctx, p.ID)
+		case p.OK:
+			// A listing owed, or a handoff the last daemon did not get
+			// to write: settle decides which.
+			go d.settle(ctx, p.ID)
 		}
 	}
 }
@@ -455,7 +498,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		if err != nil {
 			var ref *refusal
 			if errors.As(err, &ref) {
-				d.setPending(id, true, func(p *pendingFile) {
+				d.persist(ctx, id, func(p *pendingFile) {
 					p.Done, p.OK, p.Error, p.Reachable = true, false, ref.msg, true
 				})
 				return
@@ -475,7 +518,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			req = protocol.Message{Type: protocol.TypeFollow, ID: id, After: after}
 		} else if time.Since(p.SubmittedAt) > relayLifetime {
 			c.Close()
-			d.setPending(id, true, func(p *pendingFile) {
+			d.persist(ctx, id, func(p *pendingFile) {
 				p.Done, p.OK, p.Error, p.Reachable = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true
 			})
 			return
@@ -524,7 +567,9 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			d.setPending(id, true, func(p *pendingFile) { p.Sent = false })
 			continue
 		}
-		d.setPending(id, true, func(p *pendingFile) {
+		// The outcome must reach the disk: a record without it would be
+		// followed by no one.
+		d.persist(ctx, id, func(p *pendingFile) {
 			p.Taken, p.Done, p.Reachable = true, true, true
 			p.OK = res.OK
 			if res.Branch != "" {
@@ -534,15 +579,17 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 				p.Root = res.Root
 			}
 			p.Session = res.Session
+			// The delivery state is the host's whatever the add did:
+			// a launch that failed after the agent may have started
+			// says unknown, and the prompt leaves the file once it is
+			// delivered or there was none.
+			p.Prompt = res.Prompt
 			if res.OK {
-				p.Prompt, p.Error = res.Prompt, res.Error
+				p.Error = res.Error
 				if p.Prompt == "" {
 					p.Prompt = protocol.DeliveryNone
 				}
 				p.Barrier = res.Listing
-				if p.Complete() {
-					p.PromptText = ""
-				}
 			} else {
 				p.Stage = res.Stage
 				p.Error = res.Error
@@ -552,11 +599,40 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 					p.Error = "failed at " + res.Stage + ": " + res.Error
 				}
 			}
+			if p.Delivered() {
+				p.PromptText = ""
+			}
 		})
 		break
 	}
-	if p, ok := d.relay.get(id); ok && p.Done && p.OK && !p.Listed {
-		d.retire(ctx, p.ID)
+	d.settle(ctx, id)
+}
+
+// settle brings a record with a successful outcome to rest: the
+// listing after the result is waited for once, and a record that is
+// complete, prompt delivered or none, whose worktree that listing
+// showed is handed over. It is called after the result, after every
+// attempt and at start, serialized per record, and decides on the
+// record as it is when each step ends, so a listing that completes
+// while an attempt delivers, or the other way round, strands nothing.
+func (d *Daemon) settle(ctx context.Context, id string) {
+	l := d.relay.settleLock(id)
+	l.Lock()
+	defer l.Unlock()
+	p, ok := d.relay.get(id)
+	if !ok || !p.Done || !p.OK || p.retired() {
+		return
+	}
+	if !p.Listed {
+		if !d.retire(ctx, id) {
+			return
+		}
+		if p, ok = d.relay.get(id); !ok {
+			return
+		}
+	}
+	if p.Complete() && p.Listed && !p.Gone && !p.retired() {
+		d.handoff(ctx, id, p.WorktreeID())
 	}
 }
 
@@ -591,68 +667,63 @@ func (d *Daemon) relayExchange(ctx context.Context, c *client.Conn, req protocol
 
 // retire waits for the host's listing to reflect a successful add, on
 // the relay's own connection: plain snapshots and the listing stamps
-// after them until one satisfies the result's barrier. A worktree at
-// the root in that listing hands the record over to the worktree row,
-// once the merged stream shows it too when there is a merged
-// subscriber to show it to; no worktree at the root is done, worktree
-// gone, a record that needs the user only to be dismissed. A record
-// that is not complete stays for the user either way, with its listing
-// noted.
-func (d *Daemon) retire(ctx context.Context, id string) {
+// after them until one satisfies the result's barrier, with the host's
+// listing error on the record meanwhile. It records what the listing
+// said, a worktree at the root or gone, and reports whether it was
+// seen; the handoff is settle's, on the record as it then is.
+func (d *Daemon) retire(ctx context.Context, id string) bool {
 	wait := d.cfg.ReconnectMin
 	for ctx.Err() == nil {
 		p, ok := d.relay.get(id)
-		if !ok || !p.Done || !p.OK || p.Listed {
-			return
+		if !ok || !p.Done || !p.OK {
+			return false
+		}
+		if p.Listed {
+			return true
 		}
 		if p.Barrier == nil || p.Root == "" {
 			// A host without a barrier cannot prove its listing; the
 			// record stays with what the result said.
-			d.setPending(id, true, func(p *pendingFile) { p.Listed = true })
-			return
+			_, ok := d.persist(ctx, id, func(p *pendingFile) { p.Listed = true })
+			return ok
 		}
 		c, p, err := d.relayConn(ctx, id)
 		if err != nil {
 			var ref *refusal
 			if errors.As(err, &ref) {
-				d.setPending(id, true, func(p *pendingFile) { p.Listed, p.Gone = true, false; p.Error = ref.msg })
-				return
+				_, ok := d.persist(ctx, id, func(p *pendingFile) { p.Listed, p.Gone = true, false; p.Error = ref.msg })
+				return ok
 			}
 			d.unreachable(id, err)
 			if !d.relayBackoff(ctx, &wait) {
-				return
+				return false
 			}
 			continue
 		}
 		wait = d.cfg.ReconnectMin
 		d.setPending(id, false, func(p *pendingFile) { p.Reachable, p.Unreachable = true, "" })
-		present, err := d.awaitListing(ctx, c, *p.Barrier, p.Root)
+		present, err := d.awaitListing(ctx, c, *p.Barrier, p.Root, func(msg string) {
+			d.setPending(id, false, func(p *pendingFile) { p.ListingError = msg })
+		})
 		c.Close()
 		if err != nil {
 			d.unreachable(id, fmt.Errorf("connection lost: %v", err))
 			if !d.relayBackoff(ctx, &wait) {
-				return
+				return false
 			}
 			continue
 		}
-		if !present {
-			d.setPending(id, true, func(p *pendingFile) { p.Listed, p.Gone = true, true })
-			return
-		}
-		if !p.Complete() {
-			d.setPending(id, true, func(p *pendingFile) { p.Listed = true })
-			return
-		}
-		d.handoff(ctx, id, p.WorktreeID())
-		return
+		_, ok = d.persist(ctx, id, func(p *pendingFile) { p.Listed, p.Gone, p.ListingError = true, !present, "" })
+		return ok
 	}
+	return false
 }
 
 // awaitListing subscribes to the host and reads until a listing at or
 // past the barrier, then reports whether a worktree is at root in it.
 // The worktrees are tracked from the snapshot on, since the stamp of a
 // listing arrives after the records it changed.
-func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier protocol.Listing, root string) (bool, error) {
+func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier protocol.Listing, root string, listingErr func(string)) (bool, error) {
 	defer c.CloseOnDone(ctx)()
 	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe}); err != nil {
 		return false, err
@@ -683,6 +754,11 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 		case protocol.TypeError:
 			return false, errors.New(m.Error)
 		}
+		if m.Type == protocol.TypeSnapshot || m.Listing != nil {
+			// The host's listing error, or its clearing, rides on the
+			// snapshot and on every stamp.
+			listingErr(m.ListingError)
+		}
 		if m.Listing != nil && m.Listing.Satisfies(barrier) {
 			for _, r := range roots {
 				if r == root {
@@ -705,7 +781,6 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 	if !ok {
 		return
 	}
-	deadline := time.Now().Add(30 * time.Second)
 	for ctx.Err() == nil {
 		d.mu.Lock()
 		watching := d.mctx != nil
@@ -718,9 +793,12 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			}
 		}
 		d.mu.Unlock()
-		if !watching || shown || time.Now().After(deadline) {
+		if !watching || shown {
 			break
 		}
+		// The merged stream's own connection to the host may be down
+		// while the relay's is up; the row stays until it shows the
+		// replacement, however long that is.
 		select {
 		case <-ctx.Done():
 			return
@@ -728,9 +806,12 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		}
 	}
 	now := time.Now()
-	if _, ok := d.setPending(id, true, func(p *pendingFile) {
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	if _, err := d.relay.updateLocked(id, true, func(p *pendingFile) {
 		p.Listed, p.ReplacedBy, p.RetiredAt, p.PromptText = true, worktreeID, now, ""
-	}); !ok {
+	}); err != nil {
+		d.cfg.Logger.Printf("pending: %s: %v", id, err)
 		return
 	}
 	d.publishRemoved(id, worktreeID)
@@ -745,7 +826,15 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		res.Error = "this daemon has no relay capability"
 		return res
 	}
-	p, ok := d.relay.get(id)
+	// Under the record's attempt lock, so a prompt request cannot open
+	// an attempt between the check and the removal; and the check, the
+	// removal and its publication are one step under the relay's mutex.
+	l := d.relay.attemptLock(id)
+	l.Lock()
+	defer l.Unlock()
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	p, ok := d.relay.recs[id]
 	switch {
 	case !ok:
 		res.Error = "no pending record " + id
@@ -757,7 +846,7 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	if res.Error != "" {
 		return res
 	}
-	if err := d.relay.remove(id); err != nil {
+	if err := d.relay.removeLocked(id); err != nil {
 		res.Error = err.Error()
 		return res
 	}
@@ -789,7 +878,7 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "the add is still running"
 	case p.PromptText == "":
 		res.Error = "no prompt retained for " + id
-	case p.Complete():
+	case p.Delivered():
 		res.Error = "the prompt is delivered"
 	case p.AttemptOpen:
 		res.Error = fmt.Sprintf("attempt %d is unresolved", p.Attempt)
@@ -810,33 +899,18 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 	res.OK = true
 	res.Attempt = p.Attempt
 	res.Prompt, res.Error = p.Prompt, p.Error
-	go d.afterAttempt(ctx, p)
+	go d.settle(ctx, id)
 	return res
 }
 
 // runAttempt follows the record's open attempt, one the last daemon
-// sent, under the record's attempt lock.
+// sent, under the record's attempt lock, then settles the record.
 func (d *Daemon) runAttempt(ctx context.Context, id string) {
 	l := d.relay.attemptLock(id)
 	l.Lock()
-	p := d.runAttemptLocked(ctx, id, true)
+	d.runAttemptLocked(ctx, id, true)
 	l.Unlock()
-	d.afterAttempt(ctx, p)
-}
-
-// afterAttempt retires a record an attempt has completed: into its
-// worktree row when the listing after the result showed one, or
-// through the listing when that is still owed.
-func (d *Daemon) afterAttempt(ctx context.Context, p pendingFile) {
-	if !p.Complete() || p.retired() {
-		return
-	}
-	switch {
-	case !p.Listed:
-		d.retire(ctx, p.ID)
-	case !p.Gone:
-		d.handoff(ctx, p.ID, p.WorktreeID())
-	}
+	d.settle(ctx, id)
 }
 
 // runAttemptLocked sends the open attempt as a prompt message and
@@ -855,7 +929,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent bool) pen
 		if err != nil {
 			var ref *refusal
 			if errors.As(err, &ref) {
-				p, _ = d.setPending(id, true, func(p *pendingFile) {
+				p, _ = d.persist(ctx, id, func(p *pendingFile) {
 					p.AttemptOpen, p.Prompt, p.Error = false, protocol.DeliveryNotDelivered, ref.msg
 				})
 				return p
@@ -886,11 +960,11 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent bool) pen
 			sent = false
 			continue
 		}
-		p, _ = d.setPending(id, true, func(p *pendingFile) {
+		p, _ = d.persist(ctx, id, func(p *pendingFile) {
 			p.AttemptOpen = false
 			if res.OK {
 				p.Prompt, p.Error = res.Prompt, res.Error
-				if p.Complete() {
+				if p.Delivered() {
 					p.PromptText = ""
 				}
 			} else {

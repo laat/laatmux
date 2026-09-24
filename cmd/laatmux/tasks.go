@@ -49,7 +49,8 @@ func cmdTasks(ctx context.Context, args []string) error {
 	return errors.New("usage: laatmux tasks [show|dismiss|prompt <id>]")
 }
 
-// listTasks reads one merged snapshot and prints the pending records.
+// listTasks reads the merged stream's snapshot, which carries the
+// pending records, and prints them.
 func listTasks(ctx context.Context) error {
 	c, ok := dialMerged(ctx)
 	if !ok {
@@ -59,15 +60,20 @@ func listTasks(ctx context.Context) error {
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
 		return fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
 	}
-	snap, err := c.Snapshot(ctx)
-	if err != nil {
+	m := newMerged()
+	if _, err := m.readMerged(ctx, c, 5*time.Second, func(*merged) bool { return true }); err != nil {
 		return err
 	}
-	if len(snap.Pendings) == 0 {
+	m.mu.Lock()
+	ps := make([]protocol.Pending, 0, len(m.pendings))
+	for _, p := range m.pendings {
+		ps = append(ps, p)
+	}
+	m.mu.Unlock()
+	if len(ps) == 0 {
 		fmt.Println("no pending tasks")
 		return nil
 	}
-	ps := snap.Pendings
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
 		fmt.Printf("%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p))
@@ -91,6 +97,8 @@ func TaskState(p protocol.Pending) string {
 		return "prompt not delivered: " + p.Error
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
 		return "prompt delivery unknown: " + p.Error
+	case p.Done && !p.Listed && p.ListingError != "":
+		return "done, awaiting the listing: " + p.ListingError
 	case p.Done && !p.Listed:
 		return "done, awaiting the listing"
 	case p.Done:

@@ -51,12 +51,13 @@ func cmdAdd(ctx context.Context, args []string) error {
 	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
 	if a.detach {
+		// The daemon has the task once an id comes back, whatever the
+		// local bookkeeping after; a retry would submit another.
 		id, err := add.Submit(ctx)
-		if err != nil {
-			return err
+		if id != "" {
+			fmt.Printf("accepted %s; the daemon runs it, laatmux tasks shows it\n", id)
 		}
-		fmt.Printf("accepted %s; the daemon runs it, laatmux tasks shows it\n", id)
-		return nil
+		return err
 	}
 	res, err := add.Run(ctx, printer{})
 	// A host result that succeeded means the worktree and its agent

@@ -194,15 +194,16 @@ type Pending struct {
 	// attempt, AttemptOpen that it is unresolved. Listed is that the
 	// host's listing after the result has been seen, Retired that the
 	// record handed over to its worktree row.
-	Done        bool      `json:"done,omitempty"`
-	OK          bool      `json:"ok,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	Prompt      string    `json:"prompt,omitempty"`
-	Attempt     int       `json:"attempt,omitempty"`
-	AttemptOpen bool      `json:"attempt_open,omitempty"`
-	Listed      bool      `json:"listed,omitempty"`
-	Gone        bool      `json:"gone,omitempty"` // the listing after the result had no worktree at the root
-	UpdatedAt   time.Time `json:"updated_at"`
+	Done         bool      `json:"done,omitempty"`
+	OK           bool      `json:"ok,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	Prompt       string    `json:"prompt,omitempty"`
+	Attempt      int       `json:"attempt,omitempty"`
+	AttemptOpen  bool      `json:"attempt_open,omitempty"`
+	Listed       bool      `json:"listed,omitempty"`
+	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
+	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Complete reports whether nothing about the add needs the user: it
@@ -210,8 +211,13 @@ type Pending struct {
 // retires a complete record once the host's listing shows its
 // worktree; the views hide the worktree row behind a record that is
 // not complete and offer p and x on it.
-func (p Pending) Complete() bool {
-	return p.Done && p.OK && (p.Prompt == DeliveryDelivered || p.Prompt == DeliveryNone || p.Prompt == "")
+func (p Pending) Complete() bool { return p.Done && p.OK && p.Delivered() }
+
+// Delivered reports whether the prompt is with the agent, or there was
+// none: the relay scrubs the prompt from its file on it, whatever the
+// add did, and delivers no more.
+func (p Pending) Delivered() bool {
+	return p.Done && (p.Prompt == DeliveryDelivered || p.Prompt == DeliveryNone || p.Prompt == "")
 }
 
 // WorktreeID is the id of the worktree row the record becomes, "" until

@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -309,6 +310,19 @@ func TestRelayUnreachable(t *testing.T) {
 	if p.Reachable || p.Taken || p.Done || !strings.Contains(p.Unreachable, "connect refused") {
 		t.Fatalf("record %+v", p)
 	}
+	// Well past the three attempts a foreground client gives up after.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		f.remote.mu.Lock()
+		n := f.remote.dials
+		f.remote.mu.Unlock()
+		if n >= 6 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d dials", n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	f.remote.mu.Lock()
 	f.remote.down = nil
 	f.remote.mu.Unlock()
@@ -420,5 +434,51 @@ func TestRelayWorktreeGone(t *testing.T) {
 	got := f.awaitRecord(t, "g1", 10*time.Second, func(p pendingFile) bool { return p.Listed })
 	if !got.Gone || got.retired() {
 		t.Fatalf("record %+v", got)
+	}
+}
+
+// A daemon that starts on a complete, listed record whose handoff was
+// never written hands it over; a failed add keeps the host's delivery
+// state and the prompt, and delivers no more once delivered.
+func TestRelaySettleAndFailedAdd(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	c, pc, _ := f.merged(t)
+	defer c.Close()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "settle", AgentName: "argv", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	awaitMerged(t, c, pc, 30*time.Second, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.PendingID == "s1" })
+	// As a daemon that died between the listing and the handoff left it.
+	p := readPending(t, f.dir, "s1")
+	p.ReplacedBy, p.RetiredAt = "", time.Time{}
+	b, _ := json.Marshal(p)
+	os.WriteFile(filepath.Join(f.dir, fileName("s1")), b, 0o600)
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.local = local
+	if got := f.awaitRecord(t, "s1", 10*time.Second, func(p pendingFile) bool { return p.retired() }); got.ReplacedBy != p.WorktreeID() {
+		t.Fatalf("settled %+v", got)
+	}
+	// A launch that fails after new-session was submitted: the add
+	// fails, the delivery is unknown, the prompt stays.
+	f.ft.set(func() { f.ft.newErr = &tmux.SubmittedError{Err: errors.New("tmux: set-option failed")} })
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "failed", AgentName: "argv", Prompt: "keep", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if got.OK || got.Prompt != protocol.DeliveryUnknown || got.PromptText != "keep" || !strings.Contains(got.Error, "failed at agent") {
+		t.Fatalf("failed add %+v", got)
+	}
+	f.ft.set(func() { f.ft.newErr = nil })
+	// p on it reaches the host, which has no agent to deliver to.
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "s2"}); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "no agent to deliver to") {
+		t.Fatalf("prompt on failed add %+v", res)
+	}
+	if got := readPending(t, f.dir, "s2"); got.PromptText != "keep" || got.Attempt != 1 || got.AttemptOpen {
+		t.Fatalf("file %+v", got)
 	}
 }
