@@ -109,3 +109,35 @@ func TestParseRmArgs(t *testing.T) {
 		}
 	}
 }
+
+// The add command line: a branch first, or none with a prompt, and
+// the command override after -- never read as the branch.
+func TestParseAddArgs(t *testing.T) {
+	cases := []struct {
+		args []string
+		want addArgs
+		bad  bool
+	}{
+		{[]string{"fix"}, addArgs{branch: "fix"}, false},
+		{[]string{"fix", "--host", "vm", "-p", "do it"}, addArgs{branch: "fix", host: "vm", prompt: "do it"}, false},
+		{[]string{"-p", "Fix the tests", "--agent", "claude"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", agent: "claude"}, false},
+		{[]string{"-p", "Fix the tests", "--", "claude", "--flag"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", cmd: []string{"claude", "--flag"}}, false},
+		{[]string{"fix", "--", "sleep", "3600"}, addArgs{branch: "fix", cmd: []string{"sleep", "3600"}}, false},
+		{nil, addArgs{}, true},
+		{[]string{""}, addArgs{}, true},
+		{[]string{"-p", "!!!"}, addArgs{}, true},
+		{[]string{"fix", "extra"}, addArgs{}, true},
+	}
+	for _, c := range cases {
+		got, err := parseAddArgs(c.args)
+		if c.bad {
+			if err == nil {
+				t.Errorf("%v: accepted as %+v", c.args, got)
+			}
+			continue
+		}
+		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
+			t.Errorf("%v: got %+v %v, want %+v", c.args, got, err, c.want)
+		}
+	}
+}

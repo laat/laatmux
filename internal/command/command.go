@@ -68,6 +68,18 @@ func ID(kind string) string {
 	return fmt.Sprintf("%s-%d-%d", kind, os.Getpid(), time.Now().UnixNano())
 }
 
+// SenderLifetime is how long after its submission an add may be sent or
+// resent, by the sender's clock: the sender's side of the clock contract
+// with the host's journal, which keeps an entry for thirty days. Past
+// it the outcome is unknown rather than a fresh add on a host that has
+// forgotten the id.
+var SenderLifetime = 7 * 24 * time.Hour
+
+// ErrSubmissionExpired is an add whose submission is older than the
+// sender lifetime: it is not sent again, and what became of it is not
+// known from here.
+var ErrSubmissionExpired = errors.New("outcome unknown: the submission is older than seven days and is not sent again")
+
 // stream sends a command with progress to the host and returns its
 // result. When the transport fails mid-way it dials again and, against a
 // daemon with follow, follows the id from the last numbered progress it
@@ -77,9 +89,15 @@ func ID(kind string) string {
 // of is answered as the kind of command decides: add and rm resend the
 // command as a new execution, since every step of theirs is skipped by
 // inspection; run reports the outcome unknown, since the process may be
-// running still. The hello of the connection that delivered the result
-// is returned with it.
-func stream(ctx context.Context, h client.Host, needCap string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
+// running still. A follow answered interrupted, by a daemon whose
+// journal knows the add and that died in it, resends the add under its
+// id and the daemon resumes it. Every capability in needCaps must be in
+// the daemon's hello, on every connection. The hello of the connection
+// that delivered the result is returned with it.
+//
+// This is the one send path, and the sender lifetime is enforced here:
+// a message with SubmittedAt is neither sent nor resent past it.
+func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
 	f := &progressFilter{fn: r.Progress}
 	sent := false // the command may have reached a daemon
 	const attempts = 3
@@ -97,9 +115,11 @@ func stream(ctx context.Context, h client.Host, needCap string, m protocol.Messa
 			}
 			continue
 		}
-		if !protocol.Has(c.Hello.Capabilities, needCap) {
-			c.Close()
-			return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, needCap)
+		for _, cap := range needCaps {
+			if !protocol.Has(c.Hello.Capabilities, cap) {
+				c.Close()
+				return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, cap)
+			}
 		}
 		if o.environment != "" && c.Hello.EnvironmentID != o.environment {
 			c.Close()
@@ -109,19 +129,31 @@ func stream(ctx context.Context, h client.Host, needCap string, m protocol.Messa
 		follow := sent && protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
 		req := m
 		if follow {
-			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark}
+			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark, Attempt: o.attempt}
+		} else if !m.SubmittedAt.IsZero() && time.Since(m.SubmittedAt) > SenderLifetime {
+			// The lifetime bounds sends and resends of the command; a
+			// follow executes nothing and is asked at any age.
+			c.Close()
+			return hello, res, ErrSubmissionExpired
 		}
 		f.numbered = protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
 		f.reset()
 		sent = true
 		res, err = exchange(ctx, c, req, o.cancel, f.pass)
 		c.Close()
-		if follow && res.Type == protocol.TypeResult && !res.OK && res.Error == protocol.ErrUnknownCommand {
+		unknown := res.Error == protocol.ErrUnknownCommand || res.Error == protocol.ErrInterrupted || (o.attempt > 0 && res.Error == protocol.ErrUnknownAttempt)
+		if follow && res.Type == protocol.TypeResult && !res.OK && unknown {
 			if !o.restart {
 				return hello, res, ErrOutcomeUnknown
 			}
-			// A new execution numbers from 1 again.
-			r.Note(fmt.Sprintf("%s: daemon no longer knows %s %s; sending it again", h.Name, m.Type, m.ID))
+			// A new execution numbers from 1 again; a resumed one too,
+			// since the daemon that resumes it has no memory of the
+			// numbers the one that died gave.
+			if res.Error == protocol.ErrInterrupted {
+				r.Note(fmt.Sprintf("%s: daemon restarted during %s %s at %s; sending it again to resume", h.Name, m.Type, m.ID, res.Stage))
+			} else {
+				r.Note(fmt.Sprintf("%s: daemon no longer knows %s %s; sending it again", h.Name, m.Type, m.ID))
+			}
 			f.mark, f.seen, sent = 0, 0, false
 			attempt--
 			continue
@@ -151,6 +183,9 @@ type streamOpts struct {
 	// answer as, on every connection; another is a refusal before the
 	// command is sent.
 	environment string
+	// attempt, on a prompt message, is the attempt number a follow
+	// carries; a follow answered unknown attempt resends the message.
+	attempt int
 }
 
 // ErrOutcomeUnknown is a run whose daemon no longer knows the id after a

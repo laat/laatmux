@@ -204,6 +204,31 @@ func (d *Daemon) lookup(id string) (*command, bool) {
 	return c, ok
 }
 
+// lockDeliveries takes the root's delivery lock, which deliveries to
+// the root hold across their readiness check and paste, and an add
+// across the publication of its result; the returned func releases it.
+func (d *Daemon) lockDeliveries(root string) func() {
+	l := d.repoLock("deliver/" + root)
+	l.Lock()
+	return l.Unlock
+}
+
+// forgetDone drops the command under id when it has finished.
+func (d *Daemon) forgetDone(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.cmds[id]
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	done := c.done
+	c.mu.Unlock()
+	if done {
+		delete(d.cmds, id)
+	}
+}
+
 // evict forgets a finished command once its TTL has passed, whether or
 // not any other command arrives meanwhile. The identity check keeps a
 // timer from evicting a newer command under the same id.
@@ -229,97 +254,6 @@ func (d *Daemon) repoLock(source string) *sync.Mutex {
 		d.locks[source] = l
 	}
 	return l
-}
-
-// runAdd runs the stages of add and records the result on c. ctx is the
-// daemon's: a command runs to completion whatever happens to the
-// connection that sent it, so a client that lost its bridge can repeat
-// the id and pick the stream up.
-func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
-	report := func(stage, state, detail string) {
-		c.emit(protocol.Message{Type: protocol.TypeProgress, ID: m.ID, Stage: stage, State: state, Detail: detail})
-	}
-	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-	err := func() error {
-		repo, ok := d.cfg.Store.Repo(m.Repo)
-		if !ok {
-			return stageErr(protocol.StageResolve, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo))
-		}
-		cmd := m.Cmd
-		if len(cmd) == 0 {
-			var ok bool
-			if cmd, ok = d.cfg.Agents[m.AgentName]; !ok {
-				return stageErr(protocol.StageResolve, fmt.Errorf("unknown agent %q: not in this host's config", m.AgentName))
-			}
-		}
-		l := d.repoLock(repo.Source)
-		l.Lock()
-		defer l.Unlock()
-		added, err := d.cfg.Store.Add(ctx, repo, m.Branch, report)
-		if err != nil {
-			return err
-		}
-		res.Root = added.Root
-		session, paneID, err := d.agentStage(ctx, repo, m.Branch, added.Root, cmd, report)
-		if err != nil {
-			return stageErr(protocol.StageAgent, err)
-		}
-		res.Session, res.PaneID = session, paneID
-		return nil
-	}()
-	d.finish(c, res, err)
-}
-
-// agentStage starts the agent in a managed session, or finds the one that
-// already runs in the root. The check is by root, not by name: a worktree
-// made before a label change keeps its session under the old name. A
-// session with the intended name whose pane records another root, or
-// that is not a single managed pane, is a name in use; nothing is adopted.
-func (d *Daemon) agentStage(ctx context.Context, repo worktree.Repo, branch, root string, cmd []string, report worktree.Reporter) (session, paneID string, err error) {
-	stage := protocol.StageAgent
-	name := tmux.SessionName(repo.Name, branch)
-	panes, err := d.managed.Tmux.ListPanes(ctx)
-	if err != nil && !tmux.NoServer(err) {
-		return "", "", err
-	}
-	bySession := map[string][]tmux.Pane{}
-	for _, p := range panes {
-		bySession[p.Session] = append(bySession[p.Session], p)
-	}
-	names := make([]string, 0, len(bySession))
-	for s := range bySession {
-		names = append(names, s)
-	}
-	sort.Strings(names)
-	for _, s := range names {
-		ps := bySession[s]
-		if len(ps) == 1 && ps[0].Managed && ps[0].Cwd == root {
-			report(stage, protocol.StateSkip, "session "+s+" runs in "+root)
-			return s, ps[0].ID, nil
-		}
-	}
-	if ps, ok := bySession[name]; ok {
-		switch {
-		case len(ps) != 1:
-			return "", "", fmt.Errorf("session %s exists with %d panes; name in use", name, len(ps))
-		case !ps[0].Managed:
-			return "", "", fmt.Errorf("session %s exists and is not managed by laatmux; name in use", name)
-		default:
-			return "", "", fmt.Errorf("session %s runs in %s, not %s; name in use", name, ps[0].Cwd, root)
-		}
-	}
-	report(stage, protocol.StateStart, "tmux new-session "+name+" "+tmux.ShellJoin(cmd))
-	paneID, err = d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: root, Cmd: cmd, Host: d.cfg.Host})
-	if err != nil {
-		return "", "", err
-	}
-	// Refresh the session join now, so the record the poke publishes
-	// names the session rather than waiting for the next pane poll.
-	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {
-		d.setManagedRoots(panes, time.Now())
-	}
-	report(stage, protocol.StateDone, "session "+name+" pane "+paneID)
-	return name, paneID, nil
 }
 
 // runRm removes a worktree, then every managed session whose pane records
@@ -404,15 +338,44 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			return nil
 		}
 		res.Root = root
+		// From the removal on, everything is under the root's delivery
+		// lock: git's removal, the sessions going, the journal's entries
+		// marked removed and the finished commands the memory holds for
+		// them dropped. A delivery holds the same lock across its
+		// readiness check and paste, so it never pastes into a root git
+		// has removed and, once it gets the lock, finds the tombstone
+		// rather than a replacement session; an add records and
+		// publishes its result under it, so no success is published
+		// between the mark and the drop.
+		unlockDeliveries := d.lockDeliveries(root)
+		defer unlockDeliveries()
 		if checkout != "" {
-			if _, err := worktree.Remove(ctx, checkout, root, m.Force); err != nil {
+			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
+			if err != nil {
 				return err
+			}
+			if removed {
+				// A listing from here on has one worktree fewer.
+				d.stepRevision()
 			}
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait
 		// makes the ok mean nothing of laatmux's is left there.
 		d.cancelRunsIn(root)
+		// The journal's entries at the root are removed with it: a
+		// follow or a resend for one is answered removed from now on,
+		// which means the finished commands the memory still holds for
+		// them go, so the journal answers.
+		if d.journal != nil {
+			ids, err := d.journal.markRemoved(root, time.Now())
+			for _, id := range ids {
+				d.forgetDone(id)
+			}
+			if err != nil {
+				return err
+			}
+		}
 		panes, err := d.managed.Tmux.ListPanes(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {
@@ -470,20 +433,27 @@ func (d *Daemon) lockRepos() func() {
 // finish records the result and asks for a worktree poll, so the record
 // follows the command.
 func (d *Daemon) finish(c *command, res protocol.Message, err error) {
-	if err != nil {
-		var se *worktree.StageError
-		if errors.As(err, &se) {
-			res.Stage = se.Stage
-			res.Error = se.Err.Error()
-		} else {
-			res.Error = err.Error()
-		}
-	} else {
-		res.OK = true
-	}
+	res = resultOf(res, err)
 	d.pokeWorktrees()
 	c.emit(res)
 	d.evict(res.ID, c)
+}
+
+// resultOf is the result message for an outcome: ok, or the error with
+// the stage it failed at.
+func resultOf(res protocol.Message, err error) protocol.Message {
+	if err == nil {
+		res.OK = true
+		return res
+	}
+	var se *worktree.StageError
+	if errors.As(err, &se) {
+		res.Stage = se.Stage
+		res.Error = se.Err.Error()
+	} else {
+		res.Error = err.Error()
+	}
+	return res
 }
 
 func stageErr(stage string, err error) error { return &worktree.StageError{Stage: stage, Err: err} }

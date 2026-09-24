@@ -41,6 +41,8 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux repos     # each known repository's name and where it lands on each host
 ./laatmux add fix-ls                          # worktree and agent for the repo of the current directory, on the last-used host
 ./laatmux add fix-ls --repo proj --host vm --agent claude
+./laatmux add -p 'make ls sort by host'          # branch proposed from the prompt, made unique on the host; the agent gets the prompt
+./laatmux add fix-ls -p 'make ls sort by host'   # the same with the branch given
 ./laatmux path proj/fix-ls                    # the worktree root on its host
 ./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
 ./laatmux shell                               # a shell at the worktree root, from inside a workspace session
@@ -71,9 +73,10 @@ hosts:
 tmux_servers: [laatmux, default]   # what this machine's daemon watches
 agents:
   claude:
-    cmd: [claude]
+    cmd: [claude, "{prompt}"] # {prompt} is replaced by add -p's prompt, or removed
   claude-safe:
-    cmd: [claude-safe]        # sandboxing is the launch command's business
+    cmd: [claude-safe]        # sandboxing is the launch command's business;
+                              # without {prompt} the prompt is typed into the pane
 default_agent: claude         # what add starts when --agent and last.json say nothing
 repos:                        # the known set
   - git@github.com:laat/laatmux.git
@@ -91,6 +94,14 @@ watches or where it clones; each host's own config does that. The default
 server list is the managed `laatmux` server alone.
 `laatmux serve --tmux-servers laatmux,default` overrides the file;
 `--tmux-socket` is the older spelling of the same flag.
+
+An agent's `cmd` may carry `{prompt}` as one argument: `add -p` replaces
+it with the prompt, as one argument however many lines it has, and an add
+without a prompt removes it. The prompt is then on the host's process
+list for as long as the agent runs, visible to another user of that host
+with `ps`; choosing the placeholder is choosing that. A `cmd` without it
+gets the prompt typed into the pane once the agent is ready, as the
+task section below says.
 
 Host names, agent keys and repository names are labels: `A-Z a-z 0-9 _ -`,
 nothing else, since they end up in session names, ids and directory names.
@@ -246,6 +257,77 @@ truth; labels only place new things.
   different repositories run in parallel; `rm` takes every repository's
   lock while it resolves and removes, since its root checks ask every
   checkout, and so waits for any add in flight.
+- **Tasks**, capability `task`, the host's side of
+  [milestone four](docs/milestone-four.md): a command journal, one file
+  per add under `<state>/commands/`, for the two decisions a retry
+  cannot inspect. `add` takes `prompt`, `generated` and `submitted_at`.
+  The journal is read before anything is done for an id it has seen: a
+  terminal entry is answered with its recorded result and nothing runs,
+  one the daemon died in is resumed, the steps by inspection, the
+  allocation and the launch by the record, and `follow` for an id the
+  memory has let go is answered from it: the result, `removed` after an
+  `rm`, or `interrupted` with the stage reached, on which the client
+  resends the add under the same id. An id the journal never saw is
+  `unknown command` as before. An add whose `submitted_at` is more than
+  a day in the host's future or more than thirty days in its past is
+  refused as `submission expired`; entries are swept thirty days after
+  they became terminal. The client's side of the contract is in one
+  send path: an add is neither sent nor resent more than seven days
+  after its submission.
+  With `generated`, `branch` is a proposal and an `allocate` stage after
+  `fetch` picks the first free of `<name>`, `<name>-2`, `<name>-3`
+  against the local and remote branches, the registered worktrees and
+  the names other unfinished entries hold, writes it to the journal
+  before the branch is made, and reports `{stage: allocate, state, detail,
+  branch, root}`; a given branch gets the same line as `skip`. The
+  result carries `branch`.
+  The agent stage is journaled as `launching` before `new-session` and
+  `launched` after, with the pane and the tmux server instance. The
+  prompt reaches the agent on the argv when the `cmd` has `{prompt}`,
+  and `launched` is then `delivered`; otherwise it is typed in once the
+  pane is ready: a fresh observation by the detector, after the startup
+  grace, with the prompt box on screen (`VisibleIdle`, not the idle
+  fallback), a verified live agent identified in the pane, the pane and
+  server instance the journal names. That identity is bound into the
+  journal before the paste and required by every later one. The paste
+  is `load-buffer` from stdin into a buffer named for the attempt,
+  `paste-buffer -p`, `send-keys Enter`, `delete-buffer`; a daemon that
+  starts deletes every `laatmux-attempt-*` buffer. A pane not ready
+  within a minute gets nothing. The result carries `prompt`, the
+  delivery state: `none` (no prompt), `delivered`, `not delivered` with
+  the reason in `error` on an ok result (pane never ready, paste refused
+  before it began, a managed session already in the root: `session
+  existed`, a launch that failed before anything started), or `unknown`
+  (a daemon death between `launching` and `launched` or during a paste,
+  `new-session` failing after the session may have been made, Enter
+  refused after the paste). Nothing is inferred from a session's
+  existence, and no daemon delivers again on its own. The prompt is
+  never in the journal, a progress line, or a tmux error: the agent
+  stage's `start` line names the command with the placeholder in it,
+  and an error that echoes the command line has the prompt replaced.
+  `{type: prompt, id, attempt, prompt}` delivers a pending prompt later,
+  as attempt `attempt` from 1 in order: the journal serializes attempts
+  per add, answers a repeat of a number with its recorded outcome rather
+  than pasting again, checks the target is still the recorded pane on
+  the recorded server with the bound agent (`not delivered: session
+  replaced` otherwise), and for an entry without a target adopts the
+  managed session in the root when it is the only one and its pane has
+  a verified agent (`not delivered: no agent to deliver to` otherwise).
+  `follow` with `attempt` reattaches to one in flight or answers from
+  the record; an attempt the journal never saw is `unknown attempt`,
+  on which the client resends; an id the journal no longer holds is
+  `recovery expired`. `laatmux add -p` in the foreground prints the
+  delivery state as its last line and exits 0 when the add succeeded,
+  whatever the delivery.
+  Listings are stamped: the daemon counts observations owed in a
+  `revision`, stepped at the end of every add that succeeded and by
+  every `rm` that removed a worktree; a poll reads it before it asks
+  git and publishes its listing stamped `{generation, revision}`, the
+  generation being the daemon's start, in the snapshot and in an upsert
+  of `listing` alone when it changes, with `listing_error` when the last
+  listing failed. An add's result carries the barrier its mutation made;
+  a listing at that revision or later in the same generation reflects
+  it, and so does any successful listing of a later generation.
 
 ## Workspaces, client side
 

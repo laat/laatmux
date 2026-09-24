@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
@@ -151,6 +152,9 @@ type fakeDaemon struct {
 	drop     int // connections to drop after the command, from the first
 	conns    int
 	listener net.Listener
+	// answer, when set, is the reply to a command; the default is an ok
+	// result with a root.
+	answer func(protocol.Message) protocol.Message
 }
 
 func startFake(t *testing.T, drop int, hellos ...protocol.Message) *fakeDaemon {
@@ -196,6 +200,10 @@ func startFake(t *testing.T, drop int, hellos ...protocol.Message) *fakeDaemon {
 					if drop {
 						return
 					}
+					if f.answer != nil {
+						pc.Write(f.answer(m))
+						continue
+					}
 					pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/r/x"})
 				}
 			}()
@@ -220,7 +228,7 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	host := client.Host{Name: "local"}
 
 	f := startFake(t, 0, protocol.Message{EnvironmentID: "other", Capabilities: caps})
-	_, _, err := stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	_, _, err := stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true, environment: "env"})
 	if err == nil || !strings.Contains(err.Error(), "answers as environment other, not env") {
 		t.Fatalf("mismatch on the first connection: %v", err)
 	}
@@ -229,7 +237,7 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	}
 
 	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps}, protocol.Message{EnvironmentID: "other", Capabilities: caps})
-	_, _, err = stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	_, _, err = stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true, environment: "env"})
 	if err == nil || !strings.Contains(err.Error(), "answers as environment other, not env") {
 		t.Fatalf("mismatch on the reconnect: %v", err)
 	}
@@ -238,11 +246,150 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	}
 
 	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
-	hello, res, err := stream(context.Background(), host, protocol.CapRm, req, Discard{}, streamOpts{restart: true, environment: "env"})
+	hello, res, err := stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true, environment: "env"})
 	if err != nil || !res.OK || hello.EnvironmentID != "env" {
 		t.Fatalf("same environment throughout: %+v %+v %v", hello, res, err)
 	}
 	if got := f.commands(); len(got) != 2 || got[1].Type != protocol.TypeFollow {
 		t.Fatalf("reconnect did not follow: %+v", got)
+	}
+}
+
+// A follow answered interrupted, by a daemon whose journal knows the
+// add and that died in it, resends the add under its id; the sender
+// lifetime is enforced before any send, so an add submitted more than
+// seven days ago is outcome unknown without a connection.
+func TestStreamResendsOnInterrupted(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapTask}
+	host := client.Host{Name: "local"}
+	f := startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		if m.Type == protocol.TypeFollow {
+			return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrInterrupted, Stage: protocol.StageWorktree}
+		}
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/r/x", Branch: "task-2", Prompt: protocol.DeliveryDelivered}
+	}
+	add := Add{Host: config.Host{Host: host}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "task", Generated: true, Prompt: "p", Agent: "claude"}
+	req := add.Request("a1")
+	if req.SubmittedAt.IsZero() || !req.Generated || req.Prompt != "p" {
+		t.Fatalf("request %+v", req)
+	}
+	var notes []string
+	rep := noter{fn: func(s string) { notes = append(notes, s) }}
+	_, res, err := stream(context.Background(), host, add.Needs(), req, rep, streamOpts{restart: true})
+	if err != nil || !res.OK || res.Branch != "task-2" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	got := f.commands()
+	if len(got) != 3 || got[0].Type != protocol.TypeAdd || got[1].Type != protocol.TypeFollow || got[2].Type != protocol.TypeAdd || !got[2].SubmittedAt.Equal(got[0].SubmittedAt) {
+		t.Fatalf("commands %+v", got)
+	}
+	if len(notes) == 0 || !strings.Contains(notes[len(notes)-1], "resume") {
+		t.Fatalf("notes %q", notes)
+	}
+	// The lifetime: nothing is sent.
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	old := add
+	old.SubmittedAt = time.Now().Add(-8 * 24 * time.Hour)
+	if _, _, err := stream(context.Background(), host, old.Needs(), old.Request("a2"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) {
+		t.Fatalf("lifetime: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent past the lifetime: %+v", got)
+	}
+	// The lifetime bounds sends and resends, not follows: an add sent
+	// in time is followed past it, and the resend the follow asks for
+	// is what the lifetime refuses.
+	was := SenderLifetime
+	SenderLifetime = 300 * time.Millisecond
+	defer func() { SenderLifetime = was }()
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		time.Sleep(400 * time.Millisecond)
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrInterrupted, Stage: protocol.StageFetch}
+	}
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) {
+		t.Fatalf("resend past the lifetime: %v", err)
+	}
+	if got := f.commands(); len(got) != 2 || got[0].Type != protocol.TypeAdd || got[1].Type != protocol.TypeFollow {
+		t.Fatalf("follow past the lifetime: %+v", got)
+	}
+	SenderLifetime = was
+
+	// A prompt or a generated branch needs task; a daemon without it is
+	// refused before the send.
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow}})
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a3"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support task") {
+		t.Fatalf("needs task: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent without task: %+v", got)
+	}
+	if n := (Add{}).Needs(); len(n) != 1 || n[0] != protocol.CapAdd {
+		t.Fatalf("needs %v", n)
+	}
+}
+
+// Deliver sends the prompt message under the add's id with the attempt
+// number, follows it with the number after a drop, and resends it when
+// the follow is answered unknown attempt.
+func TestDeliver(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapFollow, protocol.CapTask}
+	host := client.Host{Name: "local"}
+	f := startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		if m.Type == protocol.TypeFollow {
+			return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, Error: protocol.ErrUnknownAttempt}
+		}
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "session replaced"}
+	}
+	d := Deliver{Host: config.Host{Host: host}, ID: "a1", Attempt: 2, Prompt: "p", Environment: "env"}
+	state, reason, err := d.Run(context.Background(), Discard{})
+	if err != nil || state != protocol.DeliveryNotDelivered || reason != "session replaced" {
+		t.Fatalf("%s %s %v", state, reason, err)
+	}
+	got := f.commands()
+	if len(got) != 3 || got[0].Type != protocol.TypePrompt || got[0].Attempt != 2 || got[0].Prompt != "p" || got[1].Type != protocol.TypeFollow || got[1].Attempt != 2 || got[2].Type != protocol.TypePrompt {
+		t.Fatalf("commands %+v", got)
+	}
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, Error: protocol.ErrRecoveryExpired}
+	}
+	if _, _, err := d.Run(context.Background(), Discard{}); err == nil || !strings.Contains(err.Error(), protocol.ErrRecoveryExpired) {
+		t.Fatalf("refusal: %v", err)
+	}
+	if _, _, err := (Deliver{}).Run(context.Background(), Discard{}); err == nil {
+		t.Fatal("empty deliver accepted")
+	}
+}
+
+// noter is a Reporter that keeps the notes.
+type noter struct{ fn func(string) }
+
+func (noter) Progress(protocol.Message) {}
+func (n noter) Note(s string)           { n.fn(s) }
+
+// A host result that failed still carries what the host said: the
+// delivery state of a launch that may have started the agent reaches
+// the caller with the error, and no local session is made.
+func TestAddKeepsHostOutcomeOnError(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapTask}
+	host := client.Host{Name: "local"}
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Stage: protocol.StageAgent, Error: "tmux: set-option failed", Root: "/r/x", Branch: "x", Prompt: protocol.DeliveryUnknown}
+	}
+	add := Add{Host: config.Host{Host: host}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "x", Prompt: "p", Agent: "claude"}
+	out, err := add.Run(context.Background(), Discard{})
+	if err == nil || out.Prompt != protocol.DeliveryUnknown || out.Root != "/r/x" || out.Session != "" {
+		t.Fatalf("%+v %v", out, err)
+	}
+	var se *StageError
+	if !errors.As(err, &se) || se.Stage != protocol.StageAgent {
+		t.Fatalf("error %v", err)
+	}
+	if out.Complete() || (Added{Done: true}).Complete() != true || (Added{Done: true, Prompt: protocol.DeliveryUnknown}).Complete() {
+		t.Fatal("Complete")
 	}
 }

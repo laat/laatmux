@@ -118,8 +118,9 @@ func (d *Daemon) cancelCommand(id string) {
 }
 
 // StopRuns closes the registry, cancels every run and waits for them,
-// bounded by ctx: what a clean shutdown does, so a restart for an
-// upgrade leaves no orphan.
+// and waits for every paste in flight, all bounded by ctx: what a
+// clean shutdown does, so a restart for an upgrade leaves no orphan
+// and no prompt in a buffer on the server.
 func (d *Daemon) StopRuns(ctx context.Context) {
 	d.mu.Lock()
 	d.stopping = true
@@ -138,6 +139,19 @@ func (d *Daemon) StopRuns(ctx context.Context) {
 		case <-r.done:
 		case <-ctx.Done():
 			return
+		}
+	}
+	for {
+		d.mu.Lock()
+		n := d.pasting
+		d.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
 }

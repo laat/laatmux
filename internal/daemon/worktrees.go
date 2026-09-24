@@ -31,10 +31,22 @@ func (d *Daemon) runWorktrees(ctx context.Context) {
 }
 
 // pollWorktrees lists worktrees and publishes the difference. A listing
-// that fails is an unavailable observation: the last records are kept and
-// the error logged once per change of message. It still counts as the
-// first poll, so a checkout git cannot read does not hold every snapshot.
+// that fails is an unavailable observation: the last records are kept,
+// the stamp stays where it was, and the error is logged once per change
+// of message and published with the stamp. It still counts as the first
+// poll, so a checkout git cannot read does not hold every snapshot.
+//
+// The listing is stamped with the observation revision read before git
+// was asked, so a listing that overlaps a mutation carries the revision
+// before it and does not stand for its outcome; the poll and its
+// publication run under one lock, so an older observation never
+// overwrites a newer one.
 func (d *Daemon) pollWorktrees(ctx context.Context) {
+	d.pollMu.Lock()
+	defer d.pollMu.Unlock()
+	d.mu.Lock()
+	stamp := protocol.Listing{Generation: d.generation, Revision: d.revision}
+	d.mu.Unlock()
 	recs, err := d.cfg.Store.List(ctx)
 	if ctx.Err() != nil {
 		return
@@ -43,16 +55,42 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		if msg := err.Error(); msg != d.lastListErr {
 			d.cfg.Logger.Printf("worktrees: %v", err)
 			d.lastListErr = msg
+			d.mu.Lock()
+			d.listErr = msg
+			d.publishListingLocked()
+			d.mu.Unlock()
 		}
 	} else {
 		d.lastListErr = ""
 		d.mu.Lock()
 		d.lastList = recs
 		d.listed = true
+		d.listing, d.listErr = stamp, ""
 		d.publishWorktreesLocked(time.Now())
+		d.publishListingLocked()
 		d.mu.Unlock()
 	}
 	d.markDiscovered(&d.worktreesDiscovered)
+}
+
+// stepRevision counts one observation owed: an add that succeeded, or
+// an rm that removed a worktree, so a listing read before it cannot
+// stand for its outcome. The listing returned is the barrier such a
+// listing must pass.
+func (d *Daemon) stepRevision() protocol.Listing {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.revision++
+	return protocol.Listing{Generation: d.generation, Revision: d.revision}
+}
+
+// publishListingLocked tells subscribers the listing's stamp and error,
+// in an upsert with nothing else, which a client that does not know the
+// field passes over. Called with d.mu held.
+func (d *Daemon) publishListingLocked() {
+	l := d.listing
+	d.seq++
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Listing: &l, ListingError: d.listErr})
 }
 
 // pokeWorktrees asks for a poll now; a poll already pending is enough.

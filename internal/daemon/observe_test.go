@@ -64,10 +64,12 @@ func (f *fakeTmux) Capture(context.Context, string, int) ([]string, error) {
 	return f.screen, f.captureErr
 }
 func (f *fakeTmux) EnsureConfigured(context.Context) error { f.configured++; return nil }
-func (f *fakeTmux) NewSession(context.Context, tmux.NewSessionOpts) (string, error) {
-	return "%0", nil
+func (f *fakeTmux) NewSession(context.Context, tmux.NewSessionOpts) (tmux.Session, error) {
+	return tmux.Session{PaneID: "%0", ServerPID: 1}, nil
 }
-func (f *fakeTmux) KillSession(context.Context, string) error { return nil }
+func (f *fakeTmux) KillSession(context.Context, string) error           { return nil }
+func (f *fakeTmux) Paste(context.Context, string, string, string) error { return nil }
+func (f *fakeTmux) DeleteBuffers(context.Context, string) error         { return nil }
 
 // managed and unmanaged wrap a fake as the daemon's targets.
 func managed(ft *fakeTmux) []Target   { return []Target{{Label: "laatmux", Tmux: ft, Managed: true}} }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -113,6 +114,7 @@ func cmdServe(ctx context.Context, args []string) error {
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
 		Store: store, Agents: agents, Shutdown: shutdown,
+		Commands: filepath.Join(home.Dir(), "commands"),
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.

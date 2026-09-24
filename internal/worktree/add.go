@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -45,41 +46,54 @@ type Added struct {
 // a branch of repo. Every step that mutates something has its own check,
 // so a retry after a crash skips exactly what is done and finishes what
 // is not. A failed stage stops the sequence with a StageError and leaves
-// the worktree in place for a retry.
+// the worktree in place for a retry. The daemon runs the three parts
+// itself, with its allocate stage between Prepare and Place; Add is the
+// composition for a branch decided in advance.
 func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Reporter) (Added, error) {
 	if report == nil {
 		report = func(string, string, string) {}
 	}
-	var a Added
+	if err := CheckBranch(ctx, branch); err != nil {
+		return Added{}, fail(protocol.StageResolve, err)
+	}
+	p, err := s.Prepare(ctx, repo, report)
+	if err != nil {
+		return Added{}, err
+	}
+	root, err := s.Place(ctx, p, repo, branch)
+	if err != nil {
+		return Added{Checkout: p.Checkout}, fail(protocol.StageResolve, err)
+	}
+	return s.Materialize(ctx, p.Checkout, repo, branch, root, report)
+}
+
+// Prepared is what the resolve, clone and fetch stages leave: the main
+// checkout, fresh, whether it was found or made.
+type Prepared struct {
+	Checkout string
+	Found    bool // the checkout was there before
+}
+
+// Prepare runs resolve, clone and fetch: the main checkout is found by
+// its origin or cloned, then fetched, so what follows decides against
+// current branches. Nothing here depends on the branch.
+func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepared, error) {
+	if report == nil {
+		report = func(string, string, string) {}
+	}
+	var p Prepared
 
 	// resolve
 	stage := protocol.StageResolve
-	if err := CheckBranch(ctx, branch); err != nil {
-		return a, fail(stage, err)
-	}
 	checkout, found, err := s.Checkout(ctx, repo)
 	if err != nil {
-		return a, fail(stage, err)
+		return p, fail(stage, err)
 	}
 	if !found {
 		checkout = s.Dirs.Checkout(repo.Name)
 	}
-	a.Checkout = checkout
-	a.Root = s.Dirs.Worktree(repo.Name, branch)
-	if found {
-		entries, err := ListWorktrees(ctx, checkout)
-		if err != nil {
-			return a, fail(stage, err)
-		}
-		// Only a worktree under the worktrees directory is the worktree
-		// for the branch; one elsewhere fails the worktree stage below.
-		for _, e := range entries {
-			if e.Branch == branch && !e.Prunable && e.Root != checkout && s.Owns(e.Root) {
-				a.Root = e.Root
-			}
-		}
-	}
-	report(stage, protocol.StateDone, fmt.Sprintf("checkout %s, worktree %s", checkout, a.Root))
+	p.Checkout, p.Found = checkout, found
+	report(stage, protocol.StateDone, "checkout "+checkout)
 
 	// clone
 	stage = protocol.StageClone
@@ -90,17 +104,17 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 			url, hasOrigin, _ := s.origin(ctx, checkout)
 			switch {
 			case hasOrigin:
-				return a, fail(stage, fmt.Errorf("%s exists with origin %s, not %s", checkout, url, repo.Source))
+				return p, fail(stage, fmt.Errorf("%s exists with origin %s, not %s", checkout, url, repo.Source))
 			default:
-				return a, fail(stage, fmt.Errorf("%s exists and is not a checkout of %s", checkout, repo.Source))
+				return p, fail(stage, fmt.Errorf("%s exists and is not a checkout of %s", checkout, repo.Source))
 			}
 		}
 		if err := os.MkdirAll(s.Dirs.Repos, 0o755); err != nil {
-			return a, fail(stage, err)
+			return p, fail(stage, err)
 		}
 		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+checkout)
 		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, gitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
-			return a, fail(stage, err)
+			return p, fail(stage, err)
 		}
 		report(stage, protocol.StateDone, "cloned")
 	}
@@ -109,12 +123,44 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	stage = protocol.StageFetch
 	report(stage, protocol.StateStart, "git fetch origin")
 	if err := runStreaming(ctx, checkout, report, stage, gitEnv(), "git", "fetch", "origin"); err != nil {
-		return a, fail(stage, err)
+		return p, fail(stage, err)
 	}
 	report(stage, protocol.StateDone, "fetched")
+	return p, nil
+}
+
+// Place is the root the worktree for branch has, or will have: the one
+// git registers for the branch under the worktrees directory when there
+// is one, else the label's place. Only a worktree under the worktrees
+// directory is the worktree for the branch; one elsewhere fails the
+// worktree stage in Materialize.
+func (s *Store) Place(ctx context.Context, p Prepared, repo Repo, branch string) (string, error) {
+	root := s.Dirs.Worktree(repo.Name, branch)
+	if !p.Found {
+		return root, nil
+	}
+	entries, err := ListWorktrees(ctx, p.Checkout)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Branch == branch && !e.Prunable && e.Root != p.Checkout && s.Owns(e.Root) {
+			root = e.Root
+		}
+	}
+	return root, nil
+}
+
+// Materialize runs the worktree, copy and setup stages for branch at
+// root in the prepared checkout.
+func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, branch, root string, report Reporter) (Added, error) {
+	if report == nil {
+		report = func(string, string, string) {}
+	}
+	a := Added{Checkout: checkout, Root: root}
 
 	// worktree
-	stage = protocol.StageWorktree
+	stage := protocol.StageWorktree
 	if _, err := git(ctx, checkout, "remote", "set-head", "origin", "--auto"); err != nil {
 		return a, fail(stage, err)
 	}
@@ -122,6 +168,8 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 		return a, fail(stage, err)
 	}
 	report(stage, protocol.StateDone, "origin/HEAD refreshed, stale worktrees pruned")
+	// The root was placed before the prune; a prunable entry for the
+	// branch elsewhere is gone now and the label's place stands.
 	switch {
 	case refExists(ctx, checkout, "refs/heads/"+branch):
 		report(stage, protocol.StateSkip, "branch "+branch+" exists, used as is")
@@ -318,6 +366,89 @@ func CheckBranch(ctx context.Context, branch string) error {
 func refExists(ctx context.Context, checkout, ref string) bool {
 	_, err := git(ctx, checkout, "rev-parse", "--verify", "--quiet", ref)
 	return err == nil
+}
+
+// Branches lists the checkout's local branches and its origin's remote
+// branches by name, for a generated name to be allocated against.
+func Branches(ctx context.Context, checkout string) (local, remote []string, err error) {
+	out, err := git(ctx, checkout, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/origin/")
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ref := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(ref, "refs/heads/"):
+			local = append(local, strings.TrimPrefix(ref, "refs/heads/"))
+		case strings.HasPrefix(ref, "refs/remotes/origin/"):
+			name := strings.TrimPrefix(ref, "refs/remotes/origin/")
+			if name != "HEAD" {
+				remote = append(remote, name)
+			}
+		}
+	}
+	return local, remote, nil
+}
+
+// RefConflict reports whether a branch named existing rules out one
+// named candidate: the same name, or one a directory of the other in
+// the ref namespace, since refs/heads/task cannot exist beside
+// refs/heads/task/sub.
+func RefConflict(existing, candidate string) bool {
+	return existing == candidate || strings.HasPrefix(existing, candidate+"/") || strings.HasPrefix(candidate, existing+"/")
+}
+
+// Allocate is the first free of <name>, <name>-2, <name>-3 and on, where
+// taken says what is not free: the local and remote branches, the
+// registered worktrees, and the names other adds have allocated and
+// not yet made into branches. A name whose ancestor in the ref
+// namespace is a branch, feature/task beside feature, is never free
+// however it is numbered; the search is bounded and says so.
+func Allocate(name string, taken func(string) bool) (string, error) {
+	if !taken(name) {
+		return name, nil
+	}
+	for i := 2; i <= 1000; i++ {
+		if c := name + "-" + strconv.Itoa(i); !taken(c) {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("no free name for %s: every numbered form is taken, or a branch occupies a component of the name", name)
+}
+
+// ProposeBranch derives a branch name from a prompt: the first words,
+// lowercased, runs of anything but letters and digits turned into one
+// dash, trimmed, cut at forty characters on a word boundary. It is a
+// proposal for the allocate stage to make unique, or for the user to
+// replace; "" when the prompt has no letters or digits. The result
+// passes CheckBranch: letters, digits and single dashes only, so no
+// sequence git refuses can arise. Characters are counted, not bytes,
+// so a name is never cut inside one.
+func ProposeBranch(prompt string) string {
+	const limit = 40
+	var name []rune
+	dash := false
+	for _, r := range strings.ToLower(prompt) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if dash && len(name) > 0 {
+				name = append(name, '-')
+			}
+			dash = false
+			name = append(name, r)
+			continue
+		}
+		dash = true
+	}
+	if len(name) <= limit {
+		return string(name)
+	}
+	cut := name[:limit]
+	for i := len(cut) - 1; i > 0; i-- {
+		if cut[i] == '-' {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), "-")
 }
 
 func branchOrDetached(e Entry) string {

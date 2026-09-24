@@ -31,6 +31,7 @@ const (
 	TypeFollow    = "follow"    // client -> daemon, attach to a command sent earlier under the same id
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
+	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
@@ -59,6 +60,14 @@ const (
 	// so the process it ends is the daemon that answered, not a pid a
 	// file remembers.
 	CapShutdown = "shutdown"
+	// CapTask is the task capability of a host: the command journal that
+	// remembers an add's branch allocation and prompt delivery across
+	// daemon restarts, generated branch names allocated in an allocate
+	// stage, the prompt field of add and the prompt message with its
+	// attempts, follow answered from the journal, and worktree listings
+	// stamped with the observation revision so a result's listing
+	// barrier can be waited for. A daemon with task has add and follow.
+	CapTask = "task"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.
@@ -82,9 +91,14 @@ const (
 
 // Stages of add, in order. A result carries the stage that failed.
 const (
-	StageResolve  = "resolve"
-	StageClone    = "clone"
-	StageFetch    = "fetch"
+	StageResolve = "resolve"
+	StageClone   = "clone"
+	StageFetch   = "fetch"
+	// StageAllocate, from a daemon with task, is the branch decided: a
+	// generated name made unique against the branches, the worktrees
+	// and the journal, or the given one as is. Its done or skip line
+	// carries Branch and Root, the ones the add uses from then on.
+	StageAllocate = "allocate"
 	StageWorktree = "worktree"
 	StageCopy     = "copy"
 	StageSetup    = "setup"
@@ -103,6 +117,58 @@ const ErrUnknownCommand = "unknown command"
 // ErrCancelled is the result error of a run stopped by cancel, or by the
 // daemon shutting down.
 const ErrCancelled = "cancelled"
+
+// Result errors of a daemon with task, on a follow or an add.
+const (
+	// ErrInterrupted answers a follow for an add the journal knows and
+	// the daemon died in: Stage is the stage reached. The sender resends
+	// the add under the same id and the daemon resumes it.
+	ErrInterrupted = "interrupted"
+	// ErrSubmissionExpired refuses an add whose SubmittedAt is more than
+	// a day in the daemon's future or more than the journal's retention
+	// in its past, and a follow for an id the journal has swept.
+	ErrSubmissionExpired = "submission expired"
+	// ErrRemoved answers a follow, or a resend, for an add whose worktree
+	// rm has removed since.
+	ErrRemoved = "removed"
+	// ErrUnknownAttempt answers a follow with an attempt number the
+	// journal has no record of; the sender resends the prompt message.
+	ErrUnknownAttempt = "unknown attempt"
+	// ErrRecoveryExpired answers a prompt message for an id the journal
+	// no longer holds: the prompt cannot be delivered by the daemon any
+	// more and is the user's to paste by hand.
+	ErrRecoveryExpired = "recovery expired"
+)
+
+// Delivery states of a prompt, in the Prompt field of an add's result
+// and of a prompt message's result. Every state but none may come with
+// the reason in Error, on a result that is otherwise ok.
+const (
+	DeliveryNone         = "none"          // the add carried no prompt
+	DeliveryDelivered    = "delivered"     // the agent was started with the prompt as its argument, or an attempt reached Enter
+	DeliveryNotDelivered = "not delivered" // provably nothing transferred; Error says why
+	DeliveryUnknown      = "unknown"       // a side effect may have taken; Error says where
+)
+
+// Listing stamps a worktree listing with when it was read: the daemon
+// generation, its start, and the observation revision the daemon had
+// stepped to before git was asked. An add's result carries the revision
+// its mutation made as a barrier; a listing at that revision or later in
+// the same generation reflects the add, and so does any successful
+// listing of a later generation, since a daemon that started after the
+// mutation lists after it.
+type Listing struct {
+	Generation int64  `json:"generation"`
+	Revision   uint64 `json:"revision"`
+}
+
+// Satisfies reports whether the listing l reflects the mutation barrier b.
+func (l Listing) Satisfies(b Listing) bool {
+	if l.Generation == 0 {
+		return false
+	}
+	return l.Generation > b.Generation || (l.Generation == b.Generation && l.Revision >= b.Revision)
+}
 
 // Activity is what the agent on screen appears to be doing.
 type Activity string
@@ -277,6 +343,27 @@ type Message struct {
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.
 	AgentName string `json:"agent_name,omitempty"`
+	// Prompt, on add and on the prompt message, is the text the agent is
+	// to be started with, or given; on a result, and on the pending
+	// records of milestone four, it is the delivery state, one of the
+	// Delivery constants. The text never travels in a result, a progress
+	// message or a record. Generated asks a daemon with task to allocate
+	// the branch: Branch is a proposal, made unique in the allocate
+	// stage. SubmittedAt is the sender's clock at submit, unchanged on
+	// every resend, so the daemon can refuse an add older than its
+	// journal keeps; Attempt numbers a prompt message's delivery from 1
+	// per add, on the message, on a follow of one, and on the result.
+	// Listing on an add's result is the barrier the worktree listing
+	// must pass to reflect it; on a snapshot it stamps the listing sent.
+	Prompt      string    `json:"prompt,omitempty"`
+	Generated   bool      `json:"generated,omitempty"`
+	SubmittedAt time.Time `json:"submitted_at,omitzero"`
+	Attempt     int       `json:"attempt,omitempty"`
+	Listing     *Listing  `json:"listing,omitempty"`
+	// ListingError, with Listing on a snapshot or an upsert of the
+	// stamp alone, is why the last listing failed; the stamp is then
+	// the last successful listing's.
+	ListingError string `json:"listing_error,omitempty"`
 	// Root on rm is the worktree root from the record. It is what reaches
 	// a managed session whose worktree is already gone, since a branch
 	// alone cannot be mapped to a root then; send it whenever it is known.
