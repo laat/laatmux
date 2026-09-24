@@ -169,10 +169,17 @@ var paneFormat = strings.Join([]string{
 	"#{pid}",
 }, Sep)
 
-// ListPanes returns every pane on the server in one call.
+// ListPanes returns every pane on the server in one call. A server
+// that runs with no sessions, which the managed one does after its last
+// session ends, has no panes: tmux answers "no current target" for it,
+// and that is an empty listing, not a failure to observe.
 func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 	out, err := s.Run(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
+		var te *Error
+		if errorsAs(err, &te) && strings.Contains(te.Msg, "no current target") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var panes []Pane

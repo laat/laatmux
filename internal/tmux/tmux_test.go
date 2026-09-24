@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -126,5 +127,26 @@ func TestRedactAndSubmitted(t *testing.T) {
 	var pe *PasteError
 	if e := (&PasteError{Step: "enter", Err: err}); !errors.As(fmt.Errorf("w: %w", e), &pe) || pe.Step != "enter" || !strings.HasPrefix(e.Error(), "paste (enter)") {
 		t.Fatalf("paste error %v", e)
+	}
+}
+
+// An empty server, kept by exit-empty off, lists no panes rather than
+// failing; a server that is not running is NoServer.
+func TestListPanesEmptyServer(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	s := Server{Name: fmt.Sprintf("laatmux-test-%d", os.Getpid())}
+	if _, err := s.ListPanes(ctx); !NoServer(err) {
+		t.Fatalf("not running: %v", err)
+	}
+	if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Run(ctx, "kill-server") })
+	panes, err := s.ListPanes(ctx)
+	if err != nil || len(panes) != 0 {
+		t.Fatalf("empty server: %v %v", panes, err)
 	}
 }
