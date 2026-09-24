@@ -369,3 +369,24 @@ type noter struct{ fn func(string) }
 
 func (noter) Progress(protocol.Message) {}
 func (n noter) Note(s string)           { n.fn(s) }
+
+// A host result that failed still carries what the host said: the
+// delivery state of a launch that may have started the agent reaches
+// the caller with the error, and no local session is made.
+func TestAddKeepsHostOutcomeOnError(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapTask}
+	host := client.Host{Name: "local"}
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	f.answer = func(m protocol.Message) protocol.Message {
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Stage: protocol.StageAgent, Error: "tmux: set-option failed", Root: "/r/x", Branch: "x", Prompt: protocol.DeliveryUnknown}
+	}
+	add := Add{Host: config.Host{Host: host}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "x", Prompt: "p", Agent: "claude"}
+	out, err := add.Run(context.Background(), Discard{})
+	if err == nil || out.Prompt != protocol.DeliveryUnknown || out.Root != "/r/x" || out.Session != "" {
+		t.Fatalf("%+v %v", out, err)
+	}
+	var se *StageError
+	if !errors.As(err, &se) || se.Stage != protocol.StageAgent {
+		t.Fatalf("error %v", err)
+	}
+}

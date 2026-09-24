@@ -60,12 +60,12 @@ func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	return append([]string(nil), f.screen...), nil
 }
 func (f *fakeServer) EnsureConfigured(context.Context) error { return nil }
-func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (string, error) {
+func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cmds = append(f.cmds, append([]string(nil), o.Cmd...))
 	if f.newErr != nil {
-		return "", f.newErr
+		return tmux.Session{}, f.newErr
 	}
 	f.next++
 	id := "%" + strconv.Itoa(f.next)
@@ -74,7 +74,7 @@ func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (strin
 		server = 5
 	}
 	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
-	return id, nil
+	return tmux.Session{PaneID: id, ServerPID: server}, nil
 }
 func (f *fakeServer) KillSession(_ context.Context, name string) error {
 	f.mu.Lock()

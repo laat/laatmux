@@ -400,16 +400,19 @@ func RefConflict(existing, candidate string) bool {
 // Allocate is the first free of <name>, <name>-2, <name>-3 and on, where
 // taken says what is not free: the local and remote branches, the
 // registered worktrees, and the names other adds have allocated and
-// not yet made into branches.
-func Allocate(name string, taken func(string) bool) string {
+// not yet made into branches. A name whose ancestor in the ref
+// namespace is a branch, feature/task beside feature, is never free
+// however it is numbered; the search is bounded and says so.
+func Allocate(name string, taken func(string) bool) (string, error) {
 	if !taken(name) {
-		return name
+		return name, nil
 	}
-	for i := 2; ; i++ {
+	for i := 2; i <= 1000; i++ {
 		if c := name + "-" + strconv.Itoa(i); !taken(c) {
-			return c
+			return c, nil
 		}
 	}
+	return "", fmt.Errorf("no free name for %s: every numbered form is taken, or a branch occupies a component of the name", name)
 }
 
 // ProposeBranch derives a branch name from a prompt: the first words,
@@ -418,31 +421,34 @@ func Allocate(name string, taken func(string) bool) string {
 // proposal for the allocate stage to make unique, or for the user to
 // replace; "" when the prompt has no letters or digits. The result
 // passes CheckBranch: letters, digits and single dashes only, so no
-// sequence git refuses can arise.
+// sequence git refuses can arise. Characters are counted, not bytes,
+// so a name is never cut inside one.
 func ProposeBranch(prompt string) string {
 	const limit = 40
-	var b strings.Builder
+	var name []rune
 	dash := false
 	for _, r := range strings.ToLower(prompt) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			if dash && b.Len() > 0 {
-				b.WriteByte('-')
+			if dash && len(name) > 0 {
+				name = append(name, '-')
 			}
 			dash = false
-			b.WriteRune(r)
+			name = append(name, r)
 			continue
 		}
 		dash = true
 	}
-	name := b.String()
 	if len(name) <= limit {
-		return name
+		return string(name)
 	}
 	cut := name[:limit]
-	if i := strings.LastIndexByte(cut, '-'); i > 0 {
-		cut = cut[:i]
+	for i := len(cut) - 1; i > 0; i-- {
+		if cut[i] == '-' {
+			cut = cut[:i]
+			break
+		}
 	}
-	return strings.TrimRight(cut, "-")
+	return strings.TrimRight(string(cut), "-")
 }
 
 func branchOrDetached(e Entry) string {

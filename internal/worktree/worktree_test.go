@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -991,8 +992,18 @@ func TestProposeAndAllocate(t *testing.T) {
 		}
 	}
 	taken := map[string]bool{"task": true, "task-2": true}
-	if got := Allocate("task", func(n string) bool { return taken[n] }); got != "task-3" {
-		t.Fatalf("allocate %s", got)
+	if got, err := Allocate("task", func(n string) bool { return taken[n] }); got != "task-3" || err != nil {
+		t.Fatalf("allocate %s %v", got, err)
+	}
+	// A name no numbering frees, an occupied ancestor, is an error, not
+	// a search that never ends.
+	if got, err := Allocate("feature/task", func(n string) bool { return RefConflict("feature", n) }); err == nil {
+		t.Fatalf("allocate under an occupied ancestor gave %s", got)
+	}
+	// Long names are cut on characters, never inside one.
+	cjk := strings.Repeat("修复侧边栏排序", 10)
+	if got := ProposeBranch(cjk); len([]rune(got)) != 40 || !utf8.ValidString(got) {
+		t.Fatalf("cjk proposal %q (%d runes)", got, len([]rune(got)))
 	}
 	for _, c := range []struct {
 		existing, candidate string
@@ -1002,8 +1013,8 @@ func TestProposeAndAllocate(t *testing.T) {
 			t.Errorf("RefConflict(%q, %q) = %v", c.existing, c.candidate, got)
 		}
 	}
-	if got := Allocate("free", func(n string) bool { return taken[n] }); got != "free" {
-		t.Fatalf("allocate %s", got)
+	if got, err := Allocate("free", func(n string) bool { return taken[n] }); got != "free" || err != nil {
+		t.Fatalf("allocate %s %v", got, err)
 	}
 	f := newFixture(t)
 	if _, _, err := f.add("feature"); err != nil {

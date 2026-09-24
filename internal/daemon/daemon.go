@@ -42,7 +42,7 @@ type Panes interface {
 	ListPanes(ctx context.Context) ([]tmux.Pane, error)
 	Capture(ctx context.Context, paneID string, n int) ([]string, error)
 	EnsureConfigured(ctx context.Context) error
-	NewSession(ctx context.Context, o tmux.NewSessionOpts) (string, error)
+	NewSession(ctx context.Context, o tmux.NewSessionOpts) (tmux.Session, error)
 	KillSession(ctx context.Context, name string) error
 	// Paste types text into a pane as one bracketed paste and Enter
 	// through the named buffer; DeleteBuffers deletes the buffers with
@@ -796,13 +796,13 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				}
 				continue
 			}
-			paneID, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+			made, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
 			if err != nil {
 				res.Error = err.Error()
 			} else {
 				res.OK = true
 				res.Session = m.Name
-				res.PaneID = paneID
+				res.PaneID = made.PaneID
 			}
 			if err := pc.Write(res); err != nil {
 				return

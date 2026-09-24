@@ -75,12 +75,18 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 	}
 	req := a.Request(id)
 	hello, res, err := stream(ctx, a.Host.Host, a.Needs(), req, r, streamOpts{restart: true})
-	if err != nil {
-		return Added{}, failed("add", res, err)
-	}
 	out := Added{Root: res.Root, Branch: res.Branch, Managed: res.Session, Prompt: res.Prompt, Reason: res.Error}
 	if out.Branch == "" {
 		out.Branch = a.Branch
+	}
+	if err != nil {
+		// What the host said stays with the error: a launch that
+		// failed after the agent may have started reports the delivery
+		// unknown, and the caller must not lose that to the failure.
+		if out.Prompt == "" || out.Prompt == protocol.DeliveryNone {
+			out.Reason = ""
+		}
+		return out, failed("add", res, err)
 	}
 	if err := home.UpdateLast(func(l *home.Last) {
 		cur := l.Get(a.Repo.Source)

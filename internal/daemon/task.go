@@ -80,7 +80,14 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		// An rm that ran while the add waited on its delivery, with the
 		// repository lock released, has removed the worktree and marked
 		// the entry: removed is the outcome then, of this result and of
-		// every follow, and the success is not recorded over it.
+		// every follow, and the success is not recorded over it. The
+		// record and the publication are under the root's delivery
+		// lock, which rm holds from the tombstone to dropping the
+		// command from memory, so the result the memory keeps is never
+		// a success published after the tombstone.
+		if r.root != "" {
+			defer d.lockDeliveries(r.root)()
+		}
 		err := r.set(func(e *entry) {
 			if e.Removed {
 				return
@@ -267,7 +274,7 @@ func (r *addRun) run(ctx context.Context) error {
 			}
 		}
 		names = append(names, j.reserved(repo.Source, m.ID)...)
-		name := worktree.Allocate(branch, func(c string) bool {
+		name, err := worktree.Allocate(branch, func(c string) bool {
 			for _, n := range names {
 				if worktree.RefConflict(n, c) {
 					return true
@@ -275,6 +282,9 @@ func (r *addRun) run(ctx context.Context) error {
 			}
 			return false
 		})
+		if err != nil {
+			return stageErr(stage, err)
+		}
 		if err := r.set(func(e *entry) { e.Branch, e.Allocated = name, true }); err != nil {
 			return stageErr(stage, fmt.Errorf("journal: the allocation could not be written: %w", err))
 		}
@@ -398,7 +408,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	}); err != nil {
 		return r.failed(prompt, "launch refused", fmt.Errorf("journal: %w", err))
 	}
-	paneID, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: r.root, Cmd: argv, Host: d.cfg.Host})
+	made, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: r.root, Cmd: argv, Host: d.cfg.Host})
 	if err != nil {
 		submitted := tmux.Submitted(err)
 		err = tmux.Redact(err, prompt, PromptPlaceholder)
@@ -409,19 +419,14 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		}
 		return r.failed(prompt, "launch failed", err)
 	}
-	serverPID := 0
+	paneID := made.PaneID
+	// Refresh the session join now, so the record the poke publishes
+	// names the session rather than waiting for the next pane poll.
 	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {
-		for _, p := range panes {
-			if p.ID == paneID {
-				serverPID = p.ServerPID
-			}
-		}
-		// Refresh the session join now, so the record the poke publishes
-		// names the session rather than waiting for the next pane poll.
 		d.setManagedRoots(panes, time.Now())
 	}
 	err = r.set(func(e *entry) {
-		e.Launch, e.PaneID, e.ServerPID = launchLaunched, paneID, serverPID
+		e.Launch, e.PaneID, e.ServerPID = launchLaunched, paneID, made.ServerPID
 		switch {
 		case prompt == "":
 			e.Delivery = protocol.DeliveryNone
@@ -529,9 +534,21 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	// attempts alike: two adds that share a session, or an attempt
 	// beside one, must not both see the pane idle and interleave their
 	// pastes. The readiness check runs under the lock.
-	l := d.repoLock("deliver/" + e.Root)
-	l.Lock()
-	defer l.Unlock()
+	defer d.lockDeliveries(e.Root)()
+	// What was true before the wait for the lock may not be now: rm
+	// may have taken the worktree and marked the entry, and another add
+	// may have a session at the root. The entry is read again and the
+	// root checked under the lock, which rm holds for its own changes.
+	e, ok = j.get(id)
+	if !ok {
+		return protocol.DeliveryNotDelivered, "no journal entry"
+	}
+	if e.Removed {
+		return record(protocol.DeliveryNotDelivered, "worktree removed")
+	}
+	if why := d.worktreeReplaced(ctx, e); why != "" {
+		return record(protocol.DeliveryNotDelivered, why)
+	}
 	if e.PaneID == "" {
 		target, why := d.adopt(ctx, e.Root)
 		if why != "" {
@@ -577,6 +594,25 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		return record(protocol.DeliveryNotDelivered, "paste refused: "+err.Error())
 	}
 	return record(protocol.DeliveryUnknown, "paste may have reached the pane: "+err.Error())
+}
+
+// worktreeReplaced says why the entry's root is no longer the worktree
+// the add made, or "" when it still is: the same repository, and the
+// branch when git still has one there. A root taken by another
+// worktree since is not a target, and its agent is not adopted.
+func (d *Daemon) worktreeReplaced(ctx context.Context, e entry) string {
+	rec, _, found, err := d.cfg.Store.Find(ctx, e.Root)
+	switch {
+	case err != nil:
+		return "worktree " + e.Root + " could not be checked: " + err.Error()
+	case !found:
+		return "worktree replaced: " + e.Root + " is gone"
+	case rec.Source != e.Source:
+		return "worktree replaced: " + e.Root + " is now a worktree of " + rec.Repo
+	case rec.Branch != "" && rec.Branch != e.Branch:
+		return "worktree replaced: " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
+	}
+	return ""
 }
 
 // adopt finds the target for an entry without one: the managed session
@@ -718,31 +754,6 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		}
 		if next := len(e.Attempts) + 1; m.Attempt != next {
 			return fmt.Errorf("attempt %d is not the next; the journal has %d", m.Attempt, len(e.Attempts))
-		}
-		// The root must still be the worktree the add made: the same
-		// repository, and the branch when git still has one there. A
-		// root reused by another worktree since is not a target, and
-		// its agent is not adopted.
-		rec, _, found, err := d.cfg.Store.Find(ctx, e.Root)
-		if err != nil {
-			return err
-		}
-		refuse := ""
-		switch {
-		case !found:
-			refuse = "worktree " + e.Root + " is gone"
-		case rec.Source != e.Source:
-			refuse = "worktree " + e.Root + " is now a worktree of " + rec.Repo
-		case rec.Branch != "" && rec.Branch != e.Branch:
-			refuse = "worktree " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
-		}
-		if refuse != "" {
-			res.Prompt, res.Error = protocol.DeliveryNotDelivered, "worktree replaced: "+refuse
-			_, err := j.update(m.ID, func(e *entry) {
-				e.Attempts = append(e.Attempts, attempt{N: m.Attempt, State: res.Prompt, Error: res.Error, At: time.Now()})
-				e.Delivery, e.DeliveryError = res.Prompt, res.Error
-			})
-			return err
 		}
 		res.Prompt, res.Error = d.deliver(ctx, m.ID, m.Attempt, m.Prompt)
 		return nil

@@ -746,3 +746,73 @@ func TestPromptRefusesReplacedWorktree(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// A delivery that waited for the root's lock reads the entry again
+// when it gets it: a tombstone written meanwhile, or a replacement at
+// the root, is refused, and nothing is adopted or pasted.
+func TestDeliveryRereadsAfterLock(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	first, _ := result(t, pc, "c1")
+	if !first.OK {
+		t.Fatal(first.Error)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "task", AgentName: "claude", Prompt: "p"})
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Error != "session existed" {
+		t.Fatalf("c2 %+v", res)
+	}
+	// The lock is held while the attempt arrives, and the entry is
+	// tombstoned meanwhile, as rm would under the same lock.
+	unlock := d.lockDeliveries(first.Root)
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c2", Attempt: 1, Prompt: "p"})
+	time.Sleep(200 * time.Millisecond)
+	if _, err := d.journal.markRemoved(first.Root, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if res, _ := result(t, pc, "c2"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || res.Error != "worktree removed" || len(ft.pastes) != 0 {
+		t.Fatalf("attempt after tombstone: %+v pastes %+v", res, ft.pastes)
+	}
+	if e := readEntry(t, d, "c2"); e.PaneID != "" || len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryNotDelivered {
+		t.Fatalf("entry %+v", e)
+	}
+}
+
+// A tombstone that cannot be written fails rm, after git has removed
+// the worktree, so the caller knows the journal still says otherwise.
+func TestRmReportsTombstoneFailure(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, nil, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, _ := result(t, pc, "c1")
+	if !res.OK {
+		t.Fatal(res.Error)
+	}
+	if err := os.Chmod(d.journal.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(d.journal.dir, 0o700) })
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: res.Root, Force: true})
+	if rres, _ := result(t, pc, "r1"); rres.OK || !strings.Contains(rres.Error, "journal") {
+		t.Fatalf("rm %+v", rres)
+	}
+	if _, err := os.Stat(res.Root); err == nil {
+		t.Fatal("worktree kept")
+	}
+}
+
+// The server instance comes from new-session itself, not from a
+// listing after it.
+func TestLaunchRecordsServerFromNewSession(t *testing.T) {
+	d, ft, _, remote := taskDaemon(t, nil, nil)
+	ft.set(func() { ft.server = 77 })
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	if res, _ := result(t, pc, "c1"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if e := readEntry(t, d, "c1"); e.ServerPID != 77 {
+		t.Fatalf("entry %+v", e)
+	}
+}

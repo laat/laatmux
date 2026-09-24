@@ -204,6 +204,15 @@ func (d *Daemon) lookup(id string) (*command, bool) {
 	return c, ok
 }
 
+// lockDeliveries takes the root's delivery lock, which deliveries to
+// the root hold across their readiness check and paste, and an add
+// across the publication of its result; the returned func releases it.
+func (d *Daemon) lockDeliveries(root string) func() {
+	l := d.repoLock("deliver/" + root)
+	l.Lock()
+	return l.Unlock
+}
+
 // forgetDone drops the command under id when it has finished.
 func (d *Daemon) forgetDone(id string) {
 	d.mu.Lock()
@@ -344,14 +353,27 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		// which means the finished commands the memory still holds for
 		// them go, so the journal answers.
 		if d.journal != nil {
-			for _, id := range d.journal.markRemoved(root, time.Now()) {
+			ids, err := d.journal.markRemoved(root, time.Now())
+			for _, id := range ids {
 				d.forgetDone(id)
+			}
+			if err != nil {
+				return err
 			}
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait
 		// makes the ok mean nothing of laatmux's is left there.
 		d.cancelRunsIn(root)
+		// The sessions go, the journal's entries at the root are marked
+		// removed and the finished commands the memory holds for them
+		// dropped, all under the root's delivery lock: a delivery that
+		// was waiting for the pane finds the tombstone when it gets the
+		// lock rather than a replacement session, and an add publishing
+		// its result does so before or after the tombstone, never
+		// between the mark and the drop.
+		unlockDeliveries := d.lockDeliveries(root)
+		defer unlockDeliveries()
 		panes, err := d.managed.Tmux.ListPanes(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {

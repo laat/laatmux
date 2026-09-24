@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -269,8 +270,10 @@ func (j *journal) reserved(source, id string) []string {
 }
 
 // markRemoved makes every entry at root terminal as removed, and
-// returns their ids.
-func (j *journal) markRemoved(root string, now time.Time) []string {
+// returns their ids. A tombstone that cannot be written is an error
+// for rm: without it a follow would answer the old outcome and an
+// interrupted add could resume and remake the worktree.
+func (j *journal) markRemoved(root string, now time.Time) ([]string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	var ids []string
@@ -282,14 +285,13 @@ func (j *journal) markRemoved(root string, now time.Time) []string {
 		cp.Removed = true
 		cp.TerminalAt = now
 		if err := j.writeLocked(&cp); err != nil {
-			j.logger.Printf("journal: %s: %v", e.ID, err)
-			continue
+			return ids, fmt.Errorf("journal: %s: %w", e.ID, err)
 		}
 		*e = cp
 		ids = append(ids, e.ID)
 	}
 	sort.Strings(ids)
-	return ids
+	return ids, nil
 }
 
 // sweep deletes the entries that have been terminal for the retention.

@@ -311,17 +311,18 @@ type NewSessionOpts struct {
 // pane, in one tmux invocation: new-session and the set-option calls are
 // one ;-separated command sequence, which tmux runs to completion once
 // submitted, so the session is never observable without its options.
-// Returns the pane id. If the server is not running it is started
-// first, empty, and configured, then the session is made.
-func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string, err error) {
+// Returns the pane id and the server's pid, the instance the pane is
+// on. If the server is not running it is started first, empty, and
+// configured, then the session is made.
+func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session, err error) {
 	if o.Name == "" {
-		return "", fmt.Errorf("tmux: session name required")
+		return made, fmt.Errorf("tmux: session name required")
 	}
 	if o.Cwd == "" {
-		return "", fmt.Errorf("tmux: cwd required")
+		return made, fmt.Errorf("tmux: cwd required")
 	}
 	if _, err := os.Stat(o.Cwd); err != nil {
-		return "", fmt.Errorf("tmux: cwd: %w", err)
+		return made, fmt.Errorf("tmux: cwd: %w", err)
 	}
 	_, notRunning := s.Run(ctx, "list-sessions")
 	if notRunning != nil && s.Managed() {
@@ -333,7 +334,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 		// agent's command, a prompt included, on the process list for
 		// the server's lifetime rather than the agent's.
 		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
-			return "", err
+			return made, err
 		}
 	}
 	if s.Managed() {
@@ -341,10 +342,10 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 		// cannot act on it; a cold-started server has the built-in
 		// defaults to undo.
 		if err := s.EnsureConfigured(ctx); err != nil {
-			return "", err
+			return made, err
 		}
 	}
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id}"}
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -367,9 +368,14 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 	// it act on a session that is there.
 	out, err := s.Run(ctx, args...)
 	if err != nil {
-		return "", &SubmittedError{Err: err}
+		return made, &SubmittedError{Err: err}
 	}
-	paneID = strings.TrimSpace(string(out))
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return made, &SubmittedError{Err: fmt.Errorf("tmux: new-session printed %q, expected a pane id and a server pid", strings.TrimSpace(string(out)))}
+	}
+	made.PaneID = fields[0]
+	made.ServerPID, _ = strconv.Atoi(fields[1])
 	if s.Managed() {
 		// The invariant is one session, one window, one pane. Anything
 		// else means something outside laatmux acted on the session;
@@ -377,11 +383,18 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 		if pout, err := s.Run(ctx, "list-panes", "-s", "-t", "="+o.Name, "-F", "#{pane_id}"); err == nil {
 			if n := len(strings.Fields(string(pout))); n != 1 {
 				_, _ = s.Run(ctx, "kill-session", "-t", "="+o.Name)
-				return "", &SubmittedError{Err: fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)}
+				return Session{}, &SubmittedError{Err: fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)}
 			}
 		}
 	}
-	return paneID, nil
+	return made, nil
+}
+
+// Session is what NewSession made: the pane and the server instance,
+// by its pid, the pane is on.
+type Session struct {
+	PaneID    string
+	ServerPID int
 }
 
 // SubmittedError is a NewSession failure after new-session was
