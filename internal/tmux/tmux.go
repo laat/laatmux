@@ -245,6 +245,9 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		{"set-option", "-g", "focus-events", "on"},
 		{"set-option", "-g", "default-terminal", "tmux-256color"},
 		{"set-option", "-g", "remain-on-exit", "off"},
+		// The server stays when its last session ends, so a cold start
+		// can make it empty and configure it before any session.
+		{"set-option", "-s", "exit-empty", "off"},
 		// The most recent client sizes the window, so a second attachment
 		// from a smaller terminal does not shrink the first.
 		{"set-option", "-g", "window-size", "latest"},
@@ -301,8 +304,8 @@ type NewSessionOpts struct {
 // pane, in one tmux invocation: new-session and the set-option calls are
 // one ;-separated command sequence, which tmux runs to completion once
 // submitted, so the session is never observable without its options.
-// Returns the pane id. If the server is not running it is started by
-// new-session itself and then configured.
+// Returns the pane id. If the server is not running it is started
+// first, empty, and configured, then the session is made.
 func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string, err error) {
 	if o.Name == "" {
 		return "", fmt.Errorf("tmux: session name required")
@@ -314,18 +317,27 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 		return "", fmt.Errorf("tmux: cwd: %w", err)
 	}
 	_, notRunning := s.Run(ctx, "list-sessions")
-	args := []string{}
 	if notRunning != nil && s.Managed() {
-		// Cold start: new-session starts the server. Skip config files.
-		args = append(args, "-f", "/dev/null")
-	} else if s.Managed() {
-		// Adopting a running server: reconcile before creating the session,
-		// so inherited hooks cannot act on it.
+		// Cold start: the server is started on its own, with no config
+		// file and told to stay without sessions, and the session is
+		// made in a second invocation. The process that starts a tmux
+		// server is the server, and keeps its command line for as long
+		// as it runs; a new-session that started it would leave the
+		// agent's command, a prompt included, on the process list for
+		// the server's lifetime rather than the agent's.
+		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+			return "", err
+		}
+	}
+	if s.Managed() {
+		// Reconcile before creating the session, so inherited hooks
+		// cannot act on it; a cold-started server has the built-in
+		// defaults to undo.
 		if err := s.EnsureConfigured(ctx); err != nil {
 			return "", err
 		}
 	}
-	args = append(args, "new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id}")
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -352,11 +364,6 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (paneID string
 	}
 	paneID = strings.TrimSpace(string(out))
 	if s.Managed() {
-		if notRunning != nil {
-			if err := s.EnsureConfigured(ctx); err != nil {
-				return paneID, &SubmittedError{Err: err}
-			}
-		}
 		// The invariant is one session, one window, one pane. Anything
 		// else means something outside laatmux acted on the session;
 		// refuse it rather than report a topology that jump cannot use.
