@@ -307,6 +307,15 @@ func TestAddLaunchInterrupted(t *testing.T) {
 	if !hasProgress(progress, protocol.StageAgent, protocol.StateSkip, "daemon restarted") {
 		t.Fatalf("progress %+v", progress)
 	}
+	// Without a prompt the launch is not repeated either: the agent may
+	// have run and exited.
+	if err := d.journal.create(entry{ID: "i0", Source: remote, Repo: "proj", Branch: "zero", Allocated: true, Root: store.Dirs.Worktree("proj", "zero"), Stage: protocol.StageAgent, Launch: launchLaunching, Session: "proj/zero", FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i0", Repo: remote, Branch: "zero", AgentName: "claude"})
+	if res, _ := result(t, pc, "i0"); !res.OK || res.Prompt != protocol.DeliveryNone || res.Session != "" || !strings.Contains(res.Error, "restarted during the launch") || len(ft.cmds) != 0 {
+		t.Fatalf("i0: %+v cmds %q", res, ft.cmds)
+	}
 	// A resend without the prompt of an add that had one is refused.
 	if err := d.journal.create(entry{ID: "i2", Source: remote, Repo: "proj", Branch: "two", Allocated: true, HasPrompt: true, Stage: protocol.StageFetch, FirstSeen: time.Now()}); err != nil {
 		t.Fatal(err)

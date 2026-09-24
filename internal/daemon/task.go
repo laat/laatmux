@@ -367,8 +367,17 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 			return r.e.Delivery, r.e.DeliveryError, nil
 		}
 		return r.typed(ctx)
-	case r.created && r.e.Launch == launchLaunching && r.e.HasPrompt:
+	case r.created && r.e.Launch == launchLaunching:
+		// new-session may have been submitted: an agent may be there,
+		// or may have run and exited. No second launch, with or without
+		// a prompt; without one the delivery is none and the reason
+		// says why no session is reported.
 		reason = "daemon restarted during the launch of session " + r.e.Session
+		if !r.e.HasPrompt {
+			r.report(stage, protocol.StateSkip, reason+"; not launched again")
+			r.set(func(e *entry) { e.Delivery = protocol.DeliveryNone })
+			return protocol.DeliveryNone, reason, nil
+		}
 		r.report(stage, protocol.StateSkip, reason+"; whether the agent has the prompt is unknown")
 		r.set(func(e *entry) { e.Delivery, e.DeliveryError = protocol.DeliveryUnknown, reason })
 		return protocol.DeliveryUnknown, reason, nil
