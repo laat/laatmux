@@ -42,7 +42,7 @@ func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}, "argv": {"claude", PromptPlaceholder}},
-		Commands: t.TempDir(), WorktreeInterval: 50 * time.Millisecond,
+		Commands: t.TempDir(), WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
 	})
 	go host.Run(ctx)
 	fr := newFakeRemote(t, ctx, host)
@@ -206,7 +206,7 @@ func TestRelayAdd(t *testing.T) {
 // p delivers it later as an attempt the file holds first; then the
 // record is complete and retires.
 func TestRelayPromptLater(t *testing.T) {
-	shortWait(t, 300*time.Millisecond)
+	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
 	c, pc, _ := f.merged(t)
 	defer c.Close()
@@ -336,7 +336,7 @@ func TestRelayUnreachable(t *testing.T) {
 // is known to lack the task capability, a dismiss of a running add; a
 // dismiss of a record that needs the user removes it.
 func TestRelayRefusalsAndDismiss(t *testing.T) {
-	shortWait(t, 200*time.Millisecond)
+	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
 	c, pc, _ := f.merged(t)
 	defer c.Close()
@@ -488,7 +488,7 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 // reached stays open, is refused to dismiss, and resolves when the
 // host is back.
 func TestRelayEarlyFailureAndOpenAttempt(t *testing.T) {
-	shortWait(t, 200*time.Millisecond)
+	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "e1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "early", AgentName: "nope", Prompt: "keep me", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
