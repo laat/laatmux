@@ -389,4 +389,7 @@ func TestAddKeepsHostOutcomeOnError(t *testing.T) {
 	if !errors.As(err, &se) || se.Stage != protocol.StageAgent {
 		t.Fatalf("error %v", err)
 	}
+	if out.Complete() || (Added{Done: true}).Complete() != true || (Added{Done: true, Prompt: protocol.DeliveryUnknown}).Complete() {
+		t.Fatal("Complete")
+	}
 }

@@ -202,6 +202,10 @@ func (r *addRun) run(ctx context.Context) error {
 	if !ok {
 		return stageErr(stage, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo))
 	}
+	if known && repo.Source != r.e.Source {
+		// A resend is the recorded add, never another repository's.
+		return stageErr(stage, fmt.Errorf("the add %s was submitted for %s, not %s", m.ID, r.e.Source, repo.Source))
+	}
 	r.repo = repo
 	r.cmd = m.Cmd
 	if len(r.cmd) == 0 {
@@ -429,6 +433,11 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 			reason = "new-session failed after the session may have been made: " + err.Error()
 			r.set(func(e *entry) { e.Delivery, e.DeliveryError = protocol.DeliveryUnknown, reason })
 			return protocol.DeliveryUnknown, reason, err
+		}
+		if submitted {
+			// The session may exist; nothing was pasted into it, so the
+			// prompt provably did not transfer.
+			return r.failed(prompt, "launch failed after new-session was submitted, a session may exist", err)
 		}
 		return r.failed(prompt, "launch failed", err)
 	}
@@ -875,6 +884,8 @@ func (d *Daemon) answerFollow(m protocol.Message) *protocol.Message {
 		switch {
 		case !ok:
 			res.Error = protocol.ErrRecoveryExpired
+		case e.Removed:
+			res.Error = protocol.ErrRemoved
 		case m.Attempt > len(e.Attempts):
 			res.Error = protocol.ErrUnknownAttempt
 		default:

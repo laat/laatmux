@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -105,6 +106,22 @@ type entry struct {
 
 func (e *entry) terminal() bool { return e.Result != nil || e.Removed }
 
+// clone is a copy that shares nothing with e, so a change applied to
+// it reaches the live entry only once the file holds it.
+func (e *entry) clone() entry {
+	cp := *e
+	cp.Attempts = slices.Clone(e.Attempts)
+	if e.Identity != nil {
+		id := *e.Identity
+		cp.Identity = &id
+	}
+	if e.Result != nil {
+		res := *e.Result
+		cp.Result = &res
+	}
+	return cp
+}
+
 // lastAttempt is the most recent attempt, or nil.
 func (e *entry) lastAttempt() *attempt {
 	if len(e.Attempts) == 0 {
@@ -196,7 +213,7 @@ func (j *journal) get(id string) (entry, bool) {
 	if !ok {
 		return entry{}, false
 	}
-	return *e, true
+	return e.clone(), true
 }
 
 // create writes a new entry, refusing an id the journal has.
@@ -225,13 +242,13 @@ func (j *journal) update(id string, change func(*entry)) (entry, error) {
 	if !ok {
 		return entry{}, errors.New("journal: no entry " + id)
 	}
-	cp := *e
+	cp := e.clone()
 	change(&cp)
 	if err := j.writeLocked(&cp); err != nil {
 		return entry{}, err
 	}
 	*e = cp
-	return cp, nil
+	return cp.clone(), nil
 }
 
 // writeLocked writes e's file through a temporary renamed into place.
@@ -281,7 +298,7 @@ func (j *journal) markRemoved(root string, now time.Time) ([]string, error) {
 		if e.Root != root || e.Removed {
 			continue
 		}
-		cp := *e
+		cp := e.clone()
 		cp.Removed = true
 		cp.TerminalAt = now
 		if err := j.writeLocked(&cp); err != nil {

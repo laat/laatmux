@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -361,6 +363,59 @@ func TestRmMarksRemoved(t *testing.T) {
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "x"})
 	if f, _ := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved {
 		t.Fatalf("prompt %+v", f)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1", Attempt: 1})
+	if f, _ := result(t, pc, "c1"); f.OK || f.Error != protocol.ErrRemoved {
+		t.Fatalf("follow with attempt %+v", f)
+	}
+}
+
+// A resend is the recorded add: one naming another repository under
+// the same id is refused before anything runs.
+func TestResendKeepsRepository(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, nil, nil)
+	if err := d.journal.create(entry{ID: "x1", Source: "git@x:o/elsewhere.git", Repo: "elsewhere", Branch: "b", Allocated: true, Stage: protocol.StageFetch, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "x1", Repo: remote, Branch: "b", AgentName: "claude"})
+	if res, ps := result(t, pc, "x1"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "was submitted for") || len(ps) != 0 {
+		t.Fatalf("%+v %d", res, len(ps))
+	}
+}
+
+// A change the journal could not write reaches no reader: the live
+// entry shares nothing with the copy the change was applied to.
+func TestJournalUpdateIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	j, err := openJournal(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := protocol.Identity{PID: 1}
+	if err := j.create(entry{ID: "a", Attempts: []attempt{{N: 1, State: attemptAttempting}}, Identity: &id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	_, err = j.update("a", func(e *entry) {
+		e.Attempts[0].State = protocol.DeliveryDelivered
+		e.Identity.PID = 2
+		e.Attempts = append(e.Attempts, attempt{N: 2})
+	})
+	if err == nil {
+		t.Fatal("update wrote into a read-only directory")
+	}
+	got, _ := j.get("a")
+	if got.Attempts[0].State != attemptAttempting || got.Identity.PID != 1 || len(got.Attempts) != 1 {
+		t.Fatalf("live entry changed: %+v", got)
+	}
+	// A copy handed out is not the live entry either.
+	got.Attempts[0].State = "x"
+	if again, _ := j.get("a"); again.Attempts[0].State != attemptAttempting {
+		t.Fatal("a copy from get reached the journal")
 	}
 }
 

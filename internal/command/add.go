@@ -57,7 +57,7 @@ type Added struct {
 // Complete reports whether nothing about the add needs the user: it
 // succeeded and its prompt is delivered, or there was none.
 func (a Added) Complete() bool {
-	return a.Prompt == protocol.DeliveryDelivered || a.Prompt == protocol.DeliveryNone || a.Prompt == ""
+	return a.Done && (a.Prompt == protocol.DeliveryDelivered || a.Prompt == protocol.DeliveryNone || a.Prompt == "")
 }
 
 // Run sends the add to the host, following its progress through r,
