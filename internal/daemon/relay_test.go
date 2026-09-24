@@ -546,11 +546,12 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
-	// As a record left sent and unfinished; the host that answers now
-	// is one without task, the same environment, as a daemon restarted
-	// without its journal directory would be.
+	// As a record left unfinished after an interrupted answer, to be
+	// sent again: taken by the host once, not sent now. The host that
+	// answers is one without task, the same environment, as a daemon
+	// restarted without its journal directory would be.
 	p := readPending(t, f.dir, "c1")
-	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent = false, false, false, "", time.Time{}, true
+	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent, p.Taken = false, false, false, "", time.Time{}, false, true
 	b, _ := json.Marshal(p)
 	os.WriteFile(filepath.Join(f.dir, fileName("c1")), b, 0o600)
 	bare := New(Config{EnvironmentID: "henv", Host: "vm", Version: "bare", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store})
@@ -580,5 +581,34 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	mu.Unlock()
 	if got := f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !got.OK || got.Prompt != protocol.DeliveryDelivered {
 		t.Fatalf("after the host is back: %+v", got)
+	}
+}
+
+// An attempt the host could not record keeps its number on the relay:
+// the request answers that it is open, and once the host can record
+// again the same number is delivered.
+func TestRelayAttemptNotRecorded(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "n1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "nr", AgentName: "claude", Prompt: "later", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "n1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	if err := os.Chmod(f.host.journal.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(f.host.journal.dir, 0o700) })
+	res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "n1"})
+	if res.OK || !strings.Contains(res.Error, "attempt 1 is open") || !strings.Contains(res.Error, protocol.ErrAttemptNotRecorded) {
+		t.Fatalf("p on an unrecordable attempt %+v", res)
+	}
+	f.ft.set(func() { f.ft.screen = idleScreen })
+	os.Chmod(f.host.journal.dir, 0o700)
+	p := f.awaitRecord(t, "n1", 30*time.Second, func(p pendingFile) bool { return !p.AttemptOpen })
+	if p.Attempt != 1 || p.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("resolved %+v", p)
+	}
+	if e := readEntry(t, f.host, "n1"); len(e.Attempts) != 1 || e.Attempts[0].N != 1 {
+		t.Fatalf("host entry %+v", e.Attempts)
 	}
 }

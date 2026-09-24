@@ -502,7 +502,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			// handshake says nothing about the add's outcome, and the
 			// host is waited on as an unreachable one is.
 			var ref *refusal
-			if errors.As(err, &ref) && !p.Sent {
+			if errors.As(err, &ref) && !p.Sent && !p.Taken {
 				d.persist(ctx, id, func(p *pendingFile) {
 					p.Done, p.OK, p.Error, p.Reachable = true, false, ref.msg, true
 				})
@@ -567,9 +567,17 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		}
 		if !res.OK && (res.Error == protocol.ErrUnknownCommand || res.Error == protocol.ErrInterrupted) {
 			// The host never took it, or died in it: sent again, and
-			// the numbering starts over.
+			// the numbering starts over. Taken stays what it was, and
+			// is set by interrupted: the host has known the add, so no
+			// later refusal can take it for one that never arrived.
 			after = 0
-			d.setPending(id, true, func(p *pendingFile) { p.Sent = false })
+			taken := res.Error == protocol.ErrInterrupted
+			d.setPending(id, true, func(p *pendingFile) {
+				p.Sent = false
+				if taken {
+					p.Taken = true
+				}
+			})
 			continue
 		}
 		// The outcome must reach the disk: a record without it would be
@@ -1011,6 +1019,20 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 		}
 		if !res.OK && res.Error == protocol.ErrUnknownAttempt {
 			sent = false
+			continue
+		}
+		if !res.OK && strings.HasPrefix(res.Error, protocol.ErrAttemptNotRecorded) {
+			// The host did nothing and the number is not taken: the
+			// attempt stays open and is sent again as it is.
+			sent = false
+			d.setPending(id, false, func(p *pendingFile) { p.Unreachable = res.Error })
+			if !wait {
+				p, _ = d.relay.get(id)
+				return p, false
+			}
+			if !d.relayBackoff(ctx, &backoff) {
+				return p, false
+			}
 			continue
 		}
 		p, _ = d.persist(ctx, id, func(p *pendingFile) {

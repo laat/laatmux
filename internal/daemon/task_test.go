@@ -866,6 +866,36 @@ func TestRmReportsTombstoneFailure(t *testing.T) {
 	}
 }
 
+// An attempt the journal cannot write is not taken: the answer says so
+// and the journal has no attempt, so the same number is sent again.
+func TestPromptAttemptNotRecorded(t *testing.T) {
+	d, _, _, remote := taskDaemon(t, idleScreen, nil)
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	if res, _ := result(t, pc, "c1"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	d.journal.update("c1", func(e *entry) {
+		e.HasPrompt, e.Delivery, e.DeliveryError = true, protocol.DeliveryNotDelivered, "session existed"
+	})
+	if err := os.Chmod(d.journal.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(d.journal.dir, 0o700) })
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); res.OK || !strings.HasPrefix(res.Error, protocol.ErrAttemptNotRecorded) {
+		t.Fatalf("%+v", res)
+	}
+	if e, _ := d.journal.get("c1"); len(e.Attempts) != 0 {
+		t.Fatalf("attempt recorded: %+v", e.Attempts)
+	}
+	os.Chmod(d.journal.dir, 0o700)
+	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "p"})
+	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("retry %+v", res)
+	}
+}
+
 // The server instance comes from new-session itself, not from a
 // listing after it.
 func TestLaunchRecordsServerFromNewSession(t *testing.T) {

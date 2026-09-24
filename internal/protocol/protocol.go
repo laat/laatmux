@@ -148,6 +148,10 @@ const (
 	// no longer holds: the prompt cannot be delivered by the daemon any
 	// more and is the user's to paste by hand.
 	ErrRecoveryExpired = "recovery expired"
+	// ErrAttemptNotRecorded prefixes the answer to a prompt message
+	// whose attempt the journal could not write: nothing was done, the
+	// number is not taken, and the sender retries it as it is.
+	ErrAttemptNotRecorded = "attempt not recorded"
 )
 
 // Delivery states of a prompt, in the Prompt field of an add's result
