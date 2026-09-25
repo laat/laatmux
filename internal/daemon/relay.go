@@ -1030,7 +1030,7 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		p, ok := d.relay.recs[id]
 		if !ok || p.Sent || p.Taken {
 			d.relay.mu.Unlock()
-			return d.dismissSettled(id)
+			return d.dismissEnded(id)
 		}
 		if err := d.relay.removeLocked(id); err != nil {
 			d.relay.mu.Unlock()
@@ -1207,6 +1207,12 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 	}
 	p, resolved := d.runAttemptLocked(ctx, id, false, false)
 	res.Attempt = p.Attempt
+	if _, ok := d.relay.get(id); !ok {
+		// Dismissed while the attempt ran: the record is gone as the
+		// user asked, and nothing follows it.
+		res.Error = "no pending record " + id
+		return res
+	}
 	if !resolved {
 		// The host cannot be reached now: the attempt stays open on
 		// disk and is followed in the background, and the answer says
