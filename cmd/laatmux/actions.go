@@ -305,7 +305,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	chips[0].Title = "repository"
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
-		if r.Name == preRepo || r.Source == preRepo {
+		if r.Name == preRepo || config.SameSource(r.Source, preRepo) {
 			chips[0].Selected = i
 		}
 	}
@@ -395,7 +395,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 // with its log, and the new workspace session is jumped to.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 	add := command.Add{
-		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Agent: f.agents[o.Chips[2].Selected],
+		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
 		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
 	}
 	if d.relay {

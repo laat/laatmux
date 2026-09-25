@@ -238,7 +238,7 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 // when the record has one, else by label.
 func sameRepo(w protocol.Worktree, repo config.Repo) bool {
 	if w.Source != "" {
-		return w.Source == repo.Source
+		return config.SameSource(w.Source, repo.Source)
 	}
 	return w.Repo == repo.Name
 }

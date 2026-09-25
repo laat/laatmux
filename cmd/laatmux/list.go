@@ -41,6 +41,19 @@ type merged struct {
 	// while it reconnects; the last state stays on screen.
 	daemonErr string
 	change    chan struct{}
+	// labels is this machine's name for a repository by its source, for
+	// the rows: a host labels a checkout its config does not list by
+	// its directory. nil keeps the host's labels.
+	labels func(source string) (string, bool)
+}
+
+// repoLabels is the config's names for its repositories, by source in
+// any form config.SameSource takes as one.
+func repoLabels(cfg config.Config) func(string) (string, bool) {
+	return func(source string) (string, bool) {
+		r, ok := cfg.RepoBySource(source)
+		return r.Name, ok
+	}
 }
 
 type hostState struct {
@@ -223,6 +236,11 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 		in.Agents = append(in.Agents, a)
 	}
 	for _, w := range m.worktrees {
+		if m.labels != nil && w.Source != "" {
+			if name, ok := m.labels(w.Source); ok {
+				w.Repo = name
+			}
+		}
 		in.Worktrees = append(in.Worktrees, w)
 	}
 	for _, p := range m.pendings {
@@ -349,6 +367,7 @@ func cmdLs(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
+	m.labels = repoLabels(cfg)
 	// The local daemon merges the hosts' streams when it can; a daemon
 	// without the capability is an older build still running, and each
 	// host is dialled from here as before.
@@ -403,6 +422,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
+	m.labels = repoLabels(cfg)
 	direct := true
 	if c, ok := dialMerged(ctx); ok {
 		direct = false

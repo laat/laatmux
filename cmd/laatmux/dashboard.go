@@ -61,6 +61,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		current = cur.Name
 	}
 	st := newMerged()
+	st.labels = repoLabels(cfg)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.followMerged(ctx, c)

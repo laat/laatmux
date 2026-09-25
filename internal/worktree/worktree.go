@@ -29,14 +29,17 @@ import (
 )
 
 // Repo is a known repository: its source, the identity, and its label,
-// which places new clones and worktrees; Copy and Setup are this host's
-// own steps for its worktrees, from the host's config, run after the
-// committed ones.
+// which places new clones and worktrees; Copy and Setup are the personal
+// steps for its worktrees, run after the committed ones. They come from
+// this host's config, or, with Sent, from the add's repository entry,
+// whose Copy already holds the sender's top-level rules, so this host's
+// own are not added.
 type Repo struct {
 	Source string
 	Name   string
 	Copy   []string
 	Setup  []string
+	Sent   bool
 }
 
 // Store is one host's checkouts and worktrees. Copy is the host's own
@@ -66,9 +69,10 @@ func New(dirs config.Dirs, repos []config.Repo) *Store {
 	return s
 }
 
-// Repo finds a known repository by name, else by source: the same order as
-// config.Config.Repo, since a bare local source can equal another entry's
-// label.
+// Repo finds a repository this host's config lists by name, else by
+// source, in any form config.SameSource takes as one: the same order as
+// config.Config.Repo, since a bare local source can equal another
+// entry's label.
 func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 	for _, r := range s.Repos {
 		if r.Name == nameOrSource {
@@ -80,26 +84,79 @@ func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 			return r, true
 		}
 	}
+	for _, r := range s.Repos {
+		if config.SameSource(r.Source, nameOrSource) {
+			return r, true
+		}
+	}
 	return Repo{}, false
 }
 
+// Known finds a repository this host has: one its config lists, as Repo
+// finds it, else a checkout under the repos directory whose origin is
+// the source, or whose directory has the name, labelled as List labels
+// it. rm and run name a repository by what a listing said, which covers
+// checkouts the config does not list.
+func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, error) {
+	if r, ok := s.Repo(nameOrSource); ok {
+		return r, true, nil
+	}
+	cos, err := s.scan(ctx)
+	if err != nil {
+		return Repo{}, false, err
+	}
+	for _, co := range cos {
+		if config.SameSource(co.origin, nameOrSource) {
+			return s.label(co), true, nil
+		}
+	}
+	for _, co := range cos {
+		if filepath.Base(co.dir) == nameOrSource {
+			return s.label(co), true, nil
+		}
+	}
+	return Repo{}, false, nil
+}
+
 // Checkout finds the main checkout of repo under the repos directory: the
-// direct child whose remote.origin.url is the source. Reads of origin are
-// cached by the mtime and size of .git/config, so an idle poll spawns no
-// git processes. Not found is ("", false, nil).
+// direct child whose remote.origin.url is the source, in any form
+// config.SameSource takes as one, so each host fetches over the
+// transport its checkout was cloned with. Reads of origin are cached by
+// the mtime and size of .git/config, so an idle poll spawns no git
+// processes. Not found is ("", false, nil).
 func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
 	checkouts, err := s.Checkouts(ctx)
 	if err != nil {
 		return "", false, err
 	}
-	dir, ok := checkouts[repo.Source]
+	dir, ok := checkouts[config.SourceKey(repo.Source)]
 	return dir, ok, nil
 }
 
-// Checkouts scans the repos directory once and maps each origin found to
-// its checkout, the first in directory order when two share an origin.
-// One scan serves every repository in a poll.
+// Checkouts scans the repos directory once and maps each origin found,
+// by config.SourceKey, to its checkout, the first in directory order
+// when two share an origin. One scan serves every repository in a poll.
 func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
+	cos, err := s.scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, co := range cos {
+		key := config.SourceKey(co.origin)
+		if _, dup := out[key]; !dup {
+			out[key] = co.dir
+		}
+	}
+	return out, nil
+}
+
+// checkout is a main checkout under the repos directory and its origin.
+type checkout struct{ dir, origin string }
+
+// scan is every main checkout with an origin directly under the repos
+// directory, in directory order.
+func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 	entries, err := os.ReadDir(s.Dirs.Repos)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -107,7 +164,7 @@ func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 		}
 		return nil, err
 	}
-	out := map[string]string{}
+	var out []checkout
 	for _, e := range entries {
 		dir := filepath.Join(s.Dirs.Repos, e.Name())
 		url, ok, err := s.origin(ctx, dir)
@@ -115,12 +172,32 @@ func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 			return nil, err
 		}
 		if ok {
-			if _, dup := out[url]; !dup {
-				out[url] = dir
-			}
+			out = append(out, checkout{dir, url})
 		}
 	}
 	return out, nil
+}
+
+// label is the repository a checkout holds: the config's entry for its
+// origin, else the origin under the checkout's directory name.
+func (s *Store) label(co checkout) Repo {
+	if r, ok := s.Repo(co.origin); ok && config.SameSource(r.Source, co.origin) {
+		return r
+	}
+	return Repo{Source: co.origin, Name: filepath.Base(co.dir)}
+}
+
+// linked reports whether a main checkout may have worktrees besides
+// itself: git keeps each one's administrative directory under
+// .git/worktrees, prunable ones included, so a checkout without any is
+// not asked. That keeps a poll over a repos directory of many checkouts
+// from running git for each. A directory that cannot be read is asked.
+func linked(dir string) bool {
+	entries, err := os.ReadDir(filepath.Join(dir, ".git", "worktrees"))
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR)
+	}
+	return len(entries) > 0
 }
 
 // origin returns dir's remote.origin.url when dir is a main checkout (has
@@ -233,32 +310,34 @@ type Record struct {
 	Root   string
 }
 
-// List returns every worktree of every known repository that lives under
-// the worktrees directory. Prunable entries, whose directory is gone, are
-// left out, as is the main checkout, which is not a worktree even when
-// the repos directory sits under the worktrees one. A repository without
-// a checkout on this host has no worktrees. The repos directory is
+// List returns every worktree that lives under the worktrees directory
+// of every main checkout under the repos directory, whether or not the
+// config lists its repository: a checkout the config lists is labelled
+// with the config's name and source, any other with its directory name
+// and origin. Prunable entries, whose directory is gone, are left out,
+// as is the main checkout, which is not a worktree even when the repos
+// directory sits under the worktrees one. The repos directory is
 // scanned once; one checkout failing to list does not hide the others:
 // its error is returned alongside what was listed.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
-	checkouts, err := s.Checkouts(ctx)
+	cos, err := s.scan(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var records []Record
 	var errs []error
-	for _, r := range s.Repos {
-		checkout, ok := checkouts[r.Source]
-		if !ok {
+	for _, co := range cos {
+		if !linked(co.dir) {
 			continue
 		}
-		entries, err := ListWorktrees(ctx, checkout)
+		entries, err := ListWorktrees(ctx, co.dir)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", checkout, err))
+			errs = append(errs, fmt.Errorf("%s: %w", co.dir, err))
 			continue
 		}
+		r := s.label(co)
 		for _, e := range entries {
-			if e.Prunable || e.Bare || e.Root == checkout || !s.Owns(e.Root) {
+			if e.Prunable || e.Bare || e.Root == co.dir || !s.Owns(e.Root) {
 				continue
 			}
 			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
@@ -324,9 +403,9 @@ func resolveExisting(p string) (string, bool) {
 	}
 }
 
-// Find locates a registered worktree by root across every known
-// repository's checkout, under the worktrees directory only. Used by rm
-// on a root-only target; a worktree elsewhere is not the daemon's to
+// Find locates a registered worktree by root across every main checkout
+// under the repos directory, under the worktrees directory only. Used by
+// rm on a root-only target; a worktree elsewhere is not the daemon's to
 // remove.
 func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, error) {
 	if !s.Owns(root) {
@@ -334,22 +413,22 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 	}
 	// A checkout that cannot be read is not absence: rm must not take it
 	// as "already removed" and go on to kill the session.
-	checkouts, err := s.Checkouts(ctx)
+	cos, err := s.scan(ctx)
 	if err != nil {
 		return Record{}, "", false, err
 	}
-	for _, r := range s.Repos {
-		checkout, ok := checkouts[r.Source]
-		if !ok {
+	for _, co := range cos {
+		if !linked(co.dir) {
 			continue
 		}
-		entries, err := ListWorktrees(ctx, checkout)
+		entries, err := ListWorktrees(ctx, co.dir)
 		if err != nil {
 			return Record{}, "", false, err
 		}
 		for _, e := range entries {
-			if e.Root == root && e.Root != checkout {
-				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, checkout, true, nil
+			if e.Root == root && e.Root != co.dir {
+				r := s.label(co)
+				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
 			}
 		}
 	}

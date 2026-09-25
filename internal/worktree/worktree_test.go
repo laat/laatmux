@@ -1040,3 +1040,138 @@ func TestProposeAndAllocate(t *testing.T) {
 		t.Fatalf("place new %s %v", root, err)
 	}
 }
+
+// A checkout the config does not list is listed too, labelled by its
+// directory with its origin as the source, and found by rm's lookups:
+// by root, by its origin, and by that label.
+func TestUnlistedCheckoutListed(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(f.store.Dirs.Repos, "other")
+	run(t, f.store.Dirs.Repos, "git", "clone", "-q", f.remote, other)
+	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
+	root := f.store.Dirs.Worktree("other", "side")
+	run(t, other, "git", "worktree", "add", "-q", "-b", "side", root)
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Record{
+		a.Root: {Repo: "proj", Source: f.remote, Branch: "task", Root: a.Root},
+		root:   {Repo: "other", Source: "/elsewhere/other.git", Branch: "side", Root: root},
+	}
+	if len(recs) != 2 || recs[0] != want[recs[0].Root] || recs[1] != want[recs[1].Root] {
+		t.Fatalf("list %+v", recs)
+	}
+	rec, co, ok, err := f.store.Find(f.ctx, root)
+	if err != nil || !ok || co != other || rec != want[root] {
+		t.Fatalf("find: %+v %s %v %v", rec, co, ok, err)
+	}
+	for _, name := range []string{"/elsewhere/other.git", "other"} {
+		r, ok, err := f.store.Known(f.ctx, name)
+		if err != nil || !ok || r.Name != "other" || r.Source != "/elsewhere/other.git" {
+			t.Fatalf("known %s: %+v %v %v", name, r, ok, err)
+		}
+		if _, ok := f.store.Repo(name); ok {
+			t.Fatalf("%s taken for a listed repository", name)
+		}
+	}
+	if r, ok, err := f.store.Known(f.ctx, "/nowhere.git"); err != nil || ok {
+		t.Fatalf("known nowhere: %+v %v %v", r, ok, err)
+	}
+	// A listed repository keeps the config's label and source.
+	if r, ok, err := f.store.Known(f.ctx, "proj"); err != nil || !ok || r.Source != f.remote {
+		t.Fatalf("known proj: %+v %v %v", r, ok, err)
+	}
+}
+
+// The ssh and https forms of one hosted repository are one repository:
+// a checkout cloned over one is found for an add over the other, which
+// fetches with the checkout's own origin, and the store's lookups take
+// either form. git's insteadOf points both at the fixture's remote.
+func TestSourceFormsShareCheckout(t *testing.T) {
+	f := newFixture(t)
+	ssh, https := "git@example.com:laat/proj.git", "https://example.com/laat/proj"
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	write(t, global, fmt.Sprintf("[url %q]\n\tinsteadOf = %s\n\tinsteadOf = %s\n", f.remote, ssh, https))
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	store := New(f.store.Dirs, nil)
+	first, err := store.Add(f.ctx, Repo{Source: ssh, Name: "proj"}, "one", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []step
+	second, err := store.Add(f.ctx, Repo{Source: https, Name: "renamed"}, "two", func(stage, state, detail string) {
+		steps = append(steps, step{stage, state, detail})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Checkout != first.Checkout || !hasStep(steps, protocol.StageClone, protocol.StateSkip, "checkout exists") {
+		t.Fatalf("second add: %+v steps %+v", second, steps)
+	}
+	if got := strings.TrimSpace(run(t, first.Checkout, "git", "config", "--get", "remote.origin.url")); got != ssh {
+		t.Fatalf("origin changed to %s", got)
+	}
+	if co, ok, err := store.Checkout(f.ctx, Repo{Source: "ssh://git@EXAMPLE.com/laat/proj.git"}); err != nil || !ok || co != first.Checkout {
+		t.Fatalf("checkout by a third form: %s %v %v", co, ok, err)
+	}
+	listed := New(f.store.Dirs, []config.Repo{{Source: https, Name: "mine"}})
+	recs, err := listed.List(f.ctx)
+	if err != nil || len(recs) != 2 || recs[0].Repo != "mine" || recs[0].Source != https {
+		t.Fatalf("list with the other form listed: %+v %v", recs, err)
+	}
+	if r, ok := listed.Repo(ssh); !ok || r.Name != "mine" {
+		t.Fatalf("repo by the other form: %+v %v", r, ok)
+	}
+}
+
+// An add from a repository entry takes the entry's copy rules, which
+// hold the sender's top-level ones already; this host's own are not
+// added. Without the entry they are.
+func TestSentEntryCopy(t *testing.T) {
+	f := newFixture(t)
+	a, err := f.store.Add(f.ctx, f.repo, "first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(a.Checkout, "host.txt"), "host")
+	write(t, filepath.Join(a.Checkout, "sent.txt"), "sent")
+	f.store.Copy = []string{"host.txt"}
+	sent := Repo{Source: f.remote, Name: "proj", Copy: []string{"sent.txt"}, Sent: true}
+	b, err := f.store.Add(f.ctx, sent, "sent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Root, "sent.txt")); err != nil {
+		t.Error("the entry's rule was not applied")
+	}
+	if _, err := os.Stat(filepath.Join(b.Root, "host.txt")); err == nil {
+		t.Error("the host's own rule was applied to an add with an entry")
+	}
+	c, err := f.store.Add(f.ctx, f.repo, "own", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Root, "host.txt")); err != nil {
+		t.Error("the host's own rule was not applied without an entry")
+	}
+}
+
+// A checkout with no linked worktrees is not asked: git is not run for
+// it at all, which a repos directory of many checkouts relies on.
+func TestCheckoutWithoutWorktreesNotAsked(t *testing.T) {
+	f := newFixture(t)
+	c := filepath.Join(f.store.Dirs.Repos, "plain")
+	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, c)
+	if linked(c) {
+		t.Fatal("a fresh clone has linked worktrees")
+	}
+	run(t, c, "git", "worktree", "add", "-q", "--detach", f.store.Dirs.Worktree("plain", "x"))
+	if !linked(c) {
+		t.Fatal("a checkout with a worktree has none")
+	}
+}

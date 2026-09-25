@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
@@ -170,7 +171,7 @@ func PaneSession(ctx context.Context, paneID string) (Local, string, error) {
 // on the host with the environment id, by its tags.
 func FindWorktree(locals []Local, environmentID, source, branch string) (Local, bool) {
 	for _, l := range locals {
-		if env, _ := SplitKey(l.Key); l.Workspace() && env == environmentID && l.Source == source && l.Branch == branch && source != "" {
+		if env, _ := SplitKey(l.Key); l.Workspace() && env == environmentID && config.SameSource(l.Source, source) && l.Branch == branch && source != "" {
 			return l, true
 		}
 	}

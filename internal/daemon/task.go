@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
@@ -122,18 +123,17 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 // addRun is one add in flight: the request, its journal entry as the
 // daemon last wrote it, and what the stages have decided so far.
 type addRun struct {
-	d       *Daemon
-	m       protocol.Message
-	c       *command
-	e       entry
-	created bool // the journal has the entry; set keeps e in step with it
-	repo    worktree.Repo
-	branch  string
-	root    string
-	cmd     []string // the configured command, placeholder and all
-	res     protocol.Message
-	lock    *sync.Mutex
-	locked  bool
+	d          *Daemon
+	m          protocol.Message
+	c          *command
+	e          entry
+	created    bool // the journal has the entry; set keeps e in step with it
+	repo       worktree.Repo
+	branch     string
+	root       string
+	cmd        []string // the configured command, placeholder and all
+	res        protocol.Message
+	unlockRepo func() // set while the repository's lock is held
 }
 
 // set applies a change to the journal entry and keeps the local copy.
@@ -168,9 +168,9 @@ func (r *addRun) report(stage, state, detail string) {
 }
 
 func (r *addRun) unlock() {
-	if r.locked {
-		r.lock.Unlock()
-		r.locked = false
+	if r.unlockRepo != nil {
+		r.unlockRepo()
+		r.unlockRepo = nil
 	}
 }
 
@@ -199,17 +199,18 @@ func (r *addRun) run(ctx context.Context) error {
 
 	// resolve
 	stage := protocol.StageResolve
-	repo, ok := d.cfg.Store.Repo(m.Repo)
-	if !ok {
-		return stageErr(stage, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo))
+	repo, err := d.addRepo(m)
+	if err != nil {
+		return stageErr(stage, err)
 	}
-	if known && repo.Source != r.e.Source {
+	if known && !config.SameSource(repo.Source, r.e.Source) {
 		// A resend is the recorded add, never another repository's.
 		return stageErr(stage, fmt.Errorf("the add %s was submitted for %s, not %s", m.ID, r.e.Source, repo.Source))
 	}
 	r.repo = repo
 	r.cmd = m.Cmd
 	if len(r.cmd) == 0 {
+		var ok bool
 		if r.cmd, ok = d.cfg.Agents[m.AgentName]; !ok {
 			return stageErr(stage, fmt.Errorf("unknown agent %q: not in this host's config", m.AgentName))
 		}
@@ -243,9 +244,7 @@ func (r *addRun) run(ctx context.Context) error {
 	}
 	r.branch = branch
 
-	r.lock = d.repoLock(repo.Source)
-	r.lock.Lock()
-	r.locked = true
+	r.unlockRepo = d.lockRepo(repo.Source)
 	// The journal is read again under the lock: an rm that held it
 	// meanwhile may have removed the worktree this add was resuming,
 	// and the entry with it, which no stage may then remake.
@@ -707,7 +706,7 @@ func (d *Daemon) worktreeReplaced(ctx context.Context, e entry) string {
 		return "worktree " + e.Root + " could not be checked: " + err.Error()
 	case !found:
 		return "worktree replaced: " + e.Root + " is gone"
-	case rec.Source != e.Source:
+	case !config.SameSource(rec.Source, e.Source):
 		return "worktree replaced: " + e.Root + " is now a worktree of " + rec.Repo
 	case rec.Branch != "" && rec.Branch != e.Branch:
 		return "worktree replaced: " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
@@ -954,4 +953,38 @@ func (d *Daemon) runJournal(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// addRepo is the repository an add is for: the entry the add brought,
+// which the machine the user sits at decides, else the one this host's
+// config lists for its source or label, for a sender without entries.
+// An entry is checked as the config checks its own: a name that places
+// directories, copy rules that stay inside the worktree, no empty setup
+// command.
+func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
+	e := m.RepoEntry
+	if e == nil {
+		repo, ok := d.cfg.Store.Repo(m.Repo)
+		if !ok {
+			return worktree.Repo{}, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
+		}
+		return repo, nil
+	}
+	if e.Source == "" || !config.SameSource(e.Source, m.Repo) {
+		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
+	}
+	if !config.ValidLabel(e.Name) {
+		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label", e.Name)
+	}
+	for _, c := range e.Copy {
+		if err := config.CheckCopy(c); err != nil {
+			return worktree.Repo{}, fmt.Errorf("the add's repository entry: copy: %w", err)
+		}
+	}
+	for i, cmd := range e.Setup {
+		if strings.TrimSpace(cmd) == "" {
+			return worktree.Repo{}, fmt.Errorf("the add's repository entry: setup: entry %d is empty", i+1)
+		}
+	}
+	return worktree.Repo{Source: e.Source, Name: e.Name, Copy: e.Copy, Setup: e.Setup, Sent: true}, nil
 }

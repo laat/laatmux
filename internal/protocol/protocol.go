@@ -87,6 +87,13 @@ const (
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.
 	CapMerged = "merged"
+	// CapRepoEntry is the repository coming from the machine the user
+	// sits at: an add with repo_entry is resolved against that entry, a
+	// repository this host's config does not list included, and the
+	// worktree listing covers every checkout under the repos directory.
+	// A daemon without it ignores the entry and resolves against its
+	// own config.
+	CapRepoEntry = "repo-entry"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -463,6 +470,10 @@ type Message struct {
 	// add and rm
 	Repo   string `json:"repo,omitempty"`   // repository source or label, as the daemon's config knows it
 	Branch string `json:"branch,omitempty"` // branch and worktree name
+	// RepoEntry on an add is the repository as the sender's config has
+	// it, its source Repo's: a daemon with repo-entry resolves the add
+	// against it, whether or not its own config lists the repository.
+	RepoEntry *RepoEntry `json:"repo_entry,omitempty"`
 	// AgentName is the configured agent to start; Cmd, when set, is the
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.
@@ -509,6 +520,18 @@ type Message struct {
 	// whether it exited at all.
 	FD   int `json:"fd,omitempty"`
 	Exit int `json:"exit,omitempty"`
+}
+
+// RepoEntry is a repository as the machine the user sits at knows it:
+// its source; its name, which places a new clone and new worktrees; and
+// the personal copy rules and setup commands a new worktree of it gets
+// after the committed ones, the sender's top-level copy rules among
+// them.
+type RepoEntry struct {
+	Source string   `json:"source"`
+	Name   string   `json:"name"`
+	Copy   []string `json:"copy,omitempty"`
+	Setup  []string `json:"setup,omitempty"`
 }
 
 // Conn is a line-oriented JSON connection. Writes are serialized.

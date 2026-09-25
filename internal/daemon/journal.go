@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -289,7 +290,7 @@ func (j *journal) reserved(source, id string) []string {
 	defer j.mu.Unlock()
 	var names []string
 	for _, e := range j.byID {
-		if e.ID != id && e.Source == source && e.Allocated && !e.terminal() {
+		if e.ID != id && config.SameSource(e.Source, source) && e.Allocated && !e.terminal() {
 			names = append(names, e.Branch)
 		}
 	}

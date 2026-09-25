@@ -670,9 +670,9 @@ func TestRmRootOutsideRefused(t *testing.T) {
 // blocks it until done.
 func TestRmWaitsForOtherRepositories(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
-	store.Repos = append(store.Repos, worktree.Repo{Source: "/nowhere/other.git", Name: "other"})
-	other := d.repoLock("/nowhere/other.git")
-	other.Lock()
+	// An add holds another repository's lock, one no config lists, as
+	// an add from a repository entry does.
+	unlockOther := d.lockRepo("/nowhere/other.git")
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: store.Dirs.Worktree("proj", "task")})
 	got := make(chan protocol.Message, 1)
@@ -685,7 +685,7 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 		t.Fatalf("rm finished while another repository was locked: %+v", res)
 	case <-time.After(300 * time.Millisecond):
 	}
-	other.Unlock()
+	unlockOther()
 	select {
 	case res := <-got:
 		if !res.OK {
@@ -693,5 +693,62 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("rm did not finish after the lock was released")
+	}
+}
+
+// An add that brings its repository entry runs for a repository this
+// host's config does not list: cloned under the entry's name, with the
+// entry's setup, listed by its checkout, and removed by rm naming its
+// source. An entry that does not match the add, or whose name could
+// not place a directory, is refused at resolve; without an entry the
+// host's own config decides, as before.
+func TestAddFromRepoEntry(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	store.Repos = nil
+	ctx := context.Background()
+	pc := conn(t, d)
+	if !protocol.Has(d.capabilities(), protocol.CapRepoEntry) {
+		t.Fatalf("caps %v", d.capabilities())
+	}
+	for id, m := range map[string]protocol.Message{
+		"none":     {Repo: remote},
+		"mismatch": {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: "/elsewhere.git", Name: "sent"}},
+		"name":     {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "../sent"}},
+		"copy":     {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "sent", Copy: []string{"../x"}}},
+		"setup":    {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "sent", Setup: []string{" "}}},
+	} {
+		m.Type, m.ID, m.Branch, m.AgentName = protocol.TypeAdd, id, "task", "claude"
+		pc.Write(m)
+		if res, _ := result(t, pc, id); res.OK || res.Stage != protocol.StageResolve {
+			t.Fatalf("%s: %+v", id, res)
+		}
+	}
+	if _, err := os.Stat(store.Dirs.Repos); err == nil {
+		t.Fatal("a refused add touched the repos directory")
+	}
+
+	entry := &protocol.RepoEntry{Source: remote, Name: "sent", Setup: []string{"echo sent >> log"}}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: remote, RepoEntry: entry, Branch: "task", AgentName: "claude"})
+	res, _ := result(t, pc, "a1")
+	root := store.Dirs.Worktree("sent", "task")
+	if !res.OK || res.Root != root {
+		t.Fatalf("add: %+v", res)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "log")); string(b) != "ran\nsent\n" {
+		t.Fatalf("setup: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dirs.Repos, "sent", ".git")); err != nil {
+		t.Fatal("not cloned under the entry's name")
+	}
+	d.pollWorktrees(ctx)
+	if wts := d.Worktrees(); len(wts) != 1 || wts[0].Root != root || wts[0].Repo != "sent" || wts[0].Source != remote {
+		t.Fatalf("worktrees %+v", wts)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root, Force: true})
+	if res, _ := result(t, pc, "r1"); !res.OK {
+		t.Fatalf("rm: %+v", res)
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatal("root still exists")
 	}
 }

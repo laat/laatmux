@@ -173,6 +173,7 @@ func TestParseRejects(t *testing.T) {
 		"agents:\n  my.agent:\n    cmd: [x]\n":                                 "not a valid label",
 		"agents:\n  claude: {}\n":                                              "has no cmd",
 		"repos:\n  - a/b\n  - a/b\n":                                           "listed twice",
+		"repos:\n  - git@github.com:a/b.git\n  - https://github.com/a/b\n":     "are one repository",
 		"repos:\n  - source: a/x\n    name: x\n  - source: b/x\n    name: x\n": "both get the name x",
 		"repos:\n  - a/x\n  - source: b/y\n    name: x\n":                      "both get the name x",
 		"repos:\n  - git@github.com:laat/foo.js.git\n":                         "set an explicit name",
@@ -245,7 +246,7 @@ func TestDeriveNames(t *testing.T) {
 	}
 	// Rule 3: hash suffix when the org-prefixed names still collide, and
 	// for a collision with no org to prefix.
-	a, b := "git@github.com:laat/laatmux.git", "https://github.com/laat/laatmux.git"
+	a, b := "git@github.com:laat/laatmux.git", "git@gitlab.com:laat/laatmux.git"
 	got := names(a, b)
 	if got[0] != "laat-laatmux-"+sourceHash(a) || got[1] != "laat-laatmux-"+sourceHash(b) {
 		t.Fatalf("rule 3 org collision: %v", got)

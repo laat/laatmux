@@ -264,7 +264,9 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	var rules []string
 	rules = append(rules, setup.Copy...)
 	rules = append(rules, repo.Copy...)
-	rules = append(rules, s.Copy...)
+	if !repo.Sent {
+		rules = append(rules, s.Copy...)
+	}
 	var listed []string
 	listedOnce := false // an empty listing is a listing too
 	for _, entry := range rules {

@@ -149,8 +149,11 @@ type Daemon struct {
 	lastListErr  string            // logged once per change
 	poke         chan struct{}
 
-	cmds       map[string]*command    // recent add, rm and run by id
-	locks      map[string]*sync.Mutex // per repository source
+	cmds  map[string]*command    // recent add, rm and run by id
+	locks map[string]*sync.Mutex // per repository source
+	// repos is held shared by every add for its repository's lock and
+	// alone by rm, which must see every add in flight complete.
+	repos      sync.RWMutex
 	commandTTL time.Duration
 	// The journal, nil without the task capability; the observation
 	// revision and the daemon generation that stamp listings, the
@@ -343,7 +346,7 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Store != nil {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun)
 		if d.managed != nil {
-			caps = append(caps, protocol.CapAdd, protocol.CapRm)
+			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
 		}
 		if d.journal != nil {
 			caps = append(caps, protocol.CapTask)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	cmdpkg "github.com/laat/laatmux/internal/command"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -52,6 +53,10 @@ type pendingFile struct {
 	protocol.Pending
 	PromptText string            `json:"prompt_text,omitempty"`
 	Barrier    *protocol.Listing `json:"barrier,omitempty"`
+	// RepoEntry is the add's repository entry, sent to the host with
+	// it; a file from before entries has none, and the host resolves
+	// the source against its own config.
+	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
 	// Sent, that the add may have reached the host, is the record's own
 	// field, so the views see it: same key in the file as before.
 	ReplacedBy string    `json:"replaced_by,omitempty"`
@@ -292,6 +297,8 @@ func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.M
 		res.Error = "repository required"
 	case m.Branch == "":
 		res.Error = "branch required"
+	case m.RepoEntry != nil && !config.SameSource(m.RepoEntry.Source, m.Repo):
+		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
 	}
 	if res.Error != "" {
 		return res
@@ -328,7 +335,7 @@ func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.M
 	p := pendingFile{Pending: protocol.Pending{
 		ID: m.ID, Host: h.Name, EnvironmentID: env, Source: m.Repo, Repo: name, Branch: m.Branch, Generated: m.Generated,
 		Agent: m.AgentName, Cmd: m.Cmd, SubmittedAt: submitted, UpdatedAt: time.Now(),
-	}, PromptText: m.Prompt}
+	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry}
 	d.relay.mu.Lock()
 	fresh, err := d.relay.createLocked(p)
 	if err == nil && fresh {
@@ -644,7 +651,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		}
 		wait = d.cfg.ReconnectMin
 		req := protocol.Message{
-			Type: protocol.TypeAdd, ID: id, Repo: p.Source, Branch: p.Branch, Generated: p.Generated,
+			Type: protocol.TypeAdd, ID: id, Repo: p.Source, RepoEntry: p.RepoEntry, Branch: p.Branch, Generated: p.Generated,
 			AgentName: p.Agent, Cmd: p.Cmd, Prompt: p.PromptText, SubmittedAt: p.SubmittedAt,
 		}
 		if p.Sent {

@@ -1171,3 +1171,27 @@ func TestRelayDismissEndsSettle(t *testing.T) {
 		t.Fatalf("%d runners after dismiss", after)
 	}
 }
+
+// The relay keeps an add's repository entry with the task and sends it
+// with the add: the host resolves against it, so the worktree is placed
+// under the entry's name rather than its own config's. An entry for
+// another source than the add's is refused at accept.
+func TestRelayRepoEntry(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "bad", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "b",
+		RepoEntry: &protocol.RepoEntry{Source: "/elsewhere.git", Name: "proj"}}); res.OK || !strings.Contains(res.Error, "entry is for") {
+		t.Fatalf("mismatched entry: %+v", res)
+	}
+	entry := &protocol.RepoEntry{Source: f.source(), Name: "sent", Copy: []string{".envrc"}}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "ent", Relay: "vm", Repo: f.source(), Name: "sent", Branch: "task",
+		RepoEntry: entry, AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatalf("accept: %+v", res)
+	}
+	if p := readPending(t, f.dir, "ent"); p.RepoEntry == nil || p.RepoEntry.Name != "sent" || len(p.RepoEntry.Copy) != 1 {
+		t.Fatalf("file after accept: %+v", p)
+	}
+	p := f.awaitRecord(t, "ent", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if !p.OK || p.Root != f.store.Dirs.Worktree("sent", "task") {
+		t.Fatalf("record %+v", p)
+	}
+}

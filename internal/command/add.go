@@ -19,8 +19,11 @@ import (
 // resolved by the caller; see the CLI's flags and the dashboard's
 // pickers.
 type Add struct {
-	Host   config.Host
-	Repo   config.Repo
+	Host config.Host
+	Repo config.Repo
+	// Copy is the config's top-level copy rules, which the host gives
+	// the new worktree after the repository's own.
+	Copy   []string
 	Branch string
 	// Agent is the configured agent to start; Cmd, when set, is the
 	// command instead and Agent is "".
@@ -128,8 +131,19 @@ func (a Add) Request(id string) protocol.Message {
 		submitted = time.Now()
 	}
 	return protocol.Message{
-		Type: protocol.TypeAdd, ID: id, Repo: a.Repo.Source, Branch: a.Branch, AgentName: a.Agent, Cmd: a.Cmd,
+		Type: protocol.TypeAdd, ID: id, Repo: a.Repo.Source, RepoEntry: a.Entry(), Branch: a.Branch, AgentName: a.Agent, Cmd: a.Cmd,
 		Prompt: a.Prompt, Generated: a.Generated, SubmittedAt: submitted,
+	}
+}
+
+// Entry is the repository as this machine's config has it, for the
+// host to resolve the add against: the host need not list it. The copy
+// rules are the repository's and then the top-level ones, the order a
+// host applies its own config's in.
+func (a Add) Entry() *protocol.RepoEntry {
+	return &protocol.RepoEntry{
+		Source: a.Repo.Source, Name: a.Repo.Name,
+		Copy: append(append([]string(nil), a.Repo.Copy...), a.Copy...), Setup: a.Repo.Setup,
 	}
 }
 
