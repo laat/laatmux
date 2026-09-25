@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1153,5 +1154,31 @@ func TestFeedAtDatesClicks(t *testing.T) {
 	// Feed, with no time, dates nothing.
 	if ks := dec.Feed([]byte("\x1b[<0;5;3M")); !click(ks, time.Time{}) {
 		t.Fatalf("a click fed with no time: %+v", ks)
+	}
+}
+
+// A sequence cut short by a new escape, Alt-[ or an Esc and [ read
+// together, is dropped up to it, and what follows is parsed afresh: a
+// click right after is the click, not the digits of its report, which
+// would jump. Held across reads, the click keeps its own read's time.
+func TestBrokenSequenceBeforeClick(t *testing.T) {
+	for in, want := range map[string][]Key{
+		"\x1b[\x1b[<0;5;3M":    {{Kind: -1}, {Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1b[1;\x1b[A":        {{Kind: -1}, {Kind: KeyUp}},
+		"\x1b[\x03":            {{Kind: -1}, {Kind: KeyCtrlC}},
+		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
+	} {
+		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: %+v, want %+v", in, got, want)
+		}
+	}
+	t1, t2 := time.Unix(10, 0), time.Unix(20, 0)
+	var dec Decoder
+	if ks := dec.FeedAt([]byte("\x1b["), t1); len(ks) != 0 || !dec.Pending() {
+		t.Fatalf("Alt-[ held: %+v", ks)
+	}
+	ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2)
+	if len(ks) != 2 || ks[0].Kind != -1 || ks[1].Kind != KeyMouse || ks[1].X != 5 || !ks[1].At.Equal(t2) || dec.Pending() {
+		t.Fatalf("a click after a held Alt-[: %+v pending %v", ks, dec.Pending())
 	}
 }

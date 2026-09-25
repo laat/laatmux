@@ -615,6 +615,13 @@ func csi(b []byte) (Key, int, bool) {
 		return Key{}, 0, false
 	}
 	final := b[i]
+	if final < 0x40 || final > 0x7e {
+		// Not a final byte: the sequence was cut short, as Alt-[ or an
+		// Esc and [ in one read are, and a new escape may start here.
+		// The broken part is dropped and the rest parsed afresh, so a
+		// click after it is a click and not its digits, which jump.
+		return Key{Kind: -1}, i, true
+	}
 	params := string(b[2:i])
 	n := i + 1
 	// A modified arrow, Ctrl-Right say, is not the plain key and is
