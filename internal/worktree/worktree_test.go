@@ -1195,6 +1195,20 @@ func TestDuplicateClones(t *testing.T) {
 	if _, _, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); ok || err == nil || !strings.Contains(err.Error(), "two clones") {
 		t.Fatalf("a branch in both clones: %v %v", ok, err)
 	}
+	// A registration in the first clone whose directory was deleted by
+	// hand does not compete with the live one in the second.
+	stale := f.store.Dirs.Worktree("proj", "stale")
+	run(t, first.Checkout, "git", "worktree", "add", "-q", "-b", "stale", stale)
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+	live := f.store.Dirs.Worktree("proj2", "stale")
+	run(t, second, "git", "worktree", "add", "-q", "-b", "stale", live)
+	if rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "stale"); err != nil || !ok || co != second || rec.Root != live {
+		t.Fatalf("a stale registration and a live worktree: %+v %s %v %v", rec, co, ok, err)
+	}
+	run(t, second, "git", "worktree", "remove", live)
+	run(t, first.Checkout, "git", "worktree", "prune")
 	run(t, second, "git", "worktree", "remove", both)
 	run(t, second, "git", "branch", "-D", "one")
 	// The first clone's worktree deleted by hand, and its root taken by

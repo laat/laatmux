@@ -529,8 +529,12 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 		return Record{}, "", false, err
 	}
 	first := ""
-	var rec Record
-	var at []string // the checkout of each root matched, then the root
+	type match struct {
+		rec      Record
+		checkout string
+		prunable bool
+	}
+	var matches []match
 	for _, co := range cos {
 		if !config.SameSource(co.origin, repo.Source) {
 			continue
@@ -546,22 +550,30 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 			return Record{}, co.dir, false, err
 		}
 		for _, e := range entries {
-			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) && !slices.Contains(at, e.Root) {
+			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) &&
+				!slices.ContainsFunc(matches, func(m match) bool { return m.rec.Root == e.Root }) {
 				// A root two checkouts still register once its directory
 				// is gone is one worktree: the first checkout's
 				// registration removes it, the other is prunable.
-				rec = Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}
-				at = append(at, co.dir, e.Root)
+				matches = append(matches, match{Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, co.dir, e.Prunable})
 			}
 		}
 	}
-	switch {
-	case len(at) == 0:
-		return Record{}, first, false, nil
-	case len(at) > 2:
-		return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, at[1], at[3])
+	if len(matches) > 1 {
+		// A registration whose directory was deleted by hand does not
+		// compete with a live worktree for the branch in another clone.
+		live := slices.DeleteFunc(slices.Clone(matches), func(m match) bool { return m.prunable })
+		if len(live) > 0 {
+			matches = live
+		}
 	}
-	return rec, at[0], true, nil
+	switch len(matches) {
+	case 0:
+		return Record{}, first, false, nil
+	case 1:
+		return matches[0].rec, matches[0].checkout, true, nil
+	}
+	return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, matches[0].rec.Root, matches[1].rec.Root)
 }
 
 // Remove unregisters and deletes a worktree through git, which is the

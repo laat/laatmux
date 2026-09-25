@@ -246,7 +246,7 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 		roots[i] = w.Root
 	}
 	sort.Strings(roots)
-	return protocol.Worktree{}, false, fmt.Errorf("%s/%s has worktrees at %s; two clones of the repository each have the branch, so name the worktree by its root", repo.Name, branch, strings.Join(roots, " and "))
+	return protocol.Worktree{}, false, fmt.Errorf("%s/%s has worktrees at %s, in two clones of the repository", repo.Name, branch, strings.Join(roots, " and "))
 }
 
 // recordRepo is this machine's entry for a host record's source, with

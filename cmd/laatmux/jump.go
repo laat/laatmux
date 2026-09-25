@@ -168,6 +168,20 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 				found = append(found, w)
 			}
 		}
+		if len(found) > 1 {
+			// The later readings may tell them apart: this machine's
+			// name can be one clone's host label, and that clone's
+			// session is the target.
+			var narrowed []protocol.Worktree
+			for _, w := range found {
+				if w.Repo == label || w.Session == rest {
+					narrowed = append(narrowed, w)
+				}
+			}
+			if len(narrowed) == 1 {
+				return narrowed[0], true, nil
+			}
+		}
 		switch len(found) {
 		case 0:
 			return protocol.Worktree{}, false, nil
@@ -179,7 +193,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 			roots[i] = w.Root
 		}
 		sort.Strings(roots)
-		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s; two clones of the repository each have it", rest, strings.Join(roots, " and "))
+		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
 	}
 	if local, ok := cfg.RepoByName(label); ok && branch != "" {
 		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && sameRepo(w, local) }); ok || err != nil {

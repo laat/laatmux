@@ -310,4 +310,15 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 			t.Errorf("by the host's label: %+v %v %v", w, ok, err)
 		}
 	}
+	// This machine's name is one clone's host label: the target is that
+	// clone's, not a dead end.
+	same, err := config.Parse([]byte("repos:\n  - source: git@x:o/proj.git\n    name: proj\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range [][]protocol.Worktree{two, {two[1], two[0]}} {
+		if w, ok, err := matchWorktree(ws, same, "proj/topic"); err != nil || !ok || w.Root != "/r/a" {
+			t.Errorf("local name equal to a host label: %+v %v %v", w, ok, err)
+		}
+	}
 }
