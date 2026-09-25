@@ -433,9 +433,15 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 // Once a Claude is bound, another process identified in the pane ends
 // the watcher, whatever agent it is.
 func TestTrustEndsOnAnyReplacement(t *testing.T) {
-	d, _, _, _ := newAddDaemon(t)
+	d, ft, _, _ := newAddDaemon(t)
+	// The pane is there with its directory elsewhere, so the watcher
+	// keeps waiting rather than stopping on a missing pane: only the
+	// replacement can end it.
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{ID: "%1", Session: "s", ServerPID: 5, CurrentPath: "/elsewhere", Managed: true}}
+	})
 	key := paneKey(d.managed.Label, "%1")
-	target := trustTarget{pane: "%1", session: "s", serverPID: 5}
+	target := trustTarget{pane: "%1", session: "s", root: "/r", real: "/r", serverPID: 5}
 	first := procs.Identity{Agent: "claude", PID: 10, Start: time.Unix(1, 0)}
 	d.mu.Lock()
 	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: first}}
@@ -446,6 +452,11 @@ func TestTrustEndsOnAnyReplacement(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the watcher ended before the replacement")
+	default:
+	}
 	d.mu.Lock()
 	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: procs.Identity{Agent: "codex", PID: 11, Start: time.Unix(2, 0)}}}
 	d.mu.Unlock()
