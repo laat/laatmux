@@ -126,7 +126,11 @@ func (d *Decoder) Feed(b []byte) []Key {
 			if i := strings.Index(string(d.pending), pasteEnd); i >= 0 {
 				d.paste = append(d.paste, d.pending[:i]...)
 				d.pending = d.pending[i+len(pasteEnd):]
-				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
+				// A paste whose text was given out at a stall ends
+				// with nothing more to give.
+				if text := pasteText(d.paste); text != "" || !d.stalled {
+					keys = append(keys, Key{Kind: KeyPaste, Text: text})
+				}
 				d.paste, d.pasting, d.stalled = nil, false, false
 				continue
 			}
@@ -134,9 +138,12 @@ func (d *Decoder) Feed(b []byte) []Key {
 			d.paste = append(d.paste, d.pending[:len(d.pending)-keep]...)
 			d.pending = append([]byte(nil), d.pending[len(d.pending)-keep:]...)
 			if len(d.paste) > pasteMax {
-				// Given out in chunks past the cap; the framing stays.
-				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
-				d.paste = nil
+				// Given out in chunks past the cap, an incomplete rune
+				// and a trailing carriage return held for the next; the
+				// framing stays.
+				chunk, tail := splitTail(d.paste)
+				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(chunk)})
+				d.paste = tail
 			}
 			return keys
 		}
@@ -153,6 +160,79 @@ func (d *Decoder) Feed(b []byte) []Key {
 		d.pasting = true
 		d.pasteAt = d.clock()
 	}
+}
+
+// stall is the flush of a paste whose bytes have stopped for the
+// grace. A paste with a lost end marker is ended by the user's Esc or
+// Ctrl-C: the last bare escape, one not followed by [ or O, or Ctrl-C
+// byte in the text ends the framing there, the text before it is the
+// paste, the key follows, and the bytes after it are keys. Without one
+// the text so far is given out and the framing kept: a resumed paste's
+// line break is still no Enter. A prefix of the end marker, an
+// incomplete rune and a trailing carriage return are held for the
+// next bytes.
+func (d *Decoder) stall() []Key {
+	held := markerPrefix(d.pending, pasteEnd)
+	if held != len(d.pending) || held == 1 {
+		// Not a marker prefix, or a bare escape alone, which is the
+		// user's Esc once the bytes have stopped: a marker's second
+		// byte would have come with it.
+		held = 0
+	}
+	data := append(append([]byte(nil), d.paste...), d.pending[:len(d.pending)-held]...)
+	d.pending = append([]byte(nil), d.pending[len(d.pending)-held:]...)
+	if i, kind := lastRecovery(data); i >= 0 {
+		var keys []Key
+		if text := pasteText(data[:i]); text != "" {
+			keys = append(keys, Key{Kind: KeyPaste, Text: text})
+		}
+		keys = append(keys, Key{Kind: kind})
+		rest, _ := parse(data[i+1:], true)
+		keys = append(keys, rest...)
+		d.paste, d.pending, d.pasting, d.stalled = nil, nil, false, false
+		return keys
+	}
+	d.stalled = true
+	text, tail := splitTail(data)
+	d.paste = tail
+	if t := pasteText(text); t != "" {
+		return []Key{{Kind: KeyPaste, Text: t}}
+	}
+	return nil
+}
+
+// lastRecovery is the index of the last byte that is the user's Esc or
+// Ctrl-C in a stalled paste, a bare escape or 0x03, and its key; -1
+// when there is none.
+func lastRecovery(b []byte) (int, KeyKind) {
+	for i := len(b) - 1; i >= 0; i-- {
+		switch b[i] {
+		case 0x03:
+			return i, KeyCtrlC
+		case 0x1b:
+			if i+1 == len(b) || (b[i+1] != '[' && b[i+1] != 'O') {
+				return i, KeyEsc
+			}
+		}
+	}
+	return -1, 0
+}
+
+// splitTail takes an incomplete trailing rune and a trailing carriage
+// return off b, to be held for the bytes that follow, so a chunk never
+// ends inside a character or between a \r and its \n.
+func splitTail(b []byte) (head, tail []byte) {
+	cut := len(b)
+	for i := max(len(b)-4, 0); i < len(b); i++ {
+		if r, _ := utf8.DecodeRune(b[i:]); r == utf8.RuneError && !utf8.FullRune(b[i:]) {
+			cut = i
+			break
+		}
+	}
+	if cut > 0 && cut == len(b) && b[cut-1] == '\r' {
+		cut--
+	}
+	return b[:cut], append([]byte(nil), b[cut:]...)
 }
 
 // markerPrefix is how many bytes at the end of b are a proper prefix
@@ -208,20 +288,7 @@ func (d *Decoder) Flush() []Key {
 		if d.clock().Sub(d.pasteAt) < pasteGrace {
 			return nil
 		}
-		// The bytes have stopped: a stalled paste gives out its text so
-		// far and keeps its framing; a bare escape alone after a stall
-		// is the user's Esc, which ends a paste whose end is lost.
-		if d.stalled && string(d.pending) == "\x1b" && len(d.paste) == 0 {
-			d.pending, d.pasting, d.stalled = nil, false, false
-			return []Key{{Kind: KeyEsc}}
-		}
-		d.stalled = true
-		text := pasteText(append(d.paste, d.pending...))
-		d.paste, d.pending = nil, nil
-		if text == "" {
-			return nil
-		}
-		return []Key{{Kind: KeyPaste, Text: text}}
+		return d.stall()
 	}
 	// The start of a paste marker, split by a slow read, is held too:
 	// dropped, the paste's text would be read as keys, its line breaks

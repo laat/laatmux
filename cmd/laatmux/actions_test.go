@@ -532,3 +532,83 @@ func TestUndelivered(t *testing.T) {
 		t.Fatal("a notice with nothing to recover")
 	}
 }
+
+// compose's host: a refusal puts the form back, an answer the daemon
+// may have taken waits in an ended log and then ends the view, and
+// the notice of an undelivered prompt ends the view when dismissed.
+func TestComposeAct(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true, add: f}
+	c := &composer{d: d, f: f}
+	var last home.Last
+	form := buildForm(cfg, f, last, "proj", "", "", nil)
+	form.SetPrompt("Fix it")
+	m := &view.Model{Overlay: form, Width: 80, Height: 24}
+	d.submit = func(command.Add) (string, error) { return "", errors.New("tasks not supported by vm's daemon") }
+	form.Handle(view.Key{Kind: view.KeyEnter})
+	if c.act(m, m.Poll()) || m.Overlay != form || form.Error == "" {
+		t.Fatalf("refusal: overlay %v error %q", m.Overlay, form.Error)
+	}
+	d.submit = func(command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
+	form.Handle(view.Key{Kind: view.KeyEnter})
+	if c.act(m, m.Poll()) {
+		t.Fatal("an uncertain answer ended the view at once")
+	}
+	log, ok := m.Overlay.(*view.Log)
+	if !ok || log.Done() {
+		t.Fatalf("no ended log waiting: %v", m.Overlay)
+	}
+	log.Handle(view.Key{Kind: view.KeyPaste, Text: "stray"})
+	if log.Done() {
+		t.Fatal("a paste dismissed the log")
+	}
+	log.Handle(view.Key{Rune: 'x'})
+	if !c.act(m, m.Poll()) || !strings.Contains(c.outcome, "submitted add-1") {
+		t.Fatalf("after the key: outcome %q", c.outcome)
+	}
+	// The notice, as the foreground path leaves it: dismissed, the
+	// view ends.
+	m = &view.Model{Overlay: view.NewNotice("t", []string{"the prompt"}, ""), Width: 80, Height: 24}
+	m.Overlay.Handle(view.Key{Kind: view.KeyEsc})
+	if !c.act(m, m.Poll()) {
+		t.Fatal("the notice's dismissal did not end the view")
+	}
+	fresh := buildForm(cfg, f, last, "proj", "", "", nil)
+	fresh.Handle(view.Key{Kind: view.KeyEsc})
+	m = &view.Model{Overlay: fresh}
+	if !c.act(m, m.Poll()) {
+		t.Fatal("esc on the form did not end the view")
+	}
+}
+
+// The dashboard: a failed log with a prompt to recover puts the notice
+// over the message and gives the message back when it is dismissed.
+func TestNoticeRestoresMessage(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	m := dashModel(cfg)
+	log := view.NewLog("t")
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }}
+	d.recover = view.NewNotice("t", []string{"the prompt"}, "")
+	m.Overlay = log
+	log.End(errors.New("local session: boom"))
+	log.Handle(view.Key{Rune: 'x'})
+	if d.act(m, m.Poll()) {
+		t.Fatal("ended the view")
+	}
+	n, ok := m.Overlay.(*view.Notice)
+	if !ok {
+		t.Fatalf("no notice: %v", m.Overlay)
+	}
+	m.Handle(view.Key{Kind: view.KeyEnter}) // clears the message as it dismisses
+	if !n.Done() || m.Message != "" {
+		t.Fatalf("dismissed: done %v message %q", n.Done(), m.Message)
+	}
+	d.act(m, m.Poll())
+	if m.Overlay != nil || m.Message != "local session: boom" {
+		t.Fatalf("after the notice: overlay %v message %q", m.Overlay, m.Message)
+	}
+}

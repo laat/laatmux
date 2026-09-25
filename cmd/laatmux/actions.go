@@ -39,8 +39,12 @@ type dash struct {
 	// run is the command whose log is on screen, nil when none.
 	run *running
 	// recover is the notice to show once the log has ended, delivered
-	// or not: a prompt that did not reach the agent, with its text.
-	recover *view.Notice
+	// or not: a prompt that did not reach the agent, with its text;
+	// recovered is the message the notice covers, put back after it.
+	recover   *view.Notice
+	recovered string
+	// last is what the foreground add left, for compose to jump to.
+	last command.Added
 }
 
 // running is a command under way: its log, and what to do when it ends.
@@ -116,13 +120,15 @@ func (d *dash) overlayDone(m *view.Model) bool {
 			// keeping in sight. A prompt to recover comes up over it.
 			m.Message = err.Error()
 			if d.recover != nil {
-				m.Overlay, d.recover = d.recover, nil
+				m.Overlay, d.recover, d.recovered = d.recover, nil, m.Message
 			}
 			return false
 		}
 		return run.done(m)
 	case *view.Notice:
+		// The key that dismissed it cleared the message it covered.
 		m.Overlay = nil
+		m.Message, d.recovered = d.recovered, ""
 		return false
 	}
 	return false
@@ -345,6 +351,7 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
+		d.last = res
 		// A prompt that did not reach the agent, or may not have, is
 		// shown with its text whatever else happened, since the
 		// foreground path keeps no file of it.
@@ -380,11 +387,16 @@ func undelivered(add command.Add, res command.Added) *view.Notice {
 	if add.Prompt == "" || res.Prompt == protocol.DeliveryDelivered || res.Prompt == protocol.DeliveryNone {
 		return nil
 	}
-	state := res.Prompt
-	if state == "" {
-		state = "not delivered"
+	var lines []string
+	switch {
+	case res.Prompt == "":
+		// The add failed before the host said anything of the prompt.
+		lines = []string{"the add failed before the prompt was sent", ""}
+	case res.Reason != "":
+		lines = []string{"prompt " + res.Prompt + ": " + res.Reason, ""}
+	default:
+		lines = []string{"prompt " + res.Prompt, ""}
 	}
-	lines := []string{"prompt " + state + ": " + res.Reason, ""}
 	switch {
 	case res.Managed != "":
 		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+" without it. The prompt was:")

@@ -388,18 +388,50 @@ func TestDecoderPasteBounded(t *testing.T) {
 	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "\nmore\t" || d.Pending() {
 		t.Fatalf("resumed paste: %+v pending %v", got, d.Pending())
 	}
-	// A lost end marker: a stall, then a bare escape alone is Esc.
-	d.Feed([]byte("\x1b[200~gone"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := d.Flush(); len(got) != 1 || got[0].Text != "gone" {
-		t.Fatalf("stalled: %+v", got)
+	// A lost end marker: a stall, then the user's Esc ends it, pressed
+	// once or twice, after typing, or as Ctrl-C.
+	for _, c := range []struct {
+		in   string
+		text string
+		kind KeyKind
+		rest int
+	}{
+		{"\x1b", "more", KeyEsc, 0},
+		{"\x1b\x1b", "more", KeyEsc, 0},
+		{"q\x03\x1b", "moreq", KeyEsc, 0},
+		{"\x03", "more", KeyCtrlC, 0},
+		{"\x1bj", "more", KeyEsc, 1},
+	} {
+		d := Decoder{now: func() time.Time { return now }}
+		d.Feed([]byte("\x1b[200~gone"))
+		now = now.Add(pasteGrace + time.Millisecond)
+		if got := d.Flush(); len(got) != 1 || got[0].Text != "gone" {
+			t.Fatalf("%q stalled: %+v", c.in, got)
+		}
+		d.Feed([]byte("more" + c.in))
+		now = now.Add(pasteGrace + time.Millisecond)
+		got := d.Flush()
+		want := 2 + c.rest
+		if len(got) != want || got[0].Kind != KeyPaste || got[0].Text != c.text || got[1].Kind != c.kind || d.Pending() {
+			t.Fatalf("%q after a lost end: %+v pending %v", c.in, got, d.Pending())
+		}
 	}
-	if got := d.Feed([]byte("\x1b")); len(got) != 0 {
-		t.Fatalf("escape during a stalled paste: %+v", got)
-	}
+	// An end marker split across the stall still ends the paste, and a
+	// trailing carriage return is held so \r\n split by it is one
+	// newline.
+	e := Decoder{now: func() time.Time { return now }}
+	e.Feed([]byte("\x1b[200~abc\r"))
 	now = now.Add(pasteGrace + time.Millisecond)
-	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc || d.Pending() {
-		t.Fatalf("esc after a lost end: %+v pending %v", got, d.Pending())
+	if got := e.Flush(); len(got) != 1 || got[0].Text != "abc" {
+		t.Fatalf("stalled before the marker: %+v", got)
+	}
+	e.Feed([]byte("\nd\x1b[20"))
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := e.Flush(); len(got) != 1 || got[0].Text != "\nd" || !e.Pending() {
+		t.Fatalf("stalled inside the marker: %+v pending %v", got, e.Pending())
+	}
+	if got := e.Feed([]byte("1~")); len(got) != 0 || e.Pending() {
+		t.Fatalf("marker completed: %+v pending %v", got, e.Pending())
 	}
 	// Past the size cap the text comes in chunks and the framing stays.
 	var big Decoder
@@ -411,5 +443,27 @@ func TestDecoderPasteBounded(t *testing.T) {
 	got = big.Feed([]byte("b\rc\x1b[201~"))
 	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "b\nc" || big.Pending() {
 		t.Fatalf("after the cap: %+v pending %v", got, big.Pending())
+	}
+	// A rune split at the cap is held whole.
+	var split Decoder
+	split.Feed([]byte("\x1b[200~"))
+	got = split.Feed(append([]byte(strings.Repeat("a", pasteMax)), 0xc3))
+	got = append(got, split.Feed([]byte{0xb8, 'x', 0x1b, '[', '2', '0', '1', '~'})...)
+	if len(got) != 2 || !strings.HasSuffix(got[1].Text, "øx") || strings.Contains(got[0].Text, "\uFFFD") {
+		t.Fatalf("rune at the cap: %d keys, last %q", len(got), got[len(got)-1].Text)
+	}
+}
+
+// A paste does not acknowledge a failed log.
+func TestLogIgnoresPaste(t *testing.T) {
+	l := NewLog("t")
+	l.End(errors.New("failed"))
+	l.Handle(Key{Kind: KeyPaste, Text: "oops\n"})
+	if l.Done() {
+		t.Fatal("a paste acknowledged the log")
+	}
+	l.Handle(Key{Rune: 'x'})
+	if !l.Done() {
+		t.Fatal("a key did not")
 	}
 }

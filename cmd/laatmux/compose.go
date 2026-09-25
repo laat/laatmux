@@ -80,48 +80,76 @@ func cmdCompose(ctx context.Context, args []string) error {
 	}
 	m := &view.Model{Layout: view.Compact, Overlay: form}
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, relay: relay, add: f}
-	var outcome string
+	c2 := &composer{d: d, f: f}
 	err = view.Run(ctx, t, m, view.Host{
 		Changed: st.change,
 		Refresh: func(*view.Model) {},
-		Act: func(m *view.Model, a view.Action) bool {
-			if a.Kind != view.ActionOverlay {
-				return false
-			}
-			switch o := m.Overlay.(type) {
-			case *view.Form:
-				m.Overlay = nil
-				if o.Cancelled {
-					return true
-				}
-				done := d.submitForm(m, f, o)
-				outcome = m.Message
-				if done {
-					return true
-				}
-				// A refusal put the form back up; without the relay
-				// the log is up; an answer the daemon may have taken
-				// stays until a key, since the popup closes with it.
-				if m.Overlay == nil && m.Message != "" {
-					m.Overlay = ended(m.Message)
-					m.Message = ""
-				}
-				return false
-			case *view.Log:
-				done := d.overlayDone(m)
-				if m.Message != "" {
-					outcome = m.Message
-				}
-				return done || m.Overlay == nil
-			}
-			return false
-		},
+		Act:     c2.act,
 	})
 	// The terminal is restored before the outcome is printed, so it is
 	// not lost with the alternate screen.
 	t.Close()
-	if outcome != "" {
-		fmt.Println(outcome)
+	if c2.outcome != "" {
+		fmt.Println(c2.outcome)
 	}
 	return err
+}
+
+// composer is compose's view host: the form, then whatever the submit
+// puts up, until the view ends.
+type composer struct {
+	d       *dash
+	f       *addForm
+	outcome string // printed once the terminal is restored
+}
+
+// act handles an overlay ending. The form's submit either ends the
+// view on accepted, puts the form back up on a refusal, runs the add
+// in the foreground with its log, or leaves a message an answer the
+// daemon may have taken carries, shown in an ended log until a key
+// since the popup closes with the process. The log's end goes through
+// the dashboard's handling, which may put up the notice of a prompt
+// that did not reach the agent; when that is dismissed the view ends,
+// jumping first to the session the add made when there is one, as the
+// foreground add does, so the prompt can be pasted into the agent.
+func (c *composer) act(m *view.Model, a view.Action) bool {
+	if a.Kind != view.ActionOverlay {
+		return false
+	}
+	d := c.d
+	switch o := m.Overlay.(type) {
+	case *view.Form:
+		m.Overlay = nil
+		if o.Cancelled {
+			return true
+		}
+		done := d.submitForm(m, c.f, o)
+		c.outcome = m.Message
+		if done {
+			return true
+		}
+		if m.Overlay == nil && m.Message != "" {
+			m.Overlay = ended(m.Message)
+			m.Message = ""
+		}
+		return false
+	case *view.Log:
+		done := d.overlayDone(m)
+		if m.Message != "" {
+			c.outcome = m.Message
+		}
+		return done || m.Overlay == nil
+	case *view.Notice:
+		d.overlayDone(m)
+		if m.Message != "" {
+			c.outcome = m.Message
+		}
+		if d.last.Session != "" {
+			if err := switchTo(d.ctx, d.last.Session); err != nil {
+				c.outcome = err.Error()
+			}
+		}
+		return true
+	}
+	return false
 }

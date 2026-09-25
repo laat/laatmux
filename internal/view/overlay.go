@@ -310,13 +310,14 @@ func (l *Log) Done() bool {
 }
 
 // Handle acknowledges a failure with any key but a mouse event, which
-// a wheel over the popup would send.
+// a wheel over the popup would send, and a paste, which is never a
+// key pressed on purpose.
 func (l *Log) Handle(k Key) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
 	case l.ended:
-		l.acked = l.acked || k.Kind != KeyMouse
+		l.acked = l.acked || (k.Kind != KeyMouse && k.Kind != KeyPaste)
 	case k.Kind == KeyCtrlC:
 		l.Quit = true
 	}
