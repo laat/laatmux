@@ -116,7 +116,7 @@ func usage() {
   ls        workspaces and agents across configured hosts
   watch     live list, redraws on change, for a plain terminal
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
-            laatmux sidebar pane | attach <window> | reap      what the pane and the hooks run
+            laatmux sidebar pane | attach <window> | fit <window> | reap   what the pane and the hooks run
   dashboard the list in a popup for display-popup -E: Enter jumps and closes it;
             a opens the task form, x/X removes, s settles, S opens a shell
   compose   the task form alone, for display-popup -E -d '#{pane_current_path}'
