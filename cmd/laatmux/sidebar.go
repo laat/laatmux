@@ -267,9 +267,20 @@ func sidebarReap(ctx context.Context) error {
 // sidebar with it, to a share of the terminal. So does resizing the
 // terminal. A width the user dragged the border to stays until the
 // window is resized next. A window without a live sidebar pane is left
-// alone; no lock is needed, since nothing is created.
+// alone.
+//
+// It runs under the lock: a switch that lands between attach's split
+// and its tag scales an untagged pane, and fit, waiting for the tag,
+// then sees it. resize-pane unzooms a zoomed window, so the zoomed pane
+// is zoomed again in the same command sequence, and tmux draws the
+// window once.
 func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}"}, tmux.Sep))
+	unlock, err := sidebarLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}", "#{window_zoomed_flag}", "#{pane_active}"}, tmux.Sep))
 	if err != nil {
 		if tmux.NoServer(err) {
 			return nil
@@ -277,15 +288,28 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 		return err
 	}
 	want := strconv.Itoa(cfg.Sidebar.Columns())
+	sidebar, zoomed := "", ""
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
-		if len(f) != 4 || f[1] == "" || f[2] == "1" || f[3] == want {
+		if len(f) != 6 {
 			continue
 		}
-		_, err := workspace.Server.Run(ctx, "resize-pane", "-t", f[0], "-x", want)
-		return err
+		if f[4] == "1" && f[5] == "1" {
+			zoomed = f[0]
+		}
+		if f[1] != "" && f[2] != "1" && f[3] != want {
+			sidebar = f[0]
+		}
 	}
-	return nil
+	if sidebar == "" {
+		return nil
+	}
+	args := []string{"resize-pane", "-t", sidebar, "-x", want}
+	if zoomed != "" {
+		args = append(args, ";", "resize-pane", "-Z", "-t", zoomed)
+	}
+	_, err = workspace.Server.Run(ctx, args...)
+	return err
 }
 
 type paneInfo struct {

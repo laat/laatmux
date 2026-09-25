@@ -12,9 +12,10 @@ import (
 )
 
 // isolatedDefault points the default tmux server at a socket directory
-// of the test's own, with HOME there too so no user's tmux config, its
-// plugins and hooks, is read, and kills that server at the end. The
-// directory is under /tmp: a unix socket's path is short on macOS.
+// of the test's own, starts it with no config at all, not the user's
+// nor a system-wide one that might source it, and kills it at the end.
+// HOME and the state directory are the test's too. The directory is
+// under /tmp: a unix socket's path is short on macOS.
 func isolatedDefault(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
@@ -27,11 +28,17 @@ func isolatedDefault(t *testing.T) {
 	t.Setenv("TMUX_TMPDIR", dir)
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("LAATMUX_HOME", dir)
 	t.Setenv("TMUX", "")
 	t.Cleanup(func() {
 		_, _ = workspace.Server.Run(context.Background(), "kill-server")
 		os.RemoveAll(dir)
 	})
+	// The server starts here, with -f /dev/null; every later command
+	// reaches it through workspace.Server's socket and reads no config.
+	if out, err := exec.Command("tmux", "-L", "default", "-f", "/dev/null", "new-session", "-d", "-s", "boot", "sleep 1000").CombinedOutput(); err != nil {
+		t.Fatalf("start tmux: %v: %s", err, out)
+	}
 }
 
 // A sidebar split off a detached session's 80 columns grows with the
@@ -70,6 +77,29 @@ func TestSidebarFit(t *testing.T) {
 	}
 	if err := sidebarFit(ctx, cfg, other); err != nil {
 		t.Fatal("fit without a sidebar:", err)
+	}
+	// Zoomed on the main pane, the window resized: the sidebar is put
+	// back and the window stays zoomed on the same pane.
+	main := run("display", "-p", "-t", window+".1", "#{pane_id}")
+	if main == id {
+		main = run("display", "-p", "-t", window+".0", "#{pane_id}")
+	}
+	run("select-pane", "-t", main)
+	run("resize-pane", "-Z", "-t", main)
+	run("resize-window", "-t", window, "-x", "100", "-y", "40")
+	run("resize-window", "-t", window, "-x", "200", "-y", "40")
+	if err := sidebarFit(ctx, cfg, window); err != nil {
+		t.Fatal(err)
+	}
+	if z := run("display", "-p", "-t", window, "#{window_zoomed_flag}"); z != "1" {
+		t.Fatal("fit unzoomed the window")
+	}
+	if a := run("display", "-p", "-t", window, "#{pane_id}"); a != main {
+		t.Fatalf("zoomed on %s, want %s", a, main)
+	}
+	run("resize-pane", "-Z", "-t", main)
+	if w := width(); w != "35" {
+		t.Fatalf("after unzoom: %s", w)
 	}
 }
 
