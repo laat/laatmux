@@ -405,6 +405,26 @@ func TestBuildForm(t *testing.T) {
 	if form.Branch() != "fix-the-thing" {
 		t.Fatalf("proposal %q", form.Branch())
 	}
+	// A repository chosen later brings its own host and agent; a host
+	// the user set stays.
+	form = buildForm(cfg, f, last, "proj", "", "", caps)
+	if form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
+		t.Fatalf("proj defaults %q %q", form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
+	form.Handle(view.Key{Kind: view.KeyRight})
+	if form.Chips[0].Label() != "other" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("after choosing other: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	form.Handle(view.Key{Kind: view.KeyTab}) // the host chip
+	form.Handle(view.Key{Kind: view.KeyLeft})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyLeft}) // back to proj
+	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
+		t.Fatalf("after the user's host: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
 	// A worktree row without a session: repository, host and branch
 	// from the record, the branch explicit.
 	form = buildForm(cfg, f, last, "proj", "mac", "existing", caps)
@@ -440,10 +460,12 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	if got.Prompt != "Fix it" || got.Branch != "fix-it" || !got.Generated {
 		t.Fatalf("submitted %+v", got)
 	}
+	// An answer the daemon may have taken: the form goes, the view
+	// stays with the message.
 	d.submit = func(a command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
 	f.Handle(view.Key{Kind: view.KeyEnter})
-	if !d.act(m, m.Poll()) || !strings.Contains(m.Message, "submitted add-1") {
-		t.Fatalf("uncertain submit: message %q", m.Message)
+	if d.act(m, m.Poll()) || !strings.Contains(m.Message, "submitted add-1") || m.Overlay != nil || d.add != nil {
+		t.Fatalf("uncertain submit: message %q overlay %v add %v", m.Message, m.Overlay, d.add)
 	}
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	f = m.Overlay.(*view.Form)
@@ -452,5 +474,27 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	f.Handle(view.Key{Kind: view.KeyEnter})
 	if !d.act(m, m.Poll()) || m.Message != "accepted add-2" || d.add != nil {
 		t.Fatalf("accepted: message %q add %v", m.Message, d.add)
+	}
+}
+
+// The screen a foreground add leaves when its prompt did not reach the
+// agent: the state and reason as the error, and the prompt's lines to
+// copy, waiting for a key.
+func TestUndeliveredLog(t *testing.T) {
+	add := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "one\ntwo"}
+	res := command.Added{Done: true, Root: "/r/b", Managed: "proj/b", Prompt: protocol.DeliveryNotDelivered, Reason: "session existed"}
+	log := undeliveredLog(add, res)
+	if log.Done() {
+		t.Fatal("done before a key")
+	}
+	text := view.Text(log.Render(80, 12))
+	for _, want := range []string{"proj/b", "one", "two", "prompt not delivered: session existed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+	log.Handle(view.Key{Rune: 'x'})
+	if !log.Done() {
+		t.Fatal("a key did not end it")
 	}
 }

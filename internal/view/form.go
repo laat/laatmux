@@ -29,6 +29,9 @@ type Form struct {
 	// Note, when set, is a line under the hint about the chosen host,
 	// such as its daemon not supporting tasks.
 	Note func(f *Form) string
+	// Changed, when set, is called after a chip's selection changes,
+	// with the chip's index, so the host can re-derive the others.
+	Changed func(f *Form, chip int)
 	// Error is what refused the last submit.
 	Error string
 	// Cancelled is set when Esc ended the form.
@@ -125,7 +128,7 @@ func (f *Form) Handle(k Key) {
 		f.picker.Handle(k)
 		if f.picker.Done() {
 			if f.picker.Chosen >= 0 {
-				f.Chips[f.focus].Selected = f.picker.Chosen
+				f.setChip(f.focus, f.picker.Chosen)
 			}
 			f.picker = nil
 		}
@@ -162,16 +165,27 @@ func (f *Form) chipKey(k Key) {
 	switch k.Kind {
 	case KeyLeft, KeyUp:
 		if n > 0 {
-			c.Selected = (c.Selected + n - 1) % n
+			f.setChip(f.focus, (c.Selected+n-1)%n)
 		}
 	case KeyRight, KeyDown:
 		if n > 0 {
-			c.Selected = (c.Selected + 1) % n
+			f.setChip(f.focus, (c.Selected+1)%n)
 		}
 	case KeyEnter:
 		if n > 0 {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
 		}
+	}
+}
+
+// setChip selects a chip's candidate and tells the host.
+func (f *Form) setChip(i, sel int) {
+	if f.Chips[i].Selected == sel {
+		return
+	}
+	f.Chips[i].Selected = sel
+	if f.Changed != nil {
+		f.Changed(f, i)
 	}
 }
 
@@ -218,6 +232,13 @@ func (f *Form) promptKey(k Key) {
 			f.cursor = end + 1
 		}
 	case KeyEnter:
+		// From the prompt, Enter submits when there is one; the branch
+		// line submits without, an agent started on a branch with no
+		// prompt being the add as it was.
+		if strings.TrimSpace(string(f.prompt)) == "" {
+			f.Error = "the prompt is empty"
+			return
+		}
 		f.submit()
 	}
 }
@@ -268,13 +289,9 @@ func (f *Form) branchKey(k Key) {
 	}
 }
 
-// submit ends the form when the prompt is not empty and the branch
-// passes validation.
+// submit ends the form when the branch passes validation; a generated
+// branch from an empty prompt is empty, and refused as such.
 func (f *Form) submit() {
-	if strings.TrimSpace(string(f.prompt)) == "" {
-		f.Error = "the prompt is empty"
-		return
-	}
 	if f.branch == "" {
 		f.Error = "no branch name; give one"
 		return
@@ -335,8 +352,12 @@ func (f *Form) Render(w, h int) []Line {
 	return out[:h]
 }
 
-// focusFg is the colour of the focused field's frame.
-const focusFg = 36
+// focusFg is the colour of the focused field's frame; tabStop is how
+// a tab in the prompt is drawn.
+const (
+	focusFg = 36
+	tabStop = 4
+)
 
 // chipLines draws the three chips on three lines: a top frame with the
 // title, the value, a bottom frame. The widths are split 4:3:4 of what
@@ -472,6 +493,20 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 		r := f.prompt[i]
 		if r == '\n' {
 			flush()
+			continue
+		}
+		if r == '\t' {
+			// Drawn as spaces to the next stop of four, so indentation
+			// shows and the cursor moves as the text does.
+			n := tabStop - curW%tabStop
+			if curW+n > inner {
+				flush()
+				n = tabStop
+			}
+			for range n {
+				cur = append(cur, ' ')
+			}
+			curW += n
 			continue
 		}
 		rw := runeWidth(r)

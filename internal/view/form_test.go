@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 )
 
@@ -205,7 +206,7 @@ func TestFormHandle(t *testing.T) {
 	if !f.Done() || f.Cancelled {
 		t.Fatalf("submit: done %v cancelled %v", f.Done(), f.Cancelled)
 	}
-	// An empty prompt does not submit; Esc cancels.
+	// An empty prompt does not submit from the prompt; Esc cancels.
 	g := NewForm("t", chips(), "")
 	g.Handle(Key{Kind: KeyEnter})
 	if g.Done() || g.Error == "" {
@@ -214,6 +215,21 @@ func TestFormHandle(t *testing.T) {
 	g.Handle(Key{Kind: KeyEsc})
 	if !g.Done() || !g.Cancelled {
 		t.Fatal("esc did not cancel")
+	}
+	// From the branch line an empty prompt submits with a given branch,
+	// the add as it was; a generated one is empty and refused.
+	h := NewForm("t", chips(), "fix")
+	h.Handle(Key{Kind: KeyTab})
+	h.Handle(Key{Kind: KeyEnter})
+	if !h.Done() || h.Cancelled || h.Prompt() != "" || h.Generated() {
+		t.Fatalf("branch submit without a prompt: done %v prompt %q generated %v", h.Done(), h.Prompt(), h.Generated())
+	}
+	i := NewForm("t", chips(), "")
+	i.Propose = propose
+	i.Handle(Key{Kind: KeyTab})
+	i.Handle(Key{Kind: KeyEnter})
+	if i.Done() || !strings.Contains(i.Error, "no branch name") {
+		t.Fatalf("empty generated branch: done %v error %q", i.Done(), i.Error)
 	}
 	// A branch given at the start is the user's.
 	e := NewForm("t", chips(), "fix")
@@ -331,5 +347,50 @@ func TestDecoderPasteAndKeys(t *testing.T) {
 	}
 	if got := d.Feed([]byte("def\x1b[201~")); len(got) != 1 || got[0].Text != "abcdef" || d.Pending() {
 		t.Fatalf("paste end: %+v", got)
+	}
+}
+
+// A tab in the prompt is drawn as spaces to the next stop, and the
+// cursor moves with it.
+func TestFormTabs(t *testing.T) {
+	f := NewForm("t", chips(), "")
+	f.Handle(Key{Kind: KeyPaste, Text: "\tx\n\t\ty"})
+	text := Text(f.Render(40, 12))
+	if !strings.Contains(text, "│     x ") || !strings.Contains(text, "│         y█") {
+		t.Fatalf("tabs:\n%s", text)
+	}
+	if f.Prompt() != "\tx\n\t\ty" {
+		t.Fatalf("prompt %q", f.Prompt())
+	}
+}
+
+// A paste whose end marker never arrives is taken as it is once its
+// bytes have stopped for the grace, or once it is past the size cap,
+// so Esc works again.
+func TestDecoderPasteBounded(t *testing.T) {
+	now := time.Unix(1000, 0)
+	d := Decoder{now: func() time.Time { return now }}
+	if got := d.Feed([]byte("\x1b[200~lost")); len(got) != 0 || !d.Pending() {
+		t.Fatalf("start: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 0 || !d.Pending() {
+		t.Fatalf("flush within the grace: %+v", got)
+	}
+	now = now.Add(pasteGrace + time.Millisecond)
+	got := d.Flush()
+	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "lost" || d.Pending() {
+		t.Fatalf("flush past the grace: %+v pending %v", got, d.Pending())
+	}
+	if got := d.Feed([]byte("\x1b")); len(got) != 0 {
+		t.Fatalf("after: %+v", got)
+	}
+	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc {
+		t.Fatalf("esc after a bounded paste: %+v", got)
+	}
+	var big Decoder
+	big.Feed([]byte("\x1b[200~"))
+	got = big.Feed([]byte(strings.Repeat("a", pasteMax+1)))
+	if len(got) != 1 || got[0].Kind != KeyPaste || len(got[0].Text) != pasteMax+1 || big.Pending() {
+		t.Fatalf("size cap: %d keys pending %v", len(got), big.Pending())
 	}
 }

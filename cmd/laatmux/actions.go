@@ -245,6 +245,38 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	}
 	form := view.NewForm("add a task", chips, branch)
 	form.Propose = worktree.ProposeBranch
+	// A repository chosen later brings its own last-used host and
+	// agent, unless the user has set those chips themselves.
+	var userSet [3]bool
+	form.Changed = func(form *view.Form, chip int) {
+		if chip != 0 {
+			userSet[chip] = true
+			return
+		}
+		// As at build: the last used, else the config's default, else
+		// the first candidate.
+		repo := f.repos[form.Chips[0].Selected]
+		if !userSet[1] {
+			form.Chips[1].Selected = 0
+			if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
+				for i, c := range f.hosts {
+					if c.Name == h.Name {
+						form.Chips[1].Selected = i
+					}
+				}
+			}
+		}
+		if !userSet[2] {
+			form.Chips[2].Selected = 0
+			if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
+				for i, a := range f.agents {
+					if a == name {
+						form.Chips[2].Selected = i
+					}
+				}
+			}
+		}
+	}
 	if caps != nil {
 		form.Note = func(form *view.Form) string {
 			host := form.Chips[1].Label()
@@ -281,8 +313,12 @@ func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 			m.Overlay = o
 			return false
 		case err != nil:
-			m.Message = "submitted " + id + "; " + err.Error()
-			return true
+			// The daemon may hold the task: the form goes, so nothing
+			// is submitted twice, and the view stays with the message,
+			// which a popup closing would take with it.
+			d.add = nil
+			m.Message = "submitted " + id + "; " + err.Error() + "; laatmux tasks says whether the daemon holds it"
+			return false
 		}
 		d.add = nil
 		m.Message = "accepted " + id
@@ -308,10 +344,11 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		return err
 	}, func(m *view.Model) bool {
 		// The delivery state is what the user reads: a prompt that did
-		// not reach the agent, or may not have, stays on screen rather
-		// than being left behind by a jump.
+		// not reach the agent, or may not have, stays on screen with
+		// its text, since the foreground path keeps no file of it,
+		// until a key; a jump would leave it behind.
 		if add.Prompt != "" && res.Prompt != protocol.DeliveryDelivered && res.Prompt != protocol.DeliveryNone {
-			m.Message = "prompt " + res.Prompt + ": " + res.Reason + "  (" + res.Session + " ready)"
+			m.Overlay = undeliveredLog(add, res)
 			return false
 		}
 		if err := switchTo(d.ctx, res.Session); err != nil {
@@ -320,6 +357,22 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		}
 		return d.exitOnJump
 	})
+}
+
+// undeliveredLog is the screen a foreground add whose prompt did not
+// reach the agent leaves up until a key: the state, the reason, the
+// session, and the prompt itself, to be copied into the agent, since
+// the foreground path keeps no file of it.
+func undeliveredLog(add command.Add, res command.Added) *view.Log {
+	log := view.NewLog(add.Describe())
+	log.Append("session " + res.Managed + " is running in " + res.Root + "; the prompt was not delivered to it:")
+	log.Append("")
+	for _, line := range strings.Split(add.Prompt, "\n") {
+		log.Append("    " + line)
+	}
+	log.Append("")
+	log.End(fmt.Errorf("prompt %s: %s", res.Prompt, res.Reason))
+	return log
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree

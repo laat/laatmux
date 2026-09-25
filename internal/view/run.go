@@ -101,6 +101,11 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			if handle(dec.Flush()) {
 				return nil
 			}
+			if dec.Pending() {
+				// A paste under way: looked at again, so one whose end
+				// never comes is taken once its bytes have stopped.
+				flush = time.After(escapeWait)
+			}
 		case b, ok := <-keys:
 			if !ok {
 				return nil

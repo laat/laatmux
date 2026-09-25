@@ -14,6 +14,14 @@ import (
 	"github.com/laat/laatmux/internal/worktree"
 )
 
+// ended is a log that has ended with the message as its error, so the
+// view waits for a key before it goes on.
+func ended(msg string) *view.Log {
+	l := view.NewLog("laatmux compose")
+	l.End(errors.New(msg))
+	return l
+}
+
 // cmdCompose is the task form alone, for a popup binding such as
 // display-popup -E -d '#{pane_current_path}' 'laatmux compose': the
 // dashboard's model without the list, exiting on submit or cancel. The
@@ -88,12 +96,22 @@ func cmdCompose(ctx context.Context, args []string) error {
 				}
 				done := d.submitForm(m, f, o)
 				outcome = m.Message
-				// A refusal puts the form back up; without the relay
-				// the log is up now; with it the answer ends the view.
-				return done || m.Overlay == nil
+				if done {
+					return true
+				}
+				// A refusal put the form back up; without the relay
+				// the log is up; an answer the daemon may have taken
+				// stays until a key, since the popup closes with it.
+				if m.Overlay == nil && m.Message != "" {
+					m.Overlay = ended(m.Message)
+					m.Message = ""
+				}
+				return false
 			case *view.Log:
 				done := d.overlayDone(m)
-				outcome = m.Message
+				if m.Message != "" {
+					outcome = m.Message
+				}
 				return done || m.Overlay == nil
 			}
 			return false

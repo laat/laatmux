@@ -3,6 +3,7 @@ package view
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -65,6 +66,25 @@ type Decoder struct {
 	// across reads and flushes however long it takes.
 	paste   []byte
 	pasting bool
+	// pasteAt is when the paste's last byte arrived, for the bound: a
+	// paste whose end marker never comes is taken as it is once its
+	// bytes have stopped for the grace. now is the clock, for tests.
+	pasteAt time.Time
+	now     func() time.Time
+}
+
+// Bounds on a paste without its end marker: the silence after which it
+// is taken as it is, and the size past which it is.
+const (
+	pasteGrace = time.Second
+	pasteMax   = 1 << 20
+)
+
+func (d *Decoder) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
 }
 
 // Feed adds input and returns the keys complete so far. Pending reports
@@ -95,6 +115,7 @@ func (d *Decoder) Feed(b []byte) []Key {
 			// Everything up to the end marker is the paste; the marker
 			// may be split across reads, so a prefix of it at the end is
 			// held.
+			d.pasteAt = d.clock()
 			if i := strings.Index(string(d.pending), pasteEnd); i >= 0 {
 				d.paste = append(d.paste, d.pending[:i]...)
 				d.pending = d.pending[i+len(pasteEnd):]
@@ -105,6 +126,13 @@ func (d *Decoder) Feed(b []byte) []Key {
 			keep := markerPrefix(d.pending, pasteEnd)
 			d.paste = append(d.paste, d.pending[:len(d.pending)-keep]...)
 			d.pending = append([]byte(nil), d.pending[len(d.pending)-keep:]...)
+			if len(d.paste) > pasteMax {
+				// A paste this long has lost its end, or is not a
+				// paste: taken as it is, so the input is not locked.
+				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
+				d.paste, d.pasting = nil, false
+				continue
+			}
 			return keys
 		}
 		i := strings.Index(string(d.pending), pasteStart)
@@ -118,6 +146,7 @@ func (d *Decoder) Feed(b []byte) []Key {
 		_ = rest
 		d.pending = d.pending[i+len(pasteStart):]
 		d.pasting = true
+		d.pasteAt = d.clock()
 	}
 }
 
@@ -171,7 +200,14 @@ func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
 // way is kept whole: its end is coming, however long it takes.
 func (d *Decoder) Flush() []Key {
 	if d.pasting {
-		return nil
+		// A paste whose bytes have stopped for the grace has lost its
+		// end marker: taken as it is, so Esc works again.
+		if d.clock().Sub(d.pasteAt) < pasteGrace {
+			return nil
+		}
+		text := pasteText(append(d.paste, d.pending...))
+		d.paste, d.pending, d.pasting = nil, nil, false
+		return []Key{{Kind: KeyPaste, Text: text}}
 	}
 	// The start of a paste marker, split by a slow read, is held too:
 	// dropped, the paste's text would be read as keys, its line breaks
