@@ -47,6 +47,10 @@ type mergedHost struct {
 	agents    map[string]protocol.Agent    // by id; empty for the local host, whose records are the daemon's own
 	worktrees map[string]protocol.Worktree // by id
 	cancel    context.CancelFunc           // stops the follow goroutine; nil while not following
+	// listed is that the current connection has delivered a successful
+	// listing: a snapshot with its stamp, or a stamp upsert after one
+	// without. Its first is fresh, checked whatever came before.
+	listed bool
 }
 
 // mergedSubscribe registers a merged subscriber and returns its snapshot.
@@ -442,11 +446,40 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: id})
 			}
 		}
+		// A successful listing: a task on the host whose worktree it
+		// lacks, removed while this daemon was down say, is checked. A
+		// snapshot without the stamp has no listing behind it.
+		// Every snapshot begins a connection's stream. It carries the
+		// last successful listing's stamp, and with it the current
+		// error when the latest poll failed: then its worktrees are that
+		// older listing's, and it is not the connection's listing.
+		mh.listed = msg.Listing != nil && msg.ListingError == ""
+		if mh.listed {
+			listed := map[string]bool{}
+			for id := range mh.worktrees {
+				listed[id] = true
+			}
+			d.hostListedLocked(mh.status.EnvironmentID, listed, true)
+		}
 		mh.status.Listed = true
 		mh.status.Since = time.Now()
 		st := mh.status
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
 	case protocol.TypeUpsert:
+		if msg.Listing != nil && msg.ListingError == "" {
+			// A poll that succeeded, after the removals it made: a
+			// listing that failed for a while and came back finds what
+			// went meanwhile.
+			listed := map[string]bool{}
+			for id := range mh.worktrees {
+				listed[id] = true
+			}
+			// The connection's first listing, after a snapshot a failing
+			// listing left without its stamp, is fresh as a stamped
+			// snapshot is.
+			d.hostListedLocked(mh.status.EnvironmentID, listed, !mh.listed)
+			mh.listed = true
+		}
 		if msg.Agent != nil {
 			mh.agents[msg.Agent.ID] = *msg.Agent
 		}
@@ -462,6 +495,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		}
 		if msg.WorktreeID != "" {
 			delete(mh.worktrees, msg.WorktreeID)
+			d.worktreeRemovedLocked(msg.WorktreeID)
 		}
 		if msg.AgentID != "" || msg.WorktreeID != "" {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: msg.AgentID, WorktreeID: msg.WorktreeID})

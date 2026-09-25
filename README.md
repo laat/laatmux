@@ -766,6 +766,14 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   the worktree row's id. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
   retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
+  delivers it; its worktree removed meanwhile, by `rm` here or
+  elsewhere or by hand, makes it `gone` too: a removal the host reports,
+  and a host's successful listing that lacks the worktree, a
+  reconnect's snapshot or a later poll's, have the host asked again, as
+  the handoff asks it, until it answers; a remote host's listings are
+  followed while a view is subscribed. `rm` drops the finished tasks at the worktree it
+  removed, through `{type: dismiss, environment_id, root}` to a local
+  daemon that is running and has the capability `dismiss-root`. Until then, `{type: prompt, id}`
   delivers it as the next attempt, written to the file first, one
   unresolved at a time; `recovery expired` from the host ends that, and
   `laatmux tasks show <id>` prints the prompt for pasting by hand. An add

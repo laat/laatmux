@@ -448,7 +448,11 @@ the row for good; with no viewer, or with the host gone from the
 merged hosts, it hands over on the listing at once. Then the file
 goes; no worktree at the root is `done, worktree gone`, a
 row that needs the user only to be dismissed, and the file stays until
-then. Until such a snapshot the row says `done, awaiting the listing`,
+then. A record that needs the user and whose worktree goes later, by
+`rm` or by hand, is `gone` as well: a removal the host reports, or a
+host's full listing without the worktree, has the host asked again as
+the handoff asks it; and `rm` drops the finished records at the
+worktree it removed. Until such a snapshot the row says `done, awaiting the listing`,
 with the host's listing error when there is one, and the outcome is
 already reported: the foreground command returns, the relay's channel
 closes, only the retirement waits. While a
@@ -526,6 +530,7 @@ New capability on the laptop's daemon, `relay`, next to `merged`:
 -> {type: add, id, relay: <host>, repo, branch, generated, agent_name, cmd, prompt}
 <- {type: result, id, ok}                          accepted: on disk, host dialled after
 -> {type: dismiss, id}                             drop a pending record that needs the user, or one the host will never answer for
+-> {type: dismiss, environment_id, root}          drop the finished records at a worktree rm removed
 <- {type: result, id, ok}
 -> {type: prompt, id}                              deliver a pending record's prompt now
 <- {type: result, id, ok, prompt: <state>, error}

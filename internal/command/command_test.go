@@ -449,3 +449,33 @@ func TestSubmit(t *testing.T) {
 		t.Fatalf("sent without relay: %+v", got)
 	}
 }
+
+// DismissAt with no daemon running starts none and says nothing: rm
+// must not fail for want of one.
+func TestDismissAtNoDaemon(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	if err := DismissAt(context.Background(), "env", "/w/b"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A daemon without dismiss-root is sent nothing: it would read the
+// message as a dismiss of the request's own id.
+func TestDismissAtOlderDaemon(t *testing.T) {
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapRelay}})
+	if err := DismissAt(context.Background(), "env", "/w/b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent to a daemon without dismiss-root: %+v", got)
+	}
+	// One with it gets the dismiss by root, under an id of its own.
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapRelay, protocol.CapDismissRoot}})
+	if err := DismissAt(context.Background(), "env", "/w/b"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.commands()
+	if len(got) != 1 || got[0].Type != protocol.TypeDismiss || got[0].EnvironmentID != "env" || got[0].Root != "/w/b" || got[0].ID == "" {
+		t.Fatalf("dismiss at: %+v", got)
+	}
+}
