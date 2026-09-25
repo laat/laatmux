@@ -366,6 +366,47 @@ func (l *Log) Render(w, h int) []Line {
 	return append(out[:h-1], foot)
 }
 
+// hardWrap splits s into lines of at most w cells exactly where the
+// width runs out, keeping every space, with tabs drawn as spaces to
+// the next stop of four and other control characters dropped.
+func hardWrap(s string, w int) []string {
+	if w < 1 {
+		return nil
+	}
+	var out []string
+	var cur []rune
+	n := 0
+	flush := func() {
+		out = append(out, string(cur))
+		cur, n = nil, 0
+	}
+	for _, r := range s {
+		if r == '\t' {
+			k := 4 - n%4
+			if n+k > w {
+				flush()
+				k = 4
+			}
+			for range k {
+				cur = append(cur, ' ')
+			}
+			n += k
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		rw := runeWidth(r)
+		if n+rw > w && n > 0 {
+			flush()
+		}
+		cur = append(cur, r)
+		n += rw
+	}
+	flush()
+	return out
+}
+
 // wrap splits s into lines of at most w cells, at spaces where one
 // falls in the last third of the line, else mid-word. Control
 // characters are dropped first, line breaks and tabs becoming spaces:
@@ -415,8 +456,13 @@ type Notice struct {
 	Title  string
 	Lines  []string
 	Footer string
-	scroll int
-	done   bool
+	// Verbatim is the index of the first line kept as it is: wrapped
+	// only where the width runs out, tabs drawn as spaces to the next
+	// stop, no space dropped, so a prompt shown for copying reads as it
+	// was typed. Lines before it are prose, wrapped at spaces.
+	Verbatim int
+	scroll   int
+	done     bool
 }
 
 func NewNotice(title string, lines []string, footer string) *Notice {
@@ -455,12 +501,16 @@ func (n *Notice) Render(w, h int) []Line {
 		return nil
 	}
 	var body []Line
-	for _, s := range n.Lines {
+	for i, s := range n.Lines {
 		if s == "" {
 			body = append(body, plain(""))
 			continue
 		}
-		for _, part := range wrap(s, w) {
+		parts := wrap(s, w)
+		if n.Verbatim > 0 && i >= n.Verbatim {
+			parts = hardWrap(s, w)
+		}
+		for _, part := range parts {
 			body = append(body, plain(part))
 		}
 	}

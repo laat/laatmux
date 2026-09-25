@@ -467,3 +467,18 @@ func TestLogIgnoresPaste(t *testing.T) {
 		t.Fatal("a key did not")
 	}
 }
+
+// A notice's verbatim lines keep their spaces and show tabs as
+// indents, wrapped only where the width runs out; its prose lines
+// wrap at spaces.
+func TestNoticeVerbatim(t *testing.T) {
+	n := NewNotice("t", []string{"a prose line that wraps at a space when long", "", "\tkeep  two spaces and a very long line that runs past the width"}, "")
+	n.Verbatim = 2
+	text := Text(n.Render(30, 10))
+	if !strings.Contains(text, "    keep  two spaces and a ver") || !strings.Contains(text, "y long line that runs past the") {
+		t.Fatalf("verbatim:\n%s", text)
+	}
+	if !strings.Contains(text, "a prose line that wraps at a") {
+		t.Fatalf("prose:\n%s", text)
+	}
+}

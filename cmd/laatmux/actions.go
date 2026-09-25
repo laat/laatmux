@@ -389,25 +389,38 @@ func undelivered(add command.Add, res command.Added) *view.Notice {
 	}
 	var lines []string
 	switch {
+	case res.Prompt == "" && !res.Answered:
+		// No result came: the host may have taken the add and the
+		// agent may have the prompt.
+		lines = []string{"outcome unknown: no result came from the host; the agent may have the prompt", ""}
+	case res.Prompt == "" && res.Stage != "" && res.Stage != protocol.StageAgent:
+		// A failure before the agent stage: the prompt was never sent.
+		lines = []string{"the add failed at " + res.Stage + ", before the prompt was sent", ""}
 	case res.Prompt == "":
-		// The add failed before the host said anything of the prompt.
-		lines = []string{"the add failed before the prompt was sent", ""}
+		lines = []string{"the add failed; whether the prompt was sent is unknown", ""}
 	case res.Reason != "":
 		lines = []string{"prompt " + res.Prompt + ": " + res.Reason, ""}
 	default:
 		lines = []string{"prompt " + res.Prompt, ""}
 	}
+	sure := res.Prompt == protocol.DeliveryNotDelivered
 	switch {
-	case res.Managed != "":
+	case res.Managed != "" && sure:
 		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+" without it. The prompt was:")
-	case res.Root != "":
+	case res.Managed != "":
+		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+"; whether it has the prompt is unknown. The prompt was:")
+	case res.Root != "" && sure:
 		lines = append(lines, "the worktree "+res.Root+" is there without an agent. The prompt was:")
+	case res.Root != "":
+		lines = append(lines, "the worktree "+res.Root+" is there. The prompt was:")
 	default:
 		lines = append(lines, "The prompt was:")
 	}
 	lines = append(lines, "")
 	lines = append(lines, strings.Split(add.Prompt, "\n")...)
-	return view.NewNotice(add.Describe(), lines, "enter or esc returns")
+	n := view.NewNotice(add.Describe(), lines, "enter or esc returns")
+	n.Verbatim = len(lines) - strings.Count(add.Prompt, "\n") - 1
+	return n
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree

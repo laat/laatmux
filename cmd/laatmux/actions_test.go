@@ -523,10 +523,26 @@ func TestUndelivered(t *testing.T) {
 	if !n.Done() {
 		t.Fatal("enter did not end it")
 	}
-	// A launch that failed with the delivery unknown, no session.
-	failed := command.Added{Done: false, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
-	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") {
-		t.Fatal("no notice for an unknown delivery on a failed add")
+	// A launch that failed with the delivery unknown, no session: the
+	// text says the agent may have it, never that it does not.
+	failed := command.Added{Done: false, Answered: true, Stage: protocol.StageAgent, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
+	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") || strings.Contains(view.Text(n.Render(80, 12)), "without") {
+		t.Fatalf("unknown delivery on a failed add:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// A failure before the agent stage is positively before the send;
+	// no result at all is unknown.
+	early := command.Added{Answered: true, Stage: protocol.StageFetch}
+	if n := undelivered(add, early); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "failed at fetch, before the prompt was sent") {
+		t.Fatalf("early failure:\n%s", view.Text(n.Render(80, 12)))
+	}
+	lost := command.Added{}
+	if n := undelivered(add, lost); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "outcome unknown") || strings.Contains(view.Text(n.Render(80, 12)), "not sent") {
+		t.Fatalf("lost result:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// The prompt's whitespace is kept.
+	tabs := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "run:\n\tmake  all"}
+	if text := view.Text(undelivered(tabs, res).Render(80, 12)); !strings.Contains(text, "    make  all") {
+		t.Fatalf("whitespace:\n%s", text)
 	}
 	if undelivered(add, command.Added{Done: true, Prompt: protocol.DeliveryDelivered}) != nil || undelivered(command.Add{}, res) != nil {
 		t.Fatal("a notice with nothing to recover")
