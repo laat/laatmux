@@ -435,8 +435,14 @@ stands. The relay, on its own connection, takes plain snapshots after
 the result until one satisfies the barrier: the same generation at that
 revision or higher, or any later generation with a successful listing,
 since a daemon that started after the mutation lists after it. A worktree at the root in that snapshot hands
-the row over to the worktree row, once the merged stream shows it too,
-and the file goes; no worktree at the root is `done, worktree gone`, a
+the row over to the worktree row, once the merged stream shows it too:
+while a viewer is subscribed the relay waits for that, looking at the
+host's listing again every few seconds meanwhile, since the worktree
+may be gone again by then, and after a minute it hands over on the
+listing alone, so a merged connection that stays down does not hold
+the row for good; with no viewer, or with the host gone from the
+merged hosts, it hands over on the listing at once. Then the file
+goes; no worktree at the root is `done, worktree gone`, a
 row that needs the user only to be dismissed, and the file stays until
 then. Until such a snapshot the row says `done, awaiting the listing`,
 with the host's listing error when there is one, and the outcome is
@@ -490,6 +496,14 @@ not resubmit it, and one with an attempt unresolved follows the
 attempt. One whose host is gone from the config stays too, with `host
 removed`, so nothing the user asked for disappears without them.
 
+`x` is offered on a row that needs the user, and on two more that
+would otherwise be stuck: a record the host has no trace of, never
+sent nor taken, which a host that never answers leaves waiting, and a
+record whose host is gone from the config, whatever its state. A
+dismiss ends the record's goroutines first, and removes a never-sent
+record before ending them, so nothing is sent for a file that is gone;
+a running add on a configured host is never dismissed.
+
 ## Protocol
 
 New capability on the laptop's daemon, `relay`, next to `merged`:
@@ -497,7 +511,7 @@ New capability on the laptop's daemon, `relay`, next to `merged`:
 ```
 -> {type: add, id, relay: <host>, repo, branch, generated, agent_name, cmd, prompt}
 <- {type: result, id, ok}                          accepted: on disk, host dialled after
--> {type: dismiss, id}                             drop a pending record that needs the user
+-> {type: dismiss, id}                             drop a pending record that needs the user, or one the host will never answer for
 <- {type: result, id, ok}
 -> {type: prompt, id}                              deliver a pending record's prompt now
 <- {type: result, id, ok, prompt: <state>, error}

@@ -26,10 +26,12 @@ import (
 // lifetime reaches a tombstone unless the clocks disagree by more than
 // three weeks.
 const (
-	journalRetention = 30 * 24 * time.Hour
-	journalFuture    = 24 * time.Hour
-	journalSweep     = time.Hour
+	journalFuture = 24 * time.Hour
+	journalSweep  = time.Hour
 )
+
+// journalRetention is a variable so a test can shorten it.
+var journalRetention = 30 * 24 * time.Hour
 
 // Launch states of an entry: the agent stage journaled as two
 // transitions around new-session.

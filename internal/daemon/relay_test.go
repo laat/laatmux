@@ -848,3 +848,143 @@ func TestRelayHandoffFindsWorktreeGone(t *testing.T) {
 	}
 	_ = pc
 }
+
+// Recovery expired through the relay: a host journal swept before p
+// refuses the attempt, which the record keeps apart from the add's
+// outcome with its number rolled back, the next p is refused, and the
+// prompt stays in the file for tasks show.
+func TestRelayRecoveryExpired(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "x1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "swept", AgentName: "claude", Prompt: "keep", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "x1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	f.host.journal.sweep(time.Now().Add(journalRetention + time.Hour))
+	if _, ok := f.host.journal.get("x1"); ok {
+		t.Fatal("entry not swept")
+	}
+	res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "x1"})
+	if res.OK || res.Error != protocol.ErrRecoveryExpired {
+		t.Fatalf("p after the sweep %+v", res)
+	}
+	p := readPending(t, f.dir, "x1")
+	if p.AttemptError != protocol.ErrRecoveryExpired || p.Attempt != 0 || p.AttemptOpen || p.PromptText != "keep" || !strings.Contains(p.Error, "not ready") {
+		t.Fatalf("file %+v", p)
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "x1"}); res.OK || !strings.Contains(res.Error, protocol.ErrRecoveryExpired) {
+		t.Fatalf("second p %+v", res)
+	}
+}
+
+// A host that refuses the add as submission expired makes the record
+// outcome unknown.
+func TestRelaySubmissionExpiredByHost(t *testing.T) {
+	was := journalRetention
+	journalRetention = time.Hour
+	t.Cleanup(func() { journalRetention = was })
+	f := newRelayFixture(t, nil)
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "e1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "expired", AgentName: "argv", SubmittedAt: time.Now().Add(-2 * time.Hour)}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	p := f.awaitRecord(t, "e1", 10*time.Second, func(p pendingFile) bool { return p.Done })
+	if p.OK || !strings.Contains(p.Error, relayOutcomeUnknown) || !strings.Contains(p.Error, protocol.ErrSubmissionExpired) {
+		t.Fatalf("record %+v", p)
+	}
+}
+
+// A laptop daemon restarted while the host still runs the add: the new
+// daemon's follow attaches to the live stream and gets the result.
+func TestRelayLaptopRestartDuringAdd(t *testing.T) {
+	shortWait(t, 3*time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	// The host is running the add, in its typed wait.
+	hpc := conn(t, f.host)
+	hpc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "l1", Repo: f.source(), Branch: "live", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()})
+	for {
+		m, err := hpc.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == protocol.TypeProgress && strings.HasPrefix(m.Detail, "typing the prompt") {
+			break
+		}
+	}
+	// The record as the last laptop daemon left it: sent, not done.
+	p := pendingFile{Pending: protocol.Pending{ID: "l1", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "live", Agent: "claude", SubmittedAt: time.Now(), UpdatedAt: time.Now()}, PromptText: "p", Sent: true}
+	b, _ := json.Marshal(p)
+	os.WriteFile(filepath.Join(f.dir, FileName("l1")), b, 0o600)
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.local = local
+	got := f.awaitRecord(t, "l1", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if !got.OK || got.Prompt != protocol.DeliveryNotDelivered || !got.Taken {
+		t.Fatalf("record %+v", got)
+	}
+	if res, _ := result(t, hpc, "l1"); !res.OK {
+		t.Fatalf("host result %+v", res)
+	}
+	// The host ran the add once: one launch.
+	if len(f.ft.cmds) != 1 {
+		t.Fatalf("cmds %q", f.ft.cmds)
+	}
+}
+
+// Attempt numbers that drifted from the host's are put back from its
+// answer, and the next p delivers.
+func TestRelayAttemptNumberResync(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "n1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "drift", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "n1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	f.local.setPending("n1", true, func(p *pendingFile) { p.Attempt = 3 })
+	res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "n1"})
+	if res.OK || !strings.Contains(res.Error, "the journal has 0") {
+		t.Fatalf("drifted p %+v", res)
+	}
+	if p := readPending(t, f.dir, "n1"); p.Attempt != 0 || p.AttemptError == "" {
+		t.Fatalf("file %+v", p)
+	}
+	f.ft.set(func() { f.ft.screen = idleScreen })
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "n1"}); !res.OK || res.Attempt != 1 || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("resynced p %+v", res)
+	}
+	if n, ok := journalHas("attempt 4 is not the next; the journal has 2"); !ok || n != 2 {
+		t.Fatalf("journalHas %d %v", n, ok)
+	}
+	if _, ok := journalHas("removed"); ok {
+		t.Fatal("journalHas on another message")
+	}
+}
+
+// A merged stream that never shows the worktree holds the row for the
+// patience, then the record hands over on the listing alone.
+func TestRelayHandoffPatience(t *testing.T) {
+	was := handoffPatience
+	handoffPatience = 2 * time.Second
+	t.Cleanup(func() { handoffPatience = was })
+	f := newRelayFixture(t, nil)
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	f.local.mu.Lock()
+	f.local.mhosts["vm"].cancel()
+	f.local.mhosts["vm"].cancel = func() {}
+	f.local.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "p1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "patience", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	listed := f.awaitRecord(t, "p1", 30*time.Second, func(p pendingFile) bool { return p.Listed })
+	if listed.retired() {
+		t.Fatal("handed over before the patience")
+	}
+	got := f.awaitRecord(t, "p1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	if got.Gone || got.ReplacedBy != got.WorktreeID() {
+		t.Fatalf("record %+v", got)
+	}
+}
