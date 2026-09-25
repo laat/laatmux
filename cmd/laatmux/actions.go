@@ -571,7 +571,7 @@ func (d *dash) askRm(m *view.Model, force bool) {
 // a task still running on the machine it was accepted for.
 func Dismissable(r rows.Row) bool {
 	p := r.Pending
-	return p != nil && (r.NeedsUser() || r.Removed || p.Mismatch != "" || !p.Taken)
+	return p != nil && (r.NeedsUser() || r.Removed || r.Replaced || p.Mismatch != "" || !p.Taken)
 }
 
 // Deliverable is a pending task whose prompt p delivers now: the add

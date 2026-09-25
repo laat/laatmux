@@ -814,6 +814,12 @@ func TestPendingTarget(t *testing.T) {
 	if _, err := pendingTarget(row(replaced, &protocol.Worktree{Session: "proj/fix"}, false)); err == nil || !strings.Contains(err.Error(), "host replaced") {
 		t.Fatalf("replaced: %v", err)
 	}
+	// The host's environment changed before the relay recorded it.
+	unseen := row(p, nil, false)
+	unseen.Replaced = true
+	if _, err := pendingTarget(unseen); err == nil || !strings.Contains(err.Error(), "host replaced") {
+		t.Fatalf("replaced, unrecorded: %v", err)
+	}
 	r, err := pendingTarget(row(p, nil, false))
 	if err != nil || r.Worktree == nil || r.Worktree.Session != "proj/fix" || r.Worktree.ID != "venv/worktree//w/proj/fix" {
 		t.Fatalf("unlisted: %+v %v", r.Worktree, err)

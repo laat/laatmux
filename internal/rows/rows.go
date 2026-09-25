@@ -58,8 +58,13 @@ type Row struct {
 	// record hands over, so it carries that row's worktree, agent and
 	// local session, when there are any, for the jump.
 	Pending *protocol.Pending
-	// Removed is that a pending record's host is gone from the config.
+	// Removed is that a pending record's host is gone from the config;
+	// Replaced that its host answers as another machine than the one
+	// the task was accepted for, which the view sees in the host's
+	// environment id before the relay, having stopped contacting the
+	// host, records it.
 	Removed  bool
+	Replaced bool
 	Worktree *protocol.Worktree
 	Agent    *protocol.Agent
 	// Local is the local session for the row, when there is one: the
@@ -128,7 +133,7 @@ func (r Row) NeedsUser() bool {
 	switch {
 	case p == nil:
 		return false
-	case r.Removed || p.Mismatch != "":
+	case r.Removed || r.Replaced || p.Mismatch != "":
 		return true
 	case !p.Done || p.AttemptOpen:
 		return false
@@ -187,7 +192,7 @@ func (r Row) Mark() string {
 func (r Row) State() string {
 	switch {
 	case r.Pending != nil:
-		s, _ := PendingState(*r.Pending, r.Removed)
+		s, _ := r.pendingState()
 		return s
 	case r.Stale:
 		return "no worktree"
@@ -207,8 +212,19 @@ func (r Row) Detail() string {
 	if r.Pending == nil {
 		return ""
 	}
-	_, d := PendingState(*r.Pending, r.Removed)
+	_, d := r.pendingState()
 	return d
+}
+
+// pendingState is PendingState with what the rows know besides the
+// record: the host's absence from the config, and a host that answers
+// as another machine before the relay has said so.
+func (r Row) pendingState() (string, string) {
+	p := *r.Pending
+	if r.Replaced && !r.Removed && p.Mismatch == "" {
+		return "host replaced", r.Host + " answers as another machine than " + p.EnvironmentID
+	}
+	return PendingState(p, r.Removed)
 }
 
 // PendingState is where a pending task is, in a few words, and the
@@ -333,8 +349,9 @@ func Build(in Input) Rows {
 	byAlias := map[string][]int{}
 	for i := range in.Pendings {
 		p := &in.Pendings[i]
-		_, configured := hosts[p.Host]
-		r := Row{Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured}
+		h, configured := hosts[p.Host]
+		r := Row{Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
+			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
 		if alias := r.Alias(); alias != "" {
 			byAlias[alias] = append(byAlias[alias], len(pendings))
 		}
@@ -384,10 +401,13 @@ func Build(in Input) Rows {
 		if pendings[i].Agent != nil || p.EnvironmentID == "" || p.Session == "" {
 			continue
 		}
-		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] {
+		// The session name alone could be a later session's that took
+		// the name: the agent's pane must start at the task's root, as
+		// the host's own join of a pane to a worktree has it.
+		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] && p.Root != "" && a.Cwd == p.Root {
 			pendings[i].Agent, used[a] = a, true
 			for j := range pendings {
-				if j != i && pendings[j].Agent == nil && pendings[j].Pending.EnvironmentID == p.EnvironmentID && pendings[j].Pending.Session == p.Session {
+				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
 					pendings[j].Agent = a
 				}
 			}

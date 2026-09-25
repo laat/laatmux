@@ -249,10 +249,10 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 	switch {
 	case r.Removed:
 		return r, errors.New(r.Name + ": host removed from the config")
-	case p.Mismatch != "":
+	case p.Mismatch != "" || r.Replaced:
 		// The name reaches another machine now: its session of the
 		// same name is not this task's.
-		return r, errors.New(r.Name + ": host replaced: " + p.Mismatch)
+		return r, errors.New(r.Name + ": host replaced: " + r.Detail())
 	case r.Worktree != nil && r.Worktree.Session != "":
 	case p.Session == "" || p.Root == "" || p.EnvironmentID == "":
 		if r.Worktree == nil {

@@ -185,7 +185,7 @@ func TestBuildPending(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Cwd: "/r/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
@@ -265,6 +265,35 @@ func TestBuildPending(t *testing.T) {
 		}
 		if (r.ID() == "add-1" || r.ID() == "add-2") && (r.Local == nil || !r.Current) {
 			t.Fatalf("%s did not take the local session: %v current %v", r.ID(), r.Local, r.Current)
+		}
+	}
+	// A later session that took the name, in another directory, is not
+	// the task's: it stays a row of its own.
+	in.Agents[0].Cwd = "/scratch"
+	got = Build(in)
+	own := false
+	for _, r := range got.All() {
+		if r.Pending == nil && r.Agent != nil && r.Agent.Session == "proj/task" {
+			own = true
+		}
+		if r.ID() == "add-1" && r.Agent != nil {
+			t.Fatal("the task took an agent in another directory")
+		}
+	}
+	if !own {
+		t.Fatal("the agent in another directory has no row")
+	}
+	// The host answering as another machine: the task says so and
+	// needs the user, before the relay has recorded it.
+	in.Agents[0].Cwd = "/r/task"
+	in.Hosts[0].EnvironmentID = "wenv"
+	got = Build(in)
+	for _, r := range got.Main {
+		if r.ID() == "add-1" && (!r.Replaced || r.State() != "host replaced" || !r.NeedsUser()) {
+			t.Fatalf("replaced: %v %q needs %v", r.Replaced, r.State(), r.NeedsUser())
+		}
+		if r.ID() == "add-3" && r.Replaced {
+			t.Fatal("a task with no environment yet is replaced")
 		}
 	}
 }
