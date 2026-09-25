@@ -385,12 +385,13 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
 				continue
 			}
-			// A root whose owner cannot be told is left out, with the
-			// error, as a checkout that fails to list is.
-			if mine, err := pointsBack(e.Root, co.dir); err != nil {
-				errs = append(errs, err)
-				continue
-			} else if !mine {
+			// A root whose owner cannot be told, its .git unreadable or
+			// not a worktree's, is listed for the first checkout that
+			// registers it: the listing fails as a whole on an error,
+			// which would hold every other worktree's change, and a
+			// wrong clone here is only a label. Find and ByBranch, which
+			// rm removes through, refuse it instead.
+			if mine, err := pointsBack(e.Root, co.dir); err == nil && !mine {
 				continue
 			}
 			seen[e.Root] = true

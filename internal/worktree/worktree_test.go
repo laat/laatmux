@@ -1286,8 +1286,9 @@ func TestKnownAmbiguousLabel(t *testing.T) {
 }
 
 // A registered root whose .git cannot be told apart as a worktree's is
-// an error in the listing and the lookups, not a guess at its clone; a
-// root that is gone is still found for rm to prune.
+// an error in the lookups rm removes through, not a guess at its clone;
+// the listing, which fails as a whole on an error, still lists it for
+// its checkout. A root that is gone is still found for rm to prune.
 func TestUnreadableDotGitIsAnError(t *testing.T) {
 	f := newFixture(t)
 	a, _, err := f.add("one")
@@ -1300,7 +1301,7 @@ func TestUnreadableDotGitIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, dotgit, "not a gitdir line\n")
-	if recs, err := f.store.List(f.ctx); err == nil || len(recs) != 0 {
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 || recs[0].Root != a.Root {
 		t.Fatalf("list with a malformed .git: %+v %v", recs, err)
 	}
 	if _, _, ok, err := f.store.Find(f.ctx, a.Root); err == nil || ok {
