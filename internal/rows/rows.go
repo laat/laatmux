@@ -65,6 +65,12 @@ type Row struct {
 	// host, records it.
 	Removed  bool
 	Replaced bool
+	// Unlisted is a task whose worktree was listed after its add and is
+	// not in its host's listing now: the host can say, being connected,
+	// listed and publishing worktrees, and the worktree has gone since.
+	// The daemon marks such a task gone once the host confirms it; until
+	// then the row is not jumped into.
+	Unlisted bool
 	Worktree *protocol.Worktree
 	Agent    *protocol.Agent
 	// Local is the local session for the row, when there is one: the
@@ -432,6 +438,14 @@ func Build(in Input) Rows {
 					pendings[j].Agent = a
 				}
 			}
+		}
+	}
+	for i := range pendings {
+		p := pendings[i].Pending
+		h := hosts[p.Host]
+		if pendings[i].stands() && p.Listed && pendings[i].Worktree == nil && pendings[i].Alias() != "" &&
+			h.Connected && h.Listed && h.Worktrees && h.EnvironmentID == p.EnvironmentID {
+			pendings[i].Unlisted = true
 		}
 	}
 	rows = append(rows, pendings...)

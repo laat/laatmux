@@ -442,6 +442,9 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: id})
 			}
 		}
+		// A full listing: a task on the host whose worktree it lacks,
+		// removed while this daemon was down say, is checked.
+		d.hostListedLocked(mh.status.EnvironmentID, seen)
 		mh.status.Listed = true
 		mh.status.Since = time.Now()
 		st := mh.status
@@ -462,6 +465,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		}
 		if msg.WorktreeID != "" {
 			delete(mh.worktrees, msg.WorktreeID)
+			d.worktreeRemovedLocked(msg.WorktreeID)
 		}
 		if msg.AgentID != "" || msg.WorktreeID != "" {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: msg.AgentID, WorktreeID: msg.WorktreeID})

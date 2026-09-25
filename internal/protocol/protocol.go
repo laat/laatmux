@@ -32,7 +32,7 @@ const (
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
-	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user
+	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user; with environment_id and root, the finished ones at that worktree, the id then the request's own
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"

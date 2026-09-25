@@ -408,6 +408,11 @@ func (d *Daemon) markDiscovered(flag *bool) {
 	both := d.panesDiscovered && d.worktreesDiscovered
 	if both {
 		d.localListedLocked()
+		listed := map[string]bool{}
+		for root := range d.worktrees {
+			listed[d.worktreeID(root)] = true
+		}
+		d.hostListedLocked(d.cfg.EnvironmentID, listed)
 	}
 	d.mu.Unlock()
 	if both {
@@ -854,7 +859,15 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				return
 			}
 		case protocol.TypeDismiss:
-			if err := pc.Write(d.dismiss(m.ID)); err != nil {
+			// A root names the worktree whose tasks go; the id is then
+			// the request's own, which a client always sets.
+			var res protocol.Message
+			if m.Root != "" {
+				res = d.dismissAt(m.ID, m.EnvironmentID, m.Root)
+			} else {
+				res = d.dismiss(m.ID)
+			}
+			if err := pc.Write(res); err != nil {
 				return
 			}
 		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun, protocol.TypePrompt:

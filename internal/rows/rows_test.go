@@ -416,3 +416,38 @@ func TestPendingOnRenamedHost(t *testing.T) {
 		}
 	}
 }
+
+// A task listed after its add whose worktree its host's listing lacks
+// now is unlisted, when the host can say so; one whose worktree is
+// listed, or whose host is not listed, or not listed yet itself, is not.
+func TestPendingUnlisted(t *testing.T) {
+	now := time.Now()
+	p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Listed: true, SubmittedAt: now}
+	up := Host{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}
+	wt := protocol.Worktree{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b"}
+	unlisted := func(h Host, ws []protocol.Worktree, p protocol.Pending) bool {
+		for _, r := range Build(Input{Hosts: []Host{h}, Worktrees: ws, Pendings: []protocol.Pending{p}}).Main {
+			if r.Pending != nil {
+				return r.Unlisted
+			}
+		}
+		t.Fatal("no task row")
+		return false
+	}
+	if !unlisted(up, nil, p) {
+		t.Error("worktree missing from a live listing: not unlisted")
+	}
+	if unlisted(up, []protocol.Worktree{wt}, p) {
+		t.Error("worktree listed: unlisted")
+	}
+	down := up
+	down.Listed = false
+	if unlisted(down, nil, p) {
+		t.Error("host not listed: unlisted")
+	}
+	early := p
+	early.Listed = false
+	if unlisted(up, nil, early) {
+		t.Error("task not listed yet: unlisted")
+	}
+}

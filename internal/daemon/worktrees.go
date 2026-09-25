@@ -180,6 +180,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		delete(d.worktrees, root)
 		d.seq++
 		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, WorktreeID: d.worktreeID(root)})
+		d.worktreeRemovedLocked(d.worktreeID(root))
 	}
 }
 

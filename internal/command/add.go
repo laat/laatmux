@@ -257,6 +257,27 @@ func Dismiss(ctx context.Context, id string) error {
 	return err
 }
 
+// DismissAt asks this machine's daemon, when one is running, to drop
+// the tasks at a worktree rm removed. Best effort: a daemon that is not
+// running holds no task in memory, and marks one gone once its host's
+// listing lacks the worktree; one without the relay has none.
+func DismissAt(ctx context.Context, environmentID, root string) error {
+	nc, err := client.DialLocal(ctx, false)
+	if err != nil {
+		return nil
+	}
+	c, err := client.Connect(ctx, client.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		return nil
+	}
+	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, EnvironmentID: environmentID, Root: root})
+	return err
+}
+
 // DeliverPending asks this machine's daemon to deliver a pending
 // record's prompt now, as its next attempt, and returns the delivery
 // state with its reason.

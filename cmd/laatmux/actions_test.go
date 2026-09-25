@@ -839,6 +839,13 @@ func TestPendingTarget(t *testing.T) {
 	if _, err := pendingTarget(row(failed, nil, false)); err == nil || !strings.Contains(err.Error(), "proj/fix: failed; x dismisses") {
 		t.Fatalf("failed: %v", err)
 	}
+	// Not in its host's listing any more: the reported session went
+	// with the worktree, so no session is made for it.
+	missing := row(p, nil, false)
+	missing.Unlisted = true
+	if _, err := pendingTarget(missing); err == nil || !strings.Contains(err.Error(), "the worktree is gone") {
+		t.Fatalf("unlisted: %v", err)
+	}
 	unknown := early
 	unknown.OK, unknown.Error = false, "outcome unknown: the daemon no longer knows it"
 	if _, err := pendingTarget(row(unknown, nil, false)); err == nil || !strings.Contains(err.Error(), "outcome unknown; x dismisses") {
