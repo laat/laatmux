@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -59,8 +60,11 @@ type running struct {
 	log  *view.Log
 	done func(m *view.Model) (exit bool)
 	// prompt is the prompt of an add under way, kept in a file should
-	// the wait for it be quit, since the view ends with nothing shown.
+	// the wait for it be quit, since the view ends with nothing shown;
+	// quit is set then, so the add, should it end before the view does,
+	// keeps no second copy.
 	prompt string
+	quit   *atomic.Bool
 }
 
 // act handles a dashboard key, a confirm answer or an overlay ending.
@@ -121,6 +125,7 @@ func (d *dash) overlayDone(m *view.Model) bool {
 				// prompt is kept and said to be, in a notice that ends
 				// the view when dismissed: a message would never be
 				// drawn.
+				d.run.quit.Store(true)
 				m.Overlay, d.run, d.quitting = quitNotice(d.run.prompt), nil, true
 				return false
 			}
@@ -390,9 +395,10 @@ func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 // new workspace session is jumped to.
 func (d *dash) runAdd(m *view.Model, add command.Add) {
 	var res command.Added
+	quit := new(atomic.Bool)
 	defer func() {
 		if d.run != nil {
-			d.run.prompt = add.Prompt
+			d.run.prompt, d.run.quit = add.Prompt, quit
 		}
 	}()
 	d.start(m, add.Describe(), func(r command.Reporter) error {
@@ -402,7 +408,7 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		// A prompt that did not reach the agent, or may not have, is
 		// shown with its text whatever else happened, and kept in a
 		// file, since the foreground path keeps none of it otherwise.
-		if d.recover = undelivered(add, res); d.recover != nil {
+		if d.recover = undelivered(add, res); d.recover != nil && !quit.Load() {
 			if path, err := keepPrompt(command.ID("prompt"), add.Prompt); err == nil {
 				// The path on a line of its own, to be copied.
 				d.recover.Lines = append([]string{"kept in", path, ""}, d.recover.Lines...)
@@ -497,7 +503,7 @@ func quitNotice(prompt string) *view.Notice {
 		lines = append(lines, strings.Split(prompt, "\n")...)
 	}
 	n := view.NewNotice("add interrupted", lines, "enter or esc quits")
-	n.Verbatim = verbatim
+	n.Verbatim, n.Final = verbatim, true
 	return n
 }
 

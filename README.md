@@ -609,9 +609,9 @@ is switched to.
   that did not reach the agent, or may not have, or was refused before
   the host, comes up first in a scrollable notice with its text, kept
   as well in a file under `undelivered/` in the state directory, and
-  the jump follows the notice; `Ctrl-C` while the add runs ends the
-  view with the same kept file named, the add itself may or may not
-  have been sent. The footer
+  the jump follows the notice; `Ctrl-C` while the add runs puts up a
+  notice naming the same kept file, the add itself may or may not have
+  been sent, and its dismissal ends the view. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use

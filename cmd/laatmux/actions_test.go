@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -624,6 +625,21 @@ func TestComposeAct(t *testing.T) {
 	if !c.act(m, m.Poll()) {
 		t.Fatal("esc on the form did not end the view")
 	}
+	// Ctrl-C on a foreground add's log: the quit notice, then the end.
+	log = view.NewLog("t")
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: new(atomic.Bool)}
+	m = &view.Model{Overlay: log, Width: 80, Height: 24}
+	m.Handle(view.Key{Kind: view.KeyCtrlC})
+	if c.act(m, m.Poll()) {
+		t.Fatal("Ctrl-C on the log ended compose before the notice")
+	}
+	if _, ok := m.Overlay.(*view.Notice); !ok {
+		t.Fatalf("no quit notice in compose: %v", m.Overlay)
+	}
+	m.Handle(view.Key{Kind: view.KeyEnter})
+	if !c.act(m, m.Poll()) {
+		t.Fatal("the quit notice's dismissal did not end compose")
+	}
 }
 
 // The dashboard: a failed log with a prompt to recover puts the notice
@@ -667,11 +683,15 @@ func TestNoticeRestoresMessage(t *testing.T) {
 	// Ctrl-C on the log of an add keeps the prompt in a file and says
 	// so in a notice, whose dismissal ends the view.
 	log = view.NewLog("t")
-	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt"}
+	quit := new(atomic.Bool)
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: quit}
 	m.Overlay = log
 	log.Handle(view.Key{Kind: view.KeyCtrlC})
 	if d.act(m, m.Poll()) {
 		t.Fatal("quit ended the view before the notice")
+	}
+	if !quit.Load() {
+		t.Fatal("the add was not told it was quit")
 	}
 	n, ok = m.Overlay.(*view.Notice)
 	if !ok {
@@ -690,8 +710,23 @@ func TestNoticeRestoresMessage(t *testing.T) {
 	if b, err := os.ReadFile(path); err != nil || string(b) != "the prompt" {
 		t.Fatalf("kept %q %v", b, err)
 	}
+	// A second Ctrl-C does not close it before it is read.
+	m.Handle(view.Key{Kind: view.KeyCtrlC})
+	if n.Done() {
+		t.Fatal("Ctrl-C dismissed the quit notice")
+	}
 	m.Handle(view.Key{Kind: view.KeyEsc})
 	if !d.act(m, m.Poll()) {
 		t.Fatal("dismissing the quit notice did not end the view")
+	}
+	// A state directory that cannot hold the file: the prompt is shown.
+	bad := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(bad, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", bad)
+	qn := quitNotice("line one\n\tline two")
+	if text := view.Text(qn.Render(100, 14)); !strings.Contains(text, "could not be kept") || !strings.Contains(text, "    line two") {
+		t.Fatalf("fallback:\n%s", text)
 	}
 }

@@ -461,8 +461,11 @@ type Notice struct {
 	// stop, no space dropped, so a prompt shown for copying reads as it
 	// was typed. Lines before it are prose, wrapped at spaces.
 	Verbatim int
-	scroll   int
-	done     bool
+	// Final is a notice whose dismissal ends the view: Ctrl-C, pressed
+	// again out of habit, does not dismiss it before it is read.
+	Final  bool
+	scroll int
+	done   bool
 }
 
 func NewNotice(title string, lines []string, footer string) *Notice {
@@ -473,8 +476,10 @@ func (n *Notice) Done() bool { return n.done }
 
 func (n *Notice) Handle(k Key) {
 	switch k.Kind {
-	case KeyEnter, KeyNewline, KeyEsc, KeyCtrlC:
+	case KeyEnter, KeyNewline, KeyEsc:
 		n.done = true
+	case KeyCtrlC:
+		n.done = !n.Final
 	case KeyUp:
 		n.scroll--
 	case KeyDown:

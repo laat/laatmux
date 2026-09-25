@@ -173,6 +173,9 @@ func TestHandle(t *testing.T) {
 	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionJump {
 		t.Errorf("enter = %+v", a)
 	}
+	if a := m.Handle(Key{Kind: KeyNewline}); a.Kind != ActionJump {
+		t.Errorf("newline = %+v", a)
+	}
 	m.Handle(Key{Rune: 'v'})
 	if m.Layout != Tiles {
 		t.Error("v did not toggle")
