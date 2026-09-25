@@ -1003,8 +1003,8 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Render()
 	// The first body line is the first row; the own row is elsewhere.
 	y := 1 + len(m.Header)
-	target := m.Visible()[m.hit(y)].Row.Name
-	if m.hit(y) == own {
+	target := m.Visible()[m.hitRow(y)].Row.Name
+	if m.hitRow(y) == own {
 		t.Fatal("the fixture's first row is the viewer's own")
 	}
 	a := m.Handle(Key{Kind: KeyMouse, Y: y})
@@ -1015,7 +1015,26 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Handle(Key{Rune: 'j'})
 	m.Render()
 	a = m.Handle(Key{Kind: KeyMouse, Y: y})
-	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hit(y) {
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y) {
 		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
+	}
+	// What was clicked is what was drawn: rows that moved since the last
+	// render, or a filter typed since, do not change the target; a row
+	// that is gone is no target.
+	m.Follow = true
+	m.Render()
+	drawn := m.Visible()[m.hitRow(y)].Row.Name
+	in2 := fixtureInput(now)
+	in2.Current = "mac/proj/task"
+	for i := range in2.Agents {
+		in2.Agents[i].Activity = protocol.Idle
+	}
+	m.SetRows(rows.Build(in2))
+	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
+		t.Fatalf("after a reorder: jumped to %+v, drawn was %q", a.Row, drawn)
+	}
+	m.Filter = "zzz-nothing"
+	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
+		t.Fatalf("a row filtered away since: %+v", a)
 	}
 }

@@ -67,6 +67,12 @@ type Model struct {
 	Overlay Overlay
 	scroll  int   // first body line drawn
 	hits    []int // body line -> index into Visible, -1 for none
+	// hitIDs is the id of the row each body line drew, "" for none, and
+	// hitTop the header lines above the body, both as the last Render
+	// drew them: a click names what was on screen, which a refresh or
+	// a filter since may have moved.
+	hitIDs []string
+	hitTop int
 	// Handoffs are the pending tasks that have handed over to their
 	// worktree rows, command id to worktree id, as the merged stream
 	// carried them: an anchor on a task the view never saw hand over
@@ -377,6 +383,7 @@ func (m *Model) Render() []Line {
 	}
 	var lines []Line
 	var hits []int
+	var ids []string
 	selStart, selEnd := -1, -1
 	m.Selection()
 	for _, it := range m.Items() {
@@ -392,8 +399,13 @@ func (m *Model) Render() []Line {
 				}
 			}
 		}
+		id := ""
+		if it.Row != nil {
+			id = it.Row.ID()
+		}
 		for range ls {
 			hits = append(hits, it.Index)
+			ids = append(ids, id)
 		}
 		lines = append(lines, ls...)
 	}
@@ -414,11 +426,14 @@ func (m *Model) Render() []Line {
 		m.scroll = 0
 	}
 	m.hits = make([]int, body)
+	m.hitIDs = make([]string, body)
+	m.hitTop = len(m.Header)
 	for i := 0; i < body; i++ {
 		m.hits[i] = -1
 		if j := m.scroll + i; j < len(lines) {
 			out = append(out, lines[j])
 			m.hits[i] = hits[j]
+			m.hitIDs[i] = ids[j]
 		} else {
 			out = append(out, plain(""))
 		}

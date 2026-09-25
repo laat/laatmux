@@ -734,7 +734,7 @@ func (m *Model) Handle(k Key) Action {
 			m.move(k.Wheel)
 			return Action{}
 		}
-		if i := m.hit(k.Y); i >= 0 {
+		if i := m.hitRow(k.Y); i >= 0 {
 			a := m.jumpTo(i)
 			a.Mouse = a.Kind == ActionJump
 			return a
@@ -857,6 +857,23 @@ func (m *Model) nth(n int) (int, bool) {
 
 // hit is the row on screen line y (1-based), -1 for none. The body
 // starts after the header lines.
+// hitRow is the visible row now that the last Render drew on screen
+// line y (1-based), found by its id, -1 when that line drew no row or
+// the row is no longer visible: what was clicked is what was on screen,
+// whatever a refresh or a key since has done to the indexes.
+func (m *Model) hitRow(y int) int {
+	i := y - 1 - m.hitTop
+	if i < 0 || i >= len(m.hitIDs) || m.hitIDs[i] == "" {
+		return -1
+	}
+	for _, it := range m.Visible() {
+		if it.Row.ID() == m.hitIDs[i] {
+			return it.Index
+		}
+	}
+	return -1
+}
+
 func (m *Model) hit(y int) int {
 	i := y - 1 - len(m.Header)
 	if i < 0 || i >= len(m.hits) {

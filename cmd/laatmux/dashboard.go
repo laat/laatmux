@@ -103,22 +103,29 @@ func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
 	if r == nil {
 		return false
 	}
-	if a.Mouse && !d.exitOnJump {
+	exit, jumped := d.jumpRow(m, *r)
+	// Only after a jump that happened: a click that jumped nowhere, on a
+	// task still running or refused with a message, leaves the focus on
+	// the view, where the message is.
+	if jumped && a.Mouse && !d.exitOnJump {
 		refocus := d.refocus
 		if refocus == nil {
 			refocus = func() { lastPane(d.ctx) }
 		}
 		refocus()
 	}
-	return d.jump(m, *r)
+	return exit
 }
 
 // lastPane makes the pane active before the view's own the active one
-// in the view's window. A window whose view pane was active all along
-// has no other to go back to, and tmux's refusal is ignored.
+// in the view's window, while the view's pane is the active one: tmux
+// checks and switches in one command, so two clicks handled one after
+// the other do not toggle the focus back into the view. A window whose
+// view pane was active all along has no other to go back to, and
+// tmux's refusal is ignored.
 func lastPane(ctx context.Context) {
 	if pane := os.Getenv("TMUX_PANE"); pane != "" {
-		_, _ = workspace.Server.Run(ctx, "last-pane", "-t", pane)
+		_, _ = workspace.Server.Run(ctx, "if-shell", "-F", "-t", pane, "#{pane_active}", "last-pane -t "+pane)
 	}
 }
 

@@ -993,10 +993,26 @@ func TestClickJumpRefocuses(t *testing.T) {
 	m := dashModel(cfg)
 	row := m.Selection()
 	refocused := 0
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ }, switcher: func(string) error { return nil }}
+	var jumped []string
+	jumpErr := error(nil)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ },
+		jumper: func(r rows.Row) error { jumped = append(jumped, r.ID()); return jumpErr }}
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
+	if refocused != 1 || len(jumped) != 1 || jumped[0] != row.ID() {
+		t.Fatalf("sidebar click: refocused %d jumped %v", refocused, jumped)
+	}
+	// A jump refused leaves the focus on the view, with the message.
+	jumpErr = errors.New("no session")
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
+	if refocused != 1 || m.Message != "no session" {
+		t.Fatalf("refused: refocused %d message %q", refocused, m.Message)
+	}
+	jumpErr = nil
+	// A click on a task still running jumps nowhere and keeps the focus.
+	running := rows.Row{Name: "proj/new", Pending: &protocol.Pending{ID: "add-1"}}
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: &running, Mouse: true})
 	if refocused != 1 {
-		t.Fatalf("sidebar click: refocused %d", refocused)
+		t.Fatal("a click on a running task moved the focus")
 	}
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row})
 	if refocused != 1 {

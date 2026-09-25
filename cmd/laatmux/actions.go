@@ -53,9 +53,10 @@ type dash struct {
 	recovered string
 	// last is what the foreground add left, for compose to jump to.
 	last command.Added
-	// switcher replaces the tmux switch, for tests, and refocus the
-	// return of focus after a click in the sidebar.
+	// switcher replaces the tmux switch, for tests, jumper a row's jump,
+	// and refocus the return of focus after a click in the sidebar.
 	switcher func(session string) error
+	jumper   func(r rows.Row) error
 	refocus  func()
 	// quitting is that the notice up is the last thing shown: its
 	// dismissal ends the view.
@@ -115,15 +116,27 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 
 // jump is the Enter key: the jump command's logic on the selected row.
 func (d *dash) jump(m *view.Model, r rows.Row) bool {
+	exit, _ := d.jumpRow(m, r)
+	return exit
+}
+
+// jumpRow runs the jump and says whether it happened: jumped is false
+// for a task still running and for a jump refused, whose message is in
+// the footer; exit is that the view ends.
+func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	if r.Pending != nil && !r.Pending.Done {
 		// A task still running has nothing to jump to yet.
-		return false
+		return false, false
 	}
-	if err := jumpRow(d.ctx, d.cfg, r); err != nil {
+	jump := d.jumper
+	if jump == nil {
+		jump = func(r rows.Row) error { return jumpRow(d.ctx, d.cfg, r) }
+	}
+	if err := jump(r); err != nil {
 		m.Message = err.Error()
-		return false
+		return false, false
 	}
-	return d.exitOnJump
+	return d.exitOnJump, true
 }
 
 // overlayDone reads what the finished overlay decided and moves on:
