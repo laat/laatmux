@@ -461,7 +461,22 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
 		testDaemon(mode)
 	}
-	os.Exit(m.Run())
+	// No test reaches the user's tmux: the default server's socket, and
+	// every other, is under a directory of the run's own, and the
+	// variables that name the user's session are cleared. A jump or an
+	// add that gets as far as tmux finds no server. A test that wants a
+	// server of its own sets TMUX_TMPDIR itself.
+	dir, err := os.MkdirTemp("/tmp", "lmxc")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("TMUX_TMPDIR", dir)
+	os.Unsetenv("TMUX")
+	os.Unsetenv("TMUX_PANE")
+	code := m.Run()
+	exec.Command("tmux", "-L", "default", "kill-server").Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // The source is the current directory only when it is the laatmux

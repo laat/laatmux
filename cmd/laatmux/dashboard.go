@@ -76,7 +76,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionJump:
-				return d.jump(m, *m.Selection())
+				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
 			case taskAction(m, a):
@@ -87,6 +87,39 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 			return false
 		},
 	})
+}
+
+// jumpAction runs a jump: to the row the action names. In a view that
+// stays, the sidebar, a click made the view's pane the active one, as
+// tmux's click binding selects the pane clicked; the pane that was
+// active before is made so again first, so typing goes back where it
+// was, both when the jump stays in this session and in this window when
+// the viewer comes back to it.
+func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
+	r := a.Row
+	if r == nil {
+		r = m.Selection()
+	}
+	if r == nil {
+		return false
+	}
+	if a.Mouse && !d.exitOnJump {
+		refocus := d.refocus
+		if refocus == nil {
+			refocus = func() { lastPane(d.ctx) }
+		}
+		refocus()
+	}
+	return d.jump(m, *r)
+}
+
+// lastPane makes the pane active before the view's own the active one
+// in the view's window. A window whose view pane was active all along
+// has no other to go back to, and tmux's refusal is ignored.
+func lastPane(ctx context.Context) {
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		_, _ = workspace.Server.Run(ctx, "last-pane", "-t", pane)
+	}
 }
 
 // taskAction is an action on a pending task: p or x on a task's row,

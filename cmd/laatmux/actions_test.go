@@ -983,3 +983,28 @@ func TestPendingOffers(t *testing.T) {
 		t.Errorf("enter on a gone task: %v", err)
 	}
 }
+
+// In the sidebar a click that jumps gives the focus back to the pane
+// that had it; a key that jumps does not touch it, nor does a click in
+// the dashboard's popup, which the jump closes.
+func TestClickJumpRefocuses(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	m := dashModel(cfg)
+	row := m.Selection()
+	refocused := 0
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ }, switcher: func(string) error { return nil }}
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
+	if refocused != 1 {
+		t.Fatalf("sidebar click: refocused %d", refocused)
+	}
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row})
+	if refocused != 1 {
+		t.Fatal("a key's jump moved the focus")
+	}
+	d.exitOnJump = true
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
+	if refocused != 1 {
+		t.Fatal("a click in the popup moved the focus")
+	}
+}

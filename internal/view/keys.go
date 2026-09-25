@@ -1,6 +1,7 @@
 package view
 
 import (
+	"github.com/laat/laatmux/internal/rows"
 	"strconv"
 	"strings"
 	"time"
@@ -650,6 +651,12 @@ func csi(b []byte) (Key, int, bool) {
 type Action struct {
 	Kind ActionKind
 	Key  Key // for ActionOther, the key the model did not handle
+	// Row, on ActionJump, is the row to jump to: the selection, or the
+	// row a click or a digit named while the selection follows the
+	// viewer's own row, which it goes on doing. Mouse is a jump by a
+	// click, which tmux's click binding made the view's pane active for.
+	Row   *rows.Row
+	Mouse bool
 }
 
 type ActionKind int
@@ -657,7 +664,7 @@ type ActionKind int
 const (
 	ActionNone    ActionKind = iota
 	ActionQuit               // q, Ctrl-C
-	ActionJump               // Enter, a digit, a click: on Selection
+	ActionJump               // Enter, a digit, a click: on Row
 	ActionOther              // a key the model does not know; the host may
 	ActionConfirm            // y on a Confirm; ConfirmTag says which
 	ActionOverlay            // the overlay is Done; the host reads and clears it
@@ -728,8 +735,9 @@ func (m *Model) Handle(k Key) Action {
 			return Action{}
 		}
 		if i := m.hit(k.Y); i >= 0 {
-			m.moveTo(i)
-			return m.jump()
+			a := m.jumpTo(i)
+			a.Mouse = a.Kind == ActionJump
+			return a
 		}
 	case KeyRune:
 		switch k.Rune {
@@ -756,8 +764,7 @@ func (m *Model) Handle(k Key) Action {
 			return Action{Kind: ActionQuit}
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
-				m.moveTo(i)
-				return m.jump()
+				return m.jumpTo(i)
 			}
 		default:
 			return Action{Kind: ActionOther, Key: k}
@@ -799,10 +806,29 @@ func (m *Model) moveTo(i int) {
 }
 
 func (m *Model) jump() Action {
-	if m.Selection() == nil {
+	r := m.Selection()
+	if r == nil {
 		return Action{}
 	}
-	return Action{Kind: ActionJump}
+	return Action{Kind: ActionJump, Row: r}
+}
+
+// jumpTo is a jump to the visible row at i, by a click or a digit. A
+// selection that follows the viewer's own row goes on following it: the
+// jump takes the viewer to that row's session, and when they are back
+// here the selection is on their own row again rather than on the one
+// they clicked. A selection that is the user's moves to the row, as a
+// key would move it.
+func (m *Model) jumpTo(i int) Action {
+	vis := m.Visible()
+	if i < 0 || i >= len(vis) {
+		return Action{}
+	}
+	if m.Follow {
+		return Action{Kind: ActionJump, Row: vis[i].Row}
+	}
+	m.moveTo(i)
+	return m.jump()
 }
 
 // nth is the index of the nth row of the group the selection is in.

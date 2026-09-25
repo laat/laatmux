@@ -529,7 +529,9 @@ func TestFollowSelection(t *testing.T) {
 	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
 		t.Fatalf("Enter with nothing selected: %+v", a)
 	}
-	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || m.Selected != 1 || m.Follow {
+	// A digit jumps to the row it counts; the selection goes on
+	// following, so it is on the viewer's own row when they are back.
+	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.Name != m.Visible()[1].Row.Name || m.Selected != -1 || !m.Follow || a.Mouse {
 		t.Fatalf("digit with nothing selected: %+v at %d follow=%v", a, m.Selected, m.Follow)
 	}
 	// Following again, then a key: the selection is the user's and a
@@ -985,5 +987,35 @@ func TestAnchorStandIn(t *testing.T) {
 	m.Filter = ""
 	if r := m.Selection(); r == nil {
 		t.Fatal("a cleared filter left the selection on none")
+	}
+}
+
+// A click jumps to the row clicked. While the selection follows the
+// viewer's own row it goes on following and stays where it was; a
+// selection the user moved moves to the row clicked, as a key would.
+func TestClickJumpKeepsFollow(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	in.Current = "mac/proj/task"
+	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: now, Follow: true}
+	m.SetRows(rows.Build(in))
+	own := m.Selected
+	m.Render()
+	// The first body line is the first row; the own row is elsewhere.
+	y := 1 + len(m.Header)
+	target := m.Visible()[m.hit(y)].Row.Name
+	if m.hit(y) == own {
+		t.Fatal("the fixture's first row is the viewer's own")
+	}
+	a := m.Handle(Key{Kind: KeyMouse, Y: y})
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || !a.Mouse || !m.Follow || m.Selected != own {
+		t.Fatalf("click while following: %+v selected %d follow %v", a, m.Selected, m.Follow)
+	}
+	// The user's own selection: j, then a click, moves it there.
+	m.Handle(Key{Rune: 'j'})
+	m.Render()
+	a = m.Handle(Key{Kind: KeyMouse, Y: y})
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hit(y) {
+		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
 	}
 }

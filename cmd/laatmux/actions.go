@@ -53,8 +53,10 @@ type dash struct {
 	recovered string
 	// last is what the foreground add left, for compose to jump to.
 	last command.Added
-	// switcher replaces the tmux switch, for tests.
+	// switcher replaces the tmux switch, for tests, and refocus the
+	// return of focus after a click in the sidebar.
 	switcher func(session string) error
+	refocus  func()
 	// quitting is that the notice up is the last thing shown: its
 	// dismissal ends the view.
 	quitting bool
