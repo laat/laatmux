@@ -406,6 +406,9 @@ func TestDecoderPasteBounded(t *testing.T) {
 		{"q\x03\x1b", "moreq", 0},
 		{"\x03", "more", 0},
 		{"\x03j", "more", 1},
+		// A click after the key: when it was read is not known, so
+		// it is dropped rather than resolved on the screen drawn now.
+		{"\x03\x1b[<0;5;3Mj", "more", 1},
 	} {
 		d := Decoder{now: func() time.Time { return now }}
 		d.Feed([]byte("\x1b[200~gone"))

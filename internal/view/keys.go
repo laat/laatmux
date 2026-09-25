@@ -228,8 +228,16 @@ func (d *Decoder) stall() []Key {
 		if text := pasteText(data[:i]); text != "" {
 			keys = append(keys, Key{Kind: KeyPaste, Text: text})
 		}
+		// The bytes after the key were joined across reads, so when a
+		// click among them was read is not known, nor which screen it
+		// was on: clicks there are dropped rather than resolved on the
+		// screen drawn now.
 		rest, _ := parse(data[i+1:], true, nil)
-		keys = append(keys, rest...)
+		for _, k := range rest {
+			if k.Kind != KeyMouse {
+				keys = append(keys, k)
+			}
+		}
 		d.paste, d.pending, d.pasting, d.stalled = nil, nil, false, false
 		return keys
 	}
