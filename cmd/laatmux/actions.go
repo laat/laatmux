@@ -49,6 +49,9 @@ type dash struct {
 	last command.Added
 	// switcher replaces the tmux switch, for tests.
 	switcher func(session string) error
+	// quitting is that the notice up is the last thing shown: its
+	// dismissal ends the view.
+	quitting bool
 }
 
 // running is a command under way: its log, and what to do when it ends.
@@ -114,9 +117,12 @@ func (d *dash) overlayDone(m *view.Model) bool {
 	case *view.Log:
 		if o.Quit {
 			if d.run != nil && d.run.prompt != "" {
-				if path, err := keepPrompt(command.ID("prompt"), d.run.prompt); err == nil {
-					m.Message = "the add runs on; its prompt is kept in " + path
-				}
+				// The view ends with the add's outcome unknown, so the
+				// prompt is kept and said to be, in a notice that ends
+				// the view when dismissed: a message would never be
+				// drawn.
+				m.Overlay, d.run, d.quitting = quitNotice(d.run.prompt), nil, true
+				return false
 			}
 			return true
 		}
@@ -141,6 +147,9 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		// The key that dismissed it cleared the message it covered. The
 		// jump the notice held off is made now, when there is a session.
 		m.Overlay = nil
+		if d.quitting {
+			return true
+		}
 		m.Message, d.recovered = d.recovered, ""
 		if d.last.Session != "" && m.Message == "" {
 			session := d.last.Session
@@ -470,6 +479,25 @@ func undelivered(add command.Add, res command.Added) *view.Notice {
 	lines = append(lines, strings.Split(add.Prompt, "\n")...)
 	n := view.NewNotice(add.Describe(), lines, "enter or esc returns")
 	n.Verbatim = len(lines) - strings.Count(add.Prompt, "\n") - 1
+	return n
+}
+
+// quitNotice is what a Ctrl-C on a foreground add leaves: the add may
+// run on or may never have been sent, since the view's end cancels
+// it, so the prompt is kept in a file and named, or shown when it
+// could not be.
+func quitNotice(prompt string) *view.Notice {
+	lines := []string{"the add may run on, or may never have been sent; laatmux ls says which", ""}
+	verbatim := 0
+	if path, err := keepPrompt(command.ID("prompt"), prompt); err == nil {
+		lines = append(lines, "the prompt is kept in", path)
+	} else {
+		lines = append(lines, "the prompt could not be kept in a file: "+err.Error(), "", "The prompt was:", "")
+		verbatim = len(lines)
+		lines = append(lines, strings.Split(prompt, "\n")...)
+	}
+	n := view.NewNotice("add interrupted", lines, "enter or esc quits")
+	n.Verbatim = verbatim
 	return n
 }
 

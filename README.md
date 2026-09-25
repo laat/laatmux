@@ -596,8 +596,9 @@ is switched to.
   submit, and a paste goes into the prompt wherever the focus is but
   the branch line. A paste whose bytes stop for a second is shown as
   far as it came, with its framing kept, and one whose end marker
-  never comes is ended by `Esc` or `Ctrl-C` after that, the key spent
-  on ending it. On a worktree row without a session the chips and the branch
+  never comes is ended by `Esc` or `Ctrl-C` pressed alone after that
+  and left for a second, the key spent on ending it. On a worktree row
+  without a session the chips and the branch
   are pre-filled from the record, the branch explicit. A submit with
   the local daemon's `relay` hands the add to it and closes the popup
   on `accepted`; `laatmux tasks` shows the task from then on, and the
@@ -608,7 +609,9 @@ is switched to.
   that did not reach the agent, or may not have, or was refused before
   the host, comes up first in a scrollable notice with its text, kept
   as well in a file under `undelivered/` in the state directory, and
-  the jump follows the notice. The footer
+  the jump follows the notice; `Ctrl-C` while the add runs ends the
+  view with the same kept file named, the add itself may or may not
+  have been sent. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use

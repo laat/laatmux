@@ -787,3 +787,36 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		m.Render() // one cell: the gutter alone, no panic
 	}
 }
+
+// A newline is Enter outside the form's prompt: on the list, in the
+// filter, a picker, a line prompt and a notice.
+func TestNewlineIsEnter(t *testing.T) {
+	m := &Model{Width: 80, Height: 24}
+	m.Filtering = true
+	m.Handle(Key{Kind: KeyNewline})
+	if m.Filtering {
+		t.Fatal("the filter did not close on a newline")
+	}
+	p := NewPicker("t", []Choice{{Label: "a"}}, 0)
+	p.Handle(Key{Kind: KeyNewline})
+	if !p.Done() || p.Chosen != 0 {
+		t.Fatalf("picker: done %v chosen %d", p.Done(), p.Chosen)
+	}
+	pr := NewPrompt("t", "x", nil)
+	pr.Handle(Key{Kind: KeyNewline})
+	if !pr.Done() || pr.Cancelled {
+		t.Fatalf("prompt: done %v cancelled %v", pr.Done(), pr.Cancelled)
+	}
+	n := NewNotice("t", []string{"l"}, "")
+	n.Handle(Key{Kind: KeyNewline})
+	if !n.Done() {
+		t.Fatal("notice not dismissed by a newline")
+	}
+	f := NewForm("t", chips(), "")
+	f.Handle(Key{Kind: KeyShiftTab})
+	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip
+	f.Handle(Key{Kind: KeyNewline})
+	if f.picker == nil {
+		t.Fatal("a newline on a chip did not open the picker")
+	}
+}

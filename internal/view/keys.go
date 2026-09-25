@@ -170,12 +170,15 @@ func (d *Decoder) Feed(b []byte) []Key {
 // grace. The text so far is given out and the framing kept: a resumed
 // paste's line break is still no Enter. A paste with a lost end marker
 // is ended by the user's Esc or Ctrl-C once it has stalled: the last
-// bare escape, one not followed by [ or O, or Ctrl-C byte among the
-// bytes after a stall ends the framing there, the text before it is
-// the paste, the key itself is spent on that, so the form it goes to
-// keeps its prompt, and the bytes after it are keys. A prefix of the
-// end marker, an incomplete rune and a trailing carriage return are
-// held for the next bytes.
+// bare escape, one at the end or followed by another escape, or
+// Ctrl-C byte among the bytes after a stall ends the framing there,
+// the text before it is the paste, the key itself is spent on that,
+// so the form it goes to keeps its prompt, and the bytes after it are
+// keys. Bytes from separate reads are joined here, so an Esc followed
+// within the grace by another key reads as a chord and is paste: the
+// user presses Esc and waits, which fails safe. A prefix of the end
+// marker, an incomplete rune and a trailing carriage return are held
+// for the next bytes.
 func (d *Decoder) stall() []Key {
 	held := markerPrefix(d.pending, pasteEnd)
 	if held != len(d.pending) || held == 1 {

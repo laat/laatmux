@@ -187,7 +187,7 @@ func (f *Form) chipKey(k Key) {
 		if n > 0 {
 			f.setChip(f.focus, (c.Selected+1)%n)
 		}
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
 		if n > 0 {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
 		}

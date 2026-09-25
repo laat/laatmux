@@ -664,15 +664,34 @@ func TestNoticeRestoresMessage(t *testing.T) {
 	if d.act(m, m.Poll()) || jumped != "mac/proj/b" || d.last.Session != "" {
 		t.Fatalf("after the notice with a session: jumped %q", jumped)
 	}
-	// Ctrl-C on the log of an add keeps the prompt in a file.
+	// Ctrl-C on the log of an add keeps the prompt in a file and says
+	// so in a notice, whose dismissal ends the view.
 	log = view.NewLog("t")
 	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt"}
 	m.Overlay = log
 	log.Handle(view.Key{Kind: view.KeyCtrlC})
-	if !d.act(m, m.Poll()) || !strings.Contains(m.Message, "kept in ") {
-		t.Fatalf("quit: message %q", m.Message)
+	if d.act(m, m.Poll()) {
+		t.Fatal("quit ended the view before the notice")
 	}
-	if b, err := os.ReadFile(strings.TrimPrefix(m.Message, "the add runs on; its prompt is kept in ")); err != nil || string(b) != "the prompt" {
+	n, ok = m.Overlay.(*view.Notice)
+	if !ok {
+		t.Fatalf("no notice on quit: %v", m.Overlay)
+	}
+	text := view.Text(n.Render(100, 12))
+	if !strings.Contains(text, "may run on") || !strings.Contains(text, "kept in") {
+		t.Fatalf("quit notice:\n%s", text)
+	}
+	path := ""
+	for _, l := range n.Lines {
+		if strings.HasSuffix(l, ".txt") {
+			path = l
+		}
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "the prompt" {
 		t.Fatalf("kept %q %v", b, err)
+	}
+	m.Handle(view.Key{Kind: view.KeyEsc})
+	if !d.act(m, m.Poll()) {
+		t.Fatal("dismissing the quit notice did not end the view")
 	}
 }
