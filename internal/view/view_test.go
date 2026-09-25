@@ -1173,6 +1173,7 @@ func TestBrokenSequenceBeforeClick(t *testing.T) {
 		"\x1bO2P":              nil,
 		"\x1bO1;2Pj":           {{Rune: 'j'}},
 		"\x1bO2\x03":           {{Kind: KeyCtrlC}},
+		"\x1bO 2Pj":            {{Rune: 'j'}},
 		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
 	} {
 		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {
