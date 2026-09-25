@@ -1163,9 +1163,12 @@ func TestFeedAtDatesClicks(t *testing.T) {
 // would jump. Held across reads, the click keeps its own read's time.
 func TestBrokenSequenceBeforeClick(t *testing.T) {
 	for in, want := range map[string][]Key{
-		"\x1b[\x1b[<0;5;3M":    {{Kind: -1}, {Kind: KeyMouse, X: 5, Y: 3}},
-		"\x1b[1;\x1b[A":        {{Kind: -1}, {Kind: KeyUp}},
-		"\x1b[\x03":            {{Kind: -1}, {Kind: KeyCtrlC}},
+		"\x1b[\x1b[<0;5;3M": {{Kind: -1}, {Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1b[1;\x1b[A":     {{Kind: -1}, {Kind: KeyUp}},
+		"\x1b[\x03":         {{Kind: -1}, {Kind: KeyCtrlC}},
+		// Alt-O the same way: SS3 cut short.
+		"\x1bO\x1b[<0;5;3M":    {{Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1bO\r":              {{Kind: KeyEnter}},
 		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
 	} {
 		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {

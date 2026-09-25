@@ -465,6 +465,13 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 					}
 					return keys, nil
 				}
+				// Not a final byte: Alt-O, or an Esc and O read
+				// together, cut short by what follows, a click's
+				// escape say, which is parsed afresh, as in csi.
+				if b[2] < 0x40 || b[2] > 0x7e {
+					b = b[2:]
+					continue
+				}
 				// SS3 keys, sent in application cursor mode; the rest,
 				// F1 to F4 say, are dropped whole.
 				if kind, ok := ss3Keys[b[2]]; ok {
