@@ -1003,8 +1003,8 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Render()
 	// The first body line is the first row; the own row is elsewhere.
 	y := 1 + len(m.Header)
-	target := m.Visible()[m.hitRow(y)].Row.Name
-	if m.hitRow(y) == own {
+	target := m.Visible()[m.hitRow(y, time.Time{})].Row.Name
+	if m.hitRow(y, time.Time{}) == own {
 		t.Fatal("the fixture's first row is the viewer's own")
 	}
 	a := m.Handle(Key{Kind: KeyMouse, Y: y})
@@ -1015,7 +1015,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Handle(Key{Rune: 'j'})
 	m.Render()
 	a = m.Handle(Key{Kind: KeyMouse, Y: y})
-	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y) {
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y, time.Time{}) {
 		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
 	}
 	// What was clicked is what was drawn: rows that moved since the last
@@ -1023,7 +1023,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	// that is gone is no target.
 	m.Follow = true
 	m.Render()
-	drawn := m.Visible()[m.hitRow(y)].Row.Name
+	drawn := m.Visible()[m.hitRow(y, time.Time{})].Row.Name
 	in2 := fixtureInput(now)
 	in2.Current = "mac/proj/task"
 	for i := range in2.Agents {
@@ -1036,5 +1036,39 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Filter = "zzz-nothing"
 	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
 		t.Fatalf("a row filtered away since: %+v", a)
+	}
+}
+
+// A click read before the last draw is on the screen drawn before it: a
+// refresh that redrew with the rows reordered while the click waited
+// does not change its target; one read before two draws is dropped.
+func TestClickOnScreenItWasRead(t *testing.T) {
+	t0 := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(t0)
+	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: t0}
+	m.SetRows(rows.Build(in))
+	m.Render()
+	y := 1 + len(m.Header)
+	seen := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
+	clicked := t0.Add(time.Second)
+	// The rows reorder and are drawn again after the click was read.
+	for i := range in.Agents {
+		in.Agents[i].Activity = protocol.Idle
+	}
+	in.Agents[len(in.Agents)-1].Activity = protocol.Blocked
+	m.SetRows(rows.Build(in))
+	m.Now = t0.Add(2 * time.Second)
+	m.Render()
+	if now := m.Visible()[m.hitRow(y, time.Time{})].Row.ID(); now == seen {
+		t.Fatal("the fixture's reorder left the first line as it was")
+	}
+	if i := m.hitRow(y, clicked); i < 0 || m.Visible()[i].Row.ID() != seen {
+		t.Fatalf("a click read before the redraw resolved to %d, want %q", i, seen)
+	}
+	// Drawn twice since: the screen clicked is gone, and the click with it.
+	m.Now = t0.Add(3 * time.Second)
+	m.Render()
+	if i := m.hitRow(y, clicked); i != -1 {
+		t.Fatalf("a click read before two redraws resolved to %d", i)
 	}
 }

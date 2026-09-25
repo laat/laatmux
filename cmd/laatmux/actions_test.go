@@ -1010,6 +1010,15 @@ func TestClickJumpRefocuses(t *testing.T) {
 	if refocused != 1 || m.Message != "no session" || m.Follow || m.Selection() == nil || m.Selection().ID() != other.ID() {
 		t.Fatalf("refused: refocused %d message %q follow %v selected %+v", refocused, m.Message, m.Follow, m.Selection())
 	}
+	// A failed jump on the row already selected, while following, still
+	// makes it the user's.
+	m.Follow = true
+	m.Selected = 0
+	first := m.Visible()[0].Row
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: first, Mouse: true})
+	if m.Follow {
+		t.Fatal("a failed jump on the selected row left the selection following")
+	}
 	jumpErr = nil
 	// A click on a task still running jumps nowhere and keeps the focus.
 	running := rows.Row{Name: "proj/new", Pending: &protocol.Pending{ID: "add-1"}}

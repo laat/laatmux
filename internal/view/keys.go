@@ -18,6 +18,9 @@ type Key struct {
 	X, Y  int    // mouse, 1-based cells
 	Wheel int    // mouse: -1 up, +1 down, 0 for a click
 	Text  string // paste: everything between the paste markers, line breaks as \n
+	// At, on a click, is when its bytes were read: the screen clicked is
+	// the last drawn before it. Zero when unknown.
+	At time.Time
 }
 
 type KeyKind int
@@ -735,7 +738,7 @@ func (m *Model) Handle(k Key) Action {
 			m.move(k.Wheel)
 			return Action{}
 		}
-		if i := m.hitRow(k.Y); i >= 0 {
+		if i := m.hitRow(k.Y, k.At); i >= 0 {
 			a := m.jumpTo(i)
 			a.Mouse = a.Kind == ActionJump
 			return a
@@ -821,7 +824,11 @@ func (m *Model) jump() Action {
 func (m *Model) Select(id string) bool {
 	for _, it := range m.Visible() {
 		if it.Row.ID() == id {
+			// Following ends even when the row is the one it was on: it
+			// is the user's from here, and a later refresh must not move
+			// the selection off it.
 			m.moveTo(it.Index)
+			m.Follow = false
 			return true
 		}
 	}
@@ -872,17 +879,27 @@ func (m *Model) nth(n int) (int, bool) {
 
 // hit is the row on screen line y (1-based), -1 for none. The body
 // starts after the header lines.
-// hitRow is the visible row now that the last Render drew on screen
-// line y (1-based), found by its id, -1 when that line drew no row or
-// the row is no longer visible: what was clicked is what was on screen,
-// whatever a refresh or a key since has done to the indexes.
-func (m *Model) hitRow(y int) int {
-	i := y - 1 - m.hitTop
-	if i < 0 || i >= len(m.hitIDs) || m.hitIDs[i] == "" {
+// hitRow is the visible row now that the screen clicked drew on line y
+// (1-based), found by its id, -1 when that line drew no row or the row
+// is no longer visible: what was clicked is what was on screen, whatever
+// a refresh or a key since has done to the indexes. The screen clicked
+// is the last drawn before the click was read, at: the previous render
+// when one was drawn after it, the click dropped when two were; the
+// last render when at is zero.
+func (m *Model) hitRow(y int, at time.Time) int {
+	ids, top := m.hitIDs, m.hitTop
+	if !at.IsZero() && at.Before(m.hitAt) {
+		if m.hitPrevAt.IsZero() || at.Before(m.hitPrevAt) {
+			return -1
+		}
+		ids, top = m.hitPrevIDs, m.hitPrevTop
+	}
+	i := y - 1 - top
+	if i < 0 || i >= len(ids) || ids[i] == "" {
 		return -1
 	}
 	for _, it := range m.Visible() {
-		if it.Row.ID() == m.hitIDs[i] {
+		if it.Row.ID() == ids[i] {
 			return it.Index
 		}
 	}

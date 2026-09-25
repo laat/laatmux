@@ -73,6 +73,13 @@ type Model struct {
 	// a filter since may have moved.
 	hitIDs []string
 	hitTop int
+	// hitAt is when that render was drawn, Now at the time, and the
+	// hitPrev fields the render before it, for a click read before the
+	// last draw.
+	hitAt      time.Time
+	hitPrevIDs []string
+	hitPrevTop int
+	hitPrevAt  time.Time
 	// Handoffs are the pending tasks that have handed over to their
 	// worktree rows, command id to worktree id, as the merged stream
 	// carried them: an anchor on a task the view never saw hand over
@@ -426,8 +433,10 @@ func (m *Model) Render() []Line {
 		m.scroll = 0
 	}
 	m.hits = make([]int, body)
+	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
 	m.hitIDs = make([]string, body)
 	m.hitTop = len(m.Header)
+	m.hitAt = m.Now
 	for i := 0; i < body; i++ {
 		m.hits[i] = -1
 		if j := m.scroll + i; j < len(lines) {
