@@ -542,10 +542,11 @@ a `switch-client`; one on a remote host's default server is refused with
 would start one in the footer. A stale row's session exists locally and
 is switched to.
 
-- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets four
+- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets five
   server hooks at indexes laatmux owns, `after-new-window[9101]` and
   `after-new-session[9102]` running `sidebar attach '#{window_id}'`,
   `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
+  and `window-resized[9105]` running `sidebar fit '#{window_id}'`,
   then walks every window on the default server and splits a pane off
   the left edge of each that has none, full height, at the configured
   width, running `sidebar pane`. The split is detached, so focus stays
@@ -558,8 +559,14 @@ is switched to.
   `attach` reads the hooks under it and does nothing when they are gone,
   so an attach queued behind `off` puts no pane back. `reap` kills a sidebar pane that is alone in its
   window, counting a dead pane kept by `remain-on-exit`, such as a
-  workspace's attach pane, as the window's. `off` unsets the four hooks
-  and kills every tagged pane. `toggle` reads the hooks. The hook
+  workspace's attach pane, as the window's. `fit` puts a window's
+  sidebar back to the configured width: tmux scales every pane in
+  proportion when a window is resized, so a session made detached, 80
+  columns wide, would otherwise give its sidebar a share of the terminal
+  once a client switches to it, and so would resizing the terminal. A
+  border dragged by hand stays until the window is resized next. A
+  sidebar turned on by an older build gets the hook when `on` runs
+  again. `off` unsets the five hooks and kills every tagged pane. `toggle` reads the hooks. The hook
   commands name the binary by its absolute path. `q` in a sidebar pane
   closes it; that window has no sidebar until a new window is made or
   `on` runs again.

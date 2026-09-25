@@ -22,7 +22,8 @@ import (
 // merged stream each. `on` installs hooks on the server so new windows
 // and sessions get a pane, and a window whose real panes are gone loses
 // its sidebar; then it adds a pane to every window that lacks one. `off`
-// removes the hooks and the panes. The hooks run `attach` and `reap`.
+// removes the hooks and the panes. The hooks run `attach`, `reap` and
+// `fit`.
 //
 // Every check-and-create runs under an exclusive flock on
 // $LAATMUX_HOME/sidebar.lock: two attaches for the same window, or an
@@ -37,22 +38,24 @@ const sidebarTag = "@laatmux_sidebar"
 // wait on them. In an after-new-window or after-new-session hook the
 // formats expand for the window the command made, so window_id is the
 // new window in both; the hook_window and hook_session formats are
-// empty there on tmux 3.6.
+// empty there on tmux 3.6. window-resized expands window_id for the
+// resized window too.
 var sidebarHooks = []struct{ hook, cmd string }{
 	{"after-new-window[9101]", "sidebar attach '#{window_id}'"},
 	{"after-new-session[9102]", "sidebar attach '#{window_id}'"},
 	{"pane-exited[9103]", "sidebar reap"},
 	{"after-kill-pane[9104]", "sidebar reap"},
+	{"window-resized[9105]", "sidebar fit '#{window_id}'"},
 }
 
 func cmdSidebar(ctx context.Context, args []string) error {
-	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | reap")
+	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | fit <window> | reap")
 	sub := "toggle"
 	if len(args) > 0 {
 		sub = args[0]
 		args = args[1:]
 	}
-	if sub != "attach" && len(args) > 0 {
+	if sub != "attach" && sub != "fit" && len(args) > 0 {
 		return usage
 	}
 	// The config is read only where its width and layout are needed, so
@@ -71,6 +74,15 @@ func cmdSidebar(ctx context.Context, args []string) error {
 			return usage
 		}
 		return sidebarAttach(ctx, args[0])
+	case "fit":
+		if len(args) != 1 {
+			return usage
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return sidebarFit(ctx, cfg, args[0])
 	case "reap":
 		return sidebarReap(ctx)
 	}
@@ -244,6 +256,34 @@ func sidebarReap(ctx context.Context) error {
 		if p.sidebar && (!alive[p.window] || p.dead) {
 			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
 		}
+	}
+	return nil
+}
+
+// sidebarFit puts the window's sidebar pane back to the configured
+// width. tmux scales every pane in proportion when a window is resized:
+// a session made detached is 80 columns wide, its sidebar split off at
+// the width, and a client switching to it grows the window, and the
+// sidebar with it, to a share of the terminal. So does resizing the
+// terminal. A width the user dragged the border to stays until the
+// window is resized next. A window without a live sidebar pane is left
+// alone; no lock is needed, since nothing is created.
+func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}"}, tmux.Sep))
+	if err != nil {
+		if tmux.NoServer(err) {
+			return nil
+		}
+		return err
+	}
+	want := strconv.Itoa(cfg.Sidebar.Columns())
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) != 4 || f[1] == "" || f[2] == "1" || f[3] == want {
+			continue
+		}
+		_, err := workspace.Server.Run(ctx, "resize-pane", "-t", f[0], "-x", want)
+		return err
 	}
 	return nil
 }
