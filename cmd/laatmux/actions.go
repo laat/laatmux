@@ -571,7 +571,14 @@ func (d *dash) askRm(m *view.Model, force bool) {
 // a task still running on the machine it was accepted for.
 func Dismissable(r rows.Row) bool {
 	p := r.Pending
-	return p != nil && (r.NeedsUser() || r.Removed || r.Replaced || p.Mismatch != "" || !p.Taken)
+	if p == nil {
+		return false
+	}
+	// The daemon's own tests, in its order: never sent nor taken; the
+	// host gone or the machine replaced as it has recorded; a task with
+	// an outcome and no attempt open. The view's own sight of a
+	// replaced machine waits for the relay's record while the add runs.
+	return (!p.Sent && !p.Taken) || r.Removed || p.Mismatch != "" || (p.Done && !p.AttemptOpen && r.NeedsUser())
 }
 
 // Deliverable is a pending task whose prompt p delivers now: the add
@@ -586,7 +593,15 @@ func Deliverable(p protocol.Pending) bool {
 // says why x does nothing on it.
 func (d *dash) askDismiss(m *view.Model, r rows.Row) {
 	if !Dismissable(r) {
-		m.Message = r.Name + ": the add is still running; x dismisses it once it needs you"
+		p := r.Pending
+		switch {
+		case !p.Done:
+			m.Message = r.Name + ": the add is still running; x dismisses it once it needs you"
+		case p.AttemptOpen:
+			m.Message = r.Name + ": a delivery attempt is open; x dismisses it once it has an outcome"
+		default:
+			m.Message = r.Name + ": nothing to dismiss; it hands over to its worktree row once listed"
+		}
 		return
 	}
 	p := *r.Pending
@@ -627,7 +642,13 @@ func (d *dash) deliverPrompt(m *view.Model) {
 	}
 	p := *r.Pending
 	if !Deliverable(p) {
-		m.Message = r.Name + ": nothing to deliver (" + r.State() + ")"
+		switch {
+		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:
+			// The prompt has nowhere to go; the file still has it.
+			m.Message = r.Name + ": " + r.State() + "; laatmux tasks show " + p.ID + " prints the prompt"
+		default:
+			m.Message = r.Name + ": nothing to deliver (" + r.State() + ")"
+		}
 		return
 	}
 	deliver := d.deliver
@@ -733,6 +754,12 @@ func (d *dash) settle(m *view.Model) {
 	if r == nil {
 		return
 	}
+	if r.Pending != nil {
+		// The row is the task's until it hands over: s settles the
+		// worktree row it becomes.
+		m.Message = r.Name + ": a pending task; s settles its worktree row once it hands over"
+		return
+	}
 	if r.Local == nil || !r.Local.Workspace() {
 		m.Message = r.Name + ": no local workspace session; enter creates one"
 		return
@@ -755,7 +782,16 @@ func (d *dash) shell(m *view.Model) bool {
 	if r == nil {
 		return false
 	}
-	l, err := d.localFor(*r)
+	row := *r
+	if row.Pending != nil {
+		// A task's row goes by the task's own rules for its session.
+		var err error
+		if row, err = pendingTarget(row); err != nil {
+			m.Message = err.Error()
+			return false
+		}
+	}
+	l, err := d.localFor(row)
 	if err != nil {
 		m.Message = err.Error()
 		return false

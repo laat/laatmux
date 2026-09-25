@@ -326,3 +326,36 @@ func TestPendingState(t *testing.T) {
 		}
 	}
 }
+
+// A task that can no longer become the worktree row at its root does
+// not stand for it: a worktree made again after one was gone, or after
+// an add failed, is drawn, with its agent, beside the task's own row.
+func TestPendingThatCannotStand(t *testing.T) {
+	now := time.Now()
+	for _, p := range []protocol.Pending{
+		{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true, Gone: true, SubmittedAt: now},
+		{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b", Taken: true, Done: true, Stage: protocol.StageAgent, Error: "failed at agent: new-session: exit 1", SubmittedAt: now},
+	} {
+		got := Build(Input{
+			Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+			Agents:    []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/b", Cwd: "/r/b", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+			Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b"}},
+			Pendings:  []protocol.Pending{p},
+		})
+		var task, wt *Row
+		for i := range got.Main {
+			switch got.Main[i].ID() {
+			case "add-1":
+				task = &got.Main[i]
+			case "venv/worktree//r/b":
+				wt = &got.Main[i]
+			}
+		}
+		if task == nil || wt == nil || wt.Agent == nil || task.Agent != nil || task.Worktree != nil {
+			t.Fatalf("%s: task %+v worktree %+v", p.Error, task, wt)
+		}
+		if p.Error != "" && (task.State() != "failed at agent" || task.Detail() != "new-session: exit 1") {
+			t.Fatalf("failed: %q %q", task.State(), task.Detail())
+		}
+	}
+}

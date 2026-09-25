@@ -932,3 +932,41 @@ func TestRenderPending(t *testing.T) {
 		t.Error("a running task does not spin")
 	}
 }
+
+// A task that hands over while another task for the same root stands
+// for the worktree row: the selection goes to the task standing for
+// it. A selection found again after it was lost is a plain one again.
+func TestAnchorStandIn(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	hosts := []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
+	wt := protocol.Worktree{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b"}
+	stuck := protocol.Pending{ID: "add-a", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now.Add(-time.Hour)}
+	next := protocol.Pending{ID: "add-b", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: now}
+	build := func(ps ...protocol.Pending) rows.Rows {
+		return rows.Build(rows.Input{Hosts: hosts, Pendings: ps, Worktrees: []protocol.Worktree{wt}})
+	}
+	m := &Model{Width: 60, Height: 20, Now: now}
+	m.SetRows(build(stuck, next))
+	m.Handle(Key{Rune: 'g'})
+	if r := m.Selection(); r == nil || r.ID() != "add-b" {
+		t.Fatalf("selected %+v", r)
+	}
+	m.Handoffs = map[string]string{"add-b": wt.ID}
+	m.SetRows(build(stuck))
+	if r := m.Selection(); r == nil || r.ID() != "add-a" {
+		t.Fatalf("after add-b handed over: %+v", r)
+	}
+	// Lost, then found again: a filter that hides every row and is
+	// cleared puts the selection on the first row, as for any other.
+	m.SetRows(build())
+	m.SetRows(build(stuck))
+	if r := m.Selection(); r == nil || r.ID() != "add-a" || m.lost {
+		t.Fatalf("found again: %+v lost %v", r, m.lost)
+	}
+	m.Filter = "zzz"
+	m.Selection()
+	m.Filter = ""
+	if r := m.Selection(); r == nil {
+		t.Fatal("a cleared filter left the selection on none")
+	}
+}

@@ -874,3 +874,57 @@ func TestTaskAction(t *testing.T) {
 		t.Error("a log's end not taken")
 	}
 }
+
+// x is offered where the daemon takes it, and says why not elsewhere;
+// p says where the prompt is when it cannot go; s refuses a task's row.
+func TestPendingOffers(t *testing.T) {
+	row := func(p protocol.Pending, replaced bool) rows.Row {
+		return rows.Row{Host: "vm", Name: "proj/b", Pending: &p, Replaced: replaced}
+	}
+	for _, c := range []struct {
+		name     string
+		p        protocol.Pending
+		replaced bool
+		want     bool
+	}{
+		{"never sent", protocol.Pending{}, false, true},
+		{"sent, not taken", protocol.Pending{Sent: true, Unreachable: "ssh: timeout"}, false, false},
+		{"running", protocol.Pending{Sent: true, Taken: true}, false, false},
+		{"running on a replaced machine, unrecorded", protocol.Pending{Sent: true, Taken: true}, true, false},
+		{"recorded mismatch", protocol.Pending{Sent: true, Taken: true, Mismatch: "x"}, false, true},
+		{"prompt not delivered", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}, false, true},
+		{"attempt open", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true}, false, false},
+		{"awaiting the listing", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, false, false},
+		{"done on a replaced machine", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, true, true},
+	} {
+		if got := Dismissable(row(c.p, c.replaced)); got != c.want {
+			t.Errorf("%s: dismissable %v, want %v", c.name, got, c.want)
+		}
+	}
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	m := &view.Model{Width: 100, Height: 20}
+	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
+	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "laatmux tasks show add-1") {
+		t.Errorf("p on an expired prompt: %q", m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 's'}})
+	if !strings.Contains(m.Message, "pending task") {
+		t.Errorf("s on a task: %q", m.Message)
+	}
+	m.Handle(view.Key{Rune: 'j'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	if m.Confirm != "" || !strings.Contains(m.Message, "hands over to its worktree row") {
+		t.Errorf("x awaiting the listing: confirm %q message %q", m.Confirm, m.Message)
+	}
+	gone := listed
+	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
+	if _, err := pendingTarget(rows.Row{Name: "proj/c", Pending: &gone}); err == nil || !strings.Contains(err.Error(), "gone") {
+		t.Errorf("enter on a gone task: %v", err)
+	}
+}

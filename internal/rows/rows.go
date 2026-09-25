@@ -240,7 +240,8 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 	case p.Done && !p.OK && strings.HasPrefix(p.Error, outcomeUnknown):
 		return outcomeUnknown, strings.TrimPrefix(strings.TrimPrefix(p.Error, outcomeUnknown), ": ")
 	case p.Done && !p.OK && p.Stage != "":
-		return "failed at " + p.Stage, p.Error
+		// The relay's error says the stage already.
+		return "failed at " + p.Stage, strings.TrimPrefix(p.Error, "failed at "+p.Stage+": ")
 	case p.Done && !p.OK:
 		return "failed", p.Error
 	case p.Done && p.Gone:
@@ -263,6 +264,13 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 		return "adding", p.Detail
 	}
 	return "adding: " + p.Stage, p.Detail
+}
+
+// stands is a task that may still become the worktree row at its root,
+// and so stands for it: not one that failed, nor one whose worktree was
+// gone after the add.
+func stands(p protocol.Pending) bool {
+	return !p.Gone && !(p.Done && !p.OK)
 }
 
 // outcomeUnknown is how the relay's error begins for an add whose
@@ -344,7 +352,10 @@ func Build(in Input) Rows {
 	// A pending task stands for the worktree row at its root until it
 	// hands over: the two are joined by environment and root, never by
 	// name, and the worktree row is not drawn while any task for it
-	// stands, two tasks for one explicit branch included.
+	// stands, two tasks for one explicit branch included. A task that
+	// can no longer become that row does not stand for it: one whose
+	// worktree was gone after the add, whose row would hide a worktree
+	// made again at the root, and one that failed.
 	var pendings []Row
 	byAlias := map[string][]int{}
 	for i := range in.Pendings {
@@ -352,7 +363,7 @@ func Build(in Input) Rows {
 		h, configured := hosts[p.Host]
 		r := Row{Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
 			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
-		if alias := r.Alias(); alias != "" {
+		if alias := r.Alias(); alias != "" && stands(*p) {
 			byAlias[alias] = append(byAlias[alias], len(pendings))
 		}
 		pendings = append(pendings, r)
@@ -391,6 +402,9 @@ func Build(in Input) Rows {
 	// stale one, and the viewer's own row is followed.
 	for i := range pendings {
 		p := pendings[i].Pending
+		if !stands(*p) {
+			continue
+		}
 		if p.EnvironmentID != "" && p.Root != "" {
 			key := workspace.Key(p.EnvironmentID, p.Root)
 			seenKey[key] = true
@@ -407,7 +421,7 @@ func Build(in Input) Rows {
 		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] && p.Root != "" && a.Cwd == p.Root {
 			pendings[i].Agent, used[a] = a, true
 			for j := range pendings {
-				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
+				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && stands(*q) && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
 					pendings[j].Agent = a
 				}
 			}

@@ -89,9 +89,10 @@ type Model struct {
 // when that row is still visible. The anchor is a pair, the row's id
 // and its alias, and the lookup takes, in order: the row with the
 // anchor's id; the row whose id is the anchor's alias, the worktree
-// row once the pending task has gone; the row whose alias is the
-// anchor's id, the task standing for a worktree row again; the
-// worktree row the handoffs say the anchor's task became. It
+// row once the pending task has gone, or another task standing for it;
+// the row whose alias is the anchor's id, the task standing for a
+// worktree row again; the worktree row the handoffs say the anchor's
+// task became, or a task standing for it. It
 // re-anchors on what it found. A row found by none of these is gone,
 // and the selection is cleared rather than left at an index another
 // row has taken, until the row is back or the user moves it. While
@@ -109,18 +110,23 @@ func (m *Model) SetRows(rs rows.Rows) {
 	find := func(match func(r *rows.Row) bool) bool {
 		for _, it := range vis {
 			if match(it.Row) {
-				m.Selected, m.anchor, m.alias = it.Index, it.Row.ID(), it.Row.Alias()
+				m.Selected, m.anchor, m.alias, m.lost = it.Index, it.Row.ID(), it.Row.Alias(), false
 				return true
 			}
 		}
 		return false
 	}
-	anchor, alias := m.anchor, m.alias
+	anchor, alias, handed := m.anchor, m.alias, m.Handoffs[m.anchor]
+	// A worktree row can be hidden behind another task that stands for
+	// it: the row with that alias is the worktree row's stand-in.
+	standing := func(id string) func(r *rows.Row) bool {
+		return func(r *rows.Row) bool { return r.ID() == id || r.Alias() == id }
+	}
 	switch {
 	case find(func(r *rows.Row) bool { return r.ID() == anchor }):
-	case alias != "" && find(func(r *rows.Row) bool { return r.ID() == alias }):
+	case alias != "" && find(standing(alias)):
 	case find(func(r *rows.Row) bool { return r.Alias() == anchor }):
-	case m.Handoffs[anchor] != "" && find(func(r *rows.Row) bool { return r.ID() == m.Handoffs[anchor] }):
+	case handed != "" && find(standing(handed)):
 	default:
 		// The anchor is kept: a refresh that coalesced to nothing, a
 		// reconnect's first snapshot say, gives the row back, and the

@@ -639,7 +639,9 @@ is switched to.
   while a task for it stands, and the task's row takes its agent and
   session: `Enter` jumps once the add is done and does nothing while it
   runs, and refuses a task whose host is removed or now answers as
-  another machine. `p` and `x` on a task's row work in the sidebar as
+  another machine, or whose worktree is gone. A task that failed, or
+  whose worktree was gone after the add, does not stand for the
+  worktree row, so one made again at the root is drawn beside it. `p` and `x` on a task's row work in the sidebar as
   in the dashboard, the sidebar's only keys that act.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the

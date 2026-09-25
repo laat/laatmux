@@ -249,6 +249,8 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 	switch {
 	case r.Removed:
 		return r, errors.New(r.Name + ": host removed from the config")
+	case p.Gone:
+		return r, errors.New(r.Name + ": the worktree is gone; x dismisses the task")
 	case p.Mismatch != "" || r.Replaced:
 		// The name reaches another machine now: its session of the
 		// same name is not this task's.
