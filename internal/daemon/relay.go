@@ -225,6 +225,8 @@ func (r *relay) sweep(now time.Time) {
 			continue
 		}
 		delete(r.recs, id)
+		delete(r.checked, id)
+		delete(r.recheck, id)
 	}
 }
 

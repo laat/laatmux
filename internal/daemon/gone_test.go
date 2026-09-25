@@ -210,10 +210,11 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	if got, _ := f.local.relay.get("n5"); got.Gone {
 		t.Fatal("gone while the host lists the worktree")
 	}
-	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{}, false)
-	f.local.mu.Unlock()
-	time.Sleep(100 * time.Millisecond)
+	// The same listing again starts nothing: recheckTasks sets checking
+	// under the relay's mutex before any runner starts, so reading it as
+	// soon as it returns is exact.
+	absent := func(p protocol.Pending) bool { return p.EnvironmentID == "henv" }
+	f.local.recheckTasks("henv\x00", absent, nil)
 	f.local.relay.mu.Lock()
 	again, sig := f.local.relay.checking["n5"], f.local.relay.checked["n5"]
 	f.local.relay.mu.Unlock()
@@ -356,11 +357,20 @@ func TestRelayFreshStampAfterUnstampedSnapshot(t *testing.T) {
 	mh.cancel = func() {}
 	f.local.mu.Unlock()
 	// The task was checked against a listing without its worktree, and
-	// found present.
+	// found present. A poll's goroutine queued before the cancel could
+	// clear the memo, so they run out first, and the memo is confirmed
+	// set just before the snapshot, or the test would not be about it.
+	time.Sleep(300 * time.Millisecond)
 	f.local.relay.mu.Lock()
 	f.local.relay.checked["n8"] = "henv\x00"
 	f.local.relay.mu.Unlock()
 	rmOnHost(t, f, "rm-n8", "fresh", p.Root)
+	f.local.relay.mu.Lock()
+	seeded := f.local.relay.checked["n8"]
+	f.local.relay.mu.Unlock()
+	if seeded != "henv\x00" {
+		t.Fatalf("the seeded memo was cleared: %q", seeded)
+	}
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeUpsert, Listing: &protocol.Listing{Generation: 2, Revision: 1}})
 	f.awaitRecord(t, "n8", 30*time.Second, func(p pendingFile) bool { return p.Gone })
@@ -370,4 +380,37 @@ func TestRelayFreshStampAfterUnstampedSnapshot(t *testing.T) {
 	if !listed {
 		t.Fatal("the connection's listing was not recorded")
 	}
+}
+
+// A check that ends without an answer, stopped while its host cannot
+// answer, leaves no memo, so the same listing is checked again.
+func TestRelayCancelledCheckLeavesNoMemo(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	f.hosts.set() // the host gone from the config: relayConn refuses, the check retries
+	f.local.relay.mu.Lock()
+	f.local.relay.recs["c1"] = &pendingFile{Pending: protocol.Pending{ID: "c1", Host: "vm", EnvironmentID: "henv", Root: "/w/c", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}, Barrier: &protocol.Listing{Generation: 1, Revision: 1}}
+	f.local.relay.mu.Unlock()
+	absent := func(p protocol.Pending) bool { return p.ID == "c1" }
+	f.local.recheckTasks("sig", absent, nil)
+	f.local.relay.mu.Lock()
+	started, memo := f.local.relay.checking["c1"], f.local.relay.checked["c1"]
+	f.local.relay.mu.Unlock()
+	if !started || memo != "sig" {
+		t.Fatalf("no check: %v %q", started, memo)
+	}
+	f.local.stopRunners("c1")
+	f.local.relay.mu.Lock()
+	running, memo := f.local.relay.checking["c1"], f.local.relay.checked["c1"]
+	f.local.relay.mu.Unlock()
+	if running || memo != "" {
+		t.Fatalf("after the stop: checking %v memo %q", running, memo)
+	}
+	f.local.recheckTasks("sig", absent, nil)
+	f.local.relay.mu.Lock()
+	again := f.local.relay.checking["c1"]
+	f.local.relay.mu.Unlock()
+	if !again {
+		t.Fatal("the listing was not checked again")
+	}
+	f.local.stopRunners("c1")
 }
