@@ -332,6 +332,11 @@ func TestDecoderPasteAndKeys(t *testing.T) {
 	if got := split.Flush(); len(got) != 0 || !split.Pending() {
 		t.Fatalf("flush on a marker prefix: %+v", got)
 	}
+	// And past the grace: only an escape and bracket alone are let go.
+	split.now = func() time.Time { return time.Unix(0, 0).Add(2 * pasteGrace) }
+	if got := split.Flush(); len(got) != 0 || !split.Pending() || split.Wait() != 0 {
+		t.Fatalf("flush on a marker prefix past the grace: %+v pending %v", got, split.Pending())
+	}
 	got := split.Feed([]byte("~fix\rmore\x1b[201~"))
 	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "fix\nmore" {
 		t.Fatalf("paste after the split marker: %+v", got)

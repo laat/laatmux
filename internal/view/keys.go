@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -306,10 +307,11 @@ func pasteText(b []byte) string {
 func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
 
 // Wait is how long until a Flush has something to do: the escape wait
-// for held bytes, what is left of the grace for a paste or a held
-// start of a marker, and nothing at all when nothing is held or a
-// stalled paste has had no bytes since, so the caller sets no timer
-// and draws nothing until input comes.
+// for held bytes, what is left of the grace for a paste or for a held
+// escape and bracket, and nothing at all when nothing is held, a
+// longer start of a marker is held, or a stalled paste has had no
+// bytes since, so the caller sets no timer and draws nothing until
+// input comes.
 func (d *Decoder) Wait() time.Duration {
 	grace := func() time.Duration { return max(pasteGrace-d.clock().Sub(d.at), time.Millisecond) }
 	switch {
@@ -321,6 +323,9 @@ func (d *Decoder) Wait() time.Duration {
 	case len(d.pending) == 0:
 		return 0
 	case d.startHeld():
+		if len(d.pending) > 2 {
+			return 0
+		}
 		return grace()
 	}
 	return escapeWait
@@ -344,13 +349,13 @@ func (d *Decoder) Flush() []Key {
 		}
 		return d.stall()
 	}
-	// The start of a paste marker, split by a slow read, is held too:
-	// dropped, the paste's text would be read as keys, its line breaks
-	// as Enter. For the grace only: after that it was Alt-[ or a
-	// sequence that will not finish, and is dropped whole rather than
+	// The start of a paste marker, split by a slow read, is held too,
+	// however long: dropped, the paste's text would be read as keys,
+	// its line breaks as Enter. An escape and bracket alone are as
+	// likely Alt-[, and are dropped whole after the grace rather than
 	// with the next key.
 	if d.startHeld() {
-		if d.clock().Sub(d.at) < pasteGrace {
+		if len(d.pending) > 2 || d.clock().Sub(d.at) < pasteGrace {
 			return nil
 		}
 		d.pending = nil
@@ -461,6 +466,75 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 	return keys, nil
 }
 
+// extended is the key an extended-key report names: the code is the
+// key's unmodified character, alt its shifted one when the report has
+// it, and mod one more than the modifier bits (shift 1, alt 2, ctrl
+// 4). Enter with any modifier is a newline, so Shift-Enter and
+// Ctrl-Enter break a line as Ctrl-J does; Shift-Tab is itself; the
+// plain keys are themselves; a modified letter or other chord is
+// dropped, as an unknown sequence is.
+func extended(code, alt, mod int) Key {
+	if mod < 1 {
+		mod = 1
+	}
+	plain, shift := mod == 1, mod == 2
+	switch code {
+	case 13:
+		if plain {
+			return Key{Kind: KeyEnter}
+		}
+		return Key{Kind: KeyNewline}
+	case 10:
+		return Key{Kind: KeyNewline}
+	case 9:
+		if plain {
+			return Key{Kind: KeyTab}
+		}
+		if shift {
+			return Key{Kind: KeyShiftTab}
+		}
+	case 27:
+		if plain {
+			return Key{Kind: KeyEsc}
+		}
+	case 127, 8:
+		if plain || shift {
+			return Key{Kind: KeyBackspace}
+		}
+	case 3:
+		return Key{Kind: KeyCtrlC}
+	}
+	if mod == 5 {
+		// Control chords at xterm's second level, where every modified
+		// key is a sequence: the ones the view reads are their bytes.
+		switch code {
+		case 'c':
+			return Key{Kind: KeyCtrlC}
+		case 'j':
+			return Key{Kind: KeyNewline}
+		case 'm':
+			return Key{Kind: KeyEnter}
+		case 'i':
+			return Key{Kind: KeyTab}
+		case 'h':
+			return Key{Kind: KeyBackspace}
+		case '[':
+			return Key{Kind: KeyEsc}
+		}
+	}
+	switch {
+	case code < 0x20 || code == 0x7f:
+	case plain:
+		return Key{Rune: rune(code)}
+	case shift && alt >= 0x20:
+		return Key{Rune: rune(alt)}
+	case shift:
+		// tmux reports a shifted letter by its unshifted code.
+		return Key{Rune: unicode.ToUpper(rune(code))}
+	}
+	return Key{Kind: -1}
+}
+
 // ss3Keys are the keys sent as ESC O x in application cursor mode.
 var ss3Keys = map[byte]KeyKind{'A': KeyUp, 'B': KeyDown, 'C': KeyRight, 'D': KeyLeft, 'H': KeyHome, 'F': KeyEnd}
 
@@ -492,7 +566,38 @@ func csi(b []byte) (Key, int, bool) {
 		return Key{Kind: map[byte]KeyKind{'A': KeyUp, 'B': KeyDown, 'C': KeyRight, 'D': KeyLeft, 'H': KeyHome, 'F': KeyEnd}[final]}, n, true
 	case 'Z':
 		return Key{Kind: KeyShiftTab}, n, true
+	case 'u':
+		// CSI u, an extended key: the code, a shifted alternative
+		// after a colon, and the modifier after a semicolon.
+		f := strings.SplitN(params, ";", 2)
+		codes := strings.Split(f[0], ":")
+		code, err := strconv.Atoi(codes[0])
+		if err != nil {
+			return Key{Kind: -1}, n, true
+		}
+		mod := 1
+		if len(f) == 2 {
+			mod, _ = strconv.Atoi(strings.Split(f[1], ":")[0])
+		}
+		alt := 0
+		if len(codes) > 1 {
+			alt, _ = strconv.Atoi(codes[1])
+		}
+		return extended(code, alt, mod), n, true
 	case '~':
+		if strings.HasPrefix(params, "27;") {
+			// The xterm form of an extended key: 27, the modifier,
+			// the code.
+			f := strings.Split(params, ";")
+			if len(f) == 3 {
+				mod, _ := strconv.Atoi(f[1])
+				code, err := strconv.Atoi(f[2])
+				if err == nil {
+					return extended(code, 0, mod), n, true
+				}
+			}
+			return Key{Kind: -1}, n, true
+		}
 		switch params {
 		case "1", "7":
 			return Key{Kind: KeyHome}, n, true

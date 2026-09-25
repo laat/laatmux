@@ -9,4 +9,4 @@
 ...|⟨│ ⟩                                                        ⟨ │⟩
 ...|⟨└──────────────────────────────────────────────────────────┘⟩
 ...|branch  ‹›
-.D.|tab next field  enter submit  ctrl-j newline  esc cancel
+.D.|tab next  enter submit  ctrl-j/S-enter newline  esc cancel

@@ -308,8 +308,9 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 		time.Sleep(400 * time.Millisecond)
 		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrInterrupted, Stage: protocol.StageFetch}
 	}
-	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) {
-		t.Fatalf("resend past the lifetime: %v", err)
+	var everSent *NotSent
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) || errors.As(err, &everSent) {
+		t.Fatalf("resend past the lifetime: %v (a refusal after a send is not a not-sent)", err)
 	}
 	if got := f.commands(); len(got) != 2 || got[0].Type != protocol.TypeAdd || got[1].Type != protocol.TypeFollow {
 		t.Fatalf("follow past the lifetime: %+v", got)

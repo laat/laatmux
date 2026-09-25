@@ -40,7 +40,13 @@ func Open(in, out *os.File) (*Term, error) {
 	// paste, so pasted text arrives marked and is inserted rather than
 	// read as keys. A tmux popup passes the markers through once the
 	// application has asked for them.
-	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?2004h")
+	// The alternate screen, no cursor, mouse presses and wheel as SGR
+	// reports, bracketed paste, and extended keys at xterm's first
+	// level (modifyOtherKeys 1): a modified Enter comes as a sequence
+	// rather than as Enter, so Shift-Enter can break a line, while
+	// Esc, Enter, Tab and Ctrl-C stay the bytes they are. tmux with
+	// extended-keys on forwards them to a pane that asked.
+	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[>4;1m")
 	return t, nil
 }
 
@@ -49,7 +55,7 @@ func (t *Term) Close() {
 	if t.saved == nil {
 		return
 	}
-	t.write("\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
+	t.write("\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
 	_ = unix.IoctlSetTermios(int(t.in.Fd()), ioctlSetTermios, t.saved)
 	t.saved = nil
 }

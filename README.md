@@ -580,7 +580,12 @@ is switched to.
   box, and a branch line filled from the prompt as it is typed until
   it is edited. `Tab` and `Shift-Tab` move between the fields; on a
   chip `Left` and `Right` cycle and `Enter` opens the picker; in the
-  prompt `Ctrl-J` inserts a newline and `Enter` submits; `Esc` cancels,
+  prompt `Ctrl-J` inserts a newline and `Enter` submits, as do
+  `Shift-Enter` and `Ctrl-Enter` where the terminal reports them: the
+  view asks for xterm's modifyOtherKeys at level 1 and reads both the
+  `CSI 27 ; m ; 13 ~` and the `CSI 13 ; m u` forms, so under tmux
+  `extended-keys on` with either `extended-keys-format` is enough;
+  `Esc` cancels,
   and an Alt chord, `Alt-Backspace` say, which the terminal sends as an
   escape and the key in one read, is not `Esc` and is dropped.
   Bracketed paste is on, so a pasted line break is a newline, never a
