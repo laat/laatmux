@@ -83,7 +83,7 @@ func TestRelayListedTaskGoneOnListing(t *testing.T) {
 		t.Fatal("gone without a listing")
 	}
 	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
 	f.awaitRecord(t, "n2", 30*time.Second, func(p pendingFile) bool { return p.Gone })
 }
@@ -195,7 +195,7 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	mh := f.local.mhosts["vm"]
 	mh.cancel()
 	mh.cancel = func() {}
-	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
 	time.Sleep(time.Second)
 	for i := 0; i < 100; i++ {
@@ -211,7 +211,7 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 		t.Fatal("gone while the host lists the worktree")
 	}
 	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
 	time.Sleep(100 * time.Millisecond)
 	f.local.relay.mu.Lock()
@@ -222,7 +222,7 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	}
 	// Another listing that lacks it is checked again.
 	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{"henv/worktree//elsewhere": true})
+	f.local.hostListedLocked("henv", map[string]bool{"henv/worktree//elsewhere": true}, false)
 	f.local.mu.Unlock()
 	for i := 0; ; i++ {
 		f.local.relay.mu.Lock()
@@ -236,6 +236,22 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	for i := 0; i < 200; i++ {
+		f.local.relay.mu.Lock()
+		busy := f.local.relay.checking["n5"]
+		f.local.relay.mu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Then the worktree goes while the connection is down, and the
+	// reconnect's snapshot reads as the listing already checked against:
+	// a fresh listing is checked all the same.
+	p, _ := f.local.relay.get("n5")
+	rmOnHost(t, f, "rm-n5", "present", p.Root)
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 9}, Worktrees: []protocol.Worktree{{ID: "henv/worktree//elsewhere", EnvironmentID: "henv", Root: "/elsewhere"}}})
+	f.awaitRecord(t, "n5", 30*time.Second, func(p pendingFile) bool { return p.Gone })
 }
 
 // Only a listing starts a check: a snapshot without the stamp, from a
@@ -246,29 +262,20 @@ func TestRelaySnapshotNeedsListing(t *testing.T) {
 	f := newRelayFixture(t, []string{"loading"})
 	c, _, _ := f.merged(t)
 	defer c.Close()
-	notDelivered(t, f, "n7", "snap")
+	p := notDelivered(t, f, "n7", "snap")
 	f.local.mu.Lock()
 	mh := f.local.mhosts["vm"]
 	mh.cancel()
 	mh.cancel = func() {}
 	f.local.mu.Unlock()
-	checked := func() string {
-		f.local.relay.mu.Lock()
-		defer f.local.relay.mu.Unlock()
-		return f.local.relay.checked["n7"]
-	}
+	rmOnHost(t, f, "rm-n7", "snap", p.Root)
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
-	time.Sleep(200 * time.Millisecond)
-	if s := checked(); s != "" {
-		t.Fatalf("a snapshot without a listing started a check: %q", s)
+	time.Sleep(500 * time.Millisecond)
+	if got, _ := f.local.relay.get("n7"); got.Gone {
+		t.Fatal("a snapshot without a listing started a check")
 	}
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 1}})
-	for i := 0; checked() == ""; i++ {
-		if i > 200 {
-			t.Fatal("a snapshot with a listing started no check")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	f.awaitRecord(t, "n7", 30*time.Second, func(p pendingFile) bool { return p.Gone })
 }
 
 // A task that becomes eligible after its host's listing was already
@@ -280,7 +287,7 @@ func TestRelayGoneAgainstSeenListing(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
 	p := notDelivered(t, f, "n6", "seen")
 	f.local.mu.Lock()
@@ -290,7 +297,7 @@ func TestRelayGoneAgainstSeenListing(t *testing.T) {
 	f.local.mu.Unlock()
 	rmOnHost(t, f, "rm-n6", "seen", p.Root)
 	f.local.mu.Lock()
-	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
 	f.awaitRecord(t, "n6", 30*time.Second, func(p pendingFile) bool { return p.Gone })
 }

@@ -21,8 +21,8 @@ import (
 // worktrees and is not a removal.
 
 // tasksAtLocked schedules the check for every listed task that match
-// selects, against the listing sig names, "" for a reported removal,
-// which always checks. Called with d.mu held; the relay's mutex comes
+// selects, against the listing sig names, "" for a reported removal or a
+// fresh listing, which always checks. Called with d.mu held; the relay's mutex comes
 // before d.mu, so the records are read on a goroutine of their own.
 func (d *Daemon) tasksAtLocked(sig string, match, shown func(protocol.Pending) bool) {
 	if d.relay == nil {
@@ -38,17 +38,23 @@ func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
 
 // hostListedLocked is a host's successful listing of worktrees: a task
 // on the environment whose worktree it lacks is checked, once per
-// listing that differs, since polls repeat a listing many times over.
-func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool) {
+// listing that differs, since polls repeat a listing many times over. A
+// fresh listing, a connection's first, is checked whatever came before:
+// the worktree may have gone while the connection was down, and the
+// listing after it can read the same as one from before.
+func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool, fresh bool) {
 	if environmentID == "" {
 		return
 	}
-	ids := make([]string, 0, len(listed))
-	for id := range listed {
-		ids = append(ids, id)
+	sig := ""
+	if !fresh {
+		ids := make([]string, 0, len(listed))
+		for id := range listed {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		sig = environmentID + "\x00" + strings.Join(ids, "\x00")
 	}
-	sort.Strings(ids)
-	sig := environmentID + "\x00" + strings.Join(ids, "\x00")
 	d.tasksAtLocked(sig, func(p protocol.Pending) bool {
 		return p.EnvironmentID == environmentID && !listed[p.WorktreeID()]
 	}, func(p protocol.Pending) bool {

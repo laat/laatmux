@@ -450,7 +450,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			for id := range mh.worktrees {
 				listed[id] = true
 			}
-			d.hostListedLocked(mh.status.EnvironmentID, listed)
+			d.hostListedLocked(mh.status.EnvironmentID, listed, true)
 		}
 		mh.status.Listed = true
 		mh.status.Since = time.Now()
@@ -465,7 +465,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			for id := range mh.worktrees {
 				listed[id] = true
 			}
-			d.hostListedLocked(mh.status.EnvironmentID, listed)
+			d.hostListedLocked(mh.status.EnvironmentID, listed, false)
 		}
 		if msg.Agent != nil {
 			mh.agents[msg.Agent.ID] = *msg.Agent

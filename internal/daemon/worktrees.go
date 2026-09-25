@@ -72,7 +72,7 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		for root := range d.worktrees {
 			listed[d.worktreeID(root)] = true
 		}
-		d.hostListedLocked(d.cfg.EnvironmentID, listed)
+		d.hostListedLocked(d.cfg.EnvironmentID, listed, false)
 		d.mu.Unlock()
 	}
 	d.markDiscovered(&d.worktreesDiscovered)
