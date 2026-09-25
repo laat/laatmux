@@ -189,7 +189,12 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	notDelivered(t, f, "n5", "present")
+	// Only the listings below reach the task: the host's own polls,
+	// which show the worktree, would clear its memo.
 	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
 	f.local.hostListedLocked("henv", map[string]bool{})
 	f.local.mu.Unlock()
 	time.Sleep(time.Second)
@@ -210,10 +215,59 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	f.local.mu.Unlock()
 	time.Sleep(100 * time.Millisecond)
 	f.local.relay.mu.Lock()
-	again := f.local.relay.checking["n5"]
+	again, sig := f.local.relay.checking["n5"], f.local.relay.checked["n5"]
 	f.local.relay.mu.Unlock()
-	if again {
-		t.Fatal("the same listing started a second check")
+	if again || sig != "henv\x00" {
+		t.Fatalf("the same listing started a second check, or none was recorded: %v %q", again, sig)
+	}
+	// Another listing that lacks it is checked again.
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{"henv/worktree//elsewhere": true})
+	f.local.mu.Unlock()
+	for i := 0; ; i++ {
+		f.local.relay.mu.Lock()
+		sig = f.local.relay.checked["n5"]
+		f.local.relay.mu.Unlock()
+		if sig == "henv\x00henv/worktree//elsewhere" {
+			break
+		}
+		if i > 200 {
+			t.Fatalf("a changed listing was not checked: %q", sig)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Only a listing starts a check: a snapshot without the stamp, from a
+// host whose listing has not succeeded, is not one; with the stamp it
+// is, driven through applyRemote as the follow drives it.
+func TestRelaySnapshotNeedsListing(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	notDelivered(t, f, "n7", "snap")
+	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
+	f.local.mu.Unlock()
+	checked := func() string {
+		f.local.relay.mu.Lock()
+		defer f.local.relay.mu.Unlock()
+		return f.local.relay.checked["n7"]
+	}
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
+	time.Sleep(200 * time.Millisecond)
+	if s := checked(); s != "" {
+		t.Fatalf("a snapshot without a listing started a check: %q", s)
+	}
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 1}})
+	for i := 0; checked() == ""; i++ {
+		if i > 200 {
+			t.Fatal("a snapshot with a listing started no check")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

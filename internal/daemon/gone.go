@@ -95,6 +95,11 @@ func (d *Daemon) recheckTasks(sig string, match, shown func(protocol.Pending) bo
 			for {
 				d.checkGone(ctx, id)
 				d.relay.mu.Lock()
+				if ctx.Err() != nil {
+					// Ended without an answer, by a dismiss that kept the
+					// record say: the listing it was for is not checked.
+					delete(d.relay.checked, id)
+				}
 				again := d.relay.recheck[id] && ctx.Err() == nil
 				delete(d.relay.recheck, id)
 				if !again {
