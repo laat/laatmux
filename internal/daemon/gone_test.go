@@ -271,9 +271,11 @@ func TestRelaySnapshotNeedsListing(t *testing.T) {
 	f.local.mu.Unlock()
 	rmOnHost(t, f, "rm-n7", "snap", p.Root)
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
+	// Nor one with the last good stamp and the current poll's error.
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 1}, ListingError: "git: broken"})
 	time.Sleep(500 * time.Millisecond)
 	if got, _ := f.local.relay.get("n7"); got.Gone {
-		t.Fatal("a snapshot without a listing started a check")
+		t.Fatal("a snapshot without a successful listing started a check")
 	}
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 1}})
 	f.awaitRecord(t, "n7", 30*time.Second, func(p pendingFile) bool { return p.Gone })

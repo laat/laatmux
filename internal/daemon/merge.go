@@ -449,8 +449,11 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		// A successful listing: a task on the host whose worktree it
 		// lacks, removed while this daemon was down say, is checked. A
 		// snapshot without the stamp has no listing behind it.
-		// Every snapshot begins a connection's stream.
-		mh.listed = msg.Listing != nil
+		// Every snapshot begins a connection's stream. It carries the
+		// last successful listing's stamp, and with it the current
+		// error when the latest poll failed: then its worktrees are that
+		// older listing's, and it is not the connection's listing.
+		mh.listed = msg.Listing != nil && msg.ListingError == ""
 		if mh.listed {
 			listed := map[string]bool{}
 			for id := range mh.worktrees {
