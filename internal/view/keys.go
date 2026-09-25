@@ -6,12 +6,14 @@ import (
 	"unicode/utf8"
 )
 
-// Key is one input event: a rune, a special key, or a mouse event.
+// Key is one input event: a rune, a special key, a mouse event, or a
+// bracketed paste with its text.
 type Key struct {
 	Rune  rune
 	Kind  KeyKind
-	X, Y  int // mouse, 1-based cells
-	Wheel int // mouse: -1 up, +1 down, 0 for a click
+	X, Y  int    // mouse, 1-based cells
+	Wheel int    // mouse: -1 up, +1 down, 0 for a click
+	Text  string // paste: everything between the paste markers, line breaks as \n
 }
 
 type KeyKind int
@@ -25,6 +27,26 @@ const (
 	KeyBackspace
 	KeyMouse // a left-button press or a wheel step
 	KeyCtrlC
+	KeyTab
+	KeyShiftTab
+	KeyLeft
+	KeyRight
+	KeyHome
+	KeyEnd
+	KeyDelete
+	// KeyNewline is Ctrl-J, a line feed: in raw mode Enter is \r, so
+	// the two are told apart without any terminal extension.
+	KeyNewline
+	// KeyPaste is a bracketed paste, the terminal having been asked for
+	// them: the text is inserted where the cursor is, never read as
+	// keys, so a pasted line break is a newline and not a submit.
+	KeyPaste
+)
+
+// Paste markers of bracketed paste mode.
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
 )
 
 // Decoder turns terminal input into keys across reads. Reads do not
@@ -38,6 +60,11 @@ type Decoder struct {
 	// the rest of it may still arrive, and is swallowed through its
 	// final byte rather than read as the keys its bytes spell.
 	discard bool
+	// paste is the text of a bracketed paste whose end has not arrived;
+	// pasting is set from its start marker to its end. A paste is held
+	// across reads and flushes however long it takes.
+	paste   []byte
+	pasting bool
 }
 
 // Feed adds input and returns the keys complete so far. Pending reports
@@ -62,18 +89,90 @@ func (d *Decoder) Feed(b []byte) []Key {
 		d.discard = false
 	}
 	d.pending = append(d.pending, b...)
-	keys, rest := parse(d.pending, false)
-	d.pending = rest
-	return keys
+	var keys []Key
+	for {
+		if d.pasting {
+			// Everything up to the end marker is the paste; the marker
+			// may be split across reads, so a prefix of it at the end is
+			// held.
+			if i := strings.Index(string(d.pending), pasteEnd); i >= 0 {
+				d.paste = append(d.paste, d.pending[:i]...)
+				d.pending = d.pending[i+len(pasteEnd):]
+				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
+				d.paste, d.pasting = nil, false
+				continue
+			}
+			keep := markerPrefix(d.pending, pasteEnd)
+			d.paste = append(d.paste, d.pending[:len(d.pending)-keep]...)
+			d.pending = append([]byte(nil), d.pending[len(d.pending)-keep:]...)
+			return keys
+		}
+		i := strings.Index(string(d.pending), pasteStart)
+		if i < 0 {
+			ks, rest := parse(d.pending, false)
+			d.pending = rest
+			return append(keys, ks...)
+		}
+		ks, rest := parse(d.pending[:i], true)
+		keys = append(keys, ks...)
+		_ = rest
+		d.pending = d.pending[i+len(pasteStart):]
+		d.pasting = true
+	}
 }
 
-// Pending reports whether Feed held bytes back.
-func (d *Decoder) Pending() bool { return len(d.pending) > 0 }
+// markerPrefix is how many bytes at the end of b are a proper prefix
+// of marker, held back for the rest of it.
+func markerPrefix(b []byte, marker string) int {
+	for n := min(len(b), len(marker)-1); n > 0; n-- {
+		if string(b[len(b)-n:]) == marker[:n] {
+			return n
+		}
+	}
+	return 0
+}
+
+// pasteText is a paste's bytes as text: line breaks of any kind become
+// newlines, escape sequences are dropped whole, and other control
+// characters but tabs are dropped.
+func pasteText(b []byte) string {
+	s := strings.ReplaceAll(string(b), "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	var out strings.Builder
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == 0x1b:
+			// CSI: through the final byte; SS3: one more; a lone escape
+			// is dropped alone.
+			if i+1 < len(rs) && rs[i+1] == '[' {
+				i += 2
+				for i < len(rs) && (rs[i] < 0x40 || rs[i] > 0x7e) {
+					i++
+				}
+			} else if i+1 < len(rs) && rs[i+1] == 'O' {
+				i += 2
+			}
+		case r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+// Pending reports whether Feed held bytes back. A paste under way holds
+// its text until its end marker arrives, so it is pending until then.
+func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
 
 // Flush reads the held bytes as they are: a bare escape is the escape
 // key; an incomplete sequence is dropped and its continuation, should
-// it arrive, discarded; an incomplete rune is dropped.
+// it arrive, discarded; an incomplete rune is dropped. A paste under
+// way is kept whole: its end is coming, however long it takes.
 func (d *Decoder) Flush() []Key {
+	if d.pasting {
+		return nil
+	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
 		d.discard = true
 	}
@@ -85,8 +184,9 @@ func (d *Decoder) Flush() []Key {
 // Parse reads one complete chunk of input as keys, flushing what is
 // incomplete.
 func Parse(b []byte) []Key {
-	keys, _ := parse(b, true)
-	return keys
+	var d Decoder
+	keys := d.Feed(b)
+	return append(keys, d.Flush()...)
 }
 
 // parse splits b into keys. With flush false, bytes that may be the
@@ -124,14 +224,9 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 					}
 					return keys, nil
 				} else {
-					// SS3 arrows, sent in application cursor mode.
-					switch b[2] {
-					case 'A':
-						keys = append(keys, Key{Kind: KeyUp})
-						b = b[3:]
-						continue
-					case 'B':
-						keys = append(keys, Key{Kind: KeyDown})
+					// SS3 keys, sent in application cursor mode.
+					if kind, ok := ss3Keys[b[2]]; ok {
+						keys = append(keys, Key{Kind: kind})
 						b = b[3:]
 						continue
 					}
@@ -139,8 +234,14 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 			}
 			keys = append(keys, Key{Kind: KeyEsc})
 			b = b[1:]
-		case c == '\r' || c == '\n':
+		case c == '\r':
 			keys = append(keys, Key{Kind: KeyEnter})
+			b = b[1:]
+		case c == '\n':
+			keys = append(keys, Key{Kind: KeyNewline})
+			b = b[1:]
+		case c == '\t':
+			keys = append(keys, Key{Kind: KeyTab})
 			b = b[1:]
 		case c == 0x7f || c == 0x08:
 			keys = append(keys, Key{Kind: KeyBackspace})
@@ -169,8 +270,12 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 	return keys, nil
 }
 
-// csi reads one CSI sequence at the start of b: arrows and SGR mouse
-// reports. Anything else it recognises the shape of is dropped.
+// ss3Keys are the keys sent as ESC O x in application cursor mode.
+var ss3Keys = map[byte]KeyKind{'A': KeyUp, 'B': KeyDown, 'C': KeyRight, 'D': KeyLeft, 'H': KeyHome, 'F': KeyEnd}
+
+// csi reads one CSI sequence at the start of b: arrows, Home and End,
+// Shift-Tab, the tilde keys and SGR mouse reports. Anything else it
+// recognises the shape of is dropped.
 func csi(b []byte) (Key, int, bool) {
 	i := 2
 	for i < len(b) && (b[i] >= 0x30 && b[i] <= 0x3f) {
@@ -185,11 +290,27 @@ func csi(b []byte) (Key, int, bool) {
 	final := b[i]
 	params := string(b[2:i])
 	n := i + 1
+	// A modified arrow, Ctrl-Right say, is not the plain key and is
+	// dropped as before.
+	plain := params == "" || params == "1"
 	switch final {
-	case 'A':
-		return Key{Kind: KeyUp}, n, true
-	case 'B':
-		return Key{Kind: KeyDown}, n, true
+	case 'A', 'B', 'C', 'D', 'H', 'F':
+		if !plain {
+			return Key{Kind: -1}, n, true
+		}
+		return Key{Kind: map[byte]KeyKind{'A': KeyUp, 'B': KeyDown, 'C': KeyRight, 'D': KeyLeft, 'H': KeyHome, 'F': KeyEnd}[final]}, n, true
+	case 'Z':
+		return Key{Kind: KeyShiftTab}, n, true
+	case '~':
+		switch params {
+		case "1", "7":
+			return Key{Kind: KeyHome}, n, true
+		case "4", "8":
+			return Key{Kind: KeyEnd}, n, true
+		case "3":
+			return Key{Kind: KeyDelete}, n, true
+		}
+		return Key{Kind: -1}, n, true
 	case 'M', 'm':
 		if strings.HasPrefix(params, "<") {
 			f := strings.Split(params[1:], ";")

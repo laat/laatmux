@@ -26,8 +26,12 @@ type dash struct {
 	cfg        config.Config
 	st         *merged
 	exitOnJump bool
-	// add is the picker sequence in progress, nil when none.
-	add *addFlow
+	// relay is the local daemon's relay capability: with it a submit
+	// hands the add to the daemon and ends the view; without it the
+	// add runs in the foreground with its log, as before.
+	relay bool
+	// add is the form in progress, nil when none.
+	add *addForm
 	// rm is the removal a confirm line asks about.
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
@@ -83,22 +87,14 @@ func (d *dash) jump(m *view.Model, r rows.Row) bool {
 // command.
 func (d *dash) overlayDone(m *view.Model) bool {
 	switch o := m.Overlay.(type) {
-	case *view.Picker:
+	case *view.Form:
 		m.Overlay = nil
-		if o.Chosen < 0 || d.add == nil {
-			d.add = nil
+		f := d.add
+		d.add = nil
+		if o.Cancelled || f == nil {
 			return false
 		}
-		d.add.chose(o.Chosen)
-		d.advanceAdd(m)
-	case *view.Prompt:
-		m.Overlay = nil
-		if o.Cancelled || d.add == nil {
-			d.add = nil
-			return false
-		}
-		d.add.branch = strings.TrimSpace(o.Text)
-		d.runAdd(m)
+		return d.submitForm(m, f, o)
 	case *view.Log:
 		if o.Quit {
 			return true
@@ -152,39 +148,29 @@ func (r logReporter) Note(s string) {
 	r.st.notify()
 }
 
-// addFlow is the a key: pickers for the repository, the host and the
-// agent, then a prompt for the branch, then the add. Each picker is
-// skipped when there is one candidate, and preselects the default the
-// CLI would take: the repository of the directory the popup was opened
-// from, the host and agent last used for that repository, else the
-// first. a on a worktree row that has no session pre-fills the
-// repository, host and branch from the record.
-type addFlow struct {
+// addForm is the a key: the task form, with the candidates its chips
+// were built from, so a choice maps back to the config's entries. The
+// chips preselect what add would take: the repository of the directory
+// the popup was opened from, the host and agent last used for it, else
+// the config's defaults. a on a worktree row that has no session
+// pre-fills the repository, host and branch from the record, the
+// branch explicit.
+type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
-	step   int // the step whose picker is up: 0 repository, 1 host, 2 agent
-	last   home.Last
-	repo   config.Repo
-	host   config.Host
-	agent  string
-	branch string
-	// preselections, from the selected row or the working directory
-	preRepo, preHost string
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addFlow{repos: d.cfg.Repos, agents: d.cfg.AgentNames()}
+	f := &addForm{repos: d.cfg.Repos, agents: d.cfg.AgentNames()}
 	for _, h := range d.cfg.Hosts {
 		if h.CanAdd() {
 			f.hosts = append(f.hosts, h)
 		}
 	}
-	// A step with nothing to pick from refuses before any picker is
-	// up, so nothing is chosen for an add that cannot be sent. So does
-	// last.json that cannot be read: the CLI's add fails on it before
-	// sending, and the add's own update of it would fail after the
-	// worktree and agent exist on the host.
+	// A field with nothing to choose from refuses before the form is
+	// up. So does last.json that cannot be read: the submit's own
+	// update of it would fail after the daemon has the task.
 	switch {
 	case len(f.repos) == 0:
 		m.Message = "no repositories configured"
@@ -201,118 +187,110 @@ func (d *dash) startAdd(m *view.Model) {
 		m.Message = "last.json: " + err.Error()
 		return
 	}
-	f.last = last
+	preRepo, preHost, branch := "", "", ""
 	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Stale {
-		f.preRepo, f.preHost, f.branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
+		preRepo, preHost, branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
 	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-		f.preRepo = repo.Name
+		preRepo = repo.Name
 	}
+	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.hostCaps)
+	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
 	d.add = f
-	d.advanceAdd(m)
+	m.Overlay = form
 }
 
-// chose records the picker's choice for the current step.
-func (f *addFlow) chose(i int) {
-	switch f.step {
-	case 0:
-		f.repo = f.repos[i]
-	case 1:
-		f.host = f.hosts[i]
-	case 2:
-		f.agent = f.agents[i]
-	}
-	f.step++
-}
-
-// advanceAdd opens the picker for the next step, skipping steps with
-// one candidate, then the branch prompt.
-func (d *dash) advanceAdd(m *view.Model) {
-	f := d.add
-	for {
-		switch f.step {
-		case 0:
-			if len(f.repos) == 1 {
-				f.chose(0)
-				continue
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, r := range f.repos {
-				cs = append(cs, view.Choice{Label: r.Name, Detail: r.Source})
-				if r.Name == f.preRepo || r.Source == f.preRepo {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: repository", cs, pre)
-			return
-		case 1:
-			if len(f.hosts) == 1 {
-				f.chose(0)
-				continue
-			}
-			want := f.preHost
-			if want == "" {
-				if h, err := d.cfg.DefaultHost("", f.last.Get(f.repo.Source).Host); err == nil {
-					want = h.Name
-				}
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, h := range f.hosts {
-				detail := h.Worktrees
-				if h.SSH != "" {
-					detail = "ssh " + h.SSH + "  " + detail
-				}
-				cs = append(cs, view.Choice{Label: h.Name, Detail: detail})
-				if h.Name == want {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: host", cs, pre)
-			return
-		case 2:
-			if len(f.agents) == 1 {
-				f.chose(0)
-				continue
-			}
-			want := ""
-			if name, _, err := d.cfg.DefaultAgent("", f.last.Get(f.repo.Source).Agent); err == nil {
-				want = name
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, name := range f.agents {
-				cs = append(cs, view.Choice{Label: name, Detail: strings.Join(d.cfg.Agents[name].Cmd, " ")})
-				if name == want {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: agent", cs, pre)
-			return
-		default:
-			title := fmt.Sprintf("add %s on %s with %s: branch", f.repo.Name, f.host.Name, f.agent)
-			m.Overlay = view.NewPrompt(title, f.branch, func(s string) error {
-				return worktree.CheckBranch(d.ctx, strings.TrimSpace(s))
-			})
-			return
+// buildForm makes the task form over the candidates, preselecting the
+// repository named, the host and agent last used for it, else the
+// config's defaults. caps, when set, gives a host's cached daemon
+// capabilities for the note about tasks not being supported.
+func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
+	var chips [3]view.Chip
+	chips[0].Title = "repository"
+	for i, r := range f.repos {
+		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
+		if r.Name == preRepo || r.Source == preRepo {
+			chips[0].Selected = i
 		}
 	}
+	repo := f.repos[chips[0].Selected]
+	chips[1].Title = "host"
+	wantHost := preHost
+	if wantHost == "" {
+		if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
+			wantHost = h.Name
+		}
+	}
+	for i, h := range f.hosts {
+		detail := h.Worktrees
+		if h.SSH != "" {
+			detail = "ssh " + h.SSH + "  " + detail
+		}
+		chips[1].Choices = append(chips[1].Choices, view.Choice{Label: h.Name, Detail: detail})
+		if h.Name == wantHost {
+			chips[1].Selected = i
+		}
+	}
+	chips[2].Title = "agent"
+	wantAgent := ""
+	if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
+		wantAgent = name
+	}
+	for i, name := range f.agents {
+		chips[2].Choices = append(chips[2].Choices, view.Choice{Label: name, Detail: strings.Join(cfg.Agents[name].Cmd, " ")})
+		if name == wantAgent {
+			chips[2].Selected = i
+		}
+	}
+	form := view.NewForm("add a task", chips, branch)
+	form.Propose = worktree.ProposeBranch
+	if caps != nil {
+		form.Note = func(form *view.Form) string {
+			host := form.Chips[1].Label()
+			if c, ok := caps(host); ok && !protocol.Has(c, protocol.CapTask) {
+				return "tasks not supported by " + host + "'s daemon"
+			}
+			return ""
+		}
+	}
+	return form
 }
 
-// runAdd runs the add the pickers built; on success the new workspace
-// session is jumped to.
-func (d *dash) runAdd(m *view.Model) {
-	f := d.add
-	d.add = nil
-	add := command.Add{Host: f.host, Repo: f.repo, Branch: f.branch, Agent: f.agent}
+// submitForm runs what the form asked for: with the relay, the add is
+// handed to the local daemon and the view ends once it is accepted;
+// without it, the add runs in the foreground with its log, and the new
+// workspace session is jumped to.
+func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
+	add := command.Add{
+		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Agent: f.agents[o.Chips[2].Selected],
+		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
+	}
+	if d.relay {
+		id, err := add.Submit(d.ctx)
+		if err != nil {
+			m.Message = err.Error()
+			if id != "" {
+				m.Message = "submitted " + id + "; " + err.Error()
+			}
+			return false
+		}
+		m.Message = "accepted " + id
+		return true
+	}
+	d.runAdd(m, add)
+	return false
+}
+
+// runAdd runs the add in the foreground with its log; on success the
+// new workspace session is jumped to.
+func (d *dash) runAdd(m *view.Model, add command.Add) {
 	var res command.Added
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
-		if err != nil && res.Root != "" {
+		if err != nil && res.Done {
 			// The host's side is done; what failed is local, and the
 			// message must say the worktree and agent exist.
-			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", f.repo.Name, f.branch, f.host.Name, res.Root, err)
+			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", add.Repo.Name, res.Branch, add.Host.Name, res.Root, err)
 		}
 		return err
 	}, func(m *view.Model) bool {

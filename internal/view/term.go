@@ -36,8 +36,11 @@ func Open(in, out *os.File) (*Term, error) {
 	}
 	t.saved = saved
 	// Alternate screen, cursor hidden, mouse buttons and wheel with SGR
-	// coordinates so columns past 223 report correctly.
-	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
+	// coordinates so columns past 223 report correctly, and bracketed
+	// paste, so pasted text arrives marked and is inserted rather than
+	// read as keys. A tmux popup passes the markers through once the
+	// application has asked for them.
+	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?2004h")
 	return t, nil
 }
 
@@ -46,7 +49,7 @@ func (t *Term) Close() {
 	if t.saved == nil {
 		return
 	}
-	t.write("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
+	t.write("\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
 	_ = unix.IoctlSetTermios(int(t.in.Fd()), ioctlSetTermios, t.saved)
 	t.saved = nil
 }

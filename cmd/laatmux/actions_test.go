@@ -82,10 +82,10 @@ func selectRow(t *testing.T, m *view.Model, name string) *rows.Row {
 	return nil
 }
 
-// a on a worktree row without a session pre-fills the pickers with the
-// record's repository and host, and the prompt with its branch; each
-// picker in turn, then the prompt, and Esc in any step returns to the
-// list with nothing done.
+// a on a worktree row without a session opens the form pre-filled with
+// the record's repository and host, and its branch explicit; Enter on
+// a chip opens the picker inside the form, and Esc anywhere returns to
+// the list with nothing done.
 func TestAddFlowPrefilled(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -93,41 +93,38 @@ func TestAddFlowPrefilled(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/spike")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p, ok := m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: repository" || p.Choices[p.Selected].Label != "proj" {
-		t.Fatalf("repository picker: %+v", m.Overlay)
+	f, ok := m.Overlay.(*view.Form)
+	if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || len(f.Chips[1].Choices) != 2 || len(f.Chips[2].Choices) != 2 {
+		t.Fatalf("form: %+v", m.Overlay)
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
+	if f.Branch() != "spike" || f.Generated() {
+		t.Fatalf("branch %q generated %v", f.Branch(), f.Generated())
+	}
+	if err := f.Validate("bad..name"); err == nil {
+		t.Error("form accepted a name git refuses")
+	}
+	// The picker opens from a chip and is drawn in the form's place.
+	f.Handle(view.Key{Kind: view.KeyTab})
+	f.Handle(view.Key{Kind: view.KeyTab})
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if !strings.Contains(view.Text(f.Render(60, 12)), "add a task: repository") {
+		t.Fatalf("no picker:\n%s", view.Text(f.Render(60, 12)))
+	}
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
-	p, ok = m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: host" || p.Choices[p.Selected].Label != "vm" || len(p.Choices) != 2 {
-		t.Fatalf("host picker: %+v", m.Overlay)
+	if m.Overlay == nil {
+		t.Fatal("esc in the picker ended the form")
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	p, ok = m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: agent" || len(p.Choices) != 2 {
-		t.Fatalf("agent picker: %+v", m.Overlay)
-	}
-	p.Handle(view.Key{Kind: view.KeyDown})
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	pr, ok := m.Overlay.(*view.Prompt)
-	if !ok || pr.Text != "spike" || !strings.HasPrefix(pr.Title, "add proj on vm with codex") {
-		t.Fatalf("prompt: %+v", m.Overlay)
-	}
-	if err := pr.Validate("bad..name"); err == nil {
-		t.Error("prompt accepted a name git refuses")
-	}
-	pr.Handle(view.Key{Kind: view.KeyEsc})
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
 	if m.Overlay != nil || d.add != nil || d.run != nil {
 		t.Errorf("esc did not return to the list: overlay=%v add=%v run=%v", m.Overlay, d.add, d.run)
 	}
 }
 
-// The last-used host and agent for the repository are preselected, and
-// a step with one candidate is skipped.
+// The last-used host and agent for the repository are preselected, the
+// configured default agent else the first without one, and a field
+// with one candidate is shown, not skipped.
 func TestAddFlowDefaults(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -140,27 +137,15 @@ func TestAddFlowDefaults(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task") // a row with a session pre-fills nothing
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p := m.Overlay.(*view.Picker)
-	if p.Title != "add: repository" || p.Choices[p.Selected].Label != "laatmux" {
-		t.Fatalf("repository picker preselected %q", p.Choices[p.Selected].Label)
+	f := m.Overlay.(*view.Form)
+	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "codex" || f.Branch() != "" {
+		t.Fatalf("preselected %q %q %q branch %q", f.Chips[0].Label(), f.Chips[1].Label(), f.Chips[2].Label(), f.Branch())
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
-	p = m.Overlay.(*view.Picker)
-	if p.Title != "add: host" || p.Choices[p.Selected].Label != "vm" {
-		t.Fatalf("host picker preselected %q", p.Choices[p.Selected].Label)
-	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	p = m.Overlay.(*view.Picker)
-	if p.Title != "add: agent" || p.Choices[p.Selected].Label != "codex" {
-		t.Fatalf("agent picker preselected %q", p.Choices[p.Selected].Label)
-	}
 
 	// No last-used agent for the repository: the configured default is
 	// preselected; without one, the first agent.
-	p.Handle(view.Key{Kind: view.KeyEsc})
-	d.act(m, m.Poll())
 	if err := home.UpdateLast(func(l *home.Last) { l.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm"}) }); err != nil {
 		t.Fatal(err)
 	}
@@ -168,30 +153,24 @@ func TestAddFlowDefaults(t *testing.T) {
 		cfg.DefaultAgentName = c.def
 		d.cfg = cfg
 		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-		for i := 0; i < 2; i++ {
-			m.Overlay.(*view.Picker).Handle(view.Key{Kind: view.KeyEnter})
-			d.act(m, m.Poll())
+		f := m.Overlay.(*view.Form)
+		if f.Chips[2].Label() != c.want {
+			t.Fatalf("default_agent %q: agent preselected %q", c.def, f.Chips[2].Label())
 		}
-		p = m.Overlay.(*view.Picker)
-		if p.Title != "add: agent" || p.Choices[p.Selected].Label != c.want {
-			t.Fatalf("default_agent %q: agent picker preselected %q", c.def, p.Choices[p.Selected].Label)
-		}
-		p.Handle(view.Key{Kind: view.KeyEsc})
+		f.Handle(view.Key{Kind: view.KeyEsc})
 		d.act(m, m.Poll())
 	}
 
-	// One agent and one able host: both pickers are skipped.
+	// One agent and one able host: both chips are shown with their one
+	// candidate.
 	cfg.Agents = map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}
 	cfg.Hosts = cfg.Hosts[1:2]
 	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m = dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p = m.Overlay.(*view.Picker)
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	pr, ok := m.Overlay.(*view.Prompt)
-	if !ok || pr.Title != "add laatmux on vm with claude: branch" || pr.Text != "" {
-		t.Fatalf("after the only repository picker: %+v", m.Overlay)
+	f = m.Overlay.(*view.Form)
+	if len(f.Chips[1].Choices) != 1 || len(f.Chips[2].Choices) != 1 || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" {
+		t.Fatalf("single candidates: %+v", f.Chips)
 	}
 
 	// No agents: refused with a message, nothing up.
@@ -386,5 +365,50 @@ func TestRmRefusalHint(t *testing.T) {
 	}
 	if err := forceHint(errors.New("use --force"), true); strings.Contains(err.Error(), "X force") {
 		t.Errorf("hint on a forced rm: %v", err)
+	}
+}
+
+// The task form is built over the config's candidates with the
+// defaults preselected: the repository named, the host and agent last
+// used for it, and a note when the host's cached daemon capabilities
+// lack tasks; a branch given is the user's.
+func TestBuildForm(t *testing.T) {
+	cfg := config.Config{
+		Hosts:  []config.Host{{Host: client.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: client.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
+		Repos:  []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}, {Source: "git@x:o/other.git", Name: "other"}},
+		Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}, "codex": {Cmd: []string{"codex"}}},
+	}
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
+	var last home.Last
+	last.Set("git@x:o/other.git", home.LastRepo{Host: "vm", Agent: "codex"})
+	caps := func(host string) ([]string, bool) {
+		if host == "vm" {
+			return []string{protocol.CapAdd}, true
+		}
+		return nil, false
+	}
+	form := buildForm(cfg, f, last, "other", "", "", caps)
+	if form.Chips[0].Label() != "other" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("chips %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	if !form.Generated() || form.Branch() != "" {
+		t.Fatalf("branch %q generated %v", form.Branch(), form.Generated())
+	}
+	if n := form.Note(form); !strings.Contains(n, "tasks not supported by vm") {
+		t.Fatalf("note %q", n)
+	}
+	form.Chips[1].Selected = 0
+	if n := form.Note(form); n != "" {
+		t.Fatalf("note for an unknown host %q", n)
+	}
+	form.SetPrompt("Fix the thing")
+	if form.Branch() != "fix-the-thing" {
+		t.Fatalf("proposal %q", form.Branch())
+	}
+	// A worktree row without a session: repository, host and branch
+	// from the record, the branch explicit.
+	form = buildForm(cfg, f, last, "proj", "mac", "existing", caps)
+	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Branch() != "existing" || form.Generated() {
+		t.Fatalf("prefilled %q %q %q %v", form.Chips[0].Label(), form.Chips[1].Label(), form.Branch(), form.Generated())
 	}
 }

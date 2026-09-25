@@ -572,19 +572,33 @@ is switched to.
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:
   `bind-key C-s display-popup -E -w 90% -h 80% -d '#{pane_current_path}' -T ' laatmux ' 'laatmux dashboard'`.
-  `-d` matters: the repository picker's default is the repository of
+  `-d` matters: the form's repository defaults to the repository of
   the directory the popup runs in, which without it is the session's.
-  Actions: `a` adds through pickers for repository, host and agent,
-  each skipped with one candidate and preselecting what `add` would
-  take, then a branch prompt with `add`'s validation; on a worktree row
-  without a session the pickers and the branch are pre-filled from the
-  record. The add runs with its progress in place of the list and jumps
-  on success; a failure stays until a key. `x` confirms then removes
+  Actions: `a` opens the task form of
+  [milestone four](docs/milestone-four.md): chips for the repository,
+  the host and the agent, preselecting what `add` would take, a prompt
+  box, and a branch line filled from the prompt as it is typed until
+  it is edited. `Tab` and `Shift-Tab` move between the fields; on a
+  chip `Left` and `Right` cycle and `Enter` opens the picker; in the
+  prompt `Ctrl-J` inserts a newline and `Enter` submits; `Esc` cancels.
+  Bracketed paste is on, so a pasted line break is a newline, never a
+  submit. On a worktree row without a session the chips and the branch
+  are pre-filled from the record, the branch explicit. A submit with
+  the local daemon's `relay` hands the add to it and closes the popup
+  on `accepted`, the sidebar showing the task from then on; without it
+  the add runs in the foreground with its progress in place of the
+  list and jumps on success, a failure staying until a key. The footer
+  says `tasks not supported by <host>'s daemon` for a host whose cached
+  capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use
   `X`. `s` settles or unsettles; `S` opens the shell window and jumps.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
+- **`compose`** is the form alone, for a binding from any window:
+  `bind-key T display-popup -E -w 80% -h 60% -d '#{pane_current_path}' -T ' task ' 'laatmux compose'`.
+  It exits on submit or cancel, the repository defaulting to the
+  directory the popup was opened from.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the
   view redraws at that rate only while a working row is on the list. A

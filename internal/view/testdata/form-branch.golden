@@ -1,0 +1,12 @@
+..B|add a task
+...|┌ repository ───────┐ ┌ host ───────┐ ┌ agent ─────────────┐
+...|│ laatmux           │ │ vm          │ │ claude             │
+...|└───────────────────┘ └─────────────┘ └────────────────────┘
+...|┌ prompt ──────────────────────────────────────────────────┐
+...|│ Make the sidebar follow the current row when the sort    │
+...|│ moves it, and select nothing when no row is this         │
+...|│ session.                                                 │
+...|│                                                          │
+...|└──────────────────────────────────────────────────────────┘
+...|⟨branch  ⟩make-the-sidebar-follow-the-current-row-when-the-sor
+.D.|tab next field  enter submit  ctrl-j newline  esc cancel
