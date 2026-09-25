@@ -730,3 +730,256 @@ func TestNoticeRestoresMessage(t *testing.T) {
 		t.Fatalf("fallback:\n%s", text)
 	}
 }
+
+// A pending task's keys: x asks and dismisses one that needs the user
+// and says why not on one still running; p delivers a retained prompt
+// and says why not otherwise; Enter on a running one does nothing.
+func TestPendingKeys(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	now := time.Now()
+	stuck := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix",
+		Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", SubmittedAt: now}
+	running := protocol.Pending{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "new", Taken: true, Reachable: true, Stage: protocol.StageFetch, SubmittedAt: now.Add(time.Minute)}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetRows(rows.Build(rows.Input{
+		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings: []protocol.Pending{stuck, running},
+	}))
+	var dismissed, delivered string
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true,
+		dismiss: func(id string) error { dismissed = id; return nil },
+		deliver: func(id string) (string, string, error) { delivered = id; return protocol.DeliveryDelivered, "", nil }}
+	finish := func() {
+		t.Helper()
+		log, ok := m.Overlay.(*view.Log)
+		if !ok {
+			t.Fatalf("no log: %v", m.Overlay)
+		}
+		for i := 0; i < 200 && !log.Done(); i++ {
+			time.Sleep(5 * time.Millisecond)
+		}
+		d.act(m, m.Poll())
+	}
+	key := func(r rune) view.Action { return m.Handle(view.Key{Rune: r}) }
+
+	// The running one, newest, is first.
+	m.Handle(view.Key{Rune: 'g'})
+	if r := m.Selection(); r == nil || r.ID() != "add-2" {
+		t.Fatalf("selected %+v", r)
+	}
+	if a := m.Handle(view.Key{Kind: view.KeyEnter}); a.Kind != view.ActionJump || d.jump(m, *m.Selection()) || m.Message != "" {
+		t.Fatalf("enter on a running task: %+v message %q", a, m.Message)
+	}
+	d.act(m, key('x'))
+	if m.Confirm != "" || !strings.Contains(m.Message, "still running") {
+		t.Fatalf("x on a running task: confirm %q message %q", m.Confirm, m.Message)
+	}
+	d.act(m, key('p'))
+	if !strings.Contains(m.Message, "nothing to deliver") || delivered != "" {
+		t.Fatalf("p on a running task: %q", m.Message)
+	}
+
+	// The stuck one: p delivers, x asks then dismisses.
+	m.Handle(view.Key{Rune: 'j'})
+	d.act(m, key('p'))
+	finish()
+	if delivered != "add-1" || m.Message != "prompt delivered" {
+		t.Fatalf("p: delivered %q message %q", delivered, m.Message)
+	}
+	d.act(m, key('x'))
+	if !strings.Contains(m.Confirm, "dismiss proj/fix on vm (prompt not delivered)") {
+		t.Fatalf("x: confirm %q", m.Confirm)
+	}
+	d.act(m, key('y'))
+	finish()
+	if dismissed != "add-1" || !strings.Contains(m.Message, "dismissed proj/fix on vm") {
+		t.Fatalf("dismissed %q message %q", dismissed, m.Message)
+	}
+}
+
+// The jump on a task's row: refused on a host removed or replaced,
+// by the reported session when the worktree row is not listed or has
+// no session yet, and by the worktree row when it has one.
+func TestPendingTarget(t *testing.T) {
+	p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix", Done: true, OK: true}
+	row := func(p protocol.Pending, w *protocol.Worktree, removed bool) rows.Row {
+		return rows.Row{Host: "vm", Name: "proj/fix", Pending: &p, Worktree: w, Removed: removed}
+	}
+	if _, err := pendingTarget(row(p, nil, true)); err == nil || !strings.Contains(err.Error(), "host removed") {
+		t.Fatalf("removed: %v", err)
+	}
+	replaced := p
+	replaced.Mismatch = "venv is now wenv"
+	if _, err := pendingTarget(row(replaced, &protocol.Worktree{Session: "proj/fix"}, false)); err == nil || !strings.Contains(err.Error(), "host replaced") {
+		t.Fatalf("replaced: %v", err)
+	}
+	// The host's environment changed before the relay recorded it.
+	unseen := row(p, nil, false)
+	unseen.Replaced = true
+	if _, err := pendingTarget(unseen); err == nil || !strings.Contains(err.Error(), "host replaced") {
+		t.Fatalf("replaced, unrecorded: %v", err)
+	}
+	r, err := pendingTarget(row(p, nil, false))
+	if err != nil || r.Worktree == nil || r.Worktree.Session != "proj/fix" || r.Worktree.ID != "venv/worktree//w/proj/fix" {
+		t.Fatalf("unlisted: %+v %v", r.Worktree, err)
+	}
+	bare := &protocol.Worktree{ID: "venv/worktree//w/proj/fix", EnvironmentID: "venv", Root: "/w/proj/fix", Source: "src"}
+	r, err = pendingTarget(row(p, bare, false))
+	if err != nil || r.Worktree.Session != "proj/fix" || r.Worktree.Source != "src" || bare.Session != "" {
+		t.Fatalf("listed without a session: %+v %v", r.Worktree, err)
+	}
+	early := p
+	early.Session = ""
+	if _, err := pendingTarget(row(early, nil, false)); err == nil || !strings.Contains(err.Error(), "no session yet") {
+		t.Fatalf("no session: %v", err)
+	}
+	failed := early
+	failed.OK, failed.Error = false, "failed at agent: x"
+	if _, err := pendingTarget(row(failed, nil, false)); err == nil || !strings.Contains(err.Error(), "proj/fix: failed; x dismisses") {
+		t.Fatalf("failed: %v", err)
+	}
+	unknown := early
+	unknown.OK, unknown.Error = false, "outcome unknown: the daemon no longer knows it"
+	if _, err := pendingTarget(row(unknown, nil, false)); err == nil || !strings.Contains(err.Error(), "outcome unknown; x dismisses") {
+		t.Fatalf("outcome unknown: %v", err)
+	}
+}
+
+// The sidebar takes a task's p and x and what follows from them, and
+// nothing else of the dashboard's.
+func TestTaskAction(t *testing.T) {
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetRows(rows.Build(rows.Input{
+		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings:  []protocol.Pending{{ID: "add-1", Host: "vm", Repo: "proj", Branch: "fix", SubmittedAt: time.Now()}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}},
+	}))
+	m.Handle(view.Key{Rune: 'g'})
+	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: view.Key{Rune: r}} }
+	for _, r := range []rune{'p', 'x', 'X'} {
+		if !taskAction(m, other(r)) {
+			t.Errorf("%c on a task's row not taken", r)
+		}
+	}
+	for _, r := range []rune{'a', 's', 'S'} {
+		if taskAction(m, other(r)) {
+			t.Errorf("%c taken on a task's row", r)
+		}
+	}
+	m.Handle(view.Key{Rune: 'j'}) // the worktree row
+	if taskAction(m, other('x')) {
+		t.Error("x taken on a worktree row")
+	}
+	m.Ask("dismiss?", "dismiss")
+	if !taskAction(m, view.Action{Kind: view.ActionConfirm}) {
+		t.Error("the dismiss answer not taken")
+	}
+	m.Ask("remove?", "rm")
+	if taskAction(m, view.Action{Kind: view.ActionConfirm}) {
+		t.Error("the rm answer taken")
+	}
+	m.Overlay = view.NewLog("t")
+	if !taskAction(m, view.Action{Kind: view.ActionOverlay}) {
+		t.Error("a log's end not taken")
+	}
+}
+
+// x is offered where the daemon takes it, and says why not elsewhere;
+// p says where the prompt is when it cannot go; s refuses a task's row.
+func TestPendingOffers(t *testing.T) {
+	row := func(p protocol.Pending, replaced bool) rows.Row {
+		return rows.Row{Host: "vm", Name: "proj/b", Pending: &p, Replaced: replaced}
+	}
+	for _, c := range []struct {
+		name     string
+		p        protocol.Pending
+		replaced bool
+		want     bool
+	}{
+		{"never sent", protocol.Pending{}, false, true},
+		{"sent, not taken", protocol.Pending{Sent: true, Unreachable: "ssh: timeout"}, false, false},
+		{"running", protocol.Pending{Sent: true, Taken: true}, false, false},
+		{"running on a replaced machine, unrecorded", protocol.Pending{Sent: true, Taken: true}, true, false},
+		{"recorded mismatch", protocol.Pending{Sent: true, Taken: true, Mismatch: "x"}, false, true},
+		{"prompt not delivered", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}, false, true},
+		{"attempt open", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true}, false, false},
+		{"awaiting the listing", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, false, false},
+		{"done on a replaced machine", protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, true, true},
+	} {
+		if got := Dismissable(row(c.p, c.replaced)); got != c.want {
+			t.Errorf("%s: dismissable %v, want %v", c.name, got, c.want)
+		}
+	}
+	// p goes where the relay can reach the machine and the prompt waits.
+	undelivered := protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}
+	mismatched := undelivered
+	mismatched.Mismatch = "x"
+	for _, c := range []struct {
+		name string
+		r    rows.Row
+		want bool
+	}{
+		{"not delivered", row(undelivered, false), true},
+		{"replaced, unrecorded", row(undelivered, true), false},
+		{"recorded mismatch", row(mismatched, false), false},
+		{"removed", rows.Row{Pending: &undelivered, Removed: true}, false},
+	} {
+		if got := Deliverable(c.r); got != c.want {
+			t.Errorf("%s: deliverable %v, want %v", c.name, got, c.want)
+		}
+	}
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	m := &view.Model{Width: 100, Height: 20}
+	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
+	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
+		t.Errorf("p on an expired prompt: %q", m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 's'}})
+	if !strings.Contains(m.Message, "pending task") {
+		t.Errorf("s on a task: %q", m.Message)
+	}
+	m.Handle(view.Key{Rune: 'j'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	if m.Confirm != "" || !strings.Contains(m.Message, "hands over to its worktree row") {
+		t.Errorf("x awaiting the listing: confirm %q message %q", m.Confirm, m.Message)
+	}
+	gone := listed
+	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
+	// A gone task whose prompt was delivered has nothing kept to show.
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
+		t.Errorf("p on a gone, delivered task: %q", m.Message)
+	}
+	// p on a task whose host is removed, and x on a running task whose
+	// replacement only the view has seen, say why not.
+	stuck := protocol.Pending{ID: "add-9", Host: "old", Repo: "proj", Branch: "d", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "host removed; x dismisses the task") {
+		t.Errorf("p on a removed host: %q", m.Message)
+	}
+	moving := protocol.Pending{ID: "add-8", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "e", Sent: true, Taken: true, SubmittedAt: time.Now()}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {
+		t.Errorf("x on an unrecorded replacement: confirm %q message %q", m.Confirm, m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if m.Message != "proj/e: host replaced" {
+		t.Errorf("p on an unrecorded replacement offers x: %q", m.Message)
+	}
+	if _, err := pendingTarget(rows.Row{Name: "proj/c", Pending: &gone}); err == nil || !strings.Contains(err.Error(), "gone") {
+		t.Errorf("enter on a gone task: %v", err)
+	}
+}

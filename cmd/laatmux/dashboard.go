@@ -47,7 +47,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  s settle  S shell  v layout  / filter  f settled  q quit"}
+		Hint: "enter jump  a add  x rm  p prompt  s settle  S shell  v layout  / filter  f settled  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 
@@ -79,10 +79,31 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 				return d.jump(m, *m.Selection())
 			case actions:
 				return d.act(m, a)
+			case taskAction(m, a):
+				// The sidebar takes a task's p and x, and what follows
+				// from them, and none of the dashboard's other keys.
+				return d.act(m, a)
 			}
 			return false
 		},
 	})
+}
+
+// taskAction is an action on a pending task: p or x on a task's row,
+// the answer to the dismiss question, or the end of the log they put
+// up. The sidebar, without the dashboard's keys, takes these.
+func taskAction(m *view.Model, a view.Action) bool {
+	switch a.Kind {
+	case view.ActionOther:
+		r := m.Selection()
+		return r != nil && r.Pending != nil && a.Key.Kind == view.KeyRune && (a.Key.Rune == 'p' || a.Key.Rune == 'x' || a.Key.Rune == 'X')
+	case view.ActionConfirm:
+		return m.ConfirmTag == "dismiss"
+	case view.ActionOverlay:
+		_, ok := m.Overlay.(*view.Log)
+		return ok
+	}
+	return false
 }
 
 // dialMergedOrExplain connects to the local daemon's merged stream. A
@@ -132,6 +153,13 @@ func localHostName(cfg config.Config) string {
 func (m *merged) fill(v *view.Model, current string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// The handoffs first: the anchor lookup in SetRows consults them,
+	// the day's only.
+	m.pruneHandoffsLocked()
+	v.Handoffs = make(map[string]string, len(m.handoffs))
+	for id, h := range m.handoffs {
+		v.Handoffs[id] = h.to
+	}
 	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
@@ -174,6 +202,12 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Stale {
 		return switchTo(ctx, r.Local.Name)
 	}
+	if r.Pending != nil {
+		var err error
+		if r, err = pendingTarget(r); err != nil {
+			return err
+		}
+	}
 	if r.Host == "" {
 		return errors.New(r.Name + ": no configured host claims this record")
 	}
@@ -205,6 +239,45 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 		return err
 	}
 	return switchTo(ctx, name)
+}
+
+// pendingTarget is a pending task's row made ready for the jump: a
+// task whose host is gone or answers as another machine is refused,
+// and one whose worktree row is not listed yet, or is listed from
+// before the add gave it a session, jumps by what the host reported,
+// the managed session at the root.
+func pendingTarget(r rows.Row) (rows.Row, error) {
+	p := r.Pending
+	switch {
+	case r.Removed:
+		return r, errors.New(r.Name + ": host removed from the config")
+	case p.Gone:
+		return r, errors.New(r.Name + ": the worktree is gone; x dismisses the task")
+	case p.Done && !p.OK:
+		// A failed add stands for no worktree row; one listed at the
+		// root is drawn beside it.
+		return r, errors.New(r.Name + ": " + r.State() + "; x dismisses the task")
+	case p.Mismatch != "" || r.Replaced:
+		// The name reaches another machine now: its session of the
+		// same name is not this task's.
+		return r, errors.New(r.Name + ": host replaced: " + r.Detail())
+	case r.Worktree != nil && r.Worktree.Session != "":
+	case p.Session == "" || p.Root == "" || p.EnvironmentID == "":
+		if r.Worktree == nil {
+			return r, errors.New(r.Name + ": no session yet")
+		}
+	default:
+		// The worktree row is not listed yet, or is listed from before
+		// the add gave it a session: the jump goes by what the host
+		// reported, the managed session at the root.
+		w := protocol.Worktree{ID: p.WorktreeID(), EnvironmentID: p.EnvironmentID, Root: p.Root, Repo: p.Repo, Branch: p.Branch, Source: p.Source}
+		if r.Worktree != nil {
+			w = *r.Worktree
+		}
+		w.Session = p.Session
+		r.Worktree = &w
+	}
+	return r, nil
 }
 
 // switchTo makes the session current for the client the view runs in,

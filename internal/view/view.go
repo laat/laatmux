@@ -67,18 +67,37 @@ type Model struct {
 	Overlay Overlay
 	scroll  int   // first body line drawn
 	hits    []int // body line -> index into Visible, -1 for none
+	// Handoffs are the pending tasks that have handed over to their
+	// worktree rows, command id to worktree id, as the merged stream
+	// carried them: an anchor on a task the view never saw hand over
+	// finds its worktree row through them.
+	Handoffs map[string]string
 	// anchor is the id of the selected row, so a refresh that reorders
 	// or removes rows keeps the selection on the same workspace rather
-	// than on the same index, which Enter would then jump to.
+	// than on the same index, which Enter would then jump to; alias is
+	// that row's alias, the worktree row a pending task becomes. lost is
+	// a user's selection whose row went with nothing to follow it to:
+	// it is on no row until the user moves it.
 	anchor string
+	alias  string
+	lost   bool
 	// spinning is whether the last Render drew a spinner frame.
 	spinning bool
 }
 
 // SetRows replaces the rows, keeping the selection on the row it was on
-// when that row is still visible; a row that is gone leaves the
-// selection at its index, clamped. While Follow holds the selection is
-// the viewer's own row instead, or none.
+// when that row is still visible. The anchor is a pair, the row's id
+// and its alias, and the lookup takes, in order: the row with the
+// anchor's id; the row whose id is the anchor's alias, the worktree
+// row once the pending task has gone; the row whose alias is the
+// anchor's id, the task standing for a worktree row again; the
+// worktree row the handoffs say the anchor's task became; and last,
+// for the alias or the handoff when that worktree row is hidden, the
+// task standing for it. It
+// re-anchors on what it found. A row found by none of these is gone,
+// and the selection is cleared rather than left at an index another
+// row has taken, until the row is back or the user moves it. While
+// Follow holds the selection is the viewer's own row instead, or none.
 func (m *Model) SetRows(rs rows.Rows) {
 	m.Rows = rs
 	if m.Follow {
@@ -88,11 +107,38 @@ func (m *Model) SetRows(rs rows.Rows) {
 	if m.anchor == "" {
 		return
 	}
-	for _, it := range m.Visible() {
-		if it.Row.ID() == m.anchor {
-			m.Selected = it.Index
-			return
+	vis := m.Visible()
+	find := func(match func(r *rows.Row) bool) bool {
+		for _, it := range vis {
+			if match(it.Row) {
+				m.Selected, m.anchor, m.alias, m.lost = it.Index, it.Row.ID(), it.Row.Alias(), false
+				return true
+			}
 		}
+		return false
+	}
+	anchor, alias, handed := m.anchor, m.alias, m.Handoffs[m.anchor]
+	id := func(want string) func(r *rows.Row) bool {
+		return func(r *rows.Row) bool { return want != "" && r.ID() == want }
+	}
+	// A worktree row can be hidden behind another task that stands for
+	// it, one whose alias it is: that task is the row's stand-in, taken
+	// only when the row itself is not there.
+	standing := func(want string) func(r *rows.Row) bool {
+		return func(r *rows.Row) bool { return want != "" && r.Alias() == want }
+	}
+	switch {
+	case find(id(anchor)):
+	case find(id(alias)):
+	case find(standing(anchor)):
+	case find(id(handed)):
+	case find(standing(alias)):
+	case find(standing(handed)):
+	default:
+		// The anchor is kept: a refresh that coalesced to nothing, a
+		// reconnect's first snapshot say, gives the row back, and the
+		// selection with it.
+		m.Selected, m.lost = -1, true
 	}
 }
 
@@ -213,22 +259,25 @@ func (m *Model) Selection() *rows.Row {
 	}
 	m.clamp(len(vis))
 	if len(vis) == 0 || m.Selected < 0 {
-		m.anchor = ""
+		if !m.lost {
+			m.anchor, m.alias = "", ""
+		}
 		return nil
 	}
 	r := vis[m.Selected].Row
-	m.anchor = r.ID()
+	m.anchor, m.alias = r.ID(), r.Alias()
 	return r
 }
 
 // clamp keeps the selection inside the list. A following selection may
-// be on nothing; a user's selection is on a row whenever there is one.
+// be on nothing, and so may a user's whose row went; otherwise a user's
+// selection is on a row whenever there is one.
 func (m *Model) clamp(n int) {
 	if m.Selected >= n {
 		m.Selected = n - 1
 	}
 	if m.Selected < 0 {
-		if m.Follow {
+		if m.Follow || m.lost {
 			m.Selected = -1
 			return
 		}
@@ -257,8 +306,11 @@ const (
 )
 
 // spins reports whether the row's mark is the spinner: a live working
-// agent on a row that is not dim.
+// agent on a row that is not dim, or a pending task that runs.
 func spins(r rows.Row) bool {
+	if r.Pending != nil {
+		return !r.NeedsUser()
+	}
 	return r.Agent != nil && !r.Dim && r.Agent.Activity == protocol.Working && r.Agent.Liveness == protocol.Alive
 }
 
@@ -464,9 +516,16 @@ func (m *Model) tile(r rows.Row) []Line {
 		first.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: " " + name + strings.Repeat(" ", gap)}, where}
 	}
 	lines := []Line{first}
-	if r.Agent == nil {
+	switch {
+	case r.Pending != nil:
+		// Where the add is, and the detail or the reason under it.
 		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.State(), w)}}})
-	} else {
+		if d := r.Detail(); d != "" {
+			lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+d, w)}}})
+		}
+	case r.Agent == nil:
+		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.State(), w)}}})
+	default:
 		lines = append(lines,
 			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.AgentName()+"  "+m.activity(r)+"  "+m.age(r), w)}}},
 			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+strings.TrimSpace(r.Agent.Title), w)}}})
@@ -483,8 +542,8 @@ func (m *Model) compact(r rows.Row) []Line {
 	mark := m.mark(r)
 	left := m.gutter(r) + mark.Text + " "
 	age := ""
-	if r.Agent == nil {
-		left += fmt.Sprintf("%-16s ", r.State())
+	if r.Agent == nil || r.Pending != nil {
+		left += fmt.Sprintf("%-16s ", fit(r.State(), 16))
 	} else {
 		left += fmt.Sprintf("%-8s %-7s ", r.Agent.Activity, r.AgentName())
 		age = " " + rows.Ago(m.Now.Sub(r.Agent.ActivityAt))
@@ -502,7 +561,16 @@ func (m *Model) compact(r rows.Row) []Line {
 		line.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: rest + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
 	}
 	lines := []Line{line}
-	if m.Titles && r.Agent != nil {
+	switch {
+	case m.Titles && r.Pending != nil:
+		// The state is cut to its column; the title line has it whole
+		// with the detail or the reason.
+		s := r.State()
+		if d := r.Detail(); d != "" {
+			s += ": " + d
+		}
+		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("     "+s, w)}}})
+	case m.Titles && r.Agent != nil:
 		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("     "+strings.TrimSpace(r.Agent.Title), w)}}})
 	}
 	return lines

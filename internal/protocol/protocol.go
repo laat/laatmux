@@ -184,7 +184,11 @@ type Pending struct {
 	// the outcome. Stage, State and Detail are the last progress
 	// message's; Root and Session come from the host as it reports
 	// them.
-	Taken       bool   `json:"taken,omitempty"`
+	Taken bool `json:"taken,omitempty"`
+	// Sent is that the add may have reached the host: the relay follows
+	// rather than sends it. Never sent nor taken, the host has no trace
+	// of it, and it can be dismissed whatever it is waiting on.
+	Sent        bool   `json:"sent,omitempty"`
 	Reachable   bool   `json:"reachable,omitempty"`
 	Unreachable string `json:"unreachable,omitempty"` // why the host cannot be reached, while Reachable is false
 	// Mismatch is that the machine answering for the host is not the

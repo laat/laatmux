@@ -52,9 +52,10 @@ type pendingFile struct {
 	protocol.Pending
 	PromptText string            `json:"prompt_text,omitempty"`
 	Barrier    *protocol.Listing `json:"barrier,omitempty"`
-	Sent       bool              `json:"sent,omitempty"` // the add may have reached the host: follow rather than send
-	ReplacedBy string            `json:"replaced_by,omitempty"`
-	RetiredAt  time.Time         `json:"retired_at,omitzero"`
+	// Sent, that the add may have reached the host, is the record's own
+	// field, so the views see it: same key in the file as before.
+	ReplacedBy string    `json:"replaced_by,omitempty"`
+	RetiredAt  time.Time `json:"retired_at,omitzero"`
 }
 
 func (p *pendingFile) retired() bool { return p.ReplacedBy != "" }

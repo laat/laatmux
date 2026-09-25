@@ -454,7 +454,11 @@ already reported: the foreground command returns, the relay's channel
 closes, only the retirement waits. While a
 pending record exists that is not retired, the worktree row for the
 same environment and root is not drawn: the pending row stands for it,
-with more to say.
+with more to say. A record that can no longer become that row does not
+stand for it: one that failed, one whose worktree was gone after the
+add, and one the relay cannot follow, its host gone from the config or
+answering as another machine, so a worktree made again at the root, or
+listed under another host name, is drawn beside it.
 
 A pending record and the worktree row it will become are joined by
 identity, not by name: the record carries the host's environment id,
@@ -544,12 +548,14 @@ The pending record, without the prompt:
 
 ```
 {id, host, environment_id, source, repo, branch, generated, agent, cmd,
- submitted_at, taken, reachable, unreachable, mismatch, stage, state,
+ submitted_at, taken, sent, reachable, unreachable, mismatch, stage, state,
  detail, root, session, done, ok, error, prompt, attempt, attempt_open,
  attempt_error, listed, listing_error, gone, updated_at}
 ```
 
-`taken` is that the host has the add; `reachable` is the relay's
+`taken` is that the host has the add, and `sent` that it may have
+reached the host, so a record neither sent nor taken is one the host
+has no trace of; `reachable` is the relay's
 connection, the connectivity axis kept apart from the outcome as issue
 #1 wants, with `unreachable` saying why not while it is down and
 `mismatch` that the machine answering under the host's name is not

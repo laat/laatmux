@@ -213,7 +213,8 @@ func TestRelayAdd(t *testing.T) {
 	if rm.ReplacedBy != "henv/worktree/"+root {
 		t.Fatalf("remove %+v", rm)
 	}
-	if !last.Done || !last.OK || last.Prompt != protocol.DeliveryDelivered || last.Root != root || last.Branch != "task" || last.EnvironmentID != "henv" || !last.Taken || !last.Reachable {
+	// The stream carries sent, which the views test for dismissal.
+	if !last.Done || !last.OK || last.Prompt != protocol.DeliveryDelivered || last.Root != root || last.Branch != "task" || last.EnvironmentID != "henv" || !last.Taken || !last.Reachable || !last.Sent {
 		t.Fatalf("last record %+v", last)
 	}
 	p := readPending(t, f.dir, "t1")
@@ -324,7 +325,7 @@ func TestRelayResumesFiles(t *testing.T) {
 		}
 	}
 	write(pendingFile{Pending: protocol.Pending{ID: "r1", Host: "vm", Source: f.source(), Repo: "proj", Branch: "one", Agent: "argv"}, PromptText: "one"})
-	write(pendingFile{Pending: protocol.Pending{ID: "r2", Host: "vm", Source: f.source(), Repo: "proj", Branch: "two", Agent: "argv"}, PromptText: "two", Sent: true})
+	write(pendingFile{Pending: protocol.Pending{Sent: true, ID: "r2", Host: "vm", Source: f.source(), Repo: "proj", Branch: "two", Agent: "argv"}, PromptText: "two"})
 	// r3: a finished add on the host whose prompt was not delivered,
 	// with an attempt the last daemon opened and the host never saw.
 	pc := conn(t, f.host)
@@ -336,8 +337,8 @@ func TestRelayResumesFiles(t *testing.T) {
 	f.host.journal.update("r3", func(e *entry) {
 		e.HasPrompt, e.Delivery, e.DeliveryError = true, protocol.DeliveryNotDelivered, "session existed"
 	})
-	write(pendingFile{Pending: protocol.Pending{ID: "r3", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "three", Agent: "claude",
-		Taken: true, Done: true, OK: true, Root: three.Root, Prompt: protocol.DeliveryNotDelivered, Error: "session existed", Attempt: 1, AttemptOpen: true, Listed: true}, PromptText: "three", Sent: true})
+	write(pendingFile{Pending: protocol.Pending{Sent: true, ID: "r3", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "three", Agent: "claude",
+		Taken: true, Done: true, OK: true, Root: three.Root, Prompt: protocol.DeliveryNotDelivered, Error: "session existed", Attempt: 1, AttemptOpen: true, Listed: true}, PromptText: "three"})
 	// A new daemon on the same files.
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
@@ -952,7 +953,7 @@ func TestRelayLaptopRestartDuringAdd(t *testing.T) {
 		}
 	}
 	// The record as the last laptop daemon left it: sent, not done.
-	p := pendingFile{Pending: protocol.Pending{ID: "l1", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "live", Agent: "claude", SubmittedAt: time.Now(), UpdatedAt: time.Now()}, PromptText: "p", Sent: true}
+	p := pendingFile{Pending: protocol.Pending{Sent: true, ID: "l1", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "live", Agent: "claude", SubmittedAt: time.Now(), UpdatedAt: time.Now()}, PromptText: "p"}
 	b, _ := json.Marshal(p)
 	os.WriteFile(filepath.Join(f.dir, FileName("l1")), b, 0o600)
 	local := New(Config{
@@ -1115,7 +1116,7 @@ func TestRelayMismatchDismissable(t *testing.T) {
 	go local.Run(f.ctx)
 	f.setLocal(local)
 	// Sent to the right machine, then another answers under the name.
-	p := pendingFile{Pending: protocol.Pending{ID: "mm", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "mm", Agent: "argv", SubmittedAt: time.Now(), UpdatedAt: time.Now(), Taken: true}, Sent: true}
+	p := pendingFile{Pending: protocol.Pending{Sent: true, ID: "mm", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "mm", Agent: "argv", SubmittedAt: time.Now(), UpdatedAt: time.Now(), Taken: true}}
 	if _, err := f.local.relay.create(p); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,12 @@
+S..| ⟨⠋⟩ proj/sidebar-follow               ‹@vm›
+S..|   adding: clone
+S..|   cloning git@github.com:laat/proj.git
+SD.|────────────────────────────────────────
+.D.| ! proj/fix-ls                       ‹@vm›
+.D.|   prompt not delivered
+.D.|   the pane was not ready within a minut
+.D.|────────────────────────────────────────
+.D.|   proj/a                            ‹@vm›
+.D.|   no session
+.D.|────────────────────────────────────────
+.D.|

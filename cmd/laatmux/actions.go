@@ -33,8 +33,13 @@ type dash struct {
 	// hands the add to the daemon and ends the view; without it the
 	// add runs in the foreground with its log, as before.
 	relay bool
-	// submit hands an add to the local daemon; a test replaces it.
-	submit func(command.Add) (string, error)
+	// submit hands an add to the local daemon; a test replaces it, as
+	// it does dismiss and deliver, a pending task's x and p.
+	submit  func(command.Add) (string, error)
+	dismiss func(id string) error
+	deliver func(id string) (state, reason string, err error)
+	// pending is the task a confirm line asks to dismiss.
+	pending *protocol.Pending
 	// add is the form in progress, nil when none.
 	add *addForm
 	// rm is the removal a confirm line asks about.
@@ -79,16 +84,26 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 		case 'a':
 			d.startAdd(m)
 		case 'x', 'X':
+			if r := m.Selection(); r != nil && r.Pending != nil {
+				d.askDismiss(m, *r)
+				break
+			}
 			d.askRm(m, a.Key.Rune == 'X')
+		case 'p':
+			d.deliverPrompt(m)
 		case 's':
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
 		}
 	case view.ActionConfirm:
-		if m.ConfirmTag == "rm" {
+		switch m.ConfirmTag {
+		case "rm":
 			m.ConfirmTag = ""
 			d.startRm(m)
+		case "dismiss":
+			m.ConfirmTag = ""
+			d.startDismiss(m)
 		}
 	case view.ActionOverlay:
 		return d.overlayDone(m)
@@ -98,6 +113,10 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 
 // jump is the Enter key: the jump command's logic on the selected row.
 func (d *dash) jump(m *view.Model, r rows.Row) bool {
+	if r.Pending != nil && !r.Pending.Done {
+		// A task still running has nothing to jump to yet.
+		return false
+	}
 	if err := jumpRow(d.ctx, d.cfg, r); err != nil {
 		m.Message = err.Error()
 		return false
@@ -545,6 +564,130 @@ func (d *dash) askRm(m *view.Model, force bool) {
 	m.Ask(fmt.Sprintf("%s %s on %s (%s)? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root), "rm")
 }
 
+// Dismissable is a pending task that x drops: one that needs the user,
+// and three more that would otherwise be stuck, one the host has no
+// trace of, one whose host is gone from the config, and one whose host
+// answers as another machine. The daemon has the last word: it refuses
+// a task still running on the machine it was accepted for.
+func Dismissable(r rows.Row) bool {
+	p := r.Pending
+	if p == nil {
+		return false
+	}
+	// The daemon's own tests, in its order: never sent nor taken; the
+	// host gone or the machine replaced as it has recorded; a task with
+	// an outcome and no attempt open. The view's own sight of a
+	// replaced machine waits for the relay's record while the add runs.
+	return (!p.Sent && !p.Taken) || r.Removed || p.Mismatch != "" || (p.Done && !p.AttemptOpen && r.NeedsUser())
+}
+
+// Deliverable is a pending task whose prompt p delivers now: the add
+// succeeded, the prompt did not reach the agent or may not have, and no
+// attempt is open. The prompt is retained until it is delivered.
+func Deliverable(r rows.Row) bool {
+	p := r.Pending
+	if p == nil || r.Removed || r.Replaced || p.Mismatch != "" {
+		// The relay cannot reach the machine the task was accepted on.
+		return false
+	}
+	return p.Done && p.OK && !p.Delivered() && !p.Gone && !p.AttemptOpen && p.AttemptError != protocol.ErrRecoveryExpired &&
+		(p.Prompt == protocol.DeliveryNotDelivered || p.Prompt == protocol.DeliveryUnknown)
+}
+
+// askDismiss puts the confirm line for dropping a pending task, or
+// says why x does nothing on it.
+func (d *dash) askDismiss(m *view.Model, r rows.Row) {
+	if !Dismissable(r) {
+		p := r.Pending
+		switch {
+		case r.Replaced && p.Mismatch == "" && !p.Done:
+			m.Message = r.Name + ": the relay has not yet seen the machine change; x dismisses it once it has"
+		case !p.Done:
+			m.Message = r.Name + ": the add is still running; x dismisses it once it needs you"
+		case p.AttemptOpen:
+			m.Message = r.Name + ": a delivery attempt is open; x dismisses it once it has an outcome"
+		default:
+			m.Message = r.Name + ": nothing to dismiss; it hands over to its worktree row once listed"
+		}
+		return
+	}
+	p := *r.Pending
+	d.pending = &p
+	m.Ask(fmt.Sprintf("dismiss %s on %s (%s)? y/n", r.Name, r.Host, r.State()), "dismiss")
+}
+
+// startDismiss drops the confirmed task through the local daemon.
+func (d *dash) startDismiss(m *view.Model) {
+	p := d.pending
+	d.pending = nil
+	if p == nil {
+		return
+	}
+	dismiss := d.dismiss
+	if dismiss == nil {
+		dismiss = func(id string) error { return command.Dismiss(d.ctx, id) }
+	}
+	what := p.Repo + "/" + p.Branch + " on " + p.Host
+	d.start(m, "dismiss "+what, func(command.Reporter) error {
+		return dismiss(p.ID)
+	}, func(m *view.Model) bool {
+		m.Message = "dismissed " + what
+		return false
+	})
+}
+
+// deliverPrompt is p: a pending task's retained prompt delivered now,
+// with the state it reached in the footer.
+func (d *dash) deliverPrompt(m *view.Model) {
+	r := m.Selection()
+	if r == nil {
+		return
+	}
+	if r.Pending == nil {
+		m.Message = r.Name + ": p delivers a pending task's prompt"
+		return
+	}
+	p := *r.Pending
+	if !Deliverable(*r) {
+		switch {
+		case r.Removed || r.Replaced || p.Mismatch != "":
+			m.Message = r.Name + ": " + r.State()
+			if Dismissable(*r) {
+				m.Message += "; x dismisses the task"
+			}
+		case p.Delivered():
+			m.Message = r.Name + ": nothing to deliver (the prompt is " + p.Prompt + ")"
+		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:
+			// The prompt has nowhere to go; the file still has it, if
+			// the add had one, which a failure before the agent stage
+			// does not say.
+			m.Message = r.Name + ": " + r.State() + "; laatmux tasks show " + p.ID + " prints the prompt, if one was kept"
+		default:
+			m.Message = r.Name + ": nothing to deliver (" + r.State() + ")"
+		}
+		return
+	}
+	deliver := d.deliver
+	if deliver == nil {
+		deliver = func(id string) (string, string, error) { return command.DeliverPending(d.ctx, id) }
+	}
+	var state, reason string
+	d.start(m, "prompt for "+r.Name, func(command.Reporter) error {
+		var err error
+		state, reason, err = deliver(p.ID)
+		return err
+	}, func(m *view.Model) bool {
+		if state == "" {
+			state = "sent"
+		}
+		m.Message = "prompt " + state
+		if reason != "" {
+			m.Message += ": " + reason
+		}
+		return false
+	})
+}
+
 // rmFor is the rm for a row: the worktree's repository, branch and root
 // from its record, or from a stale session's tags and key. A repository
 // this machine's config does not know is removed by root alone, as
@@ -627,6 +770,12 @@ func (d *dash) settle(m *view.Model) {
 	if r == nil {
 		return
 	}
+	if r.Pending != nil {
+		// The row is the task's until it hands over: s settles the
+		// worktree row it becomes.
+		m.Message = r.Name + ": a pending task; s settles its worktree row once it hands over"
+		return
+	}
 	if r.Local == nil || !r.Local.Workspace() {
 		m.Message = r.Name + ": no local workspace session; enter creates one"
 		return
@@ -649,7 +798,16 @@ func (d *dash) shell(m *view.Model) bool {
 	if r == nil {
 		return false
 	}
-	l, err := d.localFor(*r)
+	row := *r
+	if row.Pending != nil {
+		// A task's row goes by the task's own rules for its session.
+		var err error
+		if row, err = pendingTarget(row); err != nil {
+			m.Message = err.Error()
+			return false
+		}
+	}
+	l, err := d.localFor(row)
 	if err != nil {
 		m.Message = err.Error()
 		return false
