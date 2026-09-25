@@ -389,18 +389,18 @@ func TestDecoderPasteBounded(t *testing.T) {
 		t.Fatalf("resumed paste: %+v pending %v", got, d.Pending())
 	}
 	// A lost end marker: a stall, then the user's Esc ends it, pressed
-	// once or twice, after typing, or as Ctrl-C.
+	// once or twice, after typing, or as Ctrl-C; the key is spent on
+	// ending it, and never reaches the form.
 	for _, c := range []struct {
 		in   string
 		text string
-		kind KeyKind
 		rest int
 	}{
-		{"\x1b", "more", KeyEsc, 0},
-		{"\x1b\x1b", "more", KeyEsc, 0},
-		{"q\x03\x1b", "moreq", KeyEsc, 0},
-		{"\x03", "more", KeyCtrlC, 0},
-		{"\x1bj", "more", KeyEsc, 1},
+		{"\x1b", "more", 0},
+		{"\x1b\x1b", "more", 0},
+		{"q\x03\x1b", "moreq", 0},
+		{"\x03", "more", 0},
+		{"\x1bj", "more", 1},
 	} {
 		d := Decoder{now: func() time.Time { return now }}
 		d.Feed([]byte("\x1b[200~gone"))
@@ -408,13 +408,37 @@ func TestDecoderPasteBounded(t *testing.T) {
 		if got := d.Flush(); len(got) != 1 || got[0].Text != "gone" {
 			t.Fatalf("%q stalled: %+v", c.in, got)
 		}
+		if d.Wait() != 0 {
+			t.Fatalf("%q: a stalled paste with no new bytes waits %v", c.in, d.Wait())
+		}
 		d.Feed([]byte("more" + c.in))
+		if w := d.Wait(); w <= 0 || w > pasteGrace {
+			t.Fatalf("%q: waits %v for the grace", c.in, w)
+		}
 		now = now.Add(pasteGrace + time.Millisecond)
 		got := d.Flush()
-		want := 2 + c.rest
-		if len(got) != want || got[0].Kind != KeyPaste || got[0].Text != c.text || got[1].Kind != c.kind || d.Pending() {
+		want := 1 + c.rest
+		if len(got) != want || got[0].Kind != KeyPaste || got[0].Text != c.text || d.Pending() {
 			t.Fatalf("%q after a lost end: %+v pending %v", c.in, got, d.Pending())
 		}
+		for _, k := range got {
+			if k.Kind == KeyEsc || k.Kind == KeyCtrlC {
+				t.Fatalf("%q: the recovery key came through: %+v", c.in, got)
+			}
+		}
+	}
+	// A bare escape in a slow paste's first chunk, the output of tput
+	// say, is paste and not the user's: only after a stall does one
+	// end the framing.
+	slow := Decoder{now: func() time.Time { return now }}
+	slow.Feed([]byte("\x1b[200~echo $(tput sgr0)\x1b(Bdone\r"))
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := slow.Flush(); len(got) != 1 || got[0].Kind != KeyPaste || !slow.Pending() {
+		t.Fatalf("escape before any stall: %+v pending %v", got, slow.Pending())
+	}
+	// The first chunk's trailing carriage return was held, and leads.
+	if got := slow.Feed([]byte("second line\r\x1b[201~")); len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "\nsecond line\n" || slow.Pending() {
+		t.Fatalf("the rest of a slow paste: %+v", got)
 	}
 	// An end marker split across the stall still ends the paste, and a
 	// trailing carriage return is held so \r\n split by it is one
@@ -443,6 +467,14 @@ func TestDecoderPasteBounded(t *testing.T) {
 	got = big.Feed([]byte("b\rc\x1b[201~"))
 	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "b\nc" || big.Pending() {
 		t.Fatalf("after the cap: %+v pending %v", got, big.Pending())
+	}
+	// A sequence cut by the cap is held whole, so its rest is not text.
+	var seq Decoder
+	seq.Feed([]byte("\x1b[200~"))
+	got = seq.Feed([]byte(strings.Repeat("a", pasteMax) + "\x1b[3"))
+	got = append(got, seq.Feed([]byte("1mb\x1b[201~"))...)
+	if len(got) != 2 || strings.Contains(got[0].Text, "[3") || got[1].Text != "b" {
+		t.Fatalf("sequence at the cap: %d keys, last %q", len(got), got[len(got)-1].Text)
 	}
 	// A rune split at the cap is held whole.
 	var split Decoder
@@ -480,5 +512,95 @@ func TestNoticeVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(text, "a prose line that wraps at a") {
 		t.Fatalf("prose:\n%s", text)
+	}
+}
+
+// Raw bytes through the decoder into a form: an Alt chord is not the
+// Esc that cancels, and the Esc that ends a paste with a lost end
+// marker is spent on that, so the prompt survives both.
+func TestDecoderIntoForm(t *testing.T) {
+	for _, in := range []string{"\x1b\x7f", "\x1bb", "\x1bf"} {
+		f := NewForm("t", chips(), "")
+		f.SetPrompt("a long prompt")
+		for _, k := range Parse([]byte(in)) {
+			f.Handle(k)
+		}
+		if f.Cancelled || f.Prompt() != "a long prompt" {
+			t.Fatalf("%q: cancelled %v prompt %q", in, f.Cancelled, f.Prompt())
+		}
+	}
+	now := time.Unix(0, 0)
+	d := Decoder{now: func() time.Time { return now }}
+	f := NewForm("t", chips(), "")
+	feed := func(b string) {
+		for _, k := range d.Feed([]byte(b)) {
+			f.Handle(k)
+		}
+		now = now.Add(pasteGrace + time.Millisecond)
+		for _, k := range d.Flush() {
+			f.Handle(k)
+		}
+	}
+	feed("typed by hand ")
+	feed("\x1b[200~pasted")
+	feed("\r")
+	feed("\x1b")
+	if f.Cancelled || f.Prompt() != "typed by hand pasted\n" || d.Pending() {
+		t.Fatalf("after a stalled paste and Esc: cancelled %v prompt %q pending %v", f.Cancelled, f.Prompt(), d.Pending())
+	}
+	// The next Esc cancels as usual.
+	feed("\x1b")
+	if !f.Cancelled {
+		t.Fatal("a second Esc did not cancel")
+	}
+}
+
+// The start of a paste marker held alone is dropped after the grace,
+// and the key after it is read; a held escape waits the escape wait;
+// nothing held waits nothing.
+func TestDecoderHeldStart(t *testing.T) {
+	now := time.Unix(0, 0)
+	d := Decoder{now: func() time.Time { return now }}
+	if d.Wait() != 0 {
+		t.Fatalf("nothing held waits %v", d.Wait())
+	}
+	d.Feed([]byte("\x1b"))
+	if d.Wait() != escapeWait {
+		t.Fatalf("a held escape waits %v", d.Wait())
+	}
+	d.Flush()
+	d.Feed([]byte("\x1b["))
+	if w := d.Wait(); w <= 0 || w > pasteGrace {
+		t.Fatalf("a held marker start waits %v", w)
+	}
+	if got := d.Flush(); len(got) != 0 || !d.Pending() {
+		t.Fatalf("flushed within the grace: %+v pending %v", got, d.Pending())
+	}
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := d.Flush(); len(got) != 0 || d.Pending() || d.Wait() != 0 {
+		t.Fatalf("flushed past the grace: %+v pending %v", got, d.Pending())
+	}
+	if got := d.Feed([]byte("a")); len(got) != 1 || got[0].Rune != 'a' {
+		t.Fatalf("the key after: %+v", got)
+	}
+}
+
+// A paste on a chip goes into the prompt, which takes the focus; a
+// prompt of whitespace is none; a height too short for the form keeps
+// the footer, where the error is.
+func TestFormPasteOnChipShortAndBlank(t *testing.T) {
+	f := NewForm("t", chips(), "")
+	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip
+	f.Handle(Key{Kind: KeyPaste, Text: "pasted"})
+	if f.Prompt() != "pasted" || f.Focus() != fieldPrompt {
+		t.Fatalf("paste on a chip: prompt %q focus %d", f.Prompt(), f.Focus())
+	}
+	f.SetPrompt(" \t\n ")
+	if f.Prompt() != "" {
+		t.Fatalf("whitespace prompt %q", f.Prompt())
+	}
+	f.Error = "no branch name; give one"
+	if text := Text(f.Render(60, 8)); !strings.Contains(text, "no branch name") {
+		t.Fatalf("short:\n%s", text)
 	}
 }

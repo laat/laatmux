@@ -89,8 +89,13 @@ func (f *Form) Reopen(err string) {
 	f.done, f.Cancelled, f.Error = false, false, err
 }
 
-// Prompt is the prompt's text.
-func (f *Form) Prompt() string { return string(f.prompt) }
+// Prompt is the prompt's text; one of whitespace alone is no prompt.
+func (f *Form) Prompt() string {
+	if strings.TrimSpace(string(f.prompt)) == "" {
+		return ""
+	}
+	return string(f.prompt)
+}
 
 // Branch is the branch line: the proposal, or what the user made it.
 func (f *Form) Branch() string { return f.branch }
@@ -151,6 +156,12 @@ func (f *Form) Handle(k Key) {
 		return
 	case KeyMouse:
 		return
+	case KeyPaste:
+		// A paste is text for the prompt wherever the focus is, but on
+		// the branch line: dropped on a chip it would be lost.
+		if f.focus != fieldBranch {
+			f.focus = fieldPrompt
+		}
 	}
 	switch f.focus {
 	case fieldRepo, fieldHost, fieldAgent:
@@ -354,7 +365,9 @@ func (f *Form) Render(w, h int) []Line {
 	for len(out) < h {
 		out = append(out, plain(""))
 	}
-	return out[:h]
+	// Too short for it all, the top goes: the footer says why a submit
+	// was refused, which is worth more than the title.
+	return out[len(out)-h:]
 }
 
 // focusFg is the colour of the focused field's frame; tabStop is how

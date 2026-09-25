@@ -53,10 +53,12 @@ type Added struct {
 	// agent are there, and the state is what the user reads.
 	Prompt string
 	Reason string
-	// Answered is that a result came from the host at all, and Stage
-	// the stage a failed one names: without an answer nothing is known
-	// of the prompt, which is not the same as a failure before it was
-	// sent.
+	// Sent is that the add was written to a daemon, Answered that a
+	// result came back, and Stage the stage a failed one names. Sent
+	// without an answer is a lost result, of which nothing is known;
+	// not sent is a refusal before the host, and the prompt went
+	// nowhere.
+	Sent     bool
 	Answered bool
 	Stage    string
 }
@@ -83,7 +85,8 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 	}
 	req := a.Request(id)
 	hello, res, err := stream(ctx, a.Host.Host, a.Needs(), req, r, streamOpts{restart: true})
-	out := Added{Done: res.OK, Root: res.Root, Branch: res.Branch, Managed: res.Session, Prompt: res.Prompt, Reason: res.Error, Answered: res.Type == protocol.TypeResult, Stage: res.Stage}
+	var ns *NotSent
+	out := Added{Done: res.OK, Root: res.Root, Branch: res.Branch, Managed: res.Session, Prompt: res.Prompt, Reason: res.Error, Sent: !errors.As(err, &ns), Answered: res.Type == protocol.TypeResult, Stage: res.Stage}
 	if out.Branch == "" {
 		out.Branch = a.Branch
 	}

@@ -109,7 +109,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			// A redial after a started attempt is a transport failure
 			// like any other and spends the same budget.
 			if attempt == 1 || attempt == attempts || ctx.Err() != nil {
-				return hello, res, err
+				return hello, res, notSent(sent, err)
 			}
 			r.Note(fmt.Sprintf("%s: reconnect failed (%v); retrying", h.Name, err))
 			if err := pause(ctx); err != nil {
@@ -120,12 +120,12 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 		for _, cap := range needCaps {
 			if !protocol.Has(c.Hello.Capabilities, cap) {
 				c.Close()
-				return hello, res, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, cap)
+				return hello, res, notSent(sent, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, cap))
 			}
 		}
 		if o.environment != "" && c.Hello.EnvironmentID != o.environment {
 			c.Close()
-			return hello, res, fmt.Errorf("%s: answers as environment %s, not %s the request was resolved for", h.Name, c.Hello.EnvironmentID, o.environment)
+			return hello, res, notSent(sent, fmt.Errorf("%s: answers as environment %s, not %s the request was resolved for", h.Name, c.Hello.EnvironmentID, o.environment))
 		}
 		hello = c.Hello
 		follow := sent && protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
@@ -136,7 +136,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			// The lifetime bounds sends and resends of the command; a
 			// follow executes nothing and is asked at any age.
 			c.Close()
-			return hello, res, ErrSubmissionExpired
+			return hello, res, notSent(sent, ErrSubmissionExpired)
 		}
 		f.numbered = protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
 		f.reset()
@@ -171,6 +171,24 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			return hello, res, err
 		}
 	}
+}
+
+// NotSent is a failure before the command was written to any daemon:
+// the host could not be reached, its daemon lacks a capability, it
+// answers as another environment, or the submission has expired. The
+// command did not run, so nothing is unknown about it.
+type NotSent struct{ Err error }
+
+func (e *NotSent) Error() string { return e.Err.Error() }
+func (e *NotSent) Unwrap() error { return e.Err }
+
+// notSent wraps a refusal when the command was never sent; after a
+// send the daemon may hold it, and the error is what it was.
+func notSent(sent bool, err error) error {
+	if sent {
+		return err
+	}
+	return &NotSent{Err: err}
 }
 
 // streamOpts is what differs between the commands on a stream.

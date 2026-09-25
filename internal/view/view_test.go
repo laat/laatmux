@@ -255,7 +255,9 @@ func TestParse(t *testing.T) {
 		"\x1b[<32;1;1M": {{Kind: -1}},
 		"ø":             {{Rune: 'ø'}},
 		"\x1b[1;5Cq":    {{Kind: -1}, {Rune: 'q'}},
-		"\x1bj":         {{Kind: KeyEsc}, {Rune: 'j'}},
+		"\x1bj":         {},
+		"\x1b\x7f":      {},
+		"\x1b\x1b":      {{Kind: KeyEsc}, {Kind: KeyEsc}},
 	}
 	for in, want := range cases {
 		got := Parse([]byte(in))
@@ -352,8 +354,9 @@ func TestDecoderSplit(t *testing.T) {
 	if got := d.Flush(); len(got) != 0 {
 		t.Errorf("flushed partial SS3 = %+v", got)
 	}
-	// Escape then a key that is no sequence is both, at once.
-	if got := d.Feed([]byte("\x1bj")); len(got) != 2 || got[0].Kind != KeyEsc || got[1].Rune != 'j' || d.Pending() {
+	// Escape then a key that is no sequence, in one read, is an Alt
+	// chord: neither the Esc that cancels nor the key.
+	if got := d.Feed([]byte("\x1bj")); len(got) != 0 || d.Pending() {
 		t.Errorf("escape then j = %+v", got)
 	}
 	if got := Parse([]byte{0xc3, 'j'}); len(got) != 1 || got[0].Rune != 'j' {

@@ -580,16 +580,26 @@ is switched to.
   box, and a branch line filled from the prompt as it is typed until
   it is edited. `Tab` and `Shift-Tab` move between the fields; on a
   chip `Left` and `Right` cycle and `Enter` opens the picker; in the
-  prompt `Ctrl-J` inserts a newline and `Enter` submits; `Esc` cancels.
+  prompt `Ctrl-J` inserts a newline and `Enter` submits; `Esc` cancels,
+  and an Alt chord, `Alt-Backspace` say, which the terminal sends as an
+  escape and the key in one read, is not `Esc` and is dropped.
   Bracketed paste is on, so a pasted line break is a newline, never a
-  submit. On a worktree row without a session the chips and the branch
+  submit, and a paste goes into the prompt wherever the focus is but
+  the branch line. A paste whose bytes stop for a second is shown as
+  far as it came, with its framing kept, and one whose end marker
+  never comes is ended by `Esc` or `Ctrl-C` after that, the key spent
+  on ending it. On a worktree row without a session the chips and the branch
   are pre-filled from the record, the branch explicit. A submit with
   the local daemon's `relay` hands the add to it and closes the popup
   on `accepted`; `laatmux tasks` shows the task from then on, and the
   views will once step 5 lands; a refusal keeps the form up with the
   error. Without it
   the add runs in the foreground with its progress in place of the
-  list and jumps on success, a failure staying until a key. The footer
+  list and jumps on success, a failure staying until a key; a prompt
+  that did not reach the agent, or may not have, or was refused before
+  the host, comes up first in a scrollable notice with its text, kept
+  as well in a file under `undelivered/` in the state directory, and
+  the jump follows the notice. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use

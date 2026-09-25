@@ -66,22 +66,26 @@ type Decoder struct {
 	// across reads and flushes however long it takes.
 	paste   []byte
 	pasting bool
-	// pasteAt is when the paste's last byte arrived, for the bound: a
-	// paste whose end marker never comes is taken as it is once its
-	// bytes have stopped for the grace. now is the clock, for tests.
-	pasteAt time.Time
-	now     func() time.Time
+	// at is when the last byte arrived, for the bounds: a paste whose
+	// end marker never comes is taken as it is once its bytes have
+	// stopped for the grace, and a held start of a paste marker is
+	// dropped after as long. now is the clock, for tests.
+	at  time.Time
+	now func() time.Time
 	// stalled is a paste whose bytes stopped for the grace: its text
-	// so far has been given out, the framing stays, and a bare escape
-	// with nothing after it is the user's Esc, which ends it.
-	stalled bool
+	// so far has been given out and the framing stays; stalledAt is
+	// the arrival the stall was for, so nothing is looked at again
+	// until more bytes come. A bare escape or Ctrl-C among the bytes
+	// after a stall is the user's, and ends the paste.
+	stalled   bool
+	stalledAt time.Time
 }
 
 // Bounds on a paste: the silence after which its text so far is given
 // out, and the size past which a chunk is. Neither ends the framing,
 // so a pasted line break after them is never Enter; a paste whose end
-// marker is lost ends on a bare escape after a stall, the one byte no
-// paste sends alone.
+// marker is lost ends on the user's bare escape or Ctrl-C after a
+// stall, bytes no paste sends alone, and that key only ends it.
 const (
 	pasteGrace = time.Second
 	pasteMax   = 1 << 20
@@ -116,13 +120,13 @@ func (d *Decoder) Feed(b []byte) []Key {
 		d.discard = false
 	}
 	d.pending = append(d.pending, b...)
+	d.at = d.clock()
 	var keys []Key
 	for {
 		if d.pasting {
 			// Everything up to the end marker is the paste; the marker
 			// may be split across reads, so a prefix of it at the end is
 			// held.
-			d.pasteAt = d.clock()
 			if i := strings.Index(string(d.pending), pasteEnd); i >= 0 {
 				d.paste = append(d.paste, d.pending[:i]...)
 				d.pending = d.pending[i+len(pasteEnd):]
@@ -158,19 +162,19 @@ func (d *Decoder) Feed(b []byte) []Key {
 		_ = rest
 		d.pending = d.pending[i+len(pasteStart):]
 		d.pasting = true
-		d.pasteAt = d.clock()
 	}
 }
 
 // stall is the flush of a paste whose bytes have stopped for the
-// grace. A paste with a lost end marker is ended by the user's Esc or
-// Ctrl-C: the last bare escape, one not followed by [ or O, or Ctrl-C
-// byte in the text ends the framing there, the text before it is the
-// paste, the key follows, and the bytes after it are keys. Without one
-// the text so far is given out and the framing kept: a resumed paste's
-// line break is still no Enter. A prefix of the end marker, an
-// incomplete rune and a trailing carriage return are held for the
-// next bytes.
+// grace. The text so far is given out and the framing kept: a resumed
+// paste's line break is still no Enter. A paste with a lost end marker
+// is ended by the user's Esc or Ctrl-C once it has stalled: the last
+// bare escape, one not followed by [ or O, or Ctrl-C byte among the
+// bytes after a stall ends the framing there, the text before it is
+// the paste, the key itself is spent on that, so the form it goes to
+// keeps its prompt, and the bytes after it are keys. A prefix of the
+// end marker, an incomplete rune and a trailing carriage return are
+// held for the next bytes.
 func (d *Decoder) stall() []Key {
 	held := markerPrefix(d.pending, pasteEnd)
 	if held != len(d.pending) || held == 1 {
@@ -181,18 +185,17 @@ func (d *Decoder) stall() []Key {
 	}
 	data := append(append([]byte(nil), d.paste...), d.pending[:len(d.pending)-held]...)
 	d.pending = append([]byte(nil), d.pending[len(d.pending)-held:]...)
-	if i, kind := lastRecovery(data); i >= 0 {
+	if i, _ := lastRecovery(data); i >= 0 && d.stalled {
 		var keys []Key
 		if text := pasteText(data[:i]); text != "" {
 			keys = append(keys, Key{Kind: KeyPaste, Text: text})
 		}
-		keys = append(keys, Key{Kind: kind})
 		rest, _ := parse(data[i+1:], true)
 		keys = append(keys, rest...)
 		d.paste, d.pending, d.pasting, d.stalled = nil, nil, false, false
 		return keys
 	}
-	d.stalled = true
+	d.stalled, d.stalledAt = true, d.at
 	text, tail := splitTail(data)
 	d.paste = tail
 	if t := pasteText(text); t != "" {
@@ -218,9 +221,10 @@ func lastRecovery(b []byte) (int, KeyKind) {
 	return -1, 0
 }
 
-// splitTail takes an incomplete trailing rune and a trailing carriage
-// return off b, to be held for the bytes that follow, so a chunk never
-// ends inside a character or between a \r and its \n.
+// splitTail takes an incomplete trailing rune, an unfinished escape
+// sequence and a trailing carriage return off b, to be held for the
+// bytes that follow, so a chunk never ends inside a character or a
+// sequence, whose rest would read as text, or between a \r and its \n.
 func splitTail(b []byte) (head, tail []byte) {
 	cut := len(b)
 	for i := max(len(b)-4, 0); i < len(b); i++ {
@@ -228,6 +232,28 @@ func splitTail(b []byte) (head, tail []byte) {
 			cut = i
 			break
 		}
+	}
+	// A sequence is bounded: an escape further back than this is not
+	// one still under way.
+	for i := cut - 1; i >= max(cut-32, 0); i-- {
+		if b[i] != 0x1b {
+			continue
+		}
+		if i+1 < cut && b[i+1] == '[' {
+			done := false
+			for j := i + 2; j < cut; j++ {
+				if b[j] >= 0x40 && b[j] <= 0x7e {
+					done = true
+					break
+				}
+			}
+			if !done {
+				cut = i
+			}
+		} else if i+1 < cut && b[i+1] == 'O' && i+2 >= cut {
+			cut = i
+		}
+		break
 	}
 	if cut > 0 && cut == len(b) && b[cut-1] == '\r' {
 		cut--
@@ -279,21 +305,55 @@ func pasteText(b []byte) string {
 // its text until its end marker arrives, so it is pending until then.
 func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
 
+// Wait is how long until a Flush has something to do: the escape wait
+// for held bytes, what is left of the grace for a paste or a held
+// start of a marker, and nothing at all when nothing is held or a
+// stalled paste has had no bytes since, so the caller sets no timer
+// and draws nothing until input comes.
+func (d *Decoder) Wait() time.Duration {
+	grace := func() time.Duration { return max(pasteGrace-d.clock().Sub(d.at), time.Millisecond) }
+	switch {
+	case d.pasting:
+		if d.stalled && d.stalledAt.Equal(d.at) {
+			return 0
+		}
+		return grace()
+	case len(d.pending) == 0:
+		return 0
+	case d.startHeld():
+		return grace()
+	}
+	return escapeWait
+}
+
+// startHeld is a held prefix of the paste start marker, and nothing
+// else, in the pending bytes.
+func (d *Decoder) startHeld() bool {
+	n := markerPrefix(d.pending, pasteStart)
+	return n == len(d.pending) && n >= 2
+}
+
 // Flush reads the held bytes as they are: a bare escape is the escape
 // key; an incomplete sequence is dropped and its continuation, should
 // it arrive, discarded; an incomplete rune is dropped. A paste under
 // way is kept whole: its end is coming, however long it takes.
 func (d *Decoder) Flush() []Key {
 	if d.pasting {
-		if d.clock().Sub(d.pasteAt) < pasteGrace {
+		if d.clock().Sub(d.at) < pasteGrace {
 			return nil
 		}
 		return d.stall()
 	}
 	// The start of a paste marker, split by a slow read, is held too:
 	// dropped, the paste's text would be read as keys, its line breaks
-	// as Enter.
-	if n := markerPrefix(d.pending, pasteStart); n == len(d.pending) && n >= 2 {
+	// as Enter. For the grace only: after that it was Alt-[ or a
+	// sequence that will not finish, and is dropped whole rather than
+	// with the next key.
+	if d.startHeld() {
+		if d.clock().Sub(d.at) < pasteGrace {
+			return nil
+		}
+		d.pending = nil
 		return nil
 	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
@@ -354,6 +414,14 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 						continue
 					}
 				}
+			}
+			if b[1] != 0x1b {
+				// Escape then another byte in one read is an Alt chord,
+				// Alt-Backspace or Alt-b say, the terminal sending the
+				// key with the escape in front; it is not the Esc that
+				// cancels a form, and is dropped whole.
+				b = b[2:]
+				continue
 			}
 			keys = append(keys, Key{Kind: KeyEsc})
 			b = b[1:]

@@ -442,6 +442,16 @@ func TestBuildForm(t *testing.T) {
 	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Branch() != "existing" || form.Generated() {
 		t.Fatalf("prefilled %q %q %q %v", form.Chips[0].Label(), form.Chips[1].Label(), form.Branch(), form.Generated())
 	}
+	// The record's host is as good as the user's: picking the
+	// repository again does not replace it.
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyRight}) // other, whose last host is vm
+	form.Handle(view.Key{Kind: view.KeyRight}) // back to proj
+	if form.Chips[1].Label() != "mac" {
+		t.Fatalf("the record's host replaced: %q", form.Chips[1].Label())
+	}
 }
 
 // A submit through the relay: a refusal puts the form back up with the
@@ -525,19 +535,36 @@ func TestUndelivered(t *testing.T) {
 	}
 	// A launch that failed with the delivery unknown, no session: the
 	// text says the agent may have it, never that it does not.
-	failed := command.Added{Done: false, Answered: true, Stage: protocol.StageAgent, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
+	failed := command.Added{Done: false, Sent: true, Answered: true, Stage: protocol.StageAgent, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
 	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") || strings.Contains(view.Text(n.Render(80, 12)), "without") {
 		t.Fatalf("unknown delivery on a failed add:\n%s", view.Text(n.Render(80, 12)))
 	}
 	// A failure before the agent stage is positively before the send;
 	// no result at all is unknown.
-	early := command.Added{Answered: true, Stage: protocol.StageFetch}
+	early := command.Added{Sent: true, Answered: true, Stage: protocol.StageFetch}
 	if n := undelivered(add, early); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "failed at fetch, before the prompt was sent") {
 		t.Fatalf("early failure:\n%s", view.Text(n.Render(80, 12)))
 	}
-	lost := command.Added{}
+	lost := command.Added{Sent: true}
 	if n := undelivered(add, lost); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "outcome unknown") || strings.Contains(view.Text(n.Render(80, 12)), "not sent") {
 		t.Fatalf("lost result:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// Refused before any daemon had it: a host down, or one without
+	// the capability.
+	refused := command.Added{}
+	if n := undelivered(add, refused); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "the prompt was not sent") || strings.Contains(view.Text(n.Render(80, 12)), "may have") {
+		t.Fatalf("refused:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// The prompt is kept in a file of the user's own.
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	path, err := keepPrompt("id", "p\tq\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	st, _ := os.Stat(path)
+	if err != nil || string(b) != "p\tq\n" || st.Mode().Perm() != 0o600 {
+		t.Fatalf("kept %q %v %v", b, err, st.Mode())
 	}
 	// The prompt's whitespace is kept.
 	tabs := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "run:\n\tmake  all"}

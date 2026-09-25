@@ -319,11 +319,17 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 	// A prompt or a generated branch needs task; a daemon without it is
 	// refused before the send.
 	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow}})
-	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a3"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support task") {
+	var ns *NotSent
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a3"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support task") || !errors.As(err, &ns) {
 		t.Fatalf("needs task: %v", err)
 	}
 	if got := f.commands(); len(got) != 0 {
 		t.Fatalf("sent without task: %+v", got)
+	}
+	// A host that cannot be dialled is the same refusal before the send.
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	if _, _, err := stream(context.Background(), host, nil, add.Request("a4"), Discard{}, streamOpts{}); err == nil || !errors.As(err, &ns) {
+		t.Fatalf("host down: %v", err)
 	}
 	if n := (Add{}).Needs(); len(n) != 1 || n[0] != protocol.CapAdd {
 		t.Fatalf("needs %v", n)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/laat/laatmux/internal/command"
@@ -126,9 +128,19 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		}
 		return run.done(m)
 	case *view.Notice:
-		// The key that dismissed it cleared the message it covered.
+		// The key that dismissed it cleared the message it covered. The
+		// jump the notice held off is made now, when there is a session.
 		m.Overlay = nil
 		m.Message, d.recovered = d.recovered, ""
+		if d.last.Session != "" && m.Message == "" {
+			session := d.last.Session
+			d.last.Session = ""
+			if err := switchTo(d.ctx, session); err != nil {
+				m.Message = err.Error()
+				return false
+			}
+			return d.exitOnJump
+		}
 		return false
 	}
 	return false
@@ -261,8 +273,10 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	form := view.NewForm("add a task", chips, branch)
 	form.Propose = worktree.ProposeBranch
 	// A repository chosen later brings its own last-used host and
-	// agent, unless the user has set those chips themselves.
+	// agent, unless the user has set those chips themselves; a host
+	// pre-filled from a worktree's record is as good as set.
 	var userSet [3]bool
+	userSet[1] = preHost != ""
 	form.Changed = func(form *view.Form, chip int) {
 		if chip != 0 {
 			userSet[chip] = true
@@ -353,9 +367,17 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		res, err = add.Run(d.ctx, r)
 		d.last = res
 		// A prompt that did not reach the agent, or may not have, is
-		// shown with its text whatever else happened, since the
-		// foreground path keeps no file of it.
-		d.recover = undelivered(add, res)
+		// shown with its text whatever else happened, and kept in a
+		// file, since the foreground path keeps none of it otherwise.
+		if d.recover = undelivered(add, res); d.recover != nil {
+			if path, err := keepPrompt(command.ID("prompt"), add.Prompt); err == nil {
+				d.recover.Lines = append([]string{"kept in " + path, ""}, d.recover.Lines...)
+				d.recover.Verbatim += 2
+			} else {
+				d.recover.Lines = append([]string{"not kept in a file: " + err.Error(), ""}, d.recover.Lines...)
+				d.recover.Verbatim += 2
+			}
+		}
 		if err != nil && res.Done {
 			// The host's side is done; what failed is local, and the
 			// message must say the worktree and agent exist.
@@ -389,6 +411,9 @@ func undelivered(add command.Add, res command.Added) *view.Notice {
 	}
 	var lines []string
 	switch {
+	case res.Prompt == "" && !res.Sent:
+		// Refused before any daemon had it.
+		lines = []string{"the add was refused before it reached the host; the prompt was not sent", ""}
 	case res.Prompt == "" && !res.Answered:
 		// No result came: the host may have taken the add and the
 		// agent may have the prompt.
@@ -421,6 +446,22 @@ func undelivered(add command.Add, res command.Added) *view.Notice {
 	n := view.NewNotice(add.Describe(), lines, "enter or esc returns")
 	n.Verbatim = len(lines) - strings.Count(add.Prompt, "\n") - 1
 	return n
+}
+
+// keepPrompt writes an undelivered prompt to a file of its own under
+// the state directory, readable by the user alone, and returns the
+// path: the notice is copied from by hand, lossily, and the popup that
+// shows it closes. The file is the user's to delete.
+func keepPrompt(id, prompt string) (string, error) {
+	dir := filepath.Join(home.Dir(), "undelivered")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, id+".txt")
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree
