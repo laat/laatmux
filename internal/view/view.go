@@ -72,9 +72,9 @@ type Model struct {
 	// a filter since may have moved.
 	hitIDs []string
 	hitTop int
-	// hitAt is when that render was drawn, Now at the time, and the
-	// hitPrev fields the render before it, for a click read before the
-	// last draw.
+	// hitAt is when that render was on the terminal, Now at the time,
+	// set again by Run once the frame is written, and the hitPrev fields
+	// the render before it, for a click read before the last draw.
 	hitAt      time.Time
 	hitPrevIDs []string
 	hitPrevTop int

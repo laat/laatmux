@@ -69,6 +69,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		m.Now = time.Now()
 		m.Width, m.Height = t.Size()
 		t.Draw(m.Render())
+		// The new screen is on the terminal from here: a click read
+		// before now was on the one before it.
+		m.hitAt = time.Now()
 	}
 	handle := func(ks []Key) (done bool) {
 		for _, k := range ks {
@@ -83,6 +86,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		return false
 	}
 	var dec Decoder
+	var clicks clickClock
 	var flush, spin <-chan time.Time
 	h.Refresh(m)
 	draw()
@@ -116,12 +120,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			if !ok {
 				return nil
 			}
-			ks := dec.Feed(in.b)
-			for i := range ks {
-				if ks[i].Kind == KeyMouse {
-					ks[i].At = in.at
-				}
-			}
+			ks := clicks.feed(&dec, in.b, in.at)
 			if handle(ks) {
 				return nil
 			}
@@ -132,4 +131,28 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		}
 		draw()
 	}
+}
+
+// clickClock stamps the clicks decoded from each read with when their
+// bytes came: for a sequence split across reads, when its first bytes
+// came, which is the screen it was clicked on.
+type clickClock struct {
+	held time.Time // when the bytes the decoder holds first came
+}
+
+func (c *clickClock) feed(dec *Decoder, b []byte, at time.Time) []Key {
+	if !c.held.IsZero() {
+		at = c.held
+	}
+	ks := dec.Feed(b)
+	for i := range ks {
+		if ks[i].Kind == KeyMouse {
+			ks[i].At = at
+		}
+	}
+	c.held = time.Time{}
+	if dec.Pending() {
+		c.held = at
+	}
+	return ks
 }

@@ -1037,17 +1037,34 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
 		t.Fatalf("a row filtered away since: %+v", a)
 	}
-	// A row that moved into a collapsed group since is no target either.
+	// A row that moved into a collapsed group since is no target either:
+	// a main-group row with a local session is settled after the render.
 	m.Filter = ""
+	m.ShowHidden = false
 	m.Render()
-	id := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
+	sy, local := -1, ""
+	for yy := 1; yy <= m.Height; yy++ {
+		if i := m.hitRow(yy, time.Time{}); i >= 0 {
+			if r := m.Visible()[i].Row; r.Local != nil && !r.Settled {
+				sy, local = yy, r.Local.Name
+				break
+			}
+		}
+	}
+	if sy < 0 {
+		t.Fatal("no row with a local session on screen")
+	}
 	for i := range in2.Locals {
-		in2.Locals[i].Settled = true
+		if in2.Locals[i].Name == local {
+			in2.Locals[i].Settled = true
+		}
 	}
 	m.SetRows(rows.Build(in2))
-	m.ShowHidden = false
-	if i := m.hitRow(y, time.Time{}); i >= 0 && m.Visible()[i].Row.ID() == id && m.Visible()[i].Row.Settled {
+	if i := m.hitRow(sy, time.Time{}); i != -1 {
 		t.Fatalf("a row collapsed since resolved to %d", i)
+	}
+	if a := m.Handle(Key{Kind: KeyMouse, Y: sy}); a.Kind != ActionNone {
+		t.Fatalf("a click on a row collapsed since: %+v", a)
 	}
 }
 
@@ -1082,5 +1099,24 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 	m.Render()
 	if i := m.hitRow(y, clicked); i != -1 {
 		t.Fatalf("a click read before two redraws resolved to %d", i)
+	}
+}
+
+// A click split across reads is stamped with when its first bytes
+// came; a click in one read with that read's time.
+func TestClickClock(t *testing.T) {
+	t1, t2 := time.Unix(10, 0), time.Unix(20, 0)
+	var dec Decoder
+	var c clickClock
+	if ks := c.feed(&dec, []byte("\x1b[<0;5;"), t1); len(ks) != 0 {
+		t.Fatalf("half a click: %+v", ks)
+	}
+	ks := c.feed(&dec, []byte("3M"), t2)
+	if len(ks) != 1 || ks[0].Kind != KeyMouse || !ks[0].At.Equal(t1) {
+		t.Fatalf("split click: %+v", ks)
+	}
+	ks = c.feed(&dec, []byte("\x1b[<0;5;3M"), t2)
+	if len(ks) != 1 || !ks[0].At.Equal(t2) {
+		t.Fatalf("whole click: %+v", ks)
 	}
 }
