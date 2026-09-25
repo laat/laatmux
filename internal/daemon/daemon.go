@@ -154,7 +154,8 @@ type Daemon struct {
 	// stamp and error of the last listing, and the lock the poll and
 	// its publication run under.
 	journal    *journal
-	relay      *relay // nil without the relay capability
+	relay      *relay          // nil without the relay capability
+	ctx        context.Context // Run's context, for goroutines that outlive a connection
 	generation int64
 	revision   uint64
 	listing    protocol.Listing
@@ -352,8 +353,21 @@ func (d *Daemon) capabilities() []string {
 	return caps
 }
 
+// runCtx is Run's context, or the background one before Run.
+func (d *Daemon) runCtx() context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ctx == nil {
+		return context.Background()
+	}
+	return d.ctx
+}
+
 // Run polls until ctx is done.
 func (d *Daemon) Run(ctx context.Context) error {
+	d.mu.Lock()
+	d.ctx = ctx
+	d.mu.Unlock()
 	if d.cfg.Store != nil {
 		go d.runWorktrees(ctx)
 	} else {
@@ -847,15 +861,18 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			// The relay's messages: an add naming a host to run it on,
 			// and a prompt without an attempt number.
 			if m.Type == protocol.TypeAdd && m.Relay != "" {
-				// The task runs once the answer is written: the host is
-				// contacted after the acceptance, and a client whose
-				// answer was lost resubmits the id and gets it started.
+				// The task runs once the answer has been written, or
+				// could not be: the acceptance is the file, and a
+				// client killed before it read the answer must not
+				// leave its task unrun until the daemon restarts. The
+				// host is contacted after the answer either way.
 				res := d.acceptRelay(ctx, m)
-				if err := pc.Write(res); err != nil {
-					return
-				}
+				err := pc.Write(res)
 				if res.OK {
-					d.startPending(ctx, m.ID)
+					d.startPending(d.runCtx(), m.ID)
+				}
+				if err != nil {
+					return
 				}
 				continue
 			}

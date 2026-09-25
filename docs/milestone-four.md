@@ -115,10 +115,11 @@ So the laptop's daemon gains a `relay` capability: a client sends it an
 `add` naming the host, the daemon dials that host as the client would
 have, sends the add under the client's id, and follows it to the result.
 While it does, it publishes a pending record in the merged stream, and
-the views draw it as a row. The relay is the client's `command.Add`
-moved into the daemon, not a second implementation: the same `stream`
-with its follow and its environment pin, the same result handling, with
-the differences below. What the client did after the result splits: the
+the views draw it as a row. The relay does what the client's
+`command.Add` does, with the same follow, environment pin and result
+handling, in a send loop of its own, since it keeps its record on disk
+and reconnects without bound where the client gives up; the two share
+the sender lifetime, and the differences are below. What the client did after the result splits: the
 client writes `last.json` at submit, since it is the client's state and
 the submit is the choice; the local session is not made at all, `jump`
 makes it from the record when the user goes there, which is what `jump`

@@ -156,7 +156,15 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 		return nil, err
 	}
 	for _, de := range entries {
-		if de.IsDir() || !strings.HasSuffix(de.Name(), ".json") {
+		if de.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(de.Name(), ".tmp") {
+			// A write that died before its rename is nobody's entry.
+			os.Remove(filepath.Join(dir, de.Name()))
+			continue
+		}
+		if !strings.HasSuffix(de.Name(), ".json") {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, de.Name()))

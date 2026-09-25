@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	cmdpkg "github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -34,11 +35,6 @@ import (
 // delivery is delivered or none, or on dismiss.
 
 const (
-	// relayLifetime is how long after its submission the relay sends or
-	// resends an add, by this machine's clock: the sender's side of the
-	// clock contract with the host's journal, which keeps an entry for
-	// thirty days.
-	relayLifetime = 7 * 24 * time.Hour
 	// handoffRetention is how long a retired record's file, and its
 	// handoff in snapshots, are kept.
 	handoffRetention = 24 * time.Hour
@@ -71,22 +67,39 @@ type relay struct {
 	recs   map[string]*pendingFile
 	// attempts serializes the deliveries per record.
 	attempts map[string]*sync.Mutex
-	// running is the records whose add a goroutine is following, so a
-	// resubmit or a restart never starts a second.
-	running map[string]bool
+	// runners are the goroutines following a record's add or attempt,
+	// so a resubmit or a restart never starts a second, and a dismiss
+	// of a record the host will never answer for can end them.
+	runners map[string][]*runner
+}
+
+// runner is one goroutine on a record: its cancel, and done once it
+// has returned.
+type runner struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func openRelay(dir string, logger *log.Logger) (*relay, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, running: map[string]bool{}}
+	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	for _, de := range entries {
-		if de.IsDir() || !strings.HasSuffix(de.Name(), ".json") {
+		if de.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(de.Name(), ".tmp") {
+			// A write that died before its rename: the prompt may be in
+			// it, and it is nobody's record.
+			os.Remove(filepath.Join(dir, de.Name()))
+			continue
+		}
+		if !strings.HasSuffix(de.Name(), ".json") {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, de.Name()))
@@ -319,18 +332,59 @@ func (d *Daemon) startPending(ctx context.Context, id string) {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
 	p, ok := d.relay.recs[id]
-	if !ok || p.Done || d.relay.running[id] {
+	if !ok || p.Done || len(d.relay.runners[id]) > 0 {
 		return
 	}
-	d.relay.running[id] = true
+	d.startRunnerLocked(ctx, id, d.runPending)
+}
+
+// startRunnerLocked runs fn on the record in a goroutine registered
+// under the record's id, with a context a dismiss can cancel. Called
+// with the relay's mutex held.
+func (d *Daemon) startRunnerLocked(ctx context.Context, id string, fn func(context.Context, string)) {
+	ctx, cancel := context.WithCancel(ctx)
+	r := &runner{cancel: cancel, done: make(chan struct{})}
+	d.relay.runners[id] = append(d.relay.runners[id], r)
 	go func() {
 		defer func() {
+			cancel()
 			d.relay.mu.Lock()
-			delete(d.relay.running, id)
+			rs := d.relay.runners[id]
+			for i, x := range rs {
+				if x == r {
+					rs = append(rs[:i], rs[i+1:]...)
+					break
+				}
+			}
+			if len(rs) == 0 {
+				delete(d.relay.runners, id)
+			} else {
+				d.relay.runners[id] = rs
+			}
 			d.relay.mu.Unlock()
+			close(r.done)
 		}()
-		d.runPending(ctx, id)
+		fn(ctx, id)
 	}()
+}
+
+// stopRunners cancels the record's goroutines and waits for them.
+func (d *Daemon) stopRunners(id string) {
+	d.relay.mu.Lock()
+	rs := append([]*runner(nil), d.relay.runners[id]...)
+	d.relay.mu.Unlock()
+	for _, r := range rs {
+		r.cancel()
+	}
+	for _, r := range rs {
+		<-r.done
+	}
+}
+
+// hostConfigured reports whether the config has the host.
+func (d *Daemon) hostConfigured(name string) bool {
+	_, ok := d.relayHost(name)
+	return ok
 }
 
 // relayHost finds the configured host by name.
@@ -414,7 +468,9 @@ func (d *Daemon) startRelays(ctx context.Context) {
 		case !p.Done:
 			d.startPending(ctx, p.ID)
 		case p.AttemptOpen:
-			go d.runAttempt(ctx, p.ID)
+			d.relay.mu.Lock()
+			d.startRunnerLocked(ctx, p.ID, d.runAttempt)
+			d.relay.mu.Unlock()
 		case p.OK:
 			// A listing owed, or a handoff the last daemon did not get
 			// to write: settle decides which.
@@ -454,23 +510,27 @@ func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendin
 	if err != nil {
 		return nil, p, err
 	}
+	// The pin first: a machine that is not the one the task was
+	// accepted for gets nothing, whatever it can do, and is waited on
+	// as an unreachable host is. Then the capabilities, and only then
+	// is an empty pin bound.
+	if p.EnvironmentID != "" && c.Hello.EnvironmentID != p.EnvironmentID {
+		c.Close()
+		return nil, p, fmt.Errorf("%s answers as environment %s, not %s the task was accepted for", h.Name, c.Hello.EnvironmentID, p.EnvironmentID)
+	}
 	for _, cap := range []string{protocol.CapAdd, protocol.CapFollow, protocol.CapTask} {
 		if !protocol.Has(c.Hello.Capabilities, cap) {
 			c.Close()
 			return nil, p, &refusal{fmt.Sprintf("tasks not supported by %s's daemon %s: no %s capability", h.Name, c.Hello.Version, cap)}
 		}
 	}
-	switch {
-	case p.EnvironmentID == "":
+	if p.EnvironmentID == "" {
 		env := c.Hello.EnvironmentID
 		p, ok = d.setPending(id, true, func(p *pendingFile) { p.EnvironmentID = env })
 		if !ok {
 			c.Close()
 			return nil, p, errors.New("pending: the environment could not be written")
 		}
-	case c.Hello.EnvironmentID != p.EnvironmentID:
-		c.Close()
-		return nil, p, fmt.Errorf("%s answers as environment %s, not %s the task was accepted for", h.Name, c.Hello.EnvironmentID, p.EnvironmentID)
 	}
 	return c, p, nil
 }
@@ -520,6 +580,14 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		if !ok || p.Done {
 			break
 		}
+		if !p.Sent && time.Since(p.SubmittedAt) > cmdpkg.SenderLifetime {
+			// Past the lifetime nothing is sent, to a host that answers
+			// or to one that never will: the outcome is unknown.
+			d.persist(ctx, id, func(p *pendingFile) {
+				p.Done, p.OK, p.Error, p.Reachable = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true
+			})
+			return
+		}
 		c, p, err := d.relayConn(ctx, id)
 		if err != nil {
 			// A host that cannot take the task refuses it for good only
@@ -546,12 +614,6 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		}
 		if p.Sent {
 			req = protocol.Message{Type: protocol.TypeFollow, ID: id, After: after}
-		} else if time.Since(p.SubmittedAt) > relayLifetime {
-			c.Close()
-			d.persist(ctx, id, func(p *pendingFile) {
-				p.Done, p.OK, p.Error, p.Reachable = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true
-			})
-			return
 		} else {
 			// The send is on disk before it happens: a daemon that dies
 			// between the write and the answer follows rather than
@@ -597,12 +659,14 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			// later refusal can take it for one that never arrived.
 			after = 0
 			taken := res.Error == protocol.ErrInterrupted
-			d.setPending(id, true, func(p *pendingFile) {
+			if _, ok := d.persist(ctx, id, func(p *pendingFile) {
 				p.Sent = false
 				if taken {
 					p.Taken = true
 				}
-			})
+			}); !ok {
+				return
+			}
 			continue
 		}
 		// The outcome must reach the disk: a record without it would be
@@ -673,6 +737,15 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 		d.handoff(ctx, id, p.WorktreeID())
 	}
 }
+
+// handoffRecheck is how often a handoff waiting for the merged stream
+// to show the worktree looks at the host's listing again, and
+// handoffPatience how long it waits for the stream in all before it
+// hands off on the listing alone.
+const (
+	handoffRecheck  = 3 * time.Second
+	handoffPatience = time.Minute
+)
 
 // relayExchange sends one request on the connection and reads until its
 // result, passing progress to onProgress.
@@ -819,6 +892,8 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 // one it became is there.
 func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 	wait := d.cfg.ReconnectMin
+	began := time.Now()
+	recheck := time.Now().Add(handoffRecheck)
 	for ctx.Err() == nil {
 		// The check, the write and the publication are one step under
 		// the relay's mutex, which a merged subscription takes for its
@@ -826,14 +901,15 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		// is gone, the worktree row it became.
 		d.relay.mu.Lock()
 		p, ok := d.relay.recs[id]
-		if !ok || p.retired() {
+		if !ok || p.retired() || p.Gone {
 			d.relay.mu.Unlock()
 			return
 		}
 		d.mu.Lock()
 		watching := d.mctx != nil
+		mh, configured := d.mhosts[p.Host]
 		shown := false
-		if mh, ok := d.mhosts[p.Host]; ok {
+		if configured {
 			if mh.host.Local() {
 				_, shown = d.worktrees[p.Root]
 			} else {
@@ -841,11 +917,21 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			}
 		}
 		d.mu.Unlock()
-		if watching && !shown {
+		if watching && configured && !shown && time.Since(began) < handoffPatience {
 			// The merged stream's own connection to the host may be
-			// down while the relay's is up; the row stays until it
-			// shows the replacement, however long that is.
+			// down while the relay's is up, or the worktree may be
+			// gone again already: the row stays while the stream is
+			// expected to show the replacement, the host's listing
+			// looked at again meanwhile, and a worktree that is not
+			// there any more makes the record gone instead.
 			d.relay.mu.Unlock()
+			if time.Now().After(recheck) {
+				recheck = time.Now().Add(handoffRecheck)
+				if present, ok := d.listingHas(ctx, id, *p); ok && !present {
+					d.persist(ctx, id, func(p *pendingFile) { p.Gone = true })
+					return
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -874,6 +960,22 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 	}
 }
 
+// listingHas asks the host, on a connection of the relay's own, whether
+// a listing past the record's barrier still has its worktree; not ok
+// when the host could not be asked.
+func (d *Daemon) listingHas(ctx context.Context, id string, p pendingFile) (present, ok bool) {
+	if p.Barrier == nil {
+		return false, false
+	}
+	c, _, err := d.relayConn(ctx, id)
+	if err != nil {
+		return false, false
+	}
+	defer c.Close()
+	present, err = d.awaitListing(ctx, c, *p.Barrier, p.Root, func(string) {})
+	return present, err == nil
+}
+
 // dismiss drops a record that needs the user: its file goes and the
 // stream says it is gone. A record whose add is still running is not
 // dismissed; the add finishes first.
@@ -882,6 +984,15 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	if d.relay == nil {
 		res.Error = "this daemon has no relay capability"
 		return res
+	}
+	// A record the host will never answer for is dismissed whatever
+	// state its goroutines are in: one never sent nor taken, which the
+	// host has no trace of, or one whose host is gone from the config.
+	// Their goroutines are ended first, so nothing sends after the
+	// file is gone; a runner about to send has to write Sent under the
+	// relay's mutex, which fails once the record is removed.
+	if p, ok := d.relay.get(id); ok && !p.retired() && ((!p.Sent && !p.Taken) || !d.hostConfigured(p.Host)) {
+		d.stopRunners(id)
 	}
 	// Under the record's attempt lock, so a prompt request cannot open
 	// an attempt between the check and the removal; an attempt in
@@ -897,6 +1008,7 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
 	p, ok := d.relay.recs[id]
+	abandoned := ok && ((!p.Sent && !p.Taken) || !d.hostConfigured(p.Host))
 	switch {
 	case !ok:
 		res.Error = "no pending record " + id
@@ -904,9 +1016,9 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		// Kept for its handoff, which a view may still need; the sweep
 		// takes it after the day.
 		res.Error = "the task " + id + " has handed over to its worktree row; nothing to dismiss"
-	case !p.Done:
+	case !p.Done && !abandoned:
 		res.Error = "the add is still running; it cannot be dismissed until it has an outcome"
-	case p.AttemptOpen:
+	case p.AttemptOpen && !abandoned:
 		res.Error = "a delivery attempt is unresolved; it cannot be dismissed until it has an outcome"
 	}
 	if res.Error != "" {
@@ -957,10 +1069,18 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "no prompt retained for " + id
 	case p.Delivered():
 		res.Error = "the prompt is delivered"
+	case !p.OK:
+		// An add that failed has no agent of its own to deliver to; the
+		// prompt is the user's, tasks show prints it.
+		res.Error = "the add failed; laatmux tasks show " + id + " prints the prompt"
+	case p.Gone:
+		res.Error = "the worktree is gone; laatmux tasks show " + id + " prints the prompt"
+	case p.Prompt != protocol.DeliveryNotDelivered && p.Prompt != protocol.DeliveryUnknown:
+		res.Error = "nothing to deliver: the prompt is " + p.Prompt
 	case p.AttemptOpen:
 		res.Error = fmt.Sprintf("attempt %d is unresolved", p.Attempt)
-	case p.Error == protocol.ErrRecoveryExpired:
-		res.Error = protocol.ErrRecoveryExpired
+	case p.AttemptError == protocol.ErrRecoveryExpired:
+		res.Error = protocol.ErrRecoveryExpired + "; laatmux tasks show " + id + " prints the prompt"
 	}
 	if res.Error != "" {
 		return res
@@ -979,7 +1099,13 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		// disk and is followed in the background, and the answer says
 		// so rather than an outcome the host never gave.
 		res.Error = "attempt " + strconv.Itoa(p.Attempt) + " is open; " + p.Unreachable
-		go d.runAttempt(ctx, id)
+		d.relay.mu.Lock()
+		d.startRunnerLocked(d.runCtx(), id, d.runAttempt)
+		d.relay.mu.Unlock()
+		return res
+	}
+	if p.AttemptError != "" {
+		res.Error = p.AttemptError
 		return res
 	}
 	res.OK = true
@@ -1067,16 +1193,39 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 		p, _ = d.persist(ctx, id, func(p *pendingFile) {
 			p.AttemptOpen = false
 			if res.OK {
-				p.Prompt, p.Error = res.Prompt, res.Error
+				p.Prompt, p.Error, p.AttemptError = res.Prompt, res.Error, ""
 				if p.Delivered() {
 					p.PromptText = ""
 				}
-			} else {
-				p.Error = res.Error
+				return
+			}
+			// The host refused the attempt and recorded nothing: the
+			// refusal is kept apart from the add's own outcome, and the
+			// number goes back to what the host has, which its answer
+			// says when the numbers had drifted.
+			p.AttemptError = res.Error
+			if n, ok := journalHas(res.Error); ok {
+				p.Attempt = n
+			} else if p.Attempt > 0 {
+				p.Attempt--
 			}
 		})
 		return p, true
 	}
 	p, _ := d.relay.get(id)
 	return p, false
+}
+
+// journalHas reads the attempt count from the host's answer to a number
+// out of order, "attempt N is not the next; the journal has M".
+func journalHas(msg string) (int, bool) {
+	i := strings.LastIndex(msg, "the journal has ")
+	if i < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(msg[i+len("the journal has "):]))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

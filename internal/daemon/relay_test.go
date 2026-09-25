@@ -386,6 +386,8 @@ func TestRelayRefusalsAndDismiss(t *testing.T) {
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "x3", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "b", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
 	}
+	// Once the host has the add, dismiss waits for its outcome.
+	f.awaitRecord(t, "x3", 30*time.Second, func(p pendingFile) bool { return p.Taken })
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "x3"}); res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss running %+v", res)
 	}
@@ -499,11 +501,11 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 		t.Fatalf("failed add %+v", got)
 	}
 	f.ft.set(func() { f.ft.newErr = nil })
-	// p on it reaches the host, which has no agent to deliver to.
-	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "s2"}); !res.OK || res.Prompt != protocol.DeliveryNotDelivered || !strings.Contains(res.Error, "no agent to deliver to") {
+	// p on a failed add is refused: the prompt is the user's to paste.
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "s2"}); res.OK || !strings.Contains(res.Error, "the add failed") {
 		t.Fatalf("prompt on failed add %+v", res)
 	}
-	if got := readPending(t, f.dir, "s2"); got.PromptText != "keep" || got.Attempt != 1 || got.AttemptOpen {
+	if got := readPending(t, f.dir, "s2"); got.PromptText != "keep" || got.Attempt != 0 {
 		t.Fatalf("file %+v", got)
 	}
 }
@@ -635,4 +637,214 @@ func TestRelayAttemptNotRecorded(t *testing.T) {
 	if e := readEntry(t, f.host, "n1"); len(e.Attempts) != 1 || e.Attempts[0].N != 1 {
 		t.Fatalf("host entry %+v", e.Attempts)
 	}
+}
+
+// The host's daemon restarted mid-add: a new host daemon on the same
+// journal answers the follow interrupted, the relay resends under the
+// same id, the host resumes with the allocated branch, and the record
+// ends delivered.
+func TestRelayHostRestartMidAdd(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	c, pc, _ := f.merged(t)
+	defer c.Close()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "h1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "restart", Generated: true, AgentName: "argv", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	awaitMerged(t, c, pc, 30*time.Second, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.PendingID == "h1" })
+	// The host's journal as a daemon that died at the worktree stage
+	// left it, its branch allocated; the relay's record as sent and
+	// not done; a new host daemon on the same directories.
+	e := readEntry(t, f.host, "h1")
+	e.Result, e.TerminalAt, e.Launch, e.PaneID, e.Delivery, e.Stage = nil, time.Time{}, "", "", "", protocol.StageWorktree
+	b, _ := json.Marshal(e)
+	os.WriteFile(filepath.Join(f.host.journal.dir, FileName("h1")), b, 0o600)
+	p := readPending(t, f.dir, "h1")
+	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent, p.PromptText = false, false, false, "", time.Time{}, true, "p"
+	b, _ = json.Marshal(p)
+	os.WriteFile(filepath.Join(f.dir, FileName("h1")), b, 0o600)
+	ft := &fakeServer{}
+	host2 := New(Config{
+		EnvironmentID: "henv", Host: "vm", Version: "host2",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
+		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
+		Store:   f.store, Agents: map[string][]string{"argv": {"claude", PromptPlaceholder}},
+		Commands: f.host.journal.dir, WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
+	})
+	go host2.Run(f.ctx)
+	remote2 := newFakeRemote(t, f.ctx, host2)
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: remote2.dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.local = local
+	got := f.awaitRecord(t, "h1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	if got.Branch != e.Branch || got.Prompt != protocol.DeliveryDelivered || len(ft.cmds) != 1 {
+		t.Fatalf("resumed %+v cmds %q", got, ft.cmds)
+	}
+	if e2 := readEntry(t, host2, "h1"); e2.Branch != e.Branch || e2.Delivery != protocol.DeliveryDelivered {
+		t.Fatalf("host entry %+v", e2)
+	}
+}
+
+// A host that answers as another environment gets nothing: the record
+// waits, done false, and runs once the right machine answers.
+func TestRelayEnvironmentMismatchWaits(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir()})
+	discovered(other)
+	otherRemote := newFakeRemote(t, f.ctx, other)
+	var mu sync.Mutex
+	current := otherRemote
+	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+		mu.Lock()
+		r := current
+		mu.Unlock()
+		return r.dial(ctx, h)
+	}
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.local = local
+	// Pinned at accept to the host row's environment.
+	f.local.mu.Lock()
+	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "vm"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "henv", Capabilities: []string{protocol.CapTask}}, agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
+	f.local.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "m1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "moved", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	p := f.awaitRecord(t, "m1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "answers as environment") })
+	if p.Done || p.Sent {
+		t.Fatalf("record %+v", p)
+	}
+	if _, ok := other.journal.get("m1"); ok {
+		t.Fatal("the add reached the wrong machine")
+	}
+	mu.Lock()
+	current = f.remote
+	mu.Unlock()
+	if p := f.awaitRecord(t, "m1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !p.OK {
+		t.Fatalf("after the right host answers: %+v", p)
+	}
+}
+
+// A client gone before it read the accepted answer leaves a task that
+// runs anyway: the acceptance is the file.
+func TestRelayLostAcceptedAnswer(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	server, cl := net.Pipe()
+	go f.local.HandleConn(f.ctx, server, func() { server.Close() })
+	pc := protocol.NewConn(cl)
+	if _, err := pc.Read(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "l1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "lost", AgentName: "argv", SubmittedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// Gone without reading: the daemon's write of the answer fails.
+	cl.Close()
+	if p := f.awaitRecord(t, "l1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !p.OK {
+		t.Fatalf("record %+v", p)
+	}
+}
+
+// A record the host will never answer for can be dismissed: one never
+// sent nor taken, to a host that is down for good, and one whose host
+// left the config with an attempt open; the goroutines end first.
+func TestRelayDismissAbandoned(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	f.remote.mu.Lock()
+	f.remote.down = errors.New("gone for good")
+	f.remote.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "d1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "dead", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "d1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable != "" })
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "d1"}); !res.OK {
+		t.Fatalf("dismiss unsent %+v", res)
+	}
+	if _, ok := f.local.relay.get("d1"); ok {
+		t.Fatal("record kept")
+	}
+	f.local.relay.mu.Lock()
+	n := len(f.local.relay.runners["d1"])
+	f.local.relay.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d runners after dismiss", n)
+	}
+	// A record with an attempt open whose host leaves the config.
+	f.remote.mu.Lock()
+	f.remote.down = nil
+	f.remote.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "d2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "left", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "d2", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	f.remote.mu.Lock()
+	f.remote.down = errors.New("down")
+	f.remote.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "d2"}); res.OK || !strings.Contains(res.Error, "attempt 1 is open") {
+		t.Fatalf("p while down %+v", res)
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "d2"}); res.OK {
+		t.Fatal("dismissed with the host configured and an attempt open")
+	}
+	f.hosts.set()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "d2"}); !res.OK {
+		t.Fatalf("dismiss with the host gone %+v", res)
+	}
+}
+
+// p is offered only on not delivered or unknown: an add that failed,
+// or a worktree that is gone, keeps the prompt for tasks show and no
+// attempt is opened.
+func TestRelayPromptOnlyWhenUndelivered(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "f1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "fail", AgentName: "nope", Prompt: "keep", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "f1", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "f1"})
+	if res.OK || !strings.Contains(res.Error, "the add failed") {
+		t.Fatalf("p on a failed add %+v", res)
+	}
+	if p := readPending(t, f.dir, "f1"); p.Attempt != 0 || p.PromptText != "keep" {
+		t.Fatalf("file %+v", p)
+	}
+}
+
+// A worktree removed after the relay's listing showed it and before
+// the merged stream did makes the record gone rather than a handoff
+// that waits for a row that will never come.
+func TestRelayHandoffFindsWorktreeGone(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	c, pc, _ := f.merged(t)
+	defer c.Close()
+	// Keep the merged stream from ever showing the worktree: the
+	// merged host's connection is a fake whose records never arrive,
+	// which is what a dropped merged follow looks like.
+	f.local.mu.Lock()
+	f.local.mhosts["vm"].cancel()
+	f.local.mhosts["vm"].cancel = func() {}
+	f.local.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "g1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "gone", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	p := f.awaitRecord(t, "g1", 30*time.Second, func(p pendingFile) bool { return p.Listed })
+	// The worktree goes while the handoff waits for the stream.
+	pc2 := conn(t, f.host)
+	pc2.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: f.source(), Branch: "gone", Root: p.Root, Force: true})
+	if rres, _ := result(t, pc2, "r1"); !rres.OK {
+		t.Fatal(rres.Error)
+	}
+	got := f.awaitRecord(t, "g1", 30*time.Second, func(p pendingFile) bool { return p.Gone })
+	if got.retired() {
+		t.Fatalf("handed off a gone worktree: %+v", got)
+	}
+	_ = pc
 }

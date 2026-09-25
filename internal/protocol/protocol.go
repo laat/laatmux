@@ -198,12 +198,15 @@ type Pending struct {
 	// attempt, AttemptOpen that it is unresolved. Listed is that the
 	// host's listing after the result has been seen, Retired that the
 	// record handed over to its worktree row.
-	Done         bool      `json:"done,omitempty"`
-	OK           bool      `json:"ok,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Prompt       string    `json:"prompt,omitempty"`
-	Attempt      int       `json:"attempt,omitempty"`
-	AttemptOpen  bool      `json:"attempt_open,omitempty"`
+	Done        bool   `json:"done,omitempty"`
+	OK          bool   `json:"ok,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	AttemptOpen bool   `json:"attempt_open,omitempty"`
+	// AttemptError is the host's refusal of the last attempt, recovery
+	// expired say, kept apart from Error, the add's own outcome.
+	AttemptError string    `json:"attempt_error,omitempty"`
 	Listed       bool      `json:"listed,omitempty"`
 	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
 	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root

@@ -90,8 +90,10 @@ func TaskState(p protocol.Pending) string {
 		return p.Error
 	case p.Done && p.Gone:
 		return "done, worktree gone"
-	case p.Done && p.Error == protocol.ErrRecoveryExpired:
+	case p.Done && p.AttemptError == protocol.ErrRecoveryExpired:
 		return "prompt " + p.Prompt + "; recovery expired, laatmux tasks show " + p.ID + " prints it"
+	case p.Done && p.AttemptError != "":
+		return "prompt " + p.Prompt + "; last attempt refused: " + p.AttemptError
 	case p.Done && p.AttemptOpen:
 		return fmt.Sprintf("delivering the prompt, attempt %d", p.Attempt)
 	case p.Done && p.Prompt == protocol.DeliveryNotDelivered:
