@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1153,5 +1154,85 @@ func TestFeedAtDatesClicks(t *testing.T) {
 	// Feed, with no time, dates nothing.
 	if ks := dec.Feed([]byte("\x1b[<0;5;3M")); !click(ks, time.Time{}) {
 		t.Fatalf("a click fed with no time: %+v", ks)
+	}
+}
+
+// A sequence cut short by a new escape, Alt-[ or an Esc and [ read
+// together, is dropped up to it, and what follows is parsed afresh: a
+// click right after is the click, not the digits of its report, which
+// would jump. Held across reads, the click keeps its own read's time.
+func TestBrokenSequenceBeforeClick(t *testing.T) {
+	for in, want := range map[string][]Key{
+		"\x1b[\x1b[<0;5;3M": {{Kind: -1}, {Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1b[1;\x1b[A":     {{Kind: -1}, {Kind: KeyUp}},
+		"\x1b[\x03":         {{Kind: -1}, {Kind: KeyCtrlC}},
+		// Alt-O the same way: SS3 cut short.
+		"\x1bO\x1b[<0;5;3M": {{Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1bO\r":           {{Kind: KeyEnter}},
+		// The old form of a modified F1 is dropped whole, not a digit.
+		"\x1bO2P":              nil,
+		"\x1bO1;2Pj":           {{Rune: 'j'}},
+		"\x1bO2\x03":           {{Kind: KeyCtrlC}},
+		"\x1bO 2Pj":            {{Rune: 'j'}},
+		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
+	} {
+		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: %+v, want %+v", in, got, want)
+		}
+	}
+	t1, t2 := time.Unix(10, 0), time.Unix(20, 0)
+	var dec Decoder
+	if ks := dec.FeedAt([]byte("\x1b["), t1); len(ks) != 0 || !dec.Pending() {
+		t.Fatalf("Alt-[ held: %+v", ks)
+	}
+	ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2)
+	if len(ks) != 2 || ks[0].Kind != -1 || ks[1].Kind != KeyMouse || ks[1].X != 5 || !ks[1].At.Equal(t2) || dec.Pending() {
+		t.Fatalf("a click after a held Alt-[: %+v pending %v", ks, dec.Pending())
+	}
+}
+
+// A sequence flushed incomplete is discarded through its final byte
+// when the rest comes, but a byte that cannot go on, Ctrl-C or Enter or
+// a fresh escape, is the user's and comes through.
+func TestDiscardStopsAtUserKeys(t *testing.T) {
+	for in, want := range map[string][]Key{
+		"2;5H":   nil,
+		"\x03":   {{Kind: KeyCtrlC}},
+		"\rq":    {{Kind: KeyEnter}, {Rune: 'q'}},
+		"\x1b[A": {{Kind: KeyUp}},
+		"1;\x03": {{Kind: KeyCtrlC}},
+		"9~j":    {{Rune: 'j'}},
+	} {
+		var d Decoder
+		d.Feed([]byte("\x1b[1"))
+		if got := d.Flush(); len(got) != 0 {
+			t.Fatalf("flush: %+v", got)
+		}
+		if got := d.Feed([]byte(in)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q after a flushed ESC [1: %+v, want %+v", in, got, want)
+		}
+	}
+}
+
+// A sequence cut short inside pasted text is dropped up to the byte
+// that ends it, which stays text; a whole one is dropped whole.
+func TestPasteTextBrokenSequence(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\x1b[31mb":       "ab",
+		"a\x1b[\nbéc":      "a\nbéc",
+		"x\x1b[ 1 2 3 日":   "x日",
+		"\x1b[\x1b[31mred": "red",
+		"a\x1bOPb":         "ab",
+		"a\x1bO\nb":        "a\nb",
+		"a\x1bO1;2Pb":      "ab",
+		"a\x1bO 1Pb":       "ab",
+	} {
+		if got := pasteText([]byte(in)); got != want {
+			t.Errorf("pasteText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A chunk is not cut before such a sequence's text: it has ended.
+	if head, tail := splitTail([]byte("ok \x1b[\n12")); string(head) != "ok \x1b[\n12" || len(tail) != 0 {
+		t.Errorf("splitTail: %q %q", head, tail)
 	}
 }
