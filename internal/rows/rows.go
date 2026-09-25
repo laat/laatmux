@@ -367,6 +367,23 @@ func Build(in Input) Rows {
 		}
 		rows = append(rows, r)
 	}
+	// The host lists the agent in the task's session before the
+	// worktree that has it; the task takes that agent too, so it is
+	// not a row of its own meanwhile.
+	for i := range pendings {
+		p := pendings[i].Pending
+		if pendings[i].Agent != nil || p.EnvironmentID == "" || p.Session == "" {
+			continue
+		}
+		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] {
+			pendings[i].Agent, used[a] = a, true
+			for j := range pendings {
+				if j != i && pendings[j].Agent == nil && pendings[j].Pending.EnvironmentID == p.EnvironmentID && pendings[j].Pending.Session == p.Session {
+					pendings[j].Agent = a
+				}
+			}
+		}
+	}
 	rows = append(rows, pendings...)
 	for _, a := range bySession {
 		if used[a] {

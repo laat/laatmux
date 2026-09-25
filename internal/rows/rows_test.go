@@ -249,6 +249,20 @@ func TestBuildPending(t *testing.T) {
 	if byID["add-3"].Alias() != "" {
 		t.Error("an alias before the root is known")
 	}
+	// The agent listed before its worktree: the task that reported the
+	// session takes it, and it is no row of its own.
+	in.Worktrees = in.Worktrees[1:]
+	got = Build(in)
+	for _, r := range got.All() {
+		if r.Pending == nil && r.Agent != nil && r.Agent.Session == "proj/task" {
+			t.Fatalf("the task's agent is a row of its own: %q", r.ID())
+		}
+	}
+	for _, r := range got.Main {
+		if r.ID() == "add-1" && (r.Agent == nil || r.Agent.Session != "proj/task") {
+			t.Fatalf("%s did not take the agent in its session", r.ID())
+		}
+	}
 }
 
 // PendingState says where a task is in a few words, the detail or the
