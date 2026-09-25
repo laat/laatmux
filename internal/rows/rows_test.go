@@ -175,3 +175,107 @@ func TestAgo(t *testing.T) {
 		}
 	}
 }
+
+// Pending tasks: first in the main group, newest first; a task stands
+// for the worktree row at its root, which is not drawn while any task
+// for it stands, and takes that row's agent and local session; a task
+// whose host is gone from the config says so first.
+func TestBuildPending(t *testing.T) {
+	now := time.Now()
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Agents: []protocol.Agent{
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"},
+			{ID: "venv/worktree//r/other", EnvironmentID: "venv", Repo: "proj", Branch: "other", Root: "/r/other", Session: "proj/other"},
+		},
+		Locals: []workspace.Local{{Name: "vm/proj/task", Key: "venv//r/task", Host: "vm", Settled: true}},
+		Pendings: []protocol.Pending{
+			{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task", Taken: true, Reachable: true,
+				Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: now.Add(-time.Minute)},
+			{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Taken: true, Reachable: true,
+				Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready", SubmittedAt: now.Add(-2 * time.Minute)},
+			{ID: "add-3", Host: "vm", Repo: "proj", Branch: "new", Taken: true, Reachable: true, Stage: protocol.StageFetch, SubmittedAt: now},
+			{ID: "add-4", Host: "gone", Repo: "proj", Branch: "lost", SubmittedAt: now.Add(-time.Hour)},
+		},
+		Current: "vm/proj/task",
+	}
+	got := Build(in)
+	var ids []string
+	for _, r := range got.Main {
+		ids = append(ids, r.ID())
+	}
+	want := "add-3 add-1 add-2 add-4 venv/worktree//r/other"
+	if strings.Join(ids, " ") != want {
+		t.Fatalf("main %q, want %q", strings.Join(ids, " "), want)
+	}
+	if len(got.Settled)+len(got.Stale) != 0 {
+		t.Fatalf("settled %d stale %d: the settled worktree hides behind its tasks", len(got.Settled), len(got.Stale))
+	}
+	byID := map[string]Row{}
+	for _, r := range got.Main {
+		byID[r.ID()] = r
+	}
+	// Both tasks for the one branch stand for its worktree row, carry
+	// its agent and session, and alias it.
+	for _, id := range []string{"add-1", "add-2"} {
+		r := byID[id]
+		if r.Alias() != "venv/worktree//r/task" || r.Worktree == nil || r.Agent == nil || r.Local == nil || !r.Current || r.Settled {
+			t.Fatalf("%s: alias %q worktree %v agent %v local %v current %v settled %v", id, r.Alias(), r.Worktree, r.Agent, r.Local, r.Current, r.Settled)
+		}
+	}
+	// Running and complete: the spinner's mark, not dim; the ones that
+	// need the user are dim with "!".
+	for _, c := range []struct {
+		id, mark, state, detail string
+		dim                     bool
+	}{
+		{"add-1", "*", "done, awaiting the listing", "", false},
+		{"add-2", "!", "prompt not delivered", "the pane was not ready", true},
+		{"add-3", "*", "adding: fetch", "", false},
+		{"add-4", "!", "host removed", "", true},
+	} {
+		r := byID[c.id]
+		if r.Mark() != c.mark || r.State() != c.state || r.Detail() != c.detail || r.Dim != c.dim || r.Name == "" {
+			t.Errorf("%s: mark %q state %q detail %q dim %v", c.id, r.Mark(), r.State(), r.Detail(), r.Dim)
+		}
+	}
+	if !byID["add-4"].Removed || byID["add-3"].Removed {
+		t.Error("removed is the host's absence from the host list")
+	}
+	if byID["add-3"].Alias() != "" {
+		t.Error("an alias before the root is known")
+	}
+}
+
+// PendingState says where a task is in a few words, the detail or the
+// reason apart.
+func TestPendingState(t *testing.T) {
+	for _, c := range []struct {
+		p             protocol.Pending
+		removed       bool
+		state, detail string
+	}{
+		{protocol.Pending{Mismatch: "venv is now wenv"}, false, "host replaced", "venv is now wenv"},
+		{protocol.Pending{Done: true, Stage: protocol.StageFetch, Error: "no such ref"}, false, "failed at fetch", "no such ref"},
+		{protocol.Pending{Done: true, Error: "outcome unknown: the daemon no longer knows it"}, false, "outcome unknown", "the daemon no longer knows it"},
+		{protocol.Pending{Done: true, OK: true, Gone: true}, false, "done, worktree gone", ""},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 2}, false, "delivering the prompt", "attempt 2"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "sent, not seen"}, false, "prompt delivery unknown", "sent, not seen"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "recovery expired", Error: "x"}, false, "prompt not delivered", "recovery expired"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, ListingError: "git failed"}, false, "done, awaiting the listing", "git failed"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}, false, "done", ""},
+		{protocol.Pending{Unreachable: "ssh: timeout"}, false, "host unreachable, retrying", "ssh: timeout"},
+		{protocol.Pending{}, false, "submitted", ""},
+		{protocol.Pending{Taken: true, Reachable: true, Stage: protocol.StageAgent, Detail: "starting claude"}, false, "adding: agent", "starting claude"},
+		{protocol.Pending{Taken: true, Reachable: true}, true, "host removed", ""},
+	} {
+		s, d := PendingState(c.p, c.removed)
+		if s != c.state || d != c.detail {
+			t.Errorf("%+v: %q %q, want %q %q", c.p, s, d, c.state, c.detail)
+		}
+	}
+}

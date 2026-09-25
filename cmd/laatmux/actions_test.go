@@ -730,3 +730,70 @@ func TestNoticeRestoresMessage(t *testing.T) {
 		t.Fatalf("fallback:\n%s", text)
 	}
 }
+
+// A pending task's keys: x asks and dismisses one that needs the user
+// and says why not on one still running; p delivers a retained prompt
+// and says why not otherwise; Enter on a running one does nothing.
+func TestPendingKeys(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	now := time.Now()
+	stuck := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix",
+		Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", SubmittedAt: now}
+	running := protocol.Pending{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "new", Taken: true, Reachable: true, Stage: protocol.StageFetch, SubmittedAt: now.Add(time.Minute)}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetRows(rows.Build(rows.Input{
+		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings: []protocol.Pending{stuck, running},
+	}))
+	var dismissed, delivered string
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true,
+		dismiss: func(id string) error { dismissed = id; return nil },
+		deliver: func(id string) (string, string, error) { delivered = id; return protocol.DeliveryDelivered, "", nil }}
+	finish := func() {
+		t.Helper()
+		log, ok := m.Overlay.(*view.Log)
+		if !ok {
+			t.Fatalf("no log: %v", m.Overlay)
+		}
+		for i := 0; i < 200 && !log.Done(); i++ {
+			time.Sleep(5 * time.Millisecond)
+		}
+		d.act(m, m.Poll())
+	}
+	key := func(r rune) view.Action { return m.Handle(view.Key{Rune: r}) }
+
+	// The running one, newest, is first.
+	m.Handle(view.Key{Rune: 'g'})
+	if r := m.Selection(); r == nil || r.ID() != "add-2" {
+		t.Fatalf("selected %+v", r)
+	}
+	if a := m.Handle(view.Key{Kind: view.KeyEnter}); a.Kind != view.ActionJump || d.jump(m, *m.Selection()) || m.Message != "" {
+		t.Fatalf("enter on a running task: %+v message %q", a, m.Message)
+	}
+	d.act(m, key('x'))
+	if m.Confirm != "" || !strings.Contains(m.Message, "still running") {
+		t.Fatalf("x on a running task: confirm %q message %q", m.Confirm, m.Message)
+	}
+	d.act(m, key('p'))
+	if !strings.Contains(m.Message, "nothing to deliver") || delivered != "" {
+		t.Fatalf("p on a running task: %q", m.Message)
+	}
+
+	// The stuck one: p delivers, x asks then dismisses.
+	m.Handle(view.Key{Rune: 'j'})
+	d.act(m, key('p'))
+	finish()
+	if delivered != "add-1" || m.Message != "prompt delivered" {
+		t.Fatalf("p: delivered %q message %q", delivered, m.Message)
+	}
+	d.act(m, key('x'))
+	if !strings.Contains(m.Confirm, "dismiss proj/fix on vm (prompt not delivered)") {
+		t.Fatalf("x: confirm %q", m.Confirm)
+	}
+	d.act(m, key('y'))
+	finish()
+	if dismissed != "add-1" || !strings.Contains(m.Message, "dismissed proj/fix on vm") {
+		t.Fatalf("dismissed %q message %q", dismissed, m.Message)
+	}
+}

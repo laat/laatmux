@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/view"
 )
 
 // The merged stream, applied: records are attributed to hosts through
@@ -150,5 +151,28 @@ func TestHostReady(t *testing.T) {
 	st := fromStatus(protocol.HostStatus{Name: "vm", Error: "disconnected", Reconnecting: true})
 	if st.ready() || !st.Reconnecting {
 		t.Errorf("fromStatus: %+v", st)
+	}
+}
+
+// ls prints a pending task where its worktree row would be, with its
+// state and detail, and hides the worktree row behind it; the views
+// get the handoffs with the rows.
+func TestMergedPendingRows(t *testing.T) {
+	m := newMerged()
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:     []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/proj/fix", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix"}},
+		Pendings: []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix",
+			Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready"}},
+		Handoffs: []protocol.Handoff{{ID: "add-0", ReplacedBy: "venv/worktree//w/proj/old"}},
+	})
+	out := m.render(m.locals())
+	if !strings.Contains(out, "! prompt not delivered") || !strings.Contains(out, "proj/fix") || !strings.Contains(out, "not ready") || strings.Contains(out, "no agent") {
+		t.Fatalf("render:\n%s", out)
+	}
+	v := &view.Model{}
+	m.fill(v, "")
+	if len(v.Rows.Main) != 1 || v.Rows.Main[0].ID() != "add-1" || v.Handoffs["add-0"] != "venv/worktree//w/proj/old" {
+		t.Fatalf("fill: %d rows, handoffs %v", len(v.Rows.Main), v.Handoffs)
 	}
 }

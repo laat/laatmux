@@ -224,6 +224,9 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	for _, w := range m.worktrees {
 		in.Worktrees = append(in.Worktrees, w)
 	}
+	for _, p := range m.pendings {
+		in.Pendings = append(in.Pendings, p)
+	}
 	return in
 }
 
@@ -303,6 +306,15 @@ func renderRow(b *strings.Builder, r rows.Row, now time.Time) {
 	note := ""
 	if r.HostDown {
 		note += " (host down)"
+	}
+	if r.Pending != nil {
+		// A task the relay holds: where the add is, then the detail.
+		detail := r.Detail()
+		if detail != "" {
+			detail = "  " + detail
+		}
+		fmt.Fprintf(b, "%s %-24s %-32s @%s%s%s\n", r.Mark(), r.State(), r.Name, where, note, detail)
+		return
 	}
 	if r.Agent == nil {
 		// A managed session with no identified agent, or no session at

@@ -794,7 +794,7 @@ func (m *Model) moveTo(i int) {
 	if target != m.Selected {
 		m.Follow = false
 	}
-	m.Selected = target
+	m.Selected, m.lost = target, false
 	m.Selection()
 }
 

@@ -47,7 +47,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  s settle  S shell  v layout  / filter  f settled  q quit"}
+		Hint: "enter jump  a add  x rm  p prompt  s settle  S shell  v layout  / filter  f settled  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 
@@ -132,6 +132,11 @@ func localHostName(cfg config.Config) string {
 func (m *merged) fill(v *view.Model, current string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// The handoffs first: the anchor lookup in SetRows consults them.
+	v.Handoffs = make(map[string]string, len(m.handoffs))
+	for id, w := range m.handoffs {
+		v.Handoffs[id] = w
+	}
 	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
@@ -173,6 +178,15 @@ func (m *merged) fill(v *view.Model, current string) {
 func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Stale {
 		return switchTo(ctx, r.Local.Name)
+	}
+	if p := r.Pending; p != nil && r.Worktree == nil {
+		// A task whose worktree row is not listed yet jumps by what the
+		// host reported: the managed session at the root.
+		if p.Session == "" || p.Root == "" || p.EnvironmentID == "" {
+			return errors.New(r.Name + ": no session yet")
+		}
+		r.Worktree = &protocol.Worktree{ID: p.WorktreeID(), EnvironmentID: p.EnvironmentID, Root: p.Root,
+			Repo: p.Repo, Branch: p.Branch, Source: p.Source, Session: p.Session}
 	}
 	if r.Host == "" {
 		return errors.New(r.Name + ": no configured host claims this record")

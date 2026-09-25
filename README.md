@@ -601,8 +601,8 @@ is switched to.
   without a session the chips and the branch
   are pre-filled from the record, the branch explicit. A submit with
   the local daemon's `relay` hands the add to it and closes the popup
-  on `accepted`; `laatmux tasks` shows the task from then on, and the
-  views will once step 5 lands; a refusal keeps the form up with the
+  on `accepted`; the task is a row in the views from then on, and in
+  `laatmux tasks`; a refusal keeps the form up with the
   error. Without it
   the add runs in the foreground with its progress in place of the
   list and jumps on success, a failure staying until a key; a prompt
@@ -615,7 +615,10 @@ is switched to.
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use
-  `X`. `s` settles or unsettles; `S` opens the shell window and jumps.
+  `X`. On a pending task's row `x` dismisses it instead, with a confirm
+  line, where it needs the user or would otherwise be stuck, and `p`
+  delivers a prompt that did not reach the agent, or may not have.
+  `s` settles or unsettles; `S` opens the shell window and jumps.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
@@ -623,6 +626,19 @@ is switched to.
   `bind-key T display-popup -E -w 80% -h 60% -d '#{pane_current_path}' -T ' task ' 'laatmux compose'`.
   It exits on submit or cancel, the repository defaulting to the
   directory the popup was opened from.
+- In both, and in `ls`, a background add from the form is a row of its
+  own at the top of the main group, the newest first, until it hands
+  over to its worktree row. Its mark spins while the add runs and is
+  `!` once it needs the user, when the row is dim too. The second line
+  in tiles, or the state column in compact, says where it is:
+  `adding: <stage>`, `host unreachable, retrying`, `failed at <stage>`,
+  `prompt not delivered`, `prompt delivery unknown`, `outcome unknown`,
+  `done, awaiting the listing`, `done, worktree gone`, or `host
+  removed`; the line under it, the title line in compact, has the
+  detail or the reason. The worktree row at the same root is not drawn
+  while a task for it stands, and the task's row takes its agent and
+  session: `Enter` jumps once the add is done and does nothing while it
+  runs.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the
   view redraws at that rate only while a working row is on the list. A
@@ -633,7 +649,12 @@ is switched to.
   moves it, and rests on nothing when no row is that session, so `Enter`
   does nothing and a digit counts the main group. The first key or
   wheel step that moves the selection makes it the user's: from then on
-  it stays on the row it was put on across refreshes, as before.
+  it stays on the row it was put on across refreshes, as before. A
+  task's row hands the selection to its worktree row when it hands
+  over, through the handoffs the merged stream carries for a day even
+  when the view missed the steps between. A selected row that goes with
+  nothing to hand over to leaves the selection on none, not on the row
+  that took its place, until the row is back or a key moves it.
 - Both refuse a local daemon without `merged` with what to do; a sidebar
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.

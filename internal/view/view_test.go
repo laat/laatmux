@@ -414,7 +414,7 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 	if got := m.Selection(); got.Name != "proj/task" || m.Selected != 1 {
 		t.Errorf("after reorder: selected %q at %d, want proj/task at 1", got.Name, m.Selected)
 	}
-	// The row is gone: the index stays, clamped.
+	// The row goes.
 	for i := range in.Worktrees {
 		if in.Worktrees[i].Branch == "task" {
 			in.Worktrees = append(in.Worktrees[:i], in.Worktrees[i+1:]...)
@@ -428,8 +428,22 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 		}
 	}
 	m.SetRows(rows.Build(in))
-	if got := m.Selection(); got == nil || got.Name == "proj/task" || m.Selected != 1 {
+	// The row is gone: the selection is on none, not on the row that
+	// took its index, so Enter jumps nowhere.
+	if got := m.Selection(); got != nil || m.Selected != -1 {
 		t.Errorf("after removal: %+v index %d", got, m.Selected)
+	}
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+		t.Errorf("enter on no selection = %+v", a)
+	}
+	m.Render()
+	if m.Selection() != nil {
+		t.Error("a render put the selection back on a row")
+	}
+	// A key moves it onto a row again, the user's.
+	m.Handle(Key{Rune: 'j'})
+	if got := m.Selection(); got == nil || m.Selected != 0 {
+		t.Errorf("j after removal: %+v index %d", got, m.Selected)
 	}
 }
 
@@ -821,5 +835,100 @@ func TestNewlineIsEnter(t *testing.T) {
 	f.Handle(Key{Kind: KeyNewline})
 	if f.picker == nil {
 		t.Fatal("a newline on a chip did not open the picker")
+	}
+}
+
+// The anchor pair: a task selected before its root is known stays
+// selected when the root arrives, when its worktree row takes over, and
+// through the reorder; a task the view never saw hand over finds its
+// worktree row through the handoffs; past them the selection is on
+// none rather than on the row that took the index.
+func TestAnchorFollowsTask(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	hosts := []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
+	other := protocol.Worktree{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a"}
+	task := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Taken: true, Reachable: true, Stage: protocol.StageClone, SubmittedAt: now}
+	wt := protocol.Worktree{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"}
+	agent := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
+	build := func(ps []protocol.Pending, ws []protocol.Worktree, as []protocol.Agent) rows.Rows {
+		return rows.Build(rows.Input{Hosts: hosts, Pendings: ps, Worktrees: ws, Agents: as})
+	}
+	m := &Model{Width: 60, Height: 20, Now: now}
+	m.SetRows(build([]protocol.Pending{task}, []protocol.Worktree{other}, nil))
+	m.Handle(Key{Rune: 'g'}) // the task, first
+	if r := m.Selection(); r == nil || r.ID() != "add-1" {
+		t.Fatalf("selected %+v", r)
+	}
+	// The root arrives: same id, now with its alias.
+	task.Stage, task.Root = protocol.StageAgent, "/r/task"
+	m.SetRows(build([]protocol.Pending{task}, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	if r := m.Selection(); r == nil || r.ID() != "add-1" || m.alias != wt.ID {
+		t.Fatalf("with the root: %+v alias %q", r, m.alias)
+	}
+	// Handed over: the worktree row, found by the alias, which sorts
+	// first now its agent works.
+	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	if r := m.Selection(); r == nil || r.ID() != wt.ID {
+		t.Fatalf("after the handover: %+v", r)
+	}
+	// A task for the same worktree again: the task that stands for it.
+	again := task
+	again.ID = "add-2"
+	m.SetRows(build([]protocol.Pending{again}, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	if r := m.Selection(); r == nil || r.ID() != "add-2" {
+		t.Fatalf("a task standing for the worktree again: %+v", r)
+	}
+
+	// A view that selected a task during clone and missed every step
+	// until the worktree row: the handoffs name it.
+	m = &Model{Width: 60, Height: 20, Now: now}
+	early := protocol.Pending{ID: "add-3", Host: "vm", Repo: "proj", Branch: "task", Taken: true, Reachable: true, Stage: protocol.StageClone, SubmittedAt: now}
+	m.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
+	m.Handle(Key{Rune: 'g'})
+	if r := m.Selection(); r == nil || r.ID() != "add-3" || m.alias != "" {
+		t.Fatalf("selected %+v alias %q", r, m.alias)
+	}
+	m.Handoffs = map[string]string{"add-3": wt.ID}
+	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	if r := m.Selection(); r == nil || r.ID() != wt.ID {
+		t.Fatalf("through the handoffs: %+v", r)
+	}
+	// Without them the selection is on none, not on the other row.
+	m = &Model{Width: 60, Height: 20, Now: now}
+	m.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
+	m.Handle(Key{Rune: 'g'})
+	m.Selection()
+	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	if r := m.Selection(); r != nil {
+		t.Fatalf("an unknown handoff left the selection on %q", r.ID())
+	}
+	// A following view goes back to the viewer's own row meanwhile.
+	f := &Model{Width: 60, Height: 20, Now: now, Follow: true}
+	f.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
+	if f.Selection() != nil {
+		t.Fatal("a following view selected a row that is not the viewer's")
+	}
+}
+
+// Pending rows as drawn: the spinner and the state while the add runs,
+// "!" and dim with the reason once it needs the user, first in the
+// main group, in tiles and in compact with titles.
+func TestRenderPending(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	in := rows.Input{
+		Hosts:     []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a"}},
+		Pendings: []protocol.Pending{
+			{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "sidebar-follow", Taken: true, Reachable: true, Stage: protocol.StageClone, Detail: "cloning git@github.com:laat/proj.git", SubmittedAt: now},
+			{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix-ls", Root: "/r/fix-ls", Session: "proj/fix-ls", Taken: true, Reachable: true,
+				Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready within a minute", SubmittedAt: now.Add(-time.Minute)},
+		},
+	}
+	m := &Model{Rows: rows.Build(in), LocalHost: "mac", Now: now, Width: 40, Height: 12}
+	golden(t, "pending-tiles", Debug(m.Render()))
+	m.Layout, m.Titles, m.Width = Compact, true, 72
+	golden(t, "pending-compact", Debug(m.Render()))
+	if !m.Spinning() {
+		t.Error("a running task does not spin")
 	}
 }
