@@ -956,6 +956,23 @@ func TestAnchorStandIn(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != "add-a" {
 		t.Fatalf("after add-b handed over: %+v", r)
 	}
+	// Beside a task that failed or was gone at the root, which stands
+	// for nothing, the hand-over lands on the worktree row itself.
+	for _, bad := range []protocol.Pending{
+		{ID: "add-f", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, Stage: protocol.StageAgent, Error: "failed at agent: x", SubmittedAt: now.Add(-time.Hour)},
+		{ID: "add-g", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, Gone: true, SubmittedAt: now.Add(-time.Hour)},
+	} {
+		f := &Model{Width: 60, Height: 20, Now: now, Handoffs: map[string]string{"add-b": wt.ID}}
+		f.SetRows(build(bad, next))
+		f.Handle(Key{Rune: 'g'})
+		if r := f.Selection(); r == nil || r.ID() != "add-b" {
+			t.Fatalf("%s: selected %+v", bad.ID, r)
+		}
+		f.SetRows(build(bad))
+		if r := f.Selection(); r == nil || r.ID() != wt.ID {
+			t.Fatalf("%s: after add-b handed over: %+v", bad.ID, r)
+		}
+	}
 	// Lost, then found again: a filter that hides every row and is
 	// cleared puts the selection on the first row, as for any other.
 	m.SetRows(build())

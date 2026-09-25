@@ -924,6 +924,13 @@ func TestPendingOffers(t *testing.T) {
 	}
 	gone := listed
 	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
+	// A gone task whose prompt was delivered has nothing kept to show.
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
+		t.Errorf("p on a gone, delivered task: %q", m.Message)
+	}
 	if _, err := pendingTarget(rows.Row{Name: "proj/c", Pending: &gone}); err == nil || !strings.Contains(err.Error(), "gone") {
 		t.Errorf("enter on a gone task: %v", err)
 	}

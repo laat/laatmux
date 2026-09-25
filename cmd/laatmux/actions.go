@@ -643,6 +643,8 @@ func (d *dash) deliverPrompt(m *view.Model) {
 	p := *r.Pending
 	if !Deliverable(p) {
 		switch {
+		case p.Delivered():
+			m.Message = r.Name + ": nothing to deliver (the prompt is " + p.Prompt + ")"
 		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:
 			// The prompt has nowhere to go; the file still has it.
 			m.Message = r.Name + ": " + r.State() + "; laatmux tasks show " + p.ID + " prints the prompt"

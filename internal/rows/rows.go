@@ -114,10 +114,11 @@ func (r Row) ID() string {
 }
 
 // Alias is the id of the row a pending task becomes, the worktree row
-// at its root, once the host has reported the root; "" otherwise. A
-// view's selection on the task follows it there.
+// at its root, once the host has reported the root and while the task
+// stands for it; "" otherwise. A view's selection on the task follows
+// it there.
 func (r Row) Alias() string {
-	if r.Pending == nil {
+	if r.Pending == nil || !stands(*r.Pending) {
 		return ""
 	}
 	return r.Pending.WorktreeID()
@@ -363,7 +364,7 @@ func Build(in Input) Rows {
 		h, configured := hosts[p.Host]
 		r := Row{Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
 			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
-		if alias := r.Alias(); alias != "" && stands(*p) {
+		if alias := r.Alias(); alias != "" {
 			byAlias[alias] = append(byAlias[alias], len(pendings))
 		}
 		pendings = append(pendings, r)
