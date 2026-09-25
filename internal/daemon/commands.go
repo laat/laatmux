@@ -424,15 +424,21 @@ func branchOrDetached(branch string) string {
 	return "branch " + branch
 }
 
+// holdRepos is the shared hold on every repository that an add takes
+// before it resolves anything and keeps to its end, and that rm takes
+// alone. The returned func releases it.
+func (d *Daemon) holdRepos() func() {
+	d.repos.RLock()
+	return d.repos.RUnlock
+}
+
 // lockRepo takes a repository's lock, by its identity, so two forms of
 // one source share it, then the lock on the name that places its
 // checkout, so two sources sent under one name never clone into one
-// directory at once; both under the shared hold on every repository
-// that rm takes alone. The order is always hold, source, name, and
-// nothing waits on a source holding a name. The returned func releases
-// all three.
+// directory at once. The caller has the shared hold. The order is
+// always hold, source, name, and nothing waits on a source holding a
+// name. The returned func releases both locks.
 func (d *Daemon) lockRepo(source, name string) func() {
-	d.repos.RLock()
 	src := d.repoLock("repo/" + config.SourceKey(source))
 	src.Lock()
 	dir := d.repoLock("name/" + name)
@@ -440,7 +446,6 @@ func (d *Daemon) lockRepo(source, name string) func() {
 	return func() {
 		dir.Unlock()
 		src.Unlock()
-		d.repos.RUnlock()
 	}
 }
 

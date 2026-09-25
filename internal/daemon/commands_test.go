@@ -679,7 +679,9 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
 	// An add holds another repository's lock, one no config lists, as
 	// an add from a repository entry does.
-	unlockOther := d.lockRepo("/nowhere/other.git", "other")
+	unhold := d.holdRepos()
+	unlockRepo := d.lockRepo("/nowhere/other.git", "other")
+	unlockOther := func() { unlockRepo(); unhold() }
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: store.Dirs.Worktree("proj", "task")})
 	got := make(chan protocol.Message, 1)

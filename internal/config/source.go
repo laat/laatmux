@@ -11,7 +11,8 @@ import (
 // without .git and a trailing slash, the host compared without case.
 // Only the forge convention is unified: ssh as the user git on the
 // default port, with a path relative to the forge's root, and http or
-// https on the default port, whose user is a credential. Any other
+// https on the default port, whose user is a credential. git+ssh:// and
+// ssh+git:// are git's other spellings of ssh:// and count as it. Any other
 // source is its own key, since there a user, a port or a leading slash
 // can name another repository: alice@box:proj and bob@box:proj are two
 // home directories, and two ports can be two servers.

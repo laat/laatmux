@@ -113,6 +113,7 @@ The forms a forge gives one repository are one repository:
 `https://host/owner/repo`, with or without `.git` and a trailing slash,
 the host compared without case. Only the forge convention is unified: ssh
 as the user `git` on the default port with a path from the forge's root,
+`git+ssh://` and `ssh+git://` being git's other spellings of `ssh://`,
 and http or https on the default port, whose user is a credential. Any
 other source compares exactly, since there a user, a port or a leading
 slash can name another repository. A host finds an existing checkout in

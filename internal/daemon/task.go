@@ -133,6 +133,7 @@ type addRun struct {
 	root       string
 	cmd        []string // the configured command, placeholder and all
 	res        protocol.Message
+	unhold     func() // set while the shared hold on every repository is held
 	unlockRepo func() // set while the repository's lock is held
 }
 
@@ -172,6 +173,10 @@ func (r *addRun) unlock() {
 		r.unlockRepo()
 		r.unlockRepo = nil
 	}
+	if r.unhold != nil {
+		r.unhold()
+		r.unhold = nil
+	}
 }
 
 // run is the stages in order. The journal is read before anything is
@@ -197,7 +202,10 @@ func (r *addRun) run(ctx context.Context) error {
 		return stageErr(protocol.StageResolve, errors.New("this host's daemon has no task capability; a prompt or a generated branch needs one"))
 	}
 
-	// resolve
+	// resolve, under the shared hold on every repository from here: an
+	// rm that comes now waits for this add to finish rather than
+	// looking for a checkout it has not made yet.
+	r.unhold = d.holdRepos()
 	stage := protocol.StageResolve
 	repo, err := d.addRepo(m)
 	if err != nil {
@@ -981,8 +989,10 @@ func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if !config.ValidLabel(e.Name) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label", e.Name)
 	}
-	if other, ok := d.cfg.Store.Repo(e.Name); ok {
-		return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
+	for _, other := range d.cfg.Store.Repos {
+		if other.Name == e.Name {
+			return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
+		}
 	}
 	for _, c := range e.Copy {
 		if err := config.CheckCopy(c); err != nil {
