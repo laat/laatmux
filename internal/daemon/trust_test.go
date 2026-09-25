@@ -89,6 +89,9 @@ func TestTrustChoice(t *testing.T) {
 		"prompt box after":  append(append([]string(nil), base...), idleScreen...),
 		"no footer":         base[:len(base)-1],
 		"no question line":  cut(base, 3, " (Like your"),
+		"two yes":           cut(base, 8, "   Yes, I trust this folder"),
+		"two yes numbered":  cut(cut(base, 8, "   1. Yes, I trust this folder"), 9, " ❯ 2. Yes, I trust this folder"),
+		"two no":            cut(base, 9, "   No, exit"),
 	} {
 		if _, ok := trustChoice(screen, root); ok {
 			t.Errorf("%s: read as the question", name)
@@ -168,11 +171,11 @@ func TestTrustWatcherBounds(t *testing.T) {
 	}
 	ft.set(func() {
 		ft.screen = trustScreen(root, true)
-		ft.panes = append(ft.panes, tmux.Pane{ID: "%9", Session: "proj/w", Cwd: root, Managed: true, ServerPID: 5})
+		ft.panes = append(ft.panes, tmux.Pane{ID: "%9", Session: "proj/w", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5})
 	})
 	// Wait for the poll to identify the pane.
 	for i := 0; ; i++ {
-		if _, claude, _ := d.trustState(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}); claude {
+		if _, claude, _, _ := d.trustState(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}); claude {
 			break
 		}
 		if i > 200 {
@@ -190,7 +193,7 @@ func TestTrustWatcherBounds(t *testing.T) {
 		{pane: "%9", session: "proj/other", root: root, serverPID: 5},
 		{pane: "%9", session: "proj/w", root: root, serverPID: 6},
 	} {
-		if gone, _, _ := d.trustState(target); !gone {
+		if gone, _, _, _ := d.trustState(target); !gone {
 			t.Fatalf("%+v: not gone", target)
 		}
 		d.answerTrust(context.Background(), target, 10*time.Millisecond)
@@ -198,6 +201,34 @@ func TestTrustWatcherBounds(t *testing.T) {
 			t.Fatalf("%+v: pressed keys", target)
 		}
 	}
+	// Before a key the pane itself is asked: its working directory
+	// elsewhere is no key yet; tmux showing it on another server
+	// instance, or a Claude other than the one bound, ends the watcher.
+	target := trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}
+	_, _, _, id := d.trustState(target)
+	moved := false
+	ft.set(func() { ft.panes[len(ft.panes)-1].CurrentPath = "/elsewhere" })
+	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+		t.Fatalf("elsewhere: done %v stop %v keys %d", done, stop, keys())
+	}
+	ft.set(func() {
+		ft.panes[len(ft.panes)-1].CurrentPath = root
+		ft.panes[len(ft.panes)-1].ServerPID = 6
+	})
+	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || !stop || keys() != 0 {
+		t.Fatalf("another server: done %v stop %v keys %d", done, stop, keys())
+	}
+	ft.set(func() { ft.panes[len(ft.panes)-1].ServerPID = 5 })
+	other := id
+	other.PID++
+	if done, stop := d.trustStep(context.Background(), target, other, &moved); done || !stop || keys() != 0 {
+		t.Fatalf("another Claude: done %v stop %v keys %d", done, stop, keys())
+	}
+	// With all of it as launched, the cursor already on yes: Enter.
+	if done, stop := d.trustStep(context.Background(), target, id, &moved); !done || stop || keys() != 1 {
+		t.Fatalf("as launched: done %v stop %v keys %d", done, stop, keys())
+	}
+	ft.set(func() { ft.keys = nil })
 	// A root outside the worktrees directory starts nothing.
 	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5}, time.Second, 10*time.Millisecond)
 	d.mu.Lock()

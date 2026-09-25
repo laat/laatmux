@@ -88,7 +88,7 @@ func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.
 	if server == 0 {
 		server = 5
 	}
-	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
+	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, CurrentPath: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
 	return tmux.Session{PaneID: id, ServerPID: server}, nil
 }
 func (f *fakeServer) KillSession(_ context.Context, name string) error {

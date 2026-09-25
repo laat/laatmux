@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/laat/laatmux/internal/procs"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Claude Code asks, the first time it starts in a folder, whether the
@@ -16,8 +19,10 @@ import (
 // then:
 //
 //   - in the pane the add launched, still in the session it was
-//     launched as on the tmux server instance it was launched on, with
-//     a verified live Claude identified in it;
+//     launched as on the tmux server instance it was launched on, as
+//     tmux says under the lock before each key, its working directory
+//     the root, with a verified live Claude identified in it, the same
+//     process throughout;
 //   - for the add's root under the host's worktrees directory;
 //   - when the bottom of the screen is the whole question and nothing
 //     after it, naming exactly that root, with exactly its two options
@@ -69,7 +74,7 @@ func trustChoice(screen []string, root string) (moves int, ok bool) {
 	if n < 6 || !strings.HasPrefix(lines[n-1], trustFoot) {
 		return 0, false
 	}
-	cursor, yes := -1, -1
+	cursor, yes, no := -1, -1, -1
 	for _, i := range []int{n - 3, n - 2} {
 		label, selected := trustOption(lines[i])
 		if selected {
@@ -80,13 +85,20 @@ func trustChoice(screen []string, root string) (moves int, ok bool) {
 		}
 		switch label {
 		case trustYes:
+			if yes >= 0 {
+				return 0, false
+			}
 			yes = i
 		case trustNo:
+			if no >= 0 {
+				return 0, false
+			}
+			no = i
 		default:
 			return 0, false
 		}
 	}
-	if cursor < 0 || yes < 0 || lines[n-3] == lines[n-2] {
+	if cursor < 0 || yes < 0 || no < 0 {
 		return 0, false
 	}
 	// Above them the question, and above it the path under the heading:
@@ -142,21 +154,23 @@ type trustTarget struct {
 
 // trustState is what the latest observation says of the target: gone
 // for good when the pane is in another session or on another server
-// instance, claude when a verified live Claude is identified in it, and
-// ready when its prompt box is up, past the question.
-func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool) {
+// instance, claude when a verified live Claude is identified in it,
+// with its process identity, and ready when its prompt box is up, past
+// the question. It is the detector's view, as old as its last poll;
+// trustStep checks the pane itself before any key.
+func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.Identity) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	st, ok := d.panes[paneKey(d.managed.Label, t.pane)]
 	if !ok {
-		return false, false, false
+		return false, false, false, procs.Identity{}
 	}
 	o := st.obs
 	if o.session != "" && (o.session != t.session || o.serverPID != t.serverPID) {
-		return true, false, false
+		return true, false, false, procs.Identity{}
 	}
 	claude = o.verified && o.identity.Agent == "claude"
-	return false, claude, claude && o.idle
+	return false, claude, claude && o.idle, o.identity
 }
 
 // startTrust starts the watcher for a launch, unless the daemon is
@@ -196,15 +210,25 @@ func (d *Daemon) startTrust(t trustTarget, wait, poll time.Duration) {
 // press under the root's delivery lock on a capture made under it. It
 // stops once it has answered, the prompt box is up, the pane is taken
 // by another session or server, the capture fails, or ctx ends.
+//
+// The first verified Claude seen in the pane is the one answered for:
+// another process in its place, a wrapper's second run say, ends the
+// watcher.
 func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
 	moved := false
+	var bound *procs.Identity
 	for ctx.Err() == nil {
-		gone, claude, ready := d.trustState(t)
+		gone, claude, ready, id := d.trustState(t)
 		if gone || ready {
 			return
 		}
 		if claude {
-			done, stop := d.trustStep(ctx, t, &moved)
+			if bound == nil {
+				bound = &id
+			} else if id.PID != bound.PID || !id.Start.Equal(bound.Start) {
+				return
+			}
+			done, stop := d.trustStep(ctx, t, *bound, &moved)
 			if done || stop {
 				return
 			}
@@ -224,11 +248,33 @@ func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Durat
 // screen that lags or keys that went astray, and the watcher gives up
 // rather than press more. done is that Enter was pressed; stop that the
 // watcher should give up.
-func (d *Daemon) trustStep(ctx context.Context, t trustTarget, moved *bool) (done, stop bool) {
+//
+// The observation is the detector's and can be a poll old, so under the
+// lock the pane itself is looked at first: still there and alive, in
+// the launched session, on the launched server instance, its working
+// directory the root, which is also the folder Claude asks about.
+func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Identity, moved *bool) (done, stop bool) {
 	unlock := d.lockDeliveries(t.root)
 	defer unlock()
-	if gone, claude, _ := d.trustState(t); gone || !claude {
-		return false, gone
+	gone, claude, _, id := d.trustState(t)
+	if gone || !claude || id.PID != bound.PID || !id.Start.Equal(bound.Start) {
+		return false, gone || claude
+	}
+	panes, err := d.managed.Tmux.ListPanes(ctx)
+	if err != nil {
+		return false, true
+	}
+	var here *tmux.Pane
+	for i := range panes {
+		if panes[i].ID == t.pane {
+			here = &panes[i]
+		}
+	}
+	switch {
+	case here == nil || here.Dead || here.Session != t.session || here.ServerPID != t.serverPID:
+		return false, true
+	case here.CurrentPath != t.root:
+		return false, false
 	}
 	screen, err := d.managed.Tmux.Capture(ctx, t.pane, d.cfg.CaptureLines)
 	if err != nil {
