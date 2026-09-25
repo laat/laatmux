@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -529,7 +530,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 	}
 	first := ""
 	var rec Record
-	var at []string // the checkout of each match, then its root
+	var at []string // the checkout of each root matched, then the root
 	for _, co := range cos {
 		if !config.SameSource(co.origin, repo.Source) {
 			continue
@@ -545,7 +546,10 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 			return Record{}, co.dir, false, err
 		}
 		for _, e := range entries {
-			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) {
+			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) && !slices.Contains(at, e.Root) {
+				// A root two checkouts still register once its directory
+				// is gone is one worktree: the first checkout's
+				// registration removes it, the other is prunable.
 				rec = Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}
 				at = append(at, co.dir, e.Root)
 			}

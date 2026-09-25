@@ -1219,13 +1219,26 @@ func TestDuplicateClones(t *testing.T) {
 		t.Fatalf("list %+v", recs)
 	}
 	// It is the second clone's, which the worktree points back to: Find
-	// names that checkout, and git removes it from there.
+	// names that checkout.
 	rec, co, ok, err = f.store.Find(f.ctx, first.Root)
 	if err != nil || !ok || co != second || rec.Branch != "one" {
 		t.Fatalf("find a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
 	}
+	// That directory deleted by hand too: both registrations are stale,
+	// and it is still one worktree for the branch, removed through the
+	// first, the other left prunable.
+	if err := os.RemoveAll(first.Root); err != nil {
+		t.Fatal(err)
+	}
+	rec, co, ok, err = f.store.ByBranch(f.ctx, f.repo, "one")
+	if err != nil || !ok || rec.Root != first.Root {
+		t.Fatalf("by branch with both registrations stale: %+v %s %v %v", rec, co, ok, err)
+	}
 	if removed, err := Remove(f.ctx, co, first.Root, true); err != nil || !removed {
 		t.Fatalf("remove: %v %v", removed, err)
+	}
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 || recs[0].Root != topic {
+		t.Fatalf("list after: %+v %v", recs, err)
 	}
 }
 
