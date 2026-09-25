@@ -153,10 +153,12 @@ func localHostName(cfg config.Config) string {
 func (m *merged) fill(v *view.Model, current string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// The handoffs first: the anchor lookup in SetRows consults them.
+	// The handoffs first: the anchor lookup in SetRows consults them,
+	// the day's only.
+	m.pruneHandoffsLocked()
 	v.Handoffs = make(map[string]string, len(m.handoffs))
-	for id, w := range m.handoffs {
-		v.Handoffs[id] = w
+	for id, h := range m.handoffs {
+		v.Handoffs[id] = h.to
 	}
 	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
 	v.Header = v.Header[:0]

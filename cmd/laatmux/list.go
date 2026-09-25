@@ -32,10 +32,11 @@ type merged struct {
 	sessions    map[string]protocol.Session
 	sessionsErr string
 	// pendings are the relay's background adds, by id, and handoffs the
-	// worktree ids retired records became, kept across resnapshots, so
-	// a view can re-anchor a selection that was on a record.
+	// worktree ids retired records became, kept across resnapshots for
+	// the day the daemon keeps them, so a view can re-anchor a selection
+	// that was on a record.
 	pendings map[string]protocol.Pending
-	handoffs map[string]string
+	handoffs map[string]handoffSeen
 	// daemonErr says the local daemon's merged stream is down, on watch,
 	// while it reconnects; the last state stays on screen.
 	daemonErr string
@@ -87,7 +88,7 @@ func fromStatus(st protocol.HostStatus) hostState {
 
 func newMerged() *merged {
 	return &merged{agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}, hosts: map[string]hostState{}, byHost: map[string]string{},
-		pendings: map[string]protocol.Pending{}, handoffs: map[string]string{}, change: make(chan struct{}, 1)}
+		pendings: map[string]protocol.Pending{}, handoffs: map[string]handoffSeen{}, change: make(chan struct{}, 1)}
 }
 
 func (m *merged) notify() {

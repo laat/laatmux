@@ -189,12 +189,10 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		for _, p := range msg.Pendings {
 			m.pendings[p.ID] = p
 		}
-		if m.handoffs == nil {
-			m.handoffs = map[string]string{}
-		}
 		for _, h := range msg.Handoffs {
-			m.handoffs[h.ID] = h.ReplacedBy
+			m.handoffLocked(h.ID, h.ReplacedBy)
 		}
+		m.pruneHandoffsLocked()
 	case protocol.TypeUpsert:
 		if st := msg.HostStatus; st != nil {
 			m.hosts[st.Name] = fromStatus(*st)
@@ -229,10 +227,7 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		if msg.PendingID != "" {
 			delete(m.pendings, msg.PendingID)
 			if msg.ReplacedBy != "" {
-				if m.handoffs == nil {
-					m.handoffs = map[string]string{}
-				}
-				m.handoffs[msg.PendingID] = msg.ReplacedBy
+				m.handoffLocked(msg.PendingID, msg.ReplacedBy)
 			}
 		}
 		if msg.HostName != "" {
@@ -259,6 +254,41 @@ func (m *merged) applyMerged(msg protocol.Message) {
 	}
 	m.mu.Unlock()
 	m.notify()
+}
+
+// handoffSeen is a handoff as the client keeps it: the worktree id and
+// when the client first saw it. The stream carries no age, so the day
+// is counted from the first sight, which is no earlier than the
+// retirement.
+type handoffSeen struct {
+	to string
+	at time.Time
+}
+
+// handoffRetention is how long a handoff is kept, the day the daemon
+// keeps a retired record's file for. Past it an anchor on the record is
+// not found, and the selection is cleared rather than moved to a
+// worktree id that may have been reused. A variable for tests.
+var handoffRetention = 24 * time.Hour
+
+// handoffLocked records a handoff, keeping the time it was first seen.
+func (m *merged) handoffLocked(id, to string) {
+	if m.handoffs == nil {
+		m.handoffs = map[string]handoffSeen{}
+	}
+	if h, ok := m.handoffs[id]; ok && h.to == to {
+		return
+	}
+	m.handoffs[id] = handoffSeen{to: to, at: time.Now()}
+}
+
+// pruneHandoffsLocked drops the handoffs older than the retention.
+func (m *merged) pruneHandoffsLocked() {
+	for id, h := range m.handoffs {
+		if time.Since(h.at) > handoffRetention {
+			delete(m.handoffs, id)
+		}
+	}
 }
 
 // hostOf is hostOfLocked under the lock: the configured host with the

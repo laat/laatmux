@@ -175,4 +175,23 @@ func TestMergedPendingRows(t *testing.T) {
 	if len(v.Rows.Main) != 1 || v.Rows.Main[0].ID() != "add-1" || v.Handoffs["add-0"] != "venv/worktree//w/proj/old" {
 		t.Fatalf("fill: %d rows, handoffs %v", len(v.Rows.Main), v.Handoffs)
 	}
+	// A handoff seen again keeps its first sight; past the day it goes.
+	m.mu.Lock()
+	first := m.handoffs["add-0"].at
+	m.mu.Unlock()
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Handoffs: []protocol.Handoff{{ID: "add-0", ReplacedBy: "venv/worktree//w/proj/old"}}})
+	m.mu.Lock()
+	again := m.handoffs["add-0"].at
+	m.mu.Unlock()
+	if !again.Equal(first) {
+		t.Fatal("a handoff seen again was dated again")
+	}
+	was := handoffRetention
+	handoffRetention = 0
+	defer func() { handoffRetention = was }()
+	m.fill(v, "")
+	if len(v.Handoffs) != 0 {
+		t.Fatalf("handoffs past the day: %v", v.Handoffs)
+	}
 }
