@@ -367,6 +367,9 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		if r.e.Delivery != "" {
 			return r.e.Delivery, r.e.DeliveryError, nil
 		}
+		// A daemon restarted before the typed prompt was delivered: the
+		// agent may still be at its trust question.
+		d.startTrust(trustTarget{pane: r.e.PaneID, session: r.e.Session, root: r.root, serverPID: r.e.ServerPID}, readyWait, trustPoll)
 		return r.typed(ctx)
 	case r.created && r.e.Launch == launchLaunching:
 		// new-session may have been submitted: an agent may be there,
@@ -452,6 +455,11 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		return r.failed(prompt, "launch failed", err)
 	}
 	paneID := made.PaneID
+	// A worktree the add made or took up under the host's worktrees
+	// directory is a folder the agent may not have seen: its trust
+	// question, when it asks one, is answered for it, whether the prompt
+	// is typed or on the command line.
+	d.startTrust(trustTarget{pane: paneID, session: name, root: r.root, serverPID: made.ServerPID}, readyWait, trustPoll)
 	// Refresh the session join now, so the record the poke publishes
 	// names the session rather than waiting for the next pane poll.
 	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {

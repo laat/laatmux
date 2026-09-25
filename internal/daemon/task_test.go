@@ -49,7 +49,14 @@ func taskDaemon(t *testing.T, screen []string, agents map[string][]string) (*Dae
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-stopped })
+	t.Cleanup(func() {
+		// The trust watchers an add starts end with the daemon.
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		d.StopRuns(sctx)
+		scancel()
+		cancel()
+		<-stopped
+	})
 	go func() {
 		defer close(stopped)
 		for ctx.Err() == nil {

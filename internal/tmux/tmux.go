@@ -155,6 +155,10 @@ type Pane struct {
 	Cwd            string // @laatmux_cwd pane option, "" when unset
 	Managed        bool   // @laatmux_managed pane option set
 	ServerPID      int    // pid of the tmux server; changes when the server restarts
+	// InMode is a pane in a tmux mode, copy-mode or a chooser: keys sent
+	// to it reach the mode, not the program, while a capture still
+	// shows the program's screen.
+	InMode bool
 }
 
 // Sep separates fields in list-panes output. tmux 3.5 strips control
@@ -167,7 +171,7 @@ var paneFormat = strings.Join([]string{
 	"#{session_name}", "#{window_index}", "#{window_name}", "#{pane_id}", "#{pane_tty}",
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
-	"#{pid}",
+	"#{pid}", "#{pane_in_mode}",
 }, Sep)
 
 // ListPanes returns every pane on the server in one call. A server
@@ -203,6 +207,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.WindowActivity, _ = strconv.ParseInt(f[10], 10, 64)
 		p.Managed = f[13] != ""
 		p.ServerPID, _ = strconv.Atoi(f[14])
+		p.InMode = len(f) > 15 && f[15] == "1"
 		panes = append(panes, p)
 	}
 	return panes, nil
@@ -410,6 +415,12 @@ func (e *SubmittedError) Unwrap() error { return e.Err }
 func Submitted(err error) bool {
 	var se *SubmittedError
 	return errors.As(err, &se)
+}
+
+// SendKeys presses tmux key names in the pane, Down or Enter say.
+func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) error {
+	_, err := s.Run(ctx, append([]string{"send-keys", "-t", paneID}, keys...)...)
+	return err
 }
 
 // Paste types text into a pane as one bracketed paste followed by Enter,

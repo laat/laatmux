@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 // fakeProcs serves scripted process tables per call, or an error.
 type fakeProcs struct {
+	mu     sync.Mutex // a trust watcher asks beside the poll
 	tables []procTable
 	i      int
 }
@@ -23,6 +25,8 @@ type procTable struct {
 }
 
 func (f *fakeProcs) next() procTable {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	t := f.tables[min(f.i, len(f.tables)-1)]
 	f.i++
 	return t
@@ -70,6 +74,7 @@ func (f *fakeTmux) NewSession(context.Context, tmux.NewSessionOpts) (tmux.Sessio
 func (f *fakeTmux) KillSession(context.Context, string) error           { return nil }
 func (f *fakeTmux) Paste(context.Context, string, string, string) error { return nil }
 func (f *fakeTmux) DeleteBuffers(context.Context, string) error         { return nil }
+func (f *fakeTmux) SendKeys(context.Context, string, ...string) error   { return nil }
 
 // managed and unmanaged wrap a fake as the daemon's targets.
 func managed(ft *fakeTmux) []Target   { return []Target{{Label: "laatmux", Tmux: ft, Managed: true}} }
