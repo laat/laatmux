@@ -24,13 +24,26 @@ func notDelivered(t *testing.T, f *relayFixture, id, branch string) pendingFile 
 }
 
 // rmOnHost removes a worktree through the host's daemon, as an rm from
-// anywhere does.
+// anywhere does, and waits for the host's own listing to lack it, as a
+// listing that triggers a check does.
 func rmOnHost(t *testing.T, f *relayFixture, id, branch, root string) {
 	t.Helper()
 	pc := conn(t, f.host)
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: id, Repo: f.source(), Branch: branch, Root: root, Force: true})
 	if res, _ := result(t, pc, id); !res.OK {
 		t.Fatal(res.Error)
+	}
+	for i := 0; ; i++ {
+		f.host.mu.Lock()
+		_, listed := f.host.worktrees[root]
+		f.host.mu.Unlock()
+		if !listed {
+			return
+		}
+		if i > 500 {
+			t.Fatal("the host's listing kept the removed worktree")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -201,5 +214,66 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	f.local.relay.mu.Unlock()
 	if again {
 		t.Fatal("the same listing started a second check")
+	}
+}
+
+// A task that becomes eligible after its host's listing was already
+// seen is checked against that same listing: the memo is the task's,
+// not the listing's.
+func TestRelayGoneAgainstSeenListing(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.mu.Unlock()
+	p := notDelivered(t, f, "n6", "seen")
+	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
+	f.local.mu.Unlock()
+	rmOnHost(t, f, "rm-n6", "seen", p.Root)
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.mu.Unlock()
+	f.awaitRecord(t, "n6", 30*time.Second, func(p pendingFile) bool { return p.Gone })
+}
+
+// A trigger while a task's check runs marks it to run once more; a
+// retired record is neither changed nor published by a runner still
+// finishing, and persist does not spin on it.
+func TestRelayRecheckAndRetired(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	f.local.relay.mu.Lock()
+	f.local.relay.recs["k1"] = &pendingFile{Pending: protocol.Pending{ID: "k1", Host: "vm", EnvironmentID: "henv", Root: "/w/k", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}}
+	f.local.relay.checking["k1"] = true
+	f.local.relay.mu.Unlock()
+	f.local.recheckTasks("", func(protocol.Pending) bool { return true }, nil)
+	f.local.relay.mu.Lock()
+	marked := f.local.relay.recheck["k1"]
+	delete(f.local.relay.checking, "k1")
+	delete(f.local.relay.recheck, "k1")
+	f.local.relay.recs["k2"] = &pendingFile{Pending: protocol.Pending{ID: "k2", Host: "vm", EnvironmentID: "henv", Root: "/w/r"}, ReplacedBy: "henv/worktree//w/r"}
+	f.local.relay.mu.Unlock()
+	if !marked {
+		t.Fatal("a trigger during a check was lost")
+	}
+	if _, ok := f.local.setPending("k2", false, func(p *pendingFile) { p.ListingError = "x" }); ok {
+		t.Fatal("a retired record was changed")
+	}
+	if got, _ := f.local.relay.get("k2"); got.ListingError != "" {
+		t.Fatalf("retired record changed: %+v", got)
+	}
+	done := make(chan struct{})
+	go func() {
+		f.local.persist(f.ctx, "k2", func(p *pendingFile) { p.Gone = true })
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("persist spun on a retired record")
 	}
 }

@@ -446,7 +446,11 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		// lacks, removed while this daemon was down say, is checked. A
 		// snapshot without the stamp has no listing behind it.
 		if msg.Listing != nil {
-			d.hostListedLocked(mh.status.EnvironmentID, seen)
+			listed := map[string]bool{}
+			for id := range mh.worktrees {
+				listed[id] = true
+			}
+			d.hostListedLocked(mh.status.EnvironmentID, listed)
 		}
 		mh.status.Listed = true
 		mh.status.Since = time.Now()

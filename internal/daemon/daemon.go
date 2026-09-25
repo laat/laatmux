@@ -153,12 +153,8 @@ type Daemon struct {
 	// revision and the daemon generation that stamp listings, the
 	// stamp and error of the last listing, and the lock the poll and
 	// its publication run under.
-	journal *journal
-	relay   *relay // nil without the relay capability
-	// listedSets is the worktree ids of each environment's last
-	// successful listing that tasks were checked against, so a listing
-	// that is the same as the last one starts no check.
-	listedSets map[string]map[string]bool
+	journal    *journal
+	relay      *relay          // nil without the relay capability
 	ctx        context.Context // Run's context, for goroutines that outlive a connection
 	generation int64
 	revision   uint64

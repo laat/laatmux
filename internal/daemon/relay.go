@@ -72,9 +72,14 @@ type relay struct {
 	// so a resubmit or a restart never starts a second, and a dismiss
 	// of a record the host will never answer for can end them.
 	runners map[string][]*runner
-	// checking is the records a gone check runs for, so a removal and
-	// the listings after it start one, not one each.
+	// The gone checks: checking is the records one runs for, so a
+	// removal and the listings after it start one, not one each;
+	// recheck is a trigger that came while it ran, so it runs again;
+	// checked is the listing each record was last checked against, so a
+	// poll that repeats it starts nothing.
 	checking map[string]bool
+	recheck  map[string]bool
+	checked  map[string]string
 }
 
 // runner is one goroutine on a record: its cancel, and done once it
@@ -88,7 +93,8 @@ func openRelay(dir string, logger *log.Logger) (*relay, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{}, checking: map[string]bool{}}
+	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{},
+		checking: map[string]bool{}, recheck: map[string]bool{}, checked: map[string]string{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -201,6 +207,8 @@ func (r *relay) removeLocked(id string) error {
 		return err
 	}
 	delete(r.recs, id)
+	delete(r.checked, id)
+	delete(r.recheck, id)
 	return nil
 }
 
@@ -440,6 +448,12 @@ func (d *Daemon) publishRemoved(id, replacedBy string) {
 func (d *Daemon) setPending(id string, write bool, change func(*pendingFile)) (pendingFile, bool) {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
+	if rec, ok := d.relay.recs[id]; ok && rec.retired() {
+		// Kept only for its handoff: a runner still finishing, a gone
+		// check say, must neither change it nor publish it again after
+		// its removal was published.
+		return *rec, false
+	}
 	p, err := d.relay.updateLocked(id, write, change)
 	if err != nil {
 		d.cfg.Logger.Printf("pending: %s: %v", id, err)
@@ -459,7 +473,7 @@ func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFil
 		if ok {
 			return p, true
 		}
-		if _, exists := d.relay.get(id); !exists {
+		if cur, exists := d.relay.get(id); !exists || cur.retired() {
 			return p, false
 		}
 		if !d.relayBackoff(ctx, &wait) {
