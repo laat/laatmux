@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // trustScreen is Claude Code's folder trust question about root, as a
@@ -58,13 +61,34 @@ func TestTrustChoice(t *testing.T) {
 	if m, ok := trustChoice(numbered, root); !ok || m != 0 {
 		t.Fatalf("numbered: %d %v", m, ok)
 	}
-	// Another folder, a folder under the root, no question, no cursor:
-	// nothing to answer.
+	// Blank lines after the footer are the pane's bottom, not more text.
+	padded := append(trustScreen(root, false), "", "  ")
+	if m, ok := trustChoice(padded, root); !ok || m != 1 {
+		t.Fatalf("padded: %d %v", m, ok)
+	}
+	// Nothing to answer: another folder, a folder under the root whole
+	// or wrapped, a sibling whose name extends the root's, no question,
+	// no cursor, two cursors, an option that only contains the label,
+	// a third option, text after the footer, the prompt box below the
+	// question, no footer, no question line under the path.
+	cut := func(s []string, i int, with ...string) []string {
+		return append(append(append([]string(nil), s[:i]...), with...), s[i+1:]...)
+	}
+	base := trustScreen(root, false)
 	for name, screen := range map[string][]string{
-		"another root": trustScreen("/home/me/src/worktrees/proj/other", false),
-		"a subfolder":  trustScreen(root+"/sub", false),
-		"no question":  idleScreen,
-		"no cursor":    append(trustScreen(root, false)[:8], "   No, exit", "   Yes, I trust this folder"),
+		"another root":      trustScreen("/home/me/src/worktrees/proj/other", false),
+		"a subfolder":       trustScreen(root+"/sub", false),
+		"wrapped subfolder": cut(base, 2, " "+root, "/sub"),
+		"sibling suffix":    cut(base, 2, " "+root, "2"),
+		"no question":       idleScreen,
+		"no cursor":         cut(base, 8, "   No, exit"),
+		"two cursors":       cut(base, 9, " ❯ Yes, I trust this folder"),
+		"label inside":      cut(base, 9, "   Do not select Yes, I trust this folder"),
+		"third option":      cut(base, 9, "   Yes, I trust this folder", "   Maybe"),
+		"text after":        append(append([]string(nil), base...), " some output"),
+		"prompt box after":  append(append([]string(nil), base...), idleScreen...),
+		"no footer":         base[:len(base)-1],
+		"no question line":  cut(base, 3, " (Like your"),
 	} {
 		if _, ok := trustChoice(screen, root); ok {
 			t.Errorf("%s: read as the question", name)
@@ -127,5 +151,71 @@ func TestAddLeavesOtherTrust(t *testing.T) {
 	ft.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("pressed keys for another folder: %v", ft.keys)
+	}
+}
+
+// The watcher answers only for its launch: a pane taken by another
+// session or server instance ends it, an agent that is not a verified
+// Claude gets no key, and StopRuns cancels it and waits for it.
+func TestTrustWatcherBounds(t *testing.T) {
+	was := trustPoll
+	trustPoll = 10 * time.Millisecond
+	t.Cleanup(func() { trustPoll = was })
+	d, ft, store, _ := taskDaemon(t, nil, nil)
+	root := store.Dirs.Worktree("proj", "w")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ft.set(func() {
+		ft.screen = trustScreen(root, true)
+		ft.panes = append(ft.panes, tmux.Pane{ID: "%9", Session: "proj/w", Cwd: root, Managed: true, ServerPID: 5})
+	})
+	// Wait for the poll to identify the pane.
+	for i := 0; ; i++ {
+		if _, claude, _ := d.trustState(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}); claude {
+			break
+		}
+		if i > 200 {
+			t.Fatal("the pane was never seen with a verified Claude")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	keys := func() int {
+		ft.mu.Lock()
+		defer ft.mu.Unlock()
+		return len(ft.keys)
+	}
+	// Another session name, or another server instance: gone, no key.
+	for _, target := range []trustTarget{
+		{pane: "%9", session: "proj/other", root: root, serverPID: 5},
+		{pane: "%9", session: "proj/w", root: root, serverPID: 6},
+	} {
+		if gone, _, _ := d.trustState(target); !gone {
+			t.Fatalf("%+v: not gone", target)
+		}
+		d.answerTrust(context.Background(), target, 10*time.Millisecond)
+		if keys() != 0 {
+			t.Fatalf("%+v: pressed keys", target)
+		}
+	}
+	// A root outside the worktrees directory starts nothing.
+	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5}, time.Second, 10*time.Millisecond)
+	d.mu.Lock()
+	n := d.trusting
+	d.mu.Unlock()
+	if n != 0 {
+		t.Fatal("a watcher for a root outside the worktrees directory")
+	}
+	// StopRuns cancels a watcher still waiting for the question.
+	ft.set(func() { ft.screen = []string{"loading"} })
+	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}, time.Minute, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.StopRuns(ctx)
+	d.mu.Lock()
+	n = d.trusting
+	d.mu.Unlock()
+	if n != 0 || ctx.Err() != nil {
+		t.Fatalf("StopRuns left %d watchers", n)
 	}
 }

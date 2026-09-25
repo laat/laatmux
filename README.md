@@ -298,13 +298,19 @@ truth; labels only place new things.
   within a minute gets nothing. Claude Code asks, the first time it
   starts in a folder, whether the folder is trusted, and takes neither
   a typed prompt nor one on its command line until it is answered;
-  every worktree is such a folder. After a launch in a root under the
-  host's `worktrees` directory, the daemon watches the pane for that
-  question, for up to the same minute: when the screen reads as the
-  question naming exactly that root, it moves the cursor onto `Yes, I
-  trust this folder`, reads the screen again, and presses Enter only
-  with the cursor there, a handful of keys at most. Text that does not
-  match is left alone, and the wait times out as before. The result carries `prompt`, the
+  every worktree can be such a folder. After a launch in a root under
+  the host's `worktrees` directory, and again after a restart that
+  finds the typed prompt not yet delivered, the daemon watches the pane
+  for that question, for up to the same minute. It answers only while
+  the pane is still in the session and on the tmux server instance it
+  was launched in, with a verified Claude identified in it, and only
+  when the bottom of the screen is the whole question, naming exactly
+  that root, with its two options, one cursor, and nothing after the
+  footer. Each key, a handful at most, is pressed under the root's
+  delivery lock on a capture made under it: the cursor moved onto `Yes,
+  I trust this folder`, then Enter with it there. Text that does not
+  match is left alone, and the wait times out as before; `StopRuns`
+  cancels the watchers. The result carries `prompt`, the
   delivery state: `none` (no prompt), `delivered`, `not delivered` with
   the reason in `error` on an ok result (pane never ready, paste refused
   before it began, a managed session already in the root: `session

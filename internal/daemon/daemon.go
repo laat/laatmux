@@ -169,7 +169,12 @@ type Daemon struct {
 	runs     map[string]map[*runJob]struct{}
 	rootGen  map[string]uint64
 	stopping bool // StopRuns has begun; no run registers and no paste starts after it
-	pasting  int  // pastes in flight, which StopRuns waits for
+	// The trust watchers: their shared context, cancelled by StopRuns,
+	// and how many run, which StopRuns waits for; see trust.go.
+	trustCtx    context.Context
+	trustCancel context.CancelFunc
+	trusting    int
+	pasting     int // pastes in flight, which StopRuns waits for
 	// pasted is when a pane was last pasted into, by pane key: a
 	// delivery needs an observation made after it. waits counts the
 	// deliveries that have begun waiting for a pane, for tests.

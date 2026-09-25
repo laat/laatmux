@@ -124,6 +124,9 @@ func (d *Daemon) cancelCommand(id string) {
 func (d *Daemon) StopRuns(ctx context.Context) {
 	d.mu.Lock()
 	d.stopping = true
+	if d.trustCancel != nil {
+		d.trustCancel()
+	}
 	var rs []*runJob
 	for _, m := range d.runs {
 		for r := range m {
@@ -143,7 +146,7 @@ func (d *Daemon) StopRuns(ctx context.Context) {
 	}
 	for {
 		d.mu.Lock()
-		n := d.pasting
+		n := d.pasting + d.trusting
 		d.mu.Unlock()
 		if n == 0 {
 			return

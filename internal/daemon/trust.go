@@ -8,28 +8,45 @@ import (
 
 // Claude Code asks, the first time it starts in a folder, whether the
 // folder is trusted, and waits for the answer before it shows its
-// prompt box or takes a prompt given on its command line. Every
-// worktree laatmux makes is a folder Claude has not seen, so every add
-// would stop there: a typed prompt times out, one on the command line
-// waits unseen. laatmux made the folder, from a repository the user
-// configured, on the user's host, so it answers yes for them: only in
-// the pane the add launched, only for the add's root under the host's
-// worktrees directory, and only when the screen reads as the question
-// for that root. Text that does not match is left alone, and
-// the wait for the agent times out as before.
+// prompt box or takes a prompt given on its command line. A worktree
+// laatmux makes can be such a folder, and an add would stop there: a
+// typed prompt times out, one on the command line waits unseen.
+// laatmux made or took up the folder, from a repository the user
+// configured, on the user's host, so it answers yes for them, and only
+// then:
+//
+//   - in the pane the add launched, still in the session it was
+//     launched as on the tmux server instance it was launched on, with
+//     a verified live Claude identified in it;
+//   - for the add's root under the host's worktrees directory;
+//   - when the bottom of the screen is the whole question and nothing
+//     after it, naming exactly that root, with exactly its two options
+//     and one cursor on them;
+//   - each key under the root's delivery lock, which a paste into the
+//     pane also takes, on a capture made under that lock.
+//
+// Anything else is left alone, and the wait for the agent times out as
+// before. A user who moves the selection between the capture and the
+// key press is the one race a capture cannot rule out; the keys are a
+// handful at most.
 
-// The question as Claude Code 2 draws it:
+// The question as Claude Code 2 draws it, at the bottom of the pane:
 //
 //	Accessing workspace:
 //	/home/me/src/worktrees/proj/branch
 //	Quick safety check: Is this a project you created or one you trust? ...
+//	...
+//	Security guide
 //	❯ No, exit
 //	  Yes, I trust this folder
 //	Enter to confirm · Esc to cancel
 const (
-	trustHead   = "Accessing workspace:"
-	trustYes    = "Yes, I trust this folder"
-	trustCursor = "❯"
+	trustHead     = "Accessing workspace:"
+	trustQuestion = "Quick safety check:"
+	trustNo       = "No, exit"
+	trustYes      = "Yes, I trust this folder"
+	trustFoot     = "Enter to confirm"
+	trustCursor   = "❯"
 )
 
 // trustPoll is how often the pane is looked at for the question; a
@@ -37,92 +54,158 @@ const (
 var trustPoll = 500 * time.Millisecond
 
 // trustChoice reads a screen for the trust question about root. ok is
-// that the question is there and names root, the path joined back when
-// the pane wrapped it; moves is the Down presses, negative for Up, that
-// bring the cursor to yes, 0 when it is on it.
+// that the screen ends with the whole question, naming root, the path
+// joined back when the pane wrapped it; moves is the Down presses,
+// negative for Up, that bring the cursor to yes, 0 when it is on it.
 func trustChoice(screen []string, root string) (moves int, ok bool) {
+	var lines []string
+	for _, l := range screen {
+		if t := strings.TrimSpace(l); t != "" {
+			lines = append(lines, t)
+		}
+	}
+	n := len(lines)
+	// The footer is the last line, the two options just above it.
+	if n < 6 || !strings.HasPrefix(lines[n-1], trustFoot) {
+		return 0, false
+	}
+	cursor, yes := -1, -1
+	for _, i := range []int{n - 3, n - 2} {
+		label, selected := trustOption(lines[i])
+		if selected {
+			if cursor >= 0 {
+				return 0, false
+			}
+			cursor = i
+		}
+		switch label {
+		case trustYes:
+			yes = i
+		case trustNo:
+		default:
+			return 0, false
+		}
+	}
+	if cursor < 0 || yes < 0 || lines[n-3] == lines[n-2] {
+		return 0, false
+	}
+	// Above them the question, and above it the path under the heading:
+	// the last heading, and between it and the question the path alone.
 	head := -1
-	for i, l := range screen {
-		if strings.TrimSpace(l) == trustHead {
+	for i := n - 4; i >= 0; i-- {
+		if lines[i] == trustHead {
 			head = i
+			break
+		}
+		if strings.HasPrefix(lines[i], trustCursor) {
+			return 0, false
 		}
 	}
 	if head < 0 {
 		return 0, false
 	}
-	path, i := "", head+1
-	for ; i < len(screen) && path != root; i++ {
-		path += strings.TrimSpace(screen[i])
-		if !strings.HasPrefix(root, path) {
-			return 0, false
+	question := -1
+	for i := head + 1; i < n-3; i++ {
+		if strings.HasPrefix(lines[i], trustQuestion) {
+			question = i
+			break
 		}
 	}
-	if path != root {
+	if question < 0 || question == head+1 {
 		return 0, false
 	}
-	cursor, yes := -1, -1
-	for ; i < len(screen); i++ {
-		l := strings.TrimSpace(screen[i])
-		if strings.HasPrefix(l, trustCursor) {
-			cursor = i
-		}
-		if strings.Contains(l, trustYes) {
-			yes = i
-		}
-	}
-	if cursor < 0 || yes < 0 {
+	if strings.Join(lines[head+1:question], "") != root {
 		return 0, false
 	}
-	moves = yes - cursor
-	if moves < -3 || moves > 3 {
-		// Options are on consecutive lines; anything further apart is
-		// not the list this reads.
-		return 0, false
-	}
-	return moves, true
+	return yes - cursor, true
 }
 
-// answerTrust watches the pane an add launched for the trust question
-// about root, for as long as the wait for an agent, and answers yes
-// once: the cursor is moved onto yes, the screen read again, and Enter
-// pressed only with the cursor there. It stops once it has answered,
-// the pane shows the agent's prompt box, the pane is gone, or the wait
-// is over. At most a handful of keys are pressed in all.
-//
-// wait and poll are readyWait and trustPoll as the launch read them.
-func (d *Daemon) answerTrust(ctx context.Context, paneID, root string, wait, poll time.Duration) {
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
+// trustOption is an option line's label, without the cursor and a
+// "1." numbering, and whether the cursor is on it.
+func trustOption(line string) (label string, selected bool) {
+	if strings.HasPrefix(line, trustCursor) {
+		selected = true
+		line = strings.TrimSpace(strings.TrimPrefix(line, trustCursor))
+	}
+	if i := strings.Index(line, ". "); i > 0 && i <= 2 && strings.Trim(line[:i], "0123456789") == "" {
+		line = strings.TrimSpace(line[i+2:])
+	}
+	return line, selected
+}
+
+// trustTarget is the launch a watcher answers for: the pane, the session
+// and the tmux server instance it was made in, and the root.
+type trustTarget struct {
+	pane, session, root string
+	serverPID           int
+}
+
+// trustState is what the latest observation says of the target: gone
+// for good when the pane is in another session or on another server
+// instance, claude when a verified live Claude is identified in it, and
+// ready when its prompt box is up, past the question.
+func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	st, ok := d.panes[paneKey(d.managed.Label, t.pane)]
+	if !ok {
+		return false, false, false
+	}
+	o := st.obs
+	if o.session != "" && (o.session != t.session || o.serverPID != t.serverPID) {
+		return true, false, false
+	}
+	claude = o.verified && o.identity.Agent == "claude"
+	return false, claude, claude && o.idle
+}
+
+// startTrust starts the watcher for a launch, unless the daemon is
+// stopping; StopRuns cancels the watchers and waits for them.
+func (d *Daemon) startTrust(t trustTarget, wait, poll time.Duration) {
+	if d.cfg.Store == nil || !d.cfg.Store.Owns(t.root) {
+		return
+	}
+	d.mu.Lock()
+	if d.stopping {
+		d.mu.Unlock()
+		return
+	}
+	if d.trustCancel == nil {
+		d.trustCtx, d.trustCancel = context.WithCancel(context.Background())
+	}
+	ctx := d.trustCtx
+	d.trusting++
+	d.mu.Unlock()
+	go func() {
+		defer func() {
+			d.mu.Lock()
+			d.trusting--
+			d.mu.Unlock()
+		}()
+		run := d.runCtx()
+		ctx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		stop := context.AfterFunc(run, cancel)
+		defer stop()
+		d.answerTrust(ctx, t, poll)
+	}()
+}
+
+// answerTrust watches the launch for the trust question and answers
+// yes once: the cursor moved onto yes, then Enter with it there, each
+// press under the root's delivery lock on a capture made under it. It
+// stops once it has answered, the prompt box is up, the pane is taken
+// by another session or server, the capture fails, or ctx ends.
+func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
 	presses := 0
 	for ctx.Err() == nil {
-		if d.promptBoxUp(paneID) {
+		gone, claude, ready := d.trustState(t)
+		if gone || ready {
 			return
 		}
-		screen, err := d.managed.Tmux.Capture(ctx, paneID, d.cfg.CaptureLines)
-		if err != nil {
-			return
-		}
-		if moves, ok := trustChoice(screen, root); ok {
-			key, n := "Down", moves
-			if moves < 0 {
-				key, n = "Up", -moves
-			}
-			if moves == 0 {
-				key, n = "Enter", 1
-			}
-			if presses+n > 6 {
-				return
-			}
-			keys := make([]string, n)
-			for i := range keys {
-				keys[i] = key
-			}
-			if err := d.managed.Tmux.SendKeys(ctx, paneID, keys...); err != nil {
-				return
-			}
-			presses += n
-			if key == "Enter" {
-				d.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", root, paneID)
+		if claude {
+			done, stop := d.trustStep(ctx, t, &presses)
+			if done || stop {
 				return
 			}
 		}
@@ -133,20 +216,40 @@ func (d *Daemon) answerTrust(ctx context.Context, paneID, root string, wait, pol
 	}
 }
 
-// promptBoxUp is that the detector saw the agent's prompt box in the
-// pane: past the question, whoever answered it.
-func (d *Daemon) promptBoxUp(paneID string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	st, ok := d.panes[paneKey(d.managed.Label, paneID)]
-	return ok && st.obs.verified && st.obs.idle
-}
-
-// underWorktrees is that root is a worktree under the host's worktrees
-// directory, one laatmux lays out.
-func (d *Daemon) underWorktrees(root string) bool {
-	if d.cfg.Store == nil || d.cfg.Store.Dirs.Worktrees == "" {
-		return false
+// trustStep is one look and, when the question is there, one press,
+// under the root's delivery lock. done is that Enter was pressed; stop
+// that the watcher should give up.
+func (d *Daemon) trustStep(ctx context.Context, t trustTarget, presses *int) (done, stop bool) {
+	unlock := d.lockDeliveries(t.root)
+	defer unlock()
+	if gone, claude, _ := d.trustState(t); gone || !claude {
+		return false, gone
 	}
-	return strings.HasPrefix(root, strings.TrimSuffix(d.cfg.Store.Dirs.Worktrees, "/")+"/")
+	screen, err := d.managed.Tmux.Capture(ctx, t.pane, d.cfg.CaptureLines)
+	if err != nil {
+		return false, true
+	}
+	moves, ok := trustChoice(screen, t.root)
+	if !ok {
+		return false, false
+	}
+	key := "Enter"
+	switch {
+	case moves > 0:
+		key = "Down"
+	case moves < 0:
+		key = "Up"
+	}
+	if *presses >= 4 {
+		return false, true
+	}
+	*presses++
+	if err := d.managed.Tmux.SendKeys(ctx, t.pane, key); err != nil {
+		return false, true
+	}
+	if key != "Enter" {
+		return false, false
+	}
+	d.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
+	return true, false
 }
