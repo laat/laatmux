@@ -382,4 +382,27 @@ func TestPendingOnRenamedHost(t *testing.T) {
 			t.Fatalf("worktree row: %+v", r)
 		}
 	}
+	// The old name still configured, now answering as another machine,
+	// and another name listing the task's machine: the task is replaced
+	// and stands for nothing; the worktree row is drawn.
+	for _, mismatch := range []string{"", "env is now other"} {
+		p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Mismatch: mismatch, SubmittedAt: now}
+		got = Build(Input{
+			Hosts:     []Host{{Name: "vm", EnvironmentID: "other", Connected: true, Listed: true, Worktrees: true}, {Name: "old-vm", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
+			Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+			Worktrees: []protocol.Worktree{{ID: "env/worktree//r", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b"}},
+			Pendings:  []protocol.Pending{p},
+		})
+		if len(got.Main) != 2 {
+			t.Fatalf("mismatch %q: %d rows", mismatch, len(got.Main))
+		}
+		for _, r := range got.Main {
+			if r.Pending != nil && (r.Agent != nil || r.Alias() != "" || !r.NeedsUser()) {
+				t.Fatalf("mismatch %q: task agent %v alias %q", mismatch, r.Agent, r.Alias())
+			}
+			if r.Pending == nil && (r.Agent == nil || r.Host != "old-vm") {
+				t.Fatalf("mismatch %q: worktree row %+v", mismatch, r)
+			}
+		}
+	}
 }

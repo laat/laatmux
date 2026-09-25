@@ -269,12 +269,13 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 
 // stands is a task that may still become the worktree row at its root,
 // and so stands for it: not one that failed, nor one whose worktree was
-// gone after the add, nor one whose host is gone from the config, which
-// the relay no longer follows; a host renamed in the config lists the
-// worktree under its new name, and the row is drawn.
+// gone after the add, nor one the relay cannot follow, its host gone
+// from the config or answering as another machine; a host renamed in
+// the config lists the worktree under its new name, and the row is
+// drawn.
 func (r Row) stands() bool {
 	p := r.Pending
-	return p != nil && !r.Removed && !p.Gone && !(p.Done && !p.OK)
+	return p != nil && !r.Removed && !r.Replaced && p.Mismatch == "" && !p.Gone && !(p.Done && !p.OK)
 }
 
 // outcomeUnknown is how the relay's error begins for an add whose
