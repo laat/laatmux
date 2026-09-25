@@ -30,6 +30,8 @@ type dash struct {
 	// hands the add to the daemon and ends the view; without it the
 	// add runs in the foreground with its log, as before.
 	relay bool
+	// submit hands an add to the local daemon; a test replaces it.
+	submit func(command.Add) (string, error)
 	// add is the form in progress, nil when none.
 	add *addForm
 	// rm is the removal a confirm line asks about.
@@ -90,8 +92,8 @@ func (d *dash) overlayDone(m *view.Model) bool {
 	case *view.Form:
 		m.Overlay = nil
 		f := d.add
-		d.add = nil
 		if o.Cancelled || f == nil {
+			d.add = nil
 			return false
 		}
 		return d.submitForm(m, f, o)
@@ -256,26 +258,37 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 }
 
 // submitForm runs what the form asked for: with the relay, the add is
-// handed to the local daemon and the view ends once it is accepted;
-// without it, the add runs in the foreground with its log, and the new
-// workspace session is jumped to.
+// handed to the local daemon and the view ends once it is accepted; a
+// refusal, a host whose daemon does not support tasks say, keeps the
+// form up with the error, its text intact, while an error after the
+// daemon may hold the task ends the view with the id, so nothing is
+// submitted twice. Without the relay, the add runs in the foreground
+// with its log, and the new workspace session is jumped to.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 	add := command.Add{
 		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Agent: f.agents[o.Chips[2].Selected],
 		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
 	}
 	if d.relay {
-		id, err := add.Submit(d.ctx)
-		if err != nil {
-			m.Message = err.Error()
-			if id != "" {
-				m.Message = "submitted " + id + "; " + err.Error()
-			}
-			return false
+		submit := d.submit
+		if submit == nil {
+			submit = func(a command.Add) (string, error) { return a.Submit(d.ctx) }
 		}
+		id, err := submit(add)
+		switch {
+		case err != nil && id == "":
+			o.Reopen(err.Error())
+			m.Overlay = o
+			return false
+		case err != nil:
+			m.Message = "submitted " + id + "; " + err.Error()
+			return true
+		}
+		d.add = nil
 		m.Message = "accepted " + id
 		return true
 	}
+	d.add = nil
 	d.runAdd(m, add)
 	return false
 }
@@ -294,6 +307,13 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		}
 		return err
 	}, func(m *view.Model) bool {
+		// The delivery state is what the user reads: a prompt that did
+		// not reach the agent, or may not have, stays on screen rather
+		// than being left behind by a jump.
+		if add.Prompt != "" && res.Prompt != protocol.DeliveryDelivered && res.Prompt != protocol.DeliveryNone {
+			m.Message = "prompt " + res.Prompt + ": " + res.Reason + "  (" + res.Session + " ready)"
+			return false
+		}
 		if err := switchTo(d.ctx, res.Session); err != nil {
 			m.Message = err.Error()
 			return false

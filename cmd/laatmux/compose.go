@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
@@ -36,13 +35,13 @@ func cmdCompose(ctx context.Context, args []string) error {
 		return err
 	}
 	relay := protocol.Has(c.Hello.Capabilities, protocol.CapRelay)
-	// One snapshot, for the host rows' cached capabilities, then the
-	// stream is followed for the note to stay current.
+	// The merged stream is followed while the form is up, so the note
+	// about a host's daemon reflects the hello that arrives after the
+	// snapshot on a cold daemon.
 	st := newMerged()
-	if _, err := st.readMerged(ctx, c, 2*time.Second, func(m *merged) bool { return len(m.hosts) > 0 }); err != nil {
-		c.Close()
-		return err
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go st.followMerged(ctx, c)
 	f := &addForm{repos: cfg.Repos, agents: cfg.AgentNames()}
 	for _, h := range cfg.Hosts {
 		if h.CanAdd() {
@@ -71,7 +70,6 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer t.Close()
 	m := &view.Model{Layout: view.Compact, Overlay: form}
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, relay: relay, add: f}
 	var outcome string
@@ -90,15 +88,20 @@ func cmdCompose(ctx context.Context, args []string) error {
 				}
 				done := d.submitForm(m, f, o)
 				outcome = m.Message
-				// Without the relay the log is up now; with it the
-				// answer ends the view, accepted or refused.
+				// A refusal puts the form back up; without the relay
+				// the log is up now; with it the answer ends the view.
 				return done || m.Overlay == nil
 			case *view.Log:
-				return d.overlayDone(m) || m.Overlay == nil
+				done := d.overlayDone(m)
+				outcome = m.Message
+				return done || m.Overlay == nil
 			}
 			return false
 		},
 	})
+	// The terminal is restored before the outcome is printed, so it is
+	// not lost with the alternate screen.
+	t.Close()
 	if outcome != "" {
 		fmt.Println(outcome)
 	}

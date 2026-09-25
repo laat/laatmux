@@ -53,6 +53,54 @@ func TestFormRender(t *testing.T) {
 	golden(t, "form-error", Debug(f.Render(60, 12)))
 	// Narrow: the chips lose their frames, the box keeps its width.
 	golden(t, "form-narrow", Debug(NewForm("add a task", chips(), "fix").Render(14, 10)))
+	// A focused branch longer than the room shows its end, cursor
+	// included.
+	long := NewForm("t", chips(), strings.Repeat("abcdefghij", 6))
+	long.Handle(Key{Kind: KeyTab})
+	if text := Text(long.Render(40, 12)); !strings.Contains(text, "…") || !strings.Contains(text, "hij█") {
+		t.Fatalf("long branch:\n%s", text)
+	}
+}
+
+// The renderer is a pure function of the fields, the cursor and the
+// size: a render at one height then another draws what a render at
+// the second alone draws.
+func TestFormRenderStateless(t *testing.T) {
+	f := NewForm("t", chips(), "")
+	f.SetPrompt(strings.Repeat("line\n", 30))
+	f.Handle(Key{Kind: KeyUp})
+	f.Handle(Key{Kind: KeyUp})
+	f.Handle(Key{Kind: KeyUp})
+	f.Render(40, 10)
+	after := Text(f.Render(40, 12))
+	g := NewForm("t", chips(), "")
+	g.SetPrompt(strings.Repeat("line\n", 30))
+	g.Handle(Key{Kind: KeyUp})
+	g.Handle(Key{Kind: KeyUp})
+	g.Handle(Key{Kind: KeyUp})
+	if fresh := Text(g.Render(40, 12)); fresh != after {
+		t.Fatalf("render depends on the render before:\n%s\n--\n%s", after, fresh)
+	}
+}
+
+// A paste goes into a picker's filter and a prompt's text as one line.
+func TestPasteIntoFilters(t *testing.T) {
+	p := NewPicker("t", choices(), 0)
+	p.Handle(Key{Kind: KeyPaste, Text: "pro\nj"})
+	if p.Filter != "pro j" || p.Done() {
+		t.Fatalf("picker filter %q done %v", p.Filter, p.Done())
+	}
+	pr := NewPrompt("t", "", nil)
+	pr.Handle(Key{Kind: KeyPaste, Text: "a\tb"})
+	if pr.Text != "a b" || pr.Done() {
+		t.Fatalf("prompt text %q", pr.Text)
+	}
+	var m Model
+	m.Filtering = true
+	m.Handle(Key{Kind: KeyPaste, Text: "x\ny"})
+	if m.Filter != "x y" {
+		t.Fatalf("model filter %q", m.Filter)
+	}
 }
 
 // Keys: Tab and Shift-Tab cycle the fields; Left and Right cycle a
@@ -106,13 +154,17 @@ func TestFormHandle(t *testing.T) {
 	if f.Branch() != "fix-the-tests-and-the-linx" || f.Generated() {
 		t.Fatalf("branch %q generated %v", f.Branch(), f.Generated())
 	}
-	// Clearing it makes it follow again.
+	// Clearing it keeps it the user's, so the proposal can be replaced
+	// outright.
 	f.Handle(Key{Kind: KeyTab})
 	for range len([]rune(f.Branch())) {
 		f.Handle(Key{Kind: KeyBackspace})
 	}
-	if !f.Generated() || f.Branch() != "fix-the-tests-and-the-lin" {
-		t.Fatalf("cleared branch %q generated %v", f.Branch(), f.Generated())
+	for _, r := range "repair" {
+		f.Handle(Key{Rune: r})
+	}
+	if f.Generated() || f.Branch() != "repair" {
+		t.Fatalf("replaced branch %q generated %v", f.Branch(), f.Generated())
 	}
 	// Chips: Tab on round to the repository, Right cycles, Left back.
 	f.Handle(Key{Kind: KeyTab})
@@ -254,6 +306,19 @@ func TestDecoderPasteAndKeys(t *testing.T) {
 				t.Fatalf("split at %d: key %d = %+v, want %+v", cut, i, got[i], want[i])
 			}
 		}
+	}
+	// The start of a paste marker split by a slow read survives the
+	// flush too: dropped, the text's line breaks would be Enter.
+	var split Decoder
+	if got := split.Feed([]byte("\x1b[200")); len(got) != 0 || !split.Pending() {
+		t.Fatalf("marker prefix: %+v", got)
+	}
+	if got := split.Flush(); len(got) != 0 || !split.Pending() {
+		t.Fatalf("flush on a marker prefix: %+v", got)
+	}
+	got := split.Feed([]byte("~fix\rmore\x1b[201~"))
+	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "fix\nmore" {
+		t.Fatalf("paste after the split marker: %+v", got)
 	}
 	// A paste under way survives a flush: the escape wait must not cut
 	// a long paste short.

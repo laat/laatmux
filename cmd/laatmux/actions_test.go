@@ -412,3 +412,45 @@ func TestBuildForm(t *testing.T) {
 		t.Fatalf("prefilled %q %q %q %v", form.Chips[0].Label(), form.Chips[1].Label(), form.Branch(), form.Generated())
 	}
 }
+
+// A submit through the relay: a refusal puts the form back up with the
+// error and the text intact; an error after the daemon may hold the
+// task ends the view with the id; acceptance ends it with the id.
+func TestSubmitFormOutcomes(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	m := dashModel(cfg)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	f := m.Overlay.(*view.Form)
+	f.SetPrompt("Fix it")
+	var got command.Add
+	d.submit = func(a command.Add) (string, error) {
+		got = a
+		return "", errors.New("tasks not supported by vm's daemon")
+	}
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if d.act(m, m.Poll()) {
+		t.Fatal("a refusal ended the view")
+	}
+	back, ok := m.Overlay.(*view.Form)
+	if !ok || back != f || back.Error != "tasks not supported by vm's daemon" || back.Prompt() != "Fix it" || back.Done() {
+		t.Fatalf("form after a refusal: %+v", m.Overlay)
+	}
+	if got.Prompt != "Fix it" || got.Branch != "fix-it" || !got.Generated {
+		t.Fatalf("submitted %+v", got)
+	}
+	d.submit = func(a command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if !d.act(m, m.Poll()) || !strings.Contains(m.Message, "submitted add-1") {
+		t.Fatalf("uncertain submit: message %q", m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	f = m.Overlay.(*view.Form)
+	f.SetPrompt("Fix it")
+	d.submit = func(a command.Add) (string, error) { return "add-2", nil }
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if !d.act(m, m.Poll()) || m.Message != "accepted add-2" || d.add != nil {
+		t.Fatalf("accepted: message %q add %v", m.Message, d.add)
+	}
+}

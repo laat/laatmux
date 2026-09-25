@@ -41,7 +41,6 @@ type Form struct {
 	focus  int    // 0..2 the chips, 3 the prompt, 4 the branch
 	picker *Picker
 	done   bool
-	scroll int // first prompt line drawn
 }
 
 // Chip is one of the form's choices: a title, the candidates, and the
@@ -80,6 +79,12 @@ func NewForm(title string, chips [3]Chip, branch string) *Form {
 }
 
 func (f *Form) Done() bool { return f.done }
+
+// Reopen puts a submitted form back up with the error that refused it,
+// its fields as they were.
+func (f *Form) Reopen(err string) {
+	f.done, f.Cancelled, f.Error = false, false, err
+}
 
 // Prompt is the prompt's text.
 func (f *Form) Prompt() string { return string(f.prompt) }
@@ -243,24 +248,21 @@ func (f *Form) lineEnd(i int) int {
 }
 
 // branchKey edits the branch line; an edit stops it following the
-// prompt, and clearing it makes it follow again.
+// prompt, an emptied line included, so the proposal can be replaced
+// outright.
 func (f *Form) branchKey(k Key) {
 	switch k.Kind {
 	case KeyRune:
 		f.branch += string(k.Rune)
 		f.edited = true
 	case KeyPaste:
-		f.branch += strings.ReplaceAll(k.Text, "\n", "")
+		f.branch += strings.ReplaceAll(pasteLine(k.Text), " ", "")
 		f.edited = true
 	case KeyBackspace:
 		if r := []rune(f.branch); len(r) > 0 {
 			f.branch = string(r[:len(r)-1])
-			f.edited = true
 		}
-		if f.branch == "" {
-			f.edited = false
-			f.propose()
-		}
+		f.edited = true
 	case KeyEnter:
 		f.submit()
 	}
@@ -313,10 +315,12 @@ func (f *Form) Render(w, h int) []Line {
 			foot = append(foot, Line{Spans: []Span{{Text: fit(n, w)}}, Bold: true})
 		}
 	}
-	// The branch line, and the prompt box in what is left.
-	branch := Line{Spans: []Span{{Text: "branch  "}, {Text: fit(f.branch, max(w-8, 0)), Dim: !f.edited}}}
+	// The branch line, and the prompt box in what is left. A focused
+	// line longer than the room shows its end, where the cursor is.
+	avail := max(w-8, 0)
+	branch := Line{Spans: []Span{{Text: "branch  "}, {Text: fit(f.branch, avail), Dim: !f.edited}}}
 	if f.focus == fieldBranch {
-		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg}, {Text: fit(f.branch+"█", max(w-8, 0))}}}
+		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg}, {Text: tail(f.branch+"█", avail)}}}
 	}
 	boxLines := h - len(out) - 1 - len(foot)
 	if boxLines < 3 {
@@ -378,6 +382,22 @@ func (f *Form) chipLines(w int) []Line {
 	return []Line{top, mid, bot}
 }
 
+// tail is the last w cells of s, with an ellipsis first when it was
+// cut.
+func tail(s string, w int) string {
+	if width(s) <= w {
+		return s
+	}
+	rs := []rune(s)
+	n := 0
+	i := len(rs)
+	for i > 0 && n+runeWidth(rs[i-1]) <= w-1 {
+		i--
+		n += runeWidth(rs[i])
+	}
+	return "…" + string(rs[i:])
+}
+
 // pad fills s to w cells with spaces.
 func pad(s string, w int) string {
 	if n := w - width(s); n > 0 {
@@ -405,19 +425,17 @@ func (f *Form) promptBox(w, n int) []Line {
 	if body < 1 {
 		body = 1
 	}
-	if cursorLine < f.scroll {
-		f.scroll = cursorLine
-	}
-	if cursorLine >= f.scroll+body {
-		f.scroll = cursorLine - body + 1
-	}
-	if f.scroll > len(lines)-body {
-		f.scroll = max(len(lines)-body, 0)
+	// The viewport is derived, not kept: the box starts at the top
+	// until the cursor line would fall below it, then ends at the
+	// cursor line, so the same fields, cursor and size draw the same.
+	scroll := 0
+	if cursorLine >= body {
+		scroll = cursorLine - body + 1
 	}
 	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg}}}}
 	for i := 0; i < body; i++ {
 		text := ""
-		if j := f.scroll + i; j < len(lines) {
+		if j := scroll + i; j < len(lines) {
 			text = lines[j]
 		}
 		out = append(out, Line{Spans: []Span{{Text: "│ ", Fg: fg}, {Text: pad(fit(text, inner), inner)}, {Text: " │", Fg: fg}}})

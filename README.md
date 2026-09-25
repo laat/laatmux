@@ -585,7 +585,9 @@ is switched to.
   submit. On a worktree row without a session the chips and the branch
   are pre-filled from the record, the branch explicit. A submit with
   the local daemon's `relay` hands the add to it and closes the popup
-  on `accepted`, the sidebar showing the task from then on; without it
+  on `accepted`; `laatmux tasks` shows the task from then on, and the
+  views will once step 5 lands; a refusal keeps the form up with the
+  error. Without it
   the add runs in the foreground with its progress in place of the
   list and jumps on success, a failure staying until a key. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached

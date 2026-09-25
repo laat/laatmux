@@ -173,6 +173,12 @@ func (d *Decoder) Flush() []Key {
 	if d.pasting {
 		return nil
 	}
+	// The start of a paste marker, split by a slow read, is held too:
+	// dropped, the paste's text would be read as keys, its line breaks
+	// as Enter.
+	if n := markerPrefix(d.pending, pasteStart); n == len(d.pending) && n >= 2 {
+		return nil
+	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
 		d.discard = true
 	}
@@ -386,6 +392,8 @@ func (m *Model) Handle(k Key) Action {
 			}
 		case KeyRune:
 			m.Filter += string(k.Rune)
+		case KeyPaste:
+			m.Filter += pasteLine(k.Text)
 		case KeyUp:
 			m.move(-1)
 		case KeyDown:
@@ -523,4 +531,15 @@ func (m *Model) hit(y int) int {
 		return -1
 	}
 	return m.hits[i]
+}
+
+// pasteLine is a paste as one line of text, for a filter or a name:
+// line breaks and tabs become spaces.
+func pasteLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, s)
 }

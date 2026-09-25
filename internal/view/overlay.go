@@ -111,6 +111,9 @@ func (p *Picker) Handle(k Key) {
 	case KeyRune:
 		p.Filter += string(k.Rune)
 		p.keep(m)
+	case KeyPaste:
+		p.Filter += pasteLine(k.Text)
+		p.keep(m)
 	}
 	clamp()
 }
@@ -232,6 +235,8 @@ func (p *Prompt) Handle(k Key) {
 		}
 	case KeyRune:
 		p.Text += string(k.Rune)
+	case KeyPaste:
+		p.Text += pasteLine(k.Text)
 	}
 }
 
