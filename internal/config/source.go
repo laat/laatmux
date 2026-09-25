@@ -5,58 +5,69 @@ import (
 	"strings"
 )
 
-// SourceKey is a repository source's identity. The usual forms of one
-// hosted repository give the same key: git@host:owner/repo,
+// SourceKey is a repository source's identity. The forms a forge gives
+// one repository get the same key: git@host:owner/repo,
 // ssh://git@host/owner/repo and https://host/owner/repo, each with or
-// without .git and a trailing slash. The host is compared without case,
-// user and port are left out, since they choose a transport and not a
-// repository, and the path is compared as written. Any other source,
-// a local path or a file URL say, is its own key.
+// without .git and a trailing slash, the host compared without case.
+// Only the forge convention is unified: ssh as the user git on the
+// default port, with a path relative to the forge's root, and http or
+// https on the default port, whose user is a credential. Any other
+// source is its own key, since there a user, a port or a leading slash
+// can name another repository: alice@box:proj and bob@box:proj are two
+// home directories, and two ports can be two servers.
 func SourceKey(source string) string {
-	host, path, ok := hosted(source)
+	host, path, ok := forge(source)
 	if !ok {
 		return source
 	}
-	return "hosted:" + strings.ToLower(host) + "/" + path
+	return "forge:" + strings.ToLower(host) + "/" + path
 }
 
 // SameSource reports whether two sources name one repository.
 func SameSource(a, b string) bool { return a == b || SourceKey(a) == SourceKey(b) }
 
-// hosted splits a hosted repository's source into host and path, the
-// path without its leading slash, a trailing slash or .git.
-func hosted(source string) (host, path string, ok bool) {
+// forge splits a source in one of the forge forms into host and path,
+// the path without a trailing slash or .git.
+func forge(source string) (host, path string, ok bool) {
 	if i := strings.Index(source, "://"); i >= 0 {
-		switch strings.ToLower(source[:i]) {
-		case "ssh", "git+ssh", "ssh+git", "https", "http", "git":
+		u, err := url.Parse(source)
+		if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+			return "", "", false
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "ssh", "git+ssh", "ssh+git":
+			if u.User == nil || u.User.Username() != "git" || (u.Port() != "" && u.Port() != "22") {
+				return "", "", false
+			}
+		case "https":
+			if u.Port() != "" && u.Port() != "443" {
+				return "", "", false
+			}
+		case "http":
+			if u.Port() != "" && u.Port() != "80" {
+				return "", "", false
+			}
 		default:
 			return "", "", false
 		}
-		u, err := url.Parse(source)
-		if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" {
-			return "", "", false
-		}
-		host, path = u.Hostname(), u.Path
+		host, path = u.Hostname(), strings.TrimPrefix(u.Path, "/")
 	} else {
-		// git's scp-like syntax: a colon before any slash, and a host
-		// before the colon. A path with a slash before its first colon
-		// is local.
-		// A single letter before it is a drive, as git takes it.
-		i := strings.IndexByte(source, ':')
-		if i <= 1 || strings.Contains(source[:i], "/") {
+		// git's scp-like syntax: user@host:path, a colon before any
+		// slash. Only the user git counts, with a path relative to the
+		// forge's root: an absolute path or one from a home directory
+		// is the server's own.
+		at := strings.IndexByte(source, '@')
+		colon := strings.IndexByte(source, ':')
+		if at < 0 || colon < at || strings.Contains(source[:colon], "/") || source[:at] != "git" {
 			return "", "", false
 		}
-		host, path = source[:i], source[i+1:]
-		if j := strings.LastIndexByte(host, '@'); j >= 0 {
-			host = host[j+1:]
-		}
-		if host == "" || strings.HasPrefix(host, "[") {
+		host, path = source[at+1:colon], source[colon+1:]
+		if host == "" || strings.HasPrefix(host, "[") || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") {
 			return "", "", false
 		}
 	}
-	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
-	path = strings.TrimSuffix(path, "/")
-	if path == "" || strings.HasPrefix(path, "~") {
+	path = strings.TrimSuffix(strings.TrimSuffix(path, "/"), ".git")
+	if path == "" || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") || strings.Contains(path, "//") {
 		return "", "", false
 	}
 	return host, path, true

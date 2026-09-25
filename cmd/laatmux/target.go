@@ -234,6 +234,18 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 	return protocol.Worktree{}, false
 }
 
+// recordRepo is this machine's entry for a host record's source, with
+// the source spelled as the record has it: a request about the record
+// names the repository as the host does, which an older host, comparing
+// sources as strings, needs.
+func recordRepo(cfg config.Config, source string) (config.Repo, bool) {
+	r, ok := cfg.RepoBySource(source)
+	if ok {
+		r.Source = source
+	}
+	return r, ok
+}
+
 // sameRepo reports whether the record is of the repository: by source
 // when the record has one, else by label.
 func sameRepo(w protocol.Worktree, repo config.Repo) bool {

@@ -244,7 +244,7 @@ func (r *addRun) run(ctx context.Context) error {
 	}
 	r.branch = branch
 
-	r.unlockRepo = d.lockRepo(repo.Source)
+	r.unlockRepo = d.lockRepo(repo.Source, repo.Name)
 	// The journal is read again under the lock: an rm that held it
 	// meanwhile may have removed the worktree this add was resuming,
 	// and the entry with it, which no stage may then remake.
@@ -955,12 +955,14 @@ func (d *Daemon) runJournal(ctx context.Context) {
 	}
 }
 
-// addRepo is the repository an add is for: the entry the add brought,
-// which the machine the user sits at decides, else the one this host's
-// config lists for its source or label, for a sender without entries.
-// An entry is checked as the config checks its own: a name that places
-// directories, copy rules that stay inside the worktree, no empty setup
-// command.
+// addRepo is the repository an add is for. A repository this host's
+// config lists is the host's own, entry or not: its source is the
+// transport this host can clone with, and its name and steps are the
+// ones its adds had before entries. Any other is the entry the add
+// brought, which the machine the user sits at decides, checked as the
+// config checks its own: a name that places directories and is not
+// this host's name for another repository, copy rules that stay inside
+// the worktree, no empty setup command.
 func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 	e := m.RepoEntry
 	if e == nil {
@@ -973,8 +975,14 @@ func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if e.Source == "" || !config.SameSource(e.Source, m.Repo) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
 	}
+	if repo, ok := d.cfg.Store.BySource(e.Source); ok {
+		return repo, nil
+	}
 	if !config.ValidLabel(e.Name) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label", e.Name)
+	}
+	if other, ok := d.cfg.Store.Repo(e.Name); ok {
+		return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
 	}
 	for _, c := range e.Copy {
 		if err := config.CheckCopy(c); err != nil {
@@ -986,5 +994,5 @@ func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 			return worktree.Repo{}, fmt.Errorf("the add's repository entry: setup: entry %d is empty", i+1)
 		}
 	}
-	return worktree.Repo{Source: e.Source, Name: e.Name, Copy: e.Copy, Setup: e.Setup, Sent: true}, nil
+	return worktree.Repo{Source: e.Source, Name: e.Name, Copy: e.Copy, Setup: e.Setup}, nil
 }

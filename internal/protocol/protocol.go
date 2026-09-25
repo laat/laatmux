@@ -88,11 +88,12 @@ const (
 	// workspace sessions. Only a daemon with hosts in its config has it.
 	CapMerged = "merged"
 	// CapRepoEntry is the repository coming from the machine the user
-	// sits at: an add with repo_entry is resolved against that entry, a
-	// repository this host's config does not list included, and the
+	// sits at: an add with repo_entry for a repository this host's
+	// config does not list is resolved against that entry, and the
 	// worktree listing covers every checkout under the repos directory.
-	// A daemon without it ignores the entry and resolves against its
-	// own config.
+	// A repository the config lists is resolved against the config's
+	// entry, as before. A daemon without it ignores the entry and
+	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
 )
 
@@ -468,11 +469,11 @@ type Message struct {
 	PaneID  string   `json:"pane_id,omitempty"`
 
 	// add and rm
-	Repo   string `json:"repo,omitempty"`   // repository source or label, as the daemon's config knows it
+	Repo   string `json:"repo,omitempty"`   // repository source, or a label as the daemon lists it
 	Branch string `json:"branch,omitempty"` // branch and worktree name
 	// RepoEntry on an add is the repository as the sender's config has
 	// it, its source Repo's: a daemon with repo-entry resolves the add
-	// against it, whether or not its own config lists the repository.
+	// against it when its own config does not list the repository.
 	RepoEntry *RepoEntry `json:"repo_entry,omitempty"`
 	// AgentName is the configured agent to start; Cmd, when set, is the
 	// command instead. The key is agent_name because agent is the upsert's

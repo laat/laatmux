@@ -272,15 +272,7 @@ func (d *Daemon) repoLock(source string) *sync.Mutex {
 func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
-		var repo worktree.Repo
 		if m.Repo != "" {
-			var ok bool
-			var err error
-			if repo, ok, err = d.cfg.Store.Known(ctx, m.Repo); err != nil {
-				return err
-			} else if !ok {
-				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
-			}
 			if m.Branch == "" && m.Root == "" {
 				return errors.New("rm needs a branch or a root")
 			}
@@ -290,6 +282,24 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		unlock := d.lockRepos()
 		defer unlock()
 
+		// The repository is found under the lock: an add still making
+		// its first checkout is done before the checkouts are scanned.
+		// One with no checkout here is still reached by the root, which
+		// finds the session.
+		var repo worktree.Repo
+		if m.Repo != "" {
+			r, ok, err := d.cfg.Store.Known(ctx, m.Repo)
+			switch {
+			case err != nil:
+				return err
+			case ok:
+				repo = r
+			case m.Root != "":
+				repo = worktree.Repo{Source: m.Repo, Name: m.Repo}
+			default:
+				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
+			}
+		}
 		root, checkout := m.Root, ""
 		if root != "" {
 			// The client's root, cleaned so it compares with what git
@@ -302,28 +312,10 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			}
 		}
 		switch {
-		case m.Branch != "":
-			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
-			if err != nil {
-				return err
-			}
-			switch {
-			case found && root != "" && rec.Root != root:
-				return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
-			case found:
-				root, checkout = rec.Root, co
-			case root != "":
-				// The registration is gone; root still finds the session.
-				// It must not be some other worktree registered since.
-				rec, _, taken, err := d.cfg.Store.Find(ctx, root)
-				if err != nil {
-					return err
-				}
-				if taken && (!config.SameSource(rec.Source, repo.Source) || rec.Branch != m.Branch) {
-					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
-				}
-			}
-		default:
+		case root != "":
+			// The root decides the checkout, since two clones of one
+			// repository each list their own worktrees; repository and
+			// branch, when given, must be what git registers there.
 			rec, co, found, err := d.cfg.Store.Find(ctx, root)
 			if err != nil {
 				return err
@@ -332,7 +324,31 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				if repo.Source != "" && !config.SameSource(rec.Source, repo.Source) {
 					return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
 				}
+				if m.Branch != "" && rec.Branch != m.Branch {
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
+				}
 				checkout = co
+				break
+			}
+			if m.Branch != "" {
+				// The registration at the root is gone; the root still
+				// finds the session, unless the branch has moved to a
+				// worktree elsewhere since.
+				rec, _, moved, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+				if err != nil {
+					return err
+				}
+				if moved {
+					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
+				}
+			}
+		default:
+			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+			if err != nil {
+				return err
+			}
+			if found {
+				root, checkout = rec.Root, co
 			}
 		}
 		if root == "" {
@@ -409,14 +425,21 @@ func branchOrDetached(branch string) string {
 }
 
 // lockRepo takes a repository's lock, by its identity, so two forms of
-// one source share it, under the shared hold on every repository that
-// rm takes alone. The returned func releases both.
-func (d *Daemon) lockRepo(source string) func() {
+// one source share it, then the lock on the name that places its
+// checkout, so two sources sent under one name never clone into one
+// directory at once; both under the shared hold on every repository
+// that rm takes alone. The order is always hold, source, name, and
+// nothing waits on a source holding a name. The returned func releases
+// all three.
+func (d *Daemon) lockRepo(source, name string) func() {
 	d.repos.RLock()
-	l := d.repoLock("repo/" + config.SourceKey(source))
-	l.Lock()
+	src := d.repoLock("repo/" + config.SourceKey(source))
+	src.Lock()
+	dir := d.repoLock("name/" + name)
+	dir.Lock()
 	return func() {
-		l.Unlock()
+		dir.Unlock()
+		src.Unlock()
 		d.repos.RUnlock()
 	}
 }

@@ -50,9 +50,13 @@ type merged struct {
 // repoLabels is the config's names for its repositories, by source in
 // any form config.SameSource takes as one.
 func repoLabels(cfg config.Config) func(string) (string, bool) {
+	names := map[string]string{}
+	for _, r := range cfg.Repos {
+		names[config.SourceKey(r.Source)] = r.Name
+	}
 	return func(source string) (string, bool) {
-		r, ok := cfg.RepoBySource(source)
-		return r.Name, ok
+		name, ok := names[config.SourceKey(source)]
+		return name, ok
 	}
 }
 

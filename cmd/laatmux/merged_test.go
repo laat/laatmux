@@ -218,3 +218,20 @@ func TestMergedRowsUseLocalNames(t *testing.T) {
 		t.Fatalf("labels %v, stored %q", got, m.worktrees["a"].Repo)
 	}
 }
+
+// A request about a host's record names the repository as the record
+// does, with this machine's name: an older host compares sources as
+// strings.
+func TestRecordRepoKeepsSpelling(t *testing.T) {
+	cfg, err := config.Parse([]byte("repos:\n  - source: git@example.com:o/proj.git\n    name: mine\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := recordRepo(cfg, "https://example.com/o/proj")
+	if !ok || r.Name != "mine" || r.Source != "https://example.com/o/proj" || cfg.Repos[0].Source != "git@example.com:o/proj.git" {
+		t.Fatalf("%+v %v", r, ok)
+	}
+	if _, ok := recordRepo(cfg, "https://example.com/o/other"); ok {
+		t.Fatal("an unknown source matched")
+	}
+}

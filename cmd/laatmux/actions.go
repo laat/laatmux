@@ -720,7 +720,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	switch {
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
-		if repo, ok := d.cfg.RepoBySource(r.Worktree.Source); ok {
+		if repo, ok := recordRepo(d.cfg, r.Worktree.Source); ok {
 			rm.Repo = repo
 		} else if repo, ok := d.cfg.RepoByName(r.Worktree.Repo); ok && r.Worktree.Source == "" {
 			rm.Repo = repo
@@ -730,7 +730,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 		}
 	case r.Stale:
 		rm.Environment, rm.Root = workspace.SplitKey(r.Local.Key)
-		if repo, ok := d.cfg.RepoBySource(r.Local.Source); ok && r.Local.Branch != "" {
+		if repo, ok := recordRepo(d.cfg, r.Local.Source); ok && r.Local.Branch != "" {
 			rm.Repo, rm.Branch = repo, r.Local.Branch
 		}
 	default:

@@ -218,14 +218,14 @@ func rmCurrent(cfg config.Config, cur workspace.Local, h config.Host, environmen
 		if w.Root != root || w.EnvironmentID != env {
 			continue
 		}
-		if repo, ok := cfg.RepoBySource(w.Source); ok {
+		if repo, ok := recordRepo(cfg, w.Source); ok {
 			rm.Repo, rm.Branch = repo, w.Branch
 		} else if repo, ok := cfg.RepoByName(w.Repo); ok && w.Source == "" {
 			rm.Repo, rm.Branch = repo, w.Branch
 		}
 		return rm, nil
 	}
-	if repo, ok := cfg.RepoBySource(cur.Source); ok && cur.Branch != "" {
+	if repo, ok := recordRepo(cfg, cur.Source); ok && cur.Branch != "" {
 		rm.Repo, rm.Branch = repo, cur.Branch
 	}
 	return rm, nil

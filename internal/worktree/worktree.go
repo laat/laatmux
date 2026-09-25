@@ -30,16 +30,14 @@ import (
 
 // Repo is a known repository: its source, the identity, and its label,
 // which places new clones and worktrees; Copy and Setup are the personal
-// steps for its worktrees, run after the committed ones. They come from
-// this host's config, or, with Sent, from the add's repository entry,
-// whose Copy already holds the sender's top-level rules, so this host's
-// own are not added.
+// steps for its worktrees, run after the committed ones and before the
+// store's own Copy. They come from this host's config, or from the add's
+// repository entry for a repository the config does not list.
 type Repo struct {
 	Source string
 	Name   string
 	Copy   []string
 	Setup  []string
-	Sent   bool
 }
 
 // Store is one host's checkouts and worktrees. Copy is the host's own
@@ -79,39 +77,63 @@ func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 			return r, true
 		}
 	}
+	return s.BySource(nameOrSource)
+}
+
+// BySource finds a repository this host's config lists by its source,
+// in any form config.SameSource takes as one.
+func (s *Store) BySource(source string) (Repo, bool) {
 	for _, r := range s.Repos {
-		if r.Source == nameOrSource {
+		if r.Source == source {
 			return r, true
 		}
 	}
 	for _, r := range s.Repos {
-		if config.SameSource(r.Source, nameOrSource) {
+		if config.SameSource(r.Source, source) {
 			return r, true
 		}
 	}
 	return Repo{}, false
 }
 
-// Known finds a repository this host has: one its config lists, as Repo
-// finds it, else a checkout under the repos directory whose origin is
-// the source, or whose directory has the name, labelled as List labels
-// it. rm and run name a repository by what a listing said, which covers
-// checkouts the config does not list.
+// Known finds a repository this host has, as List labels it: by label,
+// the config's name or the directory of a checkout the config does not
+// list, else by source, the config's or a checkout's origin. rm and run
+// name a repository by what a listing said, which covers checkouts the
+// config does not list. A label two repositories answer to is an error
+// rather than a guess: the source tells them apart.
 func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, error) {
-	if r, ok := s.Repo(nameOrSource); ok {
-		return r, true, nil
-	}
 	cos, err := s.scan(ctx)
 	if err != nil {
 		return Repo{}, false, err
 	}
-	for _, co := range cos {
-		if config.SameSource(co.origin, nameOrSource) {
-			return s.label(co), true, nil
+	var named []Repo
+	for _, r := range s.Repos {
+		if r.Name == nameOrSource {
+			named = append(named, r)
 		}
 	}
 	for _, co := range cos {
-		if filepath.Base(co.dir) == nameOrSource {
+		if filepath.Base(co.dir) != nameOrSource {
+			continue
+		}
+		if _, listed := s.BySource(co.origin); !listed {
+			named = append(named, s.label(co))
+		}
+	}
+	for i := 1; i < len(named); i++ {
+		if !config.SameSource(named[i].Source, named[0].Source) {
+			return Repo{}, false, fmt.Errorf("%q names both %s and %s on this host; name the repository by its source", nameOrSource, named[0].Source, named[i].Source)
+		}
+	}
+	if len(named) > 0 {
+		return named[0], true, nil
+	}
+	if r, ok := s.BySource(nameOrSource); ok {
+		return r, true, nil
+	}
+	for _, co := range cos {
+		if config.SameSource(co.origin, nameOrSource) {
 			return s.label(co), true, nil
 		}
 	}
@@ -181,23 +203,42 @@ func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 // label is the repository a checkout holds: the config's entry for its
 // origin, else the origin under the checkout's directory name.
 func (s *Store) label(co checkout) Repo {
-	if r, ok := s.Repo(co.origin); ok && config.SameSource(r.Source, co.origin) {
+	if r, ok := s.BySource(co.origin); ok {
 		return r
 	}
 	return Repo{Source: co.origin, Name: filepath.Base(co.dir)}
 }
 
-// linked reports whether a main checkout may have worktrees besides
-// itself: git keeps each one's administrative directory under
-// .git/worktrees, prunable ones included, so a checkout without any is
-// not asked. That keeps a poll over a repos directory of many checkouts
-// from running git for each. A directory that cannot be read is asked.
-func linked(dir string) bool {
-	entries, err := os.ReadDir(filepath.Join(dir, ".git", "worktrees"))
+// linked reports whether git must be asked for a main checkout's
+// worktrees: whether one of them may be under the worktrees directory.
+// git keeps each linked worktree's administrative directory under
+// .git/worktrees, prunable ones included, with a gitdir file naming the
+// worktree's .git, so a checkout with none, or with all of them
+// elsewhere, is not asked. That keeps a poll over a repos directory of
+// many checkouts from running git for each. What cannot be read is
+// asked.
+func (s *Store) linked(dir string) bool {
+	admin := filepath.Join(dir, ".git", "worktrees")
+	entries, err := os.ReadDir(admin)
 	if err != nil {
 		return !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR)
 	}
-	return len(entries) > 0
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(admin, e.Name(), "gitdir"))
+		if err != nil {
+			return true
+		}
+		gitdir := strings.TrimSpace(string(b))
+		if !filepath.IsAbs(gitdir) {
+			// worktree.useRelativePaths: relative to the entry's own
+			// administrative directory.
+			gitdir = filepath.Join(admin, e.Name(), gitdir)
+		}
+		if s.Owns(filepath.Dir(gitdir)) {
+			return true
+		}
+	}
+	return false
 }
 
 // origin returns dir's remote.origin.url when dir is a main checkout (has
@@ -326,8 +367,9 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 	}
 	var records []Record
 	var errs []error
+	seen := map[string]bool{}
 	for _, co := range cos {
-		if !linked(co.dir) {
+		if !s.linked(co.dir) {
 			continue
 		}
 		entries, err := ListWorktrees(ctx, co.dir)
@@ -337,9 +379,13 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 		}
 		r := s.label(co)
 		for _, e := range entries {
-			if e.Prunable || e.Bare || e.Root == co.dir || !s.Owns(e.Root) {
+			// A root two checkouts register, one after the other's
+			// directory was deleted by hand, is listed once, for the
+			// first in directory order, as Find finds it.
+			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
 				continue
 			}
+			seen[e.Root] = true
 			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
 		}
 	}
@@ -418,7 +464,7 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 		return Record{}, "", false, err
 	}
 	for _, co := range cos {
-		if !linked(co.dir) {
+		if !s.linked(co.dir) {
 			continue
 		}
 		entries, err := ListWorktrees(ctx, co.dir)
@@ -441,21 +487,36 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 // deleted by hand, does: it is what rm prunes, and its root is what finds
 // the orphaned session. Not found is (Record{}, checkout, false, nil) with
 // the checkout still reported when it exists.
+//
+// Every checkout of the repository is asked, in directory order: two
+// clones of one repository each have worktrees, and each is listed.
 func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record, string, bool, error) {
-	checkout, ok, err := s.Checkout(ctx, repo)
-	if err != nil || !ok {
+	cos, err := s.scan(ctx)
+	if err != nil {
 		return Record{}, "", false, err
 	}
-	entries, err := ListWorktrees(ctx, checkout)
-	if err != nil {
-		return Record{}, checkout, false, err
-	}
-	for _, e := range entries {
-		if e.Branch == branch && e.Root != checkout && s.Owns(e.Root) {
-			return Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, checkout, true, nil
+	first := ""
+	for _, co := range cos {
+		if !config.SameSource(co.origin, repo.Source) {
+			continue
+		}
+		if first == "" {
+			first = co.dir
+		}
+		if !s.linked(co.dir) {
+			continue
+		}
+		entries, err := ListWorktrees(ctx, co.dir)
+		if err != nil {
+			return Record{}, co.dir, false, err
+		}
+		for _, e := range entries {
+			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) {
+				return Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
+			}
 		}
 	}
-	return Record{}, checkout, false, nil
+	return Record{}, first, false, nil
 }
 
 // Remove unregisters and deletes a worktree through git, which is the

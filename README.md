@@ -86,7 +86,7 @@ repos:                        # the known set
     name: notes               # optional; otherwise derived from the source
     copy: ["config/*.local"]  # this machine's own steps for the repository's worktrees,
     setup: ["pnpm install"]   # after the committed .laatmux.yaml's
-copy: ["**/.envrc.cache.enc"] # this machine's own copy rules for every worktree
+copy: ["**/.envrc.cache.enc"] # copy rules for every worktree this machine adds or makes
 ```
 
 `hosts`, `agents` and `repos` are read by clients. `tmux_servers` and the
@@ -98,20 +98,28 @@ default server list is the managed `laatmux` server alone.
 The repositories are the laptop's to decide. An add carries the repository
 as the sending machine's config has it: source, name, `copy` and `setup`,
 with the top-level `copy` after the repository's own. A host daemon with
-the `repo-entry` capability resolves the add against that entry, so a host
-needs no `repos` list of its own for it. A host's own list still names its
-repositories for adds from an older client, and labels its worktrees. A
-host with an older daemon ignores the entry and needs the repository in
-its own list, as before.
+the `repo-entry` capability resolves an add for a repository its own
+config does not list against that entry, so a host needs no `repos` list
+for it. The host's own top-level `copy` applies after the entry's, as it
+does to every worktree the host makes; a file copied already is skipped.
+A repository the host's config does list is the host's own: its source,
+the transport the host clones with, its name and its steps decide, as
+before entries. An entry whose name is the host's name for another
+repository is refused. A host with an older daemon ignores the entry and
+needs the repository in its own list, as before.
 
-The ssh and https forms of one hosted repository are one repository:
+The forms a forge gives one repository are one repository:
 `git@host:owner/repo`, `ssh://git@host/owner/repo` and
-`https://host/owner/repo`, with or without `.git`, compare equal, the host
-without case. User and port are ignored, and the path is compared as
-written. A host finds an existing checkout in any of the forms and fetches
-through that checkout's own origin, so each machine keeps the transport it
-can use. Local paths and other URLs compare exactly. Two forms of one
-repository in the same `repos` list are rejected as a duplicate.
+`https://host/owner/repo`, with or without `.git` and a trailing slash,
+the host compared without case. Only the forge convention is unified: ssh
+as the user `git` on the default port with a path from the forge's root,
+and http or https on the default port, whose user is a credential. Any
+other source compares exactly, since there a user, a port or a leading
+slash can name another repository. A host finds an existing checkout in
+any of the forms and fetches through that checkout's own origin, so each
+machine keeps the transport it can use. Two forms of one repository in
+the same `repos` list are rejected as a duplicate, so a config that
+listed both must drop one before the daemon starts again.
 `laatmux serve --tmux-servers laatmux,default` overrides the file;
 `--tmux-socket` is the older spelling of the same flag.
 
@@ -181,9 +189,10 @@ truth; labels only place new things.
 - **Worktree records** arrive in the subscription stream next to agents:
   `worktrees` in a snapshot, `worktree` in an upsert, `worktree_id` in a
   remove. Every two seconds the daemon scans the main checkouts under
-  `repos`, each found by having an `origin`, asks each that has linked
-  worktrees for `git worktree list --porcelain`, and publishes the
-  entries under `worktrees/`. Every checkout counts, listed in the config
+  `repos`, each found by having an `origin`, asks each that has a linked
+  worktree under `worktrees/`, read from the `gitdir` files git keeps,
+  for `git worktree list --porcelain`, and publishes the entries under
+  `worktrees/`, a root once. Every checkout counts, listed in the config
   or not: one the config lists is labelled with the config's name and
   source, any other with its directory name and its origin. The laptop's
   views show the laptop's own name for a source it knows. Prunable
@@ -192,9 +201,9 @@ truth; labels only place new things.
   `session` is the managed session whose single pane records the root in
   `@laatmux_cwd`, joined from the pane poll, so an agent exiting updates
   the record without a git call. Origin reads are cached by the mtime of
-  `.git/config`, and a checkout without `.git/worktrees` is not asked, so
-  an idle poll spawns one git process per checkout that has linked
-  worktrees. The id is `<environment_id>/worktree/<root>`.
+  `.git/config`, and a checkout with no linked worktree under
+  `worktrees/` is not asked, so an idle poll spawns one git process per
+  checkout that has one. The id is `<environment_id>/worktree/<root>`.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
   stages in the note, each step skipped by inspection: resolve, clone
   (refused when `<repos>/<name>` exists with another origin), fetch,
@@ -219,7 +228,10 @@ truth; labels only place new things.
   says why, then kills every managed session whose pane records the
   root. Both steps skip when already done, so a repeat is `ok`. `repo`
   names a repository the config lists or any checkout under `repos`, by
-  source or by label. Only a
+  source or by label; a label two repositories answer to is refused. With
+  `root`, the checkout that registers the root is the one git removes
+  from, and a repository with no checkout here still reaches the
+  session by the root. Only a
   worktree under `worktrees/` is removed, by branch or by root; one the
   user made elsewhere is left alone, as is the branch. Send `root` from
   the record whenever it is known: it is what reaches a session whose
@@ -286,7 +298,9 @@ truth; labels only place new things.
   sharing a lock, so adds for different repositories run in parallel;
   `rm` holds every repository while it resolves and removes, listed or
   not, since its root checks ask every checkout, and so waits for any add
-  in flight.
+  in flight; adds that arrive while it waits wait for it. Two sources
+  sent under one name also share the name's lock, so they never clone
+  into one directory at once.
 - **Tasks**, capability `task`, the host's side of
   [milestone four](docs/milestone-four.md): a command journal, one file
   per add under `<state>/commands/`, for the two decisions a retry
