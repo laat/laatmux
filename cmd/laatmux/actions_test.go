@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -1034,5 +1035,65 @@ func TestClickJumpRefocuses(t *testing.T) {
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
 	if refocused != 1 {
 		t.Fatal("a click in the popup moved the focus")
+	}
+}
+
+// A digit that jumps nowhere selects the row it counted, as a click
+// does, and moves no focus.
+func TestDigitJumpNowhereSelects(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	m := dashModel(cfg)
+	m.Follow = true
+	refocused := 0
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ },
+		jumper: func(rows.Row) error { return errors.New("no session") }}
+	target := m.Visible()[1].Row
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: target})
+	if refocused != 0 || m.Follow || m.Selection() == nil || m.Selection().ID() != target.ID() {
+		t.Fatalf("digit: refocused %d follow %v selected %+v", refocused, m.Follow, m.Selection())
+	}
+}
+
+// lastPane gives the focus back to the pane active before the view's,
+// once: with the view's pane no longer active, a second call does
+// nothing. On a tmux server of the test's own, found through TMUX as
+// the sidebar finds its own.
+func TestLastPane(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("no tmux")
+	}
+	dir, err := os.MkdirTemp("/tmp", "lmxl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "sock")
+	tm := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("tmux", append([]string{"-S", sock, "-f", "/dev/null"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	t.Cleanup(func() {
+		exec.Command("tmux", "-S", sock, "kill-server").Run()
+		os.RemoveAll(dir)
+	})
+	main := tm("new-session", "-d", "-s", "s", "-x", "100", "-y", "20", "-P", "-F", "#{pane_id}", "sleep 100")
+	side := tm("split-window", "-h", "-b", "-l", "30", "-t", main, "-P", "-F", "#{pane_id}", "sleep 100")
+	tm("select-pane", "-t", main)
+	tm("select-pane", "-t", side)
+	pid := tm("display", "-p", "#{pid}")
+	t.Setenv("TMUX", sock+","+pid+",0")
+	t.Setenv("TMUX_PANE", side)
+	active := func() string { return tm("display", "-p", "-t", "s", "#{pane_id}") }
+	lastPane(context.Background())
+	if a := active(); a != main {
+		t.Fatalf("after lastPane: active %s, want %s", a, main)
+	}
+	lastPane(context.Background())
+	if a := active(); a != main {
+		t.Fatalf("a second lastPane toggled back to %s", a)
 	}
 }

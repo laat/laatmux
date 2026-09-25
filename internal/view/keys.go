@@ -877,8 +877,6 @@ func (m *Model) nth(n int) (int, bool) {
 	return 0, false
 }
 
-// hit is the row on screen line y (1-based), -1 for none. The body
-// starts after the header lines.
 // hitRow is the visible row now that the screen clicked drew on line y
 // (1-based), found by its id, -1 when that line drew no row or the row
 // is no longer visible: what was clicked is what was on screen, whatever
@@ -904,14 +902,6 @@ func (m *Model) hitRow(y int, at time.Time) int {
 		}
 	}
 	return -1
-}
-
-func (m *Model) hit(y int) int {
-	i := y - 1 - len(m.Header)
-	if i < 0 || i >= len(m.hits) {
-		return -1
-	}
-	return m.hits[i]
 }
 
 // pasteLine is a paste as one line of text, for a filter or a name:

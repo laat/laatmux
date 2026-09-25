@@ -136,7 +136,7 @@ func TestRenderScroll(t *testing.T) {
 	if !strings.Contains(txt, "scratch") || strings.Contains(txt, "fix-ls") {
 		t.Errorf("selection not scrolled to:\n%s", txt)
 	}
-	if got := m.hit(1); got < 0 || m.Visible()[got].Row.Name == "laatmux/fix-ls" {
+	if got := m.hitRow(1, time.Time{}); got < 0 || m.Visible()[got].Row.Name == "laatmux/fix-ls" {
 		t.Errorf("first line maps to row %d after scrolling", got)
 	}
 	// Back to the top: the scroll follows.
@@ -1036,6 +1036,18 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	m.Filter = "zzz-nothing"
 	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
 		t.Fatalf("a row filtered away since: %+v", a)
+	}
+	// A row that moved into a collapsed group since is no target either.
+	m.Filter = ""
+	m.Render()
+	id := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
+	for i := range in2.Locals {
+		in2.Locals[i].Settled = true
+	}
+	m.SetRows(rows.Build(in2))
+	m.ShowHidden = false
+	if i := m.hitRow(y, time.Time{}); i >= 0 && m.Visible()[i].Row.ID() == id && m.Visible()[i].Row.Settled {
+		t.Fatalf("a row collapsed since resolved to %d", i)
 	}
 }
 

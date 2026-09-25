@@ -114,7 +114,8 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 	return false
 }
 
-// jump is the Enter key: the jump command's logic on the selected row.
+// jump is the jump command's logic on a row; jumpAction is the view's
+// way to it, with the focus handled.
 func (d *dash) jump(m *view.Model, r rows.Row) bool {
 	exit, _ := d.jumpRow(m, r)
 	return exit
