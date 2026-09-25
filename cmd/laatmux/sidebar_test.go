@@ -105,8 +105,8 @@ func TestSidebarFit(t *testing.T) {
 	}
 }
 
-// A narrow window gives the sidebar half; a resize that keeps the
-// width leaves a dragged border; a dead sidebar pane is left alone.
+// A narrow window gives the sidebar half; a border dragged by hand is
+// put back at the next resize; a dead sidebar pane is left alone.
 func TestSidebarFitBounds(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -139,18 +139,12 @@ func TestSidebarFitBounds(t *testing.T) {
 	if w := width(); w != "35" {
 		t.Fatalf("wide again: %s", w)
 	}
-	// Dragged, then only the height changes: the drag stays.
+	// Dragged, then any resize: the configured width again.
 	run("resize-pane", "-t", id, "-x", "50")
 	run("resize-window", "-t", window, "-x", "160", "-y", "20")
 	fit()
-	if w := width(); w != "50" {
-		t.Fatalf("a height-only resize undid the drag: %s", w)
-	}
-	// The width changes: the configured width again.
-	run("resize-window", "-t", window, "-x", "170", "-y", "20")
-	fit()
 	if w := width(); w != "35" {
-		t.Fatalf("after a width change: %s", w)
+		t.Fatalf("after a resize: %s", w)
 	}
 	// A dead sidebar pane is not resized.
 	run("set-option", "-p", "-t", id, "remain-on-exit", "on")

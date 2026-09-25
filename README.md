@@ -564,10 +564,9 @@ is switched to.
   proportion when a window is resized, so a session made detached, 80
   columns wide, would otherwise give its sidebar a share of the terminal
   once a client switches to it, and so would resizing the terminal. In
-  a window narrower than twice the width it gets half. A border dragged
-  by hand stays until the window's width changes; a resize that only
-  changes the height, a status line toggled say, leaves it. A zoomed
-  window stays zoomed. A sidebar turned on by an older build gets the
+  a window narrower than twice the width it gets half. The width is the
+  sidebar's own, set in the config: a border dragged by hand is put
+  back at the next resize of the window. A zoomed window stays zoomed. A sidebar turned on by an older build gets the
   hook when `on` runs again. `off` unsets the five hooks and kills every tagged pane. `toggle` reads the hooks. The hook
   commands name the binary by its absolute path. `q` in a sidebar pane
   closes it; that window has no sidebar until a new window is made or
