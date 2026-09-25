@@ -213,7 +213,8 @@ func TestRelayAdd(t *testing.T) {
 	if rm.ReplacedBy != "henv/worktree/"+root {
 		t.Fatalf("remove %+v", rm)
 	}
-	if !last.Done || !last.OK || last.Prompt != protocol.DeliveryDelivered || last.Root != root || last.Branch != "task" || last.EnvironmentID != "henv" || !last.Taken || !last.Reachable {
+	// The stream carries sent, which the views test for dismissal.
+	if !last.Done || !last.OK || last.Prompt != protocol.DeliveryDelivered || last.Root != root || last.Branch != "task" || last.EnvironmentID != "henv" || !last.Taken || !last.Reachable || !last.Sent {
 		t.Fatalf("last record %+v", last)
 	}
 	p := readPending(t, f.dir, "t1")

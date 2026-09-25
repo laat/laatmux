@@ -834,6 +834,11 @@ func TestPendingTarget(t *testing.T) {
 	if _, err := pendingTarget(row(early, nil, false)); err == nil || !strings.Contains(err.Error(), "no session yet") {
 		t.Fatalf("no session: %v", err)
 	}
+	failed := early
+	failed.OK, failed.Error = false, "failed at agent: x"
+	if _, err := pendingTarget(row(failed, nil, false)); err == nil || !strings.Contains(err.Error(), "the add failed") {
+		t.Fatalf("failed: %v", err)
+	}
 }
 
 // The sidebar takes a task's p and x and what follows from them, and
@@ -910,7 +915,7 @@ func TestPendingOffers(t *testing.T) {
 	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
 	m.Handle(view.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
-	if !strings.Contains(m.Message, "laatmux tasks show add-1") {
+	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
 		t.Errorf("p on an expired prompt: %q", m.Message)
 	}
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 's'}})

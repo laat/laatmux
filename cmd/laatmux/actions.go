@@ -595,6 +595,8 @@ func (d *dash) askDismiss(m *view.Model, r rows.Row) {
 	if !Dismissable(r) {
 		p := r.Pending
 		switch {
+		case r.Replaced && p.Mismatch == "" && !p.Done:
+			m.Message = r.Name + ": the relay has not yet seen the machine change; x dismisses it once it has"
 		case !p.Done:
 			m.Message = r.Name + ": the add is still running; x dismisses it once it needs you"
 		case p.AttemptOpen:
@@ -646,8 +648,10 @@ func (d *dash) deliverPrompt(m *view.Model) {
 		case p.Delivered():
 			m.Message = r.Name + ": nothing to deliver (the prompt is " + p.Prompt + ")"
 		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:
-			// The prompt has nowhere to go; the file still has it.
-			m.Message = r.Name + ": " + r.State() + "; laatmux tasks show " + p.ID + " prints the prompt"
+			// The prompt has nowhere to go; the file still has it, if
+			// the add had one, which a failure before the agent stage
+			// does not say.
+			m.Message = r.Name + ": " + r.State() + "; laatmux tasks show " + p.ID + " prints the prompt, if one was kept"
 		default:
 			m.Message = r.Name + ": nothing to deliver (" + r.State() + ")"
 		}
