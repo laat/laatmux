@@ -1167,8 +1167,12 @@ func TestBrokenSequenceBeforeClick(t *testing.T) {
 		"\x1b[1;\x1b[A":     {{Kind: -1}, {Kind: KeyUp}},
 		"\x1b[\x03":         {{Kind: -1}, {Kind: KeyCtrlC}},
 		// Alt-O the same way: SS3 cut short.
-		"\x1bO\x1b[<0;5;3M":    {{Kind: KeyMouse, X: 5, Y: 3}},
-		"\x1bO\r":              {{Kind: KeyEnter}},
+		"\x1bO\x1b[<0;5;3M": {{Kind: KeyMouse, X: 5, Y: 3}},
+		"\x1bO\r":           {{Kind: KeyEnter}},
+		// The old form of a modified F1 is dropped whole, not a digit.
+		"\x1bO2P":              nil,
+		"\x1bO1;2Pj":           {{Rune: 'j'}},
+		"\x1bO2\x03":           {{Kind: KeyCtrlC}},
 		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
 	} {
 		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {
@@ -1225,7 +1229,7 @@ func TestPasteTextBrokenSequence(t *testing.T) {
 		}
 	}
 	// A chunk is not cut before such a sequence's text: it has ended.
-	if head, tail := splitTail([]byte("ok \x1b[\nmore")); string(head) != "ok \x1b[\nmore" || len(tail) != 0 {
+	if head, tail := splitTail([]byte("ok \x1b[\n12")); string(head) != "ok \x1b[\n12" || len(tail) != 0 {
 		t.Errorf("splitTail: %q %q", head, tail)
 	}
 }

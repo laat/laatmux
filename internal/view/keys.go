@@ -302,8 +302,17 @@ func splitTail(b []byte) (head, tail []byte) {
 			if !done {
 				cut = i
 			}
-		} else if i+1 < cut && b[i+1] == 'O' && i+2 >= cut {
-			cut = i
+		} else if i+1 < cut && b[i+1] == 'O' {
+			done := false
+			for j := i + 2; j < cut; j++ {
+				if b[j] < 0x30 || b[j] > 0x3f {
+					done = true
+					break
+				}
+			}
+			if !done {
+				cut = i
+			}
 		}
 		break
 	}
@@ -351,9 +360,13 @@ func pasteText(b []byte) string {
 					i = j
 				}
 			} else if i+1 < len(rs) && rs[i+1] == 'O' {
-				i++
-				if final(i + 1) {
-					i++
+				j := i + 2
+				for j < len(rs) && rs[j] >= 0x30 && rs[j] <= 0x3f {
+					j++
+				}
+				i = j - 1
+				if final(j) {
+					i = j
 				}
 			}
 		case r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f:
@@ -473,7 +486,13 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 				return keys, nil
 			}
 			if b[1] == 'O' {
-				if len(b) < 3 {
+				// Parameter bytes, as in the old form of a modified F1
+				// to F4, ESC O 2 P, then the final byte.
+				j := 2
+				for j < len(b) && b[j] >= 0x30 && b[j] <= 0x3f {
+					j++
+				}
+				if j == len(b) {
 					if !flush {
 						return keys, b
 					}
@@ -482,16 +501,16 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 				// Not a final byte: Alt-O, or an Esc and O read
 				// together, cut short by what follows, a click's
 				// escape say, which is parsed afresh, as in csi.
-				if b[2] < 0x40 || b[2] > 0x7e {
-					b = b[2:]
+				if b[j] < 0x40 || b[j] > 0x7e {
+					b = b[j:]
 					continue
 				}
 				// SS3 keys, sent in application cursor mode; the rest,
-				// F1 to F4 say, are dropped whole.
-				if kind, ok := ss3Keys[b[2]]; ok {
+				// F1 to F4 and any with parameters, are dropped whole.
+				if kind, ok := ss3Keys[b[j]]; ok && j == 2 {
 					keys = append(keys, Key{Kind: kind})
 				}
-				b = b[3:]
+				b = b[j+1:]
 				continue
 			}
 			if b[1] == '\r' || b[1] == '\n' {
