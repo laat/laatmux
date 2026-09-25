@@ -271,7 +271,9 @@ func DismissAt(ctx context.Context, environmentID, root string) error {
 		return err
 	}
 	defer c.Close()
-	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapDismissRoot) {
+		// An older daemon would read it as a dismiss of the request's
+		// id; it marks nothing gone either, and the task stays for x.
 		return nil
 	}
 	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, EnvironmentID: environmentID, Root: root})

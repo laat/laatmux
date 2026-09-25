@@ -82,6 +82,13 @@ func TestRelayDismissAt(t *testing.T) {
 	f := newRelayFixture(t, []string{"loading"})
 	a := notDelivered(t, f, "d1", "one")
 	notDelivered(t, f, "d2", "two")
+	// Another environment's worktree at the same root is not this one.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-0", EnvironmentID: "other", Root: a.Root}); !res.OK {
+		t.Fatalf("dismiss at another environment: %+v", res)
+	}
+	if _, ok := f.local.relay.get("d1"); !ok {
+		t.Fatal("a task on another environment was dropped")
+	}
 	// The request carries an id of its own, as every client's does; the
 	// root is what names the tasks.
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-1", EnvironmentID: "henv", Root: a.Root})
@@ -93,9 +100,6 @@ func TestRelayDismissAt(t *testing.T) {
 	}
 	if _, ok := f.local.relay.get("d2"); !ok {
 		t.Fatal("a task elsewhere was dropped")
-	}
-	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-2", EnvironmentID: "other", Root: a.Root}); !res.OK {
-		t.Fatalf("dismiss at another environment: %+v", res)
 	}
 }
 
@@ -160,5 +164,42 @@ func TestRelayDismissAtKeepsRunning(t *testing.T) {
 		if _, ok := f.local.relay.get(id); !ok {
 			t.Fatalf("%s dropped by dismiss at", id)
 		}
+	}
+}
+
+// A listing that lacks the worktree while the host still has it, a
+// merged record that fell behind say, is asked about and leaves the
+// task as it was; the same listing again starts no second check.
+func TestRelayNotGoneWhilePresent(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	notDelivered(t, f, "n5", "present")
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.mu.Unlock()
+	time.Sleep(time.Second)
+	for i := 0; i < 100; i++ {
+		f.local.relay.mu.Lock()
+		busy := f.local.relay.checking["n5"]
+		f.local.relay.mu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got, _ := f.local.relay.get("n5"); got.Gone {
+		t.Fatal("gone while the host lists the worktree")
+	}
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{})
+	f.local.mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+	f.local.relay.mu.Lock()
+	again := f.local.relay.checking["n5"]
+	f.local.relay.mu.Unlock()
+	if again {
+		t.Fatal("the same listing started a second check")
 	}
 }

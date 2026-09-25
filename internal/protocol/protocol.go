@@ -78,6 +78,11 @@ const (
 	// attempt number delivers its prompt now. A daemon with relay has
 	// merged.
 	CapRelay = "relay"
+	// CapDismissRoot is dismiss with environment_id and root: the relay
+	// drops the finished records at that worktree, which rm sends after
+	// removing it. A daemon without it reads the message as a dismiss of
+	// the request's own id.
+	CapDismissRoot = "dismiss-root"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.

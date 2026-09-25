@@ -773,7 +773,7 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   the handoff asks it, until it answers; a remote host's listings are
   followed while a view is subscribed. `rm` drops the finished tasks at the worktree it
   removed, through `{type: dismiss, environment_id, root}` to a local
-  daemon that is running. Until then, `{type: prompt, id}`
+  daemon that is running and has the capability `dismiss-root`. Until then, `{type: prompt, id}`
   delivers it as the next attempt, written to the file first, one
   unresolved at a time; `recovery expired` from the host ends that, and
   `laatmux tasks show <id>` prints the prompt for pasting by hand. An add

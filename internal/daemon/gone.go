@@ -34,11 +34,21 @@ func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
 }
 
 // hostListedLocked is a host's successful listing of worktrees: a task
-// on the environment whose worktree it lacks is checked.
+// on the environment whose worktree it lacks is checked. Polls repeat a
+// listing many times over; one that is the same as the last one checked
+// against changes nothing, since a task is listed only with its
+// worktree present and a check runs until the host answers.
 func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool) {
-	if environmentID == "" {
+	if environmentID == "" || d.relay == nil {
 		return
 	}
+	if last, ok := d.listedSets[environmentID]; ok && sameSet(last, listed) {
+		return
+	}
+	if d.listedSets == nil {
+		d.listedSets = map[string]map[string]bool{}
+	}
+	d.listedSets[environmentID] = listed
 	d.tasksAtLocked(func(p protocol.Pending) bool {
 		return p.EnvironmentID == environmentID && !listed[p.WorktreeID()]
 	})
@@ -119,4 +129,16 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Messa
 		d.dismissEnded(id)
 	}
 	return res
+}
+
+func sameSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
 }
