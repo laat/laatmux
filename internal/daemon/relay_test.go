@@ -28,36 +28,77 @@ type relayFixture struct {
 	remote *fakeRemote
 	hosts  *hostsList
 	local  *Daemon
+	locals []*Daemon // every laptop daemon made, for the cleanup
 	dir    string
 	ctx    context.Context
 }
 
 func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	// The store's directories and the pending directory are made before
+	// the context, so the cleanup cancels the daemons and waits for the
+	// relay's goroutines before the directories go.
 	store, remote := newStore(t)
+	dir := t.TempDir()
+	hostCommands := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &relayFixture{store: store, dir: dir, ctx: ctx}
+	t.Cleanup(func() {
+		cancel()
+		f.awaitQuiet(t)
+	})
 	ft := &fakeServer{screen: screen}
 	host := New(Config{
 		EnvironmentID: "henv", Host: "vm", Version: "host",
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}, "argv": {"claude", PromptPlaceholder}},
-		Commands: t.TempDir(), WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
+		Commands: hostCommands, WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
 	})
 	go host.Run(ctx)
 	fr := newFakeRemote(t, ctx, host)
 	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}}}
-	dir := t.TempDir()
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Dial: fr.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, SessionInterval: 20 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
 	})
 	discovered(local)
 	go local.Run(ctx)
-	f := &relayFixture{host: host, ft: ft, store: store, remote: fr, hosts: hosts, local: local, dir: dir, ctx: ctx}
+	f.host, f.ft, f.remote, f.hosts = host, ft, fr, hosts
+	f.setLocal(local)
 	_ = remote
 	return f
+}
+
+// setLocal makes d the fixture's laptop daemon, remembered for the
+// cleanup's wait.
+func (f *relayFixture) setLocal(d *Daemon) {
+	f.local = d
+	f.locals = append(f.locals, d)
+}
+
+// awaitQuiet waits for every laptop daemon's relay goroutines to have
+// returned, bounded, so nothing writes into a directory being removed.
+func (f *relayFixture) awaitQuiet(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for _, d := range f.locals {
+		if d.relay == nil {
+			continue
+		}
+		for {
+			d.relay.mu.Lock()
+			n := len(d.relay.runners)
+			d.relay.mu.Unlock()
+			if n == 0 || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	// The host's add goroutines end with the context too; a moment for
+	// their last writes.
+	time.Sleep(50 * time.Millisecond)
 }
 
 // source is the host's repository source.
@@ -304,7 +345,7 @@ func TestRelayResumesFiles(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	for _, id := range []string{"r1", "r2"} {
 		p := f.awaitRecord(t, id, 30*time.Second, func(p pendingFile) bool { return p.retired() })
 		if p.Prompt != protocol.DeliveryDelivered {
@@ -486,7 +527,7 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	if got := f.awaitRecord(t, "s1", 10*time.Second, func(p pendingFile) bool { return p.retired() }); got.ReplacedBy != p.WorktreeID() {
 		t.Fatalf("settled %+v", got)
 	}
@@ -597,7 +638,7 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	got := f.awaitRecord(t, "c1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "tasks not supported") })
 	if got.Done {
 		t.Fatalf("done on a refusal after the send: %+v", got)
@@ -678,7 +719,7 @@ func TestRelayHostRestartMidAdd(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	got := f.awaitRecord(t, "h1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
 	if got.Branch != e.Branch || got.Prompt != protocol.DeliveryDelivered || len(ft.cmds) != 1 {
 		t.Fatalf("resumed %+v cmds %q", got, ft.cmds)
@@ -709,7 +750,7 @@ func TestRelayEnvironmentMismatchWaits(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	// Pinned at accept to the host row's environment.
 	f.local.mu.Lock()
 	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "vm"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "henv", Capabilities: []string{protocol.CapTask}}, agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
@@ -920,7 +961,7 @@ func TestRelayLaptopRestartDuringAdd(t *testing.T) {
 	})
 	discovered(local)
 	go local.Run(f.ctx)
-	f.local = local
+	f.setLocal(local)
 	got := f.awaitRecord(t, "l1", 30*time.Second, func(p pendingFile) bool { return p.Done })
 	if !got.OK || got.Prompt != protocol.DeliveryNotDelivered || !got.Taken {
 		t.Fatalf("record %+v", got)
