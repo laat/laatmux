@@ -1134,3 +1134,39 @@ func TestRelayMismatchDismissable(t *testing.T) {
 		t.Fatal("record kept")
 	}
 }
+
+// A dismiss of a record that needs the user ends its goroutines too: a
+// settle waiting on a listing the host never gives past the barrier
+// does not keep its channel open for a record that is gone.
+func TestRelayDismissEndsSettle(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "w1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "waiting", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "w1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	// A listing owed that no stamp will satisfy.
+	f.local.setPending("w1", true, func(p *pendingFile) {
+		p.Listed = false
+		p.Barrier = &protocol.Listing{Generation: p.Barrier.Generation, Revision: 1 << 40}
+	})
+	f.local.relay.mu.Lock()
+	f.local.startRunnerLocked(f.ctx, "w1", f.local.settle)
+	f.local.relay.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	f.local.relay.mu.Lock()
+	before := len(f.local.relay.runners["w1"])
+	f.local.relay.mu.Unlock()
+	if before != 1 {
+		t.Fatalf("%d runners before dismiss", before)
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "w1"}); !res.OK {
+		t.Fatalf("dismiss %+v", res)
+	}
+	f.local.relay.mu.Lock()
+	after := len(f.local.relay.runners["w1"])
+	f.local.relay.mu.Unlock()
+	if after != 0 {
+		t.Fatalf("%d runners after dismiss", after)
+	}
+}

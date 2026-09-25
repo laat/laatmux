@@ -917,11 +917,12 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		// snapshot: a viewer that arrives sees the record and, once it
 		// is gone, the worktree row it became.
 		d.relay.mu.Lock()
-		p, ok := d.relay.recs[id]
-		if !ok || p.retired() || p.Gone {
+		rec, ok := d.relay.recs[id]
+		if !ok || rec.retired() || rec.Gone {
 			d.relay.mu.Unlock()
 			return
 		}
+		p := *rec // copied under the mutex; read after it is released
 		d.mu.Lock()
 		watching := d.mctx != nil
 		mh, configured := d.mhosts[p.Host]
@@ -944,7 +945,7 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			d.relay.mu.Unlock()
 			if time.Now().After(recheck) {
 				recheck = time.Now().Add(handoffRecheck)
-				if present, ok := d.listingHas(ctx, id, *p); ok && !present {
+				if present, ok := d.listingHas(ctx, id, p); ok && !present {
 					d.persist(ctx, id, func(p *pendingFile) { p.Gone = true })
 					return
 				}
@@ -1066,9 +1067,21 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 			d.relay.mu.Unlock()
 		}
 		d.restartRunners(id)
-		return d.dismissSettled(id)
+		return d.dismissEnded(id)
 	}
-	return d.dismissSettled(id)
+	return d.dismissEnded(id)
+}
+
+// dismissEnded is dismissSettled with the record's goroutines ended
+// once it is gone: a settle waiting on the host's listing would keep
+// its channel open otherwise. After dismissSettled has let go of its
+// locks, so a runner queued on the attempt lock can see its cancel.
+func (d *Daemon) dismissEnded(id string) protocol.Message {
+	res := d.dismissSettled(id)
+	if res.OK {
+		d.stopRunners(id)
+	}
+	return res
 }
 
 // dismissSettled dismisses a record that needs the user: one with an
@@ -1294,7 +1307,10 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 			}
 			continue
 		}
-		p, _ = d.persist(ctx, id, func(p *pendingFile) {
+		// An outcome that could not be written leaves the attempt open
+		// on disk: not resolved, so the caller follows it again.
+		var written bool
+		p, written = d.persist(ctx, id, func(p *pendingFile) {
 			p.AttemptOpen = false
 			if res.OK {
 				p.Prompt, p.Error, p.AttemptError = res.Prompt, res.Error, ""
@@ -1314,7 +1330,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 				p.Attempt--
 			}
 		})
-		return p, true
+		return p, written
 	}
 	p, _ := d.relay.get(id)
 	return p, false
