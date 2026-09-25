@@ -1119,4 +1119,23 @@ func TestClickClock(t *testing.T) {
 	if len(ks) != 1 || !ks[0].At.Equal(t2) {
 		t.Fatalf("whole click: %+v", ks)
 	}
+	// The completion of a held click and a fresh one in the same read:
+	// only the first is the held one's; a new partial suffix begins now.
+	t3 := time.Unix(30, 0)
+	c.feed(&dec, []byte("\x1b[<0;5;"), t1)
+	ks = c.feed(&dec, []byte("3M\x1b[<0;6;4M\x1b[<0;7;"), t3)
+	if len(ks) != 2 || !ks[0].At.Equal(t1) || !ks[1].At.Equal(t3) || !c.held.Equal(t3) {
+		t.Fatalf("completion, fresh click and a new suffix: %+v held %v", ks, c.held)
+	}
+	dec.Flush()
+	c.flushed(&dec)
+	// A bare escape held, then flushed as the escape key: a click after
+	// it has its own time.
+	c.feed(&dec, []byte("\x1b"), t1)
+	dec.Flush()
+	c.flushed(&dec)
+	ks = c.feed(&dec, []byte("\x1b[<0;5;3M"), t3)
+	if len(ks) != 1 || !ks[0].At.Equal(t3) {
+		t.Fatalf("a click after a flushed escape: %+v", ks)
+	}
 }

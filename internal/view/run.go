@@ -111,6 +111,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			if handle(dec.Flush()) {
 				return nil
 			}
+			clicks.flushed(&dec)
 			if w := dec.Wait(); w > 0 {
 				// A paste under way: looked at again, so one whose end
 				// never comes is taken once its bytes have stopped.
@@ -140,19 +141,34 @@ type clickClock struct {
 	held time.Time // when the bytes the decoder holds first came
 }
 
+// Only the first key of a read can complete the held bytes, which the
+// decoder reads first; every later key began in this read. Bytes still
+// held after it are the held sequence, not done yet, when the read gave
+// no key, and else a new one begun in this read.
 func (c *clickClock) feed(dec *Decoder, b []byte, at time.Time) []Key {
-	if !c.held.IsZero() {
-		at = c.held
-	}
 	ks := dec.Feed(b)
 	for i := range ks {
-		if ks[i].Kind == KeyMouse {
-			ks[i].At = at
+		if ks[i].Kind != KeyMouse {
+			continue
+		}
+		ks[i].At = at
+		if i == 0 && !c.held.IsZero() {
+			ks[i].At = c.held
 		}
 	}
-	c.held = time.Time{}
-	if dec.Pending() {
+	switch {
+	case !dec.Pending():
+		c.held = time.Time{}
+	case len(ks) > 0 || c.held.IsZero():
 		c.held = at
 	}
 	return ks
+}
+
+// flushed is the decoder flushed: bytes it no longer holds were read
+// as they were, and a click after them is not theirs.
+func (c *clickClock) flushed(dec *Decoder) {
+	if !dec.Pending() {
+		c.held = time.Time{}
+	}
 }
