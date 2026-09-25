@@ -306,7 +306,7 @@ truth; labels only place new things.
   was launched in, with a verified Claude identified in it, and only
   when the bottom of the screen is the whole question, naming exactly
   that root, with its two options, one cursor, and nothing after the
-  footer. Each key, a handful at most, is pressed under the root's
+  footer. Each key, two at most, is pressed under the root's
   delivery lock on a capture made under it: the cursor moved onto `Yes,
   I trust this folder`, then Enter with it there. Text that does not
   match is left alone, and the wait times out as before; `StopRuns`

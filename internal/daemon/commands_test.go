@@ -217,6 +217,12 @@ func newAddDaemon(t *testing.T) (*Daemon, *fakeServer, *worktree.Store, string) 
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
 		Commands: t.TempDir(),
 	})
+	t.Cleanup(func() {
+		// The trust watchers an add starts end with the test.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d.StopRuns(ctx)
+	})
 	return d, ft, store, remote
 }
 

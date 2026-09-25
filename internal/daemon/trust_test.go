@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
@@ -315,5 +317,76 @@ func TestAddArgvAnswersTrust(t *testing.T) {
 			t.Fatalf("the question was not answered: %d keys", n)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Only a verified Claude is answered for: an agent identified as
+// something else, or a Claude not verified by the process check, is not.
+func TestTrustNeedsVerifiedClaude(t *testing.T) {
+	d, _, _, _ := newAddDaemon(t)
+	key := paneKey(d.managed.Label, "%1")
+	target := trustTarget{pane: "%1", session: "s", serverPID: 5}
+	for name, obs := range map[string]observation{
+		"codex":      {session: "s", serverPID: 5, verified: true, identity: procs.Identity{Agent: "codex"}},
+		"unverified": {session: "s", serverPID: 5, verified: false, identity: procs.Identity{Agent: "claude"}},
+	} {
+		d.mu.Lock()
+		d.panes[key] = &paneState{obs: obs}
+		d.mu.Unlock()
+		if _, claude, _, _ := d.trustState(target); claude {
+			t.Errorf("%s: read as a verified Claude", name)
+		}
+	}
+	d.mu.Lock()
+	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: procs.Identity{Agent: "claude"}}}
+	d.mu.Unlock()
+	if _, claude, _, _ := d.trustState(target); !claude {
+		t.Error("a verified Claude not read as one")
+	}
+}
+
+// A press waits for the root's delivery lock, which a paste into the
+// pane holds; and a root reached through a symlink is answered when
+// tmux and Claude name its resolved directory.
+func TestTrustStepLockAndSymlink(t *testing.T) {
+	d, ft, _, _ := newAddDaemon(t)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	key := paneKey(d.managed.Label, "%1")
+	id := procs.Identity{Agent: "claude", PID: 42, Start: time.Unix(1, 0)}
+	d.mu.Lock()
+	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: id}}
+	d.mu.Unlock()
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{ID: "%1", Session: "s", ServerPID: 5, CurrentPath: real, Managed: true}}
+		ft.screen = trustScreen(real, true)
+	})
+	target := trustTarget{pane: "%1", session: "s", root: link, real: real, serverPID: 5}
+	unlock := d.lockDeliveries(link)
+	type step struct{ done, stop bool }
+	got := make(chan step, 1)
+	go func() {
+		moved := false
+		done, stop := d.trustStep(context.Background(), target, id, &moved)
+		got <- step{done, stop}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	ft.mu.Lock()
+	early := len(ft.keys)
+	ft.mu.Unlock()
+	if early != 0 {
+		t.Fatal("pressed while the delivery lock was held")
+	}
+	unlock()
+	if s := <-got; !s.done || s.stop {
+		t.Fatalf("through the symlink: %+v", s)
+	}
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if len(ft.keys) != 1 || ft.keys[0][1] != "Enter" {
+		t.Fatalf("keys %v", ft.keys)
 	}
 }

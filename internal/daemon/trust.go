@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -146,10 +147,12 @@ func trustOption(line string) (label string, selected bool) {
 }
 
 // trustTarget is the launch a watcher answers for: the pane, the session
-// and the tmux server instance it was made in, and the root.
+// and the tmux server instance it was made in, and the root, with real
+// its spelling with symlinks resolved, which is how tmux reports a
+// pane's directory and may be how Claude names it.
 type trustTarget struct {
-	pane, session, root string
-	serverPID           int
+	pane, session, root, real string
+	serverPID                 int
 }
 
 // trustState is what the latest observation says of the target: gone
@@ -178,6 +181,10 @@ func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.I
 func (d *Daemon) startTrust(t trustTarget, wait, poll time.Duration) {
 	if d.cfg.Store == nil || !d.cfg.Store.Owns(t.root) {
 		return
+	}
+	t.real = t.root
+	if r, err := filepath.EvalSymlinks(t.root); err == nil {
+		t.real = r
 	}
 	d.mu.Lock()
 	if d.stopping {
@@ -273,7 +280,7 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 	switch {
 	case here == nil || here.Dead || here.Session != t.session || here.ServerPID != t.serverPID:
 		return false, true
-	case here.CurrentPath != t.root:
+	case here.CurrentPath != t.root && here.CurrentPath != t.real:
 		return false, false
 	}
 	screen, err := d.managed.Tmux.Capture(ctx, t.pane, d.cfg.CaptureLines)
@@ -281,6 +288,9 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 		return false, true
 	}
 	moves, ok := trustChoice(screen, t.root)
+	if !ok && t.real != t.root {
+		moves, ok = trustChoice(screen, t.real)
+	}
 	if !ok {
 		return false, false
 	}
