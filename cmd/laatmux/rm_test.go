@@ -1,12 +1,15 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -123,6 +126,7 @@ func TestParseAddArgs(t *testing.T) {
 		{[]string{"-p", "Fix the tests", "--agent", "claude"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", agent: "claude"}, false},
 		{[]string{"-p", "Fix the tests", "--", "claude", "--flag"}, addArgs{branch: "fix-the-tests", generated: true, prompt: "Fix the tests", cmd: []string{"claude", "--flag"}}, false},
 		{[]string{"fix", "--", "sleep", "3600"}, addArgs{branch: "fix", cmd: []string{"sleep", "3600"}}, false},
+		{[]string{"--detach", "-p", "Fix it"}, addArgs{branch: "fix-it", generated: true, prompt: "Fix it", detach: true}, false},
 		{nil, addArgs{}, true},
 		{[]string{""}, addArgs{}, true},
 		{[]string{"-p", "!!!"}, addArgs{}, true},
@@ -136,8 +140,40 @@ func TestParseAddArgs(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
+		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || got.detach != c.want.detach || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
 			t.Errorf("%v: got %+v %v, want %+v", c.args, got, err, c.want)
 		}
+	}
+}
+
+// tasks show never builds a path from the id: one that is not a plain
+// name maps to a hashed file, which does not exist.
+func TestShowTaskNoTraversal(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	os.MkdirAll(filepath.Join(home.Dir(), "pending"), 0o700)
+	os.WriteFile(filepath.Join(home.Dir(), "secret.json"), []byte(`{"prompt_text":"leak"}`), 0o600)
+	err := showTask("../secret")
+	if err == nil || !strings.Contains(err.Error(), "no pending record") {
+		t.Fatalf("traversal: %v", err)
+	}
+}
+
+// The task state line: a host gone from the snapshot's host list comes
+// first, whatever the record says.
+func TestTaskState(t *testing.T) {
+	p := protocol.Pending{ID: "t", Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", Listed: true}
+	if got := TaskState(p, true); !strings.HasPrefix(got, "prompt not delivered") {
+		t.Fatalf("configured: %q", got)
+	}
+	if got := TaskState(p, false); !strings.HasPrefix(got, "host removed") {
+		t.Fatalf("removed: %q", got)
+	}
+	p.Mismatch = "vm answers as environment x"
+	if got := TaskState(p, true); !strings.HasPrefix(got, "host replaced") {
+		t.Fatalf("mismatch: %q", got)
+	}
+	p.Mismatch, p.AttemptOpen, p.Attempt, p.AttemptError = "", true, 2, "old refusal"
+	if got := TaskState(p, true); !strings.HasPrefix(got, "delivering the prompt, attempt 2") {
+		t.Fatalf("open attempt: %q", got)
 	}
 }

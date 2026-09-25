@@ -115,10 +115,11 @@ So the laptop's daemon gains a `relay` capability: a client sends it an
 `add` naming the host, the daemon dials that host as the client would
 have, sends the add under the client's id, and follows it to the result.
 While it does, it publishes a pending record in the merged stream, and
-the views draw it as a row. The relay is the client's `command.Add`
-moved into the daemon, not a second implementation: the same `stream`
-with its follow and its environment pin, the same result handling, with
-the differences below. What the client did after the result splits: the
+the views draw it as a row. The relay does what the client's
+`command.Add` does, with the same follow, environment pin and result
+handling, in a send loop of its own, since it keeps its record on disk
+and reconnects without bound where the client gives up; the two share
+the sender lifetime, and the differences are below. What the client did after the result splits: the
 client writes `last.json` at submit, since it is the client's state and
 the submit is the choice; the local session is not made at all, `jump`
 makes it from the record when the user goes there, which is what `jump`
@@ -434,8 +435,14 @@ stands. The relay, on its own connection, takes plain snapshots after
 the result until one satisfies the barrier: the same generation at that
 revision or higher, or any later generation with a successful listing,
 since a daemon that started after the mutation lists after it. A worktree at the root in that snapshot hands
-the row over to the worktree row, once the merged stream shows it too,
-and the file goes; no worktree at the root is `done, worktree gone`, a
+the row over to the worktree row, once the merged stream shows it too:
+while a viewer is subscribed the relay waits for that, looking at the
+host's listing again every few seconds meanwhile, since the worktree
+may be gone again by then, and after a minute it hands over on the
+listing alone, so a merged connection that stays down does not hold
+the row for good; with no viewer, or with the host gone from the
+merged hosts, it hands over on the listing at once. Then the file
+goes; no worktree at the root is `done, worktree gone`, a
 row that needs the user only to be dismissed, and the file stays until
 then. Until such a snapshot the row says `done, awaiting the listing`,
 with the host's listing error when there is one, and the outcome is
@@ -489,6 +496,20 @@ not resubmit it, and one with an attempt unresolved follows the
 attempt. One whose host is gone from the config stays too, with `host
 removed`, so nothing the user asked for disappears without them.
 
+`x` is offered on a row that needs the user, and on three more that
+would otherwise be stuck: a record the host has no trace of, never
+sent nor taken, which a host that never answers leaves waiting; a
+record whose host is gone from the config, whatever its state; and a
+record whose host name now answers as another machine, the pin
+mismatch the record carries as `mismatch`. A dismiss ends the record's
+goroutines first, and removes a never-sent record before ending them,
+so nothing is sent for a file that is gone; a running add on a
+configured host that is the accepted machine is never dismissed. A
+host gone from the config is not a field of the record: the views and
+`tasks` derive it from the merged snapshot's host list, which the
+daemon re-reads from the config for every subscription, and say `host
+removed` before anything else about the row.
+
 ## Protocol
 
 New capability on the laptop's daemon, `relay`, next to `merged`:
@@ -496,7 +517,7 @@ New capability on the laptop's daemon, `relay`, next to `merged`:
 ```
 -> {type: add, id, relay: <host>, repo, branch, generated, agent_name, cmd, prompt}
 <- {type: result, id, ok}                          accepted: on disk, host dialled after
--> {type: dismiss, id}                             drop a pending record that needs the user
+-> {type: dismiss, id}                             drop a pending record that needs the user, or one the host will never answer for
 <- {type: result, id, ok}
 -> {type: prompt, id}                              deliver a pending record's prompt now
 <- {type: result, id, ok, prompt: <state>, error}
@@ -518,14 +539,24 @@ record must not read as one to an older sidebar.
 The pending record, without the prompt:
 
 ```
-{id, host, environment_id, source, repo, branch, generated, agent,
- submitted_at, taken, reachable, stage, state, detail, root, session,
- done, error, prompt, attempt, attempt_open}
+{id, host, environment_id, source, repo, branch, generated, agent, cmd,
+ submitted_at, taken, reachable, unreachable, mismatch, stage, state,
+ detail, root, session, done, ok, error, prompt, attempt, attempt_open,
+ attempt_error, listed, listing_error, gone, updated_at}
 ```
 
 `taken` is that the host has the add; `reachable` is the relay's
 connection, the connectivity axis kept apart from the outcome as issue
-#1 wants; `stage`, `state` and `detail` are the last progress message's;
+#1 wants, with `unreachable` saying why not while it is down and
+`mismatch` that the machine answering under the host's name is not
+the one the task was accepted for; `ok` is the add's success once
+`done`; `attempt_error` is the host's refusal of the last attempt,
+kept apart from `error`; `listed` is that the listing after the result
+has been seen, `listing_error` why it cannot be while it is owed, and
+`gone` that it had no worktree at the root. The views and `tasks`
+read the record in one order: host removed (from the host list),
+`mismatch`, a failed add, `gone`, an open attempt, `attempt_error`,
+the delivery state, the listing; `stage`, `state` and `detail` are the last progress message's;
 `prompt` is the delivery state, `attempt` the number of the last
 attempt and `attempt_open` that it is unresolved. Ids are the client's,
 `add-<pid>-<nanos>` as today, so a relay resent after a lost laptop

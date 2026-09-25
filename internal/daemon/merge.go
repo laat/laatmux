@@ -69,6 +69,13 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 		d.lastHostsErr = ""
 	}
 	sessions, serr := d.listSessions(ctx)
+	// The relay's mutex before the daemon's, the order every publication
+	// of a pending record takes them in, so the snapshot's records and
+	// the upserts after it never interleave.
+	if d.relay != nil {
+		d.relay.mu.Lock()
+		defer d.relay.mu.Unlock()
+	}
 	d.mu.Lock()
 	d.stopIdleLocked()
 	if d.mctx == nil {
@@ -307,6 +314,9 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 		m.Sessions = append(m.Sessions, s)
 	}
 	sort.Slice(m.Sessions, func(i, j int) bool { return m.Sessions[i].Name < m.Sessions[j].Name })
+	if d.relay != nil {
+		m.Pendings, m.Handoffs = d.relay.pendingsLocked()
+	}
 	return m
 }
 

@@ -95,8 +95,10 @@ var ErrSubmissionExpired = errors.New("outcome unknown: the submission is older 
 // the daemon's hello, on every connection. The hello of the connection
 // that delivered the result is returned with it.
 //
-// This is the one send path, and the sender lifetime is enforced here:
-// a message with SubmittedAt is neither sent nor resent past it.
+// This is the client's send path, and the sender lifetime is enforced
+// here: a message with SubmittedAt is neither sent nor resent past it.
+// The relay in the daemon has a send loop of its own, with unbounded
+// backoff and its record on disk, under the same SenderLifetime.
 func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
 	f := &progressFilter{fn: r.Progress}
 	sent := false // the command may have reached a daemon

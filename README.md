@@ -43,6 +43,8 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux add fix-ls --repo proj --host vm --agent claude
 ./laatmux add -p 'make ls sort by host'          # branch proposed from the prompt, made unique on the host; the agent gets the prompt
 ./laatmux add fix-ls -p 'make ls sort by host'   # the same with the branch given
+./laatmux add -p 'make ls sort by host' --detach # hand it to the local daemon and return; laatmux tasks shows it
+./laatmux tasks                                  # the background adds and their state; tasks show|dismiss|prompt <id>
 ./laatmux path proj/fix-ls                    # the worktree root on its host
 ./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
 ./laatmux shell                               # a shell at the worktree root, from inside a workspace session
@@ -664,6 +666,44 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   that as a plain one does. Records are forwarded unchanged, ids included; a client maps
   a record's `environment_id` to a host name through the host records.
   `seq` is the merging daemon's own.
+- **The relay**, capability `relay`, the laptop's side of
+  [milestone four](docs/milestone-four.md): `{type: add, id, relay:
+  <host>, repo, name, branch, generated, agent_name, cmd, prompt,
+  submitted_at}` is written to `<state>/pending/<id>.json`, mode 0600
+  with the prompt, before the answer says `accepted`; the daemon then
+  dials the host as the client would have, sends the add under the
+  client's id and follows it to the result, reconnecting with the merged
+  stream's backoff for as long as the task is outstanding, and to the
+  host's listing after it. Every connection is pinned to the host's
+  environment id, from the host row at accept or from the first hello,
+  and requires `add`, `follow` and `task`; a host known to lack `task` is
+  refused at accept. The pending records travel in the merged stream:
+  `pendings` and `handoffs` in a snapshot, `pending` in an upsert,
+  `pending_id` with `replaced_by` in a remove. A record carries `taken`
+  (the host has the add), `reachable` with `unreachable` saying why not
+  and `mismatch` when another machine answers under the host's name,
+  the last progress line's `stage`, `state` and `detail`, `branch` and
+  `root` as the host reports them, then `done` with `ok`, `error`,
+  `prompt` (the delivery state), `attempt`, `attempt_open` and
+  `attempt_error` (the host's refusal of the last attempt), `listed`,
+  `listing_error` and `gone`. A record is complete when the add succeeded and the prompt
+  is delivered or there was none; the relay takes the host's listings
+  until one passes the result's barrier, and a complete record whose
+  worktree is in it is retired: the handoff is written to the file,
+  which is kept a day, then the remove is published with `replaced_by`,
+  the worktree row's id. No worktree at the root is `gone`, a record
+  the user dismisses. A record that needs the user stays, prompt
+  retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
+  delivers it as the next attempt, written to the file first, one
+  unresolved at a time; `recovery expired` from the host ends that, and
+  `laatmux tasks show <id>` prints the prompt for pasting by hand. An add
+  older than seven days is not sent and is `outcome unknown`, as is one
+  the host refuses as `submission expired`; a follow answered
+  `interrupted` or `unknown command` resends the add. A daemon that
+  starts resumes every file: adds without an outcome, open attempts
+  first, listings owed. A host gone from the config leaves its records
+  waiting with `host removed`. `laatmux add --detach` submits; `laatmux
+  tasks` lists.
 - **Hosts follow the config file.** The daemon re-reads `hosts` on every
   merged subscription, so a host added shows up on the next `ls`; one
   removed gets a `remove` for its records and then its host record.

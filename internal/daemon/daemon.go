@@ -119,6 +119,10 @@ type Config struct {
 	// Shutdown ends the daemon as SIGTERM does, for the shutdown
 	// message; nil means no shutdown capability.
 	Shutdown func()
+
+	// Pending is the directory of the relay's pending files, which with
+	// Hosts is the relay capability; "" means none.
+	Pending string
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -150,6 +154,8 @@ type Daemon struct {
 	// stamp and error of the last listing, and the lock the poll and
 	// its publication run under.
 	journal    *journal
+	relay      *relay          // nil without the relay capability
+	ctx        context.Context // Run's context, for goroutines that outlive a connection
 	generation int64
 	revision   uint64
 	listing    protocol.Listing
@@ -310,6 +316,14 @@ func New(cfg Config) *Daemon {
 			d.journal = j
 		}
 	}
+	if cfg.Pending != "" && cfg.Hosts != nil {
+		r, err := openRelay(cfg.Pending, cfg.Logger)
+		if err != nil {
+			cfg.Logger.Printf("pending: %v; relay capability disabled", err)
+		} else {
+			d.relay = r
+		}
+	}
 	return d
 }
 
@@ -330,14 +344,30 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Hosts != nil {
 		caps = append(caps, protocol.CapMerged)
 	}
+	if d.relay != nil {
+		caps = append(caps, protocol.CapRelay)
+	}
 	if d.cfg.Shutdown != nil {
 		caps = append(caps, protocol.CapShutdown)
 	}
 	return caps
 }
 
+// runCtx is Run's context, or the background one before Run.
+func (d *Daemon) runCtx() context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ctx == nil {
+		return context.Background()
+	}
+	return d.ctx
+}
+
 // Run polls until ctx is done.
 func (d *Daemon) Run(ctx context.Context) error {
+	d.mu.Lock()
+	d.ctx = ctx
+	d.mu.Unlock()
 	if d.cfg.Store != nil {
 		go d.runWorktrees(ctx)
 	} else {
@@ -346,6 +376,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d.journal != nil {
 		d.sweepBuffers(ctx)
 		go d.runJournal(ctx)
+	}
+	if d.relay != nil {
+		d.startRelays(ctx)
+		go d.runRelaySweep(ctx)
 	}
 	t := time.NewTicker(d.cfg.Interval)
 	defer t.Stop()
@@ -819,7 +853,37 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			if err := pc.Write(res); err != nil {
 				return
 			}
+		case protocol.TypeDismiss:
+			if err := pc.Write(d.dismiss(m.ID)); err != nil {
+				return
+			}
 		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun, protocol.TypePrompt:
+			// The relay's messages: an add naming a host to run it on,
+			// and a prompt without an attempt number.
+			if m.Type == protocol.TypeAdd && m.Relay != "" {
+				// The task runs once the answer has been written, or
+				// could not be: the acceptance is the file, and a
+				// client killed before it read the answer must not
+				// leave its task unrun until the daemon restarts. The
+				// host is contacted after the answer either way.
+				res := d.acceptRelay(ctx, m)
+				err := pc.Write(res)
+				if res.OK {
+					d.startPending(d.runCtx(), m.ID)
+				}
+				if err != nil {
+					return
+				}
+				continue
+			}
+			if m.Type == protocol.TypePrompt && m.Attempt == 0 && d.relay != nil {
+				go func() {
+					if err := pc.Write(d.relayPrompt(ctx, m.ID)); err != nil {
+						drop()
+					}
+				}()
+				continue
+			}
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 			switch {
 			case d.cfg.Store == nil:

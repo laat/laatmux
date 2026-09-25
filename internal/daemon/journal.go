@@ -26,10 +26,12 @@ import (
 // lifetime reaches a tombstone unless the clocks disagree by more than
 // three weeks.
 const (
-	journalRetention = 30 * 24 * time.Hour
-	journalFuture    = 24 * time.Hour
-	journalSweep     = time.Hour
+	journalFuture = 24 * time.Hour
+	journalSweep  = time.Hour
 )
+
+// journalRetention is a variable so a test can shorten it.
+var journalRetention = 30 * 24 * time.Hour
 
 // Launch states of an entry: the agent stage journaled as two
 // transitions around new-session.
@@ -156,7 +158,15 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 		return nil, err
 	}
 	for _, de := range entries {
-		if de.IsDir() || !strings.HasSuffix(de.Name(), ".json") {
+		if de.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(de.Name(), ".tmp") {
+			// A write that died before its rename is nobody's entry.
+			os.Remove(filepath.Join(dir, de.Name()))
+			continue
+		}
+		if !strings.HasSuffix(de.Name(), ".json") {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, de.Name()))
@@ -192,9 +202,10 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 	return j, nil
 }
 
-// fileName is the entry's file: the id itself when it is safe as a
+// FileName is the file a command id is kept under, in the journal and
+// in the relay's pending directory: the id itself when it is safe as a
 // name, else a hash of it, so a client-chosen id never names a path.
-func fileName(id string) string {
+func FileName(id string) string {
 	safe := id != "" && id[0] != '.' && strings.IndexFunc(id, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.')
 	}) < 0
@@ -257,7 +268,7 @@ func (j *journal) writeLocked(e *entry) error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(j.dir, fileName(e.ID))
+	p := filepath.Join(j.dir, FileName(e.ID))
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
@@ -319,7 +330,7 @@ func (j *journal) sweep(now time.Time) {
 		if !e.terminal() || now.Sub(e.TerminalAt) < journalRetention {
 			continue
 		}
-		if err := os.Remove(filepath.Join(j.dir, fileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := os.Remove(filepath.Join(j.dir, FileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			j.logger.Printf("journal: sweep %s: %v", id, err)
 			continue
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -561,13 +562,6 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		}
 		return state, reason
 	}
-	if n > 0 {
-		if err := set(func(e *entry) {
-			e.Attempts = append(e.Attempts, attempt{N: n, State: attemptAttempting, At: time.Now()})
-		}); err != nil {
-			return protocol.DeliveryNotDelivered, "journal: " + err.Error()
-		}
-	}
 	// current reads the entry again and checks the root, for the steps
 	// under the lock: rm's tombstone and a worktree replaced since are
 	// refusals.
@@ -654,7 +648,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	if err := set(func(e *entry) { e.Typing = true }); err != nil {
 		return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
 	}
-	buffer := attemptBufferPrefix + fileName(id) + "-" + strconv.Itoa(n)
+	buffer := attemptBufferPrefix + FileName(id) + "-" + strconv.Itoa(n)
 	err := d.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
 	// Whatever the paste did, the pane's observation is spent: the next
 	// delivery to it needs one made after this moment.
@@ -858,6 +852,14 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		if next := len(e.Attempts) + 1; m.Attempt != next {
 			return fmt.Errorf("attempt %d is not the next; the journal has %d", m.Attempt, len(e.Attempts))
 		}
+		// The attempt is on disk before anything is done for it, or
+		// nothing is: an attempt the journal could not take is not
+		// taken, and the sender retries the same number.
+		if _, err := j.update(m.ID, func(e *entry) {
+			e.Attempts = append(e.Attempts, attempt{N: m.Attempt, State: attemptAttempting, At: time.Now()})
+		}); err != nil {
+			return fmt.Errorf("%s: %w", protocol.ErrAttemptNotRecorded, err)
+		}
 		res.Prompt, res.Error = d.deliver(ctx, m.ID, m.Attempt, m.Prompt)
 		return nil
 	}()
@@ -867,6 +869,12 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		res.OK = true
 	}
 	c.emit(res)
+	if strings.HasPrefix(res.Error, protocol.ErrAttemptNotRecorded) {
+		// Nothing was done for the number: the sender retries it, and
+		// the retry must run, not replay this answer.
+		d.forgetDone(promptKey(m.ID, m.Attempt))
+		return
+	}
 	d.evict(promptKey(m.ID, m.Attempt), c)
 }
 

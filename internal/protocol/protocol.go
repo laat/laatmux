@@ -31,7 +31,8 @@ const (
 	TypeFollow    = "follow"    // client -> daemon, attach to a command sent earlier under the same id
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
-	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt
+	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
+	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
@@ -68,6 +69,15 @@ const (
 	// stamped with the observation revision so a result's listing
 	// barrier can be waited for. A daemon with task has add and follow.
 	CapTask = "task"
+	// CapRelay is the background add on the machine the user sits at: an
+	// add with Relay naming a host is written to a pending file, answered
+	// accepted, and run against the host by the daemon, which follows it
+	// to its result and to the listing after it; the pending records
+	// travel in the merged stream, with the handoffs of retired ones;
+	// dismiss drops a record that needs the user and prompt without an
+	// attempt number delivers its prompt now. A daemon with relay has
+	// merged.
+	CapRelay = "relay"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Only a daemon with hosts in its config has it.
@@ -138,6 +148,10 @@ const (
 	// no longer holds: the prompt cannot be delivered by the daemon any
 	// more and is the user's to paste by hand.
 	ErrRecoveryExpired = "recovery expired"
+	// ErrAttemptNotRecorded prefixes the answer to a prompt message
+	// whose attempt the journal could not write: nothing was done, the
+	// number is not taken, and the sender retries it as it is.
+	ErrAttemptNotRecorded = "attempt not recorded"
 )
 
 // Delivery states of a prompt, in the Prompt field of an add's result
@@ -149,6 +163,93 @@ const (
 	DeliveryNotDelivered = "not delivered" // provably nothing transferred; Error says why
 	DeliveryUnknown      = "unknown"       // a side effect may have taken; Error says where
 )
+
+// Pending is one background add as the relay holds it, without the
+// prompt: what was submitted, where the add is, and what became of it.
+// Ids are the client's, so a relay resent after a lost laptop daemon is
+// the same id on the host and attaches rather than starts again.
+type Pending struct {
+	ID            string    `json:"id"`
+	Host          string    `json:"host"`
+	EnvironmentID string    `json:"environment_id,omitempty"` // bound at accept from the host row, or at the first hello
+	Source        string    `json:"source"`
+	Repo          string    `json:"repo"`
+	Branch        string    `json:"branch"` // the proposal until the host allocates, then the branch used
+	Generated     bool      `json:"generated,omitempty"`
+	Agent         string    `json:"agent,omitempty"`
+	Cmd           []string  `json:"cmd,omitempty"`
+	SubmittedAt   time.Time `json:"submitted_at"`
+	// Taken is that the host has the add; Reachable is the relay's
+	// connection to the host, the connectivity axis, kept apart from
+	// the outcome. Stage, State and Detail are the last progress
+	// message's; Root and Session come from the host as it reports
+	// them.
+	Taken       bool   `json:"taken,omitempty"`
+	Reachable   bool   `json:"reachable,omitempty"`
+	Unreachable string `json:"unreachable,omitempty"` // why the host cannot be reached, while Reachable is false
+	// Mismatch is that the machine answering for the host is not the
+	// one the task was accepted for, with the two environment ids: the
+	// host will never answer for the task, and the record is dismissable
+	// as one whose host left the config.
+	Mismatch string `json:"mismatch,omitempty"`
+	Stage    string `json:"stage,omitempty"`
+	State    string `json:"state,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Root     string `json:"root,omitempty"`
+	Session  string `json:"session,omitempty"`
+	// Done is that the add has an outcome: OK with the delivery state in
+	// Prompt and its reason in Error, or failed with Error saying why
+	// and Stage where. Attempt is the number of the last delivery
+	// attempt, AttemptOpen that it is unresolved. Listed is that the
+	// host's listing after the result has been seen, Retired that the
+	// record handed over to its worktree row.
+	Done        bool   `json:"done,omitempty"`
+	OK          bool   `json:"ok,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	AttemptOpen bool   `json:"attempt_open,omitempty"`
+	// AttemptError is the host's refusal of the last attempt, recovery
+	// expired say, kept apart from Error, the add's own outcome.
+	AttemptError string    `json:"attempt_error,omitempty"`
+	Listed       bool      `json:"listed,omitempty"`
+	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
+	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Complete reports whether nothing about the add needs the user: it
+// succeeded and its prompt is delivered, or there was none. The relay
+// retires a complete record once the host's listing shows its
+// worktree; the views hide the worktree row behind a record that is
+// not complete and offer p and x on it.
+func (p Pending) Complete() bool { return p.OK && p.Delivered() }
+
+// Delivered reports whether the prompt is with the agent, or there was
+// none: the relay scrubs the prompt from its file on it, whatever the
+// add did, and delivers no more. Only the two states say so; an add
+// that failed before the agent stage has no delivery state, and its
+// prompt is kept.
+func (p Pending) Delivered() bool {
+	return p.Done && (p.Prompt == DeliveryDelivered || p.Prompt == DeliveryNone)
+}
+
+// WorktreeID is the id of the worktree row the record becomes, "" until
+// the host has reported the root.
+func (p Pending) WorktreeID() string {
+	if p.EnvironmentID == "" || p.Root == "" {
+		return ""
+	}
+	return p.EnvironmentID + "/worktree/" + p.Root
+}
+
+// Handoff is a pending record retired into its worktree row, carried in
+// merged snapshots for a day so a view that missed the remove can
+// re-anchor a selection on the worktree row.
+type Handoff struct {
+	ID         string `json:"id"`
+	ReplacedBy string `json:"replaced_by"`
+}
 
 // Listing stamps a worktree listing with when it was read: the daemon
 // generation, its start, and the observation revision the daemon had
@@ -309,6 +410,20 @@ type Message struct {
 	Worktrees  []Worktree `json:"worktrees,omitempty"`
 	Worktree   *Worktree  `json:"worktree,omitempty"`
 	WorktreeID string     `json:"worktree_id,omitempty"`
+
+	// merged snapshot / upsert / remove, from a daemon with relay: the
+	// pending records and the recent handoffs; a remove names the record
+	// gone and, when it retired into its worktree row, that row's id in
+	// ReplacedBy, a field of its own, since worktree_id on a remove means
+	// a worktree is gone to every client.
+	Pendings   []Pending `json:"pendings,omitempty"`
+	Pending    *Pending  `json:"pending,omitempty"`
+	PendingID  string    `json:"pending_id,omitempty"`
+	ReplacedBy string    `json:"replaced_by,omitempty"`
+	Handoffs   []Handoff `json:"handoffs,omitempty"`
+	// Relay on an add names the host the local daemon is to run it
+	// against, in the background.
+	Relay string `json:"relay,omitempty"`
 
 	// merged snapshot / upsert / remove. The host record and the local
 	// session record are keyed by name; a remove names the one gone.
