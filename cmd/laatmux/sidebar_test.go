@@ -210,3 +210,14 @@ func must(b []byte, err error) []byte {
 	}
 	return b
 }
+
+// The width rule split and fit share: the configured width, half a
+// narrow window, the configured width for a window not known.
+func TestSidebarWidth(t *testing.T) {
+	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	for _, c := range []struct{ window, want int }{{200, 35}, {70, 35}, {50, 25}, {36, 18}, {1, 1}, {0, 35}} {
+		if got := sidebarWidth(cfg, c.window); got != c.want {
+			t.Errorf("window %d: %d, want %d", c.window, got, c.want)
+		}
+	}
+}

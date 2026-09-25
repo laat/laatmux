@@ -78,9 +78,12 @@ func cmdSidebar(ctx context.Context, args []string) error {
 		if len(args) != 1 {
 			return usage
 		}
+		// A broken config is reported where a sidebar is made, by on
+		// and attach; fit runs on every resize, and its error would open
+		// over the user's pane each time.
 		cfg, err := config.Load()
 		if err != nil {
-			return err
+			return nil
 		}
 		return sidebarFit(ctx, cfg, args[0])
 	case "reap":
@@ -200,13 +203,18 @@ func sidebarAttach(ctx context.Context, window string) error {
 // by a remain-on-exit the pane inherited before its own was set, is
 // killed and replaced. Called with the lock held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}")
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}"+tmux.Sep+"#{window_width}")
 	if err != nil {
 		return err
 	}
+	windowWidth := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
-		if len(f) != 3 || f[1] == "" {
+		if len(f) != 4 {
+			continue
+		}
+		windowWidth, _ = strconv.Atoi(f[3])
+		if f[1] == "" {
 			continue
 		}
 		if f[2] != "1" {
@@ -219,7 +227,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 		return err
 	}
 	out, err = workspace.Server.Run(ctx,
-		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Columns()), "-t", window,
+		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth)), "-t", window,
 		"-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))
 	if err != nil {
 		return err
@@ -268,14 +276,24 @@ func sidebarReap(ctx context.Context) error {
 	return nil
 }
 
-// sidebarFit puts the window's sidebar pane back to the configured
-// width. tmux scales every pane in proportion when a window is resized:
-// a session made detached is 80 columns wide, its sidebar split off at
-// the width, and a client switching to it grows the window, and the
-// sidebar with it, to a share of the terminal. So does resizing the
-// terminal. In a window narrower than twice the width the sidebar gets
-// half, so the work pane is never squeezed to a column. A window
-// without a live sidebar pane is left alone.
+// sidebarWidth is the sidebar's width in a window of the given width:
+// the configured width, or half the window when that is narrower, so
+// neither pane is squeezed to a column. 0 is a window not known, and
+// gets the configured width.
+func sidebarWidth(cfg config.Config, windowWidth int) int {
+	if windowWidth <= 0 {
+		return cfg.Sidebar.Columns()
+	}
+	return min(cfg.Sidebar.Columns(), max(windowWidth/2, 1))
+}
+
+// sidebarFit puts the window's sidebar pane back to its width. tmux
+// shares a window's change of width out among its panes: a session made
+// detached is 80 columns wide, its sidebar split off at the width, and
+// a client switching to it widens the sidebar by a share of the extra
+// columns. So does resizing the terminal. The width is sidebarWidth's,
+// the configured one or half a narrow window. A window without a live
+// sidebar pane is left alone.
 //
 // The width is the sidebar's own: a border dragged by hand is put back
 // at the next resize. Telling a drag from a resize would take a record
@@ -314,7 +332,7 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 			sidebar, have = f[0], f[3]
 		}
 	}
-	want := strconv.Itoa(min(cfg.Sidebar.Columns(), max(windowWidth/2, 1)))
+	want := strconv.Itoa(sidebarWidth(cfg, windowWidth))
 	if sidebar == "" || have == want {
 		return nil
 	}
