@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/workspace"
@@ -103,12 +105,114 @@ func TestSidebarFit(t *testing.T) {
 	}
 }
 
-// The resize hook is among the hooks on sets and off unsets.
-func TestSidebarHooksFit(t *testing.T) {
-	for _, h := range sidebarHooks {
-		if h.hook == "window-resized[9105]" && h.cmd == "sidebar fit '#{window_id}'" {
-			return
+// A narrow window gives the sidebar half; a resize that keeps the
+// width leaves a dragged border; a dead sidebar pane is left alone.
+func TestSidebarFitBounds(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := workspace.Server.Run(ctx, args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	window := run("new-session", "-d", "-s", "n", "-x", "120", "-y", "30", "-P", "-F", "#{window_id}", "sleep 1000")
+	id := run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", id, sidebarTag, "1")
+	width := func() string { return run("display", "-p", "-t", id, "#{pane_width}") }
+	fit := func() {
+		t.Helper()
+		if err := sidebarFit(ctx, cfg, window); err != nil {
+			t.Fatal(err)
 		}
 	}
-	t.Fatal("no window-resized hook")
+	run("resize-window", "-t", window, "-x", "50", "-y", "30")
+	fit()
+	if w := width(); w != "25" {
+		t.Fatalf("narrow: %s, want half of 50", w)
+	}
+	run("resize-window", "-t", window, "-x", "160", "-y", "30")
+	fit()
+	if w := width(); w != "35" {
+		t.Fatalf("wide again: %s", w)
+	}
+	// Dragged, then only the height changes: the drag stays.
+	run("resize-pane", "-t", id, "-x", "50")
+	run("resize-window", "-t", window, "-x", "160", "-y", "20")
+	fit()
+	if w := width(); w != "50" {
+		t.Fatalf("a height-only resize undid the drag: %s", w)
+	}
+	// The width changes: the configured width again.
+	run("resize-window", "-t", window, "-x", "170", "-y", "20")
+	fit()
+	if w := width(); w != "35" {
+		t.Fatalf("after a width change: %s", w)
+	}
+	// A dead sidebar pane is not resized.
+	run("set-option", "-p", "-t", id, "remain-on-exit", "on")
+	run("respawn-pane", "-k", "-t", id, "true")
+	for i := 0; i < 50 && run("display", "-p", "-t", id, "#{pane_dead}") != "1"; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	run("resize-pane", "-t", id, "-x", "40")
+	run("resize-window", "-t", window, "-x", "180", "-y", "20")
+	was := width()
+	fit()
+	if w := width(); w != was {
+		t.Fatalf("a dead sidebar was resized: %s, was %s", w, was)
+	}
+}
+
+// The hooks on the server run the binary as the table says, with the
+// resized window's id expanded; off removes them. The binary here is a
+// script that records its arguments, never the test binary.
+func TestSidebarHooksRun(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	logf := filepath.Join(dir, "args")
+	exe := filepath.Join(dir, "fake")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+logf+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := setSidebarHooks(ctx, exe); err != nil {
+		t.Fatal(err)
+	}
+	out, err := workspace.Server.Run(ctx, "show-hooks", "-gw", "window-resized")
+	if err != nil || !strings.Contains(string(out), "window-resized[9105]") {
+		t.Fatalf("hook not set: %s %v", out, err)
+	}
+	window := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "boot", "#{window_id}"))))
+	must(workspace.Server.Run(ctx, "resize-window", "-t", window, "-x", "150", "-y", "30"))
+	var got string
+	for i := 0; i < 100; i++ {
+		b, _ := os.ReadFile(logf)
+		if got = string(b); strings.Contains(got, "sidebar fit "+window) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(got, "sidebar fit "+window) {
+		t.Fatalf("the resize hook ran %q, want sidebar fit %s", got, window)
+	}
+	for _, h := range sidebarHooks {
+		name := strings.SplitN(h.hook, "[", 2)[0]
+		must(workspace.Server.Run(ctx, "set-hook", "-gu", h.hook))
+		out, _ := workspace.Server.Run(ctx, "show-hooks", "-gw", name)
+		out2, _ := workspace.Server.Run(ctx, "show-hooks", "-g", name)
+		if strings.Contains(string(out)+string(out2), h.hook) {
+			t.Fatalf("%s left after unset", h.hook)
+		}
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
