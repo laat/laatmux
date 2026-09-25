@@ -187,11 +187,16 @@ type Pending struct {
 	Taken       bool   `json:"taken,omitempty"`
 	Reachable   bool   `json:"reachable,omitempty"`
 	Unreachable string `json:"unreachable,omitempty"` // why the host cannot be reached, while Reachable is false
-	Stage       string `json:"stage,omitempty"`
-	State       string `json:"state,omitempty"`
-	Detail      string `json:"detail,omitempty"`
-	Root        string `json:"root,omitempty"`
-	Session     string `json:"session,omitempty"`
+	// Mismatch is that the machine answering for the host is not the
+	// one the task was accepted for, with the two environment ids: the
+	// host will never answer for the task, and the record is dismissable
+	// as one whose host left the config.
+	Mismatch string `json:"mismatch,omitempty"`
+	Stage    string `json:"stage,omitempty"`
+	State    string `json:"state,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Root     string `json:"root,omitempty"`
+	Session  string `json:"session,omitempty"`
 	// Done is that the add has an outcome: OK with the delivery state in
 	// Prompt and its reason in Error, or failed with Error saying why
 	// and Stage where. Attempt is the number of the last delivery

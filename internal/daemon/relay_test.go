@@ -1029,3 +1029,108 @@ func TestRelayHandoffPatience(t *testing.T) {
 		t.Fatalf("record %+v", got)
 	}
 }
+
+// A dismiss of a record whose host left the config returns promptly
+// with every goroutine ended, even while a settle waits on the host in
+// its backoff and an attempt is open; and a host that is back between
+// the dismiss's checks keeps its record with its goroutines restarted.
+func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	// Done and OK, prompt not delivered, and the listing still owed
+	// with the host down: settle waits in retire's backoff.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "stuck", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "s1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	f.remote.mu.Lock()
+	f.remote.down = errors.New("down")
+	f.remote.mu.Unlock()
+	f.local.setPending("s1", true, func(p *pendingFile) { p.Listed = false })
+	f.local.relay.mu.Lock()
+	f.local.startRunnerLocked(f.ctx, "s1", f.local.settle)
+	f.local.relay.mu.Unlock()
+	f.awaitRecord(t, "s1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable != "" })
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "s1"}); res.OK || !strings.Contains(res.Error, "attempt 1 is open") {
+		t.Fatalf("p while down %+v", res)
+	}
+	f.hosts.set()
+	done := make(chan protocol.Message, 1)
+	go func() { done <- f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s1"}) }()
+	select {
+	case res := <-done:
+		if !res.OK {
+			t.Fatalf("dismiss %+v", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dismiss hung")
+	}
+	f.local.relay.mu.Lock()
+	n := len(f.local.relay.runners["s1"])
+	f.local.relay.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d runners after dismiss", n)
+	}
+	// The host back between the two checks: the goroutines stopped by
+	// the dismiss are started again and the record stays.
+	f.remote.mu.Lock()
+	f.remote.down = nil
+	f.remote.mu.Unlock()
+	f.hosts.set(client.Host{Name: "vm", SSH: "vm"})
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "back", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
+	f.hosts.flip = 1 // gone for the first read, back for the next
+	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
+	if res.OK || !strings.Contains(res.Error, "still running") {
+		t.Fatalf("dismiss with the host back %+v", res)
+	}
+	if got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.retired() }); !got.OK {
+		t.Fatalf("record after the restart %+v", got)
+	}
+}
+
+// A machine under the host's name that is not the accepted one leaves
+// a sent add stuck by design, marked as a mismatch, and the record is
+// then dismissable.
+func TestRelayMismatchDismissable(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir()})
+	discovered(other)
+	otherRemote := newFakeRemote(t, f.ctx, other)
+	var mu sync.Mutex
+	current := f.remote
+	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+		mu.Lock()
+		r := current
+		mu.Unlock()
+		return r.dial(ctx, h)
+	}
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.setLocal(local)
+	// Sent to the right machine, then another answers under the name.
+	p := pendingFile{Pending: protocol.Pending{ID: "mm", Host: "vm", EnvironmentID: "henv", Source: f.source(), Repo: "proj", Branch: "mm", Agent: "argv", SubmittedAt: time.Now(), UpdatedAt: time.Now(), Taken: true}, Sent: true}
+	if _, err := f.local.relay.create(p); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	current = otherRemote
+	mu.Unlock()
+	f.local.startPending(f.ctx, "mm")
+	got := f.awaitRecord(t, "mm", 5*time.Second, func(p pendingFile) bool { return p.Mismatch != "" })
+	if got.Done {
+		t.Fatalf("done on a mismatch %+v", got)
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "mm"}); !res.OK {
+		t.Fatalf("dismiss on a mismatch %+v", res)
+	}
+	if _, ok := f.local.relay.get("mm"); ok {
+		t.Fatal("record kept")
+	}
+}

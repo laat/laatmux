@@ -496,13 +496,19 @@ not resubmit it, and one with an attempt unresolved follows the
 attempt. One whose host is gone from the config stays too, with `host
 removed`, so nothing the user asked for disappears without them.
 
-`x` is offered on a row that needs the user, and on two more that
+`x` is offered on a row that needs the user, and on three more that
 would otherwise be stuck: a record the host has no trace of, never
-sent nor taken, which a host that never answers leaves waiting, and a
-record whose host is gone from the config, whatever its state. A
-dismiss ends the record's goroutines first, and removes a never-sent
-record before ending them, so nothing is sent for a file that is gone;
-a running add on a configured host is never dismissed.
+sent nor taken, which a host that never answers leaves waiting; a
+record whose host is gone from the config, whatever its state; and a
+record whose host name now answers as another machine, the pin
+mismatch the record carries as `mismatch`. A dismiss ends the record's
+goroutines first, and removes a never-sent record before ending them,
+so nothing is sent for a file that is gone; a running add on a
+configured host that is the accepted machine is never dismissed. A
+host gone from the config is not a field of the record: the views and
+`tasks` derive it from the merged snapshot's host list, which the
+daemon re-reads from the config for every subscription, and say `host
+removed` before anything else about the row.
 
 ## Protocol
 

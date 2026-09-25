@@ -70,6 +70,10 @@ func listTasks(ctx context.Context) error {
 	for _, p := range m.pendings {
 		ps = append(ps, p)
 	}
+	configured := map[string]bool{}
+	for name := range m.hosts {
+		configured[name] = true
+	}
 	m.mu.Unlock()
 	if len(ps) == 0 {
 		fmt.Println("no pending tasks")
@@ -77,15 +81,23 @@ func listTasks(ctx context.Context) error {
 	}
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
-		fmt.Printf("%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p))
+		fmt.Printf("%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured[p.Host]))
 	}
 	return nil
 }
 
 // TaskState is one line saying where a pending record is, as the
-// views say it too.
-func TaskState(p protocol.Pending) string {
+// views say it too. configured is whether the merged stream's host
+// list has the record's host: the daemon re-reads the config for
+// every subscription, so a host removed from it has no row, and the
+// record says so first, since it is dismissable then whatever else it
+// says.
+func TaskState(p protocol.Pending, configured bool) string {
 	switch {
+	case !configured:
+		return "host removed; laatmux tasks dismiss " + p.ID + " drops it"
+	case p.Mismatch != "":
+		return "host replaced: " + p.Mismatch + "; laatmux tasks dismiss " + p.ID + " drops it"
 	case p.Done && !p.OK:
 		return p.Error
 	case p.Done && p.Gone:

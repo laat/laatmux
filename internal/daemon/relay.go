@@ -528,8 +528,11 @@ func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendin
 	// is an empty pin bound.
 	if p.EnvironmentID != "" && c.Hello.EnvironmentID != p.EnvironmentID {
 		c.Close()
-		return nil, p, fmt.Errorf("%s answers as environment %s, not %s the task was accepted for", h.Name, c.Hello.EnvironmentID, p.EnvironmentID)
+		msg := fmt.Sprintf("%s answers as environment %s, not %s the task was accepted for", h.Name, c.Hello.EnvironmentID, p.EnvironmentID)
+		d.setPending(id, false, func(p *pendingFile) { p.Mismatch = msg })
+		return nil, p, errors.New(msg)
 	}
+	d.setPending(id, false, func(p *pendingFile) { p.Mismatch = "" })
 	for _, cap := range []string{protocol.CapAdd, protocol.CapFollow, protocol.CapTask} {
 		if !protocol.Has(c.Hello.Capabilities, cap) {
 			c.Close()
@@ -981,12 +984,18 @@ func (d *Daemon) listingHas(ctx context.Context, id string, p pendingFile) (pres
 	if p.Barrier == nil {
 		return false, false
 	}
+	// Bounded: a host whose listings fail after a restart would hold
+	// the handoff past its patience otherwise.
+	ctx, cancel := context.WithTimeout(ctx, handoffRecheck)
+	defer cancel()
 	c, _, err := d.relayConn(ctx, id)
 	if err != nil {
 		return false, false
 	}
 	defer c.Close()
-	present, err = d.awaitListing(ctx, c, *p.Barrier, p.Root, func(string) {})
+	present, err = d.awaitListing(ctx, c, *p.Barrier, p.Root, func(msg string) {
+		d.setPending(id, false, func(p *pendingFile) { p.ListingError = msg })
+	})
 	return present, err == nil
 }
 
@@ -1032,13 +1041,15 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		d.stopRunners(id)
 		res.OK = true
 		return res
-	case !d.hostConfigured(p.Host):
-		// A host gone from the config will never answer: the goroutines
-		// are ended, then the record is removed if the host is still
-		// gone; a host back meanwhile means the goroutines are started
-		// again and the record stays.
+	case !d.hostConfigured(p.Host) || p.Mismatch != "":
+		// A host gone from the config, or a machine under its name that
+		// is not the one the task was accepted for, will never answer:
+		// the goroutines are ended, then the record is removed if that
+		// still holds; a host back meanwhile means the goroutines are
+		// started again and the record stays.
 		d.stopRunners(id)
-		if !d.hostConfigured(p.Host) {
+		p, _ = d.relay.get(id)
+		if !d.hostConfigured(p.Host) || p.Mismatch != "" {
 			d.relay.mu.Lock()
 			p, ok := d.relay.recs[id]
 			if ok && !p.retired() {

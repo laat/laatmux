@@ -157,3 +157,23 @@ func TestShowTaskNoTraversal(t *testing.T) {
 		t.Fatalf("traversal: %v", err)
 	}
 }
+
+// The task state line: a host gone from the snapshot's host list comes
+// first, whatever the record says.
+func TestTaskState(t *testing.T) {
+	p := protocol.Pending{ID: "t", Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", Listed: true}
+	if got := TaskState(p, true); !strings.HasPrefix(got, "prompt not delivered") {
+		t.Fatalf("configured: %q", got)
+	}
+	if got := TaskState(p, false); !strings.HasPrefix(got, "host removed") {
+		t.Fatalf("removed: %q", got)
+	}
+	p.Mismatch = "vm answers as environment x"
+	if got := TaskState(p, true); !strings.HasPrefix(got, "host replaced") {
+		t.Fatalf("mismatch: %q", got)
+	}
+	p.Mismatch, p.AttemptOpen, p.Attempt, p.AttemptError = "", true, 2, "old refusal"
+	if got := TaskState(p, true); !strings.HasPrefix(got, "delivering the prompt, attempt 2") {
+		t.Fatalf("open attempt: %q", got)
+	}
+}
