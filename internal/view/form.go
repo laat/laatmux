@@ -519,7 +519,8 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 			n := tabStop - curW%tabStop
 			if curW+n > inner {
 				flush()
-				n = tabStop
+				// Never wider than the box, however narrow.
+				n = min(tabStop, inner)
 			}
 			for range n {
 				cur = append(cur, ' ')

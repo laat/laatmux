@@ -385,7 +385,7 @@ func hardWrap(s string, w int) []string {
 			k := 4 - n%4
 			if n+k > w {
 				flush()
-				k = 4
+				k = min(4, w)
 			}
 			for range k {
 				cur = append(cur, ' ')

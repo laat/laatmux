@@ -648,3 +648,21 @@ func TestFormPasteOnChipShortAndBlank(t *testing.T) {
 		t.Fatalf("short:\n%s", text)
 	}
 }
+
+// A tab in a prompt box narrower than a tab stop stays within the box,
+// the cursor with it; so does one in a notice's verbatim line.
+func TestNarrowTab(t *testing.T) {
+	f := NewForm("t", chips(), "")
+	f.SetPrompt("\t\t")
+	for _, w := range []int{5, 6, 7} {
+		text := Text(f.Render(w, 12))
+		if !strings.Contains(text, "█") {
+			t.Fatalf("width %d: cursor lost\n%s", w, text)
+		}
+	}
+	for _, line := range hardWrap("\tx", 2) {
+		if len([]rune(line)) > 2 {
+			t.Fatalf("hardWrap past the width: %q", line)
+		}
+	}
+}
