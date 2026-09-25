@@ -22,7 +22,8 @@ import (
 // merged stream each. `on` installs hooks on the server so new windows
 // and sessions get a pane, and a window whose real panes are gone loses
 // its sidebar; then it adds a pane to every window that lacks one. `off`
-// removes the hooks and the panes. The hooks run `attach` and `reap`.
+// removes the hooks and the panes. The hooks run `attach`, `reap` and
+// `fit`.
 //
 // Every check-and-create runs under an exclusive flock on
 // $LAATMUX_HOME/sidebar.lock: two attaches for the same window, or an
@@ -37,22 +38,24 @@ const sidebarTag = "@laatmux_sidebar"
 // wait on them. In an after-new-window or after-new-session hook the
 // formats expand for the window the command made, so window_id is the
 // new window in both; the hook_window and hook_session formats are
-// empty there on tmux 3.6.
+// empty there on tmux 3.6. window-resized expands window_id for the
+// resized window too.
 var sidebarHooks = []struct{ hook, cmd string }{
 	{"after-new-window[9101]", "sidebar attach '#{window_id}'"},
 	{"after-new-session[9102]", "sidebar attach '#{window_id}'"},
 	{"pane-exited[9103]", "sidebar reap"},
 	{"after-kill-pane[9104]", "sidebar reap"},
+	{"window-resized[9105]", "sidebar fit '#{window_id}'"},
 }
 
 func cmdSidebar(ctx context.Context, args []string) error {
-	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | reap")
+	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | fit <window> | reap")
 	sub := "toggle"
 	if len(args) > 0 {
 		sub = args[0]
 		args = args[1:]
 	}
-	if sub != "attach" && len(args) > 0 {
+	if sub != "attach" && sub != "fit" && len(args) > 0 {
 		return usage
 	}
 	// The config is read only where its width and layout are needed, so
@@ -71,6 +74,18 @@ func cmdSidebar(ctx context.Context, args []string) error {
 			return usage
 		}
 		return sidebarAttach(ctx, args[0])
+	case "fit":
+		if len(args) != 1 {
+			return usage
+		}
+		// A broken config is reported where a sidebar is made, by on
+		// and attach; fit runs on every resize, and its error would open
+		// over the user's pane each time.
+		cfg, err := config.Load()
+		if err != nil {
+			return nil
+		}
+		return sidebarFit(ctx, cfg, args[0])
 	case "reap":
 		return sidebarReap(ctx)
 	}
@@ -128,11 +143,8 @@ func sidebarSwitch(ctx context.Context, sub string) error {
 	if err != nil {
 		return err
 	}
-	for _, h := range sidebarHooks {
-		cmd := fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + " " + h.cmd}))
-		if _, err := workspace.Server.Run(ctx, "set-hook", "-g", h.hook, cmd); err != nil {
-			return err
-		}
+	if err := setSidebarHooks(ctx, exe); err != nil {
+		return err
 	}
 	out, err := workspace.Server.Run(ctx, "list-windows", "-a", "-F", "#{window_id}")
 	if err != nil {
@@ -143,6 +155,17 @@ func sidebarSwitch(ctx context.Context, sub string) error {
 	}
 	for _, w := range strings.Fields(string(out)) {
 		if err := sidebarAdd(ctx, cfg, w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setSidebarHooks sets the hooks, each running exe in the background.
+func setSidebarHooks(ctx context.Context, exe string) error {
+	for _, h := range sidebarHooks {
+		cmd := fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + " " + h.cmd}))
+		if _, err := workspace.Server.Run(ctx, "set-hook", "-g", h.hook, cmd); err != nil {
 			return err
 		}
 	}
@@ -170,7 +193,8 @@ func sidebarAttach(ctx context.Context, window string) error {
 }
 
 // sidebarAdd splits a sidebar pane off the left edge of the window, full
-// height, at the configured width, unless the window has one. The split
+// height, at sidebarWidth's width, the configured one or half a narrow
+// window, unless the window has one. The split
 // is detached so focus stays where it was, and the new pane is tagged
 // by the id split-window printed, not as the window's active pane: an
 // after-split-window hook of the user's runs between the two commands
@@ -180,13 +204,18 @@ func sidebarAttach(ctx context.Context, window string) error {
 // by a remain-on-exit the pane inherited before its own was set, is
 // killed and replaced. Called with the lock held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}")
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}"+tmux.Sep+"#{window_width}")
 	if err != nil {
 		return err
 	}
+	windowWidth := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
-		if len(f) != 3 || f[1] == "" {
+		if len(f) != 4 {
+			continue
+		}
+		windowWidth, _ = strconv.Atoi(f[3])
+		if f[1] == "" {
 			continue
 		}
 		if f[2] != "1" {
@@ -199,7 +228,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 		return err
 	}
 	out, err = workspace.Server.Run(ctx,
-		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Columns()), "-t", window,
+		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth)), "-t", window,
 		"-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))
 	if err != nil {
 		return err
@@ -246,6 +275,74 @@ func sidebarReap(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// sidebarWidth is the sidebar's width in a window of the given width:
+// the configured width, or half the window when that is narrower, so
+// neither pane is squeezed to a column. 0 is a window not known, and
+// gets the configured width.
+func sidebarWidth(cfg config.Config, windowWidth int) int {
+	if windowWidth <= 0 {
+		return cfg.Sidebar.Columns()
+	}
+	return min(cfg.Sidebar.Columns(), max(windowWidth/2, 1))
+}
+
+// sidebarFit puts the window's sidebar pane back to its width. tmux
+// shares a window's change of width out among its panes: a session made
+// detached is 80 columns wide, its sidebar split off at the width, and
+// a client switching to it widens the sidebar by a share of the extra
+// columns. So does resizing the terminal. The width is sidebarWidth's,
+// the configured one or half a narrow window. A window without a live
+// sidebar pane is left alone.
+//
+// The width is the sidebar's own: a border dragged by hand is put back
+// at the next resize. Telling a drag from a resize would take a record
+// of the window's width, which queued fits and a sidebar turned off and
+// on again leave stale.
+//
+// It runs under the lock: a switch that lands between attach's split
+// and its tag scales an untagged pane, and fit, waiting for the tag,
+// then sees it. resize-pane unzooms a zoomed window, so the zoomed pane
+// is zoomed again in the same command sequence, and tmux draws the
+// window once.
+func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
+	unlock, err := sidebarLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}", "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"}, tmux.Sep))
+	if err != nil {
+		// Best effort, on every resize: a window killed while fit
+		// waited on the lock, or no server, is nothing to fit, and an
+		// error would open over the user's pane.
+		return nil
+	}
+	sidebar, zoomed, have, windowWidth := "", "", "", 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) != 7 {
+			continue
+		}
+		windowWidth, _ = strconv.Atoi(f[6])
+		if f[4] == "1" && f[5] == "1" {
+			zoomed = f[0]
+		}
+		if f[1] != "" && f[2] != "1" {
+			sidebar, have = f[0], f[3]
+		}
+	}
+	want := strconv.Itoa(sidebarWidth(cfg, windowWidth))
+	if sidebar == "" || have == want {
+		return nil
+	}
+	args := []string{"resize-pane", "-t", sidebar, "-x", want}
+	if zoomed != "" {
+		args = append(args, ";", "resize-pane", "-Z", "-t", zoomed)
+	}
+	_, err = workspace.Server.Run(ctx, args...)
+	return err
 }
 
 type paneInfo struct {
