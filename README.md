@@ -295,7 +295,16 @@ truth; labels only place new things.
   is `load-buffer` from stdin into a buffer named for the attempt,
   `paste-buffer -p`, `send-keys Enter`, `delete-buffer`; a daemon that
   starts deletes every `laatmux-attempt-*` buffer. A pane not ready
-  within a minute gets nothing. The result carries `prompt`, the
+  within a minute gets nothing. Claude Code asks, the first time it
+  starts in a folder, whether the folder is trusted, and takes neither
+  a typed prompt nor one on its command line until it is answered;
+  every worktree is such a folder. After a launch in a root under the
+  host's `worktrees` directory, the daemon watches the pane for that
+  question, for up to the same minute: when the screen reads as the
+  question naming exactly that root, it moves the cursor onto `Yes, I
+  trust this folder`, reads the screen again, and presses Enter only
+  with the cursor there, a handful of keys at most. Text that does not
+  match is left alone, and the wait times out as before. The result carries `prompt`, the
   delivery state: `none` (no prompt), `delivered`, `not delivered` with
   the reason in `error` on an ok result (pane never ready, paste refused
   before it began, a managed session already in the root: `session

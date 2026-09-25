@@ -452,6 +452,13 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		return r.failed(prompt, "launch failed", err)
 	}
 	paneID := made.PaneID
+	// A worktree the add made or took up under the host's worktrees
+	// directory is a folder the agent may not have seen: its trust
+	// question, when it asks one, is answered for it, whether the prompt
+	// is typed or on the command line.
+	if d.underWorktrees(r.root) {
+		go d.answerTrust(d.runCtx(), paneID, r.root, readyWait, trustPoll)
+	}
 	// Refresh the session join now, so the record the poke publishes
 	// names the session rather than waiting for the next pane poll.
 	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {

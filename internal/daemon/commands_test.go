@@ -38,6 +38,11 @@ type fakeServer struct {
 	cmds      [][]string // the Cmd of every NewSession
 	server    int        // ServerPID of the panes made, 5 by default
 	screen    []string   // what Capture shows in every pane
+	// keys records every SendKeys, pane and keys; onKeys, when set, is
+	// called with the fake locked, to change the screen as the agent
+	// would.
+	keys   [][]string
+	onKeys func(f *fakeServer, keys []string)
 }
 
 type fakePaste struct{ buffer, pane, text string }
@@ -61,6 +66,15 @@ func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	return append([]string(nil), f.screen...), nil
 }
 func (f *fakeServer) EnsureConfigured(context.Context) error { return nil }
+func (f *fakeServer) SendKeys(_ context.Context, pane string, keys ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, append([]string{pane}, keys...))
+	if f.onKeys != nil {
+		f.onKeys(f, keys)
+	}
+	return nil
+}
 func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

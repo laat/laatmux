@@ -49,6 +49,9 @@ type Panes interface {
 	// the prefix. Both act on the managed server only.
 	Paste(ctx context.Context, buffer, paneID, text string) error
 	DeleteBuffers(ctx context.Context, prefix string) error
+	// SendKeys presses tmux key names in a pane, on the managed server:
+	// the answer to an agent's question at launch.
+	SendKeys(ctx context.Context, paneID string, keys ...string) error
 }
 
 // Target is one tmux server the daemon watches.
