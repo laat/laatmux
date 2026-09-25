@@ -429,3 +429,29 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 		t.Fatalf("pressed for a replaced Claude: %v", ft.keys)
 	}
 }
+
+// Once a Claude is bound, another process identified in the pane ends
+// the watcher, whatever agent it is.
+func TestTrustEndsOnAnyReplacement(t *testing.T) {
+	d, _, _, _ := newAddDaemon(t)
+	key := paneKey(d.managed.Label, "%1")
+	target := trustTarget{pane: "%1", session: "s", serverPID: 5}
+	first := procs.Identity{Agent: "claude", PID: 10, Start: time.Unix(1, 0)}
+	d.mu.Lock()
+	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: first}}
+	d.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		d.answerTrust(context.Background(), target, 10*time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	d.mu.Lock()
+	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: procs.Identity{Agent: "codex", PID: 11, Start: time.Unix(2, 0)}}}
+	d.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher kept going after another agent replaced the bound Claude")
+	}
+}

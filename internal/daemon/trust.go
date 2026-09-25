@@ -229,11 +229,14 @@ func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Durat
 		if gone || ready {
 			return
 		}
+		// Any other process identified in the pane once one is bound,
+		// Claude or not, ends the watcher.
+		if bound != nil && id.PID != 0 && (id.PID != bound.PID || !id.Start.Equal(bound.Start)) {
+			return
+		}
 		if claude {
 			if bound == nil {
 				bound = &id
-			} else if id.PID != bound.PID || !id.Start.Equal(bound.Start) {
-				return
 			}
 			done, stop := d.trustStep(ctx, t, *bound, &moved)
 			if done || stop {
