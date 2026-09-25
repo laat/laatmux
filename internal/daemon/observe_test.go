@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 // fakeProcs serves scripted process tables per call, or an error.
 type fakeProcs struct {
+	mu     sync.Mutex // a trust watcher asks beside the poll
 	tables []procTable
 	i      int
 }
@@ -23,6 +25,8 @@ type procTable struct {
 }
 
 func (f *fakeProcs) next() procTable {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	t := f.tables[min(f.i, len(f.tables)-1)]
 	f.i++
 	return t

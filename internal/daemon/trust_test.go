@@ -57,6 +57,20 @@ func TestTrustChoice(t *testing.T) {
 	if m, ok := trustChoice(wrapped, root); !ok || m != 1 {
 		t.Fatalf("wrapped: %d %v", m, ok)
 	}
+	// A root with a space, wrapped at it: tmux drops the trailing space.
+	spaced := "/home/me/Work Trees/proj/yo"
+	atSpace := trustScreen(spaced, false)
+	atSpace = append(atSpace[:2], append([]string{" /home/me/Work", " Trees/proj/yo"}, atSpace[3:]...)...)
+	if m, ok := trustChoice(atSpace, spaced); !ok || m != 1 {
+		t.Fatalf("wrapped at a space: %d %v", m, ok)
+	}
+	// A space is only allowed to go missing at a line break: other
+	// spellings of a root with a space are other folders.
+	for _, other := range []string{"/home/me/WorkTrees/proj/yo", "/home/me/Work  Trees/proj/yo", "/home/me/work Trees/proj/yo"} {
+		if _, ok := trustChoice(trustScreen(other, false), spaced); ok {
+			t.Errorf("%q read as %q", other, spaced)
+		}
+	}
 	// Numbered options read the same.
 	numbered := trustScreen(root, true)
 	numbered[8], numbered[9] = "   2. No, exit", " ❯ 1. Yes, I trust this folder"
@@ -82,6 +96,7 @@ func TestTrustChoice(t *testing.T) {
 		"a subfolder":       trustScreen(root+"/sub", false),
 		"wrapped subfolder": cut(base, 2, " "+root, "/sub"),
 		"sibling suffix":    cut(base, 2, " "+root, "2"),
+		"extra word":        cut(base, 2, " "+root+" x"),
 		"no question":       idleScreen,
 		"no cursor":         cut(base, 8, "   No, exit"),
 		"two cursors":       cut(base, 9, " ❯ Yes, I trust this folder"),
@@ -204,8 +219,9 @@ func TestTrustWatcherBounds(t *testing.T) {
 		}
 	}
 	// Before a key the pane itself is asked: its working directory
-	// elsewhere is no key yet; tmux showing it on another server
-	// instance, or a Claude other than the one bound, ends the watcher.
+	// elsewhere, or the pane in a tmux mode, is no key yet; tmux showing
+	// it on another server instance, or a Claude other than the one
+	// bound, ends the watcher.
 	target := trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}
 	_, _, _, id := d.trustState(target)
 	moved := false
@@ -215,6 +231,13 @@ func TestTrustWatcherBounds(t *testing.T) {
 	}
 	ft.set(func() {
 		ft.panes[len(ft.panes)-1].CurrentPath = root
+		ft.panes[len(ft.panes)-1].InMode = true
+	})
+	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+		t.Fatalf("in a mode: done %v stop %v keys %d", done, stop, keys())
+	}
+	ft.set(func() {
+		ft.panes[len(ft.panes)-1].InMode = false
 		ft.panes[len(ft.panes)-1].ServerPID = 6
 	})
 	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || !stop || keys() != 0 {
@@ -350,13 +373,14 @@ func TestTrustNeedsVerifiedClaude(t *testing.T) {
 // tmux and Claude name its resolved directory.
 func TestTrustStepLockAndSymlink(t *testing.T) {
 	d, ft, _, _ := newAddDaemon(t)
+	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
 	key := paneKey(d.managed.Label, "%1")
-	id := procs.Identity{Agent: "claude", PID: 42, Start: time.Unix(1, 0)}
+	id, _ := procs.FindIn([]procs.Proc{shell, claude})
 	d.mu.Lock()
 	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: id}}
 	d.mu.Unlock()
@@ -385,8 +409,23 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 		t.Fatalf("through the symlink: %+v", s)
 	}
 	ft.mu.Lock()
+	n := len(ft.keys)
+	enter := n == 1 && ft.keys[0][1] == "Enter"
+	ft.keys = nil
+	ft.mu.Unlock()
+	if !enter {
+		t.Fatalf("%d keys, want one Enter", n)
+	}
+	// The process table without the bound Claude, whatever the last poll
+	// saw: nothing is pressed and the watcher stops.
+	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
+	moved := false
+	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || !stop {
+		t.Fatalf("replaced: done %v stop %v", done, stop)
+	}
+	ft.mu.Lock()
 	defer ft.mu.Unlock()
-	if len(ft.keys) != 1 || ft.keys[0][1] != "Enter" {
-		t.Fatalf("keys %v", ft.keys)
+	if len(ft.keys) != 0 {
+		t.Fatalf("pressed for a replaced Claude: %v", ft.keys)
 	}
 }

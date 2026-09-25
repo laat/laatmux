@@ -33,8 +33,8 @@ import (
 //
 // Anything else is left alone, and the wait for the agent times out as
 // before. A user who moves the selection between the capture and the
-// key press is the one race a capture cannot rule out; the keys are a
-// handful at most.
+// key press is the one race a capture cannot rule out; the keys are two
+// at most.
 
 // The question as Claude Code 2 draws it, at the bottom of the pane:
 //
@@ -127,7 +127,7 @@ func trustChoice(screen []string, root string) (moves int, ok bool) {
 	if question < 0 || question == head+1 {
 		return 0, false
 	}
-	if strings.Join(lines[head+1:question], "") != root {
+	if !pathLines(lines[head+1:question], root) {
 		return 0, false
 	}
 	return yes - cursor, true
@@ -280,8 +280,19 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 	switch {
 	case here == nil || here.Dead || here.Session != t.session || here.ServerPID != t.serverPID:
 		return false, true
-	case here.CurrentPath != t.root && here.CurrentPath != t.real:
+	case here.CurrentPath != t.root && here.CurrentPath != t.real, here.InMode:
+		// Not yet: a key to a pane in copy-mode or a chooser goes to the
+		// mode, whatever the capture shows.
 		return false, false
+	}
+	// The bound Claude itself, now, not as the last poll saw it: a
+	// replacement started in the pane since gets nothing.
+	alive, err := d.cfg.Procs.Exists(here.TTY, bound)
+	if err != nil {
+		return false, false
+	}
+	if !alive {
+		return false, true
 	}
 	screen, err := d.managed.Tmux.Capture(ctx, t.pane, d.cfg.CaptureLines)
 	if err != nil {
@@ -317,4 +328,22 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 	}
 	d.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
 	return true, false
+}
+
+// pathLines is that the lines, trimmed, spell root as the pane wrapped
+// it: in order, with nothing left over, one space of the root allowed to
+// be missing at each line break and nowhere else, since tmux drops a
+// line's trailing spaces and the trim a continuation's leading ones.
+func pathLines(lines []string, root string) bool {
+	rest := root
+	for i, l := range lines {
+		if i > 0 && strings.HasPrefix(rest, " ") && !strings.HasPrefix(l, " ") {
+			rest = rest[1:]
+		}
+		if !strings.HasPrefix(rest, l) {
+			return false
+		}
+		rest = rest[len(l):]
+	}
+	return rest == ""
 }
