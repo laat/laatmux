@@ -599,7 +599,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			// Past the lifetime nothing is sent, to a host that answers
 			// or to one that never will: the outcome is unknown.
 			d.persist(ctx, id, func(p *pendingFile) {
-				p.Done, p.OK, p.Error, p.Reachable = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true
+				p.Done, p.OK, p.Error, p.Reachable, p.Mismatch = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true, ""
 			})
 			return
 		}
@@ -687,7 +687,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		// The outcome must reach the disk: a record without it would be
 		// followed by no one.
 		d.persist(ctx, id, func(p *pendingFile) {
-			p.Taken, p.Done, p.Reachable = true, true, true
+			p.Taken, p.Done, p.Reachable, p.Mismatch = true, true, true, ""
 			p.OK = res.OK
 			if res.Branch != "" {
 				p.Branch = res.Branch

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/command"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
@@ -53,6 +54,12 @@ func cmdTasks(ctx context.Context, args []string) error {
 // listTasks reads the merged stream's snapshot, which carries the
 // pending records, and prints them.
 func listTasks(ctx context.Context) error {
+	// The config is read here as every command reads it: a file that
+	// does not parse is the error, not a host list with nothing in it,
+	// which would make every record read as host removed.
+	if _, err := config.Load(); err != nil {
+		return err
+	}
 	c, ok := dialMerged(ctx)
 	if !ok {
 		return errors.New("the local daemon has no merged stream")

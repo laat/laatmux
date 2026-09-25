@@ -539,14 +539,24 @@ record must not read as one to an older sidebar.
 The pending record, without the prompt:
 
 ```
-{id, host, environment_id, source, repo, branch, generated, agent,
- submitted_at, taken, reachable, stage, state, detail, root, session,
- done, error, prompt, attempt, attempt_open}
+{id, host, environment_id, source, repo, branch, generated, agent, cmd,
+ submitted_at, taken, reachable, unreachable, mismatch, stage, state,
+ detail, root, session, done, ok, error, prompt, attempt, attempt_open,
+ attempt_error, listed, listing_error, gone, updated_at}
 ```
 
 `taken` is that the host has the add; `reachable` is the relay's
 connection, the connectivity axis kept apart from the outcome as issue
-#1 wants; `stage`, `state` and `detail` are the last progress message's;
+#1 wants, with `unreachable` saying why not while it is down and
+`mismatch` that the machine answering under the host's name is not
+the one the task was accepted for; `ok` is the add's success once
+`done`; `attempt_error` is the host's refusal of the last attempt,
+kept apart from `error`; `listed` is that the listing after the result
+has been seen, `listing_error` why it cannot be while it is owed, and
+`gone` that it had no worktree at the root. The views and `tasks`
+read the record in one order: host removed (from the host list),
+`mismatch`, a failed add, `gone`, an open attempt, `attempt_error`,
+the delivery state, the listing; `stage`, `state` and `detail` are the last progress message's;
 `prompt` is the delivery state, `attempt` the number of the last
 attempt and `attempt_open` that it is unresolved. Ids are the client's,
 `add-<pid>-<nanos>` as today, so a relay resent after a lost laptop

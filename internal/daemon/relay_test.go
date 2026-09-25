@@ -1081,7 +1081,7 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
-	f.hosts.flip = 1 // gone for the first read, back for the next
+	f.hosts.setFlip(1) // gone for the first read, back for the next
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
 	if res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss with the host back %+v", res)

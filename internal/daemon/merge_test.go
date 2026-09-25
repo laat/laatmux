@@ -111,6 +111,13 @@ type hostsList struct {
 	flip int
 }
 
+// setFlip sets flip under the lock.
+func (h *hostsList) setFlip(n int) {
+	h.mu.Lock()
+	h.flip = n
+	h.mu.Unlock()
+}
+
 func (h *hostsList) get() ([]client.Host, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

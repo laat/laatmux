@@ -680,11 +680,13 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   refused at accept. The pending records travel in the merged stream:
   `pendings` and `handoffs` in a snapshot, `pending` in an upsert,
   `pending_id` with `replaced_by` in a remove. A record carries `taken`
-  (the host has the add), `reachable` with `unreachable` saying why not,
+  (the host has the add), `reachable` with `unreachable` saying why not
+  and `mismatch` when another machine answers under the host's name,
   the last progress line's `stage`, `state` and `detail`, `branch` and
   `root` as the host reports them, then `done` with `ok`, `error`,
-  `prompt` (the delivery state), `attempt` and `attempt_open`, `listed`
-  and `gone`. A record is complete when the add succeeded and the prompt
+  `prompt` (the delivery state), `attempt`, `attempt_open` and
+  `attempt_error` (the host's refusal of the last attempt), `listed`,
+  `listing_error` and `gone`. A record is complete when the add succeeded and the prompt
   is delivered or there was none; the relay takes the host's listings
   until one passes the result's barrier, and a complete record whose
   worktree is in it is retired: the handoff is written to the file,
