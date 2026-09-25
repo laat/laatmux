@@ -584,7 +584,12 @@ func Dismissable(r rows.Row) bool {
 // Deliverable is a pending task whose prompt p delivers now: the add
 // succeeded, the prompt did not reach the agent or may not have, and no
 // attempt is open. The prompt is retained until it is delivered.
-func Deliverable(p protocol.Pending) bool {
+func Deliverable(r rows.Row) bool {
+	p := r.Pending
+	if p == nil || r.Removed || r.Replaced || p.Mismatch != "" {
+		// The relay cannot reach the machine the task was accepted on.
+		return false
+	}
 	return p.Done && p.OK && !p.Delivered() && !p.Gone && !p.AttemptOpen && p.AttemptError != protocol.ErrRecoveryExpired &&
 		(p.Prompt == protocol.DeliveryNotDelivered || p.Prompt == protocol.DeliveryUnknown)
 }
@@ -643,8 +648,10 @@ func (d *dash) deliverPrompt(m *view.Model) {
 		return
 	}
 	p := *r.Pending
-	if !Deliverable(p) {
+	if !Deliverable(*r) {
 		switch {
+		case r.Removed || r.Replaced || p.Mismatch != "":
+			m.Message = r.Name + ": " + r.State() + "; x dismisses the task"
 		case p.Delivered():
 			m.Message = r.Name + ": nothing to deliver (the prompt is " + p.Prompt + ")"
 		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:

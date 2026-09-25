@@ -118,7 +118,7 @@ func (r Row) ID() string {
 // stands for it; "" otherwise. A view's selection on the task follows
 // it there.
 func (r Row) Alias() string {
-	if r.Pending == nil || !stands(*r.Pending) {
+	if !r.stands() {
 		return ""
 	}
 	return r.Pending.WorktreeID()
@@ -269,9 +269,12 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 
 // stands is a task that may still become the worktree row at its root,
 // and so stands for it: not one that failed, nor one whose worktree was
-// gone after the add.
-func stands(p protocol.Pending) bool {
-	return !p.Gone && !(p.Done && !p.OK)
+// gone after the add, nor one whose host is gone from the config, which
+// the relay no longer follows; a host renamed in the config lists the
+// worktree under its new name, and the row is drawn.
+func (r Row) stands() bool {
+	p := r.Pending
+	return p != nil && !r.Removed && !p.Gone && !(p.Done && !p.OK)
 }
 
 // outcomeUnknown is how the relay's error begins for an add whose
@@ -403,7 +406,7 @@ func Build(in Input) Rows {
 	// stale one, and the viewer's own row is followed.
 	for i := range pendings {
 		p := pendings[i].Pending
-		if !stands(*p) {
+		if !pendings[i].stands() {
 			continue
 		}
 		if p.EnvironmentID != "" && p.Root != "" {
@@ -422,7 +425,7 @@ func Build(in Input) Rows {
 		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] && p.Root != "" && a.Cwd == p.Root {
 			pendings[i].Agent, used[a] = a, true
 			for j := range pendings {
-				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && stands(*q) && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
+				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && pendings[j].stands() && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
 					pendings[j].Agent = a
 				}
 			}

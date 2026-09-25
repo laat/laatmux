@@ -836,8 +836,13 @@ func TestPendingTarget(t *testing.T) {
 	}
 	failed := early
 	failed.OK, failed.Error = false, "failed at agent: x"
-	if _, err := pendingTarget(row(failed, nil, false)); err == nil || !strings.Contains(err.Error(), "the add failed") {
+	if _, err := pendingTarget(row(failed, nil, false)); err == nil || !strings.Contains(err.Error(), "proj/fix: failed; x dismisses") {
 		t.Fatalf("failed: %v", err)
+	}
+	unknown := early
+	unknown.OK, unknown.Error = false, "outcome unknown: the daemon no longer knows it"
+	if _, err := pendingTarget(row(unknown, nil, false)); err == nil || !strings.Contains(err.Error(), "outcome unknown; x dismisses") {
+		t.Fatalf("outcome unknown: %v", err)
 	}
 }
 
@@ -935,6 +940,22 @@ func TestPendingOffers(t *testing.T) {
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
 		t.Errorf("p on a gone, delivered task: %q", m.Message)
+	}
+	// p on a task whose host is removed, and x on a running task whose
+	// replacement only the view has seen, say why not.
+	stuck := protocol.Pending{ID: "add-9", Host: "old", Repo: "proj", Branch: "d", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if !strings.Contains(m.Message, "host removed; x dismisses the task") {
+		t.Errorf("p on a removed host: %q", m.Message)
+	}
+	moving := protocol.Pending{ID: "add-8", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "e", Sent: true, Taken: true, SubmittedAt: time.Now()}
+	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
+	m.Handle(view.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {
+		t.Errorf("x on an unrecorded replacement: confirm %q message %q", m.Confirm, m.Message)
 	}
 	if _, err := pendingTarget(rows.Row{Name: "proj/c", Pending: &gone}); err == nil || !strings.Contains(err.Error(), "gone") {
 		t.Errorf("enter on a gone task: %v", err)

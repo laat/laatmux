@@ -254,7 +254,7 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 	case p.Done && !p.OK && (r.Worktree == nil || r.Worktree.Session == ""):
 		// A failed add stands for no worktree row; one listed at the
 		// root is drawn beside it.
-		return r, errors.New(r.Name + ": the add failed; x dismisses the task")
+		return r, errors.New(r.Name + ": " + r.State() + "; x dismisses the task")
 	case p.Mismatch != "" || r.Replaced:
 		// The name reaches another machine now: its session of the
 		// same name is not this task's.

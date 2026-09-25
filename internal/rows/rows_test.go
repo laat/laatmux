@@ -359,3 +359,27 @@ func TestPendingThatCannotStand(t *testing.T) {
 		}
 	}
 }
+
+// A task whose host was renamed in the config is on a removed host: it
+// does not stand for the worktree row the new name lists, which is
+// drawn with its agent.
+func TestPendingOnRenamedHost(t *testing.T) {
+	now := time.Now()
+	got := Build(Input{
+		Hosts:     []Host{{Name: "new", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
+		Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+		Worktrees: []protocol.Worktree{{ID: "env/worktree//r", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b"}},
+		Pendings:  []protocol.Pending{{ID: "add-1", Host: "old", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now}},
+	})
+	if len(got.Main) != 2 {
+		t.Fatalf("%d rows", len(got.Main))
+	}
+	for _, r := range got.Main {
+		if r.Pending != nil && (!r.Removed || r.Agent != nil || r.Alias() != "") {
+			t.Fatalf("task: removed %v agent %v alias %q", r.Removed, r.Agent, r.Alias())
+		}
+		if r.Pending == nil && (r.Agent == nil || r.Host != "new") {
+			t.Fatalf("worktree row: %+v", r)
+		}
+	}
+}

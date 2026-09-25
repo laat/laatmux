@@ -455,8 +455,10 @@ closes, only the retirement waits. While a
 pending record exists that is not retired, the worktree row for the
 same environment and root is not drawn: the pending row stands for it,
 with more to say. A record that can no longer become that row does not
-stand for it: one that failed, and one whose worktree was gone after
-the add, so a worktree made again at the root is drawn beside it.
+stand for it: one that failed, one whose worktree was gone after the
+add, and one whose host is gone from the config, which the relay no
+longer follows, so a worktree made again at the root, or listed under a
+host's new name, is drawn beside it.
 
 A pending record and the worktree row it will become are joined by
 identity, not by name: the record carries the host's environment id,
