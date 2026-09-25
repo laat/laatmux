@@ -651,7 +651,10 @@ func (d *dash) deliverPrompt(m *view.Model) {
 	if !Deliverable(*r) {
 		switch {
 		case r.Removed || r.Replaced || p.Mismatch != "":
-			m.Message = r.Name + ": " + r.State() + "; x dismisses the task"
+			m.Message = r.Name + ": " + r.State()
+			if Dismissable(*r) {
+				m.Message += "; x dismisses the task"
+			}
 		case p.Delivered():
 			m.Message = r.Name + ": nothing to deliver (the prompt is " + p.Prompt + ")"
 		case p.Done && !p.OK, p.Gone, p.AttemptError == protocol.ErrRecoveryExpired:

@@ -358,9 +358,7 @@ func Build(in Input) Rows {
 	// hands over: the two are joined by environment and root, never by
 	// name, and the worktree row is not drawn while any task for it
 	// stands, two tasks for one explicit branch included. A task that
-	// can no longer become that row does not stand for it: one whose
-	// worktree was gone after the add, whose row would hide a worktree
-	// made again at the root, and one that failed.
+	// can no longer become that row does not stand for it: see stands.
 	var pendings []Row
 	byAlias := map[string][]int{}
 	for i := range in.Pendings {
@@ -407,13 +405,17 @@ func Build(in Input) Rows {
 	// stale one, and the viewer's own row is followed.
 	for i := range pendings {
 		p := pendings[i].Pending
+		if p.EnvironmentID != "" && p.Root != "" && !p.Gone && !(p.Done && !p.OK) {
+			// A session at the root of an add that may still make the
+			// worktree is not stale, whether or not the task stands for
+			// it: a host renamed mid-add has not listed it yet.
+			seenKey[workspace.Key(p.EnvironmentID, p.Root)] = true
+		}
 		if !pendings[i].stands() {
 			continue
 		}
 		if p.EnvironmentID != "" && p.Root != "" {
-			key := workspace.Key(p.EnvironmentID, p.Root)
-			seenKey[key] = true
-			if l := byKey[key]; l != nil && pendings[i].Local == nil {
+			if l := byKey[workspace.Key(p.EnvironmentID, p.Root)]; l != nil && pendings[i].Local == nil {
 				pendings[i].Local = l
 			}
 		}

@@ -911,6 +911,24 @@ func TestPendingOffers(t *testing.T) {
 			t.Errorf("%s: dismissable %v, want %v", c.name, got, c.want)
 		}
 	}
+	// p goes where the relay can reach the machine and the prompt waits.
+	undelivered := protocol.Pending{Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}
+	mismatched := undelivered
+	mismatched.Mismatch = "x"
+	for _, c := range []struct {
+		name string
+		r    rows.Row
+		want bool
+	}{
+		{"not delivered", row(undelivered, false), true},
+		{"replaced, unrecorded", row(undelivered, true), false},
+		{"recorded mismatch", row(mismatched, false), false},
+		{"removed", rows.Row{Pending: &undelivered, Removed: true}, false},
+	} {
+		if got := Deliverable(c.r); got != c.want {
+			t.Errorf("%s: deliverable %v, want %v", c.name, got, c.want)
+		}
+	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
@@ -956,6 +974,10 @@ func TestPendingOffers(t *testing.T) {
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {
 		t.Errorf("x on an unrecorded replacement: confirm %q message %q", m.Confirm, m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	if m.Message != "proj/e: host replaced" {
+		t.Errorf("p on an unrecorded replacement offers x: %q", m.Message)
 	}
 	if _, err := pendingTarget(rows.Row{Name: "proj/c", Pending: &gone}); err == nil || !strings.Contains(err.Error(), "gone") {
 		t.Errorf("enter on a gone task: %v", err)

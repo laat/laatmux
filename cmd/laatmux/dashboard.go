@@ -251,7 +251,7 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 		return r, errors.New(r.Name + ": host removed from the config")
 	case p.Gone:
 		return r, errors.New(r.Name + ": the worktree is gone; x dismisses the task")
-	case p.Done && !p.OK && (r.Worktree == nil || r.Worktree.Session == ""):
+	case p.Done && !p.OK:
 		// A failed add stands for no worktree row; one listed at the
 		// root is drawn beside it.
 		return r, errors.New(r.Name + ": " + r.State() + "; x dismisses the task")

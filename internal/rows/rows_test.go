@@ -382,6 +382,16 @@ func TestPendingOnRenamedHost(t *testing.T) {
 			t.Fatalf("worktree row: %+v", r)
 		}
 	}
+	// Mid-add, the session a jump made at the task's root is not stale
+	// while the renamed host has not listed the worktree yet.
+	adding := Build(Input{
+		Hosts:    []Host{{Name: "new", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
+		Locals:   []workspace.Local{{Name: "old/proj/b", Key: "env//r", Host: "old"}},
+		Pendings: []protocol.Pending{{ID: "add-2", Host: "old", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}},
+	})
+	if len(adding.Stale) != 0 {
+		t.Fatalf("a session at a running add's root is stale: %+v", adding.Stale)
+	}
 	// The old name still configured, now answering as another machine,
 	// and another name listing the task's machine: the task is replaced
 	// and stands for nothing; the worktree row is drawn.
