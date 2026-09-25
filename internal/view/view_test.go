@@ -1224,6 +1224,7 @@ func TestPasteTextBrokenSequence(t *testing.T) {
 		"a\x1bOPb":         "ab",
 		"a\x1bO\nb":        "a\nb",
 		"a\x1bO1;2Pb":      "ab",
+		"a\x1bO 1Pb":       "ab",
 	} {
 		if got := pasteText([]byte(in)); got != want {
 			t.Errorf("pasteText(%q) = %q, want %q", in, got, want)

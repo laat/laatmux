@@ -305,7 +305,7 @@ func splitTail(b []byte) (head, tail []byte) {
 		} else if i+1 < cut && b[i+1] == 'O' {
 			done := false
 			for j := i + 2; j < cut; j++ {
-				if b[j] < 0x30 || b[j] > 0x3f {
+				if b[j] < 0x20 || b[j] > 0x3f {
 					done = true
 					break
 				}
@@ -361,7 +361,7 @@ func pasteText(b []byte) string {
 				}
 			} else if i+1 < len(rs) && rs[i+1] == 'O' {
 				j := i + 2
-				for j < len(rs) && rs[j] >= 0x30 && rs[j] <= 0x3f {
+				for j < len(rs) && rs[j] >= 0x20 && rs[j] <= 0x3f {
 					j++
 				}
 				i = j - 1
@@ -486,10 +486,12 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 				return keys, nil
 			}
 			if b[1] == 'O' {
-				// Parameter bytes, as in the old form of a modified F1
-				// to F4, ESC O 2 P, then the final byte.
+				// Parameter and intermediate bytes, as csi and the
+				// discard after a flush take them: the old form of a
+				// modified F1 to F4, ESC O 2 P, say. Then the final
+				// byte.
 				j := 2
-				for j < len(b) && b[j] >= 0x30 && b[j] <= 0x3f {
+				for j < len(b) && b[j] >= 0x20 && b[j] <= 0x3f {
 					j++
 				}
 				if j == len(b) {
