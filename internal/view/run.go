@@ -36,7 +36,13 @@ const escapeWait = 50 * time.Millisecond
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
 func Run(ctx context.Context, t *Term, m *Model, h Host) error {
-	keys := make(chan []byte)
+	// Each read is stamped as it arrives: a click is on the screen that
+	// was drawn then, whatever is drawn before it is handled.
+	type input struct {
+		b  []byte
+		at time.Time
+	}
+	keys := make(chan input)
 	go func() {
 		buf := make([]byte, 256)
 		for {
@@ -48,7 +54,7 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			b := make([]byte, n)
 			copy(b, buf[:n])
 			select {
-			case keys <- b:
+			case keys <- input{b, time.Now()}:
 			case <-ctx.Done():
 				return
 			}
@@ -63,6 +69,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		m.Now = time.Now()
 		m.Width, m.Height = t.Size()
 		t.Draw(m.Render())
+		// The new screen is on the terminal from here: a click read
+		// before now was on the one before it.
+		m.hitAt = time.Now()
 	}
 	handle := func(ks []Key) (done bool) {
 		for _, k := range ks {
@@ -106,11 +115,12 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 				// never comes is taken once its bytes have stopped.
 				flush = time.After(w)
 			}
-		case b, ok := <-keys:
+		case in, ok := <-keys:
 			if !ok {
 				return nil
 			}
-			if handle(dec.Feed(b)) {
+			ks := dec.FeedAt(in.b, in.at)
+			if handle(ks) {
 				return nil
 			}
 			flush = nil

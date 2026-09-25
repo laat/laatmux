@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/laat/laatmux/internal/rows"
 )
 
 // Key is one input event: a rune, a special key, a mouse event, or a
@@ -16,6 +18,9 @@ type Key struct {
 	X, Y  int    // mouse, 1-based cells
 	Wheel int    // mouse: -1 up, +1 down, 0 for a click
 	Text  string // paste: everything between the paste markers, line breaks as \n
+	// At, on a click, is when its bytes were read: the screen clicked is
+	// the last drawn before it. Zero when unknown.
+	At time.Time
 }
 
 type KeyKind int
@@ -80,6 +85,9 @@ type Decoder struct {
 	// after a stall is the user's, and ends the paste.
 	stalled   bool
 	stalledAt time.Time
+	// heldAt is when the first of the held bytes was read, for FeedAt:
+	// a click whose bytes came in two reads is dated from the first.
+	heldAt time.Time
 }
 
 // Bounds on a paste: the silence after which its text so far is given
@@ -102,7 +110,13 @@ func (d *Decoder) clock() time.Time {
 // Feed adds input and returns the keys complete so far. Pending reports
 // whether bytes are held back; the caller flushes them after a short
 // wait, since a bare escape looks like the start of a sequence.
-func (d *Decoder) Feed(b []byte) []Key {
+func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
+
+// FeedAt is Feed for bytes read at the time given: each click it gives
+// has At set to when its first byte was read, the held bytes' time for
+// a click they begin and this read's for one begun in it, whatever the
+// held bytes turned out to be.
+func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
 	if d.discard {
 		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e. A
 		// fresh escape means the dropped sequence never completed; it
@@ -120,7 +134,27 @@ func (d *Decoder) Feed(b []byte) []Key {
 		b = b[i:]
 		d.discard = false
 	}
+	// Offsets below are into the held bytes and this read's, joined:
+	// those before h were held, and d.pending stays a suffix of them.
+	h, held := len(d.pending), d.heldAt
 	d.pending = append(d.pending, b...)
+	total := len(d.pending)
+	stamp := func(base int) func(int) time.Time {
+		return func(off int) time.Time {
+			if base+off < h {
+				return held
+			}
+			return at
+		}
+	}
+	defer func() {
+		switch {
+		case len(d.pending) == 0:
+			d.heldAt = time.Time{}
+		case total-len(d.pending) >= h:
+			d.heldAt = at
+		}
+	}()
 	d.at = d.clock()
 	var keys []Key
 	for {
@@ -154,11 +188,11 @@ func (d *Decoder) Feed(b []byte) []Key {
 		}
 		i := strings.Index(string(d.pending), pasteStart)
 		if i < 0 {
-			ks, rest := parse(d.pending, false)
+			ks, rest := parse(d.pending, false, stamp(total-len(d.pending)))
 			d.pending = rest
 			return append(keys, ks...)
 		}
-		ks, rest := parse(d.pending[:i], true)
+		ks, rest := parse(d.pending[:i], true, stamp(total-len(d.pending)))
 		keys = append(keys, ks...)
 		_ = rest
 		d.pending = d.pending[i+len(pasteStart):]
@@ -194,8 +228,16 @@ func (d *Decoder) stall() []Key {
 		if text := pasteText(data[:i]); text != "" {
 			keys = append(keys, Key{Kind: KeyPaste, Text: text})
 		}
-		rest, _ := parse(data[i+1:], true)
-		keys = append(keys, rest...)
+		// The bytes after the key were joined across reads, so when a
+		// click among them was read is not known, nor which screen it
+		// was on: clicks there are dropped rather than resolved on the
+		// screen drawn now.
+		rest, _ := parse(data[i+1:], true, nil)
+		for _, k := range rest {
+			if k.Kind != KeyMouse {
+				keys = append(keys, k)
+			}
+		}
 		d.paste, d.pending, d.pasting, d.stalled = nil, nil, false, false
 		return keys
 	}
@@ -363,14 +405,15 @@ func (d *Decoder) Flush() []Key {
 		if len(d.pending) > 2 || d.clock().Sub(d.at) < pasteGrace {
 			return nil
 		}
-		d.pending = nil
+		d.pending, d.heldAt = nil, time.Time{}
 		return nil
 	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
 		d.discard = true
 	}
-	keys, _ := parse(d.pending, true)
-	d.pending = nil
+	heldAt := d.heldAt
+	keys, _ := parse(d.pending, true, func(int) time.Time { return heldAt })
+	d.pending, d.heldAt = nil, time.Time{}
 	return keys
 }
 
@@ -386,8 +429,10 @@ func Parse(b []byte) []Key {
 // start of an escape sequence or a rune are returned as rest instead;
 // with flush true a bare escape is the escape key and an incomplete
 // sequence is dropped, since a mouse report cut short would otherwise
-// read as an escape and digits, and digits jump.
-func parse(b []byte, flush bool) (keys []Key, rest []byte) {
+// read as an escape and digits, and digits jump. stamp, when set, dates
+// a click by the offset of its first byte in b.
+func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, rest []byte) {
+	whole := len(b)
 	for len(b) > 0 {
 		c := b[0]
 		switch {
@@ -401,6 +446,9 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 			if b[1] == '[' {
 				k, n, ok := csi(b)
 				if ok {
+					if k.Kind == KeyMouse && stamp != nil {
+						k.At = stamp(whole - len(b))
+					}
 					keys = append(keys, k)
 					b = b[n:]
 					continue
@@ -650,6 +698,13 @@ func csi(b []byte) (Key, int, bool) {
 type Action struct {
 	Kind ActionKind
 	Key  Key // for ActionOther, the key the model did not handle
+	// Row, on ActionJump, is the row a click or a digit named, which
+	// is the selection unless the selection follows the viewer's own
+	// row and goes on doing so; nil for Enter, which jumps to the
+	// selection. Mouse is a jump by a click, which tmux's click binding
+	// made the view's pane active for.
+	Row   *rows.Row
+	Mouse bool
 }
 
 type ActionKind int
@@ -657,7 +712,7 @@ type ActionKind int
 const (
 	ActionNone    ActionKind = iota
 	ActionQuit               // q, Ctrl-C
-	ActionJump               // Enter, a digit, a click: on Selection
+	ActionJump               // Enter, a digit, a click: on Row
 	ActionOther              // a key the model does not know; the host may
 	ActionConfirm            // y on a Confirm; ConfirmTag says which
 	ActionOverlay            // the overlay is Done; the host reads and clears it
@@ -727,9 +782,10 @@ func (m *Model) Handle(k Key) Action {
 			m.move(k.Wheel)
 			return Action{}
 		}
-		if i := m.hit(k.Y); i >= 0 {
-			m.moveTo(i)
-			return m.jump()
+		if i := m.hitRow(k.Y, k.At); i >= 0 {
+			a := m.jumpTo(i)
+			a.Mouse = a.Kind == ActionJump
+			return a
 		}
 	case KeyRune:
 		switch k.Rune {
@@ -756,8 +812,7 @@ func (m *Model) Handle(k Key) Action {
 			return Action{Kind: ActionQuit}
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
-				m.moveTo(i)
-				return m.jump()
+				return m.jumpTo(i)
 			}
 		default:
 			return Action{Kind: ActionOther, Key: k}
@@ -805,6 +860,41 @@ func (m *Model) jump() Action {
 	return Action{Kind: ActionJump}
 }
 
+// Select puts the selection on the visible row with the id, as a key
+// would, which makes it the user's: the host's answer to a click that
+// jumped nowhere, so the row clicked is the one the next key acts on.
+// False when no visible row has the id.
+func (m *Model) Select(id string) bool {
+	for _, it := range m.Visible() {
+		if it.Row.ID() == id {
+			// Following ends even when the row is the one it was on: it
+			// is the user's from here, and a later refresh must not move
+			// the selection off it.
+			m.moveTo(it.Index)
+			m.Follow = false
+			return true
+		}
+	}
+	return false
+}
+
+// jumpTo is a jump to the visible row at i, by a click or a digit. A
+// selection that follows the viewer's own row goes on following it: the
+// jump takes the viewer to that row's session, and when they are back
+// here the selection is on their own row again rather than on the one
+// they clicked. A selection that is the user's moves to the row, as a
+// key would move it.
+func (m *Model) jumpTo(i int) Action {
+	vis := m.Visible()
+	if i < 0 || i >= len(vis) {
+		return Action{}
+	}
+	if !m.Follow {
+		m.moveTo(i)
+	}
+	return Action{Kind: ActionJump, Row: vis[i].Row}
+}
+
 // nth is the index of the nth row of the group the selection is in.
 func (m *Model) nth(n int) (int, bool) {
 	vis := m.Visible()
@@ -829,14 +919,31 @@ func (m *Model) nth(n int) (int, bool) {
 	return 0, false
 }
 
-// hit is the row on screen line y (1-based), -1 for none. The body
-// starts after the header lines.
-func (m *Model) hit(y int) int {
-	i := y - 1 - len(m.Header)
-	if i < 0 || i >= len(m.hits) {
+// hitRow is the visible row now that the screen clicked drew on line y
+// (1-based), found by its id, -1 when that line drew no row or the row
+// is no longer visible: what was clicked is what was on screen, whatever
+// a refresh or a key since has done to the indexes. The screen clicked
+// is the last drawn before the click was read, at: the previous render
+// when one was drawn after it, the click dropped when two were; the
+// last render when at is zero.
+func (m *Model) hitRow(y int, at time.Time) int {
+	ids, top := m.hitIDs, m.hitTop
+	if !at.IsZero() && at.Before(m.hitAt) {
+		if m.hitPrevAt.IsZero() || at.Before(m.hitPrevAt) {
+			return -1
+		}
+		ids, top = m.hitPrevIDs, m.hitPrevTop
+	}
+	i := y - 1 - top
+	if i < 0 || i >= len(ids) || ids[i] == "" {
 		return -1
 	}
-	return m.hits[i]
+	for _, it := range m.Visible() {
+		if it.Row.ID() == ids[i] {
+			return it.Index
+		}
+	}
+	return -1
 }
 
 // pasteLine is a paste as one line of text, for a filter or a name:

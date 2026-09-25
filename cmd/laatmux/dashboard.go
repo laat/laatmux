@@ -76,7 +76,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionJump:
-				return d.jump(m, *m.Selection())
+				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
 			case taskAction(m, a):
@@ -87,6 +87,59 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 			return false
 		},
 	})
+}
+
+// jumpAction runs a jump: to the row the action names. In a view that
+// stays, the sidebar, a click made the view's pane the active one, as
+// tmux's click binding selects the pane clicked; the pane that was
+// active before is made so again first, so typing goes back where it
+// was, both when the jump stays in this session and in this window when
+// the viewer comes back to it.
+func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
+	r, named := a.Row, a.Row != nil
+	if !named {
+		r = m.Selection()
+	}
+	if r == nil {
+		return false
+	}
+	exit, jumped := d.jumpRow(m, *r)
+	if !jumped {
+		// A click or a digit that jumped nowhere, on a task still
+		// running or refused with a message, selects the row, as it did
+		// before jumps left the selection following: the message is
+		// about that row, and p and x act on it. Enter was on the
+		// selection already, and leaves following as it was. The focus
+		// stays on the view, where the message is.
+		if named {
+			m.Select(r.ID())
+		}
+		return exit
+	}
+	if a.Mouse && !d.exitOnJump {
+		refocus := d.refocus
+		if refocus == nil {
+			refocus = func() { lastPane(d.ctx) }
+		}
+		refocus()
+	}
+	return exit
+}
+
+// lastPane makes the pane active before the view's own the active one
+// in the view's window, while the view's pane is the active one: tmux
+// checks and switches in one command, so two clicks handled one after
+// the other do not toggle the focus back into the view. It rests on
+// tmux's default click binding having made the view's pane active for
+// the click; a view focused with the keyboard before the click gives
+// the focus to the pane active before it, which is where typing went
+// before the view was focused. A window whose view pane was active all
+// along has no other to go back to, and tmux's refusal is ignored. The
+// server is the pane's own, the one TMUX names.
+func lastPane(ctx context.Context) {
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		_, _ = tmux.Server{}.Run(ctx, "if-shell", "-F", "-t", pane, "#{pane_active}", "last-pane -t "+pane)
+	}
 }
 
 // taskAction is an action on a pending task: p or x on a task's row,

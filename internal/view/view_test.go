@@ -136,7 +136,7 @@ func TestRenderScroll(t *testing.T) {
 	if !strings.Contains(txt, "scratch") || strings.Contains(txt, "fix-ls") {
 		t.Errorf("selection not scrolled to:\n%s", txt)
 	}
-	if got := m.hit(1); got < 0 || m.Visible()[got].Row.Name == "laatmux/fix-ls" {
+	if got := m.hitRow(1, time.Time{}); got < 0 || m.Visible()[got].Row.Name == "laatmux/fix-ls" {
 		t.Errorf("first line maps to row %d after scrolling", got)
 	}
 	// Back to the top: the scroll follows.
@@ -529,7 +529,9 @@ func TestFollowSelection(t *testing.T) {
 	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
 		t.Fatalf("Enter with nothing selected: %+v", a)
 	}
-	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || m.Selected != 1 || m.Follow {
+	// A digit jumps to the row it counts; the selection goes on
+	// following, so it is on the viewer's own row when they are back.
+	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.Name != m.Visible()[1].Row.Name || m.Selected != -1 || !m.Follow || a.Mouse {
 		t.Fatalf("digit with nothing selected: %+v at %d follow=%v", a, m.Selected, m.Follow)
 	}
 	// Following again, then a key: the selection is the user's and a
@@ -985,5 +987,171 @@ func TestAnchorStandIn(t *testing.T) {
 	m.Filter = ""
 	if r := m.Selection(); r == nil {
 		t.Fatal("a cleared filter left the selection on none")
+	}
+}
+
+// A click jumps to the row clicked. While the selection follows the
+// viewer's own row it goes on following and stays where it was; a
+// selection the user moved moves to the row clicked, as a key would.
+func TestClickJumpKeepsFollow(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	in.Current = "mac/proj/task"
+	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: now, Follow: true}
+	m.SetRows(rows.Build(in))
+	own := m.Selected
+	m.Render()
+	// The first body line is the first row; the own row is elsewhere.
+	y := 1 + len(m.Header)
+	target := m.Visible()[m.hitRow(y, time.Time{})].Row.Name
+	if m.hitRow(y, time.Time{}) == own {
+		t.Fatal("the fixture's first row is the viewer's own")
+	}
+	a := m.Handle(Key{Kind: KeyMouse, Y: y})
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || !a.Mouse || !m.Follow || m.Selected != own {
+		t.Fatalf("click while following: %+v selected %d follow %v", a, m.Selected, m.Follow)
+	}
+	// The user's own selection: j, then a click, moves it there.
+	m.Handle(Key{Rune: 'j'})
+	m.Render()
+	a = m.Handle(Key{Kind: KeyMouse, Y: y})
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y, time.Time{}) {
+		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
+	}
+	// What was clicked is what was drawn: rows that moved since the last
+	// render, or a filter typed since, do not change the target; a row
+	// that is gone is no target.
+	m.Follow = true
+	m.Render()
+	drawn := m.Visible()[m.hitRow(y, time.Time{})].Row.Name
+	in2 := fixtureInput(now)
+	in2.Current = "mac/proj/task"
+	for i := range in2.Agents {
+		in2.Agents[i].Activity = protocol.Idle
+	}
+	m.SetRows(rows.Build(in2))
+	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
+		t.Fatalf("after a reorder: jumped to %+v, drawn was %q", a.Row, drawn)
+	}
+	m.Filter = "zzz-nothing"
+	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
+		t.Fatalf("a row filtered away since: %+v", a)
+	}
+	// A row that moved into a collapsed group since is no target either:
+	// a main-group row with a local session is settled after the render.
+	m.Filter = ""
+	m.ShowHidden = false
+	m.Render()
+	sy, local := -1, ""
+	for yy := 1; yy <= m.Height; yy++ {
+		if i := m.hitRow(yy, time.Time{}); i >= 0 {
+			if r := m.Visible()[i].Row; r.Local != nil && !r.Settled {
+				sy, local = yy, r.Local.Name
+				break
+			}
+		}
+	}
+	if sy < 0 {
+		t.Fatal("no row with a local session on screen")
+	}
+	for i := range in2.Locals {
+		if in2.Locals[i].Name == local {
+			in2.Locals[i].Settled = true
+		}
+	}
+	m.SetRows(rows.Build(in2))
+	if i := m.hitRow(sy, time.Time{}); i != -1 {
+		t.Fatalf("a row collapsed since resolved to %d", i)
+	}
+	if a := m.Handle(Key{Kind: KeyMouse, Y: sy}); a.Kind != ActionNone {
+		t.Fatalf("a click on a row collapsed since: %+v", a)
+	}
+}
+
+// A click read before the last draw is on the screen drawn before it: a
+// refresh that redrew with the rows reordered while the click waited
+// does not change its target; one read before two draws is dropped.
+func TestClickOnScreenItWasRead(t *testing.T) {
+	t0 := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(t0)
+	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: t0}
+	m.SetRows(rows.Build(in))
+	m.Render()
+	y := 1 + len(m.Header)
+	seen := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
+	clicked := t0.Add(time.Second)
+	// The rows reorder and are drawn again after the click was read.
+	for i := range in.Agents {
+		in.Agents[i].Activity = protocol.Idle
+	}
+	in.Agents[len(in.Agents)-1].Activity = protocol.Blocked
+	m.SetRows(rows.Build(in))
+	m.Now = t0.Add(2 * time.Second)
+	m.Render()
+	if now := m.Visible()[m.hitRow(y, time.Time{})].Row.ID(); now == seen {
+		t.Fatal("the fixture's reorder left the first line as it was")
+	}
+	if i := m.hitRow(y, clicked); i < 0 || m.Visible()[i].Row.ID() != seen {
+		t.Fatalf("a click read before the redraw resolved to %d, want %q", i, seen)
+	}
+	// Drawn twice since: the screen clicked is gone, and the click with it.
+	m.Now = t0.Add(3 * time.Second)
+	m.Render()
+	if i := m.hitRow(y, clicked); i != -1 {
+		t.Fatalf("a click read before two redraws resolved to %d", i)
+	}
+}
+
+// A click split across reads is dated from when its first bytes came;
+// a click begun in a read from that read, whatever the held bytes
+// before it turned out to be.
+func TestFeedAtDatesClicks(t *testing.T) {
+	t1, t2, t3 := time.Unix(10, 0), time.Unix(20, 0), time.Unix(30, 0)
+	click := func(ks []Key, want time.Time) bool {
+		return len(ks) == 1 && ks[0].Kind == KeyMouse && ks[0].At.Equal(want)
+	}
+	var dec Decoder
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;"), t1); len(ks) != 0 {
+		t.Fatalf("half a click: %+v", ks)
+	}
+	if ks := dec.FeedAt([]byte("3M"), t2); !click(ks, t1) {
+		t.Fatalf("split click: %+v", ks)
+	}
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2); !click(ks, t2) {
+		t.Fatalf("whole click: %+v", ks)
+	}
+	// The completion of a held click and a fresh one in the same read,
+	// then the rest of a click begun in that read.
+	dec.FeedAt([]byte("\x1b[<0;5;"), t1)
+	ks := dec.FeedAt([]byte("3M\x1b[<0;6;4M\x1b[<0;7;"), t2)
+	if len(ks) != 2 || !ks[0].At.Equal(t1) || !ks[1].At.Equal(t2) {
+		t.Fatalf("completion and a fresh click: %+v", ks)
+	}
+	if ks := dec.FeedAt([]byte("8M"), t3); !click(ks, t2) {
+		t.Fatalf("a click begun after a completion: %+v", ks)
+	}
+	// Held bytes completed as a sequence that gives no key: a click
+	// after them in the same read is that read's, whole or split.
+	dec.FeedAt([]byte("\x1bO"), t1)
+	if ks := dec.FeedAt([]byte("P\x1b[<0;5;3M"), t2); !click(ks, t2) {
+		t.Fatalf("a click after an ignored completion: %+v", ks)
+	}
+	dec.FeedAt([]byte("\x1bO"), t1)
+	if ks := dec.FeedAt([]byte("P\x1b[<0;5;"), t2); len(ks) != 0 {
+		t.Fatalf("an ignored completion and half a click: %+v", ks)
+	}
+	if ks := dec.FeedAt([]byte("3M"), t3); !click(ks, t2) {
+		t.Fatalf("a split click after an ignored completion: %+v", ks)
+	}
+	// A bare escape held, then flushed as the escape key: a click after
+	// it has its own time.
+	dec.FeedAt([]byte("\x1b"), t1)
+	dec.Flush()
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t3); !click(ks, t3) {
+		t.Fatalf("a click after a flushed escape: %+v", ks)
+	}
+	// Feed, with no time, dates nothing.
+	if ks := dec.Feed([]byte("\x1b[<0;5;3M")); !click(ks, time.Time{}) {
+		t.Fatalf("a click fed with no time: %+v", ks)
 	}
 }
