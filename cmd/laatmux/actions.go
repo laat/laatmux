@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -26,18 +29,42 @@ type dash struct {
 	cfg        config.Config
 	st         *merged
 	exitOnJump bool
-	// add is the picker sequence in progress, nil when none.
-	add *addFlow
+	// relay is the local daemon's relay capability: with it a submit
+	// hands the add to the daemon and ends the view; without it the
+	// add runs in the foreground with its log, as before.
+	relay bool
+	// submit hands an add to the local daemon; a test replaces it.
+	submit func(command.Add) (string, error)
+	// add is the form in progress, nil when none.
+	add *addForm
 	// rm is the removal a confirm line asks about.
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
 	run *running
+	// recover is the notice to show once the log has ended, delivered
+	// or not: a prompt that did not reach the agent, with its text;
+	// recovered is the message the notice covers, put back after it.
+	recover   *view.Notice
+	recovered string
+	// last is what the foreground add left, for compose to jump to.
+	last command.Added
+	// switcher replaces the tmux switch, for tests.
+	switcher func(session string) error
+	// quitting is that the notice up is the last thing shown: its
+	// dismissal ends the view.
+	quitting bool
 }
 
 // running is a command under way: its log, and what to do when it ends.
 type running struct {
 	log  *view.Log
 	done func(m *view.Model) (exit bool)
+	// prompt is the prompt of an add under way, kept in a file should
+	// the wait for it be quit, since the view ends with nothing shown;
+	// quit is set then, so the add, should it end before the view does,
+	// keeps no second copy.
+	prompt string
+	quit   *atomic.Bool
 }
 
 // act handles a dashboard key, a confirm answer or an overlay ending.
@@ -83,24 +110,25 @@ func (d *dash) jump(m *view.Model, r rows.Row) bool {
 // command.
 func (d *dash) overlayDone(m *view.Model) bool {
 	switch o := m.Overlay.(type) {
-	case *view.Picker:
+	case *view.Form:
 		m.Overlay = nil
-		if o.Chosen < 0 || d.add == nil {
+		f := d.add
+		if o.Cancelled || f == nil {
 			d.add = nil
 			return false
 		}
-		d.add.chose(o.Chosen)
-		d.advanceAdd(m)
-	case *view.Prompt:
-		m.Overlay = nil
-		if o.Cancelled || d.add == nil {
-			d.add = nil
-			return false
-		}
-		d.add.branch = strings.TrimSpace(o.Text)
-		d.runAdd(m)
+		return d.submitForm(m, f, o)
 	case *view.Log:
 		if o.Quit {
+			if d.run != nil && d.run.prompt != "" {
+				// The view ends with the add's outcome unknown, so the
+				// prompt is kept and said to be, in a notice that ends
+				// the view when dismissed: a message would never be
+				// drawn.
+				d.run.quit.Store(true)
+				m.Overlay, d.run, d.quitting = quitNotice(d.run.prompt), nil, true
+				return false
+			}
 			return true
 		}
 		m.Overlay = nil
@@ -112,13 +140,43 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		if err := o.Err(); err != nil {
 			// The error was on screen until the key; the list returns
 			// with the message repeating it, since a refusal is worth
-			// keeping in sight.
+			// keeping in sight. A prompt to recover comes up over it.
 			m.Message = err.Error()
+			if d.recover != nil {
+				m.Overlay, d.recover, d.recovered = d.recover, nil, m.Message
+			}
 			return false
 		}
 		return run.done(m)
+	case *view.Notice:
+		// The key that dismissed it cleared the message it covered. The
+		// jump the notice held off is made now, when there is a session.
+		m.Overlay = nil
+		if d.quitting {
+			return true
+		}
+		m.Message, d.recovered = d.recovered, ""
+		if d.last.Session != "" && m.Message == "" {
+			session := d.last.Session
+			d.last.Session = ""
+			if err := d.jumpTo(session); err != nil {
+				m.Message = err.Error()
+				return false
+			}
+			return d.exitOnJump
+		}
+		return false
 	}
 	return false
+}
+
+// jumpTo switches the client to the session, through switcher when a
+// test set one.
+func (d *dash) jumpTo(session string) error {
+	if d.switcher != nil {
+		return d.switcher(session)
+	}
+	return switchTo(d.ctx, session)
 }
 
 // start runs a command in the background with its progress in a log
@@ -152,39 +210,29 @@ func (r logReporter) Note(s string) {
 	r.st.notify()
 }
 
-// addFlow is the a key: pickers for the repository, the host and the
-// agent, then a prompt for the branch, then the add. Each picker is
-// skipped when there is one candidate, and preselects the default the
-// CLI would take: the repository of the directory the popup was opened
-// from, the host and agent last used for that repository, else the
-// first. a on a worktree row that has no session pre-fills the
-// repository, host and branch from the record.
-type addFlow struct {
+// addForm is the a key: the task form, with the candidates its chips
+// were built from, so a choice maps back to the config's entries. The
+// chips preselect what add would take: the repository of the directory
+// the popup was opened from, the host and agent last used for it, else
+// the config's defaults. a on a worktree row that has no session
+// pre-fills the repository, host and branch from the record, the
+// branch explicit.
+type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
-	step   int // the step whose picker is up: 0 repository, 1 host, 2 agent
-	last   home.Last
-	repo   config.Repo
-	host   config.Host
-	agent  string
-	branch string
-	// preselections, from the selected row or the working directory
-	preRepo, preHost string
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addFlow{repos: d.cfg.Repos, agents: d.cfg.AgentNames()}
+	f := &addForm{repos: d.cfg.Repos, agents: d.cfg.AgentNames()}
 	for _, h := range d.cfg.Hosts {
 		if h.CanAdd() {
 			f.hosts = append(f.hosts, h)
 		}
 	}
-	// A step with nothing to pick from refuses before any picker is
-	// up, so nothing is chosen for an add that cannot be sent. So does
-	// last.json that cannot be read: the CLI's add fails on it before
-	// sending, and the add's own update of it would fail after the
-	// worktree and agent exist on the host.
+	// A field with nothing to choose from refuses before the form is
+	// up. So does last.json that cannot be read: the submit's own
+	// update of it would fail after the daemon has the task.
 	switch {
 	case len(f.repos) == 0:
 		m.Message = "no repositories configured"
@@ -201,127 +249,278 @@ func (d *dash) startAdd(m *view.Model) {
 		m.Message = "last.json: " + err.Error()
 		return
 	}
-	f.last = last
+	preRepo, preHost, branch := "", "", ""
 	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Stale {
-		f.preRepo, f.preHost, f.branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
+		preRepo, preHost, branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
 	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-		f.preRepo = repo.Name
+		preRepo = repo.Name
 	}
+	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.hostCaps)
+	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
 	d.add = f
-	d.advanceAdd(m)
+	m.Overlay = form
 }
 
-// chose records the picker's choice for the current step.
-func (f *addFlow) chose(i int) {
-	switch f.step {
-	case 0:
-		f.repo = f.repos[i]
-	case 1:
-		f.host = f.hosts[i]
-	case 2:
-		f.agent = f.agents[i]
-	}
-	f.step++
-}
-
-// advanceAdd opens the picker for the next step, skipping steps with
-// one candidate, then the branch prompt.
-func (d *dash) advanceAdd(m *view.Model) {
-	f := d.add
-	for {
-		switch f.step {
-		case 0:
-			if len(f.repos) == 1 {
-				f.chose(0)
-				continue
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, r := range f.repos {
-				cs = append(cs, view.Choice{Label: r.Name, Detail: r.Source})
-				if r.Name == f.preRepo || r.Source == f.preRepo {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: repository", cs, pre)
-			return
-		case 1:
-			if len(f.hosts) == 1 {
-				f.chose(0)
-				continue
-			}
-			want := f.preHost
-			if want == "" {
-				if h, err := d.cfg.DefaultHost("", f.last.Get(f.repo.Source).Host); err == nil {
-					want = h.Name
-				}
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, h := range f.hosts {
-				detail := h.Worktrees
-				if h.SSH != "" {
-					detail = "ssh " + h.SSH + "  " + detail
-				}
-				cs = append(cs, view.Choice{Label: h.Name, Detail: detail})
-				if h.Name == want {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: host", cs, pre)
-			return
-		case 2:
-			if len(f.agents) == 1 {
-				f.chose(0)
-				continue
-			}
-			want := ""
-			if name, _, err := d.cfg.DefaultAgent("", f.last.Get(f.repo.Source).Agent); err == nil {
-				want = name
-			}
-			var cs []view.Choice
-			pre := 0
-			for i, name := range f.agents {
-				cs = append(cs, view.Choice{Label: name, Detail: strings.Join(d.cfg.Agents[name].Cmd, " ")})
-				if name == want {
-					pre = i
-				}
-			}
-			m.Overlay = view.NewPicker("add: agent", cs, pre)
-			return
-		default:
-			title := fmt.Sprintf("add %s on %s with %s: branch", f.repo.Name, f.host.Name, f.agent)
-			m.Overlay = view.NewPrompt(title, f.branch, func(s string) error {
-				return worktree.CheckBranch(d.ctx, strings.TrimSpace(s))
-			})
-			return
+// buildForm makes the task form over the candidates, preselecting the
+// repository named, the host and agent last used for it, else the
+// config's defaults. caps, when set, gives a host's cached daemon
+// capabilities for the note about tasks not being supported.
+func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
+	var chips [3]view.Chip
+	chips[0].Title = "repository"
+	for i, r := range f.repos {
+		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
+		if r.Name == preRepo || r.Source == preRepo {
+			chips[0].Selected = i
 		}
 	}
+	repo := f.repos[chips[0].Selected]
+	chips[1].Title = "host"
+	wantHost := preHost
+	if wantHost == "" {
+		if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
+			wantHost = h.Name
+		}
+	}
+	for i, h := range f.hosts {
+		detail := h.Worktrees
+		if h.SSH != "" {
+			detail = "ssh " + h.SSH + "  " + detail
+		}
+		chips[1].Choices = append(chips[1].Choices, view.Choice{Label: h.Name, Detail: detail})
+		if h.Name == wantHost {
+			chips[1].Selected = i
+		}
+	}
+	chips[2].Title = "agent"
+	wantAgent := ""
+	if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
+		wantAgent = name
+	}
+	for i, name := range f.agents {
+		chips[2].Choices = append(chips[2].Choices, view.Choice{Label: name, Detail: strings.Join(cfg.Agents[name].Cmd, " ")})
+		if name == wantAgent {
+			chips[2].Selected = i
+		}
+	}
+	form := view.NewForm("add a task", chips, branch)
+	form.Propose = worktree.ProposeBranch
+	// A repository chosen later brings its own last-used host and
+	// agent, unless the user has set those chips themselves; a host
+	// pre-filled from a worktree's record is as good as set.
+	var userSet [3]bool
+	userSet[1] = preHost != ""
+	form.Changed = func(form *view.Form, chip int) {
+		if chip != 0 {
+			userSet[chip] = true
+			return
+		}
+		// As at build: the last used, else the config's default, else
+		// the first candidate.
+		repo := f.repos[form.Chips[0].Selected]
+		if !userSet[1] {
+			form.Chips[1].Selected = 0
+			if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
+				for i, c := range f.hosts {
+					if c.Name == h.Name {
+						form.Chips[1].Selected = i
+					}
+				}
+			}
+		}
+		if !userSet[2] {
+			form.Chips[2].Selected = 0
+			if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
+				for i, a := range f.agents {
+					if a == name {
+						form.Chips[2].Selected = i
+					}
+				}
+			}
+		}
+	}
+	if caps != nil {
+		form.Note = func(form *view.Form) string {
+			host := form.Chips[1].Label()
+			if c, ok := caps(host); ok && !protocol.Has(c, protocol.CapTask) {
+				return "tasks not supported by " + host + "'s daemon"
+			}
+			return ""
+		}
+	}
+	return form
 }
 
-// runAdd runs the add the pickers built; on success the new workspace
-// session is jumped to.
-func (d *dash) runAdd(m *view.Model) {
-	f := d.add
+// submitForm runs what the form asked for: with the relay, the add is
+// handed to the local daemon and the view ends once it is accepted; a
+// refusal, a host whose daemon does not support tasks say, keeps the
+// form up with the error, its text intact, while an error after the
+// daemon may hold the task ends the view with the id, so nothing is
+// submitted twice. Without the relay, the add runs in the foreground
+// with its log, and the new workspace session is jumped to.
+func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
+	add := command.Add{
+		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Agent: f.agents[o.Chips[2].Selected],
+		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
+	}
+	if d.relay {
+		submit := d.submit
+		if submit == nil {
+			submit = func(a command.Add) (string, error) { return a.Submit(d.ctx) }
+		}
+		id, err := submit(add)
+		switch {
+		case err != nil && id == "":
+			o.Reopen(err.Error())
+			m.Overlay = o
+			return false
+		case err != nil:
+			// The daemon may hold the task: the form goes, so nothing
+			// is submitted twice, and the view stays with the message,
+			// which a popup closing would take with it.
+			d.add = nil
+			m.Message = "submitted " + id + "; " + err.Error() + "; laatmux tasks says whether the daemon holds it"
+			return false
+		}
+		d.add = nil
+		m.Message = "accepted " + id
+		return true
+	}
 	d.add = nil
-	add := command.Add{Host: f.host, Repo: f.repo, Branch: f.branch, Agent: f.agent}
+	d.runAdd(m, add)
+	return false
+}
+
+// runAdd runs the add in the foreground with its log; on success the
+// new workspace session is jumped to.
+func (d *dash) runAdd(m *view.Model, add command.Add) {
 	var res command.Added
+	quit := new(atomic.Bool)
+	defer func() {
+		if d.run != nil {
+			d.run.prompt, d.run.quit = add.Prompt, quit
+		}
+	}()
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
-		if err != nil && res.Root != "" {
+		d.last = res
+		// A prompt that did not reach the agent, or may not have, is
+		// shown with its text whatever else happened, and kept in a
+		// file, since the foreground path keeps none of it otherwise.
+		if d.recover = undelivered(add, res); d.recover != nil && !quit.Load() {
+			if path, err := keepPrompt(command.ID("prompt"), add.Prompt); err == nil {
+				// The path on a line of its own, to be copied.
+				d.recover.Lines = append([]string{"kept in", path, ""}, d.recover.Lines...)
+				d.recover.Verbatim += 3
+			} else {
+				d.recover.Lines = append([]string{"not kept in a file: " + err.Error(), ""}, d.recover.Lines...)
+				d.recover.Verbatim += 2
+			}
+		}
+		if err != nil && res.Done {
 			// The host's side is done; what failed is local, and the
 			// message must say the worktree and agent exist.
-			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", f.repo.Name, f.branch, f.host.Name, res.Root, err)
+			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", add.Repo.Name, res.Branch, add.Host.Name, res.Root, err)
 		}
 		return err
 	}, func(m *view.Model) bool {
+		// The delivery state is what the user reads: the notice stays
+		// until dismissed; a jump would leave it behind.
+		if d.recover != nil {
+			m.Overlay, d.recover = d.recover, nil
+			return false
+		}
 		if err := switchTo(d.ctx, res.Session); err != nil {
 			m.Message = err.Error()
 			return false
 		}
 		return d.exitOnJump
 	})
+}
+
+// undelivered is the notice a foreground add whose prompt did not
+// reach the agent, or may not have, leaves up until dismissed: the
+// state, the reason, the session when there is one, and the prompt
+// itself, wrapped and scrollable, to be copied into the agent, since
+// the foreground path keeps no file of it. nil when there is nothing
+// to recover: no prompt, or one delivered.
+func undelivered(add command.Add, res command.Added) *view.Notice {
+	if add.Prompt == "" || res.Prompt == protocol.DeliveryDelivered || res.Prompt == protocol.DeliveryNone {
+		return nil
+	}
+	var lines []string
+	switch {
+	case res.Prompt == "" && !res.Sent:
+		// Refused before any daemon had it.
+		lines = []string{"the add was refused before it reached the host; the prompt was not sent", ""}
+	case res.Prompt == "" && !res.Answered:
+		// No result came: the host may have taken the add and the
+		// agent may have the prompt.
+		lines = []string{"outcome unknown: no result came from the host; the agent may have the prompt", ""}
+	case res.Prompt == "" && res.Stage != "" && res.Stage != protocol.StageAgent:
+		// A failure before the agent stage: the prompt was never sent.
+		lines = []string{"the add failed at " + res.Stage + ", before the prompt was sent", ""}
+	case res.Prompt == "":
+		lines = []string{"the add failed; whether the prompt was sent is unknown", ""}
+	case res.Reason != "":
+		lines = []string{"prompt " + res.Prompt + ": " + res.Reason, ""}
+	default:
+		lines = []string{"prompt " + res.Prompt, ""}
+	}
+	sure := res.Prompt == protocol.DeliveryNotDelivered
+	switch {
+	case res.Managed != "" && sure:
+		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+" without it. The prompt was:")
+	case res.Managed != "":
+		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+"; whether it has the prompt is unknown. The prompt was:")
+	case res.Root != "" && sure:
+		lines = append(lines, "the worktree "+res.Root+" is there without an agent. The prompt was:")
+	case res.Root != "":
+		lines = append(lines, "the worktree "+res.Root+" is there. The prompt was:")
+	default:
+		lines = append(lines, "The prompt was:")
+	}
+	lines = append(lines, "")
+	lines = append(lines, strings.Split(add.Prompt, "\n")...)
+	n := view.NewNotice(add.Describe(), lines, "enter or esc returns")
+	n.Verbatim = len(lines) - strings.Count(add.Prompt, "\n") - 1
+	return n
+}
+
+// quitNotice is what a Ctrl-C on a foreground add leaves: the add may
+// run on or may never have been sent, since the view's end cancels
+// it, so the prompt is kept in a file and named, or shown when it
+// could not be.
+func quitNotice(prompt string) *view.Notice {
+	lines := []string{"the add may run on, or may never have been sent; laatmux ls says which", ""}
+	verbatim := 0
+	if path, err := keepPrompt(command.ID("prompt"), prompt); err == nil {
+		lines = append(lines, "the prompt is kept in", path)
+	} else {
+		lines = append(lines, "the prompt could not be kept in a file: "+err.Error(), "", "The prompt was:", "")
+		verbatim = len(lines)
+		lines = append(lines, strings.Split(prompt, "\n")...)
+	}
+	n := view.NewNotice("add interrupted", lines, "enter or esc quits")
+	n.Verbatim, n.Final = verbatim, true
+	return n
+}
+
+// keepPrompt writes an undelivered prompt to a file of its own under
+// the state directory, readable by the user alone, and returns the
+// path: the notice is copied from by hand, lossily, and the popup that
+// shows it closes. The file is the user's to delete.
+func keepPrompt(id, prompt string) (string, error) {
+	dir := filepath.Join(home.Dir(), "undelivered")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, id+".txt")
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree

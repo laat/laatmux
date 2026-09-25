@@ -308,8 +308,9 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 		time.Sleep(400 * time.Millisecond)
 		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrInterrupted, Stage: protocol.StageFetch}
 	}
-	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) {
-		t.Fatalf("resend past the lifetime: %v", err)
+	var everSent *NotSent
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a4"), Discard{}, streamOpts{restart: true}); !errors.Is(err, ErrSubmissionExpired) || errors.As(err, &everSent) {
+		t.Fatalf("resend past the lifetime: %v (a refusal after a send is not a not-sent)", err)
 	}
 	if got := f.commands(); len(got) != 2 || got[0].Type != protocol.TypeAdd || got[1].Type != protocol.TypeFollow {
 		t.Fatalf("follow past the lifetime: %+v", got)
@@ -319,11 +320,17 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 	// A prompt or a generated branch needs task; a daemon without it is
 	// refused before the send.
 	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow}})
-	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a3"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support task") {
+	var ns *NotSent
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a3"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support task") || !errors.As(err, &ns) {
 		t.Fatalf("needs task: %v", err)
 	}
 	if got := f.commands(); len(got) != 0 {
 		t.Fatalf("sent without task: %+v", got)
+	}
+	// A host that cannot be dialled is the same refusal before the send.
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	if _, _, err := stream(context.Background(), host, nil, add.Request("a4"), Discard{}, streamOpts{}); err == nil || !errors.As(err, &ns) {
+		t.Fatalf("host down: %v", err)
 	}
 	if n := (Add{}).Needs(); len(n) != 1 || n[0] != protocol.CapAdd {
 		t.Fatalf("needs %v", n)

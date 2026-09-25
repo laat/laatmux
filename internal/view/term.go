@@ -36,8 +36,16 @@ func Open(in, out *os.File) (*Term, error) {
 	}
 	t.saved = saved
 	// Alternate screen, cursor hidden, mouse buttons and wheel with SGR
-	// coordinates so columns past 223 report correctly.
-	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
+	// coordinates so columns past 223 report correctly, bracketed
+	// paste, so pasted text arrives marked and is inserted rather than
+	// read as keys, and extended keys at xterm's first level
+	// (modifyOtherKeys 1), so a modified Enter comes as a sequence
+	// rather than as Enter and Shift-Enter can break a line, while Esc,
+	// Enter, Tab and Ctrl-C stay the bytes they are. A tmux popup
+	// passes the markers through once the application has asked for
+	// them, and with extended-keys on forwards the sequences to a pane
+	// that asked; a terminal that knows neither ignores both.
+	t.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[>4;1m")
 	return t, nil
 }
 
@@ -46,7 +54,9 @@ func (t *Term) Close() {
 	if t.saved == nil {
 		return
 	}
-	t.write("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
+	// The extended keys are reset without a value, which in xterm is
+	// the terminal's own setting rather than off.
+	t.write("\x1b[>4m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
 	_ = unix.IoctlSetTermios(int(t.in.Fd()), ioctlSetTermios, t.saved)
 	t.saved = nil
 }

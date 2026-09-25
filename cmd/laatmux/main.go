@@ -62,6 +62,8 @@ func main() {
 		err = cmdSidebar(ctx, os.Args[2:])
 	case "dashboard":
 		err = cmdDashboard(ctx, os.Args[2:])
+	case "compose":
+		err = cmdCompose(ctx, os.Args[2:])
 	case "settle":
 		err = cmdSettle(ctx, os.Args[2:])
 	case "unsettle":
@@ -116,7 +118,8 @@ func usage() {
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
             laatmux sidebar pane | attach <window> | reap      what the pane and the hooks run
   dashboard the list in a popup for display-popup -E: Enter jumps and closes it;
-            a adds through pickers, x/X removes, s settles, S opens a shell
+            a opens the task form, x/X removes, s settles, S opens a shell
+  compose   the task form alone, for display-popup -E -d '#{pane_current_path}'
   jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
             laatmux jump [--server default] <host>/<session>   a session that is no worktree's
   shell     a shell at the worktree root, in the workspace session this runs from

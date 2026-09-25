@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,10 +83,10 @@ func selectRow(t *testing.T, m *view.Model, name string) *rows.Row {
 	return nil
 }
 
-// a on a worktree row without a session pre-fills the pickers with the
-// record's repository and host, and the prompt with its branch; each
-// picker in turn, then the prompt, and Esc in any step returns to the
-// list with nothing done.
+// a on a worktree row without a session opens the form pre-filled with
+// the record's repository and host, and its branch explicit; Enter on
+// a chip opens the picker inside the form, and Esc anywhere returns to
+// the list with nothing done.
 func TestAddFlowPrefilled(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -93,41 +94,38 @@ func TestAddFlowPrefilled(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/spike")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p, ok := m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: repository" || p.Choices[p.Selected].Label != "proj" {
-		t.Fatalf("repository picker: %+v", m.Overlay)
+	f, ok := m.Overlay.(*view.Form)
+	if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || len(f.Chips[1].Choices) != 2 || len(f.Chips[2].Choices) != 2 {
+		t.Fatalf("form: %+v", m.Overlay)
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
+	if f.Branch() != "spike" || f.Generated() {
+		t.Fatalf("branch %q generated %v", f.Branch(), f.Generated())
+	}
+	if err := f.Validate("bad..name"); err == nil {
+		t.Error("form accepted a name git refuses")
+	}
+	// The picker opens from a chip and is drawn in the form's place.
+	f.Handle(view.Key{Kind: view.KeyTab})
+	f.Handle(view.Key{Kind: view.KeyTab})
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if !strings.Contains(view.Text(f.Render(60, 12)), "add a task: repository") {
+		t.Fatalf("no picker:\n%s", view.Text(f.Render(60, 12)))
+	}
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
-	p, ok = m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: host" || p.Choices[p.Selected].Label != "vm" || len(p.Choices) != 2 {
-		t.Fatalf("host picker: %+v", m.Overlay)
+	if m.Overlay == nil {
+		t.Fatal("esc in the picker ended the form")
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	p, ok = m.Overlay.(*view.Picker)
-	if !ok || p.Title != "add: agent" || len(p.Choices) != 2 {
-		t.Fatalf("agent picker: %+v", m.Overlay)
-	}
-	p.Handle(view.Key{Kind: view.KeyDown})
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	pr, ok := m.Overlay.(*view.Prompt)
-	if !ok || pr.Text != "spike" || !strings.HasPrefix(pr.Title, "add proj on vm with codex") {
-		t.Fatalf("prompt: %+v", m.Overlay)
-	}
-	if err := pr.Validate("bad..name"); err == nil {
-		t.Error("prompt accepted a name git refuses")
-	}
-	pr.Handle(view.Key{Kind: view.KeyEsc})
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
 	if m.Overlay != nil || d.add != nil || d.run != nil {
 		t.Errorf("esc did not return to the list: overlay=%v add=%v run=%v", m.Overlay, d.add, d.run)
 	}
 }
 
-// The last-used host and agent for the repository are preselected, and
-// a step with one candidate is skipped.
+// The last-used host and agent for the repository are preselected, the
+// configured default agent else the first without one, and a field
+// with one candidate is shown, not skipped.
 func TestAddFlowDefaults(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -140,27 +138,15 @@ func TestAddFlowDefaults(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task") // a row with a session pre-fills nothing
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p := m.Overlay.(*view.Picker)
-	if p.Title != "add: repository" || p.Choices[p.Selected].Label != "laatmux" {
-		t.Fatalf("repository picker preselected %q", p.Choices[p.Selected].Label)
+	f := m.Overlay.(*view.Form)
+	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "codex" || f.Branch() != "" {
+		t.Fatalf("preselected %q %q %q branch %q", f.Chips[0].Label(), f.Chips[1].Label(), f.Chips[2].Label(), f.Branch())
 	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
-	p = m.Overlay.(*view.Picker)
-	if p.Title != "add: host" || p.Choices[p.Selected].Label != "vm" {
-		t.Fatalf("host picker preselected %q", p.Choices[p.Selected].Label)
-	}
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	p = m.Overlay.(*view.Picker)
-	if p.Title != "add: agent" || p.Choices[p.Selected].Label != "codex" {
-		t.Fatalf("agent picker preselected %q", p.Choices[p.Selected].Label)
-	}
 
 	// No last-used agent for the repository: the configured default is
 	// preselected; without one, the first agent.
-	p.Handle(view.Key{Kind: view.KeyEsc})
-	d.act(m, m.Poll())
 	if err := home.UpdateLast(func(l *home.Last) { l.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm"}) }); err != nil {
 		t.Fatal(err)
 	}
@@ -168,30 +154,24 @@ func TestAddFlowDefaults(t *testing.T) {
 		cfg.DefaultAgentName = c.def
 		d.cfg = cfg
 		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-		for i := 0; i < 2; i++ {
-			m.Overlay.(*view.Picker).Handle(view.Key{Kind: view.KeyEnter})
-			d.act(m, m.Poll())
+		f := m.Overlay.(*view.Form)
+		if f.Chips[2].Label() != c.want {
+			t.Fatalf("default_agent %q: agent preselected %q", c.def, f.Chips[2].Label())
 		}
-		p = m.Overlay.(*view.Picker)
-		if p.Title != "add: agent" || p.Choices[p.Selected].Label != c.want {
-			t.Fatalf("default_agent %q: agent picker preselected %q", c.def, p.Choices[p.Selected].Label)
-		}
-		p.Handle(view.Key{Kind: view.KeyEsc})
+		f.Handle(view.Key{Kind: view.KeyEsc})
 		d.act(m, m.Poll())
 	}
 
-	// One agent and one able host: both pickers are skipped.
+	// One agent and one able host: both chips are shown with their one
+	// candidate.
 	cfg.Agents = map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}
 	cfg.Hosts = cfg.Hosts[1:2]
 	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m = dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	p = m.Overlay.(*view.Picker)
-	p.Handle(view.Key{Kind: view.KeyEnter})
-	d.act(m, m.Poll())
-	pr, ok := m.Overlay.(*view.Prompt)
-	if !ok || pr.Title != "add laatmux on vm with claude: branch" || pr.Text != "" {
-		t.Fatalf("after the only repository picker: %+v", m.Overlay)
+	f = m.Overlay.(*view.Form)
+	if len(f.Chips[1].Choices) != 1 || len(f.Chips[2].Choices) != 1 || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" {
+		t.Fatalf("single candidates: %+v", f.Chips)
 	}
 
 	// No agents: refused with a message, nothing up.
@@ -386,5 +366,367 @@ func TestRmRefusalHint(t *testing.T) {
 	}
 	if err := forceHint(errors.New("use --force"), true); strings.Contains(err.Error(), "X force") {
 		t.Errorf("hint on a forced rm: %v", err)
+	}
+}
+
+// The task form is built over the config's candidates with the
+// defaults preselected: the repository named, the host and agent last
+// used for it, and a note when the host's cached daemon capabilities
+// lack tasks; a branch given is the user's.
+func TestBuildForm(t *testing.T) {
+	cfg := config.Config{
+		Hosts:  []config.Host{{Host: client.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: client.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
+		Repos:  []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}, {Source: "git@x:o/other.git", Name: "other"}},
+		Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}, "codex": {Cmd: []string{"codex"}}},
+	}
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
+	var last home.Last
+	last.Set("git@x:o/other.git", home.LastRepo{Host: "vm", Agent: "codex"})
+	caps := func(host string) ([]string, bool) {
+		if host == "vm" {
+			return []string{protocol.CapAdd}, true
+		}
+		return nil, false
+	}
+	form := buildForm(cfg, f, last, "other", "", "", caps)
+	if form.Chips[0].Label() != "other" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("chips %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	if !form.Generated() || form.Branch() != "" {
+		t.Fatalf("branch %q generated %v", form.Branch(), form.Generated())
+	}
+	if n := form.Note(form); !strings.Contains(n, "tasks not supported by vm") {
+		t.Fatalf("note %q", n)
+	}
+	form.Chips[1].Selected = 0
+	if n := form.Note(form); n != "" {
+		t.Fatalf("note for an unknown host %q", n)
+	}
+	form.SetPrompt("Fix the thing")
+	if form.Branch() != "fix-the-thing" {
+		t.Fatalf("proposal %q", form.Branch())
+	}
+	// A repository chosen later brings its own host and agent; a host
+	// the user set stays.
+	form = buildForm(cfg, f, last, "proj", "", "", caps)
+	if form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
+		t.Fatalf("proj defaults %q %q", form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
+	form.Handle(view.Key{Kind: view.KeyRight})
+	if form.Chips[0].Label() != "other" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("after choosing other: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	form.Handle(view.Key{Kind: view.KeyTab}) // the host chip
+	form.Handle(view.Key{Kind: view.KeyLeft})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyLeft}) // back to proj
+	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
+		t.Fatalf("after the user's host: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	// Picking the value already shown is the user's choice too.
+	form = buildForm(cfg, f, last, "proj", "", "", caps)
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the agent chip
+	form.Handle(view.Key{Kind: view.KeyEnter})    // the picker on claude
+	form.Handle(view.Key{Kind: view.KeyEnter})    // accept claude
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
+	form.Handle(view.Key{Kind: view.KeyRight})    // other: last agent codex
+	if form.Chips[0].Label() != "other" || form.Chips[2].Label() != "claude" || form.Chips[1].Label() != "vm" {
+		t.Fatalf("picked agent kept: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	// A worktree row without a session: repository, host and branch
+	// from the record, the branch explicit.
+	form = buildForm(cfg, f, last, "proj", "mac", "existing", caps)
+	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Branch() != "existing" || form.Generated() {
+		t.Fatalf("prefilled %q %q %q %v", form.Chips[0].Label(), form.Chips[1].Label(), form.Branch(), form.Generated())
+	}
+	// The record's host is as good as the user's: picking the
+	// repository again does not replace it.
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyRight}) // other, whose last host is vm
+	form.Handle(view.Key{Kind: view.KeyRight}) // back to proj
+	if form.Chips[1].Label() != "mac" {
+		t.Fatalf("the record's host replaced: %q", form.Chips[1].Label())
+	}
+}
+
+// A submit through the relay: a refusal puts the form back up with the
+// error and the text intact; an error after the daemon may hold the
+// task ends the view with the id; acceptance ends it with the id.
+func TestSubmitFormOutcomes(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	m := dashModel(cfg)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	f := m.Overlay.(*view.Form)
+	f.SetPrompt("Fix it")
+	var got command.Add
+	d.submit = func(a command.Add) (string, error) {
+		got = a
+		return "", errors.New("tasks not supported by vm's daemon")
+	}
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if d.act(m, m.Poll()) {
+		t.Fatal("a refusal ended the view")
+	}
+	back, ok := m.Overlay.(*view.Form)
+	if !ok || back != f || back.Error != "tasks not supported by vm's daemon" || back.Prompt() != "Fix it" || back.Done() {
+		t.Fatalf("form after a refusal: %+v", m.Overlay)
+	}
+	if got.Prompt != "Fix it" || got.Branch != "fix-it" || !got.Generated {
+		t.Fatalf("submitted %+v", got)
+	}
+	// An answer the daemon may have taken: the form goes, the view
+	// stays with the message.
+	d.submit = func(a command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if d.act(m, m.Poll()) || !strings.Contains(m.Message, "submitted add-1") || m.Overlay != nil || d.add != nil {
+		t.Fatalf("uncertain submit: message %q overlay %v add %v", m.Message, m.Overlay, d.add)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	f = m.Overlay.(*view.Form)
+	f.SetPrompt("Fix it")
+	d.submit = func(a command.Add) (string, error) { return "add-2", nil }
+	f.Handle(view.Key{Kind: view.KeyEnter})
+	if !d.act(m, m.Poll()) || m.Message != "accepted add-2" || d.add != nil {
+		t.Fatalf("accepted: message %q add %v", m.Message, d.add)
+	}
+}
+
+// The notice a foreground add leaves when its prompt did not reach the
+// agent: the state and reason, the session, and the prompt's lines to
+// copy, wrapped, scrollable, until dismissed; nothing when the prompt
+// was delivered or there was none; shown whatever else went wrong.
+func TestUndelivered(t *testing.T) {
+	add := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "one\ntwo " + strings.Repeat("long ", 30)}
+	res := command.Added{Done: true, Root: "/r/b", Managed: "proj/b", Prompt: protocol.DeliveryNotDelivered, Reason: "session existed"}
+	n := undelivered(add, res)
+	if n == nil || n.Done() {
+		t.Fatal("no notice, or done before a key")
+	}
+	text := view.Text(n.Render(40, 8))
+	for _, want := range []string{"proj/b", "one", "prompt not delivered: session existed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+	for _, l := range strings.Split(text, "\n") {
+		if len([]rune(l)) > 40 {
+			t.Fatalf("line wider than the screen: %q", l)
+		}
+	}
+	// The long line is wrapped and reachable by scrolling; a stray key
+	// does not dismiss.
+	n.Handle(view.Key{Rune: 'x'})
+	for range 20 {
+		n.Handle(view.Key{Kind: view.KeyDown})
+	}
+	if n.Done() || !strings.Contains(view.Text(n.Render(40, 8)), "long long") {
+		t.Fatalf("scrolled:\n%s", view.Text(n.Render(40, 8)))
+	}
+	n.Handle(view.Key{Kind: view.KeyEnter})
+	if !n.Done() {
+		t.Fatal("enter did not end it")
+	}
+	// A launch that failed with the delivery unknown, no session: the
+	// text says the agent may have it, never that it does not.
+	failed := command.Added{Done: false, Sent: true, Answered: true, Stage: protocol.StageAgent, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
+	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") || strings.Contains(view.Text(n.Render(80, 12)), "without") {
+		t.Fatalf("unknown delivery on a failed add:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// A failure before the agent stage is positively before the send;
+	// no result at all is unknown.
+	early := command.Added{Sent: true, Answered: true, Stage: protocol.StageFetch}
+	if n := undelivered(add, early); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "failed at fetch, before the prompt was sent") {
+		t.Fatalf("early failure:\n%s", view.Text(n.Render(80, 12)))
+	}
+	lost := command.Added{Sent: true}
+	if n := undelivered(add, lost); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "outcome unknown") || strings.Contains(view.Text(n.Render(80, 12)), "not sent") {
+		t.Fatalf("lost result:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// Refused before any daemon had it: a host down, or one without
+	// the capability.
+	refused := command.Added{}
+	if n := undelivered(add, refused); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "the prompt was not sent") || strings.Contains(view.Text(n.Render(80, 12)), "may have") {
+		t.Fatalf("refused:\n%s", view.Text(n.Render(80, 12)))
+	}
+	// The prompt is kept in a file of the user's own.
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	path, err := keepPrompt("id", "p\tq\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	st, _ := os.Stat(path)
+	if err != nil || string(b) != "p\tq\n" || st.Mode().Perm() != 0o600 {
+		t.Fatalf("kept %q %v %v", b, err, st.Mode())
+	}
+	// The prompt's whitespace is kept.
+	tabs := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "run:\n\tmake  all"}
+	if text := view.Text(undelivered(tabs, res).Render(80, 12)); !strings.Contains(text, "    make  all") {
+		t.Fatalf("whitespace:\n%s", text)
+	}
+	if undelivered(add, command.Added{Done: true, Prompt: protocol.DeliveryDelivered}) != nil || undelivered(command.Add{}, res) != nil {
+		t.Fatal("a notice with nothing to recover")
+	}
+}
+
+// compose's host: a refusal puts the form back, an answer the daemon
+// may have taken waits in an ended log and then ends the view, and
+// the notice of an undelivered prompt ends the view when dismissed.
+func TestComposeAct(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true, add: f}
+	c := &composer{d: d, f: f}
+	var last home.Last
+	form := buildForm(cfg, f, last, "proj", "", "", nil)
+	form.SetPrompt("Fix it")
+	m := &view.Model{Overlay: form, Width: 80, Height: 24}
+	d.submit = func(command.Add) (string, error) { return "", errors.New("tasks not supported by vm's daemon") }
+	form.Handle(view.Key{Kind: view.KeyEnter})
+	if c.act(m, m.Poll()) || m.Overlay != form || form.Error == "" {
+		t.Fatalf("refusal: overlay %v error %q", m.Overlay, form.Error)
+	}
+	d.submit = func(command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
+	form.Handle(view.Key{Kind: view.KeyEnter})
+	if c.act(m, m.Poll()) {
+		t.Fatal("an uncertain answer ended the view at once")
+	}
+	log, ok := m.Overlay.(*view.Log)
+	if !ok || log.Done() {
+		t.Fatalf("no ended log waiting: %v", m.Overlay)
+	}
+	log.Handle(view.Key{Kind: view.KeyPaste, Text: "stray"})
+	if log.Done() {
+		t.Fatal("a paste dismissed the log")
+	}
+	log.Handle(view.Key{Rune: 'x'})
+	if !c.act(m, m.Poll()) || !strings.Contains(c.outcome, "submitted add-1") {
+		t.Fatalf("after the key: outcome %q", c.outcome)
+	}
+	// The notice, as the foreground path leaves it: dismissed, the
+	// view ends.
+	m = &view.Model{Overlay: view.NewNotice("t", []string{"the prompt"}, ""), Width: 80, Height: 24}
+	m.Overlay.Handle(view.Key{Kind: view.KeyEsc})
+	if !c.act(m, m.Poll()) {
+		t.Fatal("the notice's dismissal did not end the view")
+	}
+	fresh := buildForm(cfg, f, last, "proj", "", "", nil)
+	fresh.Handle(view.Key{Kind: view.KeyEsc})
+	m = &view.Model{Overlay: fresh}
+	if !c.act(m, m.Poll()) {
+		t.Fatal("esc on the form did not end the view")
+	}
+	// Ctrl-C on a foreground add's log: the quit notice, then the end.
+	log = view.NewLog("t")
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: new(atomic.Bool)}
+	m = &view.Model{Overlay: log, Width: 80, Height: 24}
+	m.Handle(view.Key{Kind: view.KeyCtrlC})
+	if c.act(m, m.Poll()) {
+		t.Fatal("Ctrl-C on the log ended compose before the notice")
+	}
+	if _, ok := m.Overlay.(*view.Notice); !ok {
+		t.Fatalf("no quit notice in compose: %v", m.Overlay)
+	}
+	m.Handle(view.Key{Kind: view.KeyEnter})
+	if !c.act(m, m.Poll()) {
+		t.Fatal("the quit notice's dismissal did not end compose")
+	}
+}
+
+// The dashboard: a failed log with a prompt to recover puts the notice
+// over the message and gives the message back when it is dismissed.
+func TestNoticeRestoresMessage(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	m := dashModel(cfg)
+	log := view.NewLog("t")
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }}
+	d.recover = view.NewNotice("t", []string{"the prompt"}, "")
+	m.Overlay = log
+	log.End(errors.New("local session: boom"))
+	log.Handle(view.Key{Rune: 'x'})
+	if d.act(m, m.Poll()) {
+		t.Fatal("ended the view")
+	}
+	n, ok := m.Overlay.(*view.Notice)
+	if !ok {
+		t.Fatalf("no notice: %v", m.Overlay)
+	}
+	m.Handle(view.Key{Kind: view.KeyEnter}) // clears the message as it dismisses
+	if !n.Done() || m.Message != "" {
+		t.Fatalf("dismissed: done %v message %q", n.Done(), m.Message)
+	}
+	d.act(m, m.Poll())
+	if m.Overlay != nil || m.Message != "local session: boom" {
+		t.Fatalf("after the notice: overlay %v message %q", m.Overlay, m.Message)
+	}
+	// With a session and no error, the notice's dismissal jumps.
+	jumped := ""
+	d.switcher = func(s string) error { jumped = s; return nil }
+	d.last = command.Added{Session: "mac/proj/b"}
+	d.recovered, m.Message = "", ""
+	m.Overlay = view.NewNotice("t", []string{"the prompt"}, "")
+	m.Handle(view.Key{Kind: view.KeyEnter})
+	if d.act(m, m.Poll()) || jumped != "mac/proj/b" || d.last.Session != "" {
+		t.Fatalf("after the notice with a session: jumped %q", jumped)
+	}
+	// Ctrl-C on the log of an add keeps the prompt in a file and says
+	// so in a notice, whose dismissal ends the view.
+	log = view.NewLog("t")
+	quit := new(atomic.Bool)
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: quit}
+	m.Overlay = log
+	log.Handle(view.Key{Kind: view.KeyCtrlC})
+	if d.act(m, m.Poll()) {
+		t.Fatal("quit ended the view before the notice")
+	}
+	if !quit.Load() {
+		t.Fatal("the add was not told it was quit")
+	}
+	n, ok = m.Overlay.(*view.Notice)
+	if !ok {
+		t.Fatalf("no notice on quit: %v", m.Overlay)
+	}
+	text := view.Text(n.Render(100, 12))
+	if !strings.Contains(text, "may run on") || !strings.Contains(text, "kept in") {
+		t.Fatalf("quit notice:\n%s", text)
+	}
+	path := ""
+	for _, l := range n.Lines {
+		if strings.HasSuffix(l, ".txt") {
+			path = l
+		}
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "the prompt" {
+		t.Fatalf("kept %q %v", b, err)
+	}
+	// A second Ctrl-C does not close it before it is read.
+	m.Handle(view.Key{Kind: view.KeyCtrlC})
+	if n.Done() {
+		t.Fatal("Ctrl-C dismissed the quit notice")
+	}
+	m.Handle(view.Key{Kind: view.KeyEsc})
+	if !d.act(m, m.Poll()) {
+		t.Fatal("dismissing the quit notice did not end the view")
+	}
+	// A state directory that cannot hold the file: the prompt is shown.
+	bad := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(bad, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", bad)
+	qn := quitNotice("line one\n\tline two")
+	if text := view.Text(qn.Render(100, 14)); !strings.Contains(text, "could not be kept") || !strings.Contains(text, "    line two") {
+		t.Fatalf("fallback:\n%s", text)
 	}
 }

@@ -572,19 +572,57 @@ is switched to.
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:
   `bind-key C-s display-popup -E -w 90% -h 80% -d '#{pane_current_path}' -T ' laatmux ' 'laatmux dashboard'`.
-  `-d` matters: the repository picker's default is the repository of
+  `-d` matters: the form's repository defaults to the repository of
   the directory the popup runs in, which without it is the session's.
-  Actions: `a` adds through pickers for repository, host and agent,
-  each skipped with one candidate and preselecting what `add` would
-  take, then a branch prompt with `add`'s validation; on a worktree row
-  without a session the pickers and the branch are pre-filled from the
-  record. The add runs with its progress in place of the list and jumps
-  on success; a failure stays until a key. `x` confirms then removes
+  Actions: `a` opens the task form of
+  [milestone four](docs/milestone-four.md): chips for the repository,
+  the host and the agent, preselecting what `add` would take, a prompt
+  box, and a branch line filled from the prompt as it is typed until
+  it is edited. `Tab` and `Shift-Tab` move between the fields; on a
+  chip `Left` and `Right` cycle and `Enter` opens the picker; in the
+  prompt `Enter` submits and `Ctrl-J` inserts a newline. `Shift-Enter`
+  and `Ctrl-Enter` insert one too where the terminal reports them as
+  distinct keys, and are `Enter` and submit elsewhere: the view asks
+  for xterm's modifyOtherKeys at level 1 and reads both the
+  `CSI 27 ; m ; 13 ~` and the `CSI 13 ; m u` forms, which under tmux
+  takes `extended-keys on` (the default is off) and the outer
+  terminal's `extkeys` feature, for example
+  `set -as terminal-features 'xterm*:extkeys'`, with either
+  `extended-keys-format`; a terminal bound to send `ESC CR` for
+  `Shift-Enter` gets a newline as well. `Esc` cancels,
+  and an Alt chord, `Alt-Backspace` say, which the terminal sends as an
+  escape and the key in one read, is not `Esc` and is dropped.
+  Bracketed paste is on, so a pasted line break is a newline, never a
+  submit, and a paste goes into the prompt wherever the focus is but
+  the branch line. A paste whose bytes stop for a second is shown as
+  far as it came, with its framing kept, and one whose end marker
+  never comes is ended by `Esc` or `Ctrl-C` pressed alone after that
+  and left for a second, the key spent on ending it. On a worktree row
+  without a session the chips and the branch
+  are pre-filled from the record, the branch explicit. A submit with
+  the local daemon's `relay` hands the add to it and closes the popup
+  on `accepted`; `laatmux tasks` shows the task from then on, and the
+  views will once step 5 lands; a refusal keeps the form up with the
+  error. Without it
+  the add runs in the foreground with its progress in place of the
+  list and jumps on success, a failure staying until a key; a prompt
+  that did not reach the agent, or may not have, or was refused before
+  the host, comes up first in a scrollable notice with its text, kept
+  as well in a file under `undelivered/` in the state directory, and
+  the jump follows the notice; `Ctrl-C` while the add runs puts up a
+  notice naming the same kept file, the add itself may or may not have
+  been sent, and its dismissal ends the view. The footer
+  says `tasks not supported by <host>'s daemon` for a host whose cached
+  capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use
   `X`. `s` settles or unsettles; `S` opens the shell window and jumps.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
+- **`compose`** is the form alone, for a binding from any window:
+  `bind-key T display-popup -E -w 80% -h 60% -d '#{pane_current_path}' -T ' task ' 'laatmux compose'`.
+  It exits on submit or cancel, the repository defaulting to the
+  directory the popup was opened from.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the
   view redraws at that rate only while a working row is on the list. A

@@ -173,6 +173,9 @@ func TestHandle(t *testing.T) {
 	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionJump {
 		t.Errorf("enter = %+v", a)
 	}
+	if a := m.Handle(Key{Kind: KeyNewline}); a.Kind != ActionJump {
+		t.Errorf("newline = %+v", a)
+	}
 	m.Handle(Key{Rune: 'v'})
 	if m.Layout != Tiles {
 		t.Error("v did not toggle")
@@ -240,22 +243,43 @@ func TestHandle(t *testing.T) {
 
 func TestParse(t *testing.T) {
 	cases := map[string][]Key{
-		"j":             {{Rune: 'j'}},
-		"\x1b[A\x1b[B":  {{Kind: KeyUp}, {Kind: KeyDown}},
-		"\x1bOA":        {{Kind: KeyUp}},
-		"\x1b":          {{Kind: KeyEsc}},
-		"\r":            {{Kind: KeyEnter}},
-		"\x7f":          {{Kind: KeyBackspace}},
-		"\x03":          {{Kind: KeyCtrlC}},
-		"\x1b[<0;12;5M": {{Kind: KeyMouse, X: 12, Y: 5}},
-		"\x1b[<0;12;5m": {{Kind: -1}},
-		"\x1b[<64;1;1M": {{Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
-		"\x1b[<65;1;1M": {{Kind: KeyMouse, X: 1, Y: 1, Wheel: 1}},
-		"\x1b[<2;1;1M":  {{Kind: -1}},
-		"\x1b[<32;1;1M": {{Kind: -1}},
-		"ø":             {{Rune: 'ø'}},
-		"\x1b[1;5Cq":    {{Kind: -1}, {Rune: 'q'}},
-		"\x1bj":         {{Kind: KeyEsc}, {Rune: 'j'}},
+		"j":              {{Rune: 'j'}},
+		"\x1b[A\x1b[B":   {{Kind: KeyUp}, {Kind: KeyDown}},
+		"\x1bOA":         {{Kind: KeyUp}},
+		"\x1b":           {{Kind: KeyEsc}},
+		"\r":             {{Kind: KeyEnter}},
+		"\x7f":           {{Kind: KeyBackspace}},
+		"\x03":           {{Kind: KeyCtrlC}},
+		"\x1b[<0;12;5M":  {{Kind: KeyMouse, X: 12, Y: 5}},
+		"\x1b[<0;12;5m":  {{Kind: -1}},
+		"\x1b[<64;1;1M":  {{Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
+		"\x1b[<65;1;1M":  {{Kind: KeyMouse, X: 1, Y: 1, Wheel: 1}},
+		"\x1b[<2;1;1M":   {{Kind: -1}},
+		"\x1b[<32;1;1M":  {{Kind: -1}},
+		"ø":              {{Rune: 'ø'}},
+		"\x1b[1;5Cq":     {{Kind: -1}, {Rune: 'q'}},
+		"\x1bj":          {},
+		"\x1b[13;2u":     {{Kind: KeyNewline}},
+		"\x1b[27;2;13~":  {{Kind: KeyNewline}},
+		"\x1b[27;5;13~":  {{Kind: KeyNewline}},
+		"\x1b[13u":       {{Kind: KeyEnter}},
+		"\x1b[27;1;13~":  {{Kind: KeyEnter}},
+		"\x1b[9;2u":      {{Kind: KeyShiftTab}},
+		"\x1b[27u":       {{Kind: KeyEsc}},
+		"\x1b[99;5u":     {{Kind: KeyCtrlC}},
+		"\x1b[97;5u":     {{Kind: -1}},
+		"\x1b[97u":       {{Rune: 'a'}},
+		"\x1b[97:65;2u":  {{Rune: 'A'}},
+		"\x1b[27;2;97~":  {{Rune: 'A'}},
+		"\x1b[97;2u":     {{Rune: 'A'}},
+		"\x1b[106;5u":    {{Kind: KeyNewline}},
+		"\x1b[27;3;13~":  {{Kind: KeyNewline}},
+		"\x1b[27;3;120~": {{Kind: -1}},
+		"\x1b\x7f":       {},
+		"\x1b\r":         {{Kind: KeyNewline}},
+		"\x1bOP":         {},
+		"\x1b[49;2u":     {{Kind: -1}},
+		"\x1b\x1b":       {{Kind: KeyEsc}, {Kind: KeyEsc}},
 	}
 	for in, want := range cases {
 		got := Parse([]byte(in))
@@ -352,8 +376,9 @@ func TestDecoderSplit(t *testing.T) {
 	if got := d.Flush(); len(got) != 0 {
 		t.Errorf("flushed partial SS3 = %+v", got)
 	}
-	// Escape then a key that is no sequence is both, at once.
-	if got := d.Feed([]byte("\x1bj")); len(got) != 2 || got[0].Kind != KeyEsc || got[1].Rune != 'j' || d.Pending() {
+	// Escape then a key that is no sequence, in one read, is an Alt
+	// chord: neither the Esc that cancels nor the key.
+	if got := d.Feed([]byte("\x1bj")); len(got) != 0 || d.Pending() {
 		t.Errorf("escape then j = %+v", got)
 	}
 	if got := Parse([]byte{0xc3, 'j'}); len(got) != 1 || got[0].Rune != 'j' {
@@ -763,5 +788,38 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		m.Layout, m.Width, m.Height = layout, 1, 30
 		m.SetRows(rows.Build(fixtureInput(now)))
 		m.Render() // one cell: the gutter alone, no panic
+	}
+}
+
+// A newline is Enter outside the form's prompt: on the list, in the
+// filter, a picker, a line prompt and a notice.
+func TestNewlineIsEnter(t *testing.T) {
+	m := &Model{Width: 80, Height: 24}
+	m.Filtering = true
+	m.Handle(Key{Kind: KeyNewline})
+	if m.Filtering {
+		t.Fatal("the filter did not close on a newline")
+	}
+	p := NewPicker("t", []Choice{{Label: "a"}}, 0)
+	p.Handle(Key{Kind: KeyNewline})
+	if !p.Done() || p.Chosen != 0 {
+		t.Fatalf("picker: done %v chosen %d", p.Done(), p.Chosen)
+	}
+	pr := NewPrompt("t", "x", nil)
+	pr.Handle(Key{Kind: KeyNewline})
+	if !pr.Done() || pr.Cancelled {
+		t.Fatalf("prompt: done %v cancelled %v", pr.Done(), pr.Cancelled)
+	}
+	n := NewNotice("t", []string{"l"}, "")
+	n.Handle(Key{Kind: KeyNewline})
+	if !n.Done() {
+		t.Fatal("notice not dismissed by a newline")
+	}
+	f := NewForm("t", chips(), "")
+	f.Handle(Key{Kind: KeyShiftTab})
+	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip
+	f.Handle(Key{Kind: KeyNewline})
+	if f.picker == nil {
+		t.Fatal("a newline on a chip did not open the picker")
 	}
 }

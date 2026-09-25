@@ -364,8 +364,12 @@ its candidates and `Enter` opens the existing picker with its filter;
 in the prompt, typing edits, with `Left`, `Right`, `Home`, `End`,
 `Backspace` and `Delete` within the line, `Ctrl-J` inserts a newline,
 since `Enter` is `\r` and a newline is `\n` in raw mode and the two are
-told apart without any terminal extension, and `Enter` submits when the
-prompt is not empty; on the branch line, typing edits it, and an edited
+told apart without any terminal extension; `Shift-Enter` and
+`Ctrl-Enter` insert one too where the terminal reports them, the view
+asking for xterm's modifyOtherKeys at level 1 and reading both the
+xterm and the csi-u forms, which under tmux takes `extended-keys on`
+and the outer terminal's `extkeys` feature, and are `Enter` elsewhere;
+and `Enter` submits when the prompt is not empty; on the branch line, typing edits it, and an edited
 line stops following the prompt, `Enter` submits. `Esc` cancels the
 whole form. A field with one candidate is shown, not skipped, so the
 form reads the same every time.

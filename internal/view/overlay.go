@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -86,7 +87,7 @@ func (p *Picker) Handle(k Key) {
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		p.Chosen, p.done = -1, true
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
 		if len(m) > 0 {
 			p.Chosen, p.done = m[p.Selected], true
 		}
@@ -110,6 +111,9 @@ func (p *Picker) Handle(k Key) {
 		}
 	case KeyRune:
 		p.Filter += string(k.Rune)
+		p.keep(m)
+	case KeyPaste:
+		p.Filter += pasteLine(k.Text)
 		p.keep(m)
 	}
 	clamp()
@@ -218,7 +222,7 @@ func (p *Prompt) Handle(k Key) {
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		p.Cancelled, p.done = true, true
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
 		if p.Validate != nil {
 			if err := p.Validate(p.Text); err != nil {
 				p.Error = err.Error()
@@ -232,6 +236,8 @@ func (p *Prompt) Handle(k Key) {
 		}
 	case KeyRune:
 		p.Text += string(k.Rune)
+	case KeyPaste:
+		p.Text += pasteLine(k.Text)
 	}
 }
 
@@ -304,13 +310,14 @@ func (l *Log) Done() bool {
 }
 
 // Handle acknowledges a failure with any key but a mouse event, which
-// a wheel over the popup would send.
+// a wheel over the popup would send, and a paste, which is never a
+// key pressed on purpose.
 func (l *Log) Handle(k Key) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
 	case l.ended:
-		l.acked = l.acked || k.Kind != KeyMouse
+		l.acked = l.acked || (k.Kind != KeyMouse && k.Kind != KeyPaste)
 	case k.Kind == KeyCtrlC:
 		l.Quit = true
 	}
@@ -359,6 +366,47 @@ func (l *Log) Render(w, h int) []Line {
 	return append(out[:h-1], foot)
 }
 
+// hardWrap splits s into lines of at most w cells exactly where the
+// width runs out, keeping every space, with tabs drawn as spaces to
+// the next stop of four and other control characters dropped.
+func hardWrap(s string, w int) []string {
+	if w < 1 {
+		return nil
+	}
+	var out []string
+	var cur []rune
+	n := 0
+	flush := func() {
+		out = append(out, string(cur))
+		cur, n = nil, 0
+	}
+	for _, r := range s {
+		if r == '\t' {
+			k := 4 - n%4
+			if n+k > w {
+				flush()
+				k = min(4, w)
+			}
+			for range k {
+				cur = append(cur, ' ')
+			}
+			n += k
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		rw := runeWidth(r)
+		if n+rw > w && n > 0 {
+			flush()
+		}
+		cur = append(cur, r)
+		n += rw
+	}
+	flush()
+	return out
+}
+
 // wrap splits s into lines of at most w cells, at spaces where one
 // falls in the last third of the line, else mid-word. Control
 // characters are dropped first, line breaks and tabs becoming spaces:
@@ -398,4 +446,97 @@ func wrap(s string, w int) []string {
 		s = strings.TrimLeft(s[cut:], " ")
 	}
 	return out
+}
+
+// Notice is text kept on screen until dismissed: a title, lines wrapped
+// to the width, scrolled with the arrows and the wheel, and a footer.
+// Enter, Esc and q dismiss it; other keys do nothing, so a prompt shown
+// for copying is not lost to a stray key.
+type Notice struct {
+	Title  string
+	Lines  []string
+	Footer string
+	// Verbatim is the index of the first line kept as it is: wrapped
+	// only where the width runs out, tabs drawn as spaces to the next
+	// stop, no space dropped, so a prompt shown for copying reads as it
+	// was typed. Lines before it are prose, wrapped at spaces.
+	Verbatim int
+	// Final is a notice whose dismissal ends the view: Ctrl-C, pressed
+	// again out of habit, does not dismiss it before it is read.
+	Final  bool
+	scroll int
+	done   bool
+}
+
+func NewNotice(title string, lines []string, footer string) *Notice {
+	return &Notice{Title: title, Lines: lines, Footer: footer}
+}
+
+func (n *Notice) Done() bool { return n.done }
+
+func (n *Notice) Handle(k Key) {
+	switch k.Kind {
+	case KeyEnter, KeyNewline, KeyEsc:
+		n.done = true
+	case KeyCtrlC:
+		n.done = !n.Final
+	case KeyUp:
+		n.scroll--
+	case KeyDown:
+		n.scroll++
+	case KeyMouse:
+		n.scroll += k.Wheel
+	case KeyRune:
+		switch k.Rune {
+		case 'q':
+			n.done = true
+		case 'k':
+			n.scroll--
+		case 'j':
+			n.scroll++
+		}
+	}
+	if n.scroll < 0 {
+		n.scroll = 0
+	}
+}
+
+func (n *Notice) Render(w, h int) []Line {
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	var body []Line
+	for i, s := range n.Lines {
+		if s == "" {
+			body = append(body, plain(""))
+			continue
+		}
+		parts := wrap(s, w)
+		if n.Verbatim > 0 && i >= n.Verbatim {
+			parts = hardWrap(s, w)
+		}
+		for _, part := range parts {
+			body = append(body, plain(part))
+		}
+	}
+	room := h - 2
+	if room < 1 {
+		room = 1
+	}
+	if n.scroll > len(body)-room {
+		n.scroll = max(len(body)-room, 0)
+	}
+	out := []Line{{Spans: []Span{{Text: fit(n.Title, w)}}, Bold: true}}
+	for i := 0; i < room; i++ {
+		if j := n.scroll + i; j < len(body) {
+			out = append(out, body[j])
+		} else {
+			out = append(out, plain(""))
+		}
+	}
+	foot := n.Footer
+	if len(body) > room {
+		foot = fmt.Sprintf("%s  (%d-%d of %d lines, arrows scroll)", n.Footer, n.scroll+1, min(n.scroll+room, len(body)), len(body))
+	}
+	return append(out[:h-1], Line{Spans: []Span{{Text: fit(foot, w)}}, Dim: true})
 }

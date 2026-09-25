@@ -69,7 +69,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		return err
 	}
 	defer t.Close()
-	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump}
+	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
 	return view.Run(ctx, t, m, view.Host{
 		Changed: st.change,
 		Refresh: func(m *view.Model) { st.fill(m, current) },
@@ -103,6 +103,18 @@ func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 		return nil, fmt.Errorf("local daemon %s has no merged stream (an older build, or no hosts in the config); %s", c.Hello.Version, how)
 	}
 	return c, nil
+}
+
+// hostCaps is a host's cached daemon capabilities from the merged
+// stream, ok when the host has answered a hello.
+func (m *merged) hostCaps(name string) ([]string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.hosts[name]
+	if !ok || st.EnvID == "" {
+		return nil, false
+	}
+	return st.Caps, true
 }
 
 // localHostName is the configured name of this machine.
