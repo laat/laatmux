@@ -9,4 +9,4 @@
 ...|│                                                          │
 ...|└──────────────────────────────────────────────────────────┘
 ...|⟨branch  ⟩…t-and-select-nothing-when-no-row-is-this-session-2█
-.D.|tab next  enter submit  ctrl-j/S-enter newline  esc cancel
+.D.|tab next field  enter submit  ctrl-j newline  esc cancel

@@ -273,6 +273,9 @@ func TestParse(t *testing.T) {
 		"\x1b[27;3;13~":  {{Kind: KeyNewline}},
 		"\x1b[27;3;120~": {{Kind: -1}},
 		"\x1b\x7f":       {},
+		"\x1b\r":         {{Kind: KeyNewline}},
+		"\x1bOP":         {},
+		"\x1b[49;2u":     {{Kind: -1}},
 		"\x1b\x1b":       {{Kind: KeyEsc}, {Kind: KeyEsc}},
 	}
 	for in, want := range cases {

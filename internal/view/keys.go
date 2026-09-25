@@ -206,15 +206,17 @@ func (d *Decoder) stall() []Key {
 }
 
 // lastRecovery is the index of the last byte that is the user's Esc or
-// Ctrl-C in a stalled paste, a bare escape or 0x03, and its key; -1
-// when there is none.
+// Ctrl-C in a stalled paste, and its key; -1 when there is none. The
+// Esc is a bare escape, one at the end or followed by another: one
+// followed by any other byte is a sequence or an Alt chord, as
+// everywhere else.
 func lastRecovery(b []byte) (int, KeyKind) {
 	for i := len(b) - 1; i >= 0; i-- {
 		switch b[i] {
 		case 0x03:
 			return i, KeyCtrlC
 		case 0x1b:
-			if i+1 == len(b) || (b[i+1] != '[' && b[i+1] != 'O') {
+			if i+1 == len(b) || b[i+1] == 0x1b {
 				return i, KeyEsc
 			}
 		}
@@ -411,14 +413,21 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 						return keys, b
 					}
 					return keys, nil
-				} else {
-					// SS3 keys, sent in application cursor mode.
-					if kind, ok := ss3Keys[b[2]]; ok {
-						keys = append(keys, Key{Kind: kind})
-						b = b[3:]
-						continue
-					}
 				}
+				// SS3 keys, sent in application cursor mode; the rest,
+				// F1 to F4 say, are dropped whole.
+				if kind, ok := ss3Keys[b[2]]; ok {
+					keys = append(keys, Key{Kind: kind})
+				}
+				b = b[3:]
+				continue
+			}
+			if b[1] == '\r' || b[1] == '\n' {
+				// Alt-Enter, and what a terminal bound to send it for
+				// Shift-Enter sends: a newline, never a submit.
+				keys = append(keys, Key{Kind: KeyNewline})
+				b = b[2:]
+				continue
 			}
 			if b[1] != 0x1b {
 				// Escape then another byte in one read is an Alt chord,
@@ -528,8 +537,10 @@ func extended(code, alt, mod int) Key {
 		return Key{Rune: rune(code)}
 	case shift && alt >= 0x20:
 		return Key{Rune: rune(alt)}
-	case shift:
-		// tmux reports a shifted letter by its unshifted code.
+	case shift && unicode.IsLetter(rune(code)):
+		// tmux reports a shifted letter by its unshifted code; another
+		// shifted key's character is not known from its code, and is
+		// dropped rather than inserted wrong.
 		return Key{Rune: unicode.ToUpper(rune(code))}
 	}
 	return Key{Kind: -1}
@@ -674,7 +685,7 @@ func (m *Model) Handle(k Key) Action {
 		switch k.Kind {
 		case KeyEsc:
 			m.Filter, m.Filtering = "", false
-		case KeyEnter:
+		case KeyEnter, KeyNewline:
 			m.Filtering = false
 		case KeyBackspace:
 			if r := []rune(m.Filter); len(r) > 0 {
@@ -699,7 +710,9 @@ func (m *Model) Handle(k Key) Action {
 		m.move(-1)
 	case KeyDown:
 		m.move(1)
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
+		// A newline is Enter on the list, as \n was before the form
+		// told the two apart.
 		return m.jump()
 	case KeyEsc:
 		m.Filter = ""

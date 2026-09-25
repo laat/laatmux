@@ -74,7 +74,7 @@ const (
 // and the branch line empty; a branch given is the user's from the
 // start, as a on a worktree row without a session wants.
 func NewForm(title string, chips [3]Chip, branch string) *Form {
-	f := &Form{Title: title, Chips: chips, focus: fieldPrompt, Hint: "tab next  enter submit  ctrl-j/S-enter newline  esc cancel"}
+	f := &Form{Title: title, Chips: chips, focus: fieldPrompt, Hint: "tab next field  enter submit  ctrl-j newline  esc cancel"}
 	if branch != "" {
 		f.branch, f.edited = branch, true
 	}

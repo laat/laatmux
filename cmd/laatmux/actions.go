@@ -47,12 +47,17 @@ type dash struct {
 	recovered string
 	// last is what the foreground add left, for compose to jump to.
 	last command.Added
+	// switcher replaces the tmux switch, for tests.
+	switcher func(session string) error
 }
 
 // running is a command under way: its log, and what to do when it ends.
 type running struct {
 	log  *view.Log
 	done func(m *view.Model) (exit bool)
+	// prompt is the prompt of an add under way, kept in a file should
+	// the wait for it be quit, since the view ends with nothing shown.
+	prompt string
 }
 
 // act handles a dashboard key, a confirm answer or an overlay ending.
@@ -108,6 +113,11 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		return d.submitForm(m, f, o)
 	case *view.Log:
 		if o.Quit {
+			if d.run != nil && d.run.prompt != "" {
+				if path, err := keepPrompt(command.ID("prompt"), d.run.prompt); err == nil {
+					m.Message = "the add runs on; its prompt is kept in " + path
+				}
+			}
 			return true
 		}
 		m.Overlay = nil
@@ -135,7 +145,7 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		if d.last.Session != "" && m.Message == "" {
 			session := d.last.Session
 			d.last.Session = ""
-			if err := switchTo(d.ctx, session); err != nil {
+			if err := d.jumpTo(session); err != nil {
 				m.Message = err.Error()
 				return false
 			}
@@ -144,6 +154,15 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		return false
 	}
 	return false
+}
+
+// jumpTo switches the client to the session, through switcher when a
+// test set one.
+func (d *dash) jumpTo(session string) error {
+	if d.switcher != nil {
+		return d.switcher(session)
+	}
+	return switchTo(d.ctx, session)
 }
 
 // start runs a command in the background with its progress in a log
@@ -362,6 +381,11 @@ func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 // new workspace session is jumped to.
 func (d *dash) runAdd(m *view.Model, add command.Add) {
 	var res command.Added
+	defer func() {
+		if d.run != nil {
+			d.run.prompt = add.Prompt
+		}
+	}()
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
@@ -371,8 +395,9 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		// file, since the foreground path keeps none of it otherwise.
 		if d.recover = undelivered(add, res); d.recover != nil {
 			if path, err := keepPrompt(command.ID("prompt"), add.Prompt); err == nil {
-				d.recover.Lines = append([]string{"kept in " + path, ""}, d.recover.Lines...)
-				d.recover.Verbatim += 2
+				// The path on a line of its own, to be copied.
+				d.recover.Lines = append([]string{"kept in", path, ""}, d.recover.Lines...)
+				d.recover.Verbatim += 3
 			} else {
 				d.recover.Lines = append([]string{"not kept in a file: " + err.Error(), ""}, d.recover.Lines...)
 				d.recover.Verbatim += 2

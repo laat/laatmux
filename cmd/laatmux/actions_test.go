@@ -654,4 +654,25 @@ func TestNoticeRestoresMessage(t *testing.T) {
 	if m.Overlay != nil || m.Message != "local session: boom" {
 		t.Fatalf("after the notice: overlay %v message %q", m.Overlay, m.Message)
 	}
+	// With a session and no error, the notice's dismissal jumps.
+	jumped := ""
+	d.switcher = func(s string) error { jumped = s; return nil }
+	d.last = command.Added{Session: "mac/proj/b"}
+	d.recovered, m.Message = "", ""
+	m.Overlay = view.NewNotice("t", []string{"the prompt"}, "")
+	m.Handle(view.Key{Kind: view.KeyEnter})
+	if d.act(m, m.Poll()) || jumped != "mac/proj/b" || d.last.Session != "" {
+		t.Fatalf("after the notice with a session: jumped %q", jumped)
+	}
+	// Ctrl-C on the log of an add keeps the prompt in a file.
+	log = view.NewLog("t")
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt"}
+	m.Overlay = log
+	log.Handle(view.Key{Kind: view.KeyCtrlC})
+	if !d.act(m, m.Poll()) || !strings.Contains(m.Message, "kept in ") {
+		t.Fatalf("quit: message %q", m.Message)
+	}
+	if b, err := os.ReadFile(strings.TrimPrefix(m.Message, "the add runs on; its prompt is kept in ")); err != nil || string(b) != "the prompt" {
+		t.Fatalf("kept %q %v", b, err)
+	}
 }

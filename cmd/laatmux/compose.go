@@ -140,14 +140,11 @@ func (c *composer) act(m *view.Model, a view.Action) bool {
 		}
 		return done || m.Overlay == nil
 	case *view.Notice:
+		// The dashboard's handling jumps when there is a session and no
+		// error to show; the outcome is what it left.
 		d.overlayDone(m)
 		if m.Message != "" {
 			c.outcome = m.Message
-		}
-		if d.last.Session != "" {
-			if err := switchTo(d.ctx, d.last.Session); err != nil {
-				c.outcome = err.Error()
-			}
 		}
 		return true
 	}

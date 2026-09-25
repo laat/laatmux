@@ -405,7 +405,7 @@ func TestDecoderPasteBounded(t *testing.T) {
 		{"\x1b\x1b", "more", 0},
 		{"q\x03\x1b", "moreq", 0},
 		{"\x03", "more", 0},
-		{"\x1bj", "more", 1},
+		{"\x03j", "more", 1},
 	} {
 		d := Decoder{now: func() time.Time { return now }}
 		d.Feed([]byte("\x1b[200~gone"))
@@ -431,6 +431,17 @@ func TestDecoderPasteBounded(t *testing.T) {
 				t.Fatalf("%q: the recovery key came through: %+v", c.in, got)
 			}
 		}
+	}
+	// An escape followed by another byte after a stall is a chord or a
+	// sequence, as everywhere, not the user's Esc: the paste goes on.
+	chord := Decoder{now: func() time.Time { return now }}
+	chord.Feed([]byte("\x1b[200~gone"))
+	now = now.Add(pasteGrace + time.Millisecond)
+	chord.Flush()
+	chord.Feed([]byte("more\x1bj"))
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := chord.Flush(); len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "morej" || !chord.Pending() {
+		t.Fatalf("a chord after a stall: %+v pending %v", got, chord.Pending())
 	}
 	// A bare escape in a slow paste's first chunk, the output of tput
 	// say, is paste and not the user's: only after a stall does one
@@ -557,6 +568,34 @@ func TestDecoderIntoForm(t *testing.T) {
 	feed("\x1b")
 	if !f.Cancelled {
 		t.Fatal("a second Esc did not cancel")
+	}
+	// A modified Enter, in either extended form, whole or split after
+	// the escape and bracket, is a newline and never a submit; a plain
+	// one submits.
+	for _, in := range [][]string{{"\x1b[13;2u"}, {"\x1b[27;2;13~"}, {"\x1b[2", "7;5;13~"}, {"\x1b[1", "3;2u"}, {"\x1b\r"}} {
+		d := Decoder{}
+		f := NewForm("t", chips(), "")
+		f.Propose = propose
+		f.SetPrompt("one")
+		// A split key's rest comes within the escape wait, so the
+		// flush is after the last chunk only.
+		for _, b := range in {
+			for _, k := range d.Feed([]byte(b)) {
+				f.Handle(k)
+			}
+		}
+		for _, k := range d.Flush() {
+			f.Handle(k)
+		}
+		if f.Done() || f.Prompt() != "one\n" {
+			t.Fatalf("%q: done %v prompt %q", in, f.Done(), f.Prompt())
+		}
+		for _, k := range Parse([]byte("\x1b[13u")) {
+			f.Handle(k)
+		}
+		if !f.Done() {
+			t.Fatalf("%q: a plain Enter in the extended form did not submit", in)
+		}
 	}
 }
 

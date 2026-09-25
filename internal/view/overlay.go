@@ -87,7 +87,7 @@ func (p *Picker) Handle(k Key) {
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		p.Chosen, p.done = -1, true
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
 		if len(m) > 0 {
 			p.Chosen, p.done = m[p.Selected], true
 		}
@@ -222,7 +222,7 @@ func (p *Prompt) Handle(k Key) {
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		p.Cancelled, p.done = true, true
-	case KeyEnter:
+	case KeyEnter, KeyNewline:
 		if p.Validate != nil {
 			if err := p.Validate(p.Text); err != nil {
 				p.Error = err.Error()
@@ -473,7 +473,7 @@ func (n *Notice) Done() bool { return n.done }
 
 func (n *Notice) Handle(k Key) {
 	switch k.Kind {
-	case KeyEnter, KeyEsc, KeyCtrlC:
+	case KeyEnter, KeyNewline, KeyEsc, KeyCtrlC:
 		n.done = true
 	case KeyUp:
 		n.scroll--
