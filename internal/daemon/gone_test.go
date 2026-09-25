@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -95,5 +96,69 @@ func TestRelayDismissAt(t *testing.T) {
 	}
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-2", EnvironmentID: "other", Root: a.Root}); !res.OK {
 		t.Fatalf("dismiss at another environment: %+v", res)
+	}
+}
+
+// A removal that lands while another runner follows the task, a
+// delivery attempt say, still has it checked.
+func TestRelayGoneWhileAnotherRunner(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	p := notDelivered(t, f, "n3", "busy")
+	f.local.relay.mu.Lock()
+	f.local.startRunnerLocked(f.ctx, "n3", func(ctx context.Context, id string) { <-ctx.Done() })
+	f.local.relay.mu.Unlock()
+	rmOnHost(t, f, "rm-n3", "busy", p.Root)
+	f.awaitRecord(t, "n3", 30*time.Second, func(p pendingFile) bool { return p.Gone })
+	f.local.stopRunners("n3")
+}
+
+// A listing that comes back after failing: the host's stamp, upserted
+// by a poll that succeeded, has the tasks it lacks checked, with no
+// reconnect and no removal seen.
+func TestRelayGoneOnListingStamp(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	p := notDelivered(t, f, "n4", "stamp")
+	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
+	f.local.mu.Unlock()
+	rmOnHost(t, f, "rm-n4", "stamp", p.Root)
+	f.local.mu.Lock()
+	delete(mh.worktrees, p.WorktreeID())
+	f.local.mu.Unlock()
+	// A failed poll's stamp says nothing.
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeUpsert, Listing: &protocol.Listing{Generation: 1, Revision: 1}, ListingError: "git: broken"})
+	time.Sleep(300 * time.Millisecond)
+	if got, _ := f.local.relay.get("n4"); got.Gone {
+		t.Fatal("gone on a failed listing")
+	}
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeUpsert, Listing: &protocol.Listing{Generation: 1, Revision: 2}})
+	f.awaitRecord(t, "n4", 30*time.Second, func(p pendingFile) bool { return p.Gone })
+}
+
+// Dismiss by root drops only finished tasks: a running add at the root
+// stays, even one whose host is removed from the config, whose own
+// dismiss would drop it.
+func TestRelayDismissAtKeepsRunning(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	running := &pendingFile{Pending: protocol.Pending{ID: "r1", Host: "gone", EnvironmentID: "henv", Repo: "proj", Branch: "b", Root: "/w/b", Sent: true, Taken: true, SubmittedAt: time.Now()}}
+	open := &pendingFile{Pending: protocol.Pending{ID: "r2", Host: "gone", EnvironmentID: "henv", Repo: "proj", Branch: "b", Root: "/w/b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 1, SubmittedAt: time.Now()}}
+	f.local.relay.mu.Lock()
+	f.local.relay.recs["r1"], f.local.relay.recs["r2"] = running, open
+	f.local.relay.mu.Unlock()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-3", EnvironmentID: "henv", Root: "/w/b"}); !res.OK {
+		t.Fatalf("dismiss at: %+v", res)
+	}
+	for _, id := range []string{"r1", "r2"} {
+		if _, ok := f.local.relay.get(id); !ok {
+			t.Fatalf("%s dropped by dismiss at", id)
+		}
 	}
 }

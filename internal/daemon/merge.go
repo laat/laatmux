@@ -442,14 +442,27 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: id})
 			}
 		}
-		// A full listing: a task on the host whose worktree it lacks,
-		// removed while this daemon was down say, is checked.
-		d.hostListedLocked(mh.status.EnvironmentID, seen)
+		// A successful listing: a task on the host whose worktree it
+		// lacks, removed while this daemon was down say, is checked. A
+		// snapshot without the stamp has no listing behind it.
+		if msg.Listing != nil {
+			d.hostListedLocked(mh.status.EnvironmentID, seen)
+		}
 		mh.status.Listed = true
 		mh.status.Since = time.Now()
 		st := mh.status
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
 	case protocol.TypeUpsert:
+		if msg.Listing != nil && msg.ListingError == "" {
+			// A poll that succeeded, after the removals it made: a
+			// listing that failed for a while and came back finds what
+			// went meanwhile.
+			listed := map[string]bool{}
+			for id := range mh.worktrees {
+				listed[id] = true
+			}
+			d.hostListedLocked(mh.status.EnvironmentID, listed)
+		}
 		if msg.Agent != nil {
 			mh.agents[msg.Agent.ID] = *msg.Agent
 		}

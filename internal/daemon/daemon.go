@@ -408,11 +408,6 @@ func (d *Daemon) markDiscovered(flag *bool) {
 	both := d.panesDiscovered && d.worktreesDiscovered
 	if both {
 		d.localListedLocked()
-		listed := map[string]bool{}
-		for root := range d.worktrees {
-			listed[d.worktreeID(root)] = true
-		}
-		d.hostListedLocked(d.cfg.EnvironmentID, listed)
 	}
 	d.mu.Unlock()
 	if both {

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -12,11 +11,12 @@ import (
 // by rm here or on another machine, or by hand, and the record would go
 // on saying what it said, standing for a worktree row that is not
 // there. So the daemon watches the listings it already has: a worktree
-// the host reports removed, and a host's full listing that lacks a
-// task's worktree, send the task's host to be asked again, as the
-// handoff asks it, and a worktree the listing does not have makes the
-// task gone. A host that disconnects says nothing about its worktrees
-// and is not a removal.
+// the host reports removed, and a host's successful listing that lacks
+// a task's worktree, the snapshot of a connection or a later poll's,
+// send the task's host to be asked again, as the handoff asks it, and a
+// worktree the listing does not have makes the task gone. A host that
+// disconnects, or whose listing failed, says nothing about its
+// worktrees and is not a removal.
 
 // tasksAtLocked schedules the check for every listed task that match
 // selects. Called with d.mu held; the relay's mutex comes before d.mu,
@@ -33,8 +33,8 @@ func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
 	d.tasksAtLocked(func(p protocol.Pending) bool { return p.WorktreeID() == worktreeID })
 }
 
-// hostListedLocked is a host's full listing of worktrees: a task on the
-// environment whose worktree it lacks is checked.
+// hostListedLocked is a host's successful listing of worktrees: a task
+// on the environment whose worktree it lacks is checked.
 func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool) {
 	if environmentID == "" {
 		return
@@ -44,9 +44,10 @@ func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool) 
 	})
 }
 
-// recheckTasks starts a runner for each task that match selects and
-// that is listed, not gone, not retired, and not followed by a runner
-// already: one running settles or retires on its own.
+// recheckTasks starts a check for each task that match selects and
+// that is listed, not gone and not retired, unless one runs for it
+// already. Another runner, a delivery attempt say, is no reason to skip:
+// a removal it overlaps would be lost.
 func (d *Daemon) recheckTasks(match func(protocol.Pending) bool) {
 	ctx := d.runCtx()
 	if ctx.Err() != nil {
@@ -55,21 +56,28 @@ func (d *Daemon) recheckTasks(match func(protocol.Pending) bool) {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
 	for id, p := range d.relay.recs {
-		if !p.Listed || p.Gone || p.retired() || p.WorktreeID() == "" || len(d.relay.runners[id]) > 0 || !match(p.Pending) {
+		if !p.Listed || p.Gone || p.retired() || p.WorktreeID() == "" || d.relay.checking[id] || !match(p.Pending) {
 			continue
 		}
-		d.startRunnerLocked(ctx, id, d.checkGone)
+		d.relay.checking[id] = true
+		d.startRunnerLocked(ctx, id, func(ctx context.Context, id string) {
+			defer func() {
+				d.relay.mu.Lock()
+				delete(d.relay.checking, id)
+				d.relay.mu.Unlock()
+			}()
+			d.checkGone(ctx, id)
+		})
 	}
 }
 
 // checkGone asks the task's host whether its worktree is still listed,
-// and marks the task gone when it is not. A host that cannot be asked is
-// asked again with backoff, for as long as a handoff waits; past that
-// the next listing that lacks the worktree asks again.
+// and marks the task gone when it is not. A host that cannot be asked,
+// down or its listings failing, is asked again with backoff until it
+// answers, the task is dismissed, or the daemon stops.
 func (d *Daemon) checkGone(ctx context.Context, id string) {
 	wait := d.cfg.ReconnectMin
-	deadline := time.Now().Add(handoffPatience)
-	for ctx.Err() == nil && time.Now().Before(deadline) {
+	for ctx.Err() == nil {
 		p, ok := d.relay.get(id)
 		if !ok || !p.Listed || p.Gone || p.retired() {
 			return
@@ -87,12 +95,12 @@ func (d *Daemon) checkGone(ctx context.Context, id string) {
 	}
 }
 
-// dismissAt drops the tasks at a worktree that rm removed: the add of
-// each has an outcome, and with the worktree gone there is nothing left
-// to deliver to or jump into. Each goes through dismiss, whose rules
-// stand: one whose add is still running, or whose attempt is open,
-// stays and is marked gone once the listing lacks its worktree. The
-// answer is ok whatever was dropped.
+// dismissAt drops the tasks at a worktree that rm removed: with the
+// worktree gone there is nothing left to deliver to or jump into. Only
+// a finished one goes, through the settled path under the record's own
+// locks: one whose add is still running, or whose attempt is open,
+// stays, whatever its host, and is marked gone once the listing lacks
+// its worktree. The answer is ok whatever was dropped.
 func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: requestID, OK: true}
 	if d.relay == nil {
@@ -108,7 +116,7 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Messa
 	}
 	d.relay.mu.Unlock()
 	for _, id := range ids {
-		d.dismiss(id)
+		d.dismissEnded(id)
 	}
 	return res
 }

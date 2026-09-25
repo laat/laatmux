@@ -68,6 +68,11 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		d.listing, d.listErr = stamp, ""
 		d.publishWorktreesLocked(time.Now())
 		d.publishListingLocked()
+		listed := map[string]bool{}
+		for root := range d.worktrees {
+			listed[d.worktreeID(root)] = true
+		}
+		d.hostListedLocked(d.cfg.EnvironmentID, listed)
 		d.mu.Unlock()
 	}
 	d.markDiscovered(&d.worktreesDiscovered)

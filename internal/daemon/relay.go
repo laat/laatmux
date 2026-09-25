@@ -72,6 +72,9 @@ type relay struct {
 	// so a resubmit or a restart never starts a second, and a dismiss
 	// of a record the host will never answer for can end them.
 	runners map[string][]*runner
+	// checking is the records a gone check runs for, so a removal and
+	// the listings after it start one, not one each.
+	checking map[string]bool
 }
 
 // runner is one goroutine on a record: its cancel, and done once it
@@ -85,7 +88,7 @@ func openRelay(dir string, logger *log.Logger) (*relay, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{}}
+	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{}, checking: map[string]bool{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
