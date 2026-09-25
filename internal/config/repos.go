@@ -110,10 +110,16 @@ func (c Config) RepoByName(name string) (Repo, bool) {
 	return Repo{}, false
 }
 
-// RepoBySource finds a known repository by its source, its identity.
+// RepoBySource finds a known repository by its source, its identity,
+// in any of the forms SameSource takes as one.
 func (c Config) RepoBySource(source string) (Repo, bool) {
 	for _, r := range c.Repos {
 		if r.Source == source {
+			return r, true
+		}
+	}
+	for _, r := range c.Repos {
+		if SameSource(r.Source, source) {
 			return r, true
 		}
 	}
@@ -137,10 +143,13 @@ func deriveNames(repos []Repo) error {
 		if r.Source == "" {
 			return fmt.Errorf("repos: entry %d has no source", i+1)
 		}
-		if j, dup := bySource[r.Source]; dup {
-			return fmt.Errorf("repos: %s listed twice (entries %d and %d)", r.Source, j+1, i+1)
+		if j, dup := bySource[SourceKey(r.Source)]; dup {
+			if repos[j].Source == r.Source {
+				return fmt.Errorf("repos: %s listed twice (entries %d and %d)", r.Source, j+1, i+1)
+			}
+			return fmt.Errorf("repos: %s and %s are one repository (entries %d and %d)", repos[j].Source, r.Source, j+1, i+1)
 		}
-		bySource[r.Source] = i
+		bySource[SourceKey(r.Source)] = i
 	}
 	type parts struct{ org, base string }
 	derived := map[int]parts{}

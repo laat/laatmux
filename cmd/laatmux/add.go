@@ -48,7 +48,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 		}
 	}
 	branch, prompt := a.branch, a.prompt
-	add := command.Add{Host: h, Repo: repo, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
+	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
 	if a.detach {
 		// The daemon has the task once an id comes back, whatever the

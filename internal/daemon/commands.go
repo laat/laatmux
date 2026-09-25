@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
@@ -272,12 +272,7 @@ func (d *Daemon) repoLock(source string) *sync.Mutex {
 func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
-		var repo worktree.Repo
 		if m.Repo != "" {
-			var ok bool
-			if repo, ok = d.cfg.Store.Repo(m.Repo); !ok {
-				return fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
-			}
 			if m.Branch == "" && m.Root == "" {
 				return errors.New("rm needs a branch or a root")
 			}
@@ -287,6 +282,24 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		unlock := d.lockRepos()
 		defer unlock()
 
+		// The repository is found under the lock: an add still making
+		// its first checkout is done before the checkouts are scanned.
+		// One with no checkout here is still reached by the root, which
+		// finds the session.
+		var repo worktree.Repo
+		if m.Repo != "" {
+			r, ok, err := d.cfg.Store.Known(ctx, m.Repo)
+			switch {
+			case err != nil:
+				return err
+			case ok:
+				repo = r
+			case m.Root != "":
+				repo = worktree.Repo{Source: m.Repo, Name: m.Repo}
+			default:
+				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
+			}
+		}
 		root, checkout := m.Root, ""
 		if root != "" {
 			// The client's root, cleaned so it compares with what git
@@ -299,37 +312,43 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			}
 		}
 		switch {
-		case m.Branch != "":
-			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
-			if err != nil {
-				return err
-			}
-			switch {
-			case found && root != "" && rec.Root != root:
-				return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
-			case found:
-				root, checkout = rec.Root, co
-			case root != "":
-				// The registration is gone; root still finds the session.
-				// It must not be some other worktree registered since.
-				rec, _, taken, err := d.cfg.Store.Find(ctx, root)
-				if err != nil {
-					return err
-				}
-				if taken && (rec.Source != repo.Source || rec.Branch != m.Branch) {
-					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
-				}
-			}
-		default:
+		case root != "":
+			// The root decides the checkout, since two clones of one
+			// repository each list their own worktrees; repository and
+			// branch, when given, must be what git registers there.
 			rec, co, found, err := d.cfg.Store.Find(ctx, root)
 			if err != nil {
 				return err
 			}
 			if found {
-				if repo.Source != "" && rec.Source != repo.Source {
+				if repo.Source != "" && !config.SameSource(rec.Source, repo.Source) {
 					return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
 				}
+				if m.Branch != "" && rec.Branch != m.Branch {
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
+				}
 				checkout = co
+				break
+			}
+			if m.Branch != "" {
+				// The registration at the root is gone; the root still
+				// finds the session, unless the branch has moved to a
+				// worktree elsewhere since.
+				rec, _, moved, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+				if err != nil {
+					return err
+				}
+				if moved {
+					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
+				}
+			}
+		default:
+			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+			if err != nil {
+				return err
+			}
+			if found {
+				root, checkout = rec.Root, co
 			}
 		}
 		if root == "" {
@@ -405,29 +424,36 @@ func branchOrDetached(branch string) string {
 	return "branch " + branch
 }
 
-// lockRepos takes every known repository's lock in sorted order, so two
-// callers taking several never deadlock, and add's single lock nests
-// inside. The returned func releases them.
-func (d *Daemon) lockRepos() func() {
-	var sources []string
-	for _, r := range d.cfg.Store.Repos {
-		sources = append(sources, r.Source)
-	}
-	sort.Strings(sources)
-	locks := make([]*sync.Mutex, 0, len(sources))
-	for i, src := range sources {
-		if i > 0 && src == sources[i-1] {
-			continue
-		}
-		l := d.repoLock(src)
-		l.Lock()
-		locks = append(locks, l)
-	}
+// holdRepos is the shared hold on every repository that an add takes
+// before it resolves anything and keeps to its end, and that rm takes
+// alone. The returned func releases it.
+func (d *Daemon) holdRepos() func() {
+	d.repos.RLock()
+	return d.repos.RUnlock
+}
+
+// lockRepo takes a repository's lock, by its identity, so two forms of
+// one source share it, then the lock on the name that places its
+// checkout, so two sources sent under one name never clone into one
+// directory at once. The caller has the shared hold. The order is
+// always hold, source, name, and nothing waits on a source holding a
+// name. The returned func releases both locks.
+func (d *Daemon) lockRepo(source, name string) func() {
+	src := d.repoLock("repo/" + config.SourceKey(source))
+	src.Lock()
+	dir := d.repoLock("name/" + name)
+	dir.Lock()
 	return func() {
-		for i := len(locks) - 1; i >= 0; i-- {
-			locks[i].Unlock()
-		}
+		dir.Unlock()
+		src.Unlock()
 	}
+}
+
+// lockRepos holds every repository, known or not: no add is in flight
+// until the returned func releases them.
+func (d *Daemon) lockRepos() func() {
+	d.repos.Lock()
+	return d.repos.Unlock
 }
 
 // finish records the result and asks for a worktree poll, so the record

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/view"
 )
@@ -193,5 +194,44 @@ func TestMergedPendingRows(t *testing.T) {
 	m.fill(v, "")
 	if len(v.Handoffs) != 0 {
 		t.Fatalf("handoffs past the day: %v", v.Handoffs)
+	}
+}
+
+// The rows name a host's worktree by this machine's name for its
+// source, in any form: a host labels a checkout its config does not
+// list by its directory. A source this machine does not know keeps the
+// host's label.
+func TestMergedRowsUseLocalNames(t *testing.T) {
+	cfg, err := config.Parse([]byte("repos:\n  - source: https://example.com/o/proj\n    name: mine\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newMerged()
+	m.labels = repoLabels(cfg)
+	m.worktrees["a"] = protocol.Worktree{ID: "a", EnvironmentID: "e", Repo: "checkout-dir", Source: "git@example.com:o/proj.git", Branch: "x", Root: "/w/a"}
+	m.worktrees["b"] = protocol.Worktree{ID: "b", EnvironmentID: "e", Repo: "theirs", Source: "git@example.com:o/other.git", Branch: "y", Root: "/w/b"}
+	got := map[string]string{}
+	for _, w := range m.input(nil, "").Worktrees {
+		got[w.ID] = w.Repo
+	}
+	if got["a"] != "mine" || got["b"] != "theirs" || m.worktrees["a"].Repo != "checkout-dir" {
+		t.Fatalf("labels %v, stored %q", got, m.worktrees["a"].Repo)
+	}
+}
+
+// A request about a host's record names the repository as the record
+// does, with this machine's name: an older host compares sources as
+// strings.
+func TestRecordRepoKeepsSpelling(t *testing.T) {
+	cfg, err := config.Parse([]byte("repos:\n  - source: git@example.com:o/proj.git\n    name: mine\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := recordRepo(cfg, "https://example.com/o/proj")
+	if !ok || r.Name != "mine" || r.Source != "https://example.com/o/proj" || cfg.Repos[0].Source != "git@example.com:o/proj.git" {
+		t.Fatalf("%+v %v", r, ok)
+	}
+	if _, ok := recordRepo(cfg, "https://example.com/o/other"); ok {
+		t.Fatal("an unknown source matched")
 	}
 }

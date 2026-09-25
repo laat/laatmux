@@ -70,8 +70,16 @@ func cmdRm(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if w, ok := findWorktree(snap.Worktrees, repo, branch); ok {
+		w, ok, err := findWorktree(snap.Worktrees, repo, branch)
+		if err != nil {
+			return err
+		}
+		if ok {
 			rm.Root = w.Root
+			if w.Source != "" {
+				// As the host has it, for an older host.
+				rm.Repo.Source = w.Source
+			}
 		} else {
 			locals, err := workspace.List(ctx)
 			if err != nil {
@@ -218,14 +226,14 @@ func rmCurrent(cfg config.Config, cur workspace.Local, h config.Host, environmen
 		if w.Root != root || w.EnvironmentID != env {
 			continue
 		}
-		if repo, ok := cfg.RepoBySource(w.Source); ok {
+		if repo, ok := recordRepo(cfg, w.Source); ok {
 			rm.Repo, rm.Branch = repo, w.Branch
 		} else if repo, ok := cfg.RepoByName(w.Repo); ok && w.Source == "" {
 			rm.Repo, rm.Branch = repo, w.Branch
 		}
 		return rm, nil
 	}
-	if repo, ok := cfg.RepoBySource(cur.Source); ok && cur.Branch != "" {
+	if repo, ok := recordRepo(cfg, cur.Source); ok && cur.Branch != "" {
 		rm.Repo, rm.Branch = repo, cur.Branch
 	}
 	return rm, nil

@@ -1040,3 +1040,281 @@ func TestProposeAndAllocate(t *testing.T) {
 		t.Fatalf("place new %s %v", root, err)
 	}
 }
+
+// A checkout the config does not list is listed too, labelled by its
+// directory with its origin as the source, and found by rm's lookups:
+// by root, by its origin, and by that label.
+func TestUnlistedCheckoutListed(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(f.store.Dirs.Repos, "other")
+	run(t, f.store.Dirs.Repos, "git", "clone", "-q", f.remote, other)
+	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
+	root := f.store.Dirs.Worktree("other", "side")
+	run(t, other, "git", "worktree", "add", "-q", "-b", "side", root)
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Record{
+		a.Root: {Repo: "proj", Source: f.remote, Branch: "task", Root: a.Root},
+		root:   {Repo: "other", Source: "/elsewhere/other.git", Branch: "side", Root: root},
+	}
+	if len(recs) != 2 || recs[0] != want[recs[0].Root] || recs[1] != want[recs[1].Root] {
+		t.Fatalf("list %+v", recs)
+	}
+	rec, co, ok, err := f.store.Find(f.ctx, root)
+	if err != nil || !ok || co != other || rec != want[root] {
+		t.Fatalf("find: %+v %s %v %v", rec, co, ok, err)
+	}
+	for _, name := range []string{"/elsewhere/other.git", "other"} {
+		r, ok, err := f.store.Known(f.ctx, name)
+		if err != nil || !ok || r.Name != "other" || r.Source != "/elsewhere/other.git" {
+			t.Fatalf("known %s: %+v %v %v", name, r, ok, err)
+		}
+		if _, ok := f.store.Repo(name); ok {
+			t.Fatalf("%s taken for a listed repository", name)
+		}
+	}
+	if r, ok, err := f.store.Known(f.ctx, "/nowhere.git"); err != nil || ok {
+		t.Fatalf("known nowhere: %+v %v %v", r, ok, err)
+	}
+	// A listed repository keeps the config's label and source.
+	if r, ok, err := f.store.Known(f.ctx, "proj"); err != nil || !ok || r.Source != f.remote {
+		t.Fatalf("known proj: %+v %v %v", r, ok, err)
+	}
+}
+
+// The ssh and https forms of one hosted repository are one repository:
+// a checkout cloned over one is found for an add over the other, which
+// fetches with the checkout's own origin, and the store's lookups take
+// either form. git's insteadOf points both at the fixture's remote.
+func TestSourceFormsShareCheckout(t *testing.T) {
+	f := newFixture(t)
+	ssh, https := "git@example.com:laat/proj.git", "https://example.com/laat/proj"
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	write(t, global, fmt.Sprintf("[url %q]\n\tinsteadOf = %s\n\tinsteadOf = %s\n", f.remote, ssh, https))
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	store := New(f.store.Dirs, nil)
+	first, err := store.Add(f.ctx, Repo{Source: ssh, Name: "proj"}, "one", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []step
+	second, err := store.Add(f.ctx, Repo{Source: https, Name: "renamed"}, "two", func(stage, state, detail string) {
+		steps = append(steps, step{stage, state, detail})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Checkout != first.Checkout || !hasStep(steps, protocol.StageClone, protocol.StateSkip, "checkout exists") {
+		t.Fatalf("second add: %+v steps %+v", second, steps)
+	}
+	if got := strings.TrimSpace(run(t, first.Checkout, "git", "config", "--get", "remote.origin.url")); got != ssh {
+		t.Fatalf("origin changed to %s", got)
+	}
+	if co, ok, err := store.Checkout(f.ctx, Repo{Source: "ssh://git@EXAMPLE.com/laat/proj.git"}); err != nil || !ok || co != first.Checkout {
+		t.Fatalf("checkout by a third form: %s %v %v", co, ok, err)
+	}
+	listed := New(f.store.Dirs, []config.Repo{{Source: https, Name: "mine"}})
+	recs, err := listed.List(f.ctx)
+	if err != nil || len(recs) != 2 || recs[0].Repo != "mine" || recs[0].Source != https {
+		t.Fatalf("list with the other form listed: %+v %v", recs, err)
+	}
+	if r, ok := listed.Repo(ssh); !ok || r.Name != "mine" {
+		t.Fatalf("repo by the other form: %+v %v", r, ok)
+	}
+}
+
+// A checkout is asked only when one of its worktrees can be under the
+// worktrees directory: git is not run for one with none, or with all of
+// them elsewhere, which a repos directory of many checkouts relies on.
+func TestCheckoutWithoutWorktreesNotAsked(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.store.Dirs.Repos)
+	c := filepath.Join(f.store.Dirs.Repos, "plain")
+	run(t, base, "git", "clone", "-q", f.remote, c)
+	if f.store.linked(c) {
+		t.Fatal("a fresh clone is asked")
+	}
+	run(t, c, "git", "worktree", "add", "-q", "--detach", filepath.Join(base, "elsewhere"))
+	if f.store.linked(c) {
+		t.Fatal("a clone whose only worktree is elsewhere is asked")
+	}
+	// A relative gitdir is asked about: a symlink on the way to the
+	// checkout can make it point elsewhere than it looks.
+	admin := filepath.Join(c, ".git", "worktrees", "rel")
+	write(t, filepath.Join(admin, "gitdir"), "../../../../somewhere/.git\n")
+	if !f.store.linked(c) {
+		t.Fatal("a relative gitdir is not asked about")
+	}
+	if err := os.RemoveAll(admin); err != nil {
+		t.Fatal(err)
+	}
+	inside := f.store.Dirs.Worktree("plain", "x")
+	run(t, c, "git", "worktree", "add", "-q", "--detach", inside)
+	if !f.store.linked(c) {
+		t.Fatal("a clone with a worktree under the directory is not asked")
+	}
+	// Deleted by hand, the worktree is still registered, and asked
+	// about: rm prunes it.
+	if err := os.RemoveAll(inside); err != nil {
+		t.Fatal(err)
+	}
+	if !f.store.linked(c) {
+		t.Fatal("a clone with a prunable worktree under the directory is not asked")
+	}
+}
+
+// Two clones of one repository each list their worktrees, and rm's
+// lookup by branch asks both; a root two checkouts register, one after
+// the other's directory was deleted by hand, is listed once.
+func TestDuplicateClones(t *testing.T) {
+	f := newFixture(t)
+	first, _, err := f.add("one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := filepath.Join(f.store.Dirs.Repos, "proj2")
+	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, second)
+	topic := f.store.Dirs.Worktree("proj2", "topic")
+	run(t, second, "git", "worktree", "add", "-q", "-b", "topic", topic)
+	rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "topic")
+	if err != nil || !ok || co != second || rec.Root != topic {
+		t.Fatalf("by branch in the second clone: %+v %s %v %v", rec, co, ok, err)
+	}
+	if _, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "none"); err != nil || ok || co != first.Checkout {
+		t.Fatalf("by a branch nowhere: %s %v %v", co, ok, err)
+	}
+	// The branch in both clones: which is meant is not known.
+	both := f.store.Dirs.Worktree("proj2", "one")
+	run(t, second, "git", "worktree", "add", "-q", "-b", "one", both)
+	if _, _, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); ok || err == nil || !strings.Contains(err.Error(), "two clones") {
+		t.Fatalf("a branch in both clones: %v %v", ok, err)
+	}
+	// A registration in the first clone whose directory was deleted by
+	// hand does not compete with the live one in the second.
+	stale := f.store.Dirs.Worktree("proj", "stale")
+	run(t, first.Checkout, "git", "worktree", "add", "-q", "-b", "stale", stale)
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+	live := f.store.Dirs.Worktree("proj2", "stale")
+	run(t, second, "git", "worktree", "add", "-q", "-b", "stale", live)
+	if rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "stale"); err != nil || !ok || co != second || rec.Root != live {
+		t.Fatalf("a stale registration and a live worktree: %+v %s %v %v", rec, co, ok, err)
+	}
+	run(t, second, "git", "worktree", "remove", live)
+	run(t, first.Checkout, "git", "worktree", "prune")
+	run(t, second, "git", "worktree", "remove", both)
+	run(t, second, "git", "branch", "-D", "one")
+	// The first clone's worktree deleted by hand, and its root taken by
+	// the second clone for the same branch: both register it, and it is
+	// the second's, listed once and found by branch without ambiguity.
+	if err := os.RemoveAll(first.Root); err != nil {
+		t.Fatal(err)
+	}
+	run(t, second, "git", "worktree", "add", "-q", "-b", "one", first.Root)
+	if rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); err != nil || !ok || co != second || rec.Root != first.Root {
+		t.Fatalf("by branch at a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
+	}
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := map[string]Record{}
+	for _, r := range recs {
+		roots[r.Root] = r
+	}
+	if r := roots[first.Root]; len(recs) != 2 || r.Repo != "proj" || r.Branch != "one" || roots[topic].Branch != "topic" {
+		t.Fatalf("list %+v", recs)
+	}
+	// It is the second clone's, which the worktree points back to: Find
+	// names that checkout.
+	rec, co, ok, err = f.store.Find(f.ctx, first.Root)
+	if err != nil || !ok || co != second || rec.Branch != "one" {
+		t.Fatalf("find a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
+	}
+	// That directory deleted by hand too: both registrations are stale,
+	// and it is still one worktree for the branch, removed through the
+	// first, the other left prunable.
+	if err := os.RemoveAll(first.Root); err != nil {
+		t.Fatal(err)
+	}
+	rec, co, ok, err = f.store.ByBranch(f.ctx, f.repo, "one")
+	if err != nil || !ok || rec.Root != first.Root {
+		t.Fatalf("by branch with both registrations stale: %+v %s %v %v", rec, co, ok, err)
+	}
+	if removed, err := Remove(f.ctx, co, first.Root, true); err != nil || !removed {
+		t.Fatalf("remove: %v %v", removed, err)
+	}
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 || recs[0].Root != topic {
+		t.Fatalf("list after: %+v %v", recs, err)
+	}
+}
+
+// A label two repositories answer to, the config's name and a checkout
+// the config does not list, is refused rather than guessed; the source
+// still finds each.
+func TestKnownAmbiguousLabel(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("one"); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(f.store.Dirs.Repos, "renamed")
+	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, other)
+	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
+	// The listed repository's checkout is proj; the unlisted one's
+	// directory is renamed to take the listed name.
+	if err := os.Rename(f.checkout(), filepath.Join(f.store.Dirs.Repos, "listed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(other, filepath.Join(f.store.Dirs.Repos, "proj")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.Known(f.ctx, "proj"); err == nil || !strings.Contains(err.Error(), "names both") {
+		t.Fatalf("ambiguous label: %v", err)
+	}
+	for src, name := range map[string]string{f.remote: "proj", "/elsewhere/other.git": "proj"} {
+		if r, ok, err := f.store.Known(f.ctx, src); err != nil || !ok || r.Source != src || r.Name != name {
+			t.Fatalf("known %s: %+v %v %v", src, r, ok, err)
+		}
+	}
+}
+
+// A registered root whose .git cannot be told apart as a worktree's is
+// an error in the lookups rm removes through, not a guess at its clone;
+// the listing, which fails as a whole on an error, still lists it for
+// its checkout. A root that is gone is still found for rm to prune.
+func TestUnreadableDotGitIsAnError(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotgit := filepath.Join(a.Root, ".git")
+	good, err := os.ReadFile(dotgit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dotgit, "not a gitdir line\n")
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("list with a malformed .git: %+v %v", recs, err)
+	}
+	if _, _, ok, err := f.store.Find(f.ctx, a.Root); err == nil || ok {
+		t.Fatalf("find with a malformed .git: %v %v", ok, err)
+	}
+	if _, _, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); err == nil || ok {
+		t.Fatalf("by branch with a malformed .git: %v %v", ok, err)
+	}
+	write(t, dotgit, string(good))
+	if err := os.RemoveAll(a.Root); err != nil {
+		t.Fatal(err)
+	}
+	if _, co, ok, err := f.store.Find(f.ctx, a.Root); err != nil || !ok || co != a.Checkout {
+		t.Fatalf("find a root that is gone: %s %v %v", co, ok, err)
+	}
+}

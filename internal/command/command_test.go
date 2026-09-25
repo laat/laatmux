@@ -479,3 +479,18 @@ func TestDismissAtOlderDaemon(t *testing.T) {
 		t.Fatalf("dismiss at: %+v", got)
 	}
 }
+
+// An add carries its repository as this machine's config has it, the
+// top-level copy rules after the repository's own, so the host need
+// not list it.
+func TestAddRequestCarriesEntry(t *testing.T) {
+	add := Add{Repo: config.Repo{Source: "git@example.com:o/r.git", Name: "r", Copy: []string{"notes.txt"}, Setup: []string{"make"}},
+		Copy: []string{"**/.envrc.cache.enc"}, Branch: "b"}
+	e := add.Request("a1").RepoEntry
+	if e == nil || e.Source != add.Repo.Source || e.Name != "r" || strings.Join(e.Copy, ",") != "notes.txt,**/.envrc.cache.enc" || len(e.Setup) != 1 {
+		t.Fatalf("entry %+v", e)
+	}
+	if len(add.Repo.Copy) != 1 {
+		t.Fatalf("the config's list was changed: %v", add.Repo.Copy)
+	}
+}

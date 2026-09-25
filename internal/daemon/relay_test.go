@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1169,5 +1170,33 @@ func TestRelayDismissEndsSettle(t *testing.T) {
 	f.local.relay.mu.Unlock()
 	if after != 0 {
 		t.Fatalf("%d runners after dismiss", after)
+	}
+}
+
+// The relay keeps an add's repository entry with the task and sends it
+// with the add: the host resolves against it a repository its config
+// does not list, a second remote here, placed under the entry's name.
+// An entry for another source than the add's is refused at accept.
+func TestRelayRepoEntry(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "bad", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "b",
+		RepoEntry: &protocol.RepoEntry{Source: "/elsewhere.git", Name: "proj"}}); res.OK || !strings.Contains(res.Error, "entry is for") {
+		t.Fatalf("mismatched entry: %+v", res)
+	}
+	other := filepath.Join(t.TempDir(), "other.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", f.source(), other).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v %s", err, out)
+	}
+	entry := &protocol.RepoEntry{Source: other, Name: "sent", Copy: []string{".envrc"}}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "ent", Relay: "vm", Repo: other, Name: "sent", Branch: "task",
+		RepoEntry: entry, AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatalf("accept: %+v", res)
+	}
+	if p := readPending(t, f.dir, "ent"); p.RepoEntry == nil || p.RepoEntry.Name != "sent" || len(p.RepoEntry.Copy) != 1 {
+		t.Fatalf("file after accept: %+v", p)
+	}
+	p := f.awaitRecord(t, "ent", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if !p.OK || p.Root != f.store.Dirs.Worktree("sent", "task") {
+		t.Fatalf("record %+v", p)
 	}
 }

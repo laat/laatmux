@@ -69,9 +69,16 @@ func cmdRun(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		w, ok := findWorktree(snap.Worktrees, repo, branch)
+		w, ok, err := findWorktree(snap.Worktrees, repo, branch)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, run.Host.Name)
+		}
+		if w.Source != "" {
+			// As the host has it, for an older host.
+			repo.Source = w.Source
 		}
 		run.Repo, run.Branch, run.Root = repo, branch, w.Root
 	} else {
@@ -91,7 +98,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		}
 		run.Host = h
 		_, run.Root = workspace.SplitKey(cur.Key)
-		if repo, ok := cfg.RepoBySource(cur.Source); ok {
+		if repo, ok := recordRepo(cfg, cur.Source); ok {
 			run.Repo, run.Branch = repo, cur.Branch
 		}
 	}

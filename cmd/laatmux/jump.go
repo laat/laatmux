@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,7 +77,11 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	var spec workspace.Spec
-	if w, ok := matchWorktree(snap.Worktrees, cfg, rest); ok {
+	w, ok, err := matchWorktree(snap.Worktrees, cfg, rest)
+	if err != nil {
+		return err
+	}
+	if ok {
 		if w.Session == "" {
 			return errors.New(addHint(cfg, h, w))
 		}
@@ -151,29 +156,56 @@ func localRepoArg(cfg config.Config, w protocol.Worktree) string {
 // a.b and a%2eb, the target proj/a%2eb is the second branch, not the
 // first's session name. The session-name pass does not need a branch: a
 // worktree detached in place keeps its root and session, and stays the
-// same workspace.
-func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (protocol.Worktree, bool) {
+// same workspace. Two clones of one repository can each have a worktree
+// for the branch: two matches in a pass are an error naming the roots,
+// not a pick that depends on the order the records came in.
+func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (protocol.Worktree, bool, error) {
 	label, branch, _ := strings.Cut(rest, "/")
-	if local, ok := cfg.RepoByName(label); ok && branch != "" {
+	pass := func(match func(protocol.Worktree) bool) (protocol.Worktree, bool, error) {
+		var found []protocol.Worktree
 		for _, w := range ws {
-			if w.Branch == branch && sameRepo(w, local) {
-				return w, true
+			if match(w) {
+				found = append(found, w)
 			}
+		}
+		if len(found) > 1 {
+			// The later readings may tell them apart: this machine's
+			// name can be one clone's host label, and that clone's
+			// session is the target.
+			var narrowed []protocol.Worktree
+			for _, w := range found {
+				if w.Repo == label || w.Session == rest {
+					narrowed = append(narrowed, w)
+				}
+			}
+			if len(narrowed) == 1 {
+				return narrowed[0], true, nil
+			}
+		}
+		switch len(found) {
+		case 0:
+			return protocol.Worktree{}, false, nil
+		case 1:
+			return found[0], true, nil
+		}
+		roots := make([]string, len(found))
+		for i, w := range found {
+			roots[i] = w.Root
+		}
+		sort.Strings(roots)
+		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
+	}
+	if local, ok := cfg.RepoByName(label); ok && branch != "" {
+		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && sameRepo(w, local) }); ok || err != nil {
+			return w, ok, err
 		}
 	}
 	if branch != "" {
-		for _, w := range ws {
-			if w.Branch == branch && w.Repo == label {
-				return w, true
-			}
+		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && w.Repo == label }); ok || err != nil {
+			return w, ok, err
 		}
 	}
-	for _, w := range ws {
-		if w.Session != "" && w.Session == rest {
-			return w, true
-		}
-	}
-	return protocol.Worktree{}, false
+	return pass(func(w protocol.Worktree) bool { return w.Session != "" && w.Session == rest })
 }
 
 type jumpKind int
