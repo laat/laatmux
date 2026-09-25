@@ -193,7 +193,8 @@ func sidebarAttach(ctx context.Context, window string) error {
 }
 
 // sidebarAdd splits a sidebar pane off the left edge of the window, full
-// height, at the configured width, unless the window has one. The split
+// height, at sidebarWidth's width, the configured one or half a narrow
+// window, unless the window has one. The split
 // is detached so focus stays where it was, and the new pane is tagged
 // by the id split-window printed, not as the window's active pane: an
 // after-split-window hook of the user's runs between the two commands
@@ -313,10 +314,10 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 	defer unlock()
 	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}", "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"}, tmux.Sep))
 	if err != nil {
-		if tmux.NoServer(err) {
-			return nil
-		}
-		return err
+		// Best effort, on every resize: a window killed while fit
+		// waited on the lock, or no server, is nothing to fit, and an
+		// error would open over the user's pane.
+		return nil
 	}
 	sidebar, zoomed, have, windowWidth := "", "", "", 0
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
