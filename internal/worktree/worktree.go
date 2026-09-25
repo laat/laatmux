@@ -545,7 +545,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 			return Record{}, co.dir, false, err
 		}
 		for _, e := range entries {
-			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) {
+			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) {
 				rec = Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}
 				at = append(at, co.dir, e.Root)
 			}

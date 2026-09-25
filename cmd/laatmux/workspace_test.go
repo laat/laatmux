@@ -34,22 +34,22 @@ func TestMatchWorktree(t *testing.T) {
 		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "", Root: "/r/detached"},
 		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "main", Root: "/r/b"},
 	}
-	if w, ok := matchWorktree(ws, cfg, "proj/fix/v1.2"); !ok || w.Root != "/r/a" {
+	if w, ok, _ := matchWorktree(ws, cfg, "proj/fix/v1.2"); !ok || w.Root != "/r/a" {
 		t.Errorf("by the host's label: %+v %v", w, ok)
 	}
-	if w, ok := matchWorktree(ws, cfg, "mine/fix/v1.2"); !ok || w.Root != "/r/a" {
+	if w, ok, _ := matchWorktree(ws, cfg, "mine/fix/v1.2"); !ok || w.Root != "/r/a" {
 		t.Errorf("by this machine's label: %+v %v", w, ok)
 	}
-	if w, ok := matchWorktree(ws, cfg, "proj/fix/v1%2e2"); !ok || w.Root != "/r/a" {
+	if w, ok, _ := matchWorktree(ws, cfg, "proj/fix/v1%2e2"); !ok || w.Root != "/r/a" {
 		t.Errorf("by session name: %+v %v", w, ok)
 	}
-	if _, ok := matchWorktree(ws, cfg, "proj/"); ok {
+	if _, ok, _ := matchWorktree(ws, cfg, "proj/"); ok {
 		t.Error("detached worktree matched by empty branch")
 	}
 	// A worktree detached in place keeps its session and is still reached
 	// by the session's name.
 	detached := []protocol.Worktree{{Repo: "proj", Source: "git@x:o/proj.git", Branch: "", Root: "/r/d", Session: "proj/was-fix"}}
-	if w, ok := matchWorktree(detached, cfg, "proj/was-fix"); !ok || w.Root != "/r/d" {
+	if w, ok, _ := matchWorktree(detached, cfg, "proj/was-fix"); !ok || w.Root != "/r/d" {
 		t.Errorf("detached worktree by session name: %+v %v", w, ok)
 	}
 	// This machine's label wins over the host's when they name different
@@ -59,20 +59,20 @@ func TestMatchWorktree(t *testing.T) {
 		{Repo: "theirs", Source: "git@x:o/proj.git", Branch: "fix", Root: "/r/local-label"},
 	}
 	for _, order := range [][]protocol.Worktree{clash, {clash[1], clash[0]}} {
-		if w, ok := matchWorktree(order, cfg, "mine/fix"); !ok || w.Root != "/r/local-label" {
+		if w, ok, _ := matchWorktree(order, cfg, "mine/fix"); !ok || w.Root != "/r/local-label" {
 			t.Errorf("local label: %+v %v", w, ok)
 		}
-		if w, ok := matchWorktree(order, cfg, "proj/fix"); !ok || w.Root != "/r/host-label" {
+		if w, ok, _ := matchWorktree(order, cfg, "proj/fix"); !ok || w.Root != "/r/host-label" {
 			t.Errorf("host label when this machine has none: %+v %v", w, ok)
 		}
 	}
 	both := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}}}
 	for _, order := range [][]protocol.Worktree{clash, {clash[1], clash[0]}} {
-		if w, ok := matchWorktree(order, both, "proj/fix"); !ok || w.Root != "/r/local-label" {
+		if w, ok, _ := matchWorktree(order, both, "proj/fix"); !ok || w.Root != "/r/local-label" {
 			t.Errorf("local label over host label: %+v %v", w, ok)
 		}
 	}
-	if w, ok := matchWorktree(ws, cfg, "proj/main"); !ok || w.Session != "" {
+	if w, ok, _ := matchWorktree(ws, cfg, "proj/main"); !ok || w.Session != "" {
 		t.Errorf("worktree without session: %+v %v", w, ok)
 	}
 	// A branch written as is wins over another branch's encoded session
@@ -82,10 +82,10 @@ func TestMatchWorktree(t *testing.T) {
 		{Repo: "proj", Branch: "a%2eb", Root: "/r/pct", Session: "proj/a%252eb"},
 	}
 	for _, order := range [][]protocol.Worktree{ambiguous, {ambiguous[1], ambiguous[0]}} {
-		if w, ok := matchWorktree(order, cfg, "proj/a%2eb"); !ok || w.Root != "/r/pct" {
+		if w, ok, _ := matchWorktree(order, cfg, "proj/a%2eb"); !ok || w.Root != "/r/pct" {
 			t.Errorf("raw branch target: %+v %v", w, ok)
 		}
-		if w, ok := matchWorktree(order, cfg, "proj/a.b"); !ok || w.Root != "/r/dot" {
+		if w, ok, _ := matchWorktree(order, cfg, "proj/a.b"); !ok || w.Root != "/r/dot" {
 			t.Errorf("dotted branch target: %+v %v", w, ok)
 		}
 	}
@@ -287,5 +287,27 @@ func TestOriginOf(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("missing git read as no origin")
+	}
+}
+
+// A jump target two clones of one repository both match is an error
+// naming the roots, whatever order the records came in.
+func TestMatchWorktreeAmbiguous(t *testing.T) {
+	cfg, err := config.Parse([]byte("repos:\n  - source: git@x:o/proj.git\n    name: mine\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := []protocol.Worktree{
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "topic", Root: "/r/a", Session: "proj/topic"},
+		{Repo: "proj2", Source: "https://x/o/proj", Branch: "topic", Root: "/r/b", Session: "proj2/topic"},
+	}
+	for _, ws := range [][]protocol.Worktree{two, {two[1], two[0]}} {
+		if w, ok, err := matchWorktree(ws, cfg, "mine/topic"); ok || err == nil || !strings.Contains(err.Error(), "/r/a and /r/b") {
+			t.Errorf("two clones: %+v %v %v", w, ok, err)
+		}
+		// The host's label or the session name tells them apart.
+		if w, ok, err := matchWorktree(ws, cfg, "proj2/topic"); err != nil || !ok || w.Root != "/r/b" {
+			t.Errorf("by the host's label: %+v %v %v", w, ok, err)
+		}
 	}
 }

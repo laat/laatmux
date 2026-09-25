@@ -1198,11 +1198,15 @@ func TestDuplicateClones(t *testing.T) {
 	run(t, second, "git", "worktree", "remove", both)
 	run(t, second, "git", "branch", "-D", "one")
 	// The first clone's worktree deleted by hand, and its root taken by
-	// the second clone: both register it, and it is listed once.
+	// the second clone for the same branch: both register it, and it is
+	// the second's, listed once and found by branch without ambiguity.
 	if err := os.RemoveAll(first.Root); err != nil {
 		t.Fatal(err)
 	}
-	run(t, second, "git", "worktree", "add", "-q", "-b", "again", first.Root)
+	run(t, second, "git", "worktree", "add", "-q", "-b", "one", first.Root)
+	if rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); err != nil || !ok || co != second || rec.Root != first.Root {
+		t.Fatalf("by branch at a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
+	}
 	recs, err := f.store.List(f.ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1211,13 +1215,13 @@ func TestDuplicateClones(t *testing.T) {
 	for _, r := range recs {
 		roots[r.Root] = r
 	}
-	if r := roots[first.Root]; len(recs) != 2 || r.Repo != "proj" || r.Branch != "again" || roots[topic].Branch != "topic" {
+	if r := roots[first.Root]; len(recs) != 2 || r.Repo != "proj" || r.Branch != "one" || roots[topic].Branch != "topic" {
 		t.Fatalf("list %+v", recs)
 	}
 	// It is the second clone's, which the worktree points back to: Find
 	// names that checkout, and git removes it from there.
 	rec, co, ok, err = f.store.Find(f.ctx, first.Root)
-	if err != nil || !ok || co != second || rec.Branch != "again" {
+	if err != nil || !ok || co != second || rec.Branch != "one" {
 		t.Fatalf("find a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
 	}
 	if removed, err := Remove(f.ctx, co, first.Root, true); err != nil || !removed {
