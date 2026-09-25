@@ -638,7 +638,9 @@ is switched to.
   detail or the reason. The worktree row at the same root is not drawn
   while a task for it stands, and the task's row takes its agent and
   session: `Enter` jumps once the add is done and does nothing while it
-  runs.
+  runs, and refuses a task whose host is removed or now answers as
+  another machine. `p` and `x` on a task's row work in the sidebar as
+  in the dashboard, the sidebar's only keys that act.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the
   view redraws at that rate only while a working row is on the list. A

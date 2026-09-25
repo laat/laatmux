@@ -368,10 +368,19 @@ func Build(in Input) Rows {
 		rows = append(rows, r)
 	}
 	// The host lists the agent in the task's session before the
-	// worktree that has it; the task takes that agent too, so it is
-	// not a row of its own meanwhile.
+	// worktree that has it, and a jump makes the local session before
+	// the listing too; the task takes both by what the host reported,
+	// so the agent is not a row of its own meanwhile, the session not a
+	// stale one, and the viewer's own row is followed.
 	for i := range pendings {
 		p := pendings[i].Pending
+		if p.EnvironmentID != "" && p.Root != "" {
+			key := workspace.Key(p.EnvironmentID, p.Root)
+			seenKey[key] = true
+			if l := byKey[key]; l != nil && pendings[i].Local == nil {
+				pendings[i].Local = l
+			}
+		}
 		if pendings[i].Agent != nil || p.EnvironmentID == "" || p.Session == "" {
 			continue
 		}

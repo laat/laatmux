@@ -79,10 +79,31 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 				return d.jump(m, *m.Selection())
 			case actions:
 				return d.act(m, a)
+			case taskAction(m, a):
+				// The sidebar takes a task's p and x, and what follows
+				// from them, and none of the dashboard's other keys.
+				return d.act(m, a)
 			}
 			return false
 		},
 	})
+}
+
+// taskAction is an action on a pending task: p or x on a task's row,
+// the answer to the dismiss question, or the end of the log they put
+// up. The sidebar, without the dashboard's keys, takes these.
+func taskAction(m *view.Model, a view.Action) bool {
+	switch a.Kind {
+	case view.ActionOther:
+		r := m.Selection()
+		return r != nil && r.Pending != nil && a.Key.Kind == view.KeyRune && (a.Key.Rune == 'p' || a.Key.Rune == 'x' || a.Key.Rune == 'X')
+	case view.ActionConfirm:
+		return m.ConfirmTag == "dismiss"
+	case view.ActionOverlay:
+		_, ok := m.Overlay.(*view.Log)
+		return ok
+	}
+	return false
 }
 
 // dialMergedOrExplain connects to the local daemon's merged stream. A
@@ -179,14 +200,11 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Stale {
 		return switchTo(ctx, r.Local.Name)
 	}
-	if p := r.Pending; p != nil && r.Worktree == nil {
-		// A task whose worktree row is not listed yet jumps by what the
-		// host reported: the managed session at the root.
-		if p.Session == "" || p.Root == "" || p.EnvironmentID == "" {
-			return errors.New(r.Name + ": no session yet")
+	if r.Pending != nil {
+		var err error
+		if r, err = pendingTarget(r); err != nil {
+			return err
 		}
-		r.Worktree = &protocol.Worktree{ID: p.WorktreeID(), EnvironmentID: p.EnvironmentID, Root: p.Root,
-			Repo: p.Repo, Branch: p.Branch, Source: p.Source, Session: p.Session}
 	}
 	if r.Host == "" {
 		return errors.New(r.Name + ": no configured host claims this record")
@@ -219,6 +237,39 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 		return err
 	}
 	return switchTo(ctx, name)
+}
+
+// pendingTarget is a pending task's row made ready for the jump: a
+// task whose host is gone or answers as another machine is refused,
+// and one whose worktree row is not listed yet, or is listed from
+// before the add gave it a session, jumps by what the host reported,
+// the managed session at the root.
+func pendingTarget(r rows.Row) (rows.Row, error) {
+	p := r.Pending
+	switch {
+	case r.Removed:
+		return r, errors.New(r.Name + ": host removed from the config")
+	case p.Mismatch != "":
+		// The name reaches another machine now: its session of the
+		// same name is not this task's.
+		return r, errors.New(r.Name + ": host replaced: " + p.Mismatch)
+	case r.Worktree != nil && r.Worktree.Session != "":
+	case p.Session == "" || p.Root == "" || p.EnvironmentID == "":
+		if r.Worktree == nil {
+			return r, errors.New(r.Name + ": no session yet")
+		}
+	default:
+		// The worktree row is not listed yet, or is listed from before
+		// the add gave it a session: the jump goes by what the host
+		// reported, the managed session at the root.
+		w := protocol.Worktree{ID: p.WorktreeID(), EnvironmentID: p.EnvironmentID, Root: p.Root, Repo: p.Repo, Branch: p.Branch, Source: p.Source}
+		if r.Worktree != nil {
+			w = *r.Worktree
+		}
+		w.Session = p.Session
+		r.Worktree = &w
+	}
+	return r, nil
 }
 
 // switchTo makes the session current for the client the view runs in,

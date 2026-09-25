@@ -797,3 +797,74 @@ func TestPendingKeys(t *testing.T) {
 		t.Fatalf("dismissed %q message %q", dismissed, m.Message)
 	}
 }
+
+// The jump on a task's row: refused on a host removed or replaced,
+// by the reported session when the worktree row is not listed or has
+// no session yet, and by the worktree row when it has one.
+func TestPendingTarget(t *testing.T) {
+	p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix", Done: true, OK: true}
+	row := func(p protocol.Pending, w *protocol.Worktree, removed bool) rows.Row {
+		return rows.Row{Host: "vm", Name: "proj/fix", Pending: &p, Worktree: w, Removed: removed}
+	}
+	if _, err := pendingTarget(row(p, nil, true)); err == nil || !strings.Contains(err.Error(), "host removed") {
+		t.Fatalf("removed: %v", err)
+	}
+	replaced := p
+	replaced.Mismatch = "venv is now wenv"
+	if _, err := pendingTarget(row(replaced, &protocol.Worktree{Session: "proj/fix"}, false)); err == nil || !strings.Contains(err.Error(), "host replaced") {
+		t.Fatalf("replaced: %v", err)
+	}
+	r, err := pendingTarget(row(p, nil, false))
+	if err != nil || r.Worktree == nil || r.Worktree.Session != "proj/fix" || r.Worktree.ID != "venv/worktree//w/proj/fix" {
+		t.Fatalf("unlisted: %+v %v", r.Worktree, err)
+	}
+	bare := &protocol.Worktree{ID: "venv/worktree//w/proj/fix", EnvironmentID: "venv", Root: "/w/proj/fix", Source: "src"}
+	r, err = pendingTarget(row(p, bare, false))
+	if err != nil || r.Worktree.Session != "proj/fix" || r.Worktree.Source != "src" || bare.Session != "" {
+		t.Fatalf("listed without a session: %+v %v", r.Worktree, err)
+	}
+	early := p
+	early.Session = ""
+	if _, err := pendingTarget(row(early, nil, false)); err == nil || !strings.Contains(err.Error(), "no session yet") {
+		t.Fatalf("no session: %v", err)
+	}
+}
+
+// The sidebar takes a task's p and x and what follows from them, and
+// nothing else of the dashboard's.
+func TestTaskAction(t *testing.T) {
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetRows(rows.Build(rows.Input{
+		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings:  []protocol.Pending{{ID: "add-1", Host: "vm", Repo: "proj", Branch: "fix", SubmittedAt: time.Now()}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}},
+	}))
+	m.Handle(view.Key{Rune: 'g'})
+	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: view.Key{Rune: r}} }
+	for _, r := range []rune{'p', 'x', 'X'} {
+		if !taskAction(m, other(r)) {
+			t.Errorf("%c on a task's row not taken", r)
+		}
+	}
+	for _, r := range []rune{'a', 's', 'S'} {
+		if taskAction(m, other(r)) {
+			t.Errorf("%c taken on a task's row", r)
+		}
+	}
+	m.Handle(view.Key{Rune: 'j'}) // the worktree row
+	if taskAction(m, other('x')) {
+		t.Error("x taken on a worktree row")
+	}
+	m.Ask("dismiss?", "dismiss")
+	if !taskAction(m, view.Action{Kind: view.ActionConfirm}) {
+		t.Error("the dismiss answer not taken")
+	}
+	m.Ask("remove?", "rm")
+	if taskAction(m, view.Action{Kind: view.ActionConfirm}) {
+		t.Error("the rm answer taken")
+	}
+	m.Overlay = view.NewLog("t")
+	if !taskAction(m, view.Action{Kind: view.ActionOverlay}) {
+		t.Error("a log's end not taken")
+	}
+}

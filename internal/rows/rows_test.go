@@ -249,18 +249,22 @@ func TestBuildPending(t *testing.T) {
 	if byID["add-3"].Alias() != "" {
 		t.Error("an alias before the root is known")
 	}
-	// The agent listed before its worktree: the task that reported the
-	// session takes it, and it is no row of its own.
+	// The agent and the local session before the worktree listing: the
+	// task that reported the session takes the agent, both tasks for
+	// the root take the local session, and neither is a row of its own.
 	in.Worktrees = in.Worktrees[1:]
 	got = Build(in)
 	for _, r := range got.All() {
-		if r.Pending == nil && r.Agent != nil && r.Agent.Session == "proj/task" {
-			t.Fatalf("the task's agent is a row of its own: %q", r.ID())
+		if r.Pending == nil && ((r.Agent != nil && r.Agent.Session == "proj/task") || (r.Local != nil && r.Local.Name == "vm/proj/task")) {
+			t.Fatalf("the task's agent or session is a row of its own: %q stale %v", r.ID(), r.Stale)
 		}
 	}
 	for _, r := range got.Main {
 		if r.ID() == "add-1" && (r.Agent == nil || r.Agent.Session != "proj/task") {
 			t.Fatalf("%s did not take the agent in its session", r.ID())
+		}
+		if (r.ID() == "add-1" || r.ID() == "add-2") && (r.Local == nil || !r.Current) {
+			t.Fatalf("%s did not take the local session: %v current %v", r.ID(), r.Local, r.Current)
 		}
 	}
 }
