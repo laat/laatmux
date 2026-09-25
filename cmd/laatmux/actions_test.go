@@ -1001,11 +1001,14 @@ func TestClickJumpRefocuses(t *testing.T) {
 	if refocused != 1 || len(jumped) != 1 || jumped[0] != row.ID() {
 		t.Fatalf("sidebar click: refocused %d jumped %v", refocused, jumped)
 	}
-	// A jump refused leaves the focus on the view, with the message.
+	// A jump refused leaves the focus on the view, with the message,
+	// and selects the row clicked, ending the following.
 	jumpErr = errors.New("no session")
-	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
-	if refocused != 1 || m.Message != "no session" {
-		t.Fatalf("refused: refocused %d message %q", refocused, m.Message)
+	m.Follow = true
+	other := m.Visible()[1].Row
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: other, Mouse: true})
+	if refocused != 1 || m.Message != "no session" || m.Follow || m.Selection() == nil || m.Selection().ID() != other.ID() {
+		t.Fatalf("refused: refocused %d message %q follow %v selected %+v", refocused, m.Message, m.Follow, m.Selection())
 	}
 	jumpErr = nil
 	// A click on a task still running jumps nowhere and keeps the focus.

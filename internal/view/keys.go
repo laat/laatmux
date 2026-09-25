@@ -1,12 +1,13 @@
 package view
 
 import (
-	"github.com/laat/laatmux/internal/rows"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/laat/laatmux/internal/rows"
 )
 
 // Key is one input event: a rune, a special key, a mouse event, or a
@@ -811,6 +812,20 @@ func (m *Model) jump() Action {
 		return Action{}
 	}
 	return Action{Kind: ActionJump, Row: r}
+}
+
+// Select puts the selection on the visible row with the id, as a key
+// would, which makes it the user's: the host's answer to a click that
+// jumped nowhere, so the row clicked is the one the next key acts on.
+// False when no visible row has the id.
+func (m *Model) Select(id string) bool {
+	for _, it := range m.Visible() {
+		if it.Row.ID() == id {
+			m.moveTo(it.Index)
+			return true
+		}
+	}
+	return false
 }
 
 // jumpTo is a jump to the visible row at i, by a click or a digit. A

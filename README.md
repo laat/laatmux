@@ -685,8 +685,13 @@ is switched to.
   the sidebar, tmux's click binding makes the sidebar the active pane,
   so a click that jumps makes the pane that was active before it the
   active one again (`last-pane`), and typing goes where it went before
-  the click, whether the jump left the session or stayed in it; a click
-  that hits no row leaves the sidebar focused, for its keys. A
+  the click, whether the jump left the session or stayed in it. That
+  rests on tmux's default click binding, which selects the pane
+  clicked; a sidebar focused with the keyboard before the click gives
+  the focus to the pane active before it. A click that hits no row, or
+  a click whose jump did not happen, on a task still running or one
+  refused with a message, leaves the sidebar focused and selects the
+  row clicked, so the message and `p` and `x` are about it. A
   task's row hands the selection to its worktree row when it hands
   over, through the handoffs the merged stream carries for a day even
   when the view missed the steps between. A selected row that goes with
