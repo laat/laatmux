@@ -338,3 +338,36 @@ func TestRelayRecheckAndRetired(t *testing.T) {
 		t.Fatal("persist spun on a retired record")
 	}
 }
+
+// A host restarted with its listing failing: the reconnect's snapshot
+// has no stamp, and the first successful listing comes as a stamp
+// upsert. It is fresh, and checked though it reads as the listing the
+// task was checked against before the disconnect; a later one that
+// reads the same is not.
+func TestRelayFreshStampAfterUnstampedSnapshot(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	p := notDelivered(t, f, "n8", "fresh")
+	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
+	f.local.mu.Unlock()
+	// The task was checked against a listing without its worktree, and
+	// found present.
+	f.local.relay.mu.Lock()
+	f.local.relay.checked["n8"] = "henv\x00"
+	f.local.relay.mu.Unlock()
+	rmOnHost(t, f, "rm-n8", "fresh", p.Root)
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeUpsert, Listing: &protocol.Listing{Generation: 2, Revision: 1}})
+	f.awaitRecord(t, "n8", 30*time.Second, func(p pendingFile) bool { return p.Gone })
+	f.local.mu.Lock()
+	listed := mh.listed
+	f.local.mu.Unlock()
+	if !listed {
+		t.Fatal("the connection's listing was not recorded")
+	}
+}

@@ -47,6 +47,10 @@ type mergedHost struct {
 	agents    map[string]protocol.Agent    // by id; empty for the local host, whose records are the daemon's own
 	worktrees map[string]protocol.Worktree // by id
 	cancel    context.CancelFunc           // stops the follow goroutine; nil while not following
+	// listed is that the current connection has delivered a successful
+	// listing: a snapshot with its stamp, or a stamp upsert after one
+	// without. Its first is fresh, checked whatever came before.
+	listed bool
 }
 
 // mergedSubscribe registers a merged subscriber and returns its snapshot.
@@ -445,7 +449,9 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		// A successful listing: a task on the host whose worktree it
 		// lacks, removed while this daemon was down say, is checked. A
 		// snapshot without the stamp has no listing behind it.
-		if msg.Listing != nil {
+		// Every snapshot begins a connection's stream.
+		mh.listed = msg.Listing != nil
+		if mh.listed {
 			listed := map[string]bool{}
 			for id := range mh.worktrees {
 				listed[id] = true
@@ -465,7 +471,11 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			for id := range mh.worktrees {
 				listed[id] = true
 			}
-			d.hostListedLocked(mh.status.EnvironmentID, listed, false)
+			// The connection's first listing, after a snapshot a failing
+			// listing left without its stamp, is fresh as a stamped
+			// snapshot is.
+			d.hostListedLocked(mh.status.EnvironmentID, listed, !mh.listed)
+			mh.listed = true
 		}
 		if msg.Agent != nil {
 			mh.agents[msg.Agent.ID] = *msg.Agent
