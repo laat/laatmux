@@ -219,3 +219,70 @@ func TestTrustWatcherBounds(t *testing.T) {
 		t.Fatalf("StopRuns left %d watchers", n)
 	}
 }
+
+// A screen that does not show the cursor on yes after the move, lagging
+// or with the key gone astray, gets no second move and no Enter.
+func TestTrustNoSecondMove(t *testing.T) {
+	was := trustPoll
+	trustPoll = 10 * time.Millisecond
+	t.Cleanup(func() { trustPoll = was })
+	shortWait(t, 500*time.Millisecond)
+	d, ft, store, remote := taskDaemon(t, nil, nil)
+	root := store.Dirs.Worktree("proj", "lag")
+	ft.set(func() { ft.screen = trustScreen(root, false) }) // Down changes nothing
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "t3", Repo: remote, Branch: "lag", AgentName: "claude", Prompt: "do the thing"})
+	if res, _ := result(t, pc, "t3"); !res.OK || res.Prompt != protocol.DeliveryNotDelivered {
+		t.Fatalf("result %+v", res)
+	}
+	time.Sleep(100 * time.Millisecond)
+	ft.mu.Lock()
+	keys := append([][]string(nil), ft.keys...)
+	ft.mu.Unlock()
+	if len(keys) != 1 || strings.Join(keys[0], " ") != "%1 Down" {
+		t.Fatalf("keys %v, want one Down", keys)
+	}
+}
+
+// A prompt on the command line waits behind the question too: the
+// watcher answers it after the add has returned delivered.
+func TestAddArgvAnswersTrust(t *testing.T) {
+	was := trustPoll
+	trustPoll = 10 * time.Millisecond
+	t.Cleanup(func() { trustPoll = was })
+	shortWait(t, 10*time.Second)
+	d, ft, store, remote := taskDaemon(t, nil, map[string][]string{"claude": {"claude", PromptPlaceholder}})
+	root := store.Dirs.Worktree("proj", "argv")
+	ft.set(func() {
+		ft.screen = trustScreen(root, false)
+		ft.onKeys = func(f *fakeServer, keys []string) {
+			switch keys[len(keys)-1] {
+			case "Down":
+				f.screen = trustScreen(root, true)
+			case "Enter":
+				f.screen = idleScreen
+			}
+		}
+	})
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "t4", Repo: remote, Branch: "argv", AgentName: "claude", Prompt: "do the thing"})
+	if res, _ := result(t, pc, "t4"); !res.OK || res.Prompt != protocol.DeliveryDelivered {
+		t.Fatalf("result %+v", res)
+	}
+	for i := 0; ; i++ {
+		ft.mu.Lock()
+		n := len(ft.keys)
+		last := ""
+		if n > 0 {
+			last = ft.keys[n-1][1]
+		}
+		ft.mu.Unlock()
+		if n == 2 && last == "Enter" {
+			break
+		}
+		if i > 300 {
+			t.Fatalf("the question was not answered: %d keys", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

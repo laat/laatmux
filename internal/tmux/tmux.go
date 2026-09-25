@@ -412,6 +412,12 @@ func Submitted(err error) bool {
 	return errors.As(err, &se)
 }
 
+// SendKeys presses tmux key names in the pane, Down or Enter say.
+func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) error {
+	_, err := s.Run(ctx, append([]string{"send-keys", "-t", paneID}, keys...)...)
+	return err
+}
+
 // Paste types text into a pane as one bracketed paste followed by Enter,
 // through a buffer named for the caller: load-buffer reads the text from
 // stdin, so it is never on a command line; paste-buffer -p sends it
@@ -421,12 +427,6 @@ func Submitted(err error) bool {
 // got: a PasteError whose Step is "load" or "paste" means nothing
 // reached the pane, "enter" means the text did and the submit may not
 // have.
-// SendKeys presses tmux key names in the pane, Down or Enter say.
-func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) error {
-	_, err := s.Run(ctx, append([]string{"send-keys", "-t", paneID}, keys...)...)
-	return err
-}
-
 func (s Server) Paste(ctx context.Context, buffer, paneID, text string) error {
 	defer func() {
 		// The deletion has its own bounded context: a ctx cancelled

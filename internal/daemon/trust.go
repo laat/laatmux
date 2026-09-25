@@ -197,14 +197,14 @@ func (d *Daemon) startTrust(t trustTarget, wait, poll time.Duration) {
 // stops once it has answered, the prompt box is up, the pane is taken
 // by another session or server, the capture fails, or ctx ends.
 func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
-	presses := 0
+	moved := false
 	for ctx.Err() == nil {
 		gone, claude, ready := d.trustState(t)
 		if gone || ready {
 			return
 		}
 		if claude {
-			done, stop := d.trustStep(ctx, t, &presses)
+			done, stop := d.trustStep(ctx, t, &moved)
 			if done || stop {
 				return
 			}
@@ -216,10 +216,15 @@ func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Durat
 	}
 }
 
-// trustStep is one look and, when the question is there, one press,
-// under the root's delivery lock. done is that Enter was pressed; stop
-// that the watcher should give up.
-func (d *Daemon) trustStep(ctx context.Context, t trustTarget, presses *int) (done, stop bool) {
+// trustStep is one look and, when the question is there, one action,
+// under the root's delivery lock: the moves that bring the cursor to
+// yes, pressed once and never again, or Enter with the cursor on yes.
+// The cursor starts off yes, so a capture that shows it on yes after the
+// moves was made after them; one that still shows it elsewhere is a
+// screen that lags or keys that went astray, and the watcher gives up
+// rather than press more. done is that Enter was pressed; stop that the
+// watcher should give up.
+func (d *Daemon) trustStep(ctx context.Context, t trustTarget, moved *bool) (done, stop bool) {
 	unlock := d.lockDeliveries(t.root)
 	defer unlock()
 	if gone, claude, _ := d.trustState(t); gone || !claude {
@@ -233,22 +238,26 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, presses *int) (do
 	if !ok {
 		return false, false
 	}
-	key := "Enter"
-	switch {
-	case moves > 0:
-		key = "Down"
-	case moves < 0:
-		key = "Up"
-	}
-	if *presses >= 4 {
-		return false, true
-	}
-	*presses++
-	if err := d.managed.Tmux.SendKeys(ctx, t.pane, key); err != nil {
-		return false, true
-	}
-	if key != "Enter" {
+	if moves != 0 {
+		if *moved {
+			return false, true
+		}
+		key, n := "Down", moves
+		if moves < 0 {
+			key, n = "Up", -moves
+		}
+		keys := make([]string, n)
+		for i := range keys {
+			keys[i] = key
+		}
+		*moved = true
+		if err := d.managed.Tmux.SendKeys(ctx, t.pane, keys...); err != nil {
+			return false, true
+		}
 		return false, false
+	}
+	if err := d.managed.Tmux.SendKeys(ctx, t.pane, "Enter"); err != nil {
+		return false, true
 	}
 	d.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
 	return true, false
