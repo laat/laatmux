@@ -34,7 +34,9 @@ func SameSource(a, b string) bool { return a == b || SourceKey(a) == SourceKey(b
 func forge(source string) (host, path string, ok bool) {
 	if i := strings.Index(source, "://"); i >= 0 {
 		u, err := url.Parse(source)
-		if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		// An escaped path or an empty query is not the forge's plain
+		// form: %2F can name another resource than a slash.
+		if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || u.Opaque != "" || u.RawPath != "" || strings.Contains(u.Path, "%") {
 			return "", "", false
 		}
 		switch strings.ToLower(u.Scheme) {

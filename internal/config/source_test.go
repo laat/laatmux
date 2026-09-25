@@ -47,6 +47,10 @@ func TestSameSource(t *testing.T) {
 		{"http://host:8080/o/r", "http://host/o/r"},
 		{"/src/laatmux", "/src/laatmux.git"},
 		{"/src/laatmux", "file:///src/laatmux"},
+		// Escapes and an empty query are not the plain form.
+		{"https://example.com/o%2Fr", "https://example.com/o/r"},
+		{"https://example.com/o/r?", "https://example.com/o/r"},
+		{"https://example.com/o/r%2Egit", "https://example.com/o/r"},
 		// A source that spells another's key is not that source.
 		{"forge:example.com/o/r", "https://example.com/o/r"},
 		{SourceKey("https://example.com/o/r"), "https://example.com/o/r"},

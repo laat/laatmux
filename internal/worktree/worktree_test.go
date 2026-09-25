@@ -1284,3 +1284,36 @@ func TestKnownAmbiguousLabel(t *testing.T) {
 		}
 	}
 }
+
+// A registered root whose .git cannot be told apart as a worktree's is
+// an error in the listing and the lookups, not a guess at its clone; a
+// root that is gone is still found for rm to prune.
+func TestUnreadableDotGitIsAnError(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotgit := filepath.Join(a.Root, ".git")
+	good, err := os.ReadFile(dotgit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dotgit, "not a gitdir line\n")
+	if recs, err := f.store.List(f.ctx); err == nil || len(recs) != 0 {
+		t.Fatalf("list with a malformed .git: %+v %v", recs, err)
+	}
+	if _, _, ok, err := f.store.Find(f.ctx, a.Root); err == nil || ok {
+		t.Fatalf("find with a malformed .git: %v %v", ok, err)
+	}
+	if _, _, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); err == nil || ok {
+		t.Fatalf("by branch with a malformed .git: %v %v", ok, err)
+	}
+	write(t, dotgit, string(good))
+	if err := os.RemoveAll(a.Root); err != nil {
+		t.Fatal(err)
+	}
+	if _, co, ok, err := f.store.Find(f.ctx, a.Root); err != nil || !ok || co != a.Checkout {
+		t.Fatalf("find a root that is gone: %s %v %v", co, ok, err)
+	}
+}

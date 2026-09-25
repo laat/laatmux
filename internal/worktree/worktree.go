@@ -382,7 +382,15 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 			// A root two checkouts register, one after the other's
 			// directory was deleted by hand, is listed once, for the
 			// checkout the worktree points back to, as Find finds it.
-			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) || !pointsBack(e.Root, co.dir) {
+			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
+				continue
+			}
+			// A root whose owner cannot be told is left out, with the
+			// error, as a checkout that fails to list is.
+			if mine, err := pointsBack(e.Root, co.dir); err != nil {
+				errs = append(errs, err)
+				continue
+			} else if !mine {
 				continue
 			}
 			seen[e.Root] = true
@@ -454,16 +462,24 @@ func resolveExisting(p string) (string, bool) {
 // .git/worktrees. A checkout whose worktree directory was deleted by hand
 // keeps its registration, and another checkout can then add a worktree
 // at the same root; git lists the root in both, and only the one it
-// points back to can remove it. What cannot be read is taken as the
-// checkout's, so a worktree whose directory is gone is still found.
-func pointsBack(root, checkout string) bool {
-	b, err := os.ReadFile(filepath.Join(root, ".git"))
+// points back to can remove it. A root that is gone is taken as the
+// checkout's, so a worktree deleted by hand is still found for rm to
+// prune; one pointing at an administrative directory that is gone is
+// no checkout's. A .git that cannot be read or is not a worktree's is
+// an error rather than a guess, which would hand the root to whichever
+// clone comes first.
+func pointsBack(root, checkout string) (bool, error) {
+	dotgit := filepath.Join(root, ".git")
+	b, err := os.ReadFile(dotgit)
 	if err != nil {
-		return true
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return true, nil
+		}
+		return false, fmt.Errorf("%s: %w", dotgit, err)
 	}
 	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
 	if !ok {
-		return true
+		return false, fmt.Errorf("%s is not a worktree's .git file", dotgit)
 	}
 	gitdir = strings.TrimSpace(gitdir)
 	if !filepath.IsAbs(gitdir) {
@@ -471,13 +487,19 @@ func pointsBack(root, checkout string) bool {
 	}
 	admin, err := filepath.EvalSymlinks(filepath.Dir(gitdir))
 	if err != nil {
-		return true
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("%s: %w", dotgit, err)
 	}
 	want, err := filepath.EvalSymlinks(filepath.Join(checkout, ".git", "worktrees"))
 	if err != nil {
-		return true
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
-	return admin == want
+	return admin == want, nil
 }
 
 // Find locates a registered worktree by root across every main checkout
@@ -503,7 +525,12 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 			return Record{}, "", false, err
 		}
 		for _, e := range entries {
-			if e.Root == root && e.Root != co.dir && pointsBack(root, co.dir) {
+			if e.Root != root || e.Root == co.dir {
+				continue
+			}
+			if mine, err := pointsBack(root, co.dir); err != nil {
+				return Record{}, "", false, err
+			} else if mine {
 				r := s.label(co)
 				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
 			}
@@ -550,8 +577,14 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 			return Record{}, co.dir, false, err
 		}
 		for _, e := range entries {
-			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) && pointsBack(e.Root, co.dir) &&
-				!slices.ContainsFunc(matches, func(m match) bool { return m.rec.Root == e.Root }) {
+			if e.Branch != branch || e.Root == co.dir || !s.Owns(e.Root) {
+				continue
+			}
+			mine, err := pointsBack(e.Root, co.dir)
+			if err != nil {
+				return Record{}, co.dir, false, err
+			}
+			if mine && !slices.ContainsFunc(matches, func(m match) bool { return m.rec.Root == e.Root }) {
 				// A root two checkouts still register once its directory
 				// is gone is one worktree: the first checkout's
 				// registration removes it, the other is prunable.
