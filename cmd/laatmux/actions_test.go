@@ -425,6 +425,17 @@ func TestBuildForm(t *testing.T) {
 	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
 		t.Fatalf("after the user's host: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
 	}
+	// Picking the value already shown is the user's choice too.
+	form = buildForm(cfg, f, last, "proj", "", "", caps)
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the agent chip
+	form.Handle(view.Key{Kind: view.KeyEnter})    // the picker on claude
+	form.Handle(view.Key{Kind: view.KeyEnter})    // accept claude
+	form.Handle(view.Key{Kind: view.KeyShiftTab})
+	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
+	form.Handle(view.Key{Kind: view.KeyRight})    // other: last agent codex
+	if form.Chips[0].Label() != "other" || form.Chips[2].Label() != "claude" || form.Chips[1].Label() != "vm" {
+		t.Fatalf("picked agent kept: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
 	// A worktree row without a session: repository, host and branch
 	// from the record, the branch explicit.
 	form = buildForm(cfg, f, last, "proj", "mac", "existing", caps)
@@ -477,24 +488,47 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	}
 }
 
-// The screen a foreground add leaves when its prompt did not reach the
-// agent: the state and reason as the error, and the prompt's lines to
-// copy, waiting for a key.
-func TestUndeliveredLog(t *testing.T) {
-	add := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "one\ntwo"}
+// The notice a foreground add leaves when its prompt did not reach the
+// agent: the state and reason, the session, and the prompt's lines to
+// copy, wrapped, scrollable, until dismissed; nothing when the prompt
+// was delivered or there was none; shown whatever else went wrong.
+func TestUndelivered(t *testing.T) {
+	add := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "one\ntwo " + strings.Repeat("long ", 30)}
 	res := command.Added{Done: true, Root: "/r/b", Managed: "proj/b", Prompt: protocol.DeliveryNotDelivered, Reason: "session existed"}
-	log := undeliveredLog(add, res)
-	if log.Done() {
-		t.Fatal("done before a key")
+	n := undelivered(add, res)
+	if n == nil || n.Done() {
+		t.Fatal("no notice, or done before a key")
 	}
-	text := view.Text(log.Render(80, 12))
-	for _, want := range []string{"proj/b", "one", "two", "prompt not delivered: session existed"} {
+	text := view.Text(n.Render(40, 8))
+	for _, want := range []string{"proj/b", "one", "prompt not delivered: session existed"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in\n%s", want, text)
 		}
 	}
-	log.Handle(view.Key{Rune: 'x'})
-	if !log.Done() {
-		t.Fatal("a key did not end it")
+	for _, l := range strings.Split(text, "\n") {
+		if len([]rune(l)) > 40 {
+			t.Fatalf("line wider than the screen: %q", l)
+		}
+	}
+	// The long line is wrapped and reachable by scrolling; a stray key
+	// does not dismiss.
+	n.Handle(view.Key{Rune: 'x'})
+	for range 20 {
+		n.Handle(view.Key{Kind: view.KeyDown})
+	}
+	if n.Done() || !strings.Contains(view.Text(n.Render(40, 8)), "long long") {
+		t.Fatalf("scrolled:\n%s", view.Text(n.Render(40, 8)))
+	}
+	n.Handle(view.Key{Kind: view.KeyEnter})
+	if !n.Done() {
+		t.Fatal("enter did not end it")
+	}
+	// A launch that failed with the delivery unknown, no session.
+	failed := command.Added{Done: false, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
+	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") {
+		t.Fatal("no notice for an unknown delivery on a failed add")
+	}
+	if undelivered(add, command.Added{Done: true, Prompt: protocol.DeliveryDelivered}) != nil || undelivered(command.Add{}, res) != nil {
+		t.Fatal("a notice with nothing to recover")
 	}
 }

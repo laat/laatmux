@@ -38,6 +38,9 @@ type dash struct {
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
 	run *running
+	// recover is the notice to show once the log has ended, delivered
+	// or not: a prompt that did not reach the agent, with its text.
+	recover *view.Notice
 }
 
 // running is a command under way: its log, and what to do when it ends.
@@ -110,11 +113,17 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		if err := o.Err(); err != nil {
 			// The error was on screen until the key; the list returns
 			// with the message repeating it, since a refusal is worth
-			// keeping in sight.
+			// keeping in sight. A prompt to recover comes up over it.
 			m.Message = err.Error()
+			if d.recover != nil {
+				m.Overlay, d.recover = d.recover, nil
+			}
 			return false
 		}
 		return run.done(m)
+	case *view.Notice:
+		m.Overlay = nil
+		return false
 	}
 	return false
 }
@@ -336,6 +345,10 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 	d.start(m, add.Describe(), func(r command.Reporter) error {
 		var err error
 		res, err = add.Run(d.ctx, r)
+		// A prompt that did not reach the agent, or may not have, is
+		// shown with its text whatever else happened, since the
+		// foreground path keeps no file of it.
+		d.recover = undelivered(add, res)
 		if err != nil && res.Done {
 			// The host's side is done; what failed is local, and the
 			// message must say the worktree and agent exist.
@@ -343,12 +356,10 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 		}
 		return err
 	}, func(m *view.Model) bool {
-		// The delivery state is what the user reads: a prompt that did
-		// not reach the agent, or may not have, stays on screen with
-		// its text, since the foreground path keeps no file of it,
-		// until a key; a jump would leave it behind.
-		if add.Prompt != "" && res.Prompt != protocol.DeliveryDelivered && res.Prompt != protocol.DeliveryNone {
-			m.Overlay = undeliveredLog(add, res)
+		// The delivery state is what the user reads: the notice stays
+		// until dismissed; a jump would leave it behind.
+		if d.recover != nil {
+			m.Overlay, d.recover = d.recover, nil
 			return false
 		}
 		if err := switchTo(d.ctx, res.Session); err != nil {
@@ -359,20 +370,32 @@ func (d *dash) runAdd(m *view.Model, add command.Add) {
 	})
 }
 
-// undeliveredLog is the screen a foreground add whose prompt did not
-// reach the agent leaves up until a key: the state, the reason, the
-// session, and the prompt itself, to be copied into the agent, since
-// the foreground path keeps no file of it.
-func undeliveredLog(add command.Add, res command.Added) *view.Log {
-	log := view.NewLog(add.Describe())
-	log.Append("session " + res.Managed + " is running in " + res.Root + "; the prompt was not delivered to it:")
-	log.Append("")
-	for _, line := range strings.Split(add.Prompt, "\n") {
-		log.Append("    " + line)
+// undelivered is the notice a foreground add whose prompt did not
+// reach the agent, or may not have, leaves up until dismissed: the
+// state, the reason, the session when there is one, and the prompt
+// itself, wrapped and scrollable, to be copied into the agent, since
+// the foreground path keeps no file of it. nil when there is nothing
+// to recover: no prompt, or one delivered.
+func undelivered(add command.Add, res command.Added) *view.Notice {
+	if add.Prompt == "" || res.Prompt == protocol.DeliveryDelivered || res.Prompt == protocol.DeliveryNone {
+		return nil
 	}
-	log.Append("")
-	log.End(fmt.Errorf("prompt %s: %s", res.Prompt, res.Reason))
-	return log
+	state := res.Prompt
+	if state == "" {
+		state = "not delivered"
+	}
+	lines := []string{"prompt " + state + ": " + res.Reason, ""}
+	switch {
+	case res.Managed != "":
+		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+" without it. The prompt was:")
+	case res.Root != "":
+		lines = append(lines, "the worktree "+res.Root+" is there without an agent. The prompt was:")
+	default:
+		lines = append(lines, "The prompt was:")
+	}
+	lines = append(lines, "")
+	lines = append(lines, strings.Split(add.Prompt, "\n")...)
+	return view.NewNotice(add.Describe(), lines, "enter or esc returns")
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree

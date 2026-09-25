@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -403,4 +404,83 @@ func wrap(s string, w int) []string {
 		s = strings.TrimLeft(s[cut:], " ")
 	}
 	return out
+}
+
+// Notice is text kept on screen until dismissed: a title, lines wrapped
+// to the width, scrolled with the arrows and the wheel, and a footer.
+// Enter, Esc and q dismiss it; other keys do nothing, so a prompt shown
+// for copying is not lost to a stray key.
+type Notice struct {
+	Title  string
+	Lines  []string
+	Footer string
+	scroll int
+	done   bool
+}
+
+func NewNotice(title string, lines []string, footer string) *Notice {
+	return &Notice{Title: title, Lines: lines, Footer: footer}
+}
+
+func (n *Notice) Done() bool { return n.done }
+
+func (n *Notice) Handle(k Key) {
+	switch k.Kind {
+	case KeyEnter, KeyEsc, KeyCtrlC:
+		n.done = true
+	case KeyUp:
+		n.scroll--
+	case KeyDown:
+		n.scroll++
+	case KeyMouse:
+		n.scroll += k.Wheel
+	case KeyRune:
+		switch k.Rune {
+		case 'q':
+			n.done = true
+		case 'k':
+			n.scroll--
+		case 'j':
+			n.scroll++
+		}
+	}
+	if n.scroll < 0 {
+		n.scroll = 0
+	}
+}
+
+func (n *Notice) Render(w, h int) []Line {
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	var body []Line
+	for _, s := range n.Lines {
+		if s == "" {
+			body = append(body, plain(""))
+			continue
+		}
+		for _, part := range wrap(s, w) {
+			body = append(body, plain(part))
+		}
+	}
+	room := h - 2
+	if room < 1 {
+		room = 1
+	}
+	if n.scroll > len(body)-room {
+		n.scroll = max(len(body)-room, 0)
+	}
+	out := []Line{{Spans: []Span{{Text: fit(n.Title, w)}}, Bold: true}}
+	for i := 0; i < room; i++ {
+		if j := n.scroll + i; j < len(body) {
+			out = append(out, body[j])
+		} else {
+			out = append(out, plain(""))
+		}
+	}
+	foot := n.Footer
+	if len(body) > room {
+		foot = fmt.Sprintf("%s  (%d-%d of %d lines, arrows scroll)", n.Footer, n.scroll+1, min(n.scroll+room, len(body)), len(body))
+	}
+	return append(out[:h-1], Line{Spans: []Span{{Text: fit(foot, w)}}, Dim: true})
 }

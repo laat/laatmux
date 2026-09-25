@@ -128,7 +128,12 @@ func (f *Form) Handle(k Key) {
 		f.picker.Handle(k)
 		if f.picker.Done() {
 			if f.picker.Chosen >= 0 {
-				f.setChip(f.focus, f.picker.Chosen)
+				// Picking is the user's choice even when it is the
+				// value already shown: the host is told either way.
+				f.Chips[f.focus].Selected = f.picker.Chosen
+				if f.Changed != nil {
+					f.Changed(f, f.focus)
+				}
 			}
 			f.picker = nil
 		}

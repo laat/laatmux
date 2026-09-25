@@ -364,9 +364,10 @@ func TestFormTabs(t *testing.T) {
 	}
 }
 
-// A paste whose end marker never arrives is taken as it is once its
-// bytes have stopped for the grace, or once it is past the size cap,
-// so Esc works again.
+// A paste keeps its framing past the bounds: a stalled paste gives out
+// its text so far and a resumed one with a line break in it is still
+// a paste, as is a chunk past the size cap; a bare escape alone after a
+// stall is the user's Esc, which ends a paste whose end is lost.
 func TestDecoderPasteBounded(t *testing.T) {
 	now := time.Unix(1000, 0)
 	d := Decoder{now: func() time.Time { return now }}
@@ -378,19 +379,37 @@ func TestDecoderPasteBounded(t *testing.T) {
 	}
 	now = now.Add(pasteGrace + time.Millisecond)
 	got := d.Flush()
-	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "lost" || d.Pending() {
+	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "lost" || !d.Pending() {
 		t.Fatalf("flush past the grace: %+v pending %v", got, d.Pending())
 	}
+	// The paste resumes with a carriage return and a tab and then ends:
+	// still one paste, never Enter.
+	got = d.Feed([]byte("\rmore\t\x1b[201~"))
+	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "\nmore\t" || d.Pending() {
+		t.Fatalf("resumed paste: %+v pending %v", got, d.Pending())
+	}
+	// A lost end marker: a stall, then a bare escape alone is Esc.
+	d.Feed([]byte("\x1b[200~gone"))
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := d.Flush(); len(got) != 1 || got[0].Text != "gone" {
+		t.Fatalf("stalled: %+v", got)
+	}
 	if got := d.Feed([]byte("\x1b")); len(got) != 0 {
-		t.Fatalf("after: %+v", got)
+		t.Fatalf("escape during a stalled paste: %+v", got)
 	}
-	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc {
-		t.Fatalf("esc after a bounded paste: %+v", got)
+	now = now.Add(pasteGrace + time.Millisecond)
+	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc || d.Pending() {
+		t.Fatalf("esc after a lost end: %+v pending %v", got, d.Pending())
 	}
+	// Past the size cap the text comes in chunks and the framing stays.
 	var big Decoder
 	big.Feed([]byte("\x1b[200~"))
 	got = big.Feed([]byte(strings.Repeat("a", pasteMax+1)))
-	if len(got) != 1 || got[0].Kind != KeyPaste || len(got[0].Text) != pasteMax+1 || big.Pending() {
+	if len(got) != 1 || got[0].Kind != KeyPaste || len(got[0].Text) != pasteMax+1 || !big.Pending() {
 		t.Fatalf("size cap: %d keys pending %v", len(got), big.Pending())
+	}
+	got = big.Feed([]byte("b\rc\x1b[201~"))
+	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "b\nc" || big.Pending() {
+		t.Fatalf("after the cap: %+v pending %v", got, big.Pending())
 	}
 }

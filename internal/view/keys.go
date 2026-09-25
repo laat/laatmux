@@ -71,10 +71,17 @@ type Decoder struct {
 	// bytes have stopped for the grace. now is the clock, for tests.
 	pasteAt time.Time
 	now     func() time.Time
+	// stalled is a paste whose bytes stopped for the grace: its text
+	// so far has been given out, the framing stays, and a bare escape
+	// with nothing after it is the user's Esc, which ends it.
+	stalled bool
 }
 
-// Bounds on a paste without its end marker: the silence after which it
-// is taken as it is, and the size past which it is.
+// Bounds on a paste: the silence after which its text so far is given
+// out, and the size past which a chunk is. Neither ends the framing,
+// so a pasted line break after them is never Enter; a paste whose end
+// marker is lost ends on a bare escape after a stall, the one byte no
+// paste sends alone.
 const (
 	pasteGrace = time.Second
 	pasteMax   = 1 << 20
@@ -120,18 +127,16 @@ func (d *Decoder) Feed(b []byte) []Key {
 				d.paste = append(d.paste, d.pending[:i]...)
 				d.pending = d.pending[i+len(pasteEnd):]
 				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
-				d.paste, d.pasting = nil, false
+				d.paste, d.pasting, d.stalled = nil, false, false
 				continue
 			}
 			keep := markerPrefix(d.pending, pasteEnd)
 			d.paste = append(d.paste, d.pending[:len(d.pending)-keep]...)
 			d.pending = append([]byte(nil), d.pending[len(d.pending)-keep:]...)
 			if len(d.paste) > pasteMax {
-				// A paste this long has lost its end, or is not a
-				// paste: taken as it is, so the input is not locked.
+				// Given out in chunks past the cap; the framing stays.
 				keys = append(keys, Key{Kind: KeyPaste, Text: pasteText(d.paste)})
-				d.paste, d.pasting = nil, false
-				continue
+				d.paste = nil
 			}
 			return keys
 		}
@@ -200,13 +205,22 @@ func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
 // way is kept whole: its end is coming, however long it takes.
 func (d *Decoder) Flush() []Key {
 	if d.pasting {
-		// A paste whose bytes have stopped for the grace has lost its
-		// end marker: taken as it is, so Esc works again.
 		if d.clock().Sub(d.pasteAt) < pasteGrace {
 			return nil
 		}
+		// The bytes have stopped: a stalled paste gives out its text so
+		// far and keeps its framing; a bare escape alone after a stall
+		// is the user's Esc, which ends a paste whose end is lost.
+		if d.stalled && string(d.pending) == "\x1b" && len(d.paste) == 0 {
+			d.pending, d.pasting, d.stalled = nil, false, false
+			return []Key{{Kind: KeyEsc}}
+		}
+		d.stalled = true
 		text := pasteText(append(d.paste, d.pending...))
-		d.paste, d.pending, d.pasting = nil, nil, false
+		d.paste, d.pending = nil, nil
+		if text == "" {
+			return nil
+		}
 		return []Key{{Kind: KeyPaste, Text: text}}
 	}
 	// The start of a paste marker, split by a slow read, is held too:
