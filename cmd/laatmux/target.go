@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -224,14 +225,28 @@ func needCaps(h client.Host, hello protocol.Message, needCap string) error {
 // findWorktree returns the record for a branch of a repository, by source:
 // the record carries the daemon's label, which may differ from this
 // machine's for the same source. A record from a daemon that does not
-// carry the source is matched by label instead.
-func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool) {
+// carry the source is matched by label instead. Two clones of one
+// repository can each have a worktree for the branch; that is an error
+// naming both roots rather than a guess.
+func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool, error) {
+	var found []protocol.Worktree
 	for _, w := range ws {
 		if w.Branch == branch && branch != "" && sameRepo(w, repo) {
-			return w, true
+			found = append(found, w)
 		}
 	}
-	return protocol.Worktree{}, false
+	switch len(found) {
+	case 0:
+		return protocol.Worktree{}, false, nil
+	case 1:
+		return found[0], true, nil
+	}
+	roots := make([]string, len(found))
+	for i, w := range found {
+		roots[i] = w.Root
+	}
+	sort.Strings(roots)
+	return protocol.Worktree{}, false, fmt.Errorf("%s/%s has worktrees at %s; two clones of the repository each have the branch, so name the worktree by its root", repo.Name, branch, strings.Join(roots, " and "))
 }
 
 // recordRepo is this machine's entry for a host record's source, with

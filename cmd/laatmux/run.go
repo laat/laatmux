@@ -69,7 +69,10 @@ func cmdRun(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		w, ok := findWorktree(snap.Worktrees, repo, branch)
+		w, ok, err := findWorktree(snap.Worktrees, repo, branch)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, run.Host.Name)
 		}

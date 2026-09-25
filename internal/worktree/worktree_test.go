@@ -1144,6 +1144,16 @@ func TestCheckoutWithoutWorktreesNotAsked(t *testing.T) {
 	if f.store.linked(c) {
 		t.Fatal("a clone whose only worktree is elsewhere is asked")
 	}
+	// A relative gitdir is asked about: a symlink on the way to the
+	// checkout can make it point elsewhere than it looks.
+	admin := filepath.Join(c, ".git", "worktrees", "rel")
+	write(t, filepath.Join(admin, "gitdir"), "../../../../somewhere/.git\n")
+	if !f.store.linked(c) {
+		t.Fatal("a relative gitdir is not asked about")
+	}
+	if err := os.RemoveAll(admin); err != nil {
+		t.Fatal(err)
+	}
 	inside := f.store.Dirs.Worktree("plain", "x")
 	run(t, c, "git", "worktree", "add", "-q", "--detach", inside)
 	if !f.store.linked(c) {
@@ -1179,6 +1189,14 @@ func TestDuplicateClones(t *testing.T) {
 	if _, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "none"); err != nil || ok || co != first.Checkout {
 		t.Fatalf("by a branch nowhere: %s %v %v", co, ok, err)
 	}
+	// The branch in both clones: which is meant is not known.
+	both := f.store.Dirs.Worktree("proj2", "one")
+	run(t, second, "git", "worktree", "add", "-q", "-b", "one", both)
+	if _, _, ok, err := f.store.ByBranch(f.ctx, f.repo, "one"); ok || err == nil || !strings.Contains(err.Error(), "two clones") {
+		t.Fatalf("a branch in both clones: %v %v", ok, err)
+	}
+	run(t, second, "git", "worktree", "remove", both)
+	run(t, second, "git", "branch", "-D", "one")
 	// The first clone's worktree deleted by hand, and its root taken by
 	// the second clone: both register it, and it is listed once.
 	if err := os.RemoveAll(first.Root); err != nil {
@@ -1189,12 +1207,21 @@ func TestDuplicateClones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	roots := map[string]int{}
+	roots := map[string]Record{}
 	for _, r := range recs {
-		roots[r.Root]++
+		roots[r.Root] = r
 	}
-	if roots[first.Root] != 1 || roots[topic] != 1 || len(recs) != 2 {
+	if r := roots[first.Root]; len(recs) != 2 || r.Repo != "proj" || r.Branch != "again" || roots[topic].Branch != "topic" {
 		t.Fatalf("list %+v", recs)
+	}
+	// It is the second clone's, which the worktree points back to: Find
+	// names that checkout, and git removes it from there.
+	rec, co, ok, err = f.store.Find(f.ctx, first.Root)
+	if err != nil || !ok || co != second || rec.Branch != "again" {
+		t.Fatalf("find a root two checkouts register: %+v %s %v %v", rec, co, ok, err)
+	}
+	if removed, err := Remove(f.ctx, co, first.Root, true); err != nil || !removed {
+		t.Fatalf("remove: %v %v", removed, err)
 	}
 }
 

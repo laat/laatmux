@@ -47,15 +47,19 @@ func TestSameSource(t *testing.T) {
 		{"http://host:8080/o/r", "http://host/o/r"},
 		{"/src/laatmux", "/src/laatmux.git"},
 		{"/src/laatmux", "file:///src/laatmux"},
+		// A source that spells another's key is not that source.
+		{"forge:example.com/o/r", "https://example.com/o/r"},
+		{SourceKey("https://example.com/o/r"), "https://example.com/o/r"},
 	}
 	for _, p := range differ {
 		if SameSource(p[0], p[1]) {
 			t.Errorf("%s and %s are the same", p[0], p[1])
 		}
 	}
-	for _, s := range []string{"/src/laatmux", "./laatmux", "file:///src/x", "C:/x", "host:~/x", "alice@box:proj", "ssh://git@h:2222/o/r", ""} {
-		if SourceKey(s) != s {
-			t.Errorf("SourceKey(%q) = %q, want it unchanged", s, SourceKey(s))
+	// Other sources are compared exactly.
+	for _, s := range []string{"/src/laatmux", "./laatmux", "file:///src/x", "C:/x", "host:~/x", "alice@box:proj", "ssh://git@h:2222/o/r"} {
+		if !SameSource(s, s) || SameSource(s, s+"x") || SameSource(s, s+".git") {
+			t.Errorf("%q is not compared exactly", s)
 		}
 	}
 }

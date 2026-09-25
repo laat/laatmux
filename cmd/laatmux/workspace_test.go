@@ -100,18 +100,29 @@ func TestFindWorktreeBySource(t *testing.T) {
 		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "fix", Root: "/r/proj"},
 		{Repo: "other", Source: "git@x:o/other.git", Branch: "fix", Root: "/r/other"},
 	}
-	if w, ok := findWorktree(ws, mine, "fix"); !ok || w.Root != "/r/proj" {
+	if w, ok, _ := findWorktree(ws, mine, "fix"); !ok || w.Root != "/r/proj" {
 		t.Errorf("by source under another label: %+v %v", w, ok)
 	}
-	if w, ok := findWorktree(ws, other, "fix"); !ok || w.Root != "/r/other" {
+	if w, ok, _ := findWorktree(ws, other, "fix"); !ok || w.Root != "/r/other" {
 		t.Errorf("a colliding label did not win over the source: %+v %v", w, ok)
 	}
 	old := []protocol.Worktree{{Repo: "mine", Branch: "fix", Root: "/r/old"}}
-	if w, ok := findWorktree(old, mine, "fix"); !ok || w.Root != "/r/old" {
+	if w, ok, _ := findWorktree(old, mine, "fix"); !ok || w.Root != "/r/old" {
 		t.Errorf("older record by label: %+v %v", w, ok)
 	}
-	if _, ok := findWorktree(old, other, "fix"); ok {
+	if _, ok, _ := findWorktree(old, other, "fix"); ok {
 		t.Error("older record matched a different label")
+	}
+	// Two clones of one repository, each with the branch, in either
+	// order: an error naming both roots, not the first.
+	two := []protocol.Worktree{
+		{Repo: "proj", Source: "git@x:o/proj.git", Branch: "fix", Root: "/r/a"},
+		{Repo: "proj2", Source: "https://x/o/proj", Branch: "fix", Root: "/r/b"},
+	}
+	for _, ws := range [][]protocol.Worktree{two, {two[1], two[0]}} {
+		if w, ok, err := findWorktree(ws, mine, "fix"); ok || err == nil || !strings.Contains(err.Error(), "/r/a and /r/b") {
+			t.Errorf("two clones: %+v %v %v", w, ok, err)
+		}
 	}
 }
 

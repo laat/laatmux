@@ -762,8 +762,8 @@ func TestAddFromRepoEntry(t *testing.T) {
 
 // A repository the host's config lists is the host's own, entry or
 // not: with no checkout yet, it is cloned from the host's source, the
-// transport the host can use, under the host's name, even when the
-// entry names another form of it. An entry whose name is the host's
+// transport the host can use, under the host's name and with the host's
+// steps, even when the entry names another form of it. An entry whose name is the host's
 // name for another repository is refused.
 func TestAddEntryForListedRepository(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
@@ -773,12 +773,17 @@ func TestAddEntryForListedRepository(t *testing.T) {
 	// form fails.
 	os.WriteFile(global, []byte(fmt.Sprintf("[url %q]\n\tinsteadOf = %s\n", remote, https)), 0o644)
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	store.Repos = []worktree.Repo{{Source: https, Name: "proj"}}
+	store.Repos = []worktree.Repo{{Source: https, Name: "proj", Setup: []string{"echo host >> log"}}}
 	pc := conn(t, d)
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: ssh, RepoEntry: &protocol.RepoEntry{Source: ssh, Name: "sent"}, Branch: "task", AgentName: "claude"})
+	entry := &protocol.RepoEntry{Source: ssh, Name: "sent", Setup: []string{"echo sent >> log"}}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: ssh, RepoEntry: entry, Branch: "task", AgentName: "claude"})
 	res, _ := result(t, pc, "a1")
 	if !res.OK || res.Root != store.Dirs.Worktree("proj", "task") {
 		t.Fatalf("add: %+v", res)
+	}
+	// The host's own steps ran, the entry's did not.
+	if b, _ := os.ReadFile(filepath.Join(res.Root, "log")); string(b) != "ran\nhost\n" {
+		t.Fatalf("setup: %q", b)
 	}
 	out, err := exec.Command("git", "-C", store.Dirs.Checkout("proj"), "config", "--get", "remote.origin.url").Output()
 	if err != nil || strings.TrimSpace(string(out)) != https {

@@ -18,9 +18,11 @@ import (
 func SourceKey(source string) string {
 	host, path, ok := forge(source)
 	if !ok {
-		return source
+		// Its own key, in a space of its own: a source could spell
+		// another's key.
+		return "exact\x00" + source
 	}
-	return "forge:" + strings.ToLower(host) + "/" + path
+	return "forge\x00" + strings.ToLower(host) + "/" + path
 }
 
 // SameSource reports whether two sources name one repository.

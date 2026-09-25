@@ -229,12 +229,11 @@ func (s *Store) linked(dir string) bool {
 			return true
 		}
 		gitdir := strings.TrimSpace(string(b))
-		if !filepath.IsAbs(gitdir) {
-			// worktree.useRelativePaths: relative to the entry's own
-			// administrative directory.
-			gitdir = filepath.Join(admin, e.Name(), gitdir)
-		}
-		if s.Owns(filepath.Dir(gitdir)) {
+		// A relative one, from worktree.useRelativePaths, is relative to
+		// the entry's real directory, which a symlink on the way to the
+		// checkout can make another place than it looks from here: git
+		// is asked.
+		if !filepath.IsAbs(gitdir) || s.Owns(filepath.Dir(gitdir)) {
 			return true
 		}
 	}
@@ -381,8 +380,8 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 		for _, e := range entries {
 			// A root two checkouts register, one after the other's
 			// directory was deleted by hand, is listed once, for the
-			// first in directory order, as Find finds it.
-			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
+			// checkout the worktree points back to, as Find finds it.
+			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) || !pointsBack(e.Root, co.dir) {
 				continue
 			}
 			seen[e.Root] = true
@@ -449,6 +448,37 @@ func resolveExisting(p string) (string, bool) {
 	}
 }
 
+// pointsBack reports whether the worktree at root is the checkout's: its
+// .git file names an administrative directory under the checkout's
+// .git/worktrees. A checkout whose worktree directory was deleted by hand
+// keeps its registration, and another checkout can then add a worktree
+// at the same root; git lists the root in both, and only the one it
+// points back to can remove it. What cannot be read is taken as the
+// checkout's, so a worktree whose directory is gone is still found.
+func pointsBack(root, checkout string) bool {
+	b, err := os.ReadFile(filepath.Join(root, ".git"))
+	if err != nil {
+		return true
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return true
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(root, gitdir)
+	}
+	admin, err := filepath.EvalSymlinks(filepath.Dir(gitdir))
+	if err != nil {
+		return true
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(checkout, ".git", "worktrees"))
+	if err != nil {
+		return true
+	}
+	return admin == want
+}
+
 // Find locates a registered worktree by root across every main checkout
 // under the repos directory, under the worktrees directory only. Used by
 // rm on a root-only target; a worktree elsewhere is not the daemon's to
@@ -472,7 +502,7 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 			return Record{}, "", false, err
 		}
 		for _, e := range entries {
-			if e.Root == root && e.Root != co.dir {
+			if e.Root == root && e.Root != co.dir && pointsBack(root, co.dir) {
 				r := s.label(co)
 				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
 			}
@@ -488,14 +518,18 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 // the orphaned session. Not found is (Record{}, checkout, false, nil) with
 // the checkout still reported when it exists.
 //
-// Every checkout of the repository is asked, in directory order: two
-// clones of one repository each have worktrees, and each is listed.
+// Every checkout of the repository is asked: two clones of one
+// repository each have worktrees, and each is listed. When both have
+// one for the branch, which is meant is not known, and that is an error
+// naming both roots rather than a guess.
 func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record, string, bool, error) {
 	cos, err := s.scan(ctx)
 	if err != nil {
 		return Record{}, "", false, err
 	}
 	first := ""
+	var rec Record
+	var at []string // the checkout of each match, then its root
 	for _, co := range cos {
 		if !config.SameSource(co.origin, repo.Source) {
 			continue
@@ -512,11 +546,18 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 		}
 		for _, e := range entries {
 			if e.Branch == branch && e.Root != co.dir && s.Owns(e.Root) {
-				return Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
+				rec = Record{Repo: repo.Name, Source: repo.Source, Branch: e.Branch, Root: e.Root}
+				at = append(at, co.dir, e.Root)
 			}
 		}
 	}
-	return Record{}, first, false, nil
+	switch {
+	case len(at) == 0:
+		return Record{}, first, false, nil
+	case len(at) > 2:
+		return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, at[1], at[3])
+	}
+	return rec, at[0], true, nil
 }
 
 // Remove unregisters and deletes a worktree through git, which is the
