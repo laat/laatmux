@@ -1185,3 +1185,47 @@ func TestBrokenSequenceBeforeClick(t *testing.T) {
 		t.Fatalf("a click after a held Alt-[: %+v pending %v", ks, dec.Pending())
 	}
 }
+
+// A sequence flushed incomplete is discarded through its final byte
+// when the rest comes, but a byte that cannot go on, Ctrl-C or Enter or
+// a fresh escape, is the user's and comes through.
+func TestDiscardStopsAtUserKeys(t *testing.T) {
+	for in, want := range map[string][]Key{
+		"2;5H":   nil,
+		"\x03":   {{Kind: KeyCtrlC}},
+		"\rq":    {{Kind: KeyEnter}, {Rune: 'q'}},
+		"\x1b[A": {{Kind: KeyUp}},
+		"1;\x03": {{Kind: KeyCtrlC}},
+		"9~j":    {{Rune: 'j'}},
+	} {
+		var d Decoder
+		d.Feed([]byte("\x1b[1"))
+		if got := d.Flush(); len(got) != 0 {
+			t.Fatalf("flush: %+v", got)
+		}
+		if got := d.Feed([]byte(in)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q after a flushed ESC [1: %+v, want %+v", in, got, want)
+		}
+	}
+}
+
+// A sequence cut short inside pasted text is dropped up to the byte
+// that ends it, which stays text; a whole one is dropped whole.
+func TestPasteTextBrokenSequence(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\x1b[31mb":       "ab",
+		"a\x1b[\nbéc":      "a\nbéc",
+		"x\x1b[ 1 2 3 日":   "x日",
+		"\x1b[\x1b[31mred": "red",
+		"a\x1bOPb":         "ab",
+		"a\x1bO\nb":        "a\nb",
+	} {
+		if got := pasteText([]byte(in)); got != want {
+			t.Errorf("pasteText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A chunk is not cut before such a sequence's text: it has ended.
+	if head, tail := splitTail([]byte("ok \x1b[\nmore")); string(head) != "ok \x1b[\nmore" || len(tail) != 0 {
+		t.Errorf("splitTail: %q %q", head, tail)
+	}
+}

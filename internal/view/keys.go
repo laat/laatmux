@@ -118,17 +118,20 @@ func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
 // held bytes turned out to be.
 func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
 	if d.discard {
-		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e. A
-		// fresh escape means the dropped sequence never completed; it
-		// starts a new one and is parsed from there.
+		// A CSI or SS3 sequence goes on through parameter and
+		// intermediate bytes, 0x20..0x3f, and ends at a final byte in
+		// 0x40..0x7e, dropped with it. Any other byte, a fresh escape,
+		// Ctrl-C or Enter say, means the dropped sequence never
+		// completed, as csi takes it: it is the user's and is parsed
+		// from there.
 		i := 0
-		for i < len(b) && (b[i] < 0x40 || b[i] > 0x7e) && b[i] != 0x1b {
+		for i < len(b) && b[i] >= 0x20 && b[i] <= 0x3f {
 			i++
 		}
 		if i == len(b) {
 			return nil
 		}
-		if b[i] != 0x1b {
+		if b[i] >= 0x40 && b[i] <= 0x7e {
 			i++
 		}
 		b = b[i:]
@@ -282,7 +285,8 @@ func splitTail(b []byte) (head, tail []byte) {
 		}
 	}
 	// A sequence is bounded: an escape further back than this is not
-	// one still under way.
+	// one still under way. One is over at its final byte, or at a byte
+	// that cannot go on, which ends it as csi and pasteText end it.
 	for i := cut - 1; i >= max(cut-32, 0); i-- {
 		if b[i] != 0x1b {
 			continue
@@ -290,7 +294,7 @@ func splitTail(b []byte) (head, tail []byte) {
 		if i+1 < cut && b[i+1] == '[' {
 			done := false
 			for j := i + 2; j < cut; j++ {
-				if b[j] >= 0x40 && b[j] <= 0x7e {
+				if b[j] < 0x20 || b[j] > 0x3f {
 					done = true
 					break
 				}
@@ -333,14 +337,24 @@ func pasteText(b []byte) string {
 		switch {
 		case r == 0x1b:
 			// CSI: through the final byte; SS3: one more; a lone escape
-			// is dropped alone.
+			// is dropped alone. A sequence cut short, by a line break or
+			// a letter outside the final bytes say, is dropped up to
+			// that, which stays text, as csi ends it.
+			final := func(j int) bool { return j < len(rs) && rs[j] >= 0x40 && rs[j] <= 0x7e }
 			if i+1 < len(rs) && rs[i+1] == '[' {
-				i += 2
-				for i < len(rs) && (rs[i] < 0x40 || rs[i] > 0x7e) {
-					i++
+				j := i + 2
+				for j < len(rs) && rs[j] >= 0x20 && rs[j] <= 0x3f {
+					j++
+				}
+				i = j - 1
+				if final(j) {
+					i = j
 				}
 			} else if i+1 < len(rs) && rs[i+1] == 'O' {
-				i += 2
+				i++
+				if final(i + 1) {
+					i++
+				}
 			}
 		case r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f:
 			out.WriteRune(r)
