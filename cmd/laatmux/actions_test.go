@@ -1039,8 +1039,8 @@ func TestClickJumpRefocuses(t *testing.T) {
 }
 
 // A digit that jumps nowhere selects the row it counted, as a click
-// does, and moves no focus.
-func TestDigitJumpNowhereSelects(t *testing.T) {
+// does, and moves no focus; Enter leaves following as it was.
+func TestJumpNowhereSelects(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	m := dashModel(cfg)
@@ -1052,6 +1052,19 @@ func TestDigitJumpNowhereSelects(t *testing.T) {
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: target})
 	if refocused != 0 || m.Follow || m.Selection() == nil || m.Selection().ID() != target.ID() {
 		t.Fatalf("digit: refocused %d follow %v selected %+v", refocused, m.Follow, m.Selection())
+	}
+	// Enter that jumps nowhere was on the selection already: following
+	// goes on. The first row is the viewer's own here.
+	m.Visible()[0].Row.Current = true
+	m.Follow = true
+	before := m.Selection().ID()
+	a := m.Handle(view.Key{Kind: view.KeyEnter})
+	if a.Kind != view.ActionJump || a.Row != nil {
+		t.Fatalf("enter: %+v", a)
+	}
+	d.jumpAction(m, a)
+	if refocused != 0 || !m.Follow || m.Selection().ID() != before {
+		t.Fatalf("enter: refocused %d follow %v selected %+v", refocused, m.Follow, m.Selection())
 	}
 }
 

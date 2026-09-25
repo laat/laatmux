@@ -96,8 +96,8 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 // was, both when the jump stays in this session and in this window when
 // the viewer comes back to it.
 func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
-	r := a.Row
-	if r == nil {
+	r, named := a.Row, a.Row != nil
+	if !named {
 		r = m.Selection()
 	}
 	if r == nil {
@@ -108,9 +108,12 @@ func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
 		// A click or a digit that jumped nowhere, on a task still
 		// running or refused with a message, selects the row, as it did
 		// before jumps left the selection following: the message is
-		// about that row, and p and x act on it. The focus stays on the
-		// view, where the message is.
-		m.Select(r.ID())
+		// about that row, and p and x act on it. Enter was on the
+		// selection already, and leaves following as it was. The focus
+		// stays on the view, where the message is.
+		if named {
+			m.Select(r.ID())
+		}
 		return exit
 	}
 	if a.Mouse && !d.exitOnJump {

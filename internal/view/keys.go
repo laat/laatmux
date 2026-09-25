@@ -698,10 +698,11 @@ func csi(b []byte) (Key, int, bool) {
 type Action struct {
 	Kind ActionKind
 	Key  Key // for ActionOther, the key the model did not handle
-	// Row, on ActionJump, is the row to jump to: the selection, or the
-	// row a click or a digit named while the selection follows the
-	// viewer's own row, which it goes on doing. Mouse is a jump by a
-	// click, which tmux's click binding made the view's pane active for.
+	// Row, on ActionJump, is the row a click or a digit named, which
+	// is the selection unless the selection follows the viewer's own
+	// row and goes on doing so; nil for Enter, which jumps to the
+	// selection. Mouse is a jump by a click, which tmux's click binding
+	// made the view's pane active for.
 	Row   *rows.Row
 	Mouse bool
 }
@@ -853,11 +854,10 @@ func (m *Model) moveTo(i int) {
 }
 
 func (m *Model) jump() Action {
-	r := m.Selection()
-	if r == nil {
+	if m.Selection() == nil {
 		return Action{}
 	}
-	return Action{Kind: ActionJump, Row: r}
+	return Action{Kind: ActionJump}
 }
 
 // Select puts the selection on the visible row with the id, as a key
@@ -889,11 +889,10 @@ func (m *Model) jumpTo(i int) Action {
 	if i < 0 || i >= len(vis) {
 		return Action{}
 	}
-	if m.Follow {
-		return Action{Kind: ActionJump, Row: vis[i].Row}
+	if !m.Follow {
+		m.moveTo(i)
 	}
-	m.moveTo(i)
-	return m.jump()
+	return Action{Kind: ActionJump, Row: vis[i].Row}
 }
 
 // nth is the index of the nth row of the group the selection is in.
