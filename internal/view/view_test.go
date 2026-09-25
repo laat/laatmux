@@ -1102,40 +1102,56 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 	}
 }
 
-// A click split across reads is stamped with when its first bytes
-// came; a click in one read with that read's time.
-func TestClickClock(t *testing.T) {
-	t1, t2 := time.Unix(10, 0), time.Unix(20, 0)
+// A click split across reads is dated from when its first bytes came;
+// a click begun in a read from that read, whatever the held bytes
+// before it turned out to be.
+func TestFeedAtDatesClicks(t *testing.T) {
+	t1, t2, t3 := time.Unix(10, 0), time.Unix(20, 0), time.Unix(30, 0)
+	click := func(ks []Key, want time.Time) bool {
+		return len(ks) == 1 && ks[0].Kind == KeyMouse && ks[0].At.Equal(want)
+	}
 	var dec Decoder
-	var c clickClock
-	if ks := c.feed(&dec, []byte("\x1b[<0;5;"), t1); len(ks) != 0 {
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;"), t1); len(ks) != 0 {
 		t.Fatalf("half a click: %+v", ks)
 	}
-	ks := c.feed(&dec, []byte("3M"), t2)
-	if len(ks) != 1 || ks[0].Kind != KeyMouse || !ks[0].At.Equal(t1) {
+	if ks := dec.FeedAt([]byte("3M"), t2); !click(ks, t1) {
 		t.Fatalf("split click: %+v", ks)
 	}
-	ks = c.feed(&dec, []byte("\x1b[<0;5;3M"), t2)
-	if len(ks) != 1 || !ks[0].At.Equal(t2) {
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2); !click(ks, t2) {
 		t.Fatalf("whole click: %+v", ks)
 	}
-	// The completion of a held click and a fresh one in the same read:
-	// only the first is the held one's; a new partial suffix begins now.
-	t3 := time.Unix(30, 0)
-	c.feed(&dec, []byte("\x1b[<0;5;"), t1)
-	ks = c.feed(&dec, []byte("3M\x1b[<0;6;4M\x1b[<0;7;"), t3)
-	if len(ks) != 2 || !ks[0].At.Equal(t1) || !ks[1].At.Equal(t3) || !c.held.Equal(t3) {
-		t.Fatalf("completion, fresh click and a new suffix: %+v held %v", ks, c.held)
+	// The completion of a held click and a fresh one in the same read,
+	// then the rest of a click begun in that read.
+	dec.FeedAt([]byte("\x1b[<0;5;"), t1)
+	ks := dec.FeedAt([]byte("3M\x1b[<0;6;4M\x1b[<0;7;"), t2)
+	if len(ks) != 2 || !ks[0].At.Equal(t1) || !ks[1].At.Equal(t2) {
+		t.Fatalf("completion and a fresh click: %+v", ks)
 	}
-	dec.Flush()
-	c.flushed(&dec)
+	if ks := dec.FeedAt([]byte("8M"), t3); !click(ks, t2) {
+		t.Fatalf("a click begun after a completion: %+v", ks)
+	}
+	// Held bytes completed as a sequence that gives no key: a click
+	// after them in the same read is that read's, whole or split.
+	dec.FeedAt([]byte("\x1bO"), t1)
+	if ks := dec.FeedAt([]byte("P\x1b[<0;5;3M"), t2); !click(ks, t2) {
+		t.Fatalf("a click after an ignored completion: %+v", ks)
+	}
+	dec.FeedAt([]byte("\x1bO"), t1)
+	if ks := dec.FeedAt([]byte("P\x1b[<0;5;"), t2); len(ks) != 0 {
+		t.Fatalf("an ignored completion and half a click: %+v", ks)
+	}
+	if ks := dec.FeedAt([]byte("3M"), t3); !click(ks, t2) {
+		t.Fatalf("a split click after an ignored completion: %+v", ks)
+	}
 	// A bare escape held, then flushed as the escape key: a click after
 	// it has its own time.
-	c.feed(&dec, []byte("\x1b"), t1)
+	dec.FeedAt([]byte("\x1b"), t1)
 	dec.Flush()
-	c.flushed(&dec)
-	ks = c.feed(&dec, []byte("\x1b[<0;5;3M"), t3)
-	if len(ks) != 1 || !ks[0].At.Equal(t3) {
+	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t3); !click(ks, t3) {
 		t.Fatalf("a click after a flushed escape: %+v", ks)
+	}
+	// Feed, with no time, dates nothing.
+	if ks := dec.Feed([]byte("\x1b[<0;5;3M")); !click(ks, time.Time{}) {
+		t.Fatalf("a click fed with no time: %+v", ks)
 	}
 }

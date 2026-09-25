@@ -85,6 +85,9 @@ type Decoder struct {
 	// after a stall is the user's, and ends the paste.
 	stalled   bool
 	stalledAt time.Time
+	// heldAt is when the first of the held bytes was read, for FeedAt:
+	// a click whose bytes came in two reads is dated from the first.
+	heldAt time.Time
 }
 
 // Bounds on a paste: the silence after which its text so far is given
@@ -107,7 +110,13 @@ func (d *Decoder) clock() time.Time {
 // Feed adds input and returns the keys complete so far. Pending reports
 // whether bytes are held back; the caller flushes them after a short
 // wait, since a bare escape looks like the start of a sequence.
-func (d *Decoder) Feed(b []byte) []Key {
+func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
+
+// FeedAt is Feed for bytes read at the time given: each click it gives
+// has At set to when its first byte was read, the held bytes' time for
+// a click they begin and this read's for one begun in it, whatever the
+// held bytes turned out to be.
+func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
 	if d.discard {
 		// A CSI or SS3 sequence ends at its first byte in 0x40..0x7e. A
 		// fresh escape means the dropped sequence never completed; it
@@ -125,7 +134,27 @@ func (d *Decoder) Feed(b []byte) []Key {
 		b = b[i:]
 		d.discard = false
 	}
+	// Offsets below are into the held bytes and this read's, joined:
+	// those before h were held, and d.pending stays a suffix of them.
+	h, held := len(d.pending), d.heldAt
 	d.pending = append(d.pending, b...)
+	total := len(d.pending)
+	stamp := func(base int) func(int) time.Time {
+		return func(off int) time.Time {
+			if base+off < h {
+				return held
+			}
+			return at
+		}
+	}
+	defer func() {
+		switch {
+		case len(d.pending) == 0:
+			d.heldAt = time.Time{}
+		case total-len(d.pending) >= h:
+			d.heldAt = at
+		}
+	}()
 	d.at = d.clock()
 	var keys []Key
 	for {
@@ -159,11 +188,11 @@ func (d *Decoder) Feed(b []byte) []Key {
 		}
 		i := strings.Index(string(d.pending), pasteStart)
 		if i < 0 {
-			ks, rest := parse(d.pending, false)
+			ks, rest := parse(d.pending, false, stamp(total-len(d.pending)))
 			d.pending = rest
 			return append(keys, ks...)
 		}
-		ks, rest := parse(d.pending[:i], true)
+		ks, rest := parse(d.pending[:i], true, stamp(total-len(d.pending)))
 		keys = append(keys, ks...)
 		_ = rest
 		d.pending = d.pending[i+len(pasteStart):]
@@ -199,7 +228,7 @@ func (d *Decoder) stall() []Key {
 		if text := pasteText(data[:i]); text != "" {
 			keys = append(keys, Key{Kind: KeyPaste, Text: text})
 		}
-		rest, _ := parse(data[i+1:], true)
+		rest, _ := parse(data[i+1:], true, nil)
 		keys = append(keys, rest...)
 		d.paste, d.pending, d.pasting, d.stalled = nil, nil, false, false
 		return keys
@@ -368,14 +397,15 @@ func (d *Decoder) Flush() []Key {
 		if len(d.pending) > 2 || d.clock().Sub(d.at) < pasteGrace {
 			return nil
 		}
-		d.pending = nil
+		d.pending, d.heldAt = nil, time.Time{}
 		return nil
 	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
 		d.discard = true
 	}
-	keys, _ := parse(d.pending, true)
-	d.pending = nil
+	heldAt := d.heldAt
+	keys, _ := parse(d.pending, true, func(int) time.Time { return heldAt })
+	d.pending, d.heldAt = nil, time.Time{}
 	return keys
 }
 
@@ -391,8 +421,10 @@ func Parse(b []byte) []Key {
 // start of an escape sequence or a rune are returned as rest instead;
 // with flush true a bare escape is the escape key and an incomplete
 // sequence is dropped, since a mouse report cut short would otherwise
-// read as an escape and digits, and digits jump.
-func parse(b []byte, flush bool) (keys []Key, rest []byte) {
+// read as an escape and digits, and digits jump. stamp, when set, dates
+// a click by the offset of its first byte in b.
+func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, rest []byte) {
+	whole := len(b)
 	for len(b) > 0 {
 		c := b[0]
 		switch {
@@ -406,6 +438,9 @@ func parse(b []byte, flush bool) (keys []Key, rest []byte) {
 			if b[1] == '[' {
 				k, n, ok := csi(b)
 				if ok {
+					if k.Kind == KeyMouse && stamp != nil {
+						k.At = stamp(whole - len(b))
+					}
 					keys = append(keys, k)
 					b = b[n:]
 					continue
