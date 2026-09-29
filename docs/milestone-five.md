@@ -162,7 +162,11 @@ other sessions
   is until the user toggles it, so the tree does not open and close as
   agents work; a folded worktree line shows the icon of its most
   pressing agent, so a blocked or done agent inside is not missed.
-  Repositories start open.
+  Repositories start open. A task line that holds children folds as a
+  worktree line does, by its own node id and the same first-seen rule.
+  The node that takes its children, the worktree line at handoff or the
+  next newest task, takes its fold too, unless the pane has a fold of
+  its own for that node, so a fold the user set survives the handoff.
 - **Jumps:** `Enter` on a worktree line jumps to its workspace session,
   as the row does today. On a repository line it folds and unfolds. On
   an agent or a pane it goes to that pane, routed by the record's
@@ -218,7 +222,7 @@ selected node to a node of the other view:
   as from a worktree line.
 
 A target the stale fold hides opens the fold; a target in a folded
-worktree opens that worktree and its repository. Those opens are the
+worktree or task line opens it and its repository. Those opens are the
 pane's own and are not written to `sidebar.json`. A target the filter
 hides, or none at all (a worktree with no agent, an empty repository),
 leaves the selection on no row, as a selected row that goes with
@@ -680,7 +684,7 @@ alike unless the row says otherwise.
 | `v` | tiles or compact | tiles or compact |
 | `f` | show the settled group and today's stale (orphaned) group | open every fold when any is closed, else close every one |
 | `Tab` | — | switch view |
-| `h`, `Left` | — | fold; on a child, go to its worktree |
+| `h`, `Left` | — | fold; on a child, go to its worktree or task line |
 | `l`, `Right` | — | unfold |
 | `s` | settle (dashboard) | toggle the fold at the selection |
 | `z` | — | settle or unsettle, sidebar and dashboard |
@@ -998,7 +1002,8 @@ view and folds step 6 keeps in memory.
   agents placed by session, an orphaned session under its repository, a
   new worktree whose task needs the user holding the worktree's
   children, two tasks for one worktree with each child once, the add's
-  agent under its task line before the listing.
+  agent under its task line before the listing, a fold set on a task
+  line kept across its handoff.
 - **Git:** temporary repositories for base resolution, committed and
   uncommitted counts with untracked and binary files, conflict, rebase,
   the base branch itself, no upsert when a refresh changes nothing, a
