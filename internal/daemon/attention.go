@@ -84,10 +84,7 @@ func (e *attnEntry) unseen() bool { return e.FinishedAt.After(e.SeenAt) }
 type attention struct {
 	path    string
 	entries map[string]*attnEntry // by agent id
-	// views is the last listing of the clients, for a finish observed
-	// while one shows the agent, which is seen at once.
-	views []ClientView
-	poke  chan struct{}
+	poke    chan struct{}
 }
 
 type attnFile struct {
@@ -190,16 +187,13 @@ func (d *Daemon) attendLocked(host string, local bool, a protocol.Agent) {
 	}
 	e.ActivityAt = a.ActivityAt
 	if finished {
-		now := time.Now()
-		e.FinishedAt = now
-		if d.shownLocked(d.attn.views, a.ID, e) {
-			// A client shows the agent as it finishes: seen at once.
-			e.SeenAt = now
-		}
+		e.FinishedAt = time.Now()
 		rec := e.record(a.ID)
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Attention: &rec})
-		// The clients are looked at now, not at the next tick, so a
-		// finish the user is watching does not stay done for long.
+		// The clients are listed now, not at the next tick: a client
+		// that shows the agent when the finish is observed sees it at
+		// once. An earlier listing is not asked, since the user may
+		// have left since, an interrupt and a switch away say.
 		select {
 		case d.attn.poke <- struct{}{}:
 		default:
@@ -333,6 +327,12 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 		return false
 	}
 	managed := a.Server == "" || a.Server == tmux.LaatmuxServer.Label()
+	agentHost := e.Host
+	if mh := d.localHostLocked(); e.Local && mh != nil {
+		// This machine by the name the config gives it now, which
+		// the sessions a jump makes are tagged with.
+		agentHost = mh.status.Name
+	}
 	for _, v := range views {
 		switch {
 		case v.Dead:
@@ -356,7 +356,7 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 					target = d.homeSessionLocked(v.Workspace)
 				}
 			}
-			if target != "" && target == a.Session && host == e.Host {
+			if target != "" && target == a.Session && host == agentHost {
 				return true
 			}
 		case e.Local && a.Server == tmux.DefaultServer.Label() && v.Pane != "" && v.Pane == a.PaneID:
@@ -389,10 +389,8 @@ func (d *Daemon) runSeen(ctx context.Context) {
 		d.mu.Lock()
 		if err != nil {
 			d.logOnce(&d.lastClientsErr, "clients: %v", err)
-			d.attn.views = nil
 		} else {
 			d.lastClientsErr = ""
-			d.attn.views = views
 			d.markSeenLocked(views)
 		}
 		d.mu.Unlock()

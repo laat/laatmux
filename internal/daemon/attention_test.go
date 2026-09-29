@@ -58,7 +58,6 @@ func done(d *Daemon, id string) bool {
 
 func look(d *Daemon, views ...ClientView) {
 	d.mu.Lock()
-	d.attn.views = views
 	d.markSeenLocked(views)
 	d.mu.Unlock()
 }
@@ -69,8 +68,10 @@ func attachTo(host, session string) ClientView {
 }
 
 // A finish while the user is elsewhere is done until a client shows the
-// agent; one while a client shows it is seen at once, and so is one the
-// user switched away from right after, as the last listing had it.
+// agent. One while a client shows it is seen by the listing the finish
+// has made at once; an interrupt followed by a switch away before that
+// listing is done, as the note says, since the user left before the
+// finish was observed.
 func TestAttentionFinishAndSeen(t *testing.T) {
 	d := attnDaemon(t, t.TempDir())
 	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
@@ -79,7 +80,6 @@ func TestAttentionFinishAndSeen(t *testing.T) {
 	if _, ok := attnOf(d, id); !ok {
 		t.Fatal("not tracked")
 	}
-	look(d, attachTo("vm", "proj/other"))
 	fromVM(d, remoteAgent("%1", "proj/x", protocol.Idle, t0.Add(time.Minute)))
 	if !done(d, id) {
 		t.Fatal("finish while elsewhere not done")
@@ -95,19 +95,52 @@ func TestAttentionFinishAndSeen(t *testing.T) {
 		t.Fatal("not seen through the attach")
 	}
 
-	// Watching: the finish is seen at once.
+	// Watching: the finish pokes, and the listing it makes sees it.
 	fromVM(d, remoteAgent("%1", "proj/x", protocol.Working, t0.Add(2*time.Minute)))
 	fromVM(d, remoteAgent("%1", "proj/x", protocol.Idle, t0.Add(3*time.Minute)))
+	select {
+	case <-d.attn.poke:
+	default:
+		t.Fatal("a finish did not poke")
+	}
+	look(d, attachTo("vm", "proj/x"))
 	if done(d, id) {
 		t.Error("finish while watched is done")
 	}
-	// An interrupt, then a switch away before the next listing: the
-	// listing from before the switch showed the agent.
+	// An interrupt, then a switch away before the finish is observed:
+	// the listing after it shows another session.
 	fromVM(d, remoteAgent("%1", "proj/x", protocol.Working, t0.Add(4*time.Minute)))
 	fromVM(d, remoteAgent("%1", "proj/x", protocol.Idle, t0.Add(5*time.Minute)))
 	look(d, attachTo("vm", "proj/other"))
-	if done(d, id) {
-		t.Error("interrupt then switch away is done")
+	if !done(d, id) {
+		t.Error("interrupt then switch away is not done")
+	}
+}
+
+// This machine's own agents are matched against the name the config
+// gives it now: a rename, read on a subscription, is what the sessions a
+// jump makes are tagged with.
+func TestAttentionLocalRename(t *testing.T) {
+	d := attnDaemon(t, t.TempDir())
+	t0 := time.Now()
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/x", PaneID: "%1", Agent: "claude",
+		Activity: protocol.Working, ActivityAt: t0, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 1}}
+	publish(d, "laatmux/%1", a)
+	a.Activity, a.ActivityAt = protocol.Idle, t0.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	d.mu.Lock()
+	d.reconcileHostsLocked([]client.Host{{Name: "laptop"}, {Name: "vm", SSH: "vm"}})
+	d.mu.Unlock()
+	if !done(d, a.ID) {
+		t.Fatal("the rename forgot the local agent")
+	}
+	look(d, attachTo("mac", "proj/x"))
+	if !done(d, a.ID) {
+		t.Error("seen through the old name")
+	}
+	look(d, attachTo("laptop", "proj/x"))
+	if done(d, a.ID) {
+		t.Error("not seen through the new name")
 	}
 }
 
