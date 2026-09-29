@@ -33,7 +33,7 @@ type merged struct {
 	sessionsErr string
 	// pendings are the relay's background adds, by id, and handoffs the
 	// worktree ids retired records became, kept across resnapshots for
-	// the day the daemon keeps them, so a view can re-anchor a selection
+	// a day, so a view can re-anchor a selection
 	// that was on a record.
 	pendings map[string]protocol.Pending
 	handoffs map[string]handoffSeen

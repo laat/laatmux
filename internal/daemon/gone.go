@@ -35,9 +35,26 @@ func (d *Daemon) tasksAtLocked(sig string, match, shown func(protocol.Pending) b
 	go d.recheckTasks(sig, match, shown)
 }
 
-// worktreeRemovedLocked is a worktree the host reported gone.
+// worktreeRemovedLocked is a worktree the host reported gone. A task
+// that handed over to it goes at once: the report is the worktree's
+// end, and one made again at the root is not the one the task made, so
+// the listing is not asked, which could have the new one already.
 func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
+	if d.relay != nil {
+		go d.dropRetiredAt(worktreeID)
+	}
 	d.tasksAtLocked("", func(p protocol.Pending) bool { return p.WorktreeID() == worktreeID }, nil)
+}
+
+// dropRetiredAt drops the tasks that handed over to the worktree.
+func (d *Daemon) dropRetiredAt(worktreeID string) {
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	for id, p := range d.relay.recs {
+		if p.retired() && p.ReplacedBy == worktreeID {
+			d.dropRetiredLocked(id)
+		}
+	}
 }
 
 // hostListedLocked is a host's successful listing of worktrees: a task
@@ -194,22 +211,24 @@ func (d *Daemon) worktreeGone(ctx context.Context, id string) {
 // nothing is left for the prompt to say what it was made for. The
 // stream has no message for it; its handoff is absent from the next
 // snapshot.
-func (d *Daemon) dropRetired(id string) {
+func (d *Daemon) dropRetired(id string) error {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
-	d.dropRetiredLocked(id)
+	return d.dropRetiredLocked(id)
 }
 
 // dropRetiredLocked is dropRetired with the relay's mutex held. A file
 // that cannot be removed leaves the record unchecked, so the next
 // listing without its worktree tries again rather than passing over a
 // listing already checked.
-func (d *Daemon) dropRetiredLocked(id string) {
+func (d *Daemon) dropRetiredLocked(id string) error {
 	if p, ok := d.relay.recs[id]; !ok || !p.retired() {
-		return
+		return nil
 	}
 	if err := d.relay.removeLocked(id); err != nil {
 		d.cfg.Logger.Printf("pending: drop %s: %v", id, err)
 		delete(d.relay.checked, id)
+		return err
 	}
+	return nil
 }

@@ -9,6 +9,7 @@ package rows
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -545,37 +546,45 @@ func Build(in Input) Rows {
 }
 
 // rowAgent is the agent a worktree row shows of the agents attributed
-// to it: the one in its home session, else the most pressing, blocked
-// before working before idle, then the most recently active. The rest
-// keep rows of their own until the views show several agents per
-// worktree.
+// to it. With a home session it is an agent there or none: the row is
+// jumped to through the home session, which an agent elsewhere is not
+// in. Without one it is any of them. Among several the choice never
+// turns on activity, which would swap the row's agent and the others'
+// rows as they work: a live agent before a gone one, then the one that
+// started first, then the id. The rest keep rows of their own until the
+// views show several agents per worktree.
 func rowAgent(agents []*protocol.Agent, home string) *protocol.Agent {
-	isHome := func(a *protocol.Agent) bool {
-		return home != "" && a.Session == home && Server(*a) == tmux.LaatmuxServer.Label()
-	}
 	var best *protocol.Agent
 	for _, a := range agents {
-		if best == nil || isHome(a) && !isHome(best) || isHome(a) == isHome(best) && pressing(a, best) {
+		if home != "" && (a.Session != home || Server(*a) != tmux.LaatmuxServer.Label()) {
+			continue
+		}
+		if best == nil || before(a, best) {
 			best = a
 		}
 	}
 	return best
 }
 
-// pressing is a before b: a live agent before a gone one, then rank,
-// then the most recent activity, then id, so the choice is stable.
-func pressing(a, b *protocol.Agent) bool {
-	ra, rb := Row{Agent: a}.Rank(), Row{Agent: b}.Rank()
+// before is a ahead of b in rowAgent's choice.
+func before(a, b *protocol.Agent) bool {
 	if (a.Liveness == protocol.Gone) != (b.Liveness == protocol.Gone) {
 		return b.Liveness == protocol.Gone
 	}
-	if ra != rb {
-		return ra < rb
-	}
-	if !a.ActivityAt.Equal(b.ActivityAt) {
-		return a.ActivityAt.After(b.ActivityAt)
+	sa, sb := started(a), started(b)
+	if sa != sb {
+		return sa < sb
 	}
 	return a.ID < b.ID
+}
+
+// started is when the agent's process started, the latest possible for
+// one without an identity.
+func started(a *protocol.Agent) int64 {
+	if a.Identity == nil {
+		return math.MaxInt64
+	}
+	return a.Identity.StartUnix
 }
 
 // less is the sort order: rank, then most recent activity first, then

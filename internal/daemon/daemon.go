@@ -155,7 +155,8 @@ type Daemon struct {
 	paneRecs  map[string]protocol.Pane
 	runRecs   map[string]protocol.Run
 	resolveMu sync.Mutex
-	resolved  map[string]string
+	resolved  map[string]resolution
+	resolving map[string]bool
 
 	cmds  map[string]*command    // recent add, rm and run by id
 	locks map[string]*sync.Mutex // per repository source
@@ -314,7 +315,8 @@ func New(cfg Config) *Daemon {
 		poke:         make(chan struct{}, 1),
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
-		resolved:     map[string]string{},
+		resolved:     map[string]resolution{},
+		resolving:    map[string]bool{},
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
 		commandTTL:   DefaultCommandTTL,

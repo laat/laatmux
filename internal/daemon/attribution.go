@@ -14,10 +14,11 @@ import (
 // each pane belongs to: the one whose root contains the pane's path, the
 // longest such root when checkouts nest. A pane laatmux made has its
 // path recorded in @laatmux_cwd; any other pane is where its process is,
-// pane_current_path. Paths are compared with symlinks resolved, as git
-// registers roots, and on path separators, so /w/foo-2 is not inside
-// /w/foo. A pane under no listed root, the main checkout's included,
-// belongs to no worktree.
+// pane_current_path. Paths are compared on path separators, so /w/foo-2
+// is not inside /w/foo, against each root as git registered it and with
+// its symlinks resolved; a pane's path is resolved too, off the poll, so
+// a pane on a hung mount never holds the poll up. A pane under no listed
+// root, the main checkout's included, belongs to no worktree.
 //
 // Panes are polled far more often than git lists worktrees. An agent
 // record takes its worktree at every observation, and when a listing
@@ -25,8 +26,20 @@ import (
 // worktree listed after its pane was seen gains the pane without
 // waiting for the pane to change.
 
-// maxResolved bounds the resolved-path cache between listings.
-const maxResolved = 4096
+// The resolved-path cache: its size, how many resolutions may be in
+// flight, and how long a resolution stands before it is made again, in
+// the background, the old one standing meanwhile.
+const (
+	maxResolved  = 4096
+	maxResolving = 64
+	resolveTTL   = time.Minute
+)
+
+// resolution is a path with its symlinks resolved, and when that was.
+type resolution struct {
+	real string
+	at   time.Time
+}
 
 // root is a listed worktree root and its path with symlinks resolved.
 type root struct {
@@ -38,38 +51,49 @@ type root struct {
 // pane laatmux made, the current one otherwise.
 func panePath(p tmux.Pane) string { return firstNonEmpty(p.Cwd, p.CurrentPath) }
 
-// resolve cleans a path and resolves its symlinks, through a cache the
-// worktree listing clears, so a poll costs no file system call per pane
-// and a changed symlink is seen within a listing. A path that does not
-// resolve, gone or unreadable, is taken as it is.
+// resolve is the path with its symlinks resolved as last seen, and the
+// path cleaned until it has been: the file system is asked on a
+// goroutine of its own, so a path on a hung mount costs that goroutine
+// and never the poll, and the answer is there by a later poll. A path
+// that does not resolve, gone or unreadable, is taken as it is.
 func (d *Daemon) resolve(path string) string {
 	if path == "" {
 		return ""
 	}
+	clean := filepath.Clean(path)
 	d.resolveMu.Lock()
+	defer d.resolveMu.Unlock()
 	r, ok := d.resolved[path]
-	d.resolveMu.Unlock()
+	if (!ok || time.Since(r.at) > resolveTTL) && !d.resolving[path] && len(d.resolving) < maxResolving {
+		d.resolving[path] = true
+		go func() {
+			real := clean
+			if rr, err := filepath.EvalSymlinks(clean); err == nil {
+				real = rr
+			}
+			d.resolveMu.Lock()
+			defer d.resolveMu.Unlock()
+			delete(d.resolving, path)
+			if len(d.resolved) >= maxResolved {
+				clear(d.resolved)
+			}
+			d.resolved[path] = resolution{real: real, at: time.Now()}
+		}()
+	}
 	if ok {
-		return r
+		return r.real
 	}
-	r = filepath.Clean(path)
-	if real, err := filepath.EvalSymlinks(r); err == nil {
-		r = real
-	}
-	d.resolveMu.Lock()
-	if len(d.resolved) >= maxResolved {
-		clear(d.resolved)
-	}
-	d.resolved[path] = r
-	d.resolveMu.Unlock()
-	return r
+	return clean
 }
 
-// forgetResolved empties the resolved-path cache.
-func (d *Daemon) forgetResolved() {
-	d.resolveMu.Lock()
-	clear(d.resolved)
-	d.resolveMu.Unlock()
+// resolveNow resolves a path on the caller's goroutine: a listed root,
+// which git has just read.
+func resolveNow(path string) string {
+	clean := filepath.Clean(path)
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		return real
+	}
+	return clean
 }
 
 // inside reports whether path is dir or below it, on path separators.
@@ -79,10 +103,10 @@ func inside(path, dir string) bool {
 
 // resolveRoots is the roots of a listing with their resolved paths,
 // longest first, so the first root that contains a path is the deepest.
-func (d *Daemon) resolveRoots(roots []string) []root {
+func resolveRoots(roots []string) []root {
 	out := make([]root, 0, len(roots))
 	for _, r := range roots {
-		out = append(out, root{root: r, real: d.resolve(r)})
+		out = append(out, root{root: r, real: resolveNow(r)})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i].real) > len(out[j].real) })
 	return out
@@ -119,11 +143,18 @@ func (d *Daemon) worktreeOfLocked(path string) string {
 		return ""
 	}
 	for _, r := range d.roots {
-		if inside(path, r.real) {
+		if inside(path, r.real) || inside(path, r.root) {
 			return d.worktreeID(r.root)
 		}
 	}
 	return ""
+}
+
+// within reports whether path is inside root, as written or resolved;
+// resolve is Daemon.resolve.
+func within(path, root string, resolve func(string) string) bool {
+	p := resolve(path)
+	return inside(p, filepath.Clean(root)) || inside(p, resolve(root))
 }
 
 // homeSessions maps a root to its home session on the managed server:
@@ -149,10 +180,9 @@ func homeSessions(panes []tmux.Pane, resolve func(string) string) map[string]str
 			if cur, ok := homes[p.Cwd]; ok && cur <= session {
 				continue
 			}
-			real := resolve(p.Cwd)
 			all := true
 			for _, q := range ps {
-				if !inside(resolve(panePath(q)), real) {
+				if !within(panePath(q), p.Cwd, resolve) {
 					all = false
 					break
 				}

@@ -53,13 +53,11 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	}
 	var roots []root
 	if err == nil {
-		// A listing is when symlinks are looked at again.
-		d.forgetResolved()
 		paths := make([]string, 0, len(recs))
 		for _, r := range recs {
 			paths = append(paths, r.Root)
 		}
-		roots = d.resolveRoots(paths)
+		roots = resolveRoots(paths)
 	}
 	if err != nil {
 		if msg := err.Error(); msg != d.lastListErr {

@@ -526,3 +526,39 @@ func TestRelayDropRetiredRetries(t *testing.T) {
 		t.Fatal("kept after the directory was writable again")
 	}
 }
+
+// A host's report that a worktree is gone drops the task that handed
+// over to it at once, without asking the listing, which could already
+// have a worktree made again at the root.
+func TestRelayRetiredDroppedOnRemoval(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k6", Host: "vm", EnvironmentID: "henv", Root: "/w/k6", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k6"}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.mu.Lock()
+	f.local.worktreeRemovedLocked("henv/worktree//w/other")
+	f.local.mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+	if _, ok := f.local.relay.get("k6"); !ok {
+		t.Fatal("dropped for another worktree")
+	}
+	f.local.mu.Lock()
+	f.local.worktreeRemovedLocked("henv/worktree//w/k6")
+	f.local.mu.Unlock()
+	f.awaitGone(t, "k6")
+}
+
+// awaitGone waits for the relay to have dropped the record.
+func (f *relayFixture) awaitGone(t *testing.T, id string) {
+	t.Helper()
+	for i := 0; ; i++ {
+		if _, ok := f.local.relay.get(id); !ok {
+			return
+		}
+		if i > 500 {
+			t.Fatalf("%s kept", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

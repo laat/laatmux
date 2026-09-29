@@ -230,9 +230,11 @@ truth; labels only place new things.
   after its pane was seen gains it at once. The views pair a worktree
   with its agents by `worktree_id` against a host with the capability,
   reached directly or through a merging daemon that has it too, and by
-  `session` otherwise; a worktree row shows its home session's agent,
-  else the most pressing one, and the others keep rows of their own
-  for now.
+  `session` otherwise. A worktree row shows an agent in its home
+  session, or, with no home session, the one that started first,
+  never chosen by activity, so rows do not swap as agents work; the
+  others keep rows of their own for now. A pane's path is resolved off
+  the poll, so a shell on a hung mount never holds detection up.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
   stages in the note, each step skipped by inspection: resolve, clone
   (refused when `<repos>/<name>` exists with another origin), fetch,
@@ -868,9 +870,11 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   there, and its handoff joins the task to the worktree row in every
   snapshot. The prompt stays on this machine; the host keeps none of
   it, and the stream carries the handoff, not the text. The file goes
-  when `rm` drops the tasks at the worktree, when the host's listing
-  no longer has it, asked as for a task that needs the user, and a
-  day after the handoff once its host has left the config. No worktree at the root is `gone`, a record
+  on `laatmux tasks dismiss <id>`, when `rm` drops the tasks at the
+  worktree, when the host reports the worktree removed, when the
+  host's listing no longer has it, asked as for a task that needs the
+  user, and a day after the handoff once its host has left the config
+  or answers as another machine. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
   retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
   delivers it; its worktree removed meanwhile, by `rm` here or

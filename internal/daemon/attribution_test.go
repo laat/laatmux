@@ -49,7 +49,7 @@ func TestAttributionTable(t *testing.T) {
 	}
 	d := New(Config{EnvironmentID: "env"})
 	d.mu.Lock()
-	d.roots = d.resolveRoots([]string{foo, foo2, nested})
+	d.roots = resolveRoots([]string{foo, foo2, nested})
 	d.mu.Unlock()
 	id := func(root string) string { return "env/worktree/" + root }
 	for _, c := range []struct {
@@ -66,9 +66,18 @@ func TestAttributionTable(t *testing.T) {
 		{"path reaching the root through a symlink", tmux.Pane{CurrentPath: filepath.Join(link, "src")}, id(foo)},
 		{"a path that is gone", tmux.Pane{CurrentPath: filepath.Join(foo, "gone")}, id(foo)},
 	} {
-		d.mu.Lock()
-		got := d.worktreeOfLocked(d.resolve(panePath(c.pane)))
-		d.mu.Unlock()
+		// A pane's path is resolved off the poll: the answer is there
+		// by a later one.
+		var got string
+		for i := 0; i < 100; i++ {
+			d.mu.Lock()
+			got = d.worktreeOfLocked(d.resolve(panePath(c.pane)))
+			d.mu.Unlock()
+			if got == c.want {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		if got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
@@ -180,7 +189,7 @@ func newAttrFixture(t *testing.T) *attrFixture {
 func (f *attrFixture) list(roots ...string) {
 	f.d.mu.Lock()
 	defer f.d.mu.Unlock()
-	f.d.setRootsLocked(f.d.resolveRoots(roots), time.Now())
+	f.d.setRootsLocked(resolveRoots(roots), time.Now())
 }
 
 // drain returns what the subscriber got until the stream is quiet.
@@ -285,6 +294,53 @@ func TestAttributionListedAfterPoll(t *testing.T) {
 	if pane == nil || pane.ID != "env/pane/laatmux/%2" || pane.WorktreeID != "env/worktree/"+f.foo || pane.Command != "zsh" || pane.PID != 40 {
 		t.Fatalf("pane record %+v", pane)
 	}
+	// The worktree leaves the listing: the pane record goes and the
+	// agent loses the id, without a pane poll.
+	f.list()
+	ms = f.drain(t)
+	var gone bool
+	for _, m := range ms {
+		gone = gone || m.PaneRecordID == "env/pane/laatmux/%2"
+	}
+	if got := agentUpserts(ms); !gone || got["%1"].WorktreeID != "" {
+		t.Fatalf("after the worktree left: %+v", ms)
+	}
+}
+
+// The pane poll and the worktree listing run on goroutines of their
+// own; attributing again on a listing reads what the poll writes.
+func TestAttributionConcurrentPolls(t *testing.T) {
+	f := newAttrFixture(t)
+	f.laatmux.set(func() {
+		f.laatmux.panes = []tmux.Pane{
+			{Session: "proj/foo", ID: "%1", TTY: "/dev/a1", Managed: true, Cwd: f.foo, CurrentPath: f.foo},
+			{Session: "proj/foo", ID: "%2", TTY: "/dev/s1", CurrentCommand: "zsh", CurrentPath: f.foo},
+		}
+	})
+	go func() {
+		for range f.got {
+		}
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			if i%2 == 0 {
+				f.list(f.foo, f.bar)
+			} else {
+				f.list(f.bar)
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		f.def.set(func() {
+			f.def.panes = []tmux.Pane{{Session: "work", ID: "%7", TTY: "/dev/a2", CurrentPath: []string{f.foo, f.bar, "/"}[i%3]}}
+		})
+		if err := f.d.poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
 }
 
 func TestAttributionPaneRecords(t *testing.T) {
@@ -410,6 +466,11 @@ func TestRunRecords(t *testing.T) {
 	if m, err := late.Read(); err != nil || len(m.Runs) != 1 || m.Runs[0].ID != "env/run/r2" {
 		t.Fatalf("snapshot while running %+v %v", m, err)
 	}
+	// A cancel from the client ends it as well.
+	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r3", Root: root, Cmd: []string{"sh", "-c", "sleep 30"}})
+	await(func(m protocol.Message) bool { return m.Run != nil && m.Run.ID == "env/run/r3" })
+	pc.Write(protocol.Message{Type: protocol.TypeCancel, ID: "r3"})
+	await(func(m protocol.Message) bool { return m.RunID == "env/run/r3" })
 	other := conn(t, d)
 	other.Write(protocol.Message{Type: protocol.TypeRm, ID: "rm1", Repo: remote, Branch: "task", Root: root, Force: true})
 	if res, _ := result(t, other, "rm1"); !res.OK {
@@ -420,5 +481,63 @@ func TestRunRecords(t *testing.T) {
 	defer d.mu.Unlock()
 	if len(d.runRecs) != 0 {
 		t.Fatalf("run records left %+v", d.runRecs)
+	}
+}
+
+// The home session with a split: inside the root it stays the home,
+// elsewhere it is not, and rm kills the managed session either way.
+func TestHomeSessionAndRm(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	repo, _ := store.Repo(remote)
+	for _, c := range []struct {
+		branch, split string
+		home          bool
+	}{{"inside", "src", true}, {"outside", "", false}} {
+		added, err := store.Add(ctx, repo, c.branch, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		splitPath := "/"
+		if c.split != "" {
+			splitPath = filepath.Join(added.Root, c.split)
+			mkdirs(t, splitPath)
+		}
+		session := "proj/" + c.branch
+		ft.set(func() {
+			ft.panes = []tmux.Pane{
+				{Session: session, ID: "%1", Cwd: added.Root, CurrentPath: added.Root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+				{Session: session, ID: "%2", CurrentPath: splitPath, ServerPID: 5, TTY: "/dev/null"},
+			}
+		})
+		d.pollWorktrees(ctx)
+		// The split's path resolves off the poll; a later poll has it.
+		var got string
+		for i := 0; i < 100; i++ {
+			if err := d.poll(ctx); err != nil {
+				t.Fatal(err)
+			}
+			d.mu.Lock()
+			got = d.worktrees[added.Root].Session
+			d.mu.Unlock()
+			if (got != "") == c.home {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if (got != "") != c.home {
+			t.Fatalf("%s: session %q", c.branch, got)
+		}
+		pc := conn(t, d)
+		pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "rm-" + c.branch, Repo: remote, Branch: c.branch, Root: added.Root, Force: true})
+		if res, _ := result(t, pc, "rm-"+c.branch); !res.OK {
+			t.Fatalf("rm: %+v", res)
+		}
+		ft.mu.Lock()
+		killed := len(ft.killed) > 0 && ft.killed[len(ft.killed)-1] == session
+		ft.mu.Unlock()
+		if !killed {
+			t.Fatalf("%s: rm left the managed session", c.branch)
+		}
 	}
 }

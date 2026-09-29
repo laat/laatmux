@@ -226,13 +226,14 @@ func (r *relay) removeLocked(id string) error {
 }
 
 // sweep deletes the records retired longer than the handoff retention
-// whose host configured does not say, the host's name gone from the
-// config; a record whose host is configured goes with its worktree.
-func (r *relay) sweep(now time.Time, configured func(host string) bool) {
+// that nothing can check any more: keep says which can, a host still
+// configured and answering as the machine the task ran on. Those go
+// with their worktree.
+func (r *relay) sweep(now time.Time, keep func(host, environmentID string) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, p := range r.recs {
-		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention || configured(p.Host) {
+		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention || keep(p.Host, p.EnvironmentID) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -530,13 +531,27 @@ func (d *Daemon) runRelaySweep(ctx context.Context) {
 	t := time.NewTicker(relaySweep)
 	defer t.Stop()
 	for {
-		// A config that does not read keeps every record.
+		// A config that does not read keeps every record. A host that
+		// answers as another machine now, reinstalled under its name
+		// say, lists none of the old one's worktrees.
 		hosts, err := d.cfg.Hosts()
 		configured := map[string]bool{}
 		for _, h := range hosts {
 			configured[h.Name] = true
 		}
-		d.relay.sweep(time.Now(), func(host string) bool { return err != nil || configured[host] })
+		answers := map[string]string{}
+		d.mu.Lock()
+		for name, mh := range d.mhosts {
+			answers[name] = mh.status.EnvironmentID
+		}
+		d.mu.Unlock()
+		d.relay.sweep(time.Now(), func(host, env string) bool {
+			if err != nil {
+				return true
+			}
+			now, known := answers[host]
+			return configured[host] && (!known || now == "" || now == env)
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -942,8 +957,8 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 }
 
 // handoff retires the record into its worktree row: the handoff is
-// written to the file, which is kept for a day, before the removal is
-// published, so a daemon restarted in between still carries it. When
+// written to the file, which is kept for the worktree's life, before the
+// removal is published, so a daemon restarted in between still carries it. When
 // a merged subscriber is watching, the removal waits for the merged
 // stream to show the worktree, so the row is never gone before the
 // one it became is there.
@@ -1056,9 +1071,14 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	}
 	switch {
 	case p.retired():
-		// Kept for its handoff, which a view may still need; the sweep
-		// takes it after the day.
-		res.Error = "the task " + id + " has handed over to its worktree row; nothing to dismiss"
+		// Kept for what its worktree was made for; the user may drop it,
+		// prompt and all, before the worktree goes. Its handoff leaves
+		// the next snapshot, as when the worktree goes.
+		if err := d.dropRetired(id); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
 		return res
 	case !p.Sent && !p.Taken:
 		// The host has no trace of it: removed first, under the relay's

@@ -418,9 +418,10 @@ func TestPendingOnRenamedHost(t *testing.T) {
 }
 
 // From a host with attribution a worktree takes its agent by the
-// worktree id the host gave it, from any session or server: the home
-// session's first, else the most pressing. The others keep rows of
-// their own. A host without attribution pairs by session name.
+// worktree id the host gave it: one in its home session, or, with no
+// home session, the one that started first, from any session or server.
+// The others keep rows of their own. A host without attribution pairs
+// by session name.
 func TestBuildByWorktreeID(t *testing.T) {
 	now := time.Now()
 	wt := func(env, root, session string) protocol.Worktree {
@@ -433,9 +434,11 @@ func TestBuildByWorktreeID(t *testing.T) {
 		},
 		Agents: []protocol.Agent{
 			// /w/a: no home session; an agent on the default server and
-			// one in another managed session, the blocked one shown.
-			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "scratch", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a"},
+			// one in another managed session, the first started shown.
+			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 1, StartUnix: 200}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "scratch", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 2, StartUnix: 100}},
 			// /w/b: the home session's idle agent wins over a working one
 			// elsewhere, which keeps its row.
 			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
@@ -443,10 +446,13 @@ func TestBuildByWorktreeID(t *testing.T) {
 			// /w/c names a session whose agent is not attributed to it:
 			// with attribution the name is not the link.
 			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Session: "proj/c", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now},
+			// /w/e has a home session with no agent in it: an agent
+			// elsewhere is not the row's, which jumps to the home.
+			{ID: "venv/default/%7", EnvironmentID: "venv", Server: "default", Session: "other", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/e"},
 			// A host without attribution: by session, the field ignored.
 			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
 		},
-		Worktrees: []protocol.Worktree{wt("venv", "/w/a", ""), wt("venv", "/w/b", "proj/b"), wt("venv", "/w/c", "proj/c"), wt("oenv", "/w/d", "proj/d")},
+		Worktrees: []protocol.Worktree{wt("venv", "/w/a", ""), wt("venv", "/w/b", "proj/b"), wt("venv", "/w/c", "proj/c"), wt("oenv", "/w/d", "proj/d"), wt("venv", "/w/e", "proj/e")},
 	}
 	got := Build(in)
 	byID := map[string]Row{}
@@ -464,6 +470,7 @@ func TestBuildByWorktreeID(t *testing.T) {
 		"venv/worktree//w/b": "venv/laatmux/%3",
 		"venv/worktree//w/c": "",
 		"oenv/worktree//w/d": "oenv/laatmux/%6",
+		"venv/worktree//w/e": "",
 	} {
 		if got := agentOf(id); got != want {
 			t.Errorf("%s: agent %q, want %q", id, got, want)
@@ -471,7 +478,7 @@ func TestBuildByWorktreeID(t *testing.T) {
 	}
 	// Rows of their own: the unchosen default-server agents and the
 	// unattributed one; the chosen ones are not repeated.
-	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5"} {
+	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("%s has no row", id)
 		}
@@ -479,6 +486,14 @@ func TestBuildByWorktreeID(t *testing.T) {
 	for _, id := range []string{"venv/laatmux/%2", "venv/laatmux/%3", "oenv/laatmux/%6"} {
 		if _, ok := byID[id]; ok {
 			t.Errorf("%s has a row of its own besides its worktree's", id)
+		}
+	}
+	// The choice does not turn on activity: the two agents of /w/a
+	// swapping which works keep the rows where they were.
+	in.Agents[0].Activity, in.Agents[1].Activity = protocol.Idle, protocol.Blocked
+	for _, r := range Build(in).All() {
+		if r.ID() == "venv/worktree//w/a" && (r.Agent == nil || r.Agent.ID != "venv/laatmux/%2") {
+			t.Errorf("the row's agent changed with activity: %+v", r.Agent)
 		}
 	}
 	// The same records through a view that has no attribution for the

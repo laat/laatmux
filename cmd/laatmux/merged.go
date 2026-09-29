@@ -192,8 +192,8 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		for _, s := range msg.Sessions {
 			m.sessions[s.Name] = s
 		}
-		// The handoffs merge into what is known; a snapshot's list is
-		// the last day's, and a view may hold an anchor older than that.
+		// The handoffs merge into what is known; a view may hold an
+		// anchor whose handoff the daemon has dropped since.
 		m.pendings = map[string]protocol.Pending{}
 		for _, p := range msg.Pendings {
 			m.pendings[p.ID] = p
@@ -274,10 +274,11 @@ type handoffSeen struct {
 	at time.Time
 }
 
-// handoffRetention is how long a handoff is kept, the day the daemon
-// keeps a retired record's file for. Past it an anchor on the record is
-// not found, and the selection is cleared rather than moved to a
-// worktree id that may have been reused. A variable for tests.
+// handoffRetention is how long a handoff is kept for re-anchoring a
+// selection, a day, though the daemon keeps a retired record for its
+// worktree's life. Past it an anchor on the record is not found, and the
+// selection is cleared rather than moved to a worktree id that may have
+// been reused. A variable for tests.
 var handoffRetention = 24 * time.Hour
 
 // handoffLocked records a handoff, keeping the time it was first seen.

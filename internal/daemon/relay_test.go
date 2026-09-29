@@ -265,20 +265,22 @@ func TestRelayAdd(t *testing.T) {
 	if added != 2 { // the add's connection and the listing's
 		t.Fatalf("%d dials for one task", added)
 	}
-	// A retired record is not dismissed: its handoff is kept.
-	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1"}); res.OK || !strings.Contains(res.Error, "handed over") {
-		t.Fatalf("dismiss retired %+v", res)
-	}
-	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err != nil {
-		t.Fatal("retired file dismissed")
-	}
-	// Kept past the retention while its host is configured, prompt
-	// and all, and swept after it once the host has left the config.
-	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(string) bool { return true })
+	// Kept past the retention while its host is configured and answers
+	// as the machine it ran on, prompt and all, and swept after it once
+	// the host has left the config or answers as another machine.
+	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(host, env string) bool { return host == "vm" && env == "henv" })
 	if p, ok := f.local.relay.get("t1"); !ok || p.PromptText == "" {
 		t.Fatalf("retired record %+v kept %v", p, ok)
 	}
-	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(string) bool { return false })
+	// A retired record is the user's to drop, prompt and all, before
+	// its worktree goes.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1b"}); !res.OK {
+		t.Fatalf("dismiss retired %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1b"))); err == nil {
+		t.Fatal("retired file kept after dismiss")
+	}
+	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(host, env string) bool { return host != "vm" || env != "henv" })
 	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err == nil {
 		t.Fatal("retired file kept past the retention with its host gone")
 	}
