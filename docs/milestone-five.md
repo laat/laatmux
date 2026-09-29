@@ -511,8 +511,9 @@ before 2.50, without `--quiet`, gets the plain call, which writes the
 merge's objects once per commit pair. Every call runs with
 `GIT_NO_LAZY_FETCH=1`, which git reads from 2.45, and, for an older
 git, `GIT_ALLOW_PROTOCOL=none`, so a partial clone never fetches from
-its remote during a refresh; the committed diff and the conflict are
-then left out when a blob they need is missing. A branch with no
+its remote during a refresh. What needs a missing blob is left out: the
+committed diff or the conflict, read again after a minute, or the
+uncommitted diff, then a lower bound. A branch with no
 merge base with its base, an orphan or a shallow history, gets ahead
 and behind alone.
 
@@ -539,9 +540,8 @@ every 30 s. `add`, `rm` and a run ending make it due at once, and so does
 a change in an mtime the daemon stats every second: `HEAD` and `index`
 in the worktree's git dir (`.git/worktrees/<name>`), and in the common
 dir `packed-refs`, `shallow` and the loose refs of the branch and of its
-base. A
-worktree gets at most one refresh every 2 s. Polling comes first;
-kqueue or inotify through `golang.org/x/sys` only if a measurement with
+base. A worktree gets at most one refresh every 2 s. Polling comes
+first; kqueue or inotify through `golang.org/x/sys` only if a measurement with
 twenty worktrees on the VM shows the cost.
 
 Step 4 measured it: twenty worktrees of a repository with 2000 files, each

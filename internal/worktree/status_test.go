@@ -449,3 +449,70 @@ func TestStatusPartialCloneNoFetch(t *testing.T) {
 		t.Errorf("after the fetch: %+v %v", st, err)
 	}
 }
+
+// partialPR is a blobless clone checked out at origin/pr, whose merge base
+// with origin/main has a blob of f.txt that was never fetched.
+func partialPR(t *testing.T) (string, func() int, *fixture) {
+	f := newFixture(t)
+	base := filepath.Dir(f.remote)
+	seed := filepath.Join(base, "seed")
+	var lines []string
+	for i := 1; i <= 10; i++ {
+		lines = append(lines, "line"+string(rune('a'+i)))
+	}
+	write(t, filepath.Join(seed, "f.txt"), strings.Join(lines, "\n")+"\n")
+	for i := 1; i <= 10; i++ {
+		lines[i-1] = "gone" + string(rune('a'+i))
+	}
+	write(t, filepath.Join(seed, "gone.txt"), strings.Join(lines, "\n")+"\n")
+	run(t, seed, "git", "add", ".")
+	run(t, seed, "git", "commit", "-q", "-m", "B")
+	run(t, seed, "git", "checkout", "-q", "-b", "pr")
+	run(t, seed, "sh", "-c", "sed -i.bak s/lineb/PRb/ f.txt && rm f.txt.bak && git mv gone.txt moved.txt && echo more >> moved.txt && git commit -qam pr")
+	run(t, seed, "git", "checkout", "-q", "main")
+	run(t, seed, "sh", "-c", "sed -i.bak s/linej/MAINj/ f.txt && rm f.txt.bak && echo main >> gone.txt && git commit -qam m1")
+	run(t, seed, "git", "push", "-q", f.remote, "main", "pr")
+	run(t, f.remote, "git", "config", "uploadpack.allowFilter", "true")
+	partial := filepath.Join(base, "partial")
+	run(t, base, "git", "clone", "-q", "--filter=blob:none", "file://"+f.remote, partial)
+	gitCfg(t, partial)
+	run(t, partial, "git", "checkout", "-q", "-b", "pr", "origin/pr")
+	packs := func() int {
+		m, _ := filepath.Glob(filepath.Join(partial, ".git", "objects", "pack", "*.pack"))
+		return len(m)
+	}
+	return partial, packs, f
+}
+
+// The committed diff needs the merge base's blob: left out, the rest kept.
+func TestStatusPartialCommittedDiff(t *testing.T) {
+	partial, packs, f := partialPR(t)
+	before := packs()
+	var cache StatusCache
+	for i := 0; i < 2; i++ {
+		st, _, _, err := Status(f.ctx, partial, "pr", &cache)
+		if err != nil || st.Ahead != 1 || st.Behind != 1 || !cache.have {
+			t.Errorf("refresh %d: %+v %v", i, st, err)
+		}
+	}
+	if packs() != before {
+		t.Error("fetched")
+	}
+}
+
+// The squash idiom: reset --soft to the merge base. The uncommitted
+// side needs the merge base's blobs.
+func TestStatusPartialSoftReset(t *testing.T) {
+	partial, packs, f := partialPR(t)
+	mb := strings.TrimSpace(run(t, partial, "git", "merge-base", "origin/main", "HEAD"))
+	run(t, partial, "git", "reset", "-q", "--soft", mb)
+	before := packs()
+	var cache StatusCache
+	st, _, _, err := Status(f.ctx, partial, "pr", &cache)
+	if err != nil || !st.Dirty || !st.UncommittedPartial {
+		t.Errorf("after soft reset: %+v %v", st, err)
+	}
+	if packs() != before {
+		t.Error("fetched")
+	}
+}

@@ -187,7 +187,9 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	// staged change the working tree undoes included, and for the
 	// untracked files that are not ignored; the diff against HEAD for
 	// the counts.
-	status, err := g("status", "--porcelain=v2", "-z", "--untracked-files=all")
+	// --no-renames: rename detection reads blobs a partial clone may
+	// lack, and dirty needs no pairing.
+	status, err := g("status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames")
 	if err != nil {
 		return st, head, paths, err
 	}
@@ -209,13 +211,21 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		}
 	}
 	diff, err := g("-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD")
-	if err != nil {
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		st.Uncommitted = numstat(diff)
+	case errors.As(err, &ee):
+		// git refused the diff, a blob of HEAD's missing from a partial
+		// clone after a reset say: the untracked lines alone, a lower
+		// bound.
+		st.UncommittedPartial = true
+	default:
 		return st, head, paths, err
 	}
-	st.Uncommitted = numstat(diff)
 	lines, partial := cache.countUntracked(root, untracked)
 	st.Uncommitted[0] += lines
-	st.UncommittedPartial = partial
+	st.UncommittedPartial = st.UncommittedPartial || partial
 	for _, d := range []string{"rebase-merge", "rebase-apply"} {
 		if fi, err := os.Stat(filepath.Join(paths.GitDir, d)); err == nil && fi.IsDir() {
 			st.Rebasing = true
@@ -475,8 +485,9 @@ func statusGit(ctx context.Context, dir string, args ...string) (string, error) 
 	// A partial clone does not fetch the blobs a merge-tree or a diff
 	// lacks: a refresh never goes to the network. GIT_NO_LAZY_FETCH is
 	// git 2.45's; for an older git no transport is allowed, so a lazy
-	// fetch fails rather than connects. The conflict is then left out
-	// for the pair.
+	// fetch fails rather than connects. What needs the missing blob is
+	// then left out: the committed diff or the conflict, read again
+	// after a minute, or the uncommitted diff, marked a lower bound.
 	cmd.Env = append(gitEnv(), "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
 	// Its own process group, killed whole at the timeout: a merge
 	// driver or a hook git started goes with it.
