@@ -216,25 +216,43 @@ func (f *Form) promptKey(k Key) {
 		f.insert([]rune{'\n'})
 	case KeyPaste:
 		f.insert([]rune(k.Text))
+	// Moves and deletes step over the zero-width runes after a rune,
+	// a variation selector say, so the cursor never splits a symbol
+	// from its selector.
 	case KeyBackspace:
 		if f.cursor > 0 {
-			f.prompt = append(f.prompt[:f.cursor-1], f.prompt[f.cursor:]...)
-			f.cursor--
+			i := f.cursor - 1
+			for i > 0 && joins(f.prompt[i]) {
+				i--
+			}
+			f.prompt = append(f.prompt[:i], f.prompt[f.cursor:]...)
+			f.cursor = i
 			f.propose()
 		}
 	case KeyDelete:
 		if f.cursor < len(f.prompt) {
-			f.prompt = append(f.prompt[:f.cursor], f.prompt[f.cursor+1:]...)
+			j := f.cursor + 1
+			for j < len(f.prompt) && joins(f.prompt[j]) {
+				j++
+			}
+			f.prompt = append(f.prompt[:f.cursor], f.prompt[j:]...)
 			f.propose()
 		}
 	case KeyLeft:
 		// Within the line: Up and Down change lines.
-		if f.cursor > f.lineStart(f.cursor) {
+		start := f.lineStart(f.cursor)
+		if f.cursor > start {
 			f.cursor--
+			for f.cursor > start && joins(f.prompt[f.cursor]) {
+				f.cursor--
+			}
 		}
 	case KeyRight:
-		if f.cursor < f.lineEnd(f.cursor) {
+		if end := f.lineEnd(f.cursor); f.cursor < end {
 			f.cursor++
+			for f.cursor < end && joins(f.prompt[f.cursor]) {
+				f.cursor++
+			}
 		}
 	case KeyHome:
 		f.cursor = f.lineStart(f.cursor)
@@ -260,6 +278,10 @@ func (f *Form) promptKey(k Key) {
 		f.submit()
 	}
 }
+
+// joins reports whether r is drawn with the rune before it, taking no
+// cell of its own: a combining mark or a variation selector.
+func joins(r rune) bool { return r >= 0x20 && runeWidth(r) == 0 }
 
 func (f *Form) insert(rs []rune) {
 	out := make([]rune, 0, len(f.prompt)+len(rs))
@@ -438,6 +460,10 @@ func tail(s string, w int) string {
 	for i > 0 && n+cellWidth(rs, i-1, rs[i-1]) <= w-1 {
 		i--
 		n += cellWidth(rs, i, rs[i])
+	}
+	// A selector cut from its symbol is dropped with it.
+	for i < len(rs) && joins(rs[i]) {
+		i++
 	}
 	return "…" + string(rs[i:])
 }

@@ -689,3 +689,30 @@ func TestWrapVS16(t *testing.T) {
 		}
 	}
 }
+
+// Left, Right, Backspace and Delete keep a symbol and its selector
+// together.
+func TestPromptEditVS16(t *testing.T) {
+	f := &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt}
+	f.cursor = 3
+	f.promptKey(Key{Kind: KeyLeft})
+	if f.cursor != 1 {
+		t.Errorf("left: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyRight})
+	if f.cursor != 3 {
+		t.Errorf("right: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyBackspace})
+	if string(f.prompt) != "ab" || f.cursor != 1 {
+		t.Errorf("backspace: %q at %d", string(f.prompt), f.cursor)
+	}
+	f = &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt, cursor: 1}
+	f.promptKey(Key{Kind: KeyDelete})
+	if string(f.prompt) != "ab" || f.cursor != 1 {
+		t.Errorf("delete: %q at %d", string(f.prompt), f.cursor)
+	}
+	if got := tail("abcdefgh⚠️x", 2); width(got) > 2 {
+		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+}

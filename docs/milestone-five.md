@@ -627,7 +627,8 @@ every worktree in the merged stream, keyed by source and branch.
 - **Line 3:** the pane title, then the PR number and checks against the
   right edge.
 - **The stripe:** `▌` on every line, in the status colour.
-- **The selection:** a background band, not reverse video.
+- **The selection:** a background band when the background is known,
+  reverse video otherwise (below).
 - **Dividers:** `─` between tiles, in `border`. The compact layout is
   line 1 with the secondary label and host tag after the primary, and
   the dashboard draws line 3 under it.
@@ -649,7 +650,8 @@ and the selection is reverse video with no colours on it, unless
 `theme.custom` overrides any colour. A stale
 row is drawn in `dimmed` with the dim attribute throughout, the stripe
 and the diff and PR colours included, and so is any other dim row but
-for the viewer's own row's label; a task that needs the user is not
+for the viewer's own row's label, and but when selected: under the band
+it is in `text`, under reverse video in the attributes alone, unfaint; a task that needs the user is not
 dim, its waiting icon saying so. Plain text keeps the terminal's
 foreground, in `text` under the selection band; a host that is down is
 drawn in `danger`, one connecting in `warning`, and a group's header in

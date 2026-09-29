@@ -80,8 +80,9 @@ type Decoder struct {
 	oscLeft  int
 	oscUntil time.Time
 	// expectUntil is how long an answer to the background query may
-	// still come: until then an OSC cut anywhere, right after its
-	// escape and bracket too, is armed against; after it only one whose
+	// still come: until then an OSC cut anywhere from its escape and
+	// bracket on is armed against (one cut after the escape alone
+	// reads as Esc and keys, as any other sequence would); after it only one whose
 	// number and semicolon came, so an Alt-] and the keys after it are
 	// the user's.
 	expectUntil time.Time
