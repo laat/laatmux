@@ -183,12 +183,18 @@ func (d *Daemon) attendLocked(host string, local bool, a protocol.Agent) {
 	}
 	pid, start := identityOf(a)
 	e := d.attn.entries[a.ID]
-	if e == nil || e.PID != pid || e.Start != start || e.Host != host {
+	if e == nil || e.PID != pid || e.Start != start || e.Local != local || !local && e.Host != host {
 		// A new agent, or another in the same pane: the old times go.
+		// This machine's own agent keeps its entry across a rename of
+		// the machine, which is only a label for the same agent.
 		d.forgetLocked(a.ID)
 		d.attn.entries[a.ID] = &attnEntry{Host: host, Local: local, PID: pid, Start: start, Activity: a.Activity, ActivityAt: a.ActivityAt}
 		d.saveAttentionLocked()
 		return
+	}
+	if e.Host != host {
+		e.Host = host
+		d.saveAttentionLocked()
 	}
 	// Unknown is the detector unable to tell, a startup grace after a
 	// restart say: the activity kept stands, so working, unknown, then

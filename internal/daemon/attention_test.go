@@ -143,6 +143,19 @@ func TestAttentionLocalRename(t *testing.T) {
 	if done(d, a.ID) {
 		t.Error("not seen through the new name")
 	}
+
+	// Finished again, then the daemon restarts under the new name: the
+	// entry is the same agent's and keeps its finish.
+	a.Activity, a.ActivityAt = protocol.Working, t0.Add(2*time.Second)
+	publish(d, "laatmux/%1", a)
+	a.Activity, a.ActivityAt = protocol.Idle, t0.Add(3*time.Second)
+	publish(d, "laatmux/%1", a)
+	list := &hostsList{hosts: []client.Host{{Name: "laptop"}}}
+	d = New(Config{EnvironmentID: "menv", Host: "laptop", Hosts: list.get, Attention: d.attn.path})
+	publish(d, "laatmux/%1", a)
+	if !done(d, a.ID) {
+		t.Error("a restart under the new name lost the finish")
+	}
 }
 
 // Only working to idle with a new mark is a finish: working, unknown,
