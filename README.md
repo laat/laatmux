@@ -628,7 +628,8 @@ first within a group; `recency` is most recent activity first, and
 `window` by session and window, tasks first in both. Stale rows fold,
 unless `sidebar.collapse_stale` is false, and settled rows fold, into a
 collapsed group at the bottom, orphaned rows after them; a settled
-workspace's blocked or done agent stays in place.
+workspace's blocked or done agent stays in place, and so does the
+viewer's own row, whatever it is.
 
 **Done and seen.** The local daemon keeps, per agent and its process
 identity, the last activity it saw and two times on this machine's

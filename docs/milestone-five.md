@@ -422,7 +422,7 @@ in the agent view. This reverses milestone three's "age is never a
 reason" rule; `dim_stale: false` stops the dimming and
 `collapse_stale: false` the fold, while the icon and the place in
 `priority` order stay. The viewer's own row is never folded away, stale
-or not.
+or settled, so `z` in the sidebar can undo itself.
 
 workmux's sleep is laatmux's settle, and moves to workmux's key: `z`
 settles or unsettles the selected workspace in the sidebar and the

@@ -605,24 +605,21 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
 		t.Fatalf("filter cleared: %+v follow=%v", got, m.Follow)
 	}
-	// The viewer's row settled: hidden in the collapsed group, shown
-	// when the group is expanded.
+	// The viewer's row settled: it stays in place, dim, still followed,
+	// so z can unsettle it; the groups folding changes nothing.
 	for i := range in.Locals {
 		if in.Locals[i].Name == "mac/proj/task" {
 			in.Locals[i].Settled = true
 		}
 	}
 	m.SetRows(rows.Build(in))
-	if got := m.Selection(); got != nil {
-		t.Fatalf("settled and collapsed: %+v", got)
+	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Settled || !m.Follow {
+		t.Fatalf("settled: %+v follow=%v", got, m.Follow)
 	}
+	m.Handle(Key{Rune: 'f'})
 	m.Handle(Key{Rune: 'f'})
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
-		t.Fatalf("settled and expanded: %+v follow=%v", got, m.Follow)
-	}
-	m.Handle(Key{Rune: 'f'})
-	if got := m.Selection(); got != nil || !m.Follow {
-		t.Fatalf("collapsed again: %+v follow=%v", got, m.Follow)
+		t.Fatalf("after f twice: %+v follow=%v", got, m.Follow)
 	}
 	// Moves that change nothing keep following: up from the first row,
 	// onto the selected row, on an empty list.
@@ -1059,7 +1056,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	sy, local := -1, ""
 	for yy := 1; yy <= m.Height; yy++ {
 		if i := m.hitRow(yy, time.Time{}); i >= 0 {
-			if r := m.Visible()[i].Row; r.Local != nil && !r.Settled {
+			if r := m.Visible()[i].Row; r.Local != nil && r.Local.Workspace() && !r.Settled && !r.Current {
 				sy, local = yy, r.Local.Name
 				break
 			}

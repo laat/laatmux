@@ -761,8 +761,8 @@ func TestSortOrders(t *testing.T) {
 	}
 }
 
-// The viewer's own row is never folded away as stale: the pane always
-// shows the session it sits in.
+// The viewer's own row is never folded away, stale or settled: the pane
+// always shows the session it sits in.
 func TestCurrentNotFolded(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	in := Input{
@@ -776,5 +776,16 @@ func TestCurrentNotFolded(t *testing.T) {
 	rs := Build(in)
 	if len(rs.Main) != 1 || !rs.Main[0].Stale || !rs.Main[0].Current || len(rs.Stale) != 0 {
 		t.Errorf("main %+v, stale %+v", rs.Main, rs.Stale)
+	}
+	// A workspace settled from the sidebar with z: still there, dim, to
+	// unsettle.
+	in.Agents[0].ActivityAt = now
+	in.Agents[0].Session = "proj/w"
+	in.Worktrees = []protocol.Worktree{{ID: "venv/worktree//w", EnvironmentID: "venv", Repo: "proj", Branch: "w", Root: "/w", Session: "proj/w"}}
+	in.Locals = []workspace.Local{{Name: "vm/proj/w", Key: workspace.Key("venv", "/w"), Host: "vm", Settled: true}}
+	in.Current = "vm/proj/w"
+	rs = Build(in)
+	if len(rs.Main) != 1 || !rs.Main[0].Settled || !rs.Main[0].Dim || len(rs.Settled) != 0 {
+		t.Errorf("settled: main %+v, settled %+v", rs.Main, rs.Settled)
 	}
 }
