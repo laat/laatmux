@@ -8,7 +8,9 @@ designed in [docs/milestone-two.md](docs/milestone-two.md) and built.
 Milestone three, the sidebar, the dashboard, `split` and `run`, is designed
 in [docs/milestone-three.md](docs/milestone-three.md) and built. Milestone
 four, the task form and the background add, is designed in
-[docs/milestone-four.md](docs/milestone-four.md).
+[docs/milestone-four.md](docs/milestone-four.md) and built. Milestone five,
+two sidebar views and the sidebar at workmux's level, is designed in
+[docs/milestone-five.md](docs/milestone-five.md).
 
 ## Layout
 
