@@ -27,7 +27,10 @@ func title(t *testing.T, name string) string {
 
 // Real panes captured on a clean Debian VM with tmux capture-pane -p, 100x40,
 // Claude Code 2.1.278 in manual mode; titles from #{pane_title} at the same
-// moment. codex-idle is from a local pane. Each case is a distinct rule.
+// moment. claude-interrupted is from 2.1.284, captured the same way four
+// seconds after Esc. codex-idle is from a local pane. Each case is a
+// distinct rule, but for claude-interrupted, which checks that an
+// interrupted turn reads as idle on its own.
 func TestRealFixtures(t *testing.T) {
 	cases := []struct {
 		name, agent string
@@ -46,6 +49,8 @@ func TestRealFixtures(t *testing.T) {
 			"'✻ Brewed for 12s · done' and an empty prompt box"},
 		{"claude-idle-after-tool", "claude", Idle, "live_prompt_box", false,
 			"a shell tool ran without a prompt in manual mode; back at the prompt box"},
+		{"claude-interrupted", "claude", Idle, "live_prompt_box", false,
+			"Esc during a turn, Claude Code 2.1.284 in auto mode: '⎿ Interrupted · What should Claude do instead?' above an empty prompt box, no 'esc to interrupt'"},
 		{"claude-permission-prompt", "claude", Blocked, "bash_permission_prompt", false,
 			"'Do you want to proceed?' with numbered choices for rm -f outside the project"},
 		{"claude-transcript", "claude", Unknown, "transcript_viewer", true,
