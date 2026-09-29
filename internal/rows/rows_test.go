@@ -588,4 +588,22 @@ func TestBuildHomelessRowLocal(t *testing.T) {
 	if len(rs.Main) != 1 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || rs.Main[0].Settled {
 		t.Fatalf("default-server agent: %+v", rs)
 	}
+	// The agent in the worktree's workspace session itself: the row is
+	// settled as that session is.
+	inWorkspace := notes
+	inWorkspace.Session = "mac/proj/a"
+	rs = Build(Input{Hosts: hosts, Agents: []protocol.Agent{inWorkspace}, Worktrees: []protocol.Worktree{w}, Locals: locals})
+	if len(rs.Settled) != 1 || rs.Settled[0].Local == nil || rs.Settled[0].Local.Name != "mac/proj/a" {
+		t.Fatalf("agent in the workspace session: %+v", rs)
+	}
+	// On a remote host's default server the agent's session is not
+	// this machine's: the row keeps the workspace session.
+	remote := []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	rw := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	ra := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: rw.ID}
+	rs = Build(Input{Hosts: remote, Agents: []protocol.Agent{ra}, Worktrees: []protocol.Worktree{rw},
+		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"})
+	if all := rs.All(); len(all) != 1 || all[0].Local == nil || all[0].Local.Name != "vm/proj/a" || !all[0].Current {
+		t.Fatalf("remote default-server agent: %+v", rs)
+	}
 }

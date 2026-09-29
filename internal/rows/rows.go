@@ -427,17 +427,21 @@ func Build(in Input) Rows {
 		key := workspace.Key(w.EnvironmentID, w.Root)
 		seenKey[key] = true
 		if w.Session == "" && r.Agent != nil && Server(*r.Agent) != tmux.LaatmuxServer.Label() {
-			// With no home session and its agent on a default server
-			// the row is jumped to through the agent, and stands for
-			// the agent's local session, whatever workspace session is
-			// left, and is not settled by one: settling is a workspace
-			// session's, which this row does not act on. One whose
-			// agent is in a managed session is attached to through the
-			// worktree's own workspace session.
+			// With no home session and its agent on this machine's
+			// default server the row is jumped to by switching to the
+			// agent's session, and stands for it, whatever workspace
+			// session is left. One whose agent is in a managed session
+			// is attached to through the worktree's own workspace
+			// session, and one on a remote host's default server cannot
+			// be jumped to, and keeps the workspace session.
 			r.Local = agentLocal(host, r.Agent)
-		} else if l := byKey[key]; l != nil {
-			r.Local, r.Settled = l, l.Settled
 		}
+		if r.Local == nil {
+			r.Local = byKey[key]
+		}
+		// Settled as the session the row stands for is: settling is that
+		// session's.
+		r.Settled = r.Local != nil && r.Local.Settled
 		if idx := byAlias[w.ID]; len(idx) > 0 {
 			for _, j := range idx {
 				pendings[j].Worktree, pendings[j].Agent, pendings[j].Local = r.Worktree, r.Agent, r.Local
