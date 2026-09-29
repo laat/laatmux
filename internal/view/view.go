@@ -645,22 +645,107 @@ func (m *Model) head(r rows.Row) []Span {
 }
 
 // second is a row's second line after the stripe: the secondary label
-// and the host tag.
+// and the host tag, then the worktree's diff stats against the right
+// edge, as much of them as the room past the labels takes.
 func (m *Model) second(r rows.Row, indent string) []Span {
 	_, sec := r.Labels()
 	room := m.Width - 1 - width(indent)
 	where := m.where(r)
+	labels := width(where.Text)
+	if sec != "" {
+		labels += width(sec) + 1
+	}
+	stats := gitSpans(r, room-labels-1)
+	if n := spansWidth(stats); n > 0 {
+		room -= n + 1
+	}
+	var out []Span
 	if sec == "" {
 		where.Text = fit(where.Text, room)
-		return []Span{m.stripe(r), {Text: indent}, where}
+		out = []Span{m.stripe(r), {Text: indent}, where}
+	} else {
+		s := fit(sec, room)
+		out = []Span{m.stripe(r), {Text: indent + s}}
+		if room-width(s)-1 > 0 {
+			where.Text = fit(where.Text, room-width(s)-1)
+			out = append(out, Span{Text: " "}, where)
+		}
 	}
-	s := fit(sec, room)
-	out := []Span{m.stripe(r), {Text: indent + s}}
-	if room-width(s)-1 > 0 {
-		where.Text = fit(where.Text, room-width(s)-1)
-		out = append(out, Span{Text: " "}, where)
+	if len(stats) > 0 {
+		gap := m.Width - spansWidth(out) - spansWidth(stats)
+		out = append(out, Span{Text: strings.Repeat(" ", max(gap, 1))})
+		out = append(out, stats...)
 	}
 	return out
+}
+
+// gitSpans is a worktree's diff stats in at most w cells: the rebase
+// mark R; the committed diff against the base, +N -M in green and red;
+// then ✎ and the uncommitted diff, +X -Y bold, a count past the limits
+// marked +. A part that is zero is left out. When the line is too narrow
+// the committed part goes first, then all but the rebase mark. A refresh
+// that timed out leaves them dim.
+func gitSpans(r rows.Row, w int) []Span {
+	if r.Worktree == nil || r.Worktree.Git == nil || w <= 0 {
+		return nil
+	}
+	g := r.Worktree.Git
+	var rebase, committed, uncommitted []Span
+	if g.Rebasing {
+		rebase = []Span{{Text: "R", Fg: palette.Warning, Bold: true}}
+	}
+	if g.Committed != [2]int{} {
+		committed = []Span{
+			{Text: fmt.Sprintf("+%d", g.Committed[0]), Fg: palette.Success, Dim: true},
+			{Text: " "},
+			{Text: fmt.Sprintf("-%d", g.Committed[1]), Fg: palette.Danger, Dim: true},
+		}
+	}
+	if g.Uncommitted != [2]int{} || g.Dirty {
+		added := fmt.Sprintf("+%d", g.Uncommitted[0])
+		if g.UncommittedPartial {
+			added += "+"
+		}
+		uncommitted = []Span{
+			{Text: "✎ "},
+			{Text: added, Fg: palette.Success, Bold: true},
+			{Text: " "},
+			{Text: fmt.Sprintf("-%d", g.Uncommitted[1]), Fg: palette.Danger, Bold: true},
+		}
+	}
+	join := func(parts ...[]Span) []Span {
+		var out []Span
+		for _, p := range parts {
+			if len(p) == 0 {
+				continue
+			}
+			if len(out) > 0 {
+				out = append(out, Span{Text: " "})
+			}
+			out = append(out, p...)
+		}
+		return out
+	}
+	for _, try := range [][]Span{join(rebase, committed, uncommitted), join(rebase, uncommitted), rebase} {
+		if len(try) > 0 && spansWidth(try) <= w {
+			if g.Stale {
+				for i := range try {
+					try[i].Dim, try[i].Bold, try[i].Fg = true, false, ""
+				}
+			}
+			return try
+		}
+	}
+	return nil
+}
+
+// spansWidth is the cells spans take.
+func spansWidth(spans []Span) int {
+	n := 0
+	for _, sp := range spans {
+		n += width(sp.Text)
+	}
+	return n
 }
 
 // tile is three lines: the head; the secondary label and the host tag;
@@ -712,6 +797,13 @@ func (m *Model) compact(r rows.Row) []Line {
 			where.Text = fit(where.Text, left-1)
 			line = append(line, Span{Text: " "}, where)
 			left -= 1 + width(where.Text)
+		}
+		if stats := gitSpans(r, left-2); len(stats) > 0 {
+			// Against the time, or the right edge without one.
+			n := spansWidth(stats)
+			line = append(line, Span{Text: strings.Repeat(" ", left-n)})
+			line = append(line, stats...)
+			left = 0
 		}
 		if t != "" {
 			line = append(line, Span{Text: strings.Repeat(" ", left+1)}, Span{Text: t, tick: secs})

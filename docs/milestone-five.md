@@ -482,7 +482,9 @@ carry the same; the time of the last refresh is not in the record.
   against the base, as the dashboard shows them beside `→base`. A branch
   `add` makes has no upstream, so `git status`'s counts, which are
   against the upstream, are not used.
-- **dirty:** from `git status --porcelain=v2`.
+- **dirty:** any path in the `git diff HEAD` output, a mode change or a
+  binary file too, or any untracked file: what `git status` would list,
+  without a call of its own.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
   needs git 2.38; with an older git the field is left out.
 - **rebasing:** a `rebase-merge` or `rebase-apply` directory in the
@@ -527,6 +529,16 @@ dir `packed-refs` and the loose refs of the branch and of its base. A
 worktree gets at most one refresh every 2 s. Polling comes first;
 kqueue or inotify through `golang.org/x/sys` only if a measurement with
 twenty worktrees on the VM shows the cost.
+
+Step 4 measured it: twenty worktrees of a repository with 2000 files, each
+with a commit, a changed file and an untracked one, on the VM (8 vCPU,
+Xeon 2.2 GHz, git 2.47). A refresh is four git calls, about 37 ms. The
+daemon with its git calls used 2.6% of a core in a minute before step 4,
+5.6% with the twenty worktrees on the 30 s cadence, and 12.3% with all
+twenty on the 5 s cadence of a worktree with a session. That is about
+half a percent of a core per worktree with a session, which is not
+worth an event watcher; polling stays. The base's name is kept for a
+minute, so a refresh resolves it again only then.
 
 **In the record.** The git object is part of the worktree record. The
 listing rebuilds each record from git's listing and compares four

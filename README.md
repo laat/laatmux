@@ -189,6 +189,28 @@ The daemon on a host with `repos` and `worktrees` advertises `worktrees`,
 and with the managed server also `add` and `rm`. Git is the source of
 truth; labels only place new things.
 
+- **Git status**, capability `git-status` (milestone five, step 4): each
+  worktree record carries a `git` object once read. It holds:
+  - `base`: the branch's `laatmux-base` key, which `add` sets to the
+    resolved `origin/HEAD` on a new branch; else `origin/HEAD`'s branch,
+    `main` or `master`;
+  - `committed`: the branch against its merge base with that base;
+  - `ahead` and `behind`;
+  - `uncommitted`: the diff against HEAD plus the untracked files that
+    are not ignored, a lower bound past 200 files or 1 MB a file;
+  - `dirty`, `conflict` (from `git merge-tree --write-tree`, git 2.38 and
+    later), `rebasing`, and `stale` when the last refresh timed out.
+
+  Two workers beside the listing refresh it: every 5 s for a worktree
+  with a home session, every 30 s otherwise, and at once after an add, a
+  run ending, or a change to `HEAD`, `index` or the refs of the branch
+  and its base. A refresh is at least 2 s after the last one, never waits
+  on the listing, and upserts only when a value changed. Git runs with
+  `--no-optional-locks`, and the diffs with `--no-ext-diff
+  --no-textconv`. The views show the stats on a tile's second line and
+  before the time in the compact line: `R` while rebasing, the committed
+  `+N -M`, then `✎` and the uncommitted `+X -Y`. A merging daemon that
+  knows the field forwards it.
 - **Worktree records** arrive in the subscription stream next to agents:
   `worktrees` in a snapshot, `worktree` in an upsert, `worktree_id` in a
   remove. Every two seconds the daemon scans the main checkouts under

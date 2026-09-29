@@ -161,8 +161,14 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			Session:       d.managedRoots[r.Root],
 			UpdatedAt:     now,
 		}
-		if prev, had := d.worktrees[r.Root]; had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.Session == w.Session {
+		prev, had := d.worktrees[r.Root]
+		if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.Session == w.Session {
 			continue
+		}
+		if had && prev.Branch == w.Branch {
+			// The git object is the refresh's, carried across the
+			// rebuild; a new branch at the root waits for its own.
+			w.Git = prev.Git
 		}
 		d.worktrees[r.Root] = w
 		d.seq++

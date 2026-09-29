@@ -89,6 +89,8 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		// it, and the result says which one that is.
 		l := d.stepRevision()
 		res.Listing = &l
+		// Its git object is read at once, not at the next due time.
+		d.gitDue(res.Root)
 	}
 	if r.created {
 		now := time.Now()

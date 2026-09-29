@@ -42,3 +42,41 @@ func TestAttentionOldEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// The git object is a field of the worktree record: a client from before
+// git-status decodes the record as it knew it, and a merging daemon from
+// before drops the object as it re-encodes the record.
+func TestGitStatusOldEnvelope(t *testing.T) {
+	type oldWorktree struct {
+		ID      string `json:"id"`
+		Branch  string `json:"branch"`
+		Root    string `json:"root"`
+		Session string `json:"session,omitempty"`
+	}
+	type oldMessage struct {
+		Type     string       `json:"type"`
+		Worktree *oldWorktree `json:"worktree,omitempty"`
+	}
+	no := false
+	m := Message{Type: TypeUpsert, Worktree: &Worktree{ID: "e/worktree//w", Branch: "b", Root: "/w",
+		Git: &GitStatus{Base: "origin/main", Committed: [2]int{1, 2}, Conflict: &no}}}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old oldMessage
+	if err := json.Unmarshal(b, &old); err != nil || old.Worktree == nil || old.Worktree.Root != "/w" {
+		t.Fatalf("%s: %+v %v", b, old, err)
+	}
+	re, _ := json.Marshal(old)
+	var back Message
+	if err := json.Unmarshal(re, &back); err != nil || back.Worktree == nil || back.Worktree.Git != nil {
+		t.Errorf("forwarded by an older merging daemon: %s", re)
+	}
+	// Same ignores ChangedAt and compares the conflict's value.
+	yes, no2 := true, false
+	a := GitStatus{Conflict: &yes, ChangedAt: time.Now()}
+	if !a.Same(GitStatus{Conflict: &yes}) || a.Same(GitStatus{Conflict: &no2}) || a.Same(GitStatus{}) {
+		t.Error("Same")
+	}
+}

@@ -1,0 +1,40 @@
+..B|⟨danger:box  DOWN  ssh: connect to host box port 22: ⟩
+S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                              2:00
+S..|⟨accent:▌⟩    laatmux ‹@vm›             ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
+S..|⟨accent:▌⟩    Permission to run pnpm test in packages/
+S..|‹⟨border:─────────────────────────────────────────────⟩›
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes                        0:01
+...|⟨info:▌⟩    ‹@vm/default›
+...|⟨info:▌⟩    remote
+...|‹⟨border:─────────────────────────────────────────────⟩›
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩»                                0:08
+...|⟨info:▌⟩    proj @mac                     «⟨warning:R⟩» ‹⟨success:+318⟩› ‹⟨danger:-87⟩›
+...|⟨info:▌⟩    Editing src/api.ts
+...|‹⟨border:─────────────────────────────────────────────⟩›
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down                               10:00
+.D.|⟨info:▌⟩    proj ‹@box›
+.D.|⟨info:▌⟩    last seen
+...|‹⟨border:─────────────────────────────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ scratch                             0:40
+...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩    
+...|‹⟨border:─────────────────────────────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ notes                               5:00
+...|⟨border:▌⟩    @mac/default
+...|⟨border:▌⟩    
+...|‹⟨border:─────────────────────────────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ other                                 1h
+...|⟨border:▌⟩    proj ‹@vm›                        ✎ «⟨success:+4+⟩» «⟨danger:-1⟩»
+...|⟨border:▌⟩    Done. 日本語のタイトル that is long enou
+...|‹⟨border:─────────────────────────────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead                                  3h
+.D.|⟨border:▌⟩    proj ‹@vm›
+.D.|⟨border:▌⟩    claude gone
+...|‹⟨border:─────────────────────────────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ spike
+.D.|⟨border:▌⟩    proj @mac                       ‹+153›‹ ›‹-41›
+.D.|⟨border:▌⟩    no session
+...|‹⟨border:─────────────────────────────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell
+.D.|↓ 2 more
+.D.|

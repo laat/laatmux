@@ -179,6 +179,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			return a, fail(stage, err)
 		}
 		report(stage, protocol.StateDone, "branch "+branch+" tracks origin/"+branch)
+		setBase(ctx, checkout, branch, report)
 	default:
 		// --no-track: the new branch has no remote counterpart yet, and an
 		// upstream of origin/HEAD would make push refuse and pull merge the
@@ -188,6 +189,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			return a, fail(stage, err)
 		}
 		report(stage, protocol.StateDone, "branch "+branch+" from origin/HEAD")
+		setBase(ctx, checkout, branch, report)
 	}
 	entries, err := ListWorktrees(ctx, checkout)
 	if err != nil {
@@ -345,6 +347,15 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 		}
 	}
 	return a, nil
+}
+
+// setBase records a new branch's base for the views' diff stats. A
+// failure is reported and does not stop the add: the stats then compare
+// with origin/HEAD, main or master.
+func setBase(ctx context.Context, checkout, branch string, report Reporter) {
+	if err := SetBase(ctx, checkout, branch); err != nil {
+		report(protocol.StageWorktree, protocol.StateOutput, "base not recorded: "+err.Error())
+	}
 }
 
 // CheckBranch rejects names git would refuse, before anything is touched.
