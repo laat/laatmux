@@ -754,9 +754,20 @@ Five settlements differ from the plan in #52:
   apply the change. Nothing is replayed. A window with no sidebar pane,
   or a socket that refuses the connection, makes the command exit
   quietly, since a binding's error flashes in the status line.
-  The scope is what a pane shows: every row, the rows of the session
-  the pane sits in, or the rows of the repository of that session's
-  worktree. #52 called it `filter none|all|…`; `none` was the same as
+  The scope is what a pane shows, defined by the viewer's row, the one
+  Following picks:
+  - `all`: every row;
+  - `session`: the viewer's worktree, in the agent view every agent of
+    it, whatever session each runs in, and in the tree its worktree line
+    with its children under its repository line; with no worktree, the
+    viewer's session's line in other sessions;
+  - `project`: every worktree of the viewer's worktree's repository,
+    under its repository line; with no worktree, the same as `session`.
+
+  A pane in a session that is no row's, the user's own shell session
+  say, shows the view's empty state under `session` and `project`. The
+  dashboard's `F` uses the same rules through the client the popup
+  opened on. #52 called it `filter none|all|…`; `none` was the same as
   `all`, and the word `filter` is the view's `/` text filter, which
   stays the pane's own and is not persisted, as is `F`.
 - **Persistence:** `sidebar.json` under the state directory holds two
