@@ -234,3 +234,25 @@ func TestOwnPRPastForks(t *testing.T) {
 		t.Errorf("%+v %v", rs[0], err)
 	}
 }
+
+// A later page of PRs that fails leaves the branch's answer an error, not
+// one without its PR.
+func TestPRPageFails(t *testing.T) {
+	fork := `{"number":9,"state":"OPEN","isDraft":false,"url":"u9","isCrossRepository":true,"commits":{"nodes":[]}}`
+	for _, page := range []func() (string, error){
+		func() (string, error) { return "", fmt.Errorf("network") },
+		func() (string, error) { return `{"data":{"repository":null},"errors":[{"message":"boom"}]}`, nil },
+	} {
+		f := &fake{answer: func(vars map[string]string) (string, error) {
+			if vars["after"] != "" {
+				return page()
+			}
+			return `{"data":{"b0":{"url":"u","ref":null,"open":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + fork +
+				`]},"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[` + fork + `]}}}}`, nil
+		}}
+		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+		if err != nil || rs[0].Err == nil || rs[0].NoRef {
+			t.Errorf("%+v %v", rs[0], err)
+		}
+	}
+}

@@ -406,3 +406,50 @@ func TestBranchesSlowHostShare(t *testing.T) {
 		t.Errorf("the second host: %+v", ups)
 	}
 }
+
+// A round that runs out on its last host still applies what the hosts
+// before it answered.
+func TestBranchesSlowHostLast(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{"b": "SUCCESS"}}
+	d, s := branchDaemon(t, t.TempDir(), gh)
+	d.mu.Lock()
+	d.cfg.GitHubHosts = []string{"zzz.example.com"}
+	d.mhosts["vm"].worktrees["venv/worktree//w/z"] = protocol.Worktree{ID: "venv/worktree//w/z", EnvironmentID: "venv", Source: "git@zzz.example.com:o/r.git", Branch: "z", Root: "/w/z"}
+	d.mhosts["vm"].worktrees["venv/worktree//w/b"] = protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Source: ghSource, Branch: "b", Root: "/w/b"}
+	fast := d.cfg.GitHub
+	d.cfg.GitHub = func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
+		if host == "zzz.example.com" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return fast(ctx, host, q, vars)
+	}
+	set := d.branchSetLocked()
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	d.fetchBranches(ctx, set)
+	ups, _, _ := drainBranches(s)
+	if len(ups) != 1 || ups[0].BranchKey != bkey("b") {
+		t.Errorf("the host answered before the slow one: %+v", ups)
+	}
+}
+
+// A host with no worktrees to list, a daemon without the capability,
+// does not hold the forgetting for the others.
+func TestBranchesListedWithoutWorktrees(t *testing.T) {
+	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}, {Name: "old", SSH: "old"}}}
+	d := New(Config{EnvironmentID: "menv", Hosts: hosts.get, GitHub: (&fakeGH{}).run, Branches: filepath.Join(t.TempDir(), "b.json")})
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.reconcileHostsLocked(hosts.hosts)
+	d.mhosts["vm"].listed = true
+	d.mhosts["old"].status.Connected, d.mhosts["old"].status.Capabilities = true, []string{protocol.CapStatus}
+	if !d.hostsListedLocked() {
+		t.Error("a host without worktrees holds the forgetting")
+	}
+	d.mhosts["old"].status.Capabilities = append(d.mhosts["old"].status.Capabilities, protocol.CapWorktrees)
+	if d.hostsListedLocked() {
+		t.Error("a host with worktrees not yet listed does not hold it")
+	}
+}

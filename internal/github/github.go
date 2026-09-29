@@ -237,7 +237,7 @@ const prPages = 5
 
 // morePRs pages a branch's PRs past the first answer's, open ones or
 // all, until one of the repository's own is found.
-func morePRs(ctx context.Context, run Runner, host string, b Branch, open bool, after string) []prNode {
+func morePRs(ctx context.Context, run Runner, host string, b Branch, open bool, after string) ([]prNode, error) {
 	states := ""
 	if open {
 		states = "states: [OPEN], "
@@ -249,26 +249,36 @@ func morePRs(ctx context.Context, run Runner, host string, b Branch, open bool, 
 	for page := 0; page < prPages && after != ""; page++ {
 		body, err := run(ctx, host, q, map[string]string{"o": b.Owner, "r": b.Repo, "b": b.Branch, "after": after})
 		if err != nil {
-			return out
+			return out, err
 		}
 		var resp struct {
 			Data struct {
-				Repository struct {
+				Repository *struct {
 					PullRequests prConnection `json:"pullRequests"`
 				} `json:"repository"`
 			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
 		}
-		if json.Unmarshal(body, &resp) != nil {
-			return out
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return out, fmt.Errorf("gh api graphql: %w", err)
+		}
+		if len(resp.Errors) > 0 || resp.Data.Repository == nil {
+			msg := "no repository"
+			if len(resp.Errors) > 0 {
+				msg = resp.Errors[0].Message
+			}
+			return out, fmt.Errorf("%s/%s: %s", b.Owner, b.Repo, msg)
 		}
 		c := resp.Data.Repository.PullRequests
 		out = append(out, c.Nodes...)
 		if c.own() || !c.PageInfo.HasNextPage {
-			return out
+			return out, nil
 		}
 		after = c.PageInfo.EndCursor
 	}
-	return out
+	return out, nil
 }
 
 func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch, out []Result) error {
@@ -320,12 +330,22 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 		a := resp.Data[alias]
 		if a != nil {
 			// Forks' PRs of the same name may fill a page: the next
-			// pages are asked for until one of the repository's own.
+			// pages are asked for until one of the repository's own. A
+			// page that fails leaves the answer partial, not absent.
+			var err error
 			if !a.Open.own() && a.Open.PageInfo.HasNextPage {
-				a.Open.Nodes = append(a.Open.Nodes, morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)...)
+				var more []prNode
+				more, err = morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)
+				a.Open.Nodes = append(a.Open.Nodes, more...)
 			}
-			if !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
-				a.PullRequests.Nodes = append(a.PullRequests.Nodes, morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)...)
+			if err == nil && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
+				var more []prNode
+				more, err = morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)
+				a.PullRequests.Nodes = append(a.PullRequests.Nodes, more...)
+			}
+			if err != nil {
+				out[i] = Result{Err: err}
+				continue
 			}
 		}
 		out[i] = parse(a, b)

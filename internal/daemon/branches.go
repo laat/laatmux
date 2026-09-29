@@ -162,8 +162,13 @@ func (d *Daemon) hostsListedLocked() bool {
 	}
 	// A listing that succeeded, not only a snapshot: a host whose git
 	// failed sends one with no worktrees.
+	// A host with no worktrees, this machine without a store or a
+	// daemon without the capability, has no branches to wait for.
 	for _, mh := range d.mhosts {
-		if mh.host.Local() && !d.listed || !mh.host.Local() && !mh.listed {
+		switch {
+		case mh.host.Local() && d.cfg.Store != nil && !d.listed:
+			return false
+		case !mh.host.Local() && !mh.listed && (!mh.status.Connected || protocol.Has(mh.status.Capabilities, protocol.CapWorktrees)):
 			return false
 		}
 	}
@@ -304,6 +309,20 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		results, err := github.Fetch(hctx, d.cfg.GitHub, host, bs)
 		cancel()
 		if ctx.Err() != nil {
+			// The round is out of time: what it has is applied, the
+			// hosts it did not reach kept, stale, and no names asked.
+			answers = append(answers, answer{qs, results})
+			for _, rest := range hosts[n+1:] {
+				rqs := byHost[rest]
+				failed := make([]github.Result, len(rqs))
+				for i := range failed {
+					failed[i].Err = ctx.Err()
+				}
+				answers = append(answers, answer{rqs, failed})
+			}
+			for _, a := range answers {
+				d.applyBranches(a.qs, a.results, nil)
+			}
 			return
 		}
 		if errors.Is(err, github.ErrNoGH) || errors.Is(err, github.ErrLoggedOut) {
