@@ -24,11 +24,20 @@ named where it happens, with the option that restores the old rule
 where there is one.
 
 Nothing here changes the model. Git and the daemons stay the sources of
-truth, detection never crosses the network, and records are forwarded
-unchanged by the merging daemon. What is new is state the laptop's
-daemon keeps for itself: what the user has seen, and the PR and check
-state of each branch. The git state of a worktree is computed where the
-worktree lives, by its host's daemon.
+truth, and detection never crosses the network. The merging daemon
+forwards records as it decodes them, so a new field on a host's record
+reaches a view only through a merging daemon that knows it, as #55's
+`attribution` does. What is new is state the laptop's daemon keeps for
+itself: what the user has seen, and the PR and check state of each
+branch. The git state of a worktree is computed where the worktree
+lives, by its host's daemon.
+
+**Words.** *Stale* is workmux's word for an agent idle for long, and
+this note uses it so. What laatmux has called a stale row until now, a
+local workspace session whose worktree is gone from a host that can say
+so, is renamed *orphaned*: `Row.Stale`, the `stale` group and its header
+become `Orphaned`, `orphaned` and `orphaned N`, in step 2, before stale
+by age arrives in step 3.
 
 ## Two views
 
@@ -40,10 +49,10 @@ above the list:
 - **Tree**: the repositories, their worktrees, and what runs in each.
   This is where the user looks to see what exists and where it runs.
 
-`Tab`, or a click on a tab header, switches between them. The view is
-kept in `sidebar.json` (see Persistence), so every sidebar pane on the
-machine shows the same one and a restarted pane comes back on it. The
-dashboard keeps its own choice in the same file.
+`Tab`, or a click on a tab header, switches the view of the pane it is
+pressed in; other panes keep theirs. The last view chosen is written to
+`sidebar.json` (see Persistence) as the one a new or restarted pane
+starts in. The dashboard keeps its own last choice in the same file.
 
 ### The agent view
 
@@ -56,7 +65,12 @@ dashboard keeps its own choice in the same file.
   They are the tree's.
 - **Several agents in one session** are told apart by a `(1)`, `(2)`
   suffix on the primary label, in pane order.
-- **Stale:** stale and settled agents fold into `▸ N stale` at the end.
+- **Stale:** stale agents and those of settled workspaces fold into
+  `▸ N stale` at the end, unless blocked or done (see Precedence).
+- **Orphaned sessions** have no agent and are not in this view; they
+  are the tree's.
+- **Enter** on a tile goes to the agent's pane, as on an agent in the
+  tree (see Jumps).
 - **Empty state:** `No agents running`.
 
 ### The tree view
@@ -92,7 +106,19 @@ other sessions
 
   Agents come first, by start time, then panes by session and window,
   then runs by start time. The client keeps the pane and run records
-  the merged stream carries, which it drops today.
+  the merged stream carries, which it drops today. laatmux's own panes,
+  the sidebar panes and the attach panes of workspace sessions, are not
+  children: the host daemon reads their tags, `@laatmux_sidebar` and
+  `@laatmux_attach_pane`, in its pane listing and publishes no pane
+  record for them.
+- **An older host,** without `attribution`, has no worktree ids on its
+  agents and no pane or run records. Its agents are placed by the join
+  `rows.Build` makes today, the worktree's session, and the rest go to
+  other sessions.
+- **Orphaned sessions** sit under their repository, by the source in
+  their `@laatmux_repo` tag, as a worktree line marked `worktree gone`,
+  or in other sessions when the tag is missing. `x` removes them, as
+  today.
 - **Tasks:** a pending task sits under its repository as a worktree line
   of its own, with the task's state where the git stats would be, until
   it hands over to the worktree line at its root.
@@ -101,37 +127,77 @@ other sessions
   with its host.
 - **Order:** repositories by name, worktrees by branch. Status never
   reorders the tree, so it stays put while agents work.
-- **Folds:** repositories and worktrees fold. A worktree whose agents
-  are all idle or unknown, or that is stale or settled, starts folded;
-  one with a blocked, working or done agent starts open. A fold the
-  user toggles stays as they left it.
+- **Folds:** repositories and worktrees fold. A worktree gets its fold
+  once, the first time the pane sees it: open when an agent in it is
+  blocked, working or done, folded otherwise. After that it stays as it
+  is until the user toggles it, so the tree does not open and close as
+  agents work; a folded worktree line shows the icon of its most
+  pressing agent, so a blocked or done agent inside is not missed.
+  Repositories start open.
 - **Jumps:** `Enter` on a worktree line jumps to its workspace session,
-  as the row does today. On an agent or a pane it jumps to the
-  workspace session and selects that pane: `select-pane` through the
-  attach on the host's managed server for a managed pane, `switch-client`
-  and `select-pane` on this machine's default server. A pane on a remote
-  host's default server is refused as `jump` refuses it. On a
-  repository line `Enter` folds and unfolds.
+  as the row does today. On a repository line it folds and unfolds. On
+  an agent or a pane it goes to that pane, routed by the record's
+  server and session, not by the worktree's:
+  - **a pane in the worktree's home session** on the host's managed
+    server: the jump to the workspace session, then a `select` command
+    to the host's daemon (below), which runs `select-window` and
+    `select-pane` on its managed server. The attach in the workspace
+    session shows the managed session's current window and pane, so the
+    selection is what it shows, whether the attach was just made or had
+    been there;
+  - **a pane in another managed session:** the jump an agent row makes
+    today, through the plain attachment `<host>/<session>`, then the
+    same `select`;
+  - **a pane on this machine's default server:** `switch-client` to its
+    session, then `select-window` and `select-pane` there, all local;
+  - **a pane on a remote host's default server or another observed
+    server** is refused as `jump` refuses it: laatmux attaches to managed
+    sessions only.
+
+  `select` is a new command on the host's daemon, `{type: select, id,
+  pane_id}`, capability `select`. It reaches the host over the same
+  connection every command does, the ssh bridge for a remote host, never
+  through the attach, which is an interactive terminal. It acts on the
+  managed server only and answers with a result; a pane gone answers an
+  error, and the jump then stays on the session. Against a daemon
+  without it the jump goes to the session and leaves the pane as it is.
 - **Empty state:** `No worktrees`.
 
-With both views, the rule #56 needed for which agent a mixed worktree
-row shows goes away: the tree shows every agent under its worktree, and
-the agent view lists every agent.
+With both views, most of the rule #56 needed for which agent a mixed
+worktree row shows goes away: the tree shows every agent under its
+worktree, and the agent view lists every agent. What remains is the
+worktree line's own jump when the worktree has no home session: it goes
+through the agent laatmux made at the root, or one on this machine's
+default server, as `rowSpec` does now.
 
 ### Switching
 
-The selection follows the user across a switch:
+The selection follows the user across a switch, resolved from the
+selected node to a node of the other view:
 
-- from an agent, the tree lands on that agent inside its worktree,
+- **from an agent,** the tree lands on that agent inside its worktree,
   unfolding the worktree and the repository;
-- from a worktree line or one of its panes or runs, the agent view
-  lands on the worktree's first agent in the tree's order; with none,
-  on the first row;
-- from a repository line, on the first agent of its first worktree;
-- from a task, on the same task, which both views show.
+- **from a worktree line or one of its panes or runs,** the agent view
+  lands on the worktree's first agent in the tree's order;
+- **from a repository line,** on the first agent of its first worktree;
+- **from a task,** on the same task, which both views show. A task that
+  hands over while selected moves to the node its handoff names, the
+  worktree, in the tree; in the agent view that worktree's first agent,
+  as from a worktree line.
 
-A selection that follows the viewer's own session keeps following it in
-the new view.
+A target the stale fold hides opens the fold; a target in a folded
+worktree opens that worktree and its repository. Those opens are the
+pane's own and are not written to `sidebar.json`. A target the filter
+hides, or none at all (a worktree with no agent, an empty repository),
+leaves the selection on no row, as a selected row that goes with
+nothing to hand over to does today; the next move puts it on the first
+row.
+
+**Following.** A selection that follows the viewer's own session keeps
+following it in the new view. In the agent view it follows the first
+tile in sort order among the agents of the viewer's session or
+worktree; in the tree, the worktree line of the viewer's worktree, or
+the viewer's session's line in other sessions.
 
 ### The rows package
 
@@ -139,8 +205,14 @@ the new view.
 over the same input: `Agents`, a flat list of agent and task rows, and
 `Tree`, a list of nodes with a depth, a kind (repository, worktree,
 task, agent, pane, run, group), a fold state and an id. The view draws
-either from the same model; the selection anchors on node ids, which
-are the records' ids, so a rebuild and a switch keep it.
+either from the same model. The selection anchors on node ids. A
+record's node has the record's id; a repository node has
+`repo/<source key>`, the source normalised as #53 does; the
+other-sessions group `group/other`; the agent view's stale fold
+`fold/stale`; an orphaned session `session/<name>`, as today. A switch
+resolves as above, and a task follows its handoff. `ls` prints the
+tree, as text, from the tree builder: one line per repository, one per
+worktree with its host, and one per agent under it.
 
 ## Status
 
@@ -149,38 +221,83 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
 
 | workmux | laatmux | icon | colour |
 |---|---|---|---|
-| Working | `working` | 2-cell braille spinner, 250 ms a frame | info (cyan) |
+| Working | `working` | 2-cell braille spinner, 250 ms a frame, where the view's spinner is one cell at 100 ms today | info (cyan) |
 | Waiting | `blocked` | 💬 | accent (purple) |
 | Done | `idle` after `working`, not seen since | ✅ | success (green) |
 | (none) | `idle` and seen, `unknown`, no agent | blank | — |
 | Stale | idle for more than an hour, or settled | 💤 | dimmed |
+
+### Precedence
+
+- **An agent's status**, for its icon and its place in `priority`
+  order: blocked, then done, then working, then idle and unknown, then
+  stale. A done agent is never stale: an unseen finish is what the user
+  most needs, however old. A blocked agent is never stale either.
+- **Settled** is the workspace's, not the agent's: the agents of a
+  settled workspace fold with the stale ones and show 💤, unless blocked
+  or done, which stay in place with their own icon.
+- **A worktree's status**, on its folded line and for `{worst_status}`:
+  its most pressing agent's, in the order above; with no agent, none.
 
 ### Done and seen
 
 An agent that went from working to idle is *done* until the user has
 been in its session since that change.
 
-- **The transition.** The laptop's daemon sees every agent upsert of
-  every host in the merged stream. When an agent's activity goes from
-  `working` to `idle`, it records the idle record's `activity_at` as the
-  agent's finish.
+Every time here is the laptop's: hosts' clocks are never compared with
+it.
+
+- **What is tracked.** Per agent, keyed by the agent's id and its
+  identity (pid and start, from the record), since tmux reuses pane ids
+  after a server restart: the last activity seen and that record's
+  `activity_at`, which is the host's and used only as an opaque mark of
+  the transition, and two laptop times, `finished_at` and `seen_at`.
+- **When.** The daemon's own host's agents are tracked always, from the
+  records its poll makes, subscriber or not. A remote host's agents are
+  tracked while the daemon follows the host, which is while a merged
+  subscriber is there and for the idle minute after; a finish while it
+  was not following is seen in the next snapshot, as below.
+- **A finish.** An upsert, or a host's snapshot, that shows the agent
+  `idle` with the same identity and a new `activity_at`, where the last
+  activity kept was `working`, is a finish: `finished_at` is the laptop's
+  clock at that moment. A snapshot counts as well as an upsert, so an
+  agent that finished while the laptop slept, its daemon was down or
+  the host was not followed is done when the host's snapshot comes,
+  against the state kept on disk. The cached records the merged stream
+  keeps for a host while it reconnects are not a source: only the
+  host's own upserts and snapshots are. A record with another identity,
+  a new agent in the same pane, starts over: no finish, and the old
+  times go.
+- **Not tracked:** an agent on a remote host's default server or on
+  another observed server. No view can take the user there, so it can
+  never be seen; it never shows ✅.
 - **Seen.** The daemon learns which session each tmux client of this
   machine's default server is on through `list-clients`, polled with the
-  local sessions it already lists, and poked by a `client-session-changed`
-  hook the sidebar's `on` sets, as it sets `window-resized`. A client on
-  the agent's workspace session, its plain attachment, or its own
-  session on this machine's default server has seen the agent: the seen
-  time moves to now.
+  local sessions it already lists, every second while a merged
+  subscriber is there. The sidebar's `on` also sets a
+  `client-session-changed[9106]` hook running `laatmux sidebar seen`,
+  which sends the local daemon `{type: poke}` so it lists clients at
+  once; `off` removes the hook with the others. A client on the agent's
+  workspace session, its plain attachment, or its own session on this
+  machine's default server sees the agent: when that agent's
+  `finished_at` is after its `seen_at`, `seen_at` moves to now, and a
+  finish observed while a client is there is seen at once. `seen_at`
+  moves only then, so a client sitting on a session writes nothing.
+  Every attached client counts, one left open in another terminal too.
 - **The record.** A new record type in the merged stream, from a
   merging daemon with the capability `attention`:
   `{agent_id, finished_at, seen_at}`. A view shows ✅ for an idle agent
   whose `finished_at` is after its `seen_at`.
 - **Kept across restarts** in `attention.json` under the state
-  directory, so a restart does not bring back ✅ on everything. An entry
-  goes with its agent's remove. A finish while the laptop's daemon was
-  down, or before a view subscribed to the host, is not seen as one:
-  the daemon only records transitions it watched, and a daemon without
-  a record for an agent shows no ✅ for it.
+  directory, written when an entry changes, so a restart does not bring
+  back ✅ on everything. An entry goes with its agent's remove, and one
+  whose agent a listed host's snapshot no longer has goes with that
+  snapshot.
+- **Limits.** Only this machine's clients count: a session attached
+  directly on a host, not through laatmux, is never seen, so an agent
+  the user works with that way shows ✅ until they visit it through
+  laatmux or it starts working again. An agent the laptop has never
+  seen working shows no ✅.
 
 This is the laptop's knowledge, not a host's, so no host daemon changes.
 
@@ -195,11 +312,20 @@ instead?` above an empty prompt box, and the footer no longer says
 `esc to interrupt`. It reads as `idle` through `live_prompt_box`, with
 the prompt box visible, so the working-to-idle debounce does not hold
 it. The capture is a detection fixture, `claude-interrupted`, in
-`TestRealFixtures`. An interrupt is the user's own key in the agent's
-session, so the agent is seen at that moment and is not marked done.
-The same capture shows the title not spinning while the turn ran; the
-footer rule, not the title, caught the working state, which is how the
-detector is built.
+`TestRealFixtures`. What the capture proves is the detection: idle, at
+once. Whether the agent then shows ✅ is the seen rule's: the interrupt
+is the user's key in the agent's session, so a client is on that
+session when the idle arrives, within a poll, and the finish is seen at
+once. A user who interrupts and leaves before the poll, or who works in
+the session through a direct attach on the host, gets a ✅ they did not
+need; the tests for step 3 cover the first case. The fixture is one
+screen, taken after the interrupt; it proves the detector's half. The
+daemon's half, that `nextActivity` passes a visible idle through
+without the debounce, gets its own test in step 3, and while capturing,
+the title read `✳ Essay about terminals` six seconds into the turn,
+with no spinner. If Claude Code 2.1.284 no longer spins the title,
+`osc_title_working` misses it and the footer rule carries the working
+state; step 3 adds a working capture of 2.1.284 to check.
 
 ### Stale and settled
 
@@ -209,8 +335,10 @@ in the agent view. This reverses milestone three's "age is never a
 reason" rule; `dim_stale: false` restores it.
 
 workmux's sleep is laatmux's settle, and moves to workmux's key: `z`
-settles or unsettles the selected workspace, which then shows 💤 and
-folds with the stale rows.
+settles or unsettles the selected workspace in the sidebar and the
+dashboard, whose agents then show 💤 and fold with the stale rows (see
+Precedence). #52 had `z` in the view; settle was the dashboard's only,
+and the sidebar gets it now too.
 
 ### Icons
 
@@ -234,15 +362,20 @@ behind a new capability `git-status`:
 
 ```json
 "git": {"base": "origin/main", "committed": [46, 11], "uncommitted": [28, 3],
-        "ahead": 2, "behind": 0, "dirty": true, "conflict": false, "rebasing": false,
-        "checked_at": "…"}
+        "uncommitted_partial": false, "ahead": 2, "behind": 0, "dirty": true,
+        "conflict": false, "rebasing": false, "stale": false, "changed_at": "…"}
 ```
+
+`changed_at` is when a value last changed, so an upsert and a snapshot
+carry the same; the time of the last refresh is not in the record.
 
 - **committed:** `git diff --numstat <base>...HEAD`, the branch against
   its merge base.
 - **uncommitted:** `git diff --numstat HEAD`, staged and unstaged, plus
-  the line counts of untracked files that are not ignored. A binary
-  file counts 0.
+  the line counts of untracked files that are not ignored, from `git
+  ls-files --others --exclude-standard`. A binary file counts 0. At most
+  200 untracked files are read, each only up to 1 MB; past either the
+  count is marked `+` as a lower bound.
 - **ahead, behind, dirty:** from `git status --porcelain=v2 --branch`.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
   needs git 2.38; with an older git the field is left out.
@@ -253,18 +386,42 @@ behind a new capability `git-status`:
   `origin/HEAD`; `main`; `master`. On the base branch itself only the
   uncommitted stats are shown.
 
-Every call runs with `--no-optional-locks`, `--no-ext-diff` and
-`--no-textconv`, so the poll never takes the index lock a user's git
-needs and never runs a user's diff driver.
+Every call runs as `git --no-optional-locks`, so the poll never takes
+the index lock a user's git needs. The two `git diff` calls also take
+`--no-ext-diff` and `--no-textconv`, which are diff options, so they
+never run a user's diff driver.
 
-**Refresh.** A worktree with a session is polled every 5 s, one without
-every 30 s. `add`, `rm`, a run ending, and a change in the mtime of the
-worktree's `HEAD`, index or refs trigger a poll at once; a worktree gets
-at most one poll every 2 s. The git object changes the worktree record,
-so the record is upserted only when a field other than `checked_at`
-changed. Polling comes first; kqueue or inotify through
-`golang.org/x/sys` only if a measurement with twenty worktrees on the VM
-shows the cost.
+**Where it runs.** Not in the worktree listing: that poll is serialized
+and stamps the listings that retire tasks, and a slow repository must
+not hold it. A separate worker pool, two at a time, takes the worktrees
+due for a refresh. Each git call has a 10 s timeout; one that times out
+leaves the last object and sets `stale: true` in it. A result is dropped
+when the worktree is gone from the listing, or its `HEAD` has moved,
+since the refresh began.
+
+**What is cached.** `committed`, `ahead`, `behind` and `conflict`
+depend only on the base's and `HEAD`'s commits, so they are computed
+again only when either changes. `merge-tree --write-tree` does a real
+merge and writes objects, so it runs once per pair and never on the
+base branch. `uncommitted` and `dirty` are read on every refresh.
+
+**Refresh.** A worktree with a session is due every 5 s, one without
+every 30 s. `add`, `rm` and a run ending make it due at once, and so does
+a change in an mtime the daemon stats every second: `HEAD` and `index`
+in the worktree's git dir (`.git/worktrees/<name>`), and in the common
+dir `packed-refs` and the loose refs of the branch and of its base. A
+worktree gets at most one refresh every 2 s. Polling comes first;
+kqueue or inotify through `golang.org/x/sys` only if a measurement with
+twenty worktrees on the VM shows the cost.
+
+**In the record.** The git object is part of the worktree record. The
+listing rebuilds each record from git's listing and compares four
+fields to decide an upsert; the git object is carried across that
+rebuild and compared with them, so a listing neither drops it nor
+upserts for nothing. A refresh upserts only when a value changed.
+`git-status` needs the merging daemon to know the field too: a view
+shows stats when the host's capabilities have `git-status` and the
+merging daemon's hello has it, as for `attribution`.
 
 **Rendering.** In order on the line: the rebase mark `R`, dim `+N -M` in
 green and red, then `✎` and bright `+X -Y`. When the uncommitted counts
@@ -277,27 +434,61 @@ A pushed branch is the same on every host, and `gh` is logged in on the
 laptop, so the laptop's merging daemon fetches PR and check state for
 every worktree in the merged stream, keyed by source and branch.
 
-- **The query.** One `gh api graphql` call per GitHub host, in chunks of
-  at most 32 branches, for the newest PR on each head ref, open, merged
-  or closed, with its last commit's `statusCheckRollup`. A branch with
-  no PR gets its own ref's rollup.
+- **The query.** `gh api graphql` calls per GitHub host, each for at
+  most 32 branches, with the owner, repository and branch names passed
+  as GraphQL variables, never put into the query text. For each branch
+  it asks for the PRs on that head ref whose head repository is the
+  source's own repository, since a fork's PR can have a head branch of
+  the same name, and takes an open one first, else the newest merged or
+  closed, with its last commit's oid and `statusCheckRollup`. A branch
+  with no PR gets its own ref's commit and rollup. When `origin` is
+  itself a fork, the PR lives on the upstream repository and is not
+  found: the row shows the branch's own checks and no PR. That is a
+  limit of this milestone. The rollup's
+  contexts are paginated, so the counts come from the connection's
+  aggregates, `checkRunCountsByState` and `statusContextCountsByState`,
+  which count every context whatever the page. The name of the first
+  failing check is a second, small query, only for rollups that fail,
+  paging until one is found.
 - **When.** Every 30 s while a merged subscriber is there, and at once
-  when the set of branches changes. The last answer is cached under the
-  state directory, so a restarted sidebar has it at once.
-- **Non-GitHub sources and a missing or logged-out `gh`** show nothing,
-  and `laatmux hosts` says why.
-- **The record,** from a merging daemon with the capability `branches`:
+  when the set of branches changes.
+- **The cache.** The last answer per branch is kept under the state
+  directory with the laptop time it was fetched, so a restarted sidebar
+  has it at once. An answer older than five minutes is stale: the view
+  draws it dim with `?` after the checks. A failed query, whole or for
+  one chunk, keeps the last answers of the branches it covered and
+  marks them stale; a branch the answer says has no ref drops its
+  entry, and an entry whose branch has had no worktree in the merged
+  stream for a day is dropped.
+- **Non-GitHub sources and a missing or logged-out `gh`** show nothing.
+  The reason is the daemon's own, not a host's: it travels in the merged
+  stream as `github_error` in the snapshot and in an upsert, as
+  `sessions_error` does, and `laatmux hosts` prints it on a `github:`
+  line after the hosts, never in a host's connectivity.
+- **The record,** from a merging daemon with the capability `branches`.
+  `branch` is a string in the envelope already (the branch of an add or
+  rm), so the record has a key of its own, `branch_status`:
 
   ```json
-  "branch": {"source": "…", "branch": "…",
-             "pr": {"number": 52, "state": "open", "draft": false, "url": "…"},
-             "checks": {"state": "failure", "passed": 3, "total": 5, "failing": "test (ubuntu)"}}
+  "branch_status": {"source": "…", "branch": "…", "fetched_at": "…", "stale": false,
+                    "head_oid": "…", "checks_url": "…",
+                    "pr": {"number": 52, "state": "open", "draft": false, "url": "…"},
+                    "checks": {"state": "pending", "passed": 3, "total": 5,
+                               "failing": "", "pending_since": "…"}}
   ```
+
+  `checks_url` is the PR's checks page, or the commit's for a branch
+  with no PR. `pending_since` is the laptop time the checks of this
+  `head_oid` were first seen pending, which the dashboard shows as the
+  elapsed time. In the stream: `branch_statuses` in a snapshot,
+  `branch_status` in an upsert, `branch_status_key` in a remove, the
+  key being the source key and the branch.
 
 - **Aggregation.** Failure is FAILURE, CANCELLED, TIMED_OUT,
   STARTUP_FAILURE, ACTION_REQUIRED or ERROR, and beats pending. Pending
-  is IN_PROGRESS, QUEUED, PENDING, REQUESTED or WAITING. NEUTRAL and
-  SKIPPED do not count, and a rollup of only skipped checks is success.
+  is IN_PROGRESS, QUEUED, PENDING, REQUESTED, WAITING or EXPECTED.
+  NEUTRAL, SKIPPED and STALE do not count, and a rollup of only those is
+  success.
 - **Rendering.** `#N` is green when open, purple when merged, red when
   closed, dim when a draft. Checks are `✓` in green, `× 3/5` in red, or a
   spinner and `3/5` in purple; when narrow the counts go first. On
@@ -333,12 +524,14 @@ every worktree in the merged stream, keyed by source and branch.
 ### Colour and theme
 
 A `Span` has an SGR code or dim today. It gets a foreground and a
-background in 256 colours and 24-bit, and bold. A palette of named
-colours (accent, info, success, warning, error, dim, border,
-current_worktree_fg, selection_bg) has a dark and a light theme; `theme:
-auto` picks one from the terminal's background, asked with OSC 11 when
-the view starts, dark when there is no answer. Colours can be set per
-name. The row for the viewer's own session has its primary label in
+background in 256 colours and 24-bit, and bold. The palette is #52's:
+`info`, `accent`, `success`, `warning`, `danger`, `dimmed`, `text`,
+`border`, `header`, `highlight_row_bg` and `current_worktree_fg`, with a
+dark and a light default. `theme.mode: auto` picks one from the
+terminal's background, asked with OSC 11 when the view starts, dark
+when there is no answer; `theme.custom` overrides any colour. A stale
+row is drawn in `dimmed` with the dim attribute throughout, the stripe
+and the diff and PR colours included. The row for the viewer's own session has its primary label in
 bold `current_worktree_fg`, which replaces the `>` gutter. `NO_COLOR`
 falls back to today's attributes, and the golden tests' `Debug` form
 names colours by palette name.
@@ -373,30 +566,46 @@ is the tree, and the host is on every worktree line.
 
 ## Keys
 
-Settled here, for both views; the dashboard's actions are unchanged
-but for settle.
+Settled here, for both views and for the sidebar and the dashboard
+alike unless the row says otherwise.
 
 | key | today | now |
 |---|---|---|
 | `j` `k`, arrows | move | move |
 | `g` `G` | first, last | first, last |
-| `1`..`9` | jump to the nth row | jump to the nth row of the view |
-| `Enter`, click | jump | jump; on a repository line or a fold row, fold |
+| `1`..`9` | jump to the nth row of the selection's group | jump to the nth tile of the agent view, the nth worktree line of the tree |
+| `Enter`, click | jump | jump; on a repository line or a fold row, fold; a click on a fold mark folds |
 | `/` | filter | filter |
 | `Esc` | clear the filter | clear the filter; nothing else |
 | `v` | tiles or compact | tiles or compact |
-| `f` | show the settled and stale groups | toggle every fold |
+| `f` | show the settled group and today's stale (orphaned) group | open every fold when any is closed, else close every one |
 | `Tab` | — | switch view |
 | `h`, `Left` | — | fold; on a child, go to its worktree |
 | `l`, `Right` | — | unfold |
 | `s` | settle (dashboard) | toggle the fold at the selection |
-| `z` | — | settle or unsettle (dashboard) |
+| `z` | — | settle or unsettle, sidebar and dashboard |
 | `S` | shell (dashboard) | shell (dashboard), unchanged |
 | `F` | — | filter to the rows of the viewer's session |
 | `?` | — | help overlay listing the keys |
 | `o` `O` | — | open the PR, its checks (dashboard) |
-| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n" |
-| `a` `x` `X` `p` | dashboard actions | unchanged |
+| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n", while filtering too |
+| `a` `x` `X` `p` | dashboard actions | unchanged, on the rows below |
+
+Fold rows and repository lines are selectable, since `Enter` acts on
+them, and `j` and `k` stop on them; the numbers skip them.
+
+**Actions on the new rows.**
+- `x` and `X` on an agent tile or an agent in the tree remove the
+  agent's worktree, as on its worktree line, and the question names the
+  worktree and says how many agents go with it. On an agent in no
+  worktree they do nothing, as on an observed agent today.
+- On a pane or run line, `x` and `X` do nothing; stopping a run from
+  the view is not in this milestone.
+- `a` preselects the repository and host of the selected row's
+  worktree, from a tile or any tree line under a worktree, as from a
+  worktree row today.
+- `x` on an orphaned session's line kills the session, as on a stale
+  row today.
 
 Three settlements differ from the plan in #52:
 
@@ -406,6 +615,9 @@ Three settlements differ from the plan in #52:
 - **`Esc` does not ask to quit.** In a sidebar pane an Esc meant for
   another pane is common; it clears a filter and otherwise does nothing.
   `q` and `Ctrl-c` ask.
+- **`s` folds, `z` settles, in both.** #52 had `z` in the view; here
+  settle moves from the dashboard's `s` to `z` in the sidebar and the
+  dashboard alike.
 - **`M-1`..`M-9` are opt-in.** Bound in tmux's root table they take the
   keys from every pane, where shells and editors use them.
   `sidebar.jump_keys: true` has `on` bind them to `sidebar jump N`, and
@@ -423,17 +635,35 @@ Three settlements differ from the plan in #52:
   10% of the window, clamped to 25..50 columns, and an explicit width
   is not clamped. `sidebar.height` applies to `top`. `sidebar fit` keeps
   its job of restoring the width after a resize.
-- **Scope:** `laatmux sidebar on --session` limits the rows to the
-  current session, which reverses the rule against a per-session scope;
-  `F` in the view does the same for the moment.
-- **CLI:** `laatmux sidebar next | prev | jump N | filter
-  none|all|session|project | view agents|tree`, so tmux bindings can
-  drive every sidebar pane on the machine, through the same file the
-  panes watch.
-- **Persistence:** the view, layout, filter and folds persist in
-  `sidebar.json` under the state directory, shared by every sidebar pane
-  on the machine and read again when it changes. Folds are kept by node
-  id, and ids of records gone for a day are dropped.
+- **Scope:** `laatmux sidebar on --session` puts sidebar panes in the
+  current session's windows only, and its hooks for new windows are set
+  on that session with `set-hook -t`, not globally, so other sessions
+  get none. This reverses the rule against a per-session scope, and is
+  #52's meaning. `F` in a view is a different thing, a row filter for
+  that pane: it limits the rows to those of the session the pane sits
+  in, until pressed again.
+- **CLI:** `laatmux sidebar next | prev | jump N` act on one sidebar
+  pane: the one in the window the command runs for, `-t` a window or
+  the current one. They reach it through tmux, `send-keys` to the tagged
+  pane with the key the view already takes (`j`, `k`, the digit), so
+  each command is one key press in one pane, and none is replayed.
+  `laatmux sidebar scope all|session|project` and `view agents|tree`
+  change shared preferences, written to `sidebar.json`. The scope is
+  what a pane shows: every row, the rows of the session the pane sits
+  in, or the rows of the repository of that session's worktree. #52
+  called it `filter none|all|…`; `none` was the same as `all`, and the
+  word `filter` is the view's `/` text filter, which stays the pane's
+  own and is not persisted, as is `F`.
+- **Persistence:** `sidebar.json` under the state directory holds the
+  last view chosen, the layout, the scope, and the folds the user
+  toggled, shared by every sidebar pane on the machine. Panes write it
+  read-modify-write under a lock file and replace it by rename, so two
+  panes toggling folds at once lose neither change, and read it again
+  when its mtime changes, checked every second. The selection is each
+  pane's own and is not kept. A fold is kept by node id with the time
+  its node was last seen, and one not seen for a day is dropped. At
+  start a pane takes the file's values and the config's for what the
+  file lacks; the config is the default, the file the last choice.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
 
@@ -486,16 +716,34 @@ the two views included. On top of that:
 ## Protocol
 
 All additive, behind capabilities; the protocol version stays 1.
+Subscribers do not choose which records they get, so every new record
+travels under an envelope key no older client knows, and an older
+client passes over the message. None reuses an existing key with
+another type: `branch` is a string in the envelope, which is why the PR
+record is `branch_status`.
 
-- **`git-status`,** from a host daemon: the `git` object on worktree
-  records. A client without it shows no stats.
+- **`git-status`,** from a host daemon, and from the merging daemon that
+  forwards it: the `git` object on worktree records. A client without
+  it shows no stats.
+- **`select`,** from a host daemon: the `select` command, `{type:
+  select, id, pane_id}`, which selects the pane's window and the pane on
+  the managed server. A tree jump to a pane without it stops at the
+  session.
 - **`attention`,** from a merging daemon: `attention` records in the
   merged stream, `{agent_id, finished_at, seen_at}`, in the snapshot as
   `attentions` and in upserts and removes as `attention` and
   `attention_id`. Without it no row is done.
-- **`branches`,** from a merging daemon: `branch` records, keyed by
-  source and branch, as `branches`, `branch` and `branch_key`. Without
-  it no PR state is shown.
+- **`branches`,** from a merging daemon: `branch_status` records, keyed
+  by source key and branch, as `branch_statuses`, `branch_status` and
+  `branch_status_key`, and `github_error` beside them. Without it no PR
+  state is shown.
+- **`poke`,** `{type: poke}` to a merging daemon with `attention`: list
+  the local clients now. Answered with nothing.
+- **Pane records** of laatmux's own panes stop, in step 6's host change:
+  no capability, since a record that is not there needs none.
+
+Each step that adds a record adds a test that decodes its messages with
+the envelope as it was before the step, as an older client would.
 
 The pane and run records of #55 are already in the stream; the tree is
 the first view that shows them.
@@ -518,6 +766,7 @@ sidebar:
   dim_stale: true
   collapse_stale: true
   stale_after: 1h
+  scope: all              # all | session | project
   jump_keys: false        # M-1..M-9 in tmux's root table
   templates: {tiles: ["…", "…", "…"]}
 ```
@@ -530,36 +779,52 @@ Each step is one issue and one PR, reviewed as the others were.
    check done, the capture kept as a detection fixture.
 2. **Colour and chrome, client only.** The span model, palette and
    theme, the stripe, the selection band, the dividers, the icon sets,
-   the agent icons, `m:ss`, the labels and title cleaning, `↓ N more`,
-   Loading and the empty states. No protocol change.
-3. **Done, seen and stale.** The `attention` capability and record, the
-   `client-session-changed` hook, `attention.json`, ✅, stale by age
-   with `dim_stale` and `stale_after`, `z` for settle with 💤, and the
-   sort modes.
+   the agent icons, `m:ss`, the spinner, the labels and title cleaning,
+   `↓ N more`, Loading and the empty states, and the rename of today's
+   stale rows to orphaned. No protocol change.
+3. **Done, seen and stale.** The `attention` capability and record,
+   `poke`, the `client-session-changed` hook, `attention.json`, ✅, the
+   precedence, stale by age with `dim_stale` and `stale_after`, `z` for
+   settle with 💤, and the sort modes. Stale rows fold with the settled
+   ones in today's collapsed group, with `collapse_stale`, until step 6
+   turns that into the agent view's fold. `s` does nothing from here
+   until step 6 gives it the folds. A working capture of Claude Code
+   2.1.284 and a `nextActivity` test for the interrupted fixture.
 4. **Git stats on the host daemon.** `git-status`, the `git` object,
-   `branch.<b>.laatmux-base` set by `add`, the poll policy and the
-   rendering, measured on the VM with twenty worktrees.
+   the worker pool and its cache, `branch.<b>.laatmux-base` set by `add`,
+   the refresh policy and the rendering, measured on the VM with twenty
+   worktrees. Both daemons need the build: the host for the field, the
+   laptop to forward it.
 5. **PR and checks in the laptop's daemon.** `branches`, the batched
-   GraphQL call through `gh`, the cache, the rendering, and the
-   dashboard's `o` and `O`.
+   GraphQL calls through `gh`, the failing name query, the cache and its
+   stale mark, `github_error` and the `hosts` line, the rendering, and
+   the dashboard's `o` and `O`.
 6. **Two views.** `rows` split into the agent and tree builders; the
    tree with repository nodes by source, worktree lines with the host in
    parentheses, children from the pane and run records the client now
    keeps, tasks, other sessions, folds and the pinned repository line;
-   `Tab`, the tab header, selection across a switch, the stale fold in
-   the agent view; the keys `f`, `s`, `h`, `l`; jumps to a pane; both
+   `Tab`, the tab header, selection across a switch and following, the
+   stale fold in the agent view; the keys `f`, `s`, `h`, `l`, the
+   numbers, and the actions on the new rows; jumps to a pane with the
+   host's `select` command; orphaned sessions in the tree; laatmux's own
+   panes left out of the pane records; `ls` printing the tree; both
    views in the dashboard.
 7. **Templates.** The tokens, `{fill}`, overflow, styles, template
    errors, and the tree templates.
-8. **Placement and controls.** `top`, `%` widths, `--session`, `F`, the
-   `sidebar` subcommands, `jump_keys`, `?`, the quit question, and
-   `sidebar.json`.
+8. **Placement and controls.** `top`, `%` widths, `--session` with its
+   session hooks, `F`, the `sidebar` subcommands with `send-keys` for
+   navigation, `scope`, `jump_keys`, `?`, the quit question, and
+   `sidebar.json` with its lock and last-seen folds.
 9. **Dashboard columns.** The git and PR columns and the failing check.
 
-Steps 2, 3, 4 and 6 are independent of each other after this note. Step
-5 needs step 4's base only for the base branch. Step 7 goes after 2
-through 6, so its tokens have something to show; step 8's persistence
-takes the view and folds step 6 keeps in memory.
+Steps 2, 3 and 4 are independent of each other after this note, but for
+step 2's rename, which step 3 needs first. Step 6 comes after step 3,
+which moves settle from `s` to `z` before the tree takes `s` for folds,
+so no build is without a settle key, and which gives the agent view's
+stale fold something to hold. Step 5 needs
+step 4's base only for the base branch. Step 7 goes after 2 through 6,
+so its tokens have something to show; step 8's persistence takes the
+view and folds step 6 keeps in memory.
 
 ## Tests
 
@@ -568,15 +833,35 @@ takes the view and folds step 6 keeps in memory.
   repository with worktrees on two hosts, a worktree with two agents, a
   shell and a run, other sessions, and folds.
 - **Switching:** selection across `Tab` from an agent, a worktree, a
-  pane, a repository line, a task, and an empty worktree.
+  pane, a repository line, a task, a task handing over, a target in the
+  stale fold or a folded worktree, and an empty worktree; following
+  with two agents in the viewer's worktree.
+- **Tree contents:** laatmux's own panes left out, an older host's
+  agents placed by session, an orphaned session under its repository.
 - **Git:** temporary repositories for base resolution, committed and
   uncommitted counts with untracked and binary files, conflict, rebase,
-  the base branch itself, and no upsert when only `checked_at` changed.
-- **GitHub:** a fake `gh` for chunking, the aggregation table, the
-  cache, and a missing or logged-out `gh`.
+  the base branch itself, no upsert when only `checked_at` changed, a
+  slow repository not holding the listing, a result dropped after the
+  worktree's `HEAD` moved, and the cache by commit pair.
+- **GitHub:** a fake `gh` for chunking, the aggregation from the count
+  connections with a failure past the first page of contexts, the
+  failing name query, the cache with its stale mark, a failed chunk, and
+  a missing or logged-out `gh`.
 - **Attention:** a working-to-idle transition with the user in the
-  session, one with the user elsewhere, a daemon restart between, and
-  an agent removed.
+  session, one with the user elsewhere, an interrupt followed at once by
+  a switch away, a finish across a daemon restart seen in the next
+  snapshot, a cached record replayed on reconnect not counted, a local
+  agent's finish with no subscriber, a new identity in the same pane, a
+  reused pane id after a server restart, an agent on a remote default
+  server never done, a host clock hours ahead of the laptop's, and an
+  agent removed.
+- **Precedence:** done beats stale, blocked is never stale, a settled
+  workspace's blocked agent stays in place.
+- **Jumps:** a tree jump to a pane in the home session, in another
+  managed session, in another window, and on this machine's default
+  server, against a fake daemon with and without `select`.
+- **Old envelope:** each new record decoded by the envelope before its
+  step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
 - **Detection:** `claude-interrupted` in `TestRealFixtures`, added with
   this note.
