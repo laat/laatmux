@@ -183,8 +183,8 @@ func (r Row) NeedsUser() bool {
 }
 
 // Rank is the row's sort group in priority order: pending tasks, then
-// blocked, done, working, idle and unknown, stale, then rows without an
-// agent.
+// blocked, done, working, idle and unknown, stale or settled, then rows
+// without an agent.
 func (r Row) Rank() int {
 	switch {
 	case r.Pending != nil:
@@ -195,7 +195,7 @@ func (r Row) Rank() int {
 		return 0
 	case r.Done:
 		return 1
-	case r.Stale:
+	case r.Stale || r.Settled:
 		return 4
 	case r.Agent.Activity == protocol.Working:
 		return 2

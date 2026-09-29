@@ -78,7 +78,8 @@ does not reach it, since it has no socket.
   `(1)`, `(2)` suffix, in the tree's child order, start time, so the
   tiles and the tree agree. `{pane_suffix}` is that suffix.
 - **Stale:** stale agents and those of settled workspaces fold into
-  `▸ N stale` at the end, unless blocked or done (see Precedence).
+  `▸ N stale` at the end, unless blocked or done, or the viewer's own
+  (see Precedence).
 - **Orphaned sessions** have no agent and are not in this view; they
   are the tree's.
 - **Enter** on a tile goes to the agent's pane, as on an agent in the
@@ -280,7 +281,9 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   most needs, however old. A blocked agent is never stale either.
 - **Settled** is the workspace's, not the agent's: the agents of a
   settled workspace fold with the stale ones and show 💤, unless blocked
-  or done, which stay in place with their own icon.
+  or done, which stay in place with their own icon. The viewer's own
+  row never folds: settled or stale, it stays in sight, sorted with the
+  stale ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:
   its most pressing agent's, in the order above; with no agent, none.
 

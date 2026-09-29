@@ -788,4 +788,12 @@ func TestCurrentNotFolded(t *testing.T) {
 	if len(rs.Main) != 1 || !rs.Main[0].Settled || !rs.Main[0].Dim || len(rs.Settled) != 0 {
 		t.Errorf("settled: main %+v, settled %+v", rs.Main, rs.Settled)
 	}
+	// It sorts with the stale ones, below an idle agent, though working.
+	in.Agents[0].Activity = protocol.Working
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "claude",
+		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true})
+	rs = Build(in)
+	if len(rs.Main) != 2 || rs.Main[0].Name != "other" || !rs.Main[1].Current {
+		t.Errorf("settled own row sorts: %+v", rs.Main)
+	}
 }

@@ -539,6 +539,7 @@ func TestAttentionWriteRetried(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 	look(d, attachTo("vm", "s"))
 	d.mu.Lock()
 	dirty := d.attn.dirty
