@@ -71,6 +71,8 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		return err
 	}
 	defer t.Close()
+	t.Theme, m.Icons = look(cfg, t)
+	m.Machine, _ = os.Hostname()
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
 	return view.Run(ctx, t, m, view.Host{
 		Changed: st.change,
@@ -216,6 +218,7 @@ func (m *merged) fill(v *view.Model, current string) {
 		v.Handoffs[id] = h.to
 	}
 	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
+	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
 		v.Header = append(v.Header, "local daemon  DOWN  "+m.daemonErr)
@@ -249,12 +252,12 @@ func (m *merged) fill(v *view.Model, current string) {
 // machine's default server is a switch-client; one on a remote host's
 // default server is refused as jump refuses it. A worktree with no
 // session cannot be jumped to: the message is the add line that would
-// start one. A stale row's session exists locally and is switched to.
+// start one. A orphaned row's session exists locally and is switched to.
 // The view is meant to run inside the default tmux server, where
 // switch-client is allowed; run elsewhere, a dashboard in a plain
 // terminal say, the message says how to attach instead.
 func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
-	if r.Stale {
+	if r.Orphaned {
 		return switchTo(ctx, r.Local.Name)
 	}
 	if r.Pending != nil {

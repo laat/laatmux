@@ -229,7 +229,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if err != nil || l.Host != "vm" {
 		t.Errorf("observed agent in a workspace window: localFor = %+v, %v", l, err)
 	}
-	if _, err := d.localFor(rows.Row{Name: "s", Stale: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
+	if _, err := d.localFor(rows.Row{Name: "s", Orphaned: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
 		t.Error("stale row accepted")
 	}
 	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {

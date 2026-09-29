@@ -1,40 +1,40 @@
-..B|box  DOWN  ssh: connect to host box
-S..| ! laatmux/fix-ls               ‹@vm›
-S..|   claude  blocked  2m
-S..|   Permission to run pnpm test in p
+..B|⟨warning:box  DOWN  ssh: connect to host box⟩
+S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                    2:00
+S..|⟨accent:▌⟩    laatmux ‹@vm›                   
+S..|⟨accent:▌⟩    Permission to run pnpm test in
 SD.|───────────────────────────────────
-...| ⟨⠋⟩ remote-notes         ‹@vm/default›
-...|   codex  working  1s
-...|   remote
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes              0:01
+...|⟨info:▌⟩    ‹@vm/default›
+...|⟨info:▌⟩    remote
 .D.|───────────────────────────────────
-...|>⟨⠋⟩ proj/task                   @mac
-...|   codex  working  8s
-...|   Editing src/api.ts
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩»                      0:08
+...|⟨info:▌⟩    proj @mac
+...|⟨info:▌⟩    Editing src/api.ts
 .D.|───────────────────────────────────
-.D.| * proj/down                   ‹@box›
-.D.|   claude  working  10m
-.D.|   last seen
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down                     10:00
+.D.|⟨info:▌⟩    proj ‹@box›
+.D.|⟨info:▌⟩    last seen
 .D.|───────────────────────────────────
-...| - scratch                     @mac
-...|   shell  idle  40s
-...|   zsh
+...|⟨border:▌⟩ ⟨border:  ⟩ scratch                   0:40
+...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩    
 .D.|───────────────────────────────────
-...| - notes               @mac/default
-...|   claude  idle  5m
-...|   notes
+...|⟨border:▌⟩ ⟨border:  ⟩ notes                     5:00
+...|⟨border:▌⟩    @mac/default
+...|⟨border:▌⟩    
 .D.|───────────────────────────────────
-...| - proj/other                   ‹@vm›
-...|   claude  idle  1h
-...|   ✳ Done. 日本語のタイトル that is
+...|⟨border:▌⟩ ⟨border:  ⟩ other                       1h
+...|⟨border:▌⟩    proj ‹@vm›
+...|⟨border:▌⟩    Done. 日本語のタイトル that is
 .D.|───────────────────────────────────
-.D.| - proj/dead                    ‹@vm›
-.D.|   claude  idle (gone)  3h
-.D.|   
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead                        3h
+.D.|⟨border:▌⟩    proj ‹@vm›
+.D.|⟨border:▌⟩    claude gone
 .D.|───────────────────────────────────
-.D.|   proj/spike                  @mac
-.D.|   no session
+.D.|⟨border:▌⟩ ⟨border:  ⟩ spike
+.D.|⟨border:▌⟩    proj @mac
+.D.|⟨border:▌⟩    no session
 .D.|───────────────────────────────────
-.D.|   proj/shell                   ‹@vm›
-.D.|   no agent
-.D.|───────────────────────────────────
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell
+.D.|↓ 1 more
 .D.|v layout  / filter  f all  q quit

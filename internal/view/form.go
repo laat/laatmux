@@ -1,6 +1,8 @@
 package view
 
 import (
+	"github.com/laat/laatmux/internal/palette"
+
 	"strings"
 )
 
@@ -373,7 +375,7 @@ func (f *Form) Render(w, h int) []Line {
 // focusFg is the colour of the focused field's frame; tabStop is how
 // a tab in the prompt is drawn.
 const (
-	focusFg = 36
+	focusFg = palette.Info
 	tabStop = 4
 )
 
@@ -406,7 +408,7 @@ func (f *Form) chipLines(w int) []Line {
 		t := "┌" + title + strings.Repeat("─", max(cw-2-width(title), 0)) + "┐"
 		v := "│" + pad(fit(" "+c.Label(), cw-2), cw-2) + "│"
 		b := "└" + strings.Repeat("─", cw-2) + "┘"
-		fg := 0
+		fg := ""
 		if f.focus == i {
 			fg = focusFg
 		}
@@ -453,7 +455,7 @@ func (f *Form) promptBox(w, n int) []Line {
 	if inner < 1 {
 		inner = 1
 	}
-	fg := 0
+	fg := ""
 	if f.focus == fieldPrompt {
 		fg = focusFg
 	}

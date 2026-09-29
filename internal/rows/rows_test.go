@@ -11,7 +11,7 @@ import (
 
 // The join: worktrees pair with the agent in the session the record
 // names, leftovers are listed on their own, local sessions join by key
-// or attach tag, and stale sessions are those gone from a host that can
+// or attach tag, and orphaned sessions are orphaned when gone from a host that can
 // say so.
 func TestBuild(t *testing.T) {
 	now := time.Now()
@@ -73,8 +73,8 @@ func TestBuild(t *testing.T) {
 	if want := "proj/old"; names(got.Settled) != want {
 		t.Errorf("settled = %q, want %q", names(got.Settled), want)
 	}
-	if want := "vm/proj/gone"; names(got.Stale) != want {
-		t.Errorf("stale = %q, want %q: a host down, unlisted or without worktrees says nothing", names(got.Stale), want)
+	if want := "vm/proj/gone"; names(got.Orphaned) != want {
+		t.Errorf("orphaned = %q, want %q: a host down, unlisted or without worktrees says nothing", names(got.Orphaned), want)
 	}
 	fix := byName["proj/fix"]
 	if fix.Agent == nil || fix.Agent.Title != "fixing" || fix.Local == nil || !fix.Current || fix.Dim || fix.Host != "vm" || fix.HostDown {
@@ -104,17 +104,17 @@ func TestBuild(t *testing.T) {
 	if r := byName["proj/down"]; !r.HostDown || !r.Dim {
 		t.Errorf("host down not dim: %+v", r)
 	}
-	if r := byName["vm/proj/gone"]; !r.Stale || !r.Dim || r.State() != "no worktree" || r.Local == nil || r.Host != "vm" {
-		t.Errorf("stale: %+v", r)
+	if r := byName["vm/proj/gone"]; !r.Orphaned || !r.Dim || r.State() != "no worktree" || r.Local == nil || r.Host != "vm" {
+		t.Errorf("orphaned: %+v", r)
 	}
-	// A stale session tagged with a host's old name is the host's that
+	// A orphaned session tagged with a host's old name is the host's that
 	// answers for its environment id now.
 	renamed := Build(Input{
 		Hosts:  []Host{{Name: "box", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm"}},
 	})
-	if len(renamed.Stale) != 1 || renamed.Stale[0].Host != "box" || renamed.Stale[0].HostDown {
-		t.Errorf("stale row after a host rename: %+v", renamed.Stale)
+	if len(renamed.Orphaned) != 1 || renamed.Orphaned[0].Host != "box" || renamed.Orphaned[0].HostDown {
+		t.Errorf("orphaned row after a host rename: %+v", renamed.Orphaned)
 	}
 	if r := byName["proj (detached) /r/det"]; r.Worktree == nil {
 		t.Errorf("detached worktree: %+v", r)
@@ -212,8 +212,8 @@ func TestBuildPending(t *testing.T) {
 	if strings.Join(ids, " ") != want {
 		t.Fatalf("main %q, want %q", strings.Join(ids, " "), want)
 	}
-	if len(got.Settled)+len(got.Stale) != 0 {
-		t.Fatalf("settled %d stale %d: the settled worktree hides behind its tasks", len(got.Settled), len(got.Stale))
+	if len(got.Settled)+len(got.Orphaned) != 0 {
+		t.Fatalf("settled %d orphaned %d: the settled worktree hides behind its tasks", len(got.Settled), len(got.Orphaned))
 	}
 	byID := map[string]Row{}
 	for _, r := range got.Main {
@@ -256,7 +256,7 @@ func TestBuildPending(t *testing.T) {
 	got = Build(in)
 	for _, r := range got.All() {
 		if r.Pending == nil && ((r.Agent != nil && r.Agent.Session == "proj/task") || (r.Local != nil && r.Local.Name == "vm/proj/task")) {
-			t.Fatalf("the task's agent or session is a row of its own: %q stale %v", r.ID(), r.Stale)
+			t.Fatalf("the task's agent or session is a row of its own: %q orphaned %v", r.ID(), r.Orphaned)
 		}
 	}
 	for _, r := range got.Main {
@@ -382,15 +382,15 @@ func TestPendingOnRenamedHost(t *testing.T) {
 			t.Fatalf("worktree row: %+v", r)
 		}
 	}
-	// Mid-add, the session a jump made at the task's root is not stale
+	// Mid-add, the session a jump made at the task's root is not orphaned
 	// while the renamed host has not listed the worktree yet.
 	adding := Build(Input{
 		Hosts:    []Host{{Name: "new", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
 		Locals:   []workspace.Local{{Name: "old/proj/b", Key: "env//r", Host: "old"}},
 		Pendings: []protocol.Pending{{ID: "add-2", Host: "old", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}},
 	})
-	if len(adding.Stale) != 0 {
-		t.Fatalf("a session at a running add's root is stale: %+v", adding.Stale)
+	if len(adding.Orphaned) != 0 {
+		t.Fatalf("a session at a running add's root is orphaned: %+v", adding.Orphaned)
 	}
 	// The old name still configured, now answering as another machine,
 	// and another name listing the task's machine: the task is replaced
@@ -609,5 +609,27 @@ func TestBuildHomelessRowLocal(t *testing.T) {
 		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"})
 	if all := rs.All(); len(all) != 1 || all[0].Local == nil || all[0].Local.Name != "vm/proj/a" || !all[0].Current {
 		t.Fatalf("remote default-server agent: %+v", rs)
+	}
+}
+
+// The labels: the branch primary and the repository secondary; on main
+// or master the repository primary; a detached worktree by its root; a
+// task by its branch; a row that is no worktree's by its session alone.
+func TestLabels(t *testing.T) {
+	for _, c := range []struct {
+		r    Row
+		p, s string
+	}{
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Branch: "fix-ls", Root: "/w/fix-ls"}}, "fix-ls", "laatmux"},
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Branch: "main", Root: "/w/main"}}, "laatmux", "main"},
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Branch: "master", Root: "/w/m"}}, "laatmux", "master"},
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Root: "/w/probe"}}, "probe", "laatmux detached"},
+		{Row{Pending: &protocol.Pending{Repo: "proj", Branch: "task"}}, "task", "proj"},
+		{Row{Name: "scratch", Agent: &protocol.Agent{Session: "scratch"}}, "scratch", ""},
+		{Row{Name: "vm/proj/gone", Orphaned: true}, "vm/proj/gone", ""},
+	} {
+		if p, s := c.r.Labels(); p != c.p || s != c.s {
+			t.Errorf("%+v: %q %q, want %q %q", c.r, p, s, c.p, c.s)
+		}
 	}
 }

@@ -78,6 +78,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	t.Theme, _ = look(cfg, t)
 	m := &view.Model{Layout: view.Compact, Overlay: form}
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, relay: relay, add: f}
 	c2 := &composer{d: d, f: f}

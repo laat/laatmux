@@ -41,6 +41,9 @@ type merged struct {
 	// while it reconnects; the last state stays on screen.
 	daemonErr string
 	change    chan struct{}
+	// snapshotted is that a merged snapshot has been applied: a view
+	// says it is loading until then.
+	snapshotted bool
 	// stripped is that the records come through a merging daemon
 	// without the attribution capability, which drops the worktree of
 	// every agent it forwards.
@@ -78,7 +81,7 @@ type hostState struct {
 	// Worktrees is the daemon's worktrees capability; without it a
 	// snapshot carries no records and says nothing about worktrees.
 	// Listed is set once the host's snapshot has arrived. Until both, its
-	// records are unknown, not absent, and nothing of its is stale.
+	// records are unknown, not absent, and nothing of its is orphaned.
 	Worktrees bool
 	Listed    bool
 	Caps      []string // the daemon's capabilities, from its hello
@@ -265,14 +268,14 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	return in
 }
 
-// stale lists local workspace sessions whose workspace no longer exists on
+// orphaned lists local workspace sessions whose workspace no longer exists on
 // its host: the worktree was removed by hand or from another machine. A
 // host that is down, whose snapshot has not arrived, or whose daemon does
-// not publish worktrees cannot say, so its sessions are not stale. Called
+// not publish worktrees cannot say, so its sessions are not orphaned. Called
 // with m.mu held.
-func (m *merged) stale(locals []workspace.Local) []workspace.Local {
+func (m *merged) orphaned(locals []workspace.Local) []workspace.Local {
 	var out []workspace.Local
-	for _, r := range rows.Build(m.input(locals, "")).Stale {
+	for _, r := range rows.Build(m.input(locals, "")).Orphaned {
 		out = append(out, *r.Local)
 	}
 	return out
@@ -317,15 +320,15 @@ func (m *merged) render(locals []workspace.Local) string {
 			renderRow(&b, r, now)
 		}
 	}
-	if len(rs.Stale) > 0 {
-		b.WriteString("\nstale\n")
-		for _, r := range rs.Stale {
+	if len(rs.Orphaned) > 0 {
+		b.WriteString("\norphaned\n")
+		for _, r := range rs.Orphaned {
 			_, root := workspace.SplitKey(r.Local.Key)
 			fmt.Fprintf(&b, "  %-40s no worktree %s on %s\n", r.Name, root, r.Host)
 		}
 	}
 	if m.sessionsErr != "" {
-		// An incomplete listing says so where the settled and stale
+		// An incomplete listing says so where the settled and orphaned
 		// groups would be, rather than looking complete.
 		fmt.Fprintf(&b, "\nlocal sessions not listed: %s\n", m.sessionsErr)
 	}
@@ -452,7 +455,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 	t := time.NewTicker(5 * time.Second) // refresh relative times
 	defer t.Stop()
 	for {
-		// Settled and stale come from the local sessions: from the merged
+		// Settled and orphaned come from the local sessions: from the merged
 		// stream, or on the direct path read on each redraw so a settle
 		// from another pane shows on the next change.
 		locals := m.locals()

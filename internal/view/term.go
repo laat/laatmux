@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/laat/laatmux/internal/palette"
 	"golang.org/x/sys/unix"
 )
 
@@ -14,6 +16,9 @@ import (
 type Term struct {
 	in, out *os.File
 	saved   *unix.Termios
+	// Theme is what the lines are drawn in; the zero Theme has no
+	// colours and draws with the attributes alone.
+	Theme palette.Theme
 }
 
 // Open puts the terminal into raw mode. Not a terminal is an error.
@@ -49,6 +54,43 @@ func Open(in, out *os.File) (*Term, error) {
 	return t, nil
 }
 
+// Background asks the terminal for its background colour with OSC 11 and
+// reports whether it is dark, waiting at most wait for the answer; ok is
+// false when none came or it could not be read. Called before Run reads
+// the keys, so the answer is read here; one that comes later is dropped
+// by the key decoder. tmux answers for its pane.
+func (t *Term) Background(wait time.Duration) (dark, ok bool) {
+	t.write("\x1b]11;?\x1b\\")
+	deadline := time.Now().Add(wait)
+	var got []byte
+	buf := make([]byte, 64)
+	for len(got) < 256 {
+		left := time.Until(deadline)
+		if left <= 0 {
+			break
+		}
+		fds := []unix.PollFd{{Fd: int32(t.in.Fd()), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, int(left.Milliseconds())+1)
+		if err != nil && err != unix.EINTR {
+			break
+		}
+		if n <= 0 {
+			continue
+		}
+		k, err := unix.Read(int(t.in.Fd()), buf)
+		if err != nil || k <= 0 {
+			break
+		}
+		got = append(got, buf[:k]...)
+		if i := strings.Index(string(got), "rgb:"); i >= 0 {
+			if rest := string(got[i:]); strings.ContainsAny(rest, "\x07\x1b") {
+				return palette.DarkBackground(rest)
+			}
+		}
+	}
+	return false, false
+}
+
 // Close restores the terminal.
 func (t *Term) Close() {
 	if t.saved == nil {
@@ -79,7 +121,7 @@ func (t *Term) Draw(lines []Line) {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		b.WriteString(ANSI(l))
+		b.WriteString(ANSI(l, t.Theme))
 		b.WriteString("\x1b[K")
 	}
 	t.write(b.String())

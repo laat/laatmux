@@ -515,6 +515,30 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 				b = b[j+1:]
 				continue
 			}
+			if b[1] == ']' {
+				// An OSC string, the terminal's late answer to the
+				// background query say: dropped whole, up to BEL or ST,
+				// so its digits never read as keys.
+				end := -1
+				for j := 2; j < len(b); j++ {
+					if b[j] == 0x07 {
+						end = j + 1
+						break
+					}
+					if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
+						end = j + 2
+						break
+					}
+				}
+				if end < 0 {
+					if !flush {
+						return keys, b
+					}
+					return keys, nil
+				}
+				b = b[end:]
+				continue
+			}
 			if b[1] == '\r' || b[1] == '\n' {
 				// Alt-Enter, and what a terminal bound to send it for
 				// Shift-Enter sends: a newline, never a submit.

@@ -174,6 +174,7 @@ func (m *merged) applyMerged(msg protocol.Message) {
 	m.mu.Lock()
 	switch msg.Type {
 	case protocol.TypeSnapshot:
+		m.snapshotted = true
 		m.agents, m.worktrees = map[string]protocol.Agent{}, map[string]protocol.Worktree{}
 		m.hosts, m.byHost = map[string]hostState{}, map[string]string{}
 		m.sessions = map[string]protocol.Session{}

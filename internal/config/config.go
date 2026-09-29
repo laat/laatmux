@@ -20,6 +20,12 @@
 //	sidebar:
 //	  width: 35               # columns; default 35
 //	  layout: tiles           # tiles or compact; default tiles
+//	icons: emoji              # emoji, nerdfont or ascii; default emoji
+//	status_icons: {waiting: "?"}  # per status: working, waiting, done, stale
+//	agent_icons: {claude: {icon: CC, color: "#d97757"}}
+//	theme:
+//	  mode: auto              # auto, dark or light; default auto
+//	  custom: {accent: "#b48ead"}   # palette colours over the defaults
 //
 // hosts, agents and repos are read by clients; tmux_servers and the local
 // host's directories by the daemon on the machine the file lives on. Each
@@ -36,6 +42,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
@@ -123,7 +130,36 @@ type Config struct {
 	Copy []string `yaml:"copy"`
 	// Sidebar is the sidebar pane on this machine's tmux.
 	Sidebar Sidebar `yaml:"sidebar"`
+	// Icons is the icon set the views draw statuses with: emoji, the
+	// default, nerdfont or ascii. StatusIcons overrides single icons by
+	// status; "" keeps the set's. AgentIcons overrides the agent icons
+	// by agent name.
+	Icons       string               `yaml:"icons"`
+	StatusIcons map[string]string    `yaml:"status_icons"`
+	AgentIcons  map[string]AgentIcon `yaml:"agent_icons"`
+	// Theme is the views' colours: the mode picks the dark or the light
+	// defaults, auto by asking the terminal, and Custom sets palette
+	// colours over them.
+	Theme Theme `yaml:"theme"`
 }
+
+// AgentIcon is an agent's icon and its colour, `#rrggbb` or 0 to 255.
+type AgentIcon struct {
+	Icon  string `yaml:"icon"`
+	Color string `yaml:"color"`
+}
+
+// Theme is the theme section.
+type Theme struct {
+	Mode   string            `yaml:"mode"`
+	Custom map[string]string `yaml:"custom"`
+}
+
+// The icon sets and the statuses an icon can be set for.
+var (
+	IconSets     = []string{"emoji", "nerdfont", "ascii"}
+	IconStatuses = []string{"working", "waiting", "done", "stale"}
+)
 
 // Sidebar configures the sidebar pane: its width in columns and which
 // layout it starts in. Zero values are the defaults.
@@ -238,7 +274,46 @@ func Parse(b []byte) (Config, error) {
 	default:
 		return c, fmt.Errorf("sidebar: layout %q is not tiles or compact", c.Sidebar.Layout)
 	}
+	if err := c.validateLook(); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// validateLook checks the icons and the theme, so a view never starts on
+// a config it cannot draw with.
+func (c *Config) validateLook() error {
+	if c.Icons != "" && !contains(IconSets, c.Icons) {
+		return fmt.Errorf("icons: %q is not one of %s", c.Icons, strings.Join(IconSets, ", "))
+	}
+	for k := range c.StatusIcons {
+		if !contains(IconStatuses, k) {
+			return fmt.Errorf("status_icons: %q is not one of %s", k, strings.Join(IconStatuses, ", "))
+		}
+	}
+	for name, a := range c.AgentIcons {
+		if a.Color != "" {
+			if _, err := palette.Parse(a.Color); err != nil {
+				return fmt.Errorf("agent_icons: %s: %w", name, err)
+			}
+		}
+	}
+	if !palette.ValidMode(c.Theme.Mode) {
+		return fmt.Errorf("theme: mode %q is not auto, dark or light", c.Theme.Mode)
+	}
+	if _, err := palette.New(true, c.Theme.Custom); err != nil {
+		return err
+	}
+	return nil
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) validateHosts() error {

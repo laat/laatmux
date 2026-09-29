@@ -519,7 +519,7 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   has no identified agent and `no session` when it has none; a managed
   agent with no worktree says so; observed agents name their server.
   Settled workspaces are listed under `settled`, and a local workspace
-  session whose worktree is gone from a connected host under `stale`, from
+  session whose worktree is gone from a connected host under `orphaned`, from
   which `rm` still works; a host whose snapshot has not arrived, or whose
   daemon does not publish worktrees, says nothing about its workspaces.
   The rows are the same the sidebar and the dashboard show, see below.
@@ -615,26 +615,44 @@ publishes worktrees. Local sessions are joined in by key, or by the
 attach tag for a `new` session's attachment, so a row knows its local
 session, whether it is settled, and whether it is the one the viewer is
 in. A row is dim from measured axes only: no identified agent, an agent
-that is gone, a host that is down, a stale session, a settled workspace.
+that is gone, a host that is down, an orphaned session, a settled workspace.
 Age is shown, never judged. The order is blocked, working, idle, then
 rows without a live agent, most recent activity first within a group;
-settled rows sit in a collapsed group at the bottom, stale rows after
+settled rows sit in a collapsed group at the bottom, orphaned rows after
 them.
 
 The view, in `internal/view`, is a tmux pane's worth of terminal: raw
-mode through termios, ANSI for cursor, dim and reverse, SGR mouse
-reporting for clicks and the wheel, no TUI library. The renderer is a
-pure function from rows, size and selection to lines and is tested
-against golden files for both layouts. `tiles` is three lines per row:
-the mark and `<repo>/<branch>` with the host tag right-aligned and dim
-for every host but the local one, the agent with its activity and age,
-the pane title trimmed to the width; a row without an agent has two
-lines, the second `no session`, `no agent` or `no worktree`. `compact`
-is one line per row, two in the dashboard, which has room for the
-title. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
+mode through termios, ANSI for cursor, colours and attributes, SGR
+mouse reporting for clicks and the wheel, no TUI library. The renderer
+is a pure function from rows, size and selection to lines that name
+their colours from a palette, and is tested against golden files for
+both layouts; only the terminal encoding looks the colours up
+([milestone five](docs/milestone-five.md), step 2). `tiles` is three
+lines per row and a divider: the status icon, the primary label (the
+branch; the repository on `main` or `master`; a session's name for a
+row that is no worktree's) and the time since the status changed, `m:ss`
+under an hour, then `Nh`, then `Nd`, against the right edge; the
+secondary label, the repository, with the host tag, dim for every host
+but the local one; and the pane title, cleaned of spinner and status
+characters and dropped when it only repeats a label, a shell's name or
+the host, or what the row is instead, `no session`, `no agent`, `no
+worktree`, a task's state. A stripe `▌` runs down the left of every
+line in the status colour. The viewer's own row has its primary label
+in bold `current_worktree_fg`. `compact` is the first line with the
+secondary label and host tag after the primary, and in the dashboard
+the third line under it. The icon is the status's: a two-cell braille
+spinner at 250 ms for working, 💬 for blocked or a task that needs the
+user; `icons: nerdfont` and `icons: ascii` choose other sets, and
+`status_icons` sets single ones. The selection is a background band;
+with `NO_COLOR` set, the attributes alone, the selection in reverse
+video. `theme.mode: auto` asks the terminal for its background with OSC
+11 when the view starts and takes the dark defaults without an answer;
+`theme.custom` sets palette colours. Before the first snapshot the list
+says `Loading`, an empty one says so, and rows below the window are
+counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
 `Enter` jumps, `1`..`9` jump to the nth row of the selection's group,
 `v` toggles the layout, `/` filters by name or host and `Esc` clears,
-`f` shows and hides the settled and stale groups, `q` quits. A click
+`f` shows and hides the settled and orphaned groups, `q` quits. A click
 jumps to the row under it; the wheel moves the selection. Hosts that
 are not connected and listed, and a local daemon that is down, are
 lines above the list.
@@ -645,7 +663,7 @@ the record when missing; a `new` session's row does the same through a
 plain attachment; an observed agent on this machine's default server is
 a `switch-client`; one on a remote host's default server is refused with
 `jump`'s message; a worktree with no session shows the `add` line that
-would start one in the footer. A stale row's session exists locally and
+would start one in the footer. An orphaned row's session exists locally and
 is switched to.
 
 - **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets five
@@ -682,7 +700,7 @@ is switched to.
   in the configured layout, marking the session it sits in from
   `TMUX_PANE`, redrawing on every change and every five seconds for the
   ages, staying after a jump. It reads no local sessions itself: settled
-  and stale come from the stream.
+  and orphaned come from the stream.
 - **`dashboard`** is the same view filling whatever it runs in, compact
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:
@@ -793,7 +811,14 @@ is switched to.
   plain scrolling list for a terminal that is not a tmux pane.
 
 Config: `sidebar: {width: 35, layout: tiles}`; width is at least 10,
-layout `tiles` or `compact`.
+layout `tiles` or `compact`. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
+`status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
+{claude: {icon: CC, color: "#d97757"}}` for the agent token milestone
+five's templates bring, and `theme: {mode: auto|dark|light, custom:
+{accent: "#b48ead"}}` with the palette `info`, `accent`, `success`,
+`warning`, `danger`, `dimmed`, `text`, `border`, `header`,
+`highlight_row_bg` and `current_worktree_fg`, colours as `#rrggbb` or
+0 to 255.
 
 ## Which tmux servers the daemon polls
 
@@ -850,7 +875,7 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   connection. Records from before a drop stay while `listed` is false,
   so a listing shows what was last known with the host row saying `DOWN`
   and ssh's own message. Absence is authoritative only when both bits are
-  set: a local session is stale only against a host that is connected,
+  set: a local session is orphaned only against a host that is connected,
   listed and publishes worktrees, and `jump` reports a workspace missing
   only from a listed host. The local host is itself, not a dial of its
   own socket; it is listed once the daemon's first poll of every server
@@ -934,7 +959,7 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   access of its own. The listing also runs once, synchronously, before
   each merged snapshot, so the snapshot is as fresh as the connection. A
   listing that fails for a reason other than no server puts its message
-  in `sessions_error`, which `ls` prints where the settled and stale
+  in `sessions_error`, which `ls` prints where the settled and orphaned
   groups would be.
 - **One-shot clients wait for readiness.** The snapshot comes at once
   with what the daemon knows, on a cold daemon the host rows alone. `ls`

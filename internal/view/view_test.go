@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/workspace"
@@ -19,7 +20,7 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // fixture is a listing with one of everything: the three activities, a
 // gone agent, a worktree without a session, one without an agent, a
 // managed agent with no worktree, observed agents on the local and a
-// remote default server, a host down, a settled and a stale workspace.
+// remote default server, a host down, a settled and an orphaned workspace.
 func fixture(now time.Time) rows.Rows { return rows.Build(fixtureInput(now)) }
 
 func fixtureInput(now time.Time) rows.Input {
@@ -89,7 +90,7 @@ func model(now time.Time) *Model {
 // and name with the host tag right-aligned, dim for every host but the
 // local one, the agent, activity and age, and the title trimmed to the
 // width; rows without an agent say what they are instead; the current
-// session is marked in the gutter; the settled and stale groups are
+// session is marked in the gutter; the settled and orphaned groups are
 // collapsed to one line.
 func TestRenderTiles(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
@@ -143,7 +144,7 @@ func TestRenderScroll(t *testing.T) {
 	// Back to the top: the scroll follows.
 	m.Selected = 0
 	txt = Text(m.Render())
-	if !strings.HasPrefix(txt, " ! laatmux/fix-ls") {
+	if !strings.HasPrefix(txt, "▌ 💬 fix-ls") {
 		t.Errorf("did not scroll back:\n%s", txt)
 	}
 }
@@ -649,9 +650,9 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	}
 }
 
-// A live working row's mark is the spinner frame for the clock, in
-// colour; the frame advances every spinTick and wraps; a gone or dim
-// working agent keeps the plain mark; Spinning says whether a tick is
+// A live working row's icon is the spinner frame for the clock, in the
+// info colour; the frame advances every spinTick and wraps; a dim
+// working agent's spinner stands still; Spinning says whether a tick is
 // wanted at all.
 func TestSpinner(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
@@ -667,31 +668,31 @@ func TestSpinner(t *testing.T) {
 		m.Now = at
 		for _, it := range m.Visible() {
 			if it.Row.Name == name {
-				return m.mark(*it.Row)
+				return m.iconSpan(*it.Row)
 			}
 		}
 		t.Fatalf("no row %s", name)
 		return Span{}
 	}
 	first := frameOf("proj/task", now)
-	if first.Fg != spinnerFg || first.Text != spinnerFrames[0] {
+	if first.Fg != palette.Info || first.Text != spinnerFrames[0] || !first.spin {
 		t.Fatalf("frame at t0: %+v", first)
 	}
-	if next := frameOf("proj/task", now.Add(spinTick)); next.Text != spinnerFrames[1] || next.Fg != spinnerFg {
+	if next := frameOf("proj/task", now.Add(spinTick)); next.Text != spinnerFrames[1] || next.Fg != palette.Info {
 		t.Fatalf("frame at t0+tick: %+v", next)
 	}
 	if wrapped := frameOf("proj/task", now.Add(time.Duration(len(spinnerFrames))*spinTick)); wrapped.Text != spinnerFrames[0] {
 		t.Fatalf("frame after a full cycle: %+v", wrapped)
 	}
 	// A zero Now, before the first draw, is a frame too, not a panic.
-	if z := frameOf("proj/task", time.Time{}); z.Fg != spinnerFg || z.Text == "" {
+	if z := frameOf("proj/task", time.Time{}); z.Fg != palette.Info || z.Text == "" {
 		t.Fatalf("frame at the zero time: %+v", z)
 	}
-	// Working but dim, on the down host: the plain mark.
-	if down := frameOf("proj/down", now); down.Text != "*" || down.Fg != 0 {
+	// Working but dim, on the down host: the spinner stands still.
+	if down := frameOf("proj/down", now); down.Text != spinnerFrames[0] || down.spin {
 		t.Fatalf("dim working row: %+v", down)
 	}
-	if blocked := frameOf("laatmux/fix-ls", now); blocked.Text != "!" || blocked.Fg != 0 {
+	if blocked := frameOf("laatmux/fix-ls", now); blocked.Text != "💬" || blocked.Fg != palette.Accent {
 		t.Fatalf("blocked row: %+v", blocked)
 	}
 	// Every working agent gone: nothing spins.
@@ -707,14 +708,18 @@ func TestSpinner(t *testing.T) {
 	}
 	// The colour reaches the terminal and the plain text does not
 	// carry it.
-	l := Line{Spans: []Span{{Text: ">"}, {Text: "⠋", Fg: spinnerFg}, {Text: " x"}}}
-	if got := ANSI(l); !strings.Contains(got, "\x1b[36m⠋\x1b[0m") || !strings.HasSuffix(got, " x\x1b[0m") {
+	th, _ := palette.New(true, nil)
+	l := Line{Spans: []Span{{Text: ">"}, {Text: "⠋", Fg: palette.Info}, {Text: " x"}}}
+	if got := ANSI(l, th); !strings.Contains(got, "\x1b[38;2;125;207;255m⠋\x1b[0m") || !strings.HasSuffix(got, " x\x1b[0m") {
 		t.Errorf("ANSI: %q", got)
+	}
+	if got := ANSI(l, palette.Mono()); strings.Contains(got, "38;") {
+		t.Errorf("ANSI without colours: %q", got)
 	}
 	if got := Text([]Line{l}); got != ">⠋ x\n" {
 		t.Errorf("Text: %q", got)
 	}
-	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨⠋⟩ x") {
+	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨info:⠋⟩ x") {
 		t.Errorf("Debug: %q", got)
 	}
 }
@@ -755,16 +760,17 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	}
 	m.Overlay = nil
 	// Tiles, the blocked tile selected at the top: the first working
-	// tile's head line is the fifth body line, so five body lines show
-	// its mark and four cut the tile off above it.
+	// tile's head line is the fifth body line. Rows below take the
+	// window's last line for their count, so six body lines show its
+	// icon and five cut the tile off above it.
 	m.Layout = Tiles
 	m.Handle(Key{Rune: 'g'})
-	m.Height = len(m.Header) + 5 + 1
+	m.Height = len(m.Header) + 6 + 1
 	m.Render()
 	if !m.Spinning() {
 		t.Fatalf("tile head on screen and not spinning:\n%s", Debug(m.Render()))
 	}
-	m.Height = len(m.Header) + 4 + 1
+	m.Height = len(m.Header) + 5 + 1
 	m.Render()
 	if m.Spinning() {
 		t.Fatalf("tile head clipped and still spinning:\n%s", Debug(m.Render()))

@@ -285,7 +285,7 @@ func (d *dash) startAdd(m *view.Model) {
 		return
 	}
 	preRepo, preHost, branch := "", "", ""
-	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Stale {
+	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Orphaned {
 		preRepo, preHost, branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
 	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
 		preRepo = repo.Name
@@ -559,7 +559,7 @@ func keepPrompt(id, prompt string) (string, error) {
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree
-// row, or a stale row whose session still names its root. The question
+// row, or a orphaned row whose session still names its root. The question
 // names what goes and where.
 func (d *dash) askRm(m *view.Model, force bool) {
 	r := m.Selection()
@@ -705,7 +705,7 @@ func (d *dash) deliverPrompt(m *view.Model) {
 }
 
 // rmFor is the rm for a row: the worktree's repository, branch and root
-// from its record, or from a stale session's tags and key. A repository
+// from its record, or from a orphaned session's tags and key. A repository
 // this machine's config does not know is removed by root alone, as
 // --root does.
 func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
@@ -728,7 +728,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 		if rm.Repo.Source == "" {
 			rm.Branch = ""
 		}
-	case r.Stale:
+	case r.Orphaned:
 		rm.Environment, rm.Root = workspace.SplitKey(r.Local.Key)
 		if repo, ok := recordRepo(d.cfg, r.Local.Source); ok && r.Local.Branch != "" {
 			rm.Repo, rm.Branch = repo, r.Local.Branch
@@ -847,7 +847,7 @@ func (d *dash) shell(m *view.Model) bool {
 // server sits in a local window of a workspace whose worktree may be
 // on another host, and the shell belongs where the worktree is.
 func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
-	if r.Stale {
+	if r.Orphaned {
 		return workspace.Local{}, errors.New(r.Name + ": its worktree is gone")
 	}
 	if r.Local != nil && r.Local.Workspace() {
