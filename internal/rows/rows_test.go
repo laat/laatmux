@@ -522,3 +522,21 @@ func TestBuildTwoAgentsOneSession(t *testing.T) {
 		}
 	}
 }
+
+// A worktree row with no home session whose agent is on this machine's
+// default server stands for that session: the viewer in it is on the
+// row.
+func TestBuildWorktreeRowTakesAgentSession(t *testing.T) {
+	got := Build(Input{
+		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Activity: protocol.Idle,
+			Liveness: protocol.Alive, WorktreeID: "menv/worktree//w/a"}},
+		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}},
+		Locals:    []workspace.Local{{Name: "notes"}},
+		Current:   "notes",
+	})
+	all := got.All()
+	if len(all) != 1 || all[0].Worktree == nil || all[0].Local == nil || all[0].Local.Name != "notes" || !all[0].Current {
+		t.Fatalf("rows %+v", all)
+	}
+}

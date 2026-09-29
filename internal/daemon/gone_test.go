@@ -494,3 +494,35 @@ func TestRelayGoneAfterHandoffDrops(t *testing.T) {
 		t.Fatalf("task needing the user: %+v %v", p, ok)
 	}
 }
+
+// A retired record whose file cannot be removed is tried again on the
+// next listing, the same listing included.
+func TestRelayDropRetiredRetries(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k5", Host: "vm", EnvironmentID: "henv", Root: "/w/k5", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k5"}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.relay.mu.Lock()
+	f.local.relay.checked["k5"] = "sig"
+	f.local.relay.mu.Unlock()
+	if err := os.Chmod(f.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	f.local.dropRetired("k5")
+	os.Chmod(f.dir, 0o700)
+	f.local.relay.mu.Lock()
+	_, kept := f.local.relay.recs["k5"]
+	_, checked := f.local.relay.checked["k5"]
+	f.local.relay.mu.Unlock()
+	if !kept || checked {
+		t.Fatalf("after a failed removal: kept %v, checked %v", kept, checked)
+	}
+	f.local.dropRetired("k5")
+	if _, ok := f.local.relay.get("k5"); ok {
+		t.Fatal("kept after the directory was writable again")
+	}
+}

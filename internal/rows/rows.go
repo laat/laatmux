@@ -368,6 +368,22 @@ func Build(in Input) Rows {
 			byWorktree[a.WorktreeID] = append(byWorktree[a.WorktreeID], a)
 		}
 	}
+	// agentLocal is the local session an agent's row stands for: the
+	// plain attachment to its managed session, or the observed session
+	// itself on this machine's own default server, whatever tags it
+	// carries.
+	agentLocal := func(host string, a *protocol.Agent) *workspace.Local {
+		switch {
+		case Server(*a) == tmux.LaatmuxServer.Label():
+			return byAttach[host+"/"+a.Session]
+		case hosts[host].Local && Server(*a) == tmux.DefaultServer.Label():
+			if l := byName[a.Session]; l != nil {
+				return l
+			}
+			return &workspace.Local{Name: a.Session}
+		}
+		return nil
+	}
 	used := map[*protocol.Agent]bool{}
 	var rows []Row
 	seenKey := map[string]bool{}
@@ -411,6 +427,10 @@ func Build(in Input) Rows {
 		seenKey[key] = true
 		if l := byKey[key]; l != nil {
 			r.Local, r.Settled = l, l.Settled
+		} else if w.Session == "" && r.Agent != nil {
+			// With no home session the row is jumped to through its
+			// agent, and stands for the agent's local session.
+			r.Local = agentLocal(host, r.Agent)
 		}
 		if idx := byAlias[w.ID]; len(idx) > 0 {
 			for _, j := range idx {
@@ -465,11 +485,7 @@ func Build(in Input) Rows {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]
-		r := Row{Host: host, Name: a.Session, Agent: a}
-		if l := byAttach[host+"/"+a.Session]; l != nil {
-			r.Local = l
-		}
-		rows = append(rows, r)
+		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
 	}
 	for i := range in.Agents {
 		a := &in.Agents[i]
@@ -477,17 +493,7 @@ func Build(in Input) Rows {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]
-		r := Row{Host: host, Name: a.Session, Agent: a}
-		if h := hosts[host]; h.Local && Server(*a) == tmux.DefaultServer.Label() {
-			// An observed session on this machine's own default server
-			// is a local session, whatever tags it carries.
-			if l := byName[a.Session]; l != nil {
-				r.Local = l
-			} else {
-				r.Local = &workspace.Local{Name: a.Session}
-			}
-		}
-		rows = append(rows, r)
+		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
 	}
 	// Stale: a local workspace session whose worktree is gone from a
 	// host that can say so. A host that is down, whose snapshot has not

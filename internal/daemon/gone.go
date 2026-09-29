@@ -200,12 +200,16 @@ func (d *Daemon) dropRetired(id string) {
 	d.dropRetiredLocked(id)
 }
 
-// dropRetiredLocked is dropRetired with the relay's mutex held.
+// dropRetiredLocked is dropRetired with the relay's mutex held. A file
+// that cannot be removed leaves the record unchecked, so the next
+// listing without its worktree tries again rather than passing over a
+// listing already checked.
 func (d *Daemon) dropRetiredLocked(id string) {
 	if p, ok := d.relay.recs[id]; !ok || !p.retired() {
 		return
 	}
 	if err := d.relay.removeLocked(id); err != nil {
 		d.cfg.Logger.Printf("pending: drop %s: %v", id, err)
+		delete(d.relay.checked, id)
 	}
 }
