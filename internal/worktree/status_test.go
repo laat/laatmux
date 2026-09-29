@@ -429,12 +429,23 @@ func TestStatusPartialCloneNoFetch(t *testing.T) {
 	before := packs()
 	var cache StatusCache
 	st, _, _, err := Status(f.ctx, partial, "side", &cache)
-	if err != nil || st.Ahead != 1 || st.Behind != 1 {
-		// A blob the diff may not fetch leaves the committed diff out,
-		// not the whole object.
+	if err != nil || st.Ahead != 1 || st.Behind != 1 || st.Conflict != nil {
+		// A blob the merge may not fetch leaves the conflict out, not
+		// the whole object.
 		t.Errorf("status: %+v %v", st, err)
 	}
 	if after := packs(); after != before {
 		t.Errorf("packs %d -> %d: a refresh fetched", before, after)
+	}
+	// The blob fetched by the user's own git, with no commit moving:
+	// the pair is read again after the minute and the conflict shows.
+	run(t, partial, "git", "show", "origin/main:big.txt")
+	if st, _, _, _ := Status(f.ctx, partial, "side", &cache); st.Conflict != nil {
+		t.Error("the incomplete pair was read again within the minute")
+	}
+	cache.pairAt = time.Now().Add(-2 * baseTTL)
+	st, _, _, err = Status(f.ctx, partial, "side", &cache)
+	if err != nil || st.Conflict == nil || !*st.Conflict {
+		t.Errorf("after the fetch: %+v %v", st, err)
 	}
 }

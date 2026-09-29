@@ -72,6 +72,10 @@ type Committed struct {
 	Diff          [2]int
 	Ahead, Behind int
 	Conflict      *bool
+	// incomplete is that git refused a part, the diff or the merge, a
+	// blob missing from a partial clone say: the pair is read again
+	// after baseTTL, since a blob fetched later changes no commit.
+	incomplete bool
 }
 
 // untrackedKey is what an untracked file's count is kept by.
@@ -96,6 +100,7 @@ type StatusCache struct {
 	baseAt    time.Time
 	resolved  bool // baseAt is a resolution's, one that found none too
 	pair      Pair
+	pairAt    time.Time // when the pair was read
 	committed Committed
 	have      bool
 	untracked map[string]untrackedCount
@@ -167,12 +172,13 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		if fi, err := os.Stat(filepath.Join(paths.CommonDir, "shallow")); err == nil {
 			pair.Shallow = fi.ModTime()
 		}
-		if !cache.have || cache.pair != pair {
+		stale := cache.committed.incomplete && time.Since(cache.pairAt) > baseTTL
+		if !cache.have || cache.pair != pair || stale {
 			c, err := readCommitted(ctx, root, pair)
 			if err != nil {
 				return st, head, paths, err
 			}
-			cache.pair, cache.committed, cache.have = pair, c, true
+			cache.pair, cache.committed, cache.have, cache.pairAt = pair, c, true, time.Now()
 		}
 		st.Committed, st.Ahead, st.Behind, st.Conflict = cache.committed.Diff, cache.committed.Ahead, cache.committed.Behind, cache.committed.Conflict
 	}
@@ -317,7 +323,8 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	case errors.As(err, &ee):
 		// git refused the diff, a partial clone missing a blob it may
 		// not fetch say: the committed diff is left out, the rest of
-		// the pair stands and is kept.
+		// the pair stands, and the pair is read again later.
+		c.incomplete = true
 	default:
 		return c, err
 	}
@@ -348,7 +355,10 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		return c, err
 	default:
-		// git older than 2.38 has no --write-tree: the field is left out.
+		// git older than 2.38 has no --write-tree, or the merge lacks a
+		// blob it may not fetch: the field is left out, and the pair
+		// read again later.
+		c.incomplete = true
 	}
 	return c, nil
 }
