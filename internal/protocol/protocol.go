@@ -31,6 +31,7 @@ const (
 	TypeFollow    = "follow"    // client -> daemon, attach to a command sent earlier under the same id
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
+	TypePoke      = "poke"      // client -> merging daemon with attention, list this machine's tmux clients now; not answered
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
 	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user, or one that handed over; with environment_id and root, the finished ones at that worktree, the id then the request's own, and with listing, rm's stamp, the handed-over ones whose add it is after
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
@@ -109,6 +110,14 @@ const (
 	// with it forwards the field and the records whatever it lists
 	// itself; one without drops them.
 	CapAttribution = "attribution"
+	// CapAttention is the merging daemon's record of what the user has
+	// seen: an attention record per agent that went from working to idle,
+	// with when the finish and the last visit after it were, both on this
+	// machine's clock, in the merged stream; and the poke message, which
+	// has the daemon look at what this machine's tmux clients show at
+	// once. A view shows an idle agent as done while its finish is after
+	// its visit. Without it no agent is done.
+	CapAttention = "attention"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -390,6 +399,20 @@ type Run struct {
 	StartedAt     time.Time `json:"started_at"`
 }
 
+// Attention is what the merging daemon knows of an agent's finish and
+// the user's visit after it: FinishedAt is when it was seen to go from
+// working to idle, SeenAt when a tmux client of this machine last showed
+// it after that. Both are this machine's clock. The agent is done while
+// it is idle and FinishedAt is after SeenAt.
+type Attention struct {
+	AgentID    string    `json:"agent_id"`
+	FinishedAt time.Time `json:"finished_at"`
+	SeenAt     time.Time `json:"seen_at,omitzero"`
+}
+
+// Done reports whether the finish is after the last visit.
+func (a Attention) Done() bool { return a.FinishedAt.After(a.SeenAt) }
+
 // Worktree is one git worktree on one host, under the host's configured
 // worktree directory, in a checkout of a known repository. Git is the
 // source of truth: a worktree made by hand is listed, one removed by hand
@@ -492,6 +515,14 @@ type Message struct {
 	Runs         []Run  `json:"runs,omitempty"`
 	Run          *Run   `json:"run,omitempty"`
 	RunID        string `json:"run_id,omitempty"`
+
+	// merged snapshot / upsert / remove, from a daemon with attention: the
+	// attention records, and on a remove the agent id of the one gone,
+	// under a key of its own, since agent_id on a remove means an agent
+	// is gone.
+	Attentions  []Attention `json:"attentions,omitempty"`
+	Attention   *Attention  `json:"attention,omitempty"`
+	AttentionID string      `json:"attention_id,omitempty"`
 
 	// merged snapshot / upsert / remove, from a daemon with relay: the
 	// pending records and the recent handoffs; a remove names the record

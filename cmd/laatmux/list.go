@@ -52,6 +52,17 @@ type merged struct {
 	// the rows: a host labels a checkout its config does not list by
 	// its directory. nil keeps the host's labels.
 	labels func(source string) (string, bool)
+	// attentions are the merging daemon's attention records, by agent
+	// id; sidebar is the config's row order and stale settings.
+	attentions map[string]protocol.Attention
+	sidebar    config.Sidebar
+}
+
+// configure takes what the rows need from the config: this machine's
+// repository names, the sort order and the stale settings.
+func (m *merged) configure(cfg config.Config) {
+	m.labels = repoLabels(cfg)
+	m.sidebar = cfg.Sidebar
 }
 
 // repoLabels is the config's names for its repositories, by source in
@@ -241,7 +252,9 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 // input is the rows package's view of the merged state, with the local
 // sessions and the viewer's session. Called with m.mu held.
 func (m *merged) input(locals []workspace.Local, current string) rows.Input {
-	in := rows.Input{Locals: locals, Current: current}
+	after, dim, collapse := m.sidebar.Stale()
+	in := rows.Input{Locals: locals, Current: current, Attention: m.attentions, Now: time.Now(),
+		StaleAfter: after, DimStale: dim, CollapseStale: collapse, Sort: m.sidebar.Sort}
 	for name, st := range m.hosts {
 		// A merging daemon older than attribution forwards agent records
 		// without the field, whatever the host sends.
@@ -314,6 +327,12 @@ func (m *merged) render(locals []workspace.Local) string {
 	for _, r := range rs.Main {
 		renderRow(&b, r, now)
 	}
+	if len(rs.Stale) > 0 {
+		b.WriteString("\nstale\n")
+		for _, r := range rs.Stale {
+			renderRow(&b, r, now)
+		}
+	}
 	if len(rs.Settled) > 0 {
 		b.WriteString("\nsettled\n")
 		for _, r := range rs.Settled {
@@ -377,7 +396,14 @@ func renderRow(b *strings.Builder, r rows.Row, now time.Time) {
 	if srv := rows.Server(*a); srv != tmux.LaatmuxServer.Label() {
 		where += "/" + srv
 	}
-	fmt.Fprintf(b, "%s %-8s %-6s %-32s @%s%s  %s  %s\n", r.Mark(), a.Activity, r.AgentName(), r.Name, where, note, rows.Ago(now.Sub(a.ActivityAt)), title)
+	state := string(a.Activity)
+	switch {
+	case r.Done:
+		state = "done"
+	case r.Stale:
+		state = "stale"
+	}
+	fmt.Fprintf(b, "%s %-8s %-6s %-32s @%s%s  %s  %s\n", r.Mark(), state, r.AgentName(), r.Name, where, note, rows.Ago(now.Sub(a.ActivityAt)), title)
 }
 
 func cmdLs(ctx context.Context, args []string) error {
@@ -386,7 +412,7 @@ func cmdLs(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
-	m.labels = repoLabels(cfg)
+	m.configure(cfg)
 	// The local daemon merges the hosts' streams when it can; a daemon
 	// without the capability is an older build still running, and each
 	// host is dialled from here as before.
@@ -442,7 +468,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 		return err
 	}
 	m := newMerged()
-	m.labels = repoLabels(cfg)
+	m.configure(cfg)
 	direct := true
 	if c, ok := dialMerged(ctx); ok {
 		direct = false

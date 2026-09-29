@@ -132,6 +132,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 				return nil
 			}
 		case <-tk.C:
+			// The rows again, not only the ages: an agent idle long
+			// enough turns stale with no record changing.
+			h.Refresh(m)
 		case <-spin:
 		case <-winch:
 		case <-flush:

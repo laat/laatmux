@@ -407,9 +407,11 @@ The fixture is one screen, taken after the interrupt, and proves the
 detector's half. The daemon's half, that `nextActivity` passes a visible
 idle through without the debounce, gets its own test in step 3. While
 capturing, the title read `✳ Essay about terminals` six seconds into
-the turn, with no spinner. If Claude Code 2.1.284 no longer spins the
-title, `osc_title_working` misses it and the footer rule carries the
-working state; step 3 adds a working capture of 2.1.284 to check.
+the turn, with no spinner. Step 3's working capture of 2.1.284,
+`claude-working-2.1.284`, confirms it: seven seconds into a turn the
+title is `✳` and the topic, `osc_title_working` misses it, and
+`live_turn_working`, the footer's `esc to interrupt`, carries the
+working state.
 
 ### Stale and settled
 

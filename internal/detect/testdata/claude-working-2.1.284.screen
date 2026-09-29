@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.284
+▝▜██████▀  Sonnet 5 · API Usage Billing
+ ▝▝   ▝▝   ~/lmxcap
+
+
+❯ Write a 700-word essay about the history of terminal emulators. Do not use any tools.
+
+● The History of Terminal Emulators
+
+  The terminal emulator is one of computing's great survivors—a software artifact that persists not
+  because it's optimal, but because it successfully abstracted away a piece of hardware that no
+  longer exists. To understand terminal emulators, you have to start with the thing they're
+  emulating: the physical computer terminal.
+
+  In the 1960s and 1970s, mainframes and minicomputers were expensive, centralized resources. Users
+  didn't have their own computers; they had terminals—devices with a keyboard and a display (or,
+  earlier, a printer) that connected to a distant machine, often via serial cable or telephone line.
+  The most influential of these was the DEC VT100, released in 1978. It displayed 24 lines of 80
+  characters, supported cursor addressing, and introduced escape sequences—special character codes
+  that told the terminal to move the cursor, clear the screen, or change text attributes. These
+  escape sequences became a de facto standard, and software written to target the VT100 could run,
+  unmodified, on any terminal that faithfully copied its behavior.
+
+  This is the crucial turning point: once escape sequences became standardized enough, the physical
+  terminal became replaceable by software that merely behaved like one. As personal computers
+  proliferated in the 1980s, users still needed to connect to mainframes, universities, and bulletin
+  board systems. Rather than buying dedicated terminal hardware, they ran terminal emulation
+
+
+
+
+
+
+
+  tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scro…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents

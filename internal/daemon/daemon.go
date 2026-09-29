@@ -126,6 +126,13 @@ type Config struct {
 	// Pending is the directory of the relay's pending files, which with
 	// Hosts is the relay capability; "" means none.
 	Pending string
+
+	// Attention is the file the attention state is kept in, which with
+	// Hosts is the attention capability; "" means none. Clients lists
+	// what this machine's tmux clients show; nil means no agent is ever
+	// seen. See attention.go.
+	Attention string
+	Clients   func(ctx context.Context) ([]ClientView, error)
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -168,14 +175,19 @@ type Daemon struct {
 	// revision and the daemon generation that stamp listings, the
 	// stamp and error of the last listing, and the lock the poll and
 	// its publication run under.
-	journal    *journal
-	relay      *relay          // nil without the relay capability
-	ctx        context.Context // Run's context, for goroutines that outlive a connection
-	generation int64
-	revision   uint64
-	listing    protocol.Listing
-	listErr    string
-	pollMu     sync.Mutex
+	journal *journal
+	relay   *relay     // nil without the relay capability
+	attn    *attention // nil without the attention capability
+	// The last errors of the attention file and the clients listing,
+	// logged once per change.
+	lastAttnErr    string
+	lastClientsErr string
+	ctx            context.Context // Run's context, for goroutines that outlive a connection
+	generation     int64
+	revision       uint64
+	listing        protocol.Listing
+	listErr        string
+	pollMu         sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
 	runs     map[string]map[*runJob]struct{}
@@ -347,6 +359,14 @@ func New(cfg Config) *Daemon {
 			d.journal = j
 		}
 	}
+	if cfg.Attention != "" && cfg.Hosts != nil {
+		a, err := openAttention(cfg.Attention)
+		if err != nil {
+			cfg.Logger.Printf("attention: %v; starting over", err)
+			a = &attention{path: cfg.Attention, entries: map[string]*attnEntry{}, poke: make(chan struct{}, 1)}
+		}
+		d.attn = a
+	}
 	if cfg.Pending != "" && cfg.Hosts != nil {
 		r, err := openRelay(cfg.Pending, cfg.Logger)
 		if err != nil {
@@ -383,6 +403,9 @@ func (d *Daemon) capabilities() []string {
 	if d.relay != nil {
 		caps = append(caps, protocol.CapRelay, protocol.CapDismissRoot)
 	}
+	if d.attn != nil {
+		caps = append(caps, protocol.CapAttention)
+	}
 	if d.cfg.Shutdown != nil {
 		caps = append(caps, protocol.CapShutdown)
 	}
@@ -417,8 +440,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.startRelays(ctx)
 		go d.runRelaySweep(ctx)
 	}
+	if d.attn != nil {
+		// The entries of hosts gone from the config go at start, as
+		// they do when a subscription reads the config.
+		if hosts, err := d.cfg.Hosts(); err == nil {
+			names := make([]string, len(hosts))
+			for i, h := range hosts {
+				names[i] = h.Name
+			}
+			d.mu.Lock()
+			d.forgetUnconfiguredLocked(names)
+			d.mu.Unlock()
+		}
+		if d.cfg.Clients != nil {
+			go d.runSeen(ctx)
+		}
+	}
 	t := time.NewTicker(d.cfg.Interval)
 	defer t.Stop()
+	pruned := false
 	for {
 		err := d.poll(ctx)
 		if err != nil && ctx.Err() == nil {
@@ -426,6 +466,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		if err == nil {
 			d.markDiscovered(&d.panesDiscovered)
+			if !pruned {
+				// The first complete poll: the daemon's own agents that
+				// went while it was down lose their entries.
+				pruned = true
+				d.mu.Lock()
+				d.forgetLocalLocked()
+				d.mu.Unlock()
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -728,6 +776,15 @@ func (d *Daemon) Snapshot() (uint64, []protocol.Agent) {
 // configured hosts.
 func (d *Daemon) broadcastLocked(m protocol.Message) {
 	d.forwardLocalLocked(m)
+	// The attention of the daemon's own agents follows their records:
+	// after the upsert, so a finish never names an agent a subscriber
+	// has not had.
+	switch {
+	case m.Type == protocol.TypeUpsert && m.Agent != nil:
+		d.attendLocked(d.cfg.Host, true, *m.Agent)
+	case m.Type == protocol.TypeRemove && m.AgentID != "":
+		d.forgetLocked(m.AgentID)
+	}
 	for s := range d.subs {
 		select {
 		case s.ch <- m:
@@ -1015,6 +1072,9 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			}()
 		case protocol.TypeCancel:
 			d.cancelCommand(m.ID)
+		case protocol.TypePoke:
+			// Not answered: the hook that sends it does not wait.
+			d.Poke()
 		case protocol.TypeShutdown:
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 			if d.cfg.Shutdown == nil {

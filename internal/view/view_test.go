@@ -1249,3 +1249,34 @@ func TestPasteTextBrokenSequence(t *testing.T) {
 		t.Errorf("splitTail: %q %q", head, tail)
 	}
 }
+
+// Done and stale: an agent that finished since the user last looked is
+// ✅ and sorts after the blocked ones; one idle past the stale time is
+// 💤, dim, in the stale group, collapsed with the settled ones; a settled
+// workspace's blocked agent stays in place with its own icon.
+func TestRenderAttention(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	in.Agents = append(in.Agents,
+		protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Session: "proj/old", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-2 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "long idle"},
+		protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Session: "proj/asks", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-3 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "Allow?"})
+	in.Worktrees = append(in.Worktrees,
+		protocol.Worktree{ID: "venv/worktree//r/old", EnvironmentID: "venv", Repo: "proj", Branch: "old", Root: "/r/old", Session: "proj/old"},
+		protocol.Worktree{ID: "venv/worktree//r/asks", EnvironmentID: "venv", Repo: "proj", Branch: "asks", Root: "/r/asks", Session: "proj/asks"})
+	in.Locals = append(in.Locals, workspace.Local{Name: "vm/proj/asks", Key: "venv//r/asks", Host: "vm", Settled: true})
+	in.Attention = map[string]protocol.Attention{
+		// notes finished after the last visit; other was seen since.
+		"menv/default/%6": {AgentID: "menv/default/%6", FinishedAt: now.Add(-time.Minute)},
+		"venv/laatmux/%3": {AgentID: "venv/laatmux/%3", FinishedAt: now.Add(-time.Hour), SeenAt: now.Add(-time.Minute)},
+		// A done agent is never stale, however long ago it finished.
+		"menv/laatmux/%9": {AgentID: "menv/laatmux/%9", FinishedAt: now.Add(-26 * time.Hour)},
+	}
+	in.Now, in.StaleAfter, in.DimStale, in.CollapseStale = now, time.Hour, true, true
+	m := model(now)
+	m.SetRows(rows.Build(in))
+	m.Layout, m.Titles, m.Width, m.Height = Compact, true, 90, 34
+	m.ShowHidden = true
+	golden(t, "attention", Debug(m.Render()))
+	m.ShowHidden = false
+	golden(t, "attention-folded", Debug(m.Render()))
+}

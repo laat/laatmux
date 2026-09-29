@@ -116,6 +116,10 @@ func cmdServe(ctx context.Context, args []string) error {
 		Store: store, Agents: agents, Shutdown: shutdown,
 		Commands: filepath.Join(home.Dir(), "commands"),
 		Pending:  filepath.Join(home.Dir(), "pending"),
+		// What the user has seen, kept across restarts, and what this
+		// machine's tmux clients show.
+		Attention: filepath.Join(home.Dir(), "attention.json"),
+		Clients:   listClients,
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.

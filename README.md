@@ -518,7 +518,8 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   session the record names. A worktree shows `no agent` when its session
   has no identified agent and `no session` when it has none; a managed
   agent with no worktree says so; observed agents name their server.
-  Settled workspaces are listed under `settled`, and a local workspace
+  Stale agents are listed under `stale` and settled workspaces under
+  `settled`, a done agent says `done`, and a local workspace
   session whose worktree is gone from a connected host under `orphaned`, from
   which `rm` still works; a host whose snapshot has not arrived, or whose
   daemon does not publish worktrees, says nothing about its workspaces.
@@ -614,12 +615,37 @@ whose worktree is gone from a host that is connected, listed and
 publishes worktrees. Local sessions are joined in by key, or by the
 attach tag for a `new` session's attachment, so a row knows its local
 session, whether it is settled, and whether it is the one the viewer is
-in. A row is dim from measured axes only: no identified agent, an agent
-that is gone, a host that is down, an orphaned session, a settled workspace.
-Age is shown, never judged. The order is blocked, working, idle, then
-rows without a live agent, most recent activity first within a group;
-settled rows sit in a collapsed group at the bottom, orphaned rows after
-them.
+in. An idle agent that went from working to idle since a tmux client of
+this machine last showed it is *done*; one idle for longer than
+`sidebar.stale_after`, an hour by default, is *stale* (milestone five,
+step 3). A done or blocked agent is never stale. A row is dim when it
+has no identified agent, its agent is gone, its host is down, it is
+orphaned, its workspace is settled and its agent does not want the
+user, or it is stale and `sidebar.dim_stale` is not false. The order,
+`sidebar.sort: priority`, is pending tasks, blocked, done, working, idle
+and unknown, stale, then rows without an agent, most recent activity
+first within a group; `recency` is most recent activity first, and
+`window` by session and window, tasks first in both. Stale rows fold,
+unless `sidebar.collapse_stale` is false, and settled rows fold, into a
+collapsed group at the bottom, orphaned rows after them; a settled
+workspace's blocked or done agent stays in place.
+
+**Done and seen.** The local daemon keeps, per agent and its process
+identity, the last activity it saw and two times on this machine's
+clock: when the agent finished, and when a client last showed it after
+that; a host's clock is never compared with it. It tracks its own agents
+from its poll and a remote host's from its upserts and snapshots while
+it follows the host, so a finish while the laptop slept is found in the
+host's next snapshot against the state kept in `attention.json` under
+`$LAATMUX_HOME`. A client shows an agent through a live attach pane to
+the agent's managed session on the agent's host, or as the agent's own
+pane on this machine's default server; a focused sidebar pane stands for
+the pane beside it. The daemon lists the clients once a second while a
+view is open or an agent is done, and at once on `laatmux sidebar
+seen`, which the sidebar's hooks on `client-session-changed`,
+`session-window-changed` and `window-pane-changed` run. An agent on a
+remote host's default server or another observed server is never done:
+no view can take the user there.
 
 The view, in `internal/view`, is a tmux pane's worth of terminal: raw
 mode through termios, ANSI for cursor, colours and attributes, SGR
@@ -642,7 +668,7 @@ in bold `current_worktree_fg`. `compact` is the first line with the
 secondary label and host tag after the primary, and in the dashboard
 the third line under it. The icon is the status's: a two-cell braille
 spinner at 250 ms for working, 💬 for blocked or a task that needs the
-user; `icons: nerdfont` and `icons: ascii` choose other sets, and
+user, ✅ for done, 💤 for stale or a settled workspace's agent; `icons: nerdfont` and `icons: ascii` choose other sets, and
 `status_icons` sets single ones. Plain text keeps the
 terminal's own foreground. `theme.mode: auto` asks the terminal for its
 background with OSC 11 when the view starts, then reads `COLORFGBG`;
@@ -656,7 +682,8 @@ says `Loading`, an empty one says so, and rows below the window are
 counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
 `Enter` jumps, `1`..`9` jump to the nth row of the selection's group,
 `v` toggles the layout, `/` filters by name or host and `Esc` clears,
-`f` shows and hides the settled and orphaned groups, `q` quits. A click
+`f` shows and hides the stale, settled and orphaned groups, `z` settles
+or unsettles the selected workspace, `q` quits. A click
 jumps to the row under it; the wheel moves the selection. Hosts that
 are not connected and listed, and a local daemon that is down, are
 lines above the list.
@@ -755,7 +782,8 @@ is switched to.
   `X`. On a pending task's row `x` dismisses it instead, with a confirm
   line, where it needs the user or would otherwise be stuck, and `p`
   delivers a prompt that did not reach the agent, or may not have.
-  `s` settles or unsettles; `S` opens the shell window and jumps.
+  `z` settles or unsettles; `S` opens the shell window and jumps; `s`
+  does nothing until the tree view takes it for folds.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
@@ -965,6 +993,11 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   listing that fails for a reason other than no server puts its message
   in `sessions_error`, which `ls` prints where the settled and orphaned
   groups would be.
+- **Attention**, capability `attention`: the daemon's done-and-seen
+  state as `attention` records, `{agent_id, finished_at, seen_at}`, in
+  the snapshot as `attentions` and removed by `attention_id`, keys an
+  older client passes over; and `{type: poke}`, which has it list the
+  clients at once and is not answered. See Sidebar and dashboard.
 - **One-shot clients wait for readiness.** The snapshot comes at once
   with what the daemon knows, on a cold daemon the host rows alone. `ls`
   reads on until every host is listed or carries an error, or 20 seconds

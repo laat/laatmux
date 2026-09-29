@@ -94,7 +94,9 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 			d.askRm(m, a.Key.Rune == 'X')
 		case 'p':
 			d.deliverPrompt(m)
-		case 's':
+		case 'z':
+			// s is the tree's fold from step 6 on; until then it does
+			// nothing.
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
@@ -787,9 +789,9 @@ func (d *dash) settle(m *view.Model) {
 		return
 	}
 	if r.Pending != nil {
-		// The row is the task's until it hands over: s settles the
+		// The row is the task's until it hands over: z settles the
 		// worktree row it becomes.
-		m.Message = r.Name + ": a pending task; s settles its worktree row once it hands over"
+		m.Message = r.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
 	if r.Local == nil || !r.Local.Workspace() {

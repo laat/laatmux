@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +145,32 @@ func TestShutdownMessage(t *testing.T) {
 	pc.Write(protocol.Message{Type: protocol.TypeShutdown, ID: "s2"})
 	if m, err := pc.Read(); err != nil || m.OK || m.Error == "" {
 		t.Fatalf("result %+v %v", m, err)
+	}
+}
+
+// The interrupted fixture, Claude Code 2.1.284 after Esc during a turn,
+// is idle at once from working: the prompt box is on screen, so the
+// working-to-idle debounce does not hold it, and the finish is a
+// transition the attention rule sees in the same poll.
+func TestInterruptedIsIdleAtOnce(t *testing.T) {
+	raw, err := os.ReadFile("../detect/testdata/claude-interrupted.screen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, err := os.ReadFile("../detect/testdata/claude-interrupted.title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := detect.Detect(detect.Input{Agent: "claude", Title: strings.TrimSpace(string(title)),
+		Screen: strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")})
+	d := newTestDaemon()
+	st := &paneState{
+		identity:    procs.Identity{Agent: "claude", PID: 4242, Start: time.Unix(1, 0)},
+		hasIdentity: true,
+		activity:    protocol.Working,
+	}
+	now := time.Now()
+	if got := d.nextActivity(st, res, now); got != protocol.Idle || st.pendingIdle != nil || !st.activityAt.Equal(now) {
+		t.Fatalf("interrupted: %s, pending %v (%s via %s)", got, st.pendingIdle, res.State, res.Rule)
 	}
 }

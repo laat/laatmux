@@ -633,3 +633,130 @@ func TestLabels(t *testing.T) {
 		}
 	}
 }
+
+// Precedence: done beats stale, blocked is never stale, a settled
+// workspace's blocked or done agent stays in place and is not dim, and a
+// settled one that does not want the user folds away; a stale agent is
+// dim when stale rows are, and folds when they fold.
+func TestPrecedence(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	agent := func(pane, session string, act protocol.Activity, ago time.Duration) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Session: session, Agent: "claude", Activity: act,
+			ActivityAt: now.Add(-ago), Liveness: protocol.Alive, Managed: true}
+	}
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "done-old", protocol.Idle, 5*time.Hour),
+			agent("%2", "blocked-old", protocol.Blocked, 5*time.Hour),
+			agent("%3", "idle-old", protocol.Idle, 5*time.Hour),
+			agent("%4", "idle-new", protocol.Idle, time.Minute),
+			agent("%5", "working", protocol.Working, 5*time.Hour),
+			agent("%6", "seen", protocol.Idle, time.Minute),
+		},
+		Attention: map[string]protocol.Attention{
+			"venv/laatmux/%1": {AgentID: "venv/laatmux/%1", FinishedAt: now.Add(-5 * time.Hour)},
+			"venv/laatmux/%6": {AgentID: "venv/laatmux/%6", FinishedAt: now.Add(-time.Minute), SeenAt: now},
+		},
+		Now: now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
+	}
+	rs := Build(in)
+	names := func(rs []Row) string {
+		var out []string
+		for _, r := range rs {
+			flags := ""
+			if r.Done {
+				flags += "+done"
+			}
+			if r.Stale {
+				flags += "+stale"
+			}
+			if r.Dim {
+				flags += "+dim"
+			}
+			out = append(out, r.Name+flags)
+		}
+		return strings.Join(out, " ")
+	}
+	if got, want := names(rs.Main), "blocked-old done-old+done working idle-new seen"; got != want {
+		t.Errorf("main: %s, want %s", got, want)
+	}
+	if got, want := names(rs.Stale), "idle-old+stale+dim"; got != want {
+		t.Errorf("stale: %s, want %s", got, want)
+	}
+	in.DimStale, in.CollapseStale = false, false
+	rs = Build(in)
+	if got, want := names(rs.Main), "blocked-old done-old+done working idle-new seen idle-old+stale"; got != want || len(rs.Stale) != 0 {
+		t.Errorf("stale kept in place and not dim: %s, want %s", got, want)
+	}
+
+	// Settled workspaces: the blocked and the done agents stay.
+	in = Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "a", protocol.Blocked, time.Minute),
+			agent("%2", "b", protocol.Idle, time.Minute),
+			agent("%3", "c", protocol.Working, time.Minute),
+		},
+		Attention: map[string]protocol.Attention{"venv/laatmux/%2": {AgentID: "venv/laatmux/%2", FinishedAt: now}},
+		Now:       now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
+	}
+	for i, s := range []string{"a", "b", "c"} {
+		root := "/w/" + s
+		in.Agents[i].WorktreeID = "venv/worktree/" + root
+		in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "proj", Branch: s, Root: root, Session: s})
+		in.Locals = append(in.Locals, workspace.Local{Name: "vm/proj/" + s, Key: workspace.Key("venv", root), Host: "vm", Settled: true})
+	}
+	rs = Build(in)
+	if got, want := names(rs.Main), "proj/a proj/b+done"; got != want {
+		t.Errorf("settled, main: %s, want %s", got, want)
+	}
+	if got, want := names(rs.Settled), "proj/c+dim"; got != want {
+		t.Errorf("settled: %s, want %s", got, want)
+	}
+}
+
+// The sort orders: priority by status, recency by the last change,
+// window by session then window; tasks first in all three.
+func TestSortOrders(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	agent := func(pane, session string, window int, act protocol.Activity, ago time.Duration) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Session: session, Window: window, Agent: "claude",
+			Activity: act, ActivityAt: now.Add(-ago), Liveness: protocol.Alive, Managed: true}
+	}
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "b", 1, protocol.Idle, time.Second),
+			agent("%2", "a", 2, protocol.Blocked, time.Hour),
+			agent("%3", "b", 0, protocol.Working, time.Minute),
+			agent("%4", "a", 1, protocol.Idle, 2*time.Hour),
+		},
+		Pendings: []protocol.Pending{{ID: "t1", Host: "vm", Repo: "proj", Branch: "task", SubmittedAt: now}},
+		Now:      now,
+	}
+	for order, want := range map[string]string{
+		"":             "proj/task a b b a",
+		SortPriority:   "proj/task a b b a",
+		SortRecency:    "proj/task b b a a",
+		SortWindow:     "proj/task a a b b",
+		"not-an-order": "proj/task a b b a",
+	} {
+		in.Sort = order
+		var got []string
+		var panes []string
+		for _, r := range Build(in).Main {
+			got = append(got, r.Name)
+			if r.Agent != nil {
+				panes = append(panes, r.Agent.ID[len("venv/laatmux/"):])
+			}
+		}
+		if strings.Join(got, " ") != want {
+			t.Errorf("%q: %v, want %s", order, got, want)
+		}
+		wantPanes := map[string]string{"": "%2 %3 %1 %4", SortPriority: "%2 %3 %1 %4", SortRecency: "%1 %3 %2 %4", SortWindow: "%4 %2 %3 %1", "not-an-order": "%2 %3 %1 %4"}[order]
+		if strings.Join(panes, " ") != wantPanes {
+			t.Errorf("%q: panes %v, want %s", order, panes, wantPanes)
+		}
+	}
+}
