@@ -54,9 +54,12 @@ pressed in; other panes keep theirs. The last view chosen is written to
 `sidebar.json` (see Persistence) as the default a new or restarted pane
 starts in, which no running pane reads. The dashboard keeps its own
 view and layout defaults in the same file, under keys of its own, since
-it opens in a wide popup where compact suits; its `--layout` flag wins
-over both. In the dashboard, the scope and `F` take the session of the
-client the popup opened on.
+it opens in a wide popup where compact suits. A `--layout` given on its
+command line wins, told apart from the flag's default with `fs.Visit`;
+without one the stored dashboard default applies, then compact. The
+dashboard starts at scope `all`, whatever the sidebar's default; `F`
+narrows it to the session of the client the popup opened on. `--all`
+does not reach it, since it has no socket.
 
 ### The agent view
 
@@ -249,8 +252,8 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
 
 ### Done and seen
 
-An agent that went from working to idle is *done* until the user has
-been in its session since that change.
+An agent that went from working to idle is *done* until a client has
+shown it (see Seen) since that change.
 
 Every time here is the laptop's: hosts' clocks are never compared with
 it.
@@ -280,15 +283,24 @@ it.
   another observed server. No view can take the user there, so it can
   never be seen; it never shows ✅.
 - **Seen.** The daemon learns what each tmux client of this machine's
-  default server shows through `list-clients -F '#{client_name}
-  #{pane_id}'`, every second while a merged subscriber is there or any
+  default server shows through one `list-clients -F` with
+  `#{client_name} #{pane_id} #{pane_dead} #{@laatmux_attach_pane}
+  #{@laatmux_attach_target} #{@laatmux_host} #{@laatmux_attach}`,
+  options resolving through the client's current pane and session,
+  every second while a merged subscriber is there or any
   entry is unseen, subscriber or not, and at once when it records a
   finish. With no subscriber that is one `list-clients` a second, which
   is the cost this rule accepts. A client *sees* an agent by the pane
   it shows:
-  - an attach pane, tagged `@laatmux_attach_pane`, whose
-    `@laatmux_attach_target` is the agent's managed session on the
-    agent's host, in a workspace session or a plain attachment alike;
+  - a live attach pane, tagged `@laatmux_attach_pane` and not dead,
+    whose target is the agent's managed session and whose session's
+    `@laatmux_host` is the agent's host, in a workspace session or a
+    plain attachment alike. A dead attach pane, kept by
+    `remain-on-exit` after its ssh ended, shows old output and sees
+    nothing. The target is `@laatmux_attach_target`; an attach pane from
+    before #56 has none, and its target is then the session named in a
+    plain attachment's `@laatmux_attach`, `<host>/<session>`, or for a
+    workspace session the home session of the worktree its key names;
   - on this machine's default server, the agent's own pane.
 
   A client on a workspace session's shell window sees nothing. The
@@ -299,13 +311,16 @@ it.
   client shows the agent is seen at once. `seen_at` moves only then, so
   a client sitting on a session writes nothing. Every attached client
   counts, one left open in another terminal too.
-- **The poke.** The sidebar's `on` sets a `client-session-changed[9106]`
-  hook running `laatmux sidebar seen`, which sends the local daemon
-  `{type: poke}` so it lists clients at once. The hook is global, with
-  `--session` too, since the sessions a client switches into are the
+- **The poke.** The sidebar's `on` sets three hooks running `laatmux
+  sidebar seen`, which sends the local daemon `{type: poke}` so it lists
+  clients at once: `client-session-changed[9106]`,
+  `session-window-changed[9107]` and `window-pane-changed[9108]`, since
+  seen depends on the pane a client shows and a jump's `select-window`
+  onto the attach comes after its `switch-client`. They are global,
+  with `--session` too, since the sessions a client moves into are the
   workspace sessions and attachments, not the one holding the sidebar;
-  `off` removes it only when no sidebar pane is left. The poll covers
-  a missing hook; the hook only makes it quicker.
+  `off` removes them only when no sidebar pane is left. The poll covers
+  a missing hook; the hooks only make it quicker.
 - **The record.** A new record type in the merged stream, from a
   merging daemon with the capability `attention`:
   `{agent_id, finished_at, seen_at}`. A view shows ✅ for an idle agent
@@ -637,7 +652,7 @@ alike unless the row says otherwise.
 | `s` | settle (dashboard) | toggle the fold at the selection |
 | `z` | — | settle or unsettle, sidebar and dashboard |
 | `S` | shell (dashboard) | shell (dashboard), unchanged |
-| `F` | — | filter to the rows of the viewer's session |
+| `F` | — | scope to the viewer's session, and back |
 | `?` | — | help overlay listing the keys |
 | `o` `O` | — | open the PR, its checks (dashboard) |
 | `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n", while filtering too |
@@ -699,9 +714,10 @@ Five settlements differ from the plan in #52:
   on that session with `set-hook -t`, not globally, so other sessions
   get none. This reverses the rule against a per-session scope, and is
   #52's meaning.
-- **`F`** toggles the pane's scope between `session` and the scope the
-  pane started with, for that pane only, not persisted. `F` and the
-  scope are one setting.
+- **`F`** switches the pane's scope to `session`, and pressed again back
+  to the scope the pane had before, whatever set it; a pane already on
+  `session` goes to `all`. It acts on that pane only and is not
+  persisted. `F` and the scope are one setting.
 - **CLI:** `laatmux sidebar next | prev | jump N | view agents|tree |
   scope all|session|project` act on one sidebar pane: the one in the
   window the command runs for, `-t` a window or the current one, or on
@@ -712,12 +728,15 @@ Five settlements differ from the plan in #52:
   option `@laatmux_sidebar_socket`, and the CLI reads the path from the
   tagged pane rather than building it. A pane unlinks a leftover socket
   of its name before it listens and removes its socket on exit, and
-  `sidebar reap` removes those of panes that are gone. The command is
+  `sidebar reap` removes a socket whose server pid is the default
+  server's and whose pane is gone, or one that refuses a connection; it
+  leaves the sockets of other servers, which it cannot list, alone. The command is
   one message to the socket, handled as a navigation event, not as
   typed keys: it moves the selection or switches the view whether the
   pane is filtering or not, and is ignored while an overlay or a
-  question is open. `jump N` counts the rows the pane shows, the
-  filtered ones when a filter is on, and switches the client the
+  question is open. `jump N` is the digit key N: it counts the tiles,
+  or the worktree lines in the tree, that pass the filter, skipping fold
+  rows and repository lines, and switches the client the
   command names with `-c`, or the one it ran from, with `switch-client
   -c`. For `view` and `scope` the CLI writes the new default to
   `sidebar.json` once, whether or not a pane answered; the panes only
@@ -730,15 +749,17 @@ Five settlements differ from the plan in #52:
   `all`, and the word `filter` is the view's `/` text filter, which
   stays the pane's own and is not persisted, as is `F`.
 - **Persistence:** `sidebar.json` under the state directory holds two
-  kinds of thing. The view, layout and scope are *defaults*: the last
-  chosen, by a key or the CLI, is written there, and a pane reads them
-  only when it starts. A change in one pane never moves another; the CLI
+  kinds of thing. The view, layout and scope are *defaults*: the view
+  and layout last chosen by a key or the CLI, and the scope last set by
+  the CLI, are written there, and a pane reads them only when it
+  starts; `F` is not written. A change in one pane never moves another; the CLI
   with `--all` is how to change every pane. The folds the user toggled
   are *shared*: every pane reads them again when the file's mtime
   changes, checked every second. Panes write the file read-modify-write
   under a lock file and replace it by rename, so two panes toggling
-  folds at once lose neither change. The dashboard shares the folds with
-  the sidebar panes. The selection is each
+  folds at once lose neither change; the CLI and the dashboard, which
+  write it too, do the same. The dashboard shares the folds with the
+  sidebar panes. The selection is each
   pane's own and is not kept. A fold is kept by node id with the time
   its node was last seen, and one not seen for a day is dropped. At
   start a pane takes the file's values and the config's for what the
@@ -937,7 +958,10 @@ view and folds step 6 keeps in memory.
   agent's finish with no subscriber, a new identity in the same pane, a
   reused pane id after a server restart, an agent on a remote default
   server never done, a client on a workspace session's shell window
-  seeing nothing, a host taken out of the config, a host clock hours ahead of the laptop's, and an
+  seeing nothing, a dead attach pane seeing nothing after its host
+  reconnects, an attach pane from before #56 with no target, an agent
+  on vm not seen from an attach to mac's session of the same name, a
+  host taken out of the config, a host clock hours ahead of the laptop's, and an
   agent removed.
 - **Precedence:** done beats stale, blocked is never stale, a settled
   workspace's blocked agent stays in place.
@@ -948,7 +972,9 @@ view and folds step 6 keeps in memory.
 - **Sidebar control:** two panes, a `Tab` in one, `sidebar view` to the
   other, `--all`, and a pane started after; `next` while filtering and
   while a question is open; `jump N` with two clients on one window; a
-  leftover socket; a window with no sidebar.
+  leftover socket; a window with no sidebar; `F` from `all`, from
+  `session`, and after a `scope` from the CLI; the dashboard with and
+  without `--layout`.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
