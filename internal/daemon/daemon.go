@@ -904,7 +904,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			// the request's own, which a client always sets.
 			var res protocol.Message
 			if m.Root != "" {
-				res = d.dismissAt(m.ID, m.EnvironmentID, m.Root)
+				res = d.dismissAt(m.ID, m.EnvironmentID, m.Root, m.Listing)
 			} else {
 				res = d.dismiss(m.ID)
 			}

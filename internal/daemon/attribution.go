@@ -74,8 +74,8 @@ func (d *Daemon) resolve(path string) string {
 			d.resolveMu.Lock()
 			defer d.resolveMu.Unlock()
 			delete(d.resolving, path)
-			if len(d.resolved) >= maxResolved {
-				clear(d.resolved)
+			if _, ok := d.resolved[path]; !ok && len(d.resolved) >= maxResolved {
+				d.evictResolvedLocked()
 			}
 			d.resolved[path] = resolution{real: real, at: time.Now()}
 		}()
@@ -84,6 +84,25 @@ func (d *Daemon) resolve(path string) string {
 		return r.real
 	}
 	return clean
+}
+
+// evictResolvedLocked makes room in the full cache: the entries no poll
+// has asked for in a while go, those of the panes there are now being
+// refreshed within a TTL; failing that, one entry goes. Never all, which
+// would have every path answered cleaned for a poll, and a symlinked
+// pane lose its worktree for it. Called with resolveMu held.
+func (d *Daemon) evictResolvedLocked() {
+	for p, r := range d.resolved {
+		if time.Since(r.at) > 3*resolveTTL {
+			delete(d.resolved, p)
+		}
+	}
+	for p := range d.resolved {
+		if len(d.resolved) < maxResolved {
+			return
+		}
+		delete(d.resolved, p)
+	}
 }
 
 // resolveNow resolves a path on the caller's goroutine: a listed root,

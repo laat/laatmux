@@ -428,9 +428,11 @@ func Build(in Input) Rows {
 		seenKey[key] = true
 		if l := byKey[key]; l != nil {
 			r.Local, r.Settled = l, l.Settled
-		} else if w.Session == "" && r.Agent != nil {
-			// With no home session the row is jumped to through its
-			// agent, and stands for the agent's local session.
+		} else if w.Session == "" && r.Agent != nil && Server(*r.Agent) != tmux.LaatmuxServer.Label() {
+			// With no home session and its agent on a default server
+			// the row is jumped to through the agent, and stands for
+			// the agent's local session; one in a managed session is
+			// attached to through the worktree's own workspace session.
 			r.Local = agentLocal(host, r.Agent)
 		}
 		if idx := byAlias[w.ID]; len(idx) > 0 {

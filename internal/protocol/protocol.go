@@ -553,7 +553,9 @@ type Message struct {
 	// journal keeps; Attempt numbers a prompt message's delivery from 1
 	// per add, on the message, on a follow of one, and on the result.
 	// Listing on an add's result is the barrier the worktree listing
-	// must pass to reflect it; on a snapshot it stamps the listing sent.
+	// must pass to reflect it, and on an rm's result the same for the
+	// removal, from a daemon with attribution, which rm passes on in its
+	// dismiss at the root; on a snapshot it stamps the listing sent.
 	Prompt      string    `json:"prompt,omitempty"`
 	Generated   bool      `json:"generated,omitempty"`
 	SubmittedAt time.Time `json:"submitted_at,omitzero"`

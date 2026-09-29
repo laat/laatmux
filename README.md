@@ -203,8 +203,10 @@ truth; labels only place new things.
   pane that records the root in `@laatmux_cwd`, all of whose panes are
   inside the root, joined from the pane poll, so an agent exiting updates
   the record without a git call. A split for a shell keeps the home; a
-  pane gone elsewhere takes it away, and `jump` then has no session to
-  attach to. `rm` still kills every managed session with a pane laatmux
+  pane gone elsewhere takes it away, and the views then jump to the
+  worktree through its agent: the worktree's workspace session attaches
+  to the agent's managed session, or, for an agent on a default server,
+  as to that agent. `rm` still kills every managed session with a pane laatmux
   made at the root, home or not, so no agent is left in a removed
   directory. Origin reads are cached by the mtime of
   `.git/config`, and a checkout with no linked worktree under
@@ -895,7 +897,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   starts resumes every file: adds without an outcome, open attempts
   first, listings owed. A host gone from the config leaves its records
   waiting with `host removed`. `laatmux add --detach` submits; `laatmux
-  tasks` lists.
+  tasks` lists, the tasks that handed over to their worktrees after the
+  pending ones.
 - **Hosts follow the config file.** The daemon re-reads `hosts` on every
   merged subscription, so a host added shows up on the next `ls`; one
   removed gets a `remove` for its records and then its host record.

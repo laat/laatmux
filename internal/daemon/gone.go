@@ -174,8 +174,11 @@ func (d *Daemon) checkGone(ctx context.Context, id string) {
 // a finished one goes, through the settled path under the record's own
 // locks: one whose add is still running, or whose attempt is open,
 // stays, whatever its host, and is marked gone once the listing lacks
-// its worktree. The answer is ok whatever was dropped.
-func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Message {
+// its worktree. A task that handed over goes when removed, the stamp of
+// rm's removal, reflects its add: an rm answered late must not take the
+// task of a worktree made at the root since, and without the stamp the
+// listing's check decides. The answer is ok whatever was dropped.
+func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *protocol.Listing) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: requestID, OK: true}
 	if d.relay == nil {
 		res.OK, res.Error = false, "this daemon has no relay capability"
@@ -188,7 +191,9 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Messa
 			continue
 		}
 		if p.retired() {
-			d.dropRetiredLocked(id)
+			if removed != nil && p.Barrier != nil && removed.Satisfies(*p.Barrier) {
+				d.dropRetiredLocked(id)
+			}
 			continue
 		}
 		ids = append(ids, id)

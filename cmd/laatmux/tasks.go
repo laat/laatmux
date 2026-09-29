@@ -19,10 +19,13 @@ import (
 )
 
 // cmdTasks lists the pending records the local daemon holds, one line
-// each with the state; `tasks show <id>` prints a record's retained
-// prompt to stdout, for pasting by hand once the host can no longer
-// deliver it; `tasks dismiss <id>` drops a record that needs the user;
-// `tasks prompt <id>` delivers its prompt now.
+// each with the state, then the tasks that handed over to their
+// worktrees, whose records the daemon keeps with the prompt for the
+// worktree's life; `tasks show <id>` prints a record's retained prompt
+// to stdout, for pasting by hand once the host can no longer deliver
+// it, or to see what a worktree was made for; `tasks dismiss <id>`
+// drops a record that needs the user, or a handed-over one, prompt and
+// all; `tasks prompt <id>` delivers its prompt now.
 func cmdTasks(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return listTasks(ctx)
@@ -81,14 +84,29 @@ func listTasks(ctx context.Context) error {
 	for name := range m.hosts {
 		configured[name] = true
 	}
+	var handed []string
+	for id, h := range m.handoffs {
+		where := h.to
+		if w, ok := m.worktrees[h.to]; ok {
+			where = w.Repo + "/" + w.Branch
+			if host := m.byHost[h.to]; host != "" {
+				where += " on " + host
+			}
+		}
+		handed = append(handed, fmt.Sprintf("%s  handed over to %s; laatmux tasks show %s prints its prompt, tasks dismiss drops it", id, where, id))
+	}
 	m.mu.Unlock()
-	if len(ps) == 0 {
+	if len(ps) == 0 && len(handed) == 0 {
 		fmt.Println("no pending tasks")
 		return nil
 	}
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
 		fmt.Printf("%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured[p.Host]))
+	}
+	sort.Strings(handed)
+	for _, l := range handed {
+		fmt.Println(l)
 	}
 	return nil
 }

@@ -112,3 +112,23 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 		t.Fatalf("no agent: %v", err)
 	}
 }
+
+// A worktree row with no home session whose agent is in a managed
+// session attaches through the worktree's own workspace session, keyed
+// by the worktree, so it never collides with the name that session has.
+func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
+	h := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Source: "git@example.com:o/proj.git"}
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", WorktreeID: w.ID}
+	spec, session, err := rowSpec(cfg, h, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err != nil || session != "" || spec.Key != "venv//w/a" || spec.Managed != "proj/a" || spec.Name != "vm/proj/a" || spec.Branch != "a" {
+		t.Fatalf("spec %+v session %q err %v", spec, session, err)
+	}
+	// With the home back the spec is the same session's.
+	w.Session = "proj/a"
+	home, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err != nil || home != spec {
+		t.Fatalf("home %+v, without %+v, err %v", home, spec, err)
+	}
+}

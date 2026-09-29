@@ -466,15 +466,21 @@ func TestRelayRetiredGoesWithWorktree(t *testing.T) {
 }
 
 // rm's dismiss at the worktree drops a task that handed over there.
+// Only by the removal's stamp, and only when the stamp is from after the
+// task's add: an rm answered late must not take the task of a worktree
+// made at the root since.
 func TestRelayDismissAtRetired(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, nil)
 	p := delivered(t, f, "h2", "gone")
-	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-h2", EnvironmentID: "henv", Root: p.Root}); !res.OK {
-		t.Fatalf("dismiss at: %+v", res)
-	}
-	if _, ok := f.local.relay.get("h2"); ok {
-		t.Fatal("the retired task at the root stayed")
+	b := *p.Barrier
+	for i, stamp := range []*protocol.Listing{nil, {Generation: b.Generation, Revision: b.Revision - 1}, {Generation: b.Generation, Revision: b.Revision + 1}} {
+		if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-h2", EnvironmentID: "henv", Root: p.Root, Listing: stamp}); !res.OK {
+			t.Fatalf("dismiss at: %+v", res)
+		}
+		if _, ok := f.local.relay.get("h2"); ok != (i < 2) {
+			t.Fatalf("stamp %+v: kept %v", stamp, ok)
+		}
 	}
 }
 

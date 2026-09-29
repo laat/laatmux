@@ -374,8 +374,12 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				return err
 			}
 			if removed {
-				// A listing from here on has one worktree fewer.
-				d.stepRevision()
+				// A listing from here on has one worktree fewer. The
+				// result carries the step, which dates the removal
+				// against the adds at the root: rm's dismiss drops only
+				// the tasks from before it.
+				l := d.stepRevision()
+				res.Listing = &l
 			}
 		}
 		// Git has agreed to the removal: what runs in the root is

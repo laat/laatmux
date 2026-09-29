@@ -530,7 +530,8 @@ func TestHomeSessionAndRm(t *testing.T) {
 		}
 		pc := conn(t, d)
 		pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "rm-" + c.branch, Repo: remote, Branch: c.branch, Root: added.Root, Force: true})
-		if res, _ := result(t, pc, "rm-"+c.branch); !res.OK {
+		// The result dates the removal, for rm's dismiss at the root.
+		if res, _ := result(t, pc, "rm-"+c.branch); !res.OK || res.Listing == nil {
 			t.Fatalf("rm: %+v", res)
 		}
 		ft.mu.Lock()
