@@ -669,3 +669,23 @@ func TestNarrowTab(t *testing.T) {
 		}
 	}
 }
+
+// A symbol with VS16 takes two cells in the prompt's wrap, the branch
+// line's tail and a notice's wrap, as it does in fit: nothing is cut
+// that the wrap thought fit, and nothing is wider than asked.
+func TestWrapVS16(t *testing.T) {
+	f := &Form{prompt: []rune("12345678⚠️x"), focus: fieldPrompt}
+	f.cursor = len(f.prompt)
+	lines, cur := f.wrapPrompt(10)
+	if len(lines) != 2 || lines[0] != "12345678⚠️" || lines[1] != "x█" || cur != 1 {
+		t.Errorf("wrapPrompt: %q, cursor line %d", lines, cur)
+	}
+	if got := tail("abcdefgh⚠️x", 4); width(got) > 4 {
+		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+	for _, line := range hardWrap("abc⚠️⚠️", 4) {
+		if width(line) > 4 {
+			t.Errorf("hardWrap: %q is %d cells", line, width(line))
+		}
+	}
+}
