@@ -56,7 +56,9 @@ starts in, which no running pane reads. The dashboard keeps its own
 view and layout defaults in the same file, under keys of its own, since
 it opens in a wide popup where compact suits. A `--layout` given on its
 command line wins, told apart from the flag's default with `fs.Visit`;
-without one the stored dashboard default applies, then compact. The
+without one the stored dashboard default applies, then compact. Its
+view is its own stored default, else `agents`; neither `sidebar.view`
+nor the CLI touches it. The
 dashboard starts at scope `all`, whatever the sidebar's default; `F`
 narrows it to the session of the client the popup opened on. `--all`
 does not reach it, since it has no socket.
@@ -284,9 +286,10 @@ it.
   never be seen; it never shows ✅.
 - **Seen.** The daemon learns what each tmux client of this machine's
   default server shows through one `list-clients -F` with
-  `#{client_name} #{pane_id} #{pane_dead} #{@laatmux_attach_pane}
-  #{@laatmux_attach_target} #{@laatmux_host} #{@laatmux_attach}`,
-  options resolving through the client's current pane and session,
+  `#{client_name} #{window_id} #{pane_id} #{pane_dead}
+  #{@laatmux_sidebar} #{@laatmux_attach_pane} #{@laatmux_attach_target}
+  #{@laatmux_host} #{@laatmux_attach} #{@laatmux_workspace}`, options
+  resolving through the client's current pane and session,
   every second while a merged subscriber is there or any
   entry is unseen, subscriber or not, and at once when it records a
   finish. With no subscriber that is one `list-clients` a second, which
@@ -302,6 +305,13 @@ it.
     plain attachment's `@laatmux_attach`, `<host>/<session>`, or for a
     workspace session the home session of the worktree its key names;
   - on this machine's default server, the agent's own pane.
+
+  The pane a client shows is its window's active pane, except that a
+  focused sidebar pane stands for the pane beside it: the user reading
+  the sidebar is looking at the attach or the agent next to it. When the
+  active pane is a sidebar pane, one `list-panes -t <window>` finds the
+  window's live attach pane, or its one other pane, and that is the
+  pane shown.
 
   A client on a workspace session's shell window sees nothing. The
   laptop does not know which window of a managed session the attach
@@ -687,9 +697,9 @@ Five settlements differ from the plan in #52:
   working agent starts unfolded, so its spinner is in sight; #52 folded
   whatever did not need the user.
 - **View, layout and scope are start defaults.** #52 shared them live
-  between every pane; here a change in one pane stays in it, the last
-  one chosen is what a new pane starts with, and `--all` changes every
-  running pane.
+  between every pane; here a change in one pane stays in it, the view
+  and layout last chosen and the scope last set by the CLI are what a
+  new pane starts with, and `--all` changes every running pane.
 - **`M-1`..`M-9` are opt-in.** Bound in tmux's root table they take the
   keys from every pane, where shells and editors use them.
   `sidebar.jump_keys: true` has `on` bind them to `run-shell "laatmux
@@ -735,8 +745,9 @@ Five settlements differ from the plan in #52:
   typed keys: it moves the selection or switches the view whether the
   pane is filtering or not, and is ignored while an overlay or a
   question is open. `jump N` is the digit key N: it counts the tiles,
-  or the worktree lines in the tree, that pass the filter, skipping fold
-  rows and repository lines, and switches the client the
+  or the worktree lines in the tree, in the list as drawn, after the
+  scope, the filter and the folds, skipping fold rows and repository
+  lines, and switches the client the
   command names with `-c`, or the one it ran from, with `switch-client
   -c`. For `view` and `scope` the CLI writes the new default to
   `sidebar.json` once, whether or not a pane answered; the panes only
@@ -883,7 +894,7 @@ Each step is one issue and one PR, reviewed as the others were.
    `↓ N more`, Loading and the empty states, and the rename of today's
    stale rows to orphaned. No protocol change.
 3. **Done, seen and stale.** The `attention` capability and record,
-   `poke`, the `client-session-changed` hook, `attention.json`, ✅, the
+   `poke`, the three poke hooks and `sidebar seen`, `attention.json`, ✅, the
    precedence, stale by age with `dim_stale` and `stale_after`, `z` for
    settle with 💤, and the sort modes. Stale rows fold with the settled
    ones in today's collapsed group, with `collapse_stale`, until step 6
@@ -960,8 +971,10 @@ view and folds step 6 keeps in memory.
   server never done, a client on a workspace session's shell window
   seeing nothing, a dead attach pane seeing nothing after its host
   reconnects, an attach pane from before #56 with no target, an agent
-  on vm not seen from an attach to mac's session of the same name, a
-  host taken out of the config, a host clock hours ahead of the laptop's, and an
+  on vm not seen from an attach to mac's session of the same name, two
+  workspace attach panes from before #56 on one host told apart by
+  their keys, a focused sidebar pane beside the attach, a host taken
+  out of the config, a host clock hours ahead of the laptop's, and an
   agent removed.
 - **Precedence:** done beats stale, blocked is never stale, a settled
   workspace's blocked agent stays in place.
