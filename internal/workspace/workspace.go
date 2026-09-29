@@ -281,6 +281,7 @@ const placeholder = "sleep 2147483647"
 func startAttach(ctx context.Context, paneID string, s Spec) error {
 	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "remain-on-exit", "on",
 		";", "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
+		";", "set-option", "-p", "-t", paneID, "@laatmux_attach_target", s.Managed,
 		";", "respawn-pane", "-k", "-t", paneID, AttachCommand(s.Host, s.Managed))
 	return err
 }
@@ -300,22 +301,27 @@ func tagArgs(name string, s Spec) []string {
 	return args
 }
 
-// ensureAttach makes sure the session has a live attach pane: a dead one
-// is respawned in place, and a session with no tagged attach pane at all,
-// closed by hand or left by a crash before the tag, gets a new attach
-// window. Other panes in the session are the user's and are left alone.
+// ensureAttach makes sure the session has a live attach pane on the
+// managed session the spec names: a dead one is respawned in place, as
+// is a live one attached to another managed session, the worktree's
+// agent having moved to another since, and a session with no tagged
+// attach pane at all, closed by hand or left by a crash before the tag,
+// gets a new attach window. A pane from before the target was tagged
+// is left as it is. Other panes in the session are the user's and are
+// left alone.
 func ensureAttach(ctx context.Context, name string, s Spec) error {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep))
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
 	if err != nil {
 		return err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
-		if len(f) != 3 || f[2] == "" {
+		if len(f) != 4 || f[2] == "" {
 			continue
 		}
-		if f[1] == "1" {
-			_, err := Server.Run(ctx, "respawn-pane", "-k", "-t", f[0], AttachCommand(s.Host, s.Managed))
+		if f[1] == "1" || (f[3] != "" && f[3] != s.Managed) {
+			_, err := Server.Run(ctx, "set-option", "-p", "-t", f[0], "@laatmux_attach_target", s.Managed,
+				";", "respawn-pane", "-k", "-t", f[0], AttachCommand(s.Host, s.Managed))
 			return err
 		}
 		return nil
