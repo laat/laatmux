@@ -19,6 +19,9 @@ type Term struct {
 	// Theme is what the lines are drawn in; the zero Theme has no
 	// colours and draws with the attributes alone.
 	Theme palette.Theme
+	// pending is input Background read that was not its answer, for
+	// Run to decode first.
+	pending []byte
 }
 
 // Open puts the terminal into raw mode. Not a terminal is an error.
@@ -56,17 +59,26 @@ func Open(in, out *os.File) (*Term, error) {
 
 // Background asks the terminal for its background colour with OSC 11 and
 // reports whether it is dark, waiting at most wait for the answer; ok is
-// false when none came or it could not be read. Called before Run reads
-// the keys, so the answer is read here; one that comes later is dropped
-// by the key decoder. tmux answers for its pane.
+// false when none came or it could not be read. It is called before Run
+// reads the keys, so it reads the terminal itself: whatever else comes
+// meanwhile, keys typed or the start of a paste, is kept for Run, and
+// an answer begun by the deadline is waited on a while longer for its
+// end. One cut short is left for Run's decoder, which swallows it; so
+// is one that comes later. tmux answers for its pane.
 func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 	t.write("\x1b]11;?\x1b\\")
 	deadline := time.Now().Add(wait)
+	extended := false
 	var got []byte
 	buf := make([]byte, 64)
-	for len(got) < 256 {
+	for len(got) < 1024 {
 		left := time.Until(deadline)
 		if left <= 0 {
+			// An answer under way gets its end once.
+			if start := strings.Index(string(got), "\x1b]"); start >= 0 && oscEnd(got[start:]) < 0 && !extended {
+				extended, deadline = true, time.Now().Add(oscWait)
+				continue
+			}
 			break
 		}
 		fds := []unix.PollFd{{Fd: int32(t.in.Fd()), Events: unix.POLLIN}}
@@ -82,12 +94,15 @@ func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 			break
 		}
 		got = append(got, buf[:k]...)
-		if i := strings.Index(string(got), "rgb:"); i >= 0 {
-			if rest := string(got[i:]); strings.ContainsAny(rest, "\x07\x1b") {
-				return palette.DarkBackground(rest)
+		if start := strings.Index(string(got), "\x1b]"); start >= 0 {
+			if end := oscEnd(got[start:]); end >= 0 {
+				answer := string(got[start : start+end])
+				t.pending = append(append([]byte(nil), got[:start]...), got[start+end:]...)
+				return palette.DarkBackground(answer)
 			}
 		}
 	}
+	t.pending = got
 	return false, false
 }
 

@@ -101,8 +101,10 @@ type Model struct {
 	anchor string
 	alias  string
 	lost   bool
-	// spinning is whether the last Render drew a spinner frame.
+	// spinning is whether the last Render drew a spinner frame, ticking
+	// whether it drew a time in seconds.
 	spinning bool
+	ticking  bool
 }
 
 // SetRows replaces the rows, keeping the selection on the row it was on
@@ -179,6 +181,8 @@ type Item struct {
 	// Index is the item's position among the selectable rows, -1 for
 	// a header.
 	Index int
+	// Hidden is how many rows a collapsed group's header stands for.
+	Hidden int
 }
 
 // Items is the list as drawn: main rows, then the settled and orphaned
@@ -213,7 +217,7 @@ func (m *Model) Items() []Item {
 		if orphaned > 0 {
 			parts = append(parts, fmt.Sprintf("orphaned %d", orphaned))
 		}
-		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1})
+		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1, Hidden: settled + orphaned})
 		return out
 	}
 	if settled > 0 {
@@ -314,6 +318,9 @@ type Span struct {
 	Bold bool
 	Fg   string
 	spin bool
+	// tick marks a time in seconds, `m:ss`, so Render knows the clock
+	// on screen moves every second.
+	tick bool
 }
 
 // Spinning reports whether the last Render drew a spinner, so the host
@@ -321,6 +328,11 @@ type Span struct {
 // filtered out, in a collapsed group, or scrolled off with its icon, is
 // not drawn and not ticked for.
 func (m *Model) Spinning() bool { return m.spinning }
+
+// Ticking reports whether the last Render drew a time in seconds, so
+// the host redraws every second while one is on screen and not at all
+// otherwise.
+func (m *Model) Ticking() bool { return m.ticking }
 
 // Line is one drawn line: spans and line-wide attributes. Reverse is the
 // selection: a background band in a theme with colours, reverse video
@@ -340,7 +352,7 @@ func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 // nothing to show says so. When rows are below the window, its last line
 // counts them.
 func (m *Model) Render() []Line {
-	m.spinning = false
+	m.spinning, m.ticking = false, false
 	if m.Width <= 0 || m.Height <= 0 {
 		return nil
 	}
@@ -349,7 +361,7 @@ func (m *Model) Render() []Line {
 	}
 	var out []Line
 	for _, h := range m.Header {
-		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width), Fg: palette.Warning}}, Bold: true})
+		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width), Fg: palette.Danger}}, Bold: true})
 	}
 	body := m.Height - len(out) - 1
 	if body < 1 {
@@ -357,17 +369,32 @@ func (m *Model) Render() []Line {
 	}
 	var lines []Line
 	var ids []string
+	// starts is where each row begins, and what it counts for below
+	// the window: a row one, a collapsed group's header its rows.
+	type start struct{ line, count int }
+	var starts []start
 	selStart, selEnd := -1, -1
 	m.Selection()
 	items := m.Items()
 	for _, it := range items {
+		switch {
+		case it.Row != nil:
+			starts = append(starts, start{len(lines), 1})
+		case it.Hidden > 0:
+			starts = append(starts, start{len(lines), it.Hidden})
+		}
 		var ls []Line
 		if it.Row == nil {
-			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width)}}, Dim: true}}
+			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width), Fg: palette.Header, Dim: true}}}}
 		} else {
 			ls = m.row(*it.Row)
 			if it.Index == m.Selected {
+				// The divider after a tile is not the tile: a short
+				// pane shows the tile's lines, its head first.
 				selStart, selEnd = len(lines), len(lines)+len(ls)
+				if m.Layout != Compact && len(ls) > 1 {
+					selEnd--
+				}
 				for i := range ls {
 					ls[i].Reverse = true
 					// The band spans the width, not the text alone.
@@ -386,9 +413,12 @@ func (m *Model) Render() []Line {
 		}
 		lines = append(lines, ls...)
 	}
+	if m.Loading || len(items) == 0 {
+		starts = nil
+	}
 	switch {
 	case m.Loading:
-		lines, ids = []Line{{Spans: []Span{{Text: frame(m.Now), Fg: palette.Info, spin: true}, {Text: fit(" Loading", m.Width-iconWidth)}}}}, []string{""}
+		lines, ids = []Line{{Spans: clip([]Span{{Text: frame(m.Now), Fg: palette.Info, spin: true}, {Text: " Loading"}}, m.Width)}}, []string{""}
 	case len(items) == 0 && m.Filter != "":
 		lines, ids = []Line{{Spans: []Span{{Text: fit("Nothing matches /"+m.Filter, m.Width)}}, Dim: true}}, []string{""}
 	case len(items) == 0:
@@ -407,6 +437,10 @@ func (m *Model) Render() []Line {
 			if selEnd > m.scroll+window {
 				m.scroll = selEnd - window
 			}
+			// A tile taller than the window shows its head.
+			if selEnd-selStart > window {
+				m.scroll = selStart
+			}
 		}
 		if m.scroll > len(lines)-window {
 			m.scroll = len(lines) - window
@@ -416,16 +450,27 @@ func (m *Model) Render() []Line {
 		}
 	}
 	scrollTo()
+	// rowsFrom counts the rows that begin at or after line i, a
+	// partly shown row not among them, with a collapsed group's.
+	rowsFrom := func(i int) int {
+		n := 0
+		for _, st := range starts {
+			if st.line >= i {
+				n += st.count
+			}
+		}
+		return n
+	}
 	more := 0
-	if len(lines) > m.scroll+body && body > 1 {
+	if body > 1 && rowsFrom(m.scroll+body) > 0 {
+		// Only rows count: a group's header or a divider left below is
+		// no reason to give up a line.
 		window = body - 1
 		scrollTo()
-		seen := map[string]bool{}
-		for _, id := range ids[m.scroll+window:] {
-			if id != "" && !seen[id] {
-				seen[id] = true
-				more++
-			}
+		more = rowsFrom(m.scroll + window)
+		if more == 0 {
+			window = body
+			scrollTo()
 		}
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
@@ -454,6 +499,9 @@ func (m *Model) Render() []Line {
 		for _, sp := range l.Spans {
 			if sp.spin {
 				m.spinning = true
+			}
+			if sp.tick {
+				m.ticking = true
 			}
 		}
 	}
@@ -522,15 +570,18 @@ func (m *Model) primary(r rows.Row, w int) Span {
 
 // since is the time on the right of a row's first line: since its
 // agent's status changed, or since a task was submitted; "" for a row
-// with neither.
-func (m *Model) since(r rows.Row) string {
+// with neither. secs is that it is in seconds, under an hour.
+func (m *Model) since(r rows.Row) (t string, secs bool) {
+	var d time.Duration
 	switch {
 	case r.Pending != nil:
-		return elapsed(m.Now.Sub(r.Pending.SubmittedAt))
+		d = m.Now.Sub(r.Pending.SubmittedAt)
 	case r.Agent != nil:
-		return elapsed(m.Now.Sub(r.Agent.ActivityAt))
+		d = m.Now.Sub(r.Agent.ActivityAt)
+	default:
+		return "", false
 	}
-	return ""
+	return elapsed(d), d < time.Hour
 }
 
 // third is what a row's third line says: a task's state and its detail;
@@ -563,12 +614,12 @@ func (m *Model) head(r rows.Row) []Span {
 	if w <= used {
 		return clip(lead, w)
 	}
-	t := m.since(r)
+	t, secs := m.since(r)
 	room := w - used
 	if t != "" && room-width(t)-1 >= 4 {
 		p := m.primary(r, room-width(t)-1)
 		gap := room - width(p.Text) - width(t)
-		return append(lead, p, Span{Text: strings.Repeat(" ", gap) + t})
+		return append(lead, p, Span{Text: strings.Repeat(" ", gap)}, Span{Text: t, tick: secs})
 	}
 	return append(lead, m.primary(r, room))
 }
@@ -606,7 +657,7 @@ func (m *Model) tile(r rows.Row) []Line {
 		{Dim: r.Dim, Spans: m.head(r)},
 		{Dim: r.Dim, Spans: clip(m.second(r, indent), m.Width)},
 		{Dim: r.Dim, Spans: clip(third, m.Width)},
-		{Dim: true, Spans: []Span{{Text: strings.Repeat("─", m.Width)}}},
+		{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}},
 	}
 }
 
@@ -621,7 +672,7 @@ func (m *Model) compact(r rows.Row) []Line {
 	if w <= used {
 		line = clip(lead, w)
 	} else {
-		t := m.since(r)
+		t, secs := m.since(r)
 		room := w - used
 		if t != "" && room-width(t)-1 >= 4 {
 			room -= width(t) + 1
@@ -643,7 +694,7 @@ func (m *Model) compact(r rows.Row) []Line {
 			left -= 1 + width(where.Text)
 		}
 		if t != "" {
-			line = append(line, Span{Text: strings.Repeat(" ", left+1) + t})
+			line = append(line, Span{Text: strings.Repeat(" ", left+1)}, Span{Text: t, tick: secs})
 		}
 	}
 	lines := []Line{{Dim: r.Dim, Spans: line}}
@@ -739,11 +790,20 @@ func ANSI(l Line, th palette.Theme) string {
 				b.WriteString("\x1b[7m")
 			}
 		}
-		if l.Dim {
-			b.WriteString("\x1b[2m")
+		switch {
+		case l.Dim:
+			// Under the selection band the faint attribute would leave
+			// the text unreadable; the dimmed colour says enough.
+			if !(colour && l.Reverse) {
+				b.WriteString("\x1b[2m")
+			}
 			if colour {
 				b.WriteString(th.SGR(palette.Dimmed, false))
 			}
+		case colour:
+			// The theme's text, not the terminal's own, which the
+			// highlight band may not suit.
+			b.WriteString(th.SGR(palette.Text, false))
 		}
 		if l.Bold {
 			b.WriteString("\x1b[1m")
@@ -752,7 +812,9 @@ func ANSI(l Line, th palette.Theme) string {
 	attrs()
 	for _, s := range l.Spans {
 		fg := ""
-		if colour && s.Fg != "" && !l.Dim {
+		// A dim line is dimmed throughout, but for the viewer's own
+		// row's label, the one mark of it the views have.
+		if colour && s.Fg != "" && (!l.Dim || s.Fg == palette.CurrentWorktreeFg) {
 			fg = th.SGR(s.Fg, false)
 		}
 		if (s.Dim && !l.Dim) || s.Bold || fg != "" {
@@ -806,10 +868,28 @@ func runeWidth(r rune) int {
 		r >= 0xff00 && r <= 0xff60,
 		r >= 0xffe0 && r <= 0xffe6,
 		r >= 0x1f000 && r <= 0x1faff,
-		r >= 0x20000 && r <= 0x3fffd:
+		r >= 0x20000 && r <= 0x3fffd,
+		emojiWide(r):
 		return 2
 	}
 	return 1
+}
+
+// emojiWide is the runes below the emoji planes that terminals draw two
+// cells wide by default: the symbols Unicode gives emoji presentation,
+// ✅ ⌛ ⭐ ❌ and the like, which a status icon set in the config may be.
+func emojiWide(r rune) bool {
+	switch {
+	case r == 0x231a, r == 0x231b, r >= 0x23e9 && r <= 0x23ec, r == 0x23f0, r == 0x23f3,
+		r == 0x25fd, r == 0x25fe, r == 0x2614, r == 0x2615, r >= 0x2648 && r <= 0x2653,
+		r == 0x267f, r == 0x2693, r == 0x26a1, r == 0x26aa, r == 0x26ab, r == 0x26bd, r == 0x26be,
+		r == 0x26c4, r == 0x26c5, r == 0x26ce, r == 0x26d4, r == 0x26ea, r == 0x26f2, r == 0x26f3,
+		r == 0x26f5, r == 0x26fa, r == 0x26fd, r == 0x2705, r == 0x270a, r == 0x270b, r == 0x2728,
+		r == 0x274c, r == 0x274e, r >= 0x2753 && r <= 0x2755, r == 0x2757, r >= 0x2795 && r <= 0x2797,
+		r == 0x27b0, r == 0x27bf, r == 0x2b1b, r == 0x2b1c, r == 0x2b50, r == 0x2b55:
+		return true
+	}
+	return false
 }
 
 // fit trims s to at most w cells, dropping control characters.

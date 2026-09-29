@@ -1,9 +1,9 @@
 package view
 
 import (
-	"github.com/laat/laatmux/internal/palette"
-
 	"strings"
+
+	"github.com/laat/laatmux/internal/palette"
 )
 
 // Form is the task form of milestone four: three chips for the
@@ -355,7 +355,7 @@ func (f *Form) Render(w, h int) []Line {
 	avail := max(w-8, 0)
 	branch := Line{Spans: []Span{{Text: "branch  "}, {Text: fit(f.branch, avail), Dim: !f.edited}}}
 	if f.focus == fieldBranch {
-		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg}, {Text: tail(f.branch+"█", avail)}}}
+		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg, Bold: true}, {Text: tail(f.branch+"█", avail)}}}
 	}
 	boxLines := h - len(out) - 1 - len(foot)
 	if boxLines < 3 {
@@ -390,7 +390,7 @@ func (f *Form) chipLines(w int) []Line {
 		for i, c := range f.Chips {
 			l := plain(fit(c.Title+" "+c.Label(), w))
 			if f.focus == i {
-				l = Line{Spans: []Span{{Text: fit(c.Title+" "+c.Label(), w), Fg: focusFg}}}
+				l = Line{Spans: []Span{{Text: fit(c.Title+" "+c.Label(), w), Fg: focusFg, Bold: true}}}
 			}
 			out = append(out, l)
 		}
@@ -416,9 +416,12 @@ func (f *Form) chipLines(w int) []Line {
 		if i > 0 {
 			gap = " "
 		}
-		top.Spans = append(top.Spans, Span{Text: gap + t, Fg: fg})
-		mid.Spans = append(mid.Spans, Span{Text: gap + v, Fg: fg})
-		bot.Spans = append(bot.Spans, Span{Text: gap + b, Fg: fg})
+		// The focus is bold as well as coloured, so it shows with
+		// NO_COLOR, where the colour does not.
+		bold := fg != ""
+		top.Spans = append(top.Spans, Span{Text: gap + t, Fg: fg, Bold: bold})
+		mid.Spans = append(mid.Spans, Span{Text: gap + v, Fg: fg, Bold: bold})
+		bot.Spans = append(bot.Spans, Span{Text: gap + b, Fg: fg, Bold: bold})
 	}
 	return []Line{top, mid, bot}
 }
@@ -473,15 +476,16 @@ func (f *Form) promptBox(w, n int) []Line {
 	if cursorLine >= body {
 		scroll = cursorLine - body + 1
 	}
-	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg}}}}
+	bold := fg != ""
+	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg, Bold: bold}}}}
 	for i := 0; i < body; i++ {
 		text := ""
 		if j := scroll + i; j < len(lines) {
 			text = lines[j]
 		}
-		out = append(out, Line{Spans: []Span{{Text: "│ ", Fg: fg}, {Text: pad(fit(text, inner), inner)}, {Text: " │", Fg: fg}}})
+		out = append(out, Line{Spans: []Span{{Text: "│ ", Fg: fg, Bold: bold}, {Text: pad(fit(text, inner), inner)}, {Text: " │", Fg: fg, Bold: bold}}})
 	}
-	return append(out, Line{Spans: []Span{{Text: fit(bot, w), Fg: fg}}})
+	return append(out, Line{Spans: []Span{{Text: fit(bot, w), Fg: fg, Bold: bold}}})
 }
 
 // wrapPrompt wraps the prompt to lines of at most inner cells, with the

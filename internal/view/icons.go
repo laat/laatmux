@@ -146,14 +146,15 @@ var DefaultAgentIcons = map[string]AgentIcon{
 // AgentIconFor is an agent's icon, the config's over the default; ok is
 // false for an agent neither knows.
 func AgentIconFor(agent string, over map[string]AgentIcon) (AgentIcon, bool) {
-	if a, ok := over[agent]; ok && a.Icon != "" {
-		if a.Color == "" {
-			a.Color = DefaultAgentIcons[agent].Color
-		}
-		return a, true
+	def, known := DefaultAgentIcons[agent]
+	o, set := over[agent]
+	if o.Icon == "" {
+		o.Icon = def.Icon
 	}
-	a, ok := DefaultAgentIcons[agent]
-	return a, ok
+	if o.Color == "" {
+		o.Color = def.Color
+	}
+	return o, (known || set) && o.Icon != ""
 }
 
 // shells are the names a pane title is dropped for: a shell's own name
@@ -165,6 +166,9 @@ var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true
 // starts with `Claude Code`, is a shell's name, repeats a label, or is
 // the host's name or one of the machine names given, dropped. tmux
 // titles a pane with the machine's name until the program sets one.
+// A machine's name matches whole, or as its first label either way,
+// `mac` for `mac.local`; a title that merely begins with a name, a
+// file `vm.py` say, stays.
 func cleanTitle(title, primary, secondary, host string, machines ...string) string {
 	t := strings.TrimSpace(title)
 	for {
@@ -179,15 +183,29 @@ func cleanTitle(title, primary, secondary, host string, machines ...string) stri
 	}
 	switch {
 	case t == "", strings.HasPrefix(t, "Claude Code"), shells[t],
-		t == primary, secondary != "" && t == secondary, host != "" && (t == host || strings.HasPrefix(t, host+".")):
+		t == primary, secondary != "" && t == secondary, host != "" && t == host:
 		return ""
 	}
+	short := func(s string) string { return strings.SplitN(s, ".", 2)[0] }
 	for _, name := range machines {
-		if name != "" && (t == name || strings.HasPrefix(t, name+".") || strings.HasPrefix(name, t+".")) {
+		if name != "" && (t == name || t == short(name) || name == short(t) && hostLike(t)) {
 			return ""
 		}
 	}
 	return t
+}
+
+// hostLike is a title that could be a host name: letters, digits,
+// dashes and dots, and a dot followed by more than a file extension's
+// few letters, as `mac.local` has, which `vm.py` does not.
+func hostLike(t string) bool {
+	for _, c := range t {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	i := strings.IndexByte(t, '.')
+	return i < 0 || len(t)-i-1 > 3
 }
 
 // elapsed is the time since a status changed as the views show it:

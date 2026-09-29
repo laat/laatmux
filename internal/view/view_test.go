@@ -86,12 +86,12 @@ func model(now time.Time) *Model {
 	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []string{"box  DOWN  ssh: connect to host box port 22: No route to host"}}
 }
 
-// The tile layout at the sidebar's default width: each tile is the mark
-// and name with the host tag right-aligned, dim for every host but the
-// local one, the agent, activity and age, and the title trimmed to the
-// width; rows without an agent say what they are instead; the current
-// session is marked in the gutter; the settled and orphaned groups are
-// collapsed to one line.
+// The tile layout at the sidebar's default width: each tile is the
+// stripe and the icon in the status colour, the primary label and the
+// time since the status changed; the secondary label and the host tag,
+// dim for every host but the local one; and the cleaned title, or what
+// a row without an agent is instead; the current row's label is bold in
+// its own colour; rows below the window are counted.
 func TestRenderTiles(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -726,8 +726,8 @@ func TestSpinner(t *testing.T) {
 
 // The spinner ticks only while a frame is on screen: working rows
 // scrolled off, or filtered out, or behind an overlay, are not ticked
-// for; and a narrow pane keeps the mark's colour in both layouts, down
-// to the two cells the gutter and the mark take.
+// for; and a narrow pane keeps the stripe's and icon's colours in both
+// layouts, down to a single cell.
 func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -782,7 +782,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	m.SetRows(rows.Build(fixtureInput(now)))
 	m.Filter = "proj/task" // the one row is the live working one
 	m.Header = []string{"one", "two"}
-	m.Height = 4 // headers, the body line, footer: the mark is drawn
+	m.Height = 4 // headers, the body line, footer: the icon is drawn
 	if lines := m.Render(); len(lines) != 4 || !m.Spinning() {
 		t.Fatalf("one working row under two headers: %d lines, spinning=%v", len(lines), m.Spinning())
 	}
@@ -790,7 +790,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	if lines := m.Render(); len(lines) != 2 || m.Spinning() {
 		t.Fatalf("headers filling the terminal: %d lines, spinning=%v", len(lines), m.Spinning())
 	}
-	// Narrow: the coloured mark survives the fallback in both layouts,
+	// Narrow: the coloured stripe survives the fallback in both layouts,
 	// and no line is wider than the pane.
 	for _, layout := range []Layout{Compact, Tiles} {
 		for _, w := range []int{12, 6, 3, 2} {
@@ -799,7 +799,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 			m.SetRows(rows.Build(fixtureInput(now)))
 			lines := m.Render()
 			if out := Debug(lines); !strings.Contains(out, "⟨") {
-				t.Errorf("layout %v width %d: no coloured mark:\n%s", layout, w, out)
+				t.Errorf("layout %v width %d: no colour:\n%s", layout, w, out)
 			}
 			for _, l := range lines {
 				if width(strings.TrimSuffix(Text([]Line{l}), "\n")) > w {
@@ -810,7 +810,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		m = model(now)
 		m.Layout, m.Width, m.Height = layout, 1, 30
 		m.SetRows(rows.Build(fixtureInput(now)))
-		m.Render() // one cell: the gutter alone, no panic
+		m.Render() // one cell: the stripe alone, no panic
 	}
 }
 

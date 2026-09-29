@@ -628,33 +628,46 @@ every worktree in the merged stream, keyed by source and branch.
   right edge.
 - **The stripe:** `▌` on every line, in the status colour.
 - **The selection:** a background band, not reverse video.
-- **Dividers:** `─` between tiles. The compact layout is line 1 alone.
+- **Dividers:** `─` between tiles, in `border`. The compact layout is
+  line 1 with the secondary label and host tag after the primary, and
+  the dashboard draws line 3 under it.
 
 ### Colour and theme
 
-A `Span` has an SGR code or dim today. It gets a foreground and a
-background in 256 colours and 24-bit, and bold. The palette is #52's:
+A `Span` has an SGR code or dim today. It gets a foreground, a palette
+name or a colour as the config writes one, and bold; the background is
+the line's, the selection band, in 256 colours and 24-bit. The
+palette is #52's:
 `info`, `accent`, `success`, `warning`, `danger`, `dimmed`, `text`,
 `border`, `header`, `highlight_row_bg` and `current_worktree_fg`, with a
 dark and a light default. `theme.mode: auto` picks one from the
 terminal's background, asked with OSC 11 when the view starts, dark
 when there is no answer; `theme.custom` overrides any colour. A stale
 row is drawn in `dimmed` with the dim attribute throughout, the stripe
-and the diff and PR colours included. The row for the viewer's own session has its primary label in
-bold `current_worktree_fg`, which replaces the `>` gutter. `NO_COLOR`
+and the diff and PR colours included, and so is any other dim row but
+for the viewer's own row's label; a task that needs the user is not
+dim, its waiting icon saying so. Plain text is drawn in `text`, a host
+that is down in `danger`, and a group's header in `header`. The row for
+the viewer's own session has its primary label in bold
+`current_worktree_fg`, which replaces the `>` gutter. `NO_COLOR`
 falls back to today's attributes, and the golden tests' `Debug` form
 names colours by palette name.
 
 ### Labels and the pane title
 
 The branch is the primary label and the repository the secondary, with
-the host tag after it. A detached worktree, a `new` session and an
-observed agent fall back to the session name. `main` and `master` are
-never primary when there is a better name. The pane title is cleaned
+the host tag after it. A detached worktree is named by its root's last
+element, with the repository and `detached` as the secondary; a `new`
+session and an observed agent fall back to the session name. `main`
+and `master` are never primary when there is a better name: on them
+the repository is primary and the branch secondary. The pane title is cleaned
 before it is shown: leading braille, the half-circle spinner `◐ ◑ ◒ ◓`
-and `✳ ● ○ ◌ ✓ ✗` characters are stripped, and so is an `OC |` prefix; a title that starts with `Claude
-Code`, is a shell's name, repeats the primary or secondary label, or is
-the host name is dropped.
+and `✳ ● ○ ◌ ✓ ✗` characters are stripped, and so is an `OC |` prefix;
+a title that starts with `Claude Code`, is a shell's name, repeats the
+primary or secondary label, or is the host's name or this machine's
+name, which tmux titles a pane with until its program sets one, is
+dropped. A remote machine's own name is not known to the laptop, so a
+remote pane titled with it keeps the title.
 
 ## Sorting and folding
 

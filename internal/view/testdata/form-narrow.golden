@@ -2,9 +2,9 @@
 ...|┌ r┐ ┌ ┐ ┌ ag┐
 ...|│ l│ │ │ │ cl│
 ...|└──┘ └─┘ └───┘
-...|⟨info:┌ prompt ────┐⟩
-...|⟨info:│ ⟩█         ⟨info: │⟩
-...|⟨info:│ ⟩          ⟨info: │⟩
-...|⟨info:└────────────┘⟩
+...|«⟨info:┌ prompt ────┐⟩»
+...|«⟨info:│ ⟩»█         «⟨info: │⟩»
+...|«⟨info:│ ⟩»          «⟨info: │⟩»
+...|«⟨info:└────────────┘⟩»
 ...|branch  fix
 .D.|tab next field

@@ -159,15 +159,20 @@ func New(dark bool, custom map[string]string) (Theme, error) {
 func Mono() Theme { return Theme{Mono: true} }
 
 // SGR is the escape sequence that sets name as the foreground, or with
-// bg the background; "" when the theme is monochrome or has no such
-// colour.
+// bg the background; name is a palette name, or a colour as Parse reads
+// it. "" when the theme is monochrome or the name is neither.
 func (t Theme) SGR(name string, bg bool) string {
 	if t.Mono || name == "" {
 		return ""
 	}
 	c, ok := t.colors[name]
 	if !ok {
-		return ""
+		// A colour as the config writes it, an agent's own say.
+		pc, err := Parse(name)
+		if err != nil {
+			return ""
+		}
+		c = pc
 	}
 	layer := 38
 	if bg {

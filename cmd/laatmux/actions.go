@@ -559,7 +559,7 @@ func keepPrompt(id, prompt string) (string, error) {
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree
-// row, or a orphaned row whose session still names its root. The question
+// row, or an orphaned row whose session still names its root. The question
 // names what goes and where.
 func (d *dash) askRm(m *view.Model, force bool) {
 	r := m.Selection()
@@ -705,7 +705,7 @@ func (d *dash) deliverPrompt(m *view.Model) {
 }
 
 // rmFor is the rm for a row: the worktree's repository, branch and root
-// from its record, or from a orphaned session's tags and key. A repository
+// from its record, or from an orphaned session's tags and key. A repository
 // this machine's config does not know is removed by root alone, as
 // --root does.
 func (d *dash) rmFor(r rows.Row) (command.Rm, error) {

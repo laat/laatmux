@@ -19,6 +19,12 @@ const backgroundWait = 150 * time.Millisecond
 // The config was validated when it was read, so the custom colours
 // parse.
 func look(cfg config.Config, t *view.Term) (palette.Theme, view.Icons) {
+	return lookWith(cfg, func() (bool, bool) { return t.Background(backgroundWait) })
+}
+
+// lookWith is look with the terminal's background asked through
+// background, which only a mode of auto calls.
+func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.Theme, view.Icons) {
 	icons := view.Icons{Set: cfg.Icons, Working: cfg.StatusIcons["working"], Waiting: cfg.StatusIcons["waiting"],
 		Done: cfg.StatusIcons["done"], Stale: cfg.StatusIcons["stale"]}
 	if os.Getenv("NO_COLOR") != "" {
@@ -30,7 +36,7 @@ func look(cfg config.Config, t *view.Term) (palette.Theme, view.Icons) {
 		dark = false
 	case palette.ModeDark:
 	default:
-		if d, ok := t.Background(backgroundWait); ok {
+		if d, ok := background(); ok {
 			dark = d
 		}
 	}

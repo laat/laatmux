@@ -10,7 +10,7 @@
 // after either is renamed. The session name, <host>/<repo>/<encoded
 // branch>, is for display and for switching by name. @laatmux_repo, the
 // repository source, and @laatmux_branch identify the worktree when its
-// record is gone from the host: that is how rm finds the root of a stale
+// record is gone from the host: that is how rm finds the root of an orphaned
 // workspace. The host, source and branch tags are refreshed every time
 // the session is reused, so a renamed host or label does not go stale in
 // them.

@@ -1,4 +1,4 @@
-..B|⟨warning:box  DOWN  ssh: connect to host box port 22: No route to host⟩
+..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No route to host⟩
 ...|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux ‹@vm›                                                               2:00
 ...|⟨accent:▌⟩    Permission to run pnpm test in packages/api?
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes ‹@vm/default›                                                         0:01
@@ -19,10 +19,10 @@ S..|⟨info:▌⟩    Editing src/api.ts
 .D.|⟨border:▌⟩    no session
 .D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›
 .D.|⟨border:▌⟩    no agent
-.D.|settled
+...|‹⟨header:settled⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ done proj @mac                                                                     1d
 .D.|⟨border:▌⟩    finished
-.D.|orphaned
+...|‹⟨header:orphaned⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ vm/proj/gone ‹@vm›
 .D.|⟨border:▌⟩    no worktree
 ...|

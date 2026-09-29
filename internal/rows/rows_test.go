@@ -11,8 +11,8 @@ import (
 
 // The join: worktrees pair with the agent in the session the record
 // names, leftovers are listed on their own, local sessions join by key
-// or attach tag, and orphaned sessions are orphaned when gone from a host that can
-// say so.
+// or attach tag, and sessions are orphaned when their worktree is gone
+// from a host that can say so.
 func TestBuild(t *testing.T) {
 	now := time.Now()
 	in := Input{
@@ -227,16 +227,16 @@ func TestBuildPending(t *testing.T) {
 			t.Fatalf("%s: alias %q worktree %v agent %v local %v current %v settled %v", id, r.Alias(), r.Worktree, r.Agent, r.Local, r.Current, r.Settled)
 		}
 	}
-	// Running and complete: the spinner's mark, not dim; the ones that
-	// need the user are dim with "!".
+	// Running and complete: the spinner's mark; the ones that need the
+	// user "!". None is dim: the icon says which wants the user.
 	for _, c := range []struct {
 		id, mark, state, detail string
 		dim                     bool
 	}{
 		{"add-1", "*", "done, awaiting the listing", "", false},
-		{"add-2", "!", "prompt not delivered", "the pane was not ready", true},
+		{"add-2", "!", "prompt not delivered", "the pane was not ready", false},
 		{"add-3", "*", "adding: fetch", "", false},
-		{"add-4", "!", "host removed", "", true},
+		{"add-4", "!", "host removed", "", false},
 	} {
 		r := byID[c.id]
 		if r.Mark() != c.mark || r.State() != c.state || r.Detail() != c.detail || r.Dim != c.dim || r.Name == "" {

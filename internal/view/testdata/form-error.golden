@@ -1,7 +1,7 @@
 ..B|add a task
-...|⟨info:┌ repository ───────┐⟩ ┌ host ───────┐ ┌ agent ─────────────┐
-...|⟨info:│ laatmux           │⟩ │ vm          │ │ claude             │
-...|⟨info:└───────────────────┘⟩ └─────────────┘ └────────────────────┘
+...|«⟨info:┌ repository ───────┐⟩» ┌ host ───────┐ ┌ agent ─────────────┐
+...|«⟨info:│ laatmux           │⟩» │ vm          │ │ claude             │
+...|«⟨info:└───────────────────┘⟩» └─────────────┘ └────────────────────┘
 ...|┌ prompt ──────────────────────────────────────────────────┐
 ...|│ Make the sidebar follow the current row when the sort    │
 ...|│ moves it, and select nothing when no row is this         │

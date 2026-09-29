@@ -67,6 +67,16 @@ type Decoder struct {
 	// the rest of it may still arrive, and is swallowed through its
 	// final byte rather than read as the keys its bytes spell.
 	discard bool
+	// osc is set when Flush dropped an incomplete OSC string, a late
+	// answer to the background query cut by a pause: its rest is
+	// swallowed through BEL or ST. oscEsc is an escape at the end of
+	// the last bytes, the start of ST; oscLeft bounds the swallowing,
+	// in bytes, and oscUntil in time, so an Alt-] the user typed does
+	// not eat the keys after it.
+	osc      bool
+	oscEsc   bool
+	oscLeft  int
+	oscUntil time.Time
 	// paste is the text of a bracketed paste whose end has not arrived;
 	// pasting is set from its start marker to its end. A paste is held
 	// across reads and flushes however long it takes.
@@ -117,6 +127,12 @@ func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
 // a click they begin and this read's for one begun in it, whatever the
 // held bytes turned out to be.
 func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
+	if d.osc {
+		b = d.swallowOSC(b)
+		if b == nil {
+			return nil
+		}
+	}
 	if d.discard {
 		// A CSI or SS3 sequence goes on through parameter and
 		// intermediate bytes, 0x20..0x3f, and ends at a final byte in
@@ -438,10 +454,117 @@ func (d *Decoder) Flush() []Key {
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && (d.pending[1] == '[' || d.pending[1] == 'O') {
 		d.discard = true
 	}
+	if len(d.pending) >= 2 && d.pending[0] == 0x1b && d.pending[1] == ']' {
+		// Only a string whose number and semicolon came is armed
+		// against: an Alt-] alone is the user's, and so are the keys
+		// after it.
+		if kind, _, body := oscScan(d.pending); kind == oscMore && body {
+			d.osc, d.oscEsc = true, d.pending[len(d.pending)-1] == 0x1b
+			d.oscLeft, d.oscUntil = oscMax-len(d.pending), d.clock().Add(oscWait)
+		}
+	}
 	heldAt := d.heldAt
 	keys, _ := parse(d.pending, true, func(int) time.Time { return heldAt })
 	d.pending, d.heldAt = nil, time.Time{}
 	return keys
+}
+
+// The bounds on swallowing the rest of an OSC string: an answer to the
+// background query is a few dozen bytes and comes in one go, so its rest
+// comes quickly and is short.
+const (
+	oscMax  = 256
+	oscWait = 500 * time.Millisecond
+)
+
+// swallowOSC drops the rest of an OSC string cut by a flush, through
+// BEL or ST, and returns what follows it; nil when all of b was the
+// string's. The string ends early at any other control byte, or an
+// escape that does not begin ST, which are the user's; past the bounds
+// in bytes and time everything is the user's again.
+func (d *Decoder) swallowOSC(b []byte) []byte {
+	if d.clock().After(d.oscUntil) {
+		d.osc, d.oscEsc = false, false
+		return b
+	}
+	if d.oscEsc {
+		d.oscEsc = false
+		if len(b) > 0 && b[0] == '\\' {
+			d.osc = false
+			return b[1:]
+		}
+		// The escape was not ST's: it is the start of what follows.
+		d.osc = false
+		return append([]byte{0x1b}, b...)
+	}
+	for i, c := range b {
+		switch {
+		case c == 0x07:
+			d.osc = false
+			return b[i+1:]
+		case c == 0x1b && i+1 < len(b) && b[i+1] == '\\':
+			d.osc = false
+			return b[i+2:]
+		case c == 0x1b && i+1 == len(b):
+			d.oscEsc = true
+			return nil
+		case c < 0x20:
+			d.osc = false
+			return b[i:]
+		}
+		d.oscLeft--
+		if d.oscLeft <= 0 {
+			d.osc = false
+			return b[i+1:]
+		}
+	}
+	return nil
+}
+
+// What oscScan finds at an escape and a right bracket.
+const (
+	oscMore = iota // cut short: more bytes may make it one
+	oscNot         // not an OSC string: Alt-], dropped as the Alt chord it is
+	oscDone        // a whole string, n bytes, through BEL or ST
+	oscCut         // a string ended by a byte that is the user's, at n
+)
+
+// oscScan reads the OSC string b starts with, an escape, a right
+// bracket, a number, a semicolon and the text, through BEL or ST, as a
+// terminal answers the background query. body is that the number and
+// its semicolon were seen, so a cut string is surely one.
+func oscScan(b []byte) (kind, n int, body bool) {
+	i := 2
+	for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+		i++
+	}
+	switch {
+	case i == len(b):
+		return oscMore, 0, false
+	case i == 2 || b[i] != ';':
+		return oscNot, 2, false
+	}
+	for j := i + 1; j < len(b); j++ {
+		switch c := b[j]; {
+		case c == 0x07:
+			return oscDone, j + 1, true
+		case c == 0x1b && j+1 == len(b):
+			return oscMore, 0, true
+		case c == 0x1b && b[j+1] == '\\':
+			return oscDone, j + 2, true
+		case c < 0x20:
+			return oscCut, j, true
+		}
+	}
+	return oscMore, 0, true
+}
+
+// oscEnd is the length of the whole OSC string b starts with, or -1.
+func oscEnd(b []byte) int {
+	if kind, n, _ := oscScan(b); kind == oscDone {
+		return n
+	}
+	return -1
 }
 
 // Parse reads one complete chunk of input as keys, flushing what is
@@ -518,25 +641,19 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 			if b[1] == ']' {
 				// An OSC string, the terminal's late answer to the
 				// background query say: dropped whole, up to BEL or ST,
-				// so its digits never read as keys.
-				end := -1
-				for j := 2; j < len(b); j++ {
-					if b[j] == 0x07 {
-						end = j + 1
-						break
-					}
-					if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
-						end = j + 2
-						break
-					}
-				}
-				if end < 0 {
+				// so its digits never read as keys. Without its number
+				// and semicolon it is Alt-], dropped alone as an Alt
+				// chord; one ended by another control byte ends there,
+				// the byte being the user's.
+				switch kind, n, _ := oscScan(b); kind {
+				case oscMore:
 					if !flush {
 						return keys, b
 					}
 					return keys, nil
+				default:
+					b = b[n:]
 				}
-				b = b[end:]
 				continue
 			}
 			if b[1] == '\r' || b[1] == '\n' {

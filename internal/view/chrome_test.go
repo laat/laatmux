@@ -58,6 +58,21 @@ func TestAgentIconFor(t *testing.T) {
 	if _, ok := AgentIconFor("aider", nil); ok {
 		t.Error("an agent no table knows has an icon")
 	}
+	if a, ok := AgentIconFor("claude", map[string]AgentIcon{"claude": {Color: "#ff0000"}}); !ok || a.Icon != "CC" || a.Color != "#ff0000" {
+		t.Errorf("colour over, icon kept: %+v %v", a, ok)
+	}
+	if a, ok := AgentIconFor("aider", map[string]AgentIcon{"aider": {Icon: "AI"}}); !ok || a.Icon != "AI" {
+		t.Errorf("an agent the config gives an icon: %+v %v", a, ok)
+	}
+	// An agent's own colour reaches the terminal, and the viewer's own
+	// label keeps its colour on a dim line.
+	th, _ := palette.New(true, nil)
+	if got := ANSI(Line{Spans: []Span{{Text: "CC", Fg: "#d97757"}}}, th); !strings.Contains(got, "\x1b[38;2;217;119;87mCC") {
+		t.Errorf("an agent's own colour: %q", got)
+	}
+	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg}}}, th); !strings.Contains(got, th.SGR(palette.CurrentWorktreeFg, false)+"me") {
+		t.Errorf("the viewer's label on a dim line: %q", got)
+	}
 }
 
 func TestCleanTitle(t *testing.T) {
@@ -70,14 +85,16 @@ func TestCleanTitle(t *testing.T) {
 		{"Claude Code", ""},
 		{"✳ Claude Code v2", ""},
 		{"zsh", ""},
-		{"fix-ls", ""},   // the primary label
-		{"laatmux", ""},  // the secondary
-		{"vm", ""},       // the host
-		{"vm.local", ""}, // the host with a domain
+		{"fix-ls", ""},     // the primary label
+		{"laatmux", ""},    // the secondary
+		{"vm", ""},         // the host
+		{"vm.py", "vm.py"}, // a file, not the host
+		{"vm.py: fix parsing", "vm.py: fix parsing"},
 		{"  ", ""},
 		{"vmware notes", "vmware notes"},
 		{"AM-KWMQF9PMFC", ""},       // the machine's name, as tmux titles a pane
 		{"AM-KWMQF9PMFC.local", ""}, // with its domain
+		{"AM-KWMQF9PMFC.go", "AM-KWMQF9PMFC.go"},
 	} {
 		if got := cleanTitle(c.in, "fix-ls", "laatmux", "vm", "AM-KWMQF9PMFC"); got != c.want {
 			t.Errorf("%q: %q, want %q", c.in, got, c.want)
@@ -134,8 +151,9 @@ func TestMoreBelow(t *testing.T) {
 	body := lines[:len(lines)-1]
 	last := Text(body[len(body)-1:])
 	total := len(m.Visible())
-	// Eight lines show the first two tiles whole; the rest are below.
-	if want := fmt.Sprintf("↓ %d more\n", total-2); last != want {
+	// Eight lines show the first two tiles whole; the rest are below,
+	// with the two the collapsed groups hide.
+	if want := fmt.Sprintf("↓ %d more\n", total-2+2); last != want {
 		t.Errorf("last body line %q, want %q", last, want)
 	}
 	if m.hitIDs[len(body)-1] != "" {
@@ -221,5 +239,170 @@ func TestBackground(t *testing.T) {
 	start := time.Now()
 	if _, ok := (&Term{in: r, out: devnull}).Background(50 * time.Millisecond); ok || time.Since(start) > time.Second {
 		t.Errorf("no answer: ok %v after %v", ok, time.Since(start))
+	}
+}
+
+// Keys that come while the terminal is asked for its background are
+// kept for Run, and an answer cut by the deadline is waited on for its
+// end.
+func TestBackgroundKeepsInput(t *testing.T) {
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	r, w, _ := os.Pipe()
+	w.WriteString("j\x1b]11;rgb:0000/0000/0000\x07k")
+	term := &Term{in: r, out: devnull}
+	if dark, ok := term.Background(time.Second); !ok || !dark || string(term.pending) != "jk" {
+		t.Errorf("dark %v ok %v pending %q", dark, ok, term.pending)
+	}
+	r.Close()
+	w.Close()
+	r, w, _ = os.Pipe()
+	defer r.Close()
+	defer w.Close()
+	w.WriteString("\x1b]11;rgb:ffff/")
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		w.WriteString("ffff/ffff\x1b\\")
+	}()
+	term = &Term{in: r, out: devnull}
+	if dark, ok := term.Background(50 * time.Millisecond); !ok || dark || len(term.pending) != 0 {
+		t.Errorf("split answer: dark %v ok %v pending %q", dark, ok, term.pending)
+	}
+}
+
+// An OSC answer cut by a flush is swallowed through BEL or ST when its
+// rest comes, whether the ST is split or not; past the bound in time
+// the bytes are keys again.
+func TestOSCAcrossFlush(t *testing.T) {
+	runes := func(ks []Key) string {
+		var b strings.Builder
+		for _, k := range ks {
+			if k.Kind == KeyRune {
+				b.WriteRune(k.Rune)
+			}
+		}
+		return b.String()
+	}
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	for _, parts := range [][]string{
+		{"\x1b]11;rgb:", "1111/2222/3333\x07j"},
+		{"\x1b]11;rgb:0/0/0\x1b", "\\j"},
+		{"\x1b]11;rgb:0/0", "/0\x1b", "\\j"},
+	} {
+		d := Decoder{now: clock}
+		var got string
+		for _, p := range parts {
+			got += runes(d.Feed([]byte(p)))
+			got += runes(d.Flush())
+		}
+		if got != "j" {
+			t.Errorf("%q: %q", parts, got)
+		}
+	}
+	// Alt-] and then, a while later, keys: they are the user's.
+	d := Decoder{now: clock}
+	d.Feed([]byte("\x1b]"))
+	d.Flush()
+	now = now.Add(oscWait + time.Millisecond)
+	if got := runes(d.Feed([]byte("jk"))); got != "jk" {
+		t.Errorf("keys after the bound: %q", got)
+	}
+}
+
+// Rendering details the review asked for: the theme's text colour on a
+// plain line; a short pane showing the selected tile's head, not its
+// divider; no count line for a group header left below; two-cell emoji
+// measured as two; Loading within one cell.
+func TestChromeEdges(t *testing.T) {
+	th, _ := palette.New(true, nil)
+	if got := ANSI(plain("x"), th); !strings.HasPrefix(got, th.SGR(palette.Text, false)) {
+		t.Errorf("plain line without the text colour: %q", got)
+	}
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	m := &Model{Rows: rows.Build(in), Now: now, Layout: Tiles, Width: 35, Height: 4}
+	m.Selected = 0
+	if txt := Text(m.Render()); !strings.Contains(txt, "fix-ls") {
+		t.Errorf("short pane lost the selected tile's head:\n%s", txt)
+	}
+	// Two tiles and the collapsed group below: nothing more to count.
+	two := rows.Rows{Main: m.Rows.Main[:2], Settled: m.Rows.Settled}
+	m = &Model{Rows: two, Now: now, Layout: Tiles, Width: 35, Height: 10, Selected: 1}
+	txt := Text(m.Render())
+	if strings.Contains(txt, "more") || !strings.Contains(txt, "settled") {
+		t.Errorf("group header under the tiles:\n%s", txt)
+	}
+	if width("✅") != 2 || width("⭐") != 2 || width("a") != 1 {
+		t.Errorf("widths: ✅ %d ⭐ %d", width("✅"), width("⭐"))
+	}
+	m = &Model{Now: now, Icons: Icons{Waiting: "✅"}}
+	r := rows.Row{Agent: &protocol.Agent{Activity: protocol.Blocked, Liveness: protocol.Alive}}
+	if sp := m.iconSpan(r); width(sp.Text) != iconWidth {
+		t.Errorf("a wide override is %d cells: %q", width(sp.Text), sp.Text)
+	}
+	m = &Model{Now: now, Width: 1, Height: 3, Loading: true}
+	for _, l := range m.Render() {
+		if lineWidth(l) > 1 {
+			t.Errorf("Loading wider than the pane: %q", Text([]Line{l}))
+		}
+	}
+}
+
+// Alt-] is the user's: dropped alone as the Alt chord it is, the key or
+// the click after it read, flushed or not.
+func TestAltBracket(t *testing.T) {
+	keys := Parse([]byte("\x1b]j\x1b[<0;5;3M"))
+	if len(keys) != 2 || keys[0].Kind != KeyRune || keys[0].Rune != 'j' || keys[1].Kind != KeyMouse {
+		t.Errorf("Alt-] then a key and a click: %+v", keys)
+	}
+	var d Decoder
+	d.Feed([]byte("\x1b]"))
+	d.Flush()
+	if ks := d.Feed([]byte("j")); len(ks) != 1 || ks[0].Rune != 'j' {
+		t.Errorf("a key after a flushed Alt-]: %+v", ks)
+	}
+}
+
+// No line is wider than the pane, and nothing panics, at any width and
+// height, in either layout, whatever is selected, with the icon sets.
+func TestWidthSweep(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	for _, layout := range []Layout{Tiles, Compact} {
+		for _, icons := range []Icons{{}, {Set: IconsASCII}, {Waiting: "✅"}} {
+			for w := 1; w <= 60; w++ {
+				for _, h := range []int{1, 2, 3, 5, 9, 20} {
+					for _, sel := range []int{0, 3, 8} {
+						m := model(now)
+						m.Layout, m.Icons, m.Width, m.Height, m.Selected, m.Titles = layout, icons, w, h, sel, true
+						for _, l := range m.Render() {
+							if n := lineWidth(l); n > w {
+								t.Fatalf("layout %v icons %+v %dx%d selected %d: a line of %d cells: %q", layout, icons, w, h, sel, n, Text([]Line{l}))
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// With NO_COLOR the form's focus still shows: the focused chip's frame
+// is bold.
+func TestFormFocusWithoutColour(t *testing.T) {
+	f := NewForm("add a task", [3]Chip{{Title: "repository", Choices: []Choice{{Label: "laatmux"}}}, {Title: "host", Choices: []Choice{{Label: "vm"}}}, {Title: "agent", Choices: []Choice{{Label: "claude"}}}}, "")
+	f.focus = 0
+	lines := f.Render(80, 20)
+	found := false
+	for _, l := range lines {
+		if strings.Contains(Text([]Line{l}), "repository") && strings.Contains(ANSI(l, palette.Mono()), "\x1b[1m") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no bold focus without colour:\n%s", Debug(lines))
 	}
 }

@@ -1,12 +1,12 @@
 S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ sidebar-follow                 0:00
 S..|⟨info:▌⟩    proj ‹@vm›                           
 S..|⟨info:▌⟩    adding: clone: cloning git@github.c
-SD.|────────────────────────────────────────
-.D.|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                         1:00
-.D.|⟨accent:▌⟩    proj ‹@vm›
-.D.|⟨accent:▌⟩    prompt not delivered: the pane was 
-.D.|────────────────────────────────────────
+S..|‹⟨border:────────────────────────────────────────⟩›
+...|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                         1:00
+...|⟨accent:▌⟩    proj ‹@vm›
+...|⟨accent:▌⟩    prompt not delivered: the pane was 
+...|‹⟨border:────────────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ a
 .D.|⟨border:▌⟩    proj ‹@vm›
-.D.|↓ 1 more
+.D.|⟨border:▌⟩    no session
 .D.|

@@ -83,7 +83,7 @@ type Row struct {
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
 	// Dim is decided from measured axes only: no identified agent, an
-	// agent that is gone, a host that is down, a orphaned session, a settled
+	// agent that is gone, a host that is down, an orphaned session, a settled
 	// workspace. Age is never a reason.
 	Dim bool
 }
@@ -562,9 +562,10 @@ func Build(in Input) Rows {
 		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current
 		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned || r.Settled
 		if r.Pending != nil {
-			// Not dim while it runs, dim once it needs the user, as a
-			// orphaned row is; never settled away from the main group.
-			r.Dim, r.Settled = r.NeedsUser(), false
+			// Never dim: a task that runs is under way, and one that
+			// needs the user wants them, which its waiting icon says;
+			// never settled away from the main group.
+			r.Dim, r.Settled = false, false
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return less(rows[i], rows[j]) })
