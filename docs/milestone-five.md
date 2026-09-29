@@ -509,7 +509,8 @@ are diff options, so they never run a user's diff driver. `merge-tree
 it runs the repository's merge drivers, as any merge does, and a git
 before 2.50, without `--quiet`, gets the plain call, which writes the
 merge's objects once per commit pair. Every call runs with
-`GIT_NO_LAZY_FETCH=1`, so a partial clone never fetches from its
+`GIT_NO_LAZY_FETCH=1` and, for a git before 2.45 that ignores it,
+`GIT_ALLOW_PROTOCOL=none`, so a partial clone never fetches from its
 remote during a refresh; the conflict is then left out. A branch with no
 merge base with its base, an orphan or a shallow history, gets ahead
 and behind alone.

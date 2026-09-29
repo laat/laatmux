@@ -457,9 +457,11 @@ func statusGit(ctx context.Context, dir string, args ...string) (string, error) 
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
 	// A partial clone does not fetch the blobs a merge-tree or a diff
-	// lacks: a refresh never goes to the network. The conflict is then
-	// left out for the pair; git before 2.45 ignores the variable.
-	cmd.Env = append(gitEnv(), "GIT_NO_LAZY_FETCH=1")
+	// lacks: a refresh never goes to the network. GIT_NO_LAZY_FETCH is
+	// git 2.45's; for an older git no transport is allowed, so a lazy
+	// fetch fails rather than connects. The conflict is then left out
+	// for the pair.
+	cmd.Env = append(gitEnv(), "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
 	// Its own process group, killed whole at the timeout: a merge
 	// driver or a hook git started goes with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

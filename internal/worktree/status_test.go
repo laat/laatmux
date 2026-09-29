@@ -389,3 +389,35 @@ func TestStatusShallowInKey(t *testing.T) {
 		t.Error("a new shallow boundary kept the cached stats")
 	}
 }
+
+// A refresh in a partial clone fetches nothing: no pack appears, whatever
+// blobs the merge or the diff lacks.
+func TestStatusPartialCloneNoFetch(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.remote)
+	seed := filepath.Join(base, "seed")
+	write(t, filepath.Join(seed, "big.txt"), strings.Repeat("base side\n", 100))
+	run(t, seed, "git", "add", "big.txt")
+	run(t, seed, "git", "commit", "-q", "-m", "big")
+	run(t, seed, "git", "push", "-q", f.remote, "main")
+	run(t, f.remote, "git", "config", "uploadpack.allowFilter", "true")
+	partial := filepath.Join(base, "partial")
+	run(t, base, "git", "clone", "-q", "--filter=blob:none", "--no-checkout", "file://"+f.remote, partial)
+	gitCfg(t, partial)
+	run(t, partial, "git", "checkout", "-q", "-b", "side", "HEAD~1")
+	write(t, filepath.Join(partial, "big.txt"), "branch side\n")
+	run(t, partial, "git", "add", "big.txt")
+	run(t, partial, "git", "commit", "-q", "-m", "side")
+	packs := func() int {
+		m, _ := filepath.Glob(filepath.Join(partial, ".git", "objects", "pack", "*.pack"))
+		return len(m)
+	}
+	before := packs()
+	var cache StatusCache
+	if _, _, _, err := Status(f.ctx, partial, "side", &cache); err != nil {
+		t.Logf("status: %v", err) // a missing blob may fail the diff; no fetch either way
+	}
+	if after := packs(); after != before {
+		t.Errorf("packs %d -> %d: a refresh fetched", before, after)
+	}
+}
