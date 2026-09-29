@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -356,5 +357,119 @@ func TestAttentionStream(t *testing.T) {
 	}
 	if listings.Load() == n {
 		t.Error("a poke did not list the clients at once")
+	}
+}
+
+// The seen loop: with no view open it lists only while an agent is done,
+// and the listing a finish pokes decides it. A finish watched with no
+// view open is seen; one after the user left stays done, and a view
+// opened later does not see it.
+func TestAttentionSeenLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var views atomic.Value
+	views.Store([]ClientView{attachTo("mac", "s")})
+	var listings atomic.Int32
+	hosts := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
+		Clients: func(context.Context) ([]ClientView, error) { listings.Add(1); return views.Load().([]ClientView), nil }})
+	go d.runSeen(ctx)
+	wait := func(cond func() bool, what string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	publish(d, "laatmux/%1", a)
+	time.Sleep(2 * seenInterval)
+	if n := listings.Load(); n != 0 {
+		t.Fatalf("%d listings with no view and nothing done", n)
+	}
+	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	wait(func() bool { x, _ := attnOf(d, a.ID); return !x.FinishedAt.IsZero() && !x.Done() }, "a watched finish not seen")
+
+	// The user leaves, the agent works and finishes again.
+	views.Store([]ClientView{attachTo("mac", "elsewhere")})
+	a.Activity, a.ActivityAt = protocol.Working, a.ActivityAt.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	n := listings.Load()
+	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	wait(func() bool { return listings.Load() > n }, "the finish did not list")
+	if !done(d, a.ID) {
+		t.Fatal("a finish after the user left is not done")
+	}
+	// Done and unseen: the loop lists every second, subscriber or not.
+	n = listings.Load()
+	wait(func() bool { return listings.Load() > n }, "no listing while done")
+	s := &subscriber{ch: make(chan protocol.Message, 16), merged: true}
+	d.mu.Lock()
+	d.msubs[s] = struct{}{}
+	d.mu.Unlock()
+	n = listings.Load()
+	wait(func() bool { return listings.Load() > n+1 }, "no listing with a view open")
+	if !done(d, a.ID) {
+		t.Error("a view opened after the user left saw the finish")
+	}
+}
+
+// The daemon's own agents that went while it was down lose their entries
+// at its first complete poll; entries of hosts gone from the config go at
+// start.
+func TestAttentionForgetAtStart(t *testing.T) {
+	dir := t.TempDir()
+	d := attnDaemon(t, dir)
+	t0 := time.Now()
+	publish(d, "laatmux/%1", protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "a", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 1}})
+	publish(d, "laatmux/%2", protocol.Agent{ID: "menv/laatmux/%2", EnvironmentID: "menv", Session: "b", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 2}})
+	fromVM(d, remoteAgent("%3", "c", protocol.Working, t0))
+
+	list := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	d = New(Config{EnvironmentID: "menv", Host: "mac", Hosts: list.get, Attention: filepath.Join(dir, "attention.json"), Targets: []Target{}})
+	d.mu.Lock()
+	d.agents["laatmux/%1"] = protocol.Agent{ID: "menv/laatmux/%1"}
+	d.forgetLocalLocked()
+	d.forgetUnconfiguredLocked([]string{"mac"})
+	d.mu.Unlock()
+	for id, want := range map[string]bool{"menv/laatmux/%1": true, "menv/laatmux/%2": false, "venv/laatmux/%3": false} {
+		if _, ok := attnOf(d, id); ok != want {
+			t.Errorf("%s kept %v, want %v", id, ok, want)
+		}
+	}
+}
+
+// An agent the detector cannot read, unknown while working was kept,
+// changes nothing and writes nothing.
+func TestAttentionUnknownWritesNothing(t *testing.T) {
+	d := attnDaemon(t, t.TempDir())
+	t0 := time.Now()
+	fromVM(d, remoteAgent("%1", "s", protocol.Working, t0))
+	d.mu.Lock()
+	d.attn.dirty = false
+	d.mu.Unlock()
+	u := remoteAgent("%1", "s", protocol.Unknown, t0)
+	u.Title = "changed"
+	fromVM(d, u)
+	d.mu.Lock()
+	e := *d.attn.entries["venv/laatmux/%1"]
+	d.mu.Unlock()
+	if e.Activity != protocol.Working {
+		t.Errorf("kept activity %s", e.Activity)
+	}
+	info, err := os.Stat(filepath.Join(filepath.Dir(d.attn.path), "attention.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := info.ModTime()
+	time.Sleep(20 * time.Millisecond)
+	fromVM(d, u)
+	if info, _ := os.Stat(d.attn.path); !info.ModTime().Equal(before) {
+		t.Error("the file was written for nothing")
 	}
 }

@@ -760,3 +760,21 @@ func TestSortOrders(t *testing.T) {
 		}
 	}
 }
+
+// The viewer's own row is never folded away as stale: the pane always
+// shows the session it sits in.
+func TestCurrentNotFolded(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "s", Agent: "claude", Activity: protocol.Idle,
+			ActivityAt: now.Add(-5 * time.Hour), Liveness: protocol.Alive, Managed: true}},
+		Locals:  []workspace.Local{{Name: "vm/s", Attach: "vm/s", Host: "vm"}},
+		Current: "vm/s",
+		Now:     now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
+	}
+	rs := Build(in)
+	if len(rs.Main) != 1 || !rs.Main[0].Stale || !rs.Main[0].Current || len(rs.Stale) != 0 {
+		t.Errorf("main %+v, stale %+v", rs.Main, rs.Stale)
+	}
+}

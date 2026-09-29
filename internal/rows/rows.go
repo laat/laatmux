@@ -616,7 +616,9 @@ func Build(in Input) Rows {
 			// A settled workspace's agent that wants the user stays in
 			// place with its own icon.
 			out.Settled = append(out.Settled, r)
-		case r.Stale && in.CollapseStale:
+		case r.Stale && in.CollapseStale && !r.Current:
+			// The viewer's own row stays in sight, stale or not, so the
+			// pane always shows the session it sits in.
 			out.Stale = append(out.Stale, r)
 		default:
 			out.Main = append(out.Main, r)

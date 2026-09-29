@@ -842,8 +842,10 @@ is switched to.
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
 
-Config: `sidebar: {width: 35, layout: tiles}`; width is at least 10,
-layout `tiles` or `compact`. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
+Config: `sidebar: {width: 35, layout: tiles, sort: priority, dim_stale:
+true, collapse_stale: true, stale_after: 1h}`; width is at least 10,
+layout `tiles` or `compact`, sort `priority`, `recency` or `window`,
+stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
 {claude: {icon: CC, color: "#d97757"}}` for the agent token milestone
 five's templates bring, and `theme: {mode: auto|dark|light, custom:

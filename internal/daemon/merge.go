@@ -453,6 +453,8 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 	if ctx.Err() != nil || d.mhosts[mh.status.Name] != mh {
 		return
 	}
+	// The attention file is written once for the whole message.
+	defer d.flushAttentionLocked()
 	switch msg.Type {
 	case protocol.TypeSnapshot:
 		// In the order a host's own stream keeps: the worktrees first,

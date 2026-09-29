@@ -85,6 +85,10 @@ type attention struct {
 	path    string
 	entries map[string]*attnEntry // by agent id
 	poke    chan struct{}
+	// dirty is that an entry changed since the file was written: the
+	// file is written once per batch, a poll's upsert or a host's
+	// snapshot, not once per agent.
+	dirty bool
 }
 
 type attnFile struct {
@@ -113,10 +117,19 @@ func openAttention(path string) (*attention, error) {
 	return a, nil
 }
 
-// saveLocked writes the file whole, through a temporary file, so a crash
-// leaves the old or the new one.
-func (d *Daemon) saveAttentionLocked() {
+// saveAttentionLocked marks the file for writing at the end of the batch.
+func (d *Daemon) saveAttentionLocked() { d.attn.dirty = true }
+
+// flushAttentionLocked writes the file whole when an entry changed,
+// through a temporary file, so a crash leaves the old or the new one. It
+// is a few hundred bytes an agent, written under d.mu as the relay's
+// files are.
+func (d *Daemon) flushAttentionLocked() {
 	a := d.attn
+	if a == nil || !a.dirty {
+		return
+	}
+	a.dirty = false
 	b, err := json.Marshal(attnFile{Entries: a.entries})
 	if err == nil {
 		if err = os.MkdirAll(filepath.Dir(a.path), 0o700); err == nil {
@@ -175,17 +188,18 @@ func (d *Daemon) attendLocked(host string, local bool, a protocol.Agent) {
 		d.saveAttentionLocked()
 		return
 	}
-	if e.Activity == a.Activity && e.ActivityAt.Equal(a.ActivityAt) {
+	// Unknown is the detector unable to tell, a startup grace after a
+	// restart say: the activity kept stands, so working, unknown, then
+	// idle is still a finish.
+	act := a.Activity
+	if act == protocol.Unknown {
+		act = e.Activity
+	}
+	if e.Activity == act && e.ActivityAt.Equal(a.ActivityAt) {
 		return
 	}
-	finished := e.Activity == protocol.Working && a.Activity == protocol.Idle && !e.ActivityAt.Equal(a.ActivityAt)
-	if a.Activity != protocol.Unknown {
-		// Unknown is the detector unable to tell, a startup grace after
-		// a restart say: the activity kept stands, so working, unknown,
-		// then idle is still a finish.
-		e.Activity = a.Activity
-	}
-	e.ActivityAt = a.ActivityAt
+	finished := e.Activity == protocol.Working && act == protocol.Idle && !e.ActivityAt.Equal(a.ActivityAt)
+	e.Activity, e.ActivityAt = act, a.ActivityAt
 	if finished {
 		e.FinishedAt = time.Now()
 		rec := e.record(a.ID)
@@ -246,6 +260,7 @@ func (d *Daemon) forgetUnconfiguredLocked(names []string) {
 			d.forgetLocked(id)
 		}
 	}
+	d.flushAttentionLocked()
 }
 
 // forgetLocalLocked drops the entries of the daemon's own agents that its
@@ -263,6 +278,7 @@ func (d *Daemon) forgetLocalLocked() {
 			d.forgetLocked(id)
 		}
 	}
+	d.flushAttentionLocked()
 }
 
 // attentionsLocked is the published records, for a merged snapshot.
@@ -428,6 +444,7 @@ func (d *Daemon) markSeenLocked(views []ClientView) {
 	}
 	if changed {
 		d.saveAttentionLocked()
+		d.flushAttentionLocked()
 	}
 }
 

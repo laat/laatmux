@@ -785,6 +785,7 @@ func (d *Daemon) broadcastLocked(m protocol.Message) {
 	case m.Type == protocol.TypeRemove && m.AgentID != "":
 		d.forgetLocked(m.AgentID)
 	}
+	d.flushAttentionLocked()
 	for s := range d.subs {
 		select {
 		case s.ch <- m:
