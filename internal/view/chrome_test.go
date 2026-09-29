@@ -510,6 +510,42 @@ func TestOSCAnswerEndsExpectation(t *testing.T) {
 	if !d.expectUntil.IsZero() {
 		t.Errorf("still expecting until %v", d.expectUntil)
 	}
+
+	// An answer across reads, then across a flush, ends it too.
+	for _, parts := range [][]string{
+		{"\x1b]1", "1;rgb:1a1a/1b1b/2626\x07"},
+		{"\x1b]11", "", ";rgb:1a1a/1b1b/2626\x1b", "\\"},
+	} {
+		d := Decoder{now: func() time.Time { return now }}
+		d.ExpectAnswer(now.Add(time.Second))
+		var ks []Key
+		for _, p := range parts {
+			if p == "" {
+				ks = append(ks, d.Flush()...)
+				continue
+			}
+			ks = append(ks, d.Feed([]byte(p))...)
+		}
+		ks = append(ks, d.Feed([]byte("\x1b]"))...)
+		ks = append(ks, d.Flush()...)
+		ks = append(ks, d.Feed([]byte("1j"))...)
+		ks = append(ks, d.Flush()...)
+		if !d.expectUntil.IsZero() || len(ks) != 2 {
+			t.Errorf("%q: expecting until %v, keys %+v", parts, d.expectUntil, ks)
+		}
+	}
+
+	// An echo of the query does not: the answer after it, cut after
+	// its escape and bracket, is still dropped.
+	d = Decoder{now: func() time.Time { return now }}
+	d.ExpectAnswer(now.Add(time.Second))
+	ks := d.Feed([]byte("\x1b]11;?\x1b\\\x1b]"))
+	ks = append(ks, d.Flush()...)
+	ks = append(ks, d.Feed([]byte("11;rgb:1a1a/1b1b/2626\x07j"))...)
+	ks = append(ks, d.Flush()...)
+	if len(ks) != 1 || ks[0].Rune != 'j' || !d.expectUntil.IsZero() {
+		t.Errorf("echo, then a cut answer: %+v, expecting until %v", ks, d.expectUntil)
+	}
 }
 
 // Under a guessed background the selection is reverse video alone: no

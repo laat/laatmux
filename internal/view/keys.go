@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/rows"
 )
 
@@ -84,6 +85,9 @@ type Decoder struct {
 	// number and semicolon came, so an Alt-] and the keys after it are
 	// the user's.
 	expectUntil time.Time
+	// oscBuf is the OSC string being swallowed so far, to tell the
+	// answer from an echo when it ends.
+	oscBuf []byte
 	// paste is the text of a bracketed paste whose end has not arrived;
 	// pasting is set from its start marker to its end. A paste is held
 	// across reads and flushes however long it takes.
@@ -134,10 +138,6 @@ func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
 // a click they begin and this read's for one begun in it, whatever the
 // held bytes turned out to be.
 func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
-	if bytes.Contains(b, []byte(oscAnswer)) {
-		// The late answer came: an Alt-] from here on is the user's.
-		d.expectUntil = time.Time{}
-	}
 	if d.osc {
 		b = d.swallowOSC(b)
 		if b == nil {
@@ -218,10 +218,12 @@ func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
 		}
 		i := strings.Index(string(d.pending), pasteStart)
 		if i < 0 {
+			d.seeAnswer(d.pending)
 			ks, rest := parse(d.pending, false, stamp(total-len(d.pending)))
 			d.pending = rest
 			return append(keys, ks...)
 		}
+		d.seeAnswer(d.pending[:i])
 		ks, rest := parse(d.pending[:i], true, stamp(total-len(d.pending)))
 		keys = append(keys, ks...)
 		_ = rest
@@ -475,6 +477,7 @@ func (d *Decoder) Flush() []Key {
 		if kind == oscMore && (body || expecting) {
 			d.osc, d.oscEsc = true, d.pending[len(d.pending)-1] == 0x1b
 			d.oscLeft, d.oscUntil = oscMax-len(d.pending), d.clock().Add(oscWait)
+			d.oscBuf = append([]byte(nil), d.pending...)
 		}
 	}
 	heldAt := d.heldAt
@@ -505,6 +508,7 @@ func (d *Decoder) swallowOSC(b []byte) []byte {
 		d.oscEsc = false
 		if len(b) > 0 && b[0] == '\\' {
 			d.osc = false
+			d.seeAnswer(append(d.oscBuf, '\\'))
 			return b[1:]
 		}
 		// The escape was not ST's: it is the start of what follows.
@@ -515,12 +519,15 @@ func (d *Decoder) swallowOSC(b []byte) []byte {
 		switch {
 		case c == 0x07:
 			d.osc = false
+			d.seeAnswer(append(d.oscBuf, b[:i+1]...))
 			return b[i+1:]
 		case c == 0x1b && i+1 < len(b) && b[i+1] == '\\':
 			d.osc = false
+			d.seeAnswer(append(d.oscBuf, b[:i+2]...))
 			return b[i+2:]
 		case c == 0x1b && i+1 == len(b):
 			d.oscEsc = true
+			d.oscBuf = append(d.oscBuf, b[:i+1]...)
 			return nil
 		case c < 0x20:
 			d.osc = false
@@ -532,7 +539,30 @@ func (d *Decoder) swallowOSC(b []byte) []byte {
 			return b[i+1:]
 		}
 	}
+	d.oscBuf = append(d.oscBuf, b...)
 	return nil
+}
+
+// seeAnswer ends the expectation of an answer when b holds one whole:
+// an OSC 11 string with a colour. An echo of the query, or an answer
+// still cut, does not end it.
+func (d *Decoder) seeAnswer(b []byte) {
+	if d.expectUntil.IsZero() {
+		return
+	}
+	for i := 0; i < len(b); i++ {
+		j := bytes.Index(b[i:], []byte(oscAnswer))
+		if j < 0 {
+			return
+		}
+		i += j
+		if kind, n, _ := oscScan(b[i:]); kind == oscDone {
+			if _, ok := palette.DarkBackground(string(b[i : i+n])); ok {
+				d.expectUntil, d.oscBuf = time.Time{}, nil
+				return
+			}
+		}
+	}
 }
 
 // ExpectAnswer says the answer to the background query may still come
