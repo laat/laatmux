@@ -53,12 +53,16 @@ func GH(ctx context.Context, host, query string, vars map[string]string) ([]byte
 	if err == nil {
 		return out.Bytes(), nil
 	}
-	msg := strings.TrimSpace(errb.String())
-	if strings.Contains(msg, "gh auth login") || strings.Contains(msg, "not logged") || strings.Contains(msg, "authentication") {
-		return nil, fmt.Errorf("%w to %s", ErrLoggedOut, host)
-	}
 	if bytes.Contains(out.Bytes(), []byte(`"data"`)) {
 		return out.Bytes(), nil
+	}
+	msg := strings.TrimSpace(errb.String())
+	var ee *exec.ExitError
+	// gh exits 4 when it has no credentials; a bad or expired token is
+	// GitHub's 401.
+	if errors.As(err, &ee) && ee.ExitCode() == 4 || strings.Contains(msg, "HTTP 401") || strings.Contains(msg, "Bad credentials") ||
+		strings.Contains(msg, "gh auth login") || strings.Contains(msg, "not logged") {
+		return nil, fmt.Errorf("%w to %s", ErrLoggedOut, host)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -84,13 +88,15 @@ type Result struct {
 	ChecksURL string
 	PR        *protocol.PullRequest
 	Checks    *protocol.Checks
-	rollupID  string
+	// RollupID identifies the head's check rollup, which a failing
+	// check's name is kept by.
+	RollupID string
 }
 
 // Chunk is how many branches one query asks about.
 const Chunk = 32
 
-const prFragment = `fragment P on PullRequestConnection { nodes { number state isDraft url headRepository { nameWithOwner } commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
+const prFragment = `fragment P on PullRequestConnection { nodes { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
 
 const rollupFragment = `fragment R on StatusCheckRollup { id state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }`
 
@@ -105,8 +111,8 @@ func query(n int) string {
 		fmt.Fprintf(&decl, "$o%d: String!, $r%d: String!, $q%d: String!, $b%d: String!", i, i, i, i)
 		fmt.Fprintf(&body, ` b%d: repository(owner: $o%d, name: $r%d) { url `+
 			`ref(qualifiedName: $q%d) { target { oid ... on Commit { statusCheckRollup { ...R } } } } `+
-			`open: pullRequests(headRefName: $b%d, states: [OPEN], first: 50, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } `+
-			`pullRequests(headRefName: $b%d, first: 50, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } }`, i, i, i, i, i, i)
+			`open: pullRequests(headRefName: $b%d, states: [OPEN], first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } `+
+			`pullRequests(headRefName: $b%d, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } }`, i, i, i, i, i, i)
 	}
 	return "query(" + decl.String() + ") {" + body.String() + " } " + rollupFragment + " " + prFragment
 }
@@ -127,14 +133,12 @@ type rollup struct {
 
 type prConnection struct {
 	Nodes []struct {
-		Number   int    `json:"number"`
-		State    string `json:"state"`
-		IsDraft  bool   `json:"isDraft"`
-		URL      string `json:"url"`
-		HeadRepo *struct {
-			NameWithOwner string `json:"nameWithOwner"`
-		} `json:"headRepository"`
-		Commits struct {
+		Number          int    `json:"number"`
+		State           string `json:"state"`
+		IsDraft         bool   `json:"isDraft"`
+		URL             string `json:"url"`
+		CrossRepository bool   `json:"isCrossRepository"`
+		Commits         struct {
 			Nodes []struct {
 				Commit struct {
 					OID    string  `json:"oid"`
@@ -161,7 +165,10 @@ type repoAnswer struct {
 // the first failing check of each rollup that fails. A chunk that fails
 // sets Err on its branches; the error returned is the runner's own when
 // every chunk failed with it, ErrNoGH or ErrLoggedOut say.
-func Fetch(ctx context.Context, run Runner, host string, branches []Branch) ([]Result, error) {
+//
+// known is the failing names already found, by rollup id: a rollup that
+// does not change is not paged again.
+func Fetch(ctx context.Context, run Runner, host string, branches []Branch, known map[string]string) ([]Result, error) {
 	results := make([]Result, len(branches))
 	var last error
 	failed := 0
@@ -179,8 +186,12 @@ func Fetch(ctx context.Context, run Runner, host string, branches []Branch) ([]R
 	}
 	for i := range results {
 		r := &results[i]
-		if r.Err == nil && r.Checks != nil && r.Checks.State == protocol.ChecksFailure && r.rollupID != "" {
-			r.Checks.Failing = failingName(ctx, run, host, r.rollupID)
+		if r.Err == nil && r.Checks != nil && r.Checks.State == protocol.ChecksFailure && r.RollupID != "" {
+			if name, ok := known[r.RollupID]; ok {
+				r.Checks.Failing = name
+			} else {
+				r.Checks.Failing = failingName(ctx, run, host, r.RollupID)
+			}
 		}
 	}
 	if chunks > 0 && failed == chunks && (errors.Is(last, ErrNoGH) || errors.Is(last, ErrLoggedOut)) {
@@ -252,34 +263,48 @@ func parse(a *repoAnswer, b Branch) Result {
 	if a.Ref != nil {
 		r.HeadOID, rl = a.Ref.Target.OID, a.Ref.Target.Rollup
 	}
-	own := strings.ToLower(b.Owner + "/" + b.Repo)
 	// The open ones are asked for apart, so newer closed ones or forks'
-	// do not hide an open one; else the newest of the source's own.
+	// do not hide an open one; else the newest of the repository's own,
+	// a fork's being cross-repository, whatever the names after a
+	// rename.
 	pick := -1
 	nodes := append(append(a.Open.Nodes[:0:0], a.Open.Nodes...), a.PullRequests.Nodes...)
 	for i, pr := range nodes {
-		if pr.HeadRepo != nil && strings.ToLower(pr.HeadRepo.NameWithOwner) == own {
+		if !pr.CrossRepository {
 			pick = i
 			break
 		}
 	}
 	if pick >= 0 {
 		pr := nodes[pick]
-		r.PR = &protocol.PullRequest{Number: pr.Number, State: strings.ToLower(pr.State), Draft: pr.IsDraft, URL: pr.URL}
-		r.ChecksURL = pr.URL + "/checks"
+		var last string
+		var lastRollup *rollup
 		if n := pr.Commits.Nodes; len(n) > 0 {
-			r.HeadOID, rl = n[0].Commit.OID, n[0].Commit.Rollup
+			last, lastRollup = n[0].Commit.OID, n[0].Commit.Rollup
 		}
-	} else if a.Ref == nil {
+		// A merged or closed PR is the branch's only while the branch
+		// is where the PR left it, or gone; a branch that moved on,
+		// main after an old main-to-release PR say, is its own.
+		if pr.State == "OPEN" || a.Ref == nil || last == r.HeadOID {
+			r.PR = &protocol.PullRequest{Number: pr.Number, State: strings.ToLower(pr.State), Draft: pr.IsDraft, URL: pr.URL}
+			r.ChecksURL = pr.URL + "/checks"
+			if last != "" {
+				r.HeadOID, rl = last, lastRollup
+			}
+		}
+	}
+	switch {
+	case r.PR != nil:
+	case a.Ref == nil:
 		// No branch and no PR of it: gone from GitHub. A branch deleted
 		// after its PR merged keeps the PR.
 		return Result{NoRef: true}
-	} else if a.URL != "" && r.HeadOID != "" {
+	case a.URL != "" && r.HeadOID != "":
 		r.ChecksURL = a.URL + "/commit/" + r.HeadOID + "/checks"
 	}
 	if rl != nil {
 		r.Checks = aggregate(rl)
-		r.rollupID = rl.ID
+		r.RollupID = rl.ID
 	}
 	return r
 }

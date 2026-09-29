@@ -1,7 +1,7 @@
 ..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No ⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                                 2:00
 S..|⟨accent:▌⟩    laatmux ‹@vm›                                
-S..|⟨accent:▌⟩    Permission to run pnpm test in packag ⟨success:#52⟩ ⟨success:✓⟩
+S..|⟨accent:▌⟩    Permission to run pnpm test in packag «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes                           0:01
 ...|⟨info:▌⟩    ‹@vm/default›

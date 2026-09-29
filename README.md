@@ -1033,7 +1033,10 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   - the checks of the PR's last commit, or of the branch's own, counted
     from the rollup's aggregates, with the first failing check's name.
 
-  The answers are kept in `branches.json` under `$LAATMUX_HOME`. One
+  The records travel as `branch_statuses` in a snapshot, `branch_status`
+  in an upsert and `branch_status_key` in a remove; `github_ok` clears
+  `github_error`. The answers are kept in `branches.json` under
+  `$LAATMUX_HOME`. One
   older than five minutes, or whose last query failed, is stale; a
   branch no worktree has had for a day is dropped. A missing or
   logged-out `gh` is the daemon's `github_error`, printed by `laatmux

@@ -314,3 +314,25 @@ func TestBranchesSlowRound(t *testing.T) {
 	}
 	close(block)
 }
+
+// An answer kept from before a restart is as old as it is: stale at once
+// when past the stale time.
+func TestBranchesStaleAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	gh := &fakeGH{states: map[string]string{"a": "SUCCESS"}}
+	d, _ := branchDaemon(t, dir, gh, "a")
+	d.fetchNow(t)
+	d.mu.Lock()
+	for _, e := range d.branches {
+		e.Status.FetchedAt = time.Now().Add(-time.Hour)
+	}
+	d.saveBranchesLocked()
+	d.mu.Unlock()
+	d2, _ := branchDaemon(t, dir, gh)
+	d2.mu.Lock()
+	snap := d2.mergedSnapshotLocked()
+	d2.mu.Unlock()
+	if len(snap.BranchStatuses) != 1 || !snap.BranchStatuses[0].Stale {
+		t.Errorf("%+v", snap.BranchStatuses)
+	}
+}

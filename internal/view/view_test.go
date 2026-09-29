@@ -1344,4 +1344,6 @@ func TestRenderPR(t *testing.T) {
 	golden(t, "pr-narrow", Debug(m.Render()))
 	m.Layout, m.Titles, m.Width, m.Height = Compact, true, 90, 30
 	golden(t, "pr-compact", Debug(m.Render()))
+	m.Icons = Icons{Set: IconsASCII}
+	golden(t, "pr-ascii", Debug(m.Render()))
 }

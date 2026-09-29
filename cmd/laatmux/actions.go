@@ -809,20 +809,26 @@ func (d *dash) openBranch(m *view.Model, checks bool) {
 		m.Message = r.Name + ": no checks page known"
 		return
 	}
-	if err := openURL(d.ctx, url); err != nil {
+	if err := openURL(url); err != nil {
 		m.Message = "open " + url + ": " + err.Error()
 		return
 	}
-	m.Message = "opened " + url
+	m.Message = "opening " + url
 }
 
-// openURL opens a URL in this machine's browser.
-var openURL = func(ctx context.Context, url string) error {
+// openURL opens a URL in this machine's browser, without waiting for the
+// browser: the view goes on meanwhile.
+var openURL = func(url string) error {
 	name := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		name = "open"
 	}
-	return exec.CommandContext(ctx, name, url).Run()
+	cmd := exec.Command(name, url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 // settle toggles the settled tag on the selected row's workspace

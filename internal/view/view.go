@@ -853,30 +853,43 @@ func (m *Model) prSpans(r rows.Row, w int) []Span {
 	mainline := r.Worktree != nil && (r.Worktree.Branch == "main" || r.Worktree.Branch == "master")
 	var pr []Span
 	if b.PR != nil && !mainline {
+		// Without colours the states still differ: open bold, merged
+		// plain, closed and draft faint.
 		sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
 		switch {
 		case b.PR.Draft:
 			sp.Dim = true
 		case b.PR.State == "open":
-			sp.Fg = palette.Success
+			sp.Fg, sp.Bold = palette.Success, true
 		case b.PR.State == "merged":
 			sp.Fg = palette.Accent
 		default:
-			sp.Fg = palette.Danger
+			sp.Fg, sp.Dim = palette.Danger, true
 		}
 		pr = []Span{sp}
 	}
 	var mark, counts []Span
 	if c := b.Checks; c != nil && (!mainline || c.State == protocol.ChecksFailure) {
 		ratio := fmt.Sprintf("%d/%d", c.Passed, c.Total)
+		ascii := m.Icons.Set == IconsASCII
 		switch c.State {
 		case protocol.ChecksSuccess:
-			mark = []Span{{Text: "✓", Fg: palette.Success}}
+			mark = []Span{{Text: map[bool]string{false: "✓", true: "ok"}[ascii], Fg: palette.Success}}
 		case protocol.ChecksFailure:
-			mark = []Span{{Text: "×", Fg: palette.Danger}}
+			mark = []Span{{Text: map[bool]string{false: "×", true: "x"}[ascii], Fg: palette.Danger}}
 			counts = []Span{{Text: " " + ratio, Fg: palette.Danger}}
 		case protocol.ChecksPending:
-			mark = []Span{{Text: string([]rune(frame(m.Now))[0]), Fg: palette.Accent, spin: true}}
+			// The spinner spins on a live row with a fresh answer; a
+			// stale or dim one stands still.
+			spinning := !b.Stale && !r.Dim && !ascii
+			text := string([]rune(spinnerFrames[0])[0])
+			switch {
+			case ascii:
+				text = "*"
+			case spinning:
+				text = string([]rune(frame(m.Now))[0])
+			}
+			mark = []Span{{Text: text, Fg: palette.Accent, spin: spinning}}
 			counts = []Span{{Text: " " + ratio, Fg: palette.Accent}}
 		}
 	}

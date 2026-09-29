@@ -581,30 +581,39 @@ every worktree in the merged stream, keyed by source and branch.
 - **The query.** `gh api graphql` calls per GitHub host, each for at
   most 32 branches, with the owner, repository and branch names passed
   as GraphQL variables, never put into the query text. For each branch
-  it asks for the PRs on that head ref whose head repository is the
-  source's own repository, since a fork's PR can have a head branch of
-  the same name, and takes an open one first, asked for apart so newer
-  closed ones do not hide it, else the newest merged or closed, with its last commit's oid and `statusCheckRollup`. A branch
-  with no PR gets its own ref's commit and rollup. When `origin` is
-  itself a fork, the PR lives on the upstream repository and is not
-  found: the row shows the branch's own checks and no PR. That is a
-  limit of this milestone. The rollup's
-  contexts are paginated, so the counts come from the connection's
-  aggregates, `checkRunCountsByState` and `statusContextCountsByState`,
-  which count every context whatever the page. The name of the first
-  failing check is a second, small query, only for rollups that fail,
-  paging until one is found.
+  it asks for the PRs on that head ref that are not cross-repository,
+  since a fork's PR can have a head branch of the same name: the open
+  ones apart, so newer closed ones do not hide one, and the five newest
+  of any state. An open one is taken first, else the newest merged or
+  closed, while the branch is where that PR left it or is gone; a
+  branch that moved on, `main` after an old PR from it say, has no PR.
+  The PR's last commit gives the oid and `statusCheckRollup`; a branch
+  with no PR gets its own ref's. When `origin` is itself a fork, the PR
+  lives on the upstream repository and is not found: the row shows the
+  branch's own checks and no PR. That is a limit of this milestone. The
+  rollup's contexts are paginated, so the counts come from the
+  connection's aggregates, `checkRunCountsByState` and
+  `statusContextCountsByState`, which count every context whatever the
+  page. The name of the first failing check is a second, small query,
+  only for rollups that fail, paging until one is found, and kept by
+  the rollup's id, so a rollup that does not change is not paged again.
+  A query of 32 branches costs about four of GitHub's rate-limit
+  points.
 - **When.** Every 30 s while a merged subscriber is there, and at once
-  when the set of branches changes.
+  when the set of branches changes. A round runs beside the loop that
+  ages the answers, bounded to two minutes.
 - **The cache.** The last answer per branch is kept under the state
-  directory with the laptop time it was fetched, so a restarted sidebar
-  has it at once. An answer older than five minutes is stale: the view
-  draws it dim with `?` after the checks. A failed query, whole or for
-  one chunk, keeps the last answers of the branches it covered and
-  marks them stale; a branch the answer says has no ref, and no PR of
-  the source's own, drops its entry, while one deleted after its PR
-  merged keeps the PR, with that PR's last commit's checks, and an entry whose branch has had no worktree in the merged
-  stream for a day is dropped.
+  directory with the laptop's wall-clock time it was fetched, so a
+  restarted sidebar has it at once, stale when it is old, and a laptop
+  that slept ages its answers by the sleep. An answer older than five
+  minutes is stale: the view draws it dim with `?` after the checks. A
+  failed query, whole, for one chunk, or with an error under one
+  branch, keeps the last answers of the branches it covered and marks
+  them stale; a branch the answer says has no ref, and no PR of its
+  own, drops its entry, while one deleted after its PR merged keeps the
+  PR, with that PR's last commit's checks. An entry whose branch has had
+  no worktree in the merged stream for a day is dropped, once every host
+  has listed since the daemon started.
 - **Non-GitHub sources and a missing or logged-out `gh`** show nothing.
   The reason is the daemon's own, not a host's: it travels in the merged
   stream as `github_error` in the snapshot and in an upsert, as

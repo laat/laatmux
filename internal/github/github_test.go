@@ -53,7 +53,7 @@ func TestQueryVariablesAndChunks(t *testing.T) {
 	for i := 0; i < 70; i++ {
 		bs = append(bs, Branch{Owner: "o", Repo: "r", Branch: fmt.Sprintf(`x") { evil } #%d`, i)})
 	}
-	rs, err := Fetch(context.Background(), f.run, "github.com", bs)
+	rs, err := Fetch(context.Background(), f.run, "github.com", bs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +74,8 @@ func TestQueryVariablesAndChunks(t *testing.T) {
 // else the newest; its last commit's checks. A branch gone from GitHub
 // with a merged PR keeps the PR; one with none has no ref.
 func TestParse(t *testing.T) {
-	pr := func(n int, state, owner, oid, rl string) string {
-		return fmt.Sprintf(`{"number":%d,"state":%q,"isDraft":false,"url":"https://github.com/o/r/pull/%d","headRepository":{"nameWithOwner":%q},"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":%s}}]}}`, n, state, n, owner, oid, rl)
+	pr := func(n int, state string, cross bool, oid, rl string) string {
+		return fmt.Sprintf(`{"number":%d,"state":%q,"isDraft":false,"url":"https://github.com/o/r/pull/%d","isCrossRepository":%v,"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":%s}}]}}`, n, state, n, cross, oid, rl)
 	}
 	ok := rollupJSON("R1", "SUCCESS", map[string]int{"SUCCESS": 2}, nil)
 	body := func(ref string, prs ...string) string {
@@ -93,17 +93,18 @@ func TestParse(t *testing.T) {
 		name, body string
 		want       Result
 	}{
-		{"fork excluded, open first", body(ref, pr(9, "OPEN", "fork/r", "f", ok), pr(8, "MERGED", "o/r", "m", ok), pr(7, "OPEN", "O/R", "p", ok)),
+		{"fork excluded, open first", body(ref, pr(9, "OPEN", true, "f", ok), pr(8, "MERGED", false, "m", ok), pr(7, "OPEN", false, "p", ok)),
 			Result{HeadOID: "p", PR: &protocol.PullRequest{Number: 7, State: "open", URL: "https://github.com/o/r/pull/7"}}},
-		{"newest closed", body(ref, pr(8, "CLOSED", "o/r", "c", ok), pr(6, "MERGED", "o/r", "m", ok)),
+		{"newest closed, where the branch is", body(`{"target":{"oid":"c","statusCheckRollup":null}}`, pr(8, "CLOSED", false, "c", ok), pr(6, "MERGED", false, "m", ok)),
 			Result{HeadOID: "c", PR: &protocol.PullRequest{Number: 8, State: "closed", URL: "https://github.com/o/r/pull/8"}}},
-		{"deleted after merge", body("null", pr(5, "MERGED", "o/r", "m", ok)),
+		{"a branch moved on from its merged PR", body(ref, pr(8, "MERGED", false, "old", ok)), Result{HeadOID: "own"}},
+		{"deleted after merge", body("null", pr(5, "MERGED", false, "m", ok)),
 			Result{HeadOID: "m", PR: &protocol.PullRequest{Number: 5, State: "merged", URL: "https://github.com/o/r/pull/5"}}},
 		{"gone", body("null"), Result{NoRef: true}},
-		{"only a fork's", body(ref, pr(9, "OPEN", "fork/r", "f", ok)), Result{HeadOID: "own"}},
+		{"only a fork's", body(ref, pr(9, "OPEN", true, "f", ok)), Result{HeadOID: "own"}},
 	} {
 		f := &fake{answer: func(map[string]string) (string, error) { return c.body, nil }}
-		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +153,7 @@ func TestFailingName(t *testing.T) {
 		}
 		return `{"data":{"node":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"name":"test (ubuntu)","conclusion":"FAILURE"}]}}}}`, nil
 	}}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,13 +167,13 @@ func TestFailingName(t *testing.T) {
 func TestFetchErrors(t *testing.T) {
 	for _, want := range []error{ErrNoGH, fmt.Errorf("%w to github.com", ErrLoggedOut)} {
 		f := &fake{answer: func(map[string]string) (string, error) { return "", want }}
-		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
 		if err == nil || rs[0].Err == nil {
 			t.Errorf("%v: %v %+v", want, err, rs)
 		}
 	}
 	f := &fake{answer: func(map[string]string) (string, error) { return `{"errors":[{"message":"rate limited"}]}`, nil }}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
 	if err != nil || rs[0].Err == nil || !strings.Contains(rs[0].Err.Error(), "rate limited") {
 		t.Errorf("a failed chunk: %v %+v", err, rs)
 	}
@@ -186,7 +187,7 @@ func TestPartialErrors(t *testing.T) {
 			`"b1":{"url":"u","ref":{"target":{"oid":"h"}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}},` +
 			`"errors":[{"message":"Something went wrong","path":["b0","ref"]},{"message":"x","path":["b9","pullRequests","nodes",0]}]}`, nil
 	}}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "a"}, {Owner: "o", Repo: "r", Branch: "b"}})
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "a"}, {Owner: "o", Repo: "r", Branch: "b"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,5 +196,20 @@ func TestPartialErrors(t *testing.T) {
 	}
 	if rs[1].Err != nil || rs[1].HeadOID != "h" {
 		t.Errorf("the other branch: %+v", rs[1])
+	}
+}
+
+// A failing name known for the rollup is not paged for again.
+func TestFailingNameKnown(t *testing.T) {
+	failing := rollupJSON("RID", "FAILURE", map[string]int{"FAILURE": 1}, nil)
+	f := &fake{answer: func(vars map[string]string) (string, error) {
+		if _, ok := vars["id"]; ok {
+			t.Error("paged for a known name")
+		}
+		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"h","statusCheckRollup":` + failing + `}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}}}`, nil
+	}}
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, map[string]string{"RID": "lint"})
+	if err != nil || rs[0].Checks.Failing != "lint" {
+		t.Errorf("%+v %v", rs[0].Checks, err)
 	}
 }

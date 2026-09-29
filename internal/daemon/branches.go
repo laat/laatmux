@@ -40,6 +40,9 @@ type branchEntry struct {
 	LastSeen     time.Time             `json:"last_seen"`
 	PendingOID   string                `json:"pending_oid,omitempty"`
 	PendingSince time.Time             `json:"pending_since,omitzero"`
+	// RollupID is the checks' rollup, whose failing check's name is
+	// not asked for again while it holds.
+	RollupID string `json:"rollup_id,omitempty"`
 }
 
 // branchQuery is one branch the loop asks about, with where.
@@ -68,8 +71,11 @@ func openBranches(path string) (map[string]*branchEntry, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	for k, e := range f.Entries {
 		if e != nil {
+			// An answer from before the restart is as old as it is.
+			e.Status.Stale = e.Status.Stale || now.Sub(e.Status.FetchedAt) > branchStale
 			out[k] = e
 		}
 	}
@@ -194,7 +200,7 @@ func (d *Daemon) runBranches(ctx context.Context) {
 			running = false
 			continue
 		}
-		now := time.Now()
+		now := time.Now().Round(0) // the wall clock, sleep included
 		d.mu.Lock()
 		set := d.branchSetLocked()
 		d.ageBranchesLocked(set, now)
@@ -270,7 +276,15 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		for i, q := range qs {
 			bs[i] = q.b
 		}
-		results, err := github.Fetch(ctx, d.cfg.GitHub, host, bs)
+		known := map[string]string{}
+		d.mu.Lock()
+		for _, q := range qs {
+			if e := d.branches[q.key]; e != nil && e.RollupID != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" {
+				known[e.RollupID] = e.Status.Checks.Failing
+			}
+		}
+		d.mu.Unlock()
+		results, err := github.Fetch(ctx, d.cfg.GitHub, host, bs, known)
 		if ctx.Err() != nil {
 			// The round ran out of time: what it did not answer is
 			// marked stale, as a failed query's is.
@@ -309,7 +323,9 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	now := time.Now()
+	// The wall clock: a laptop that slept has its answers aged by the
+	// sleep too.
+	now := time.Now().Round(0)
 	for i, q := range qs {
 		r := results[i]
 		e := d.branches[q.key]
@@ -331,7 +347,7 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result) {
 				e = &branchEntry{}
 				d.branches[q.key] = e
 			}
-			e.LastSeen = now
+			e.LastSeen, e.RollupID = now, r.RollupID
 			st := protocol.BranchStatus{BranchKey: q.bk, FetchedAt: now, HeadOID: r.HeadOID, ChecksURL: r.ChecksURL, PR: r.PR, Checks: r.Checks}
 			if c := st.Checks; c != nil && c.State == protocol.ChecksPending {
 				if e.PendingOID != r.HeadOID {

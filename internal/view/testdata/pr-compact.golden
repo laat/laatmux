@@ -1,6 +1,6 @@
 ..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No route to host⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux ‹@vm›                                                               2:00
-S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?                                    ⟨success:#52⟩ ⟨success:✓⟩
+S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?                                    «⟨success:#52⟩» ⟨success:✓⟩
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes ‹@vm/default›                                                         0:01
 ...|⟨info:▌⟩    remote
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩» proj @mac                                                                   0:08
