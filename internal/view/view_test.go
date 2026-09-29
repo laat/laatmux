@@ -1277,3 +1277,34 @@ func TestRenderAttention(t *testing.T) {
 	m.ShowHidden = false
 	golden(t, "attention-folded", Debug(m.Render()))
 }
+
+// The diff stats on the tile's second line and before the time in the
+// compact line: the rebase mark, the committed diff, ✎ and the
+// uncommitted one; a narrow line drops the committed part, then all but
+// the rebase mark; a stale object is dim.
+func TestRenderGit(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	yes := true
+	stats := map[string]protocol.GitStatus{
+		"venv/worktree//r/fix-ls": {Base: "origin/main", Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true, Ahead: 2},
+		"menv/worktree//w/task":   {Base: "origin/main", Committed: [2]int{318, 87}, Rebasing: true, Conflict: &yes},
+		"venv/worktree//r/other":  {Base: "origin/main", Uncommitted: [2]int{4, 1}, UncommittedPartial: true, Dirty: true},
+		"menv/worktree//w/spike":  {Base: "origin/main", Committed: [2]int{153, 41}, Stale: true},
+		// Dirty with no lines, a mode change say: the mark alone.
+		"venv/worktree//r/shell": {Base: "origin/main", Dirty: true},
+	}
+	for i := range in.Worktrees {
+		if g, ok := stats[in.Worktrees[i].ID]; ok {
+			in.Worktrees[i].Git = &g
+		}
+	}
+	m := model(now)
+	m.SetRows(rows.Build(in))
+	m.Layout, m.Width, m.Height = Tiles, 45, 40
+	golden(t, "git-tiles", Debug(m.Render()))
+	m.Width = 26
+	golden(t, "git-narrow", Debug(m.Render()))
+	m.Layout, m.Width, m.Height = Compact, 90, 20
+	golden(t, "git-compact", Debug(m.Render()))
+}

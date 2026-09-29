@@ -22,14 +22,14 @@ import (
 // copies .envrc and runs two setup commands, and a store whose repos and
 // worktrees directories are empty.
 type fixture struct {
-	t      *testing.T
+	t      testing.TB
 	remote string
 	store  *Store
 	repo   Repo
 	ctx    context.Context
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t testing.TB) *fixture {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -57,7 +57,7 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{t: t, remote: remote, store: store, repo: store.Repos[0], ctx: context.Background()}
 }
 
-func run(t *testing.T, dir string, name string, args ...string) string {
+func run(t testing.TB, dir string, name string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
@@ -69,7 +69,7 @@ func run(t *testing.T, dir string, name string, args ...string) string {
 	return string(out)
 }
 
-func write(t *testing.T, path, content string) {
+func write(t testing.TB, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

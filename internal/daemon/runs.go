@@ -86,6 +86,10 @@ func (d *Daemon) unregisterRun(r *runJob) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.runEndedLocked(r)
+	// What the run did to the worktree shows at once.
+	if e := d.gits[r.root]; e != nil {
+		e.due = true
+	}
 	if rs := d.runs[r.root]; rs != nil {
 		delete(rs, r)
 		if len(rs) == 0 {

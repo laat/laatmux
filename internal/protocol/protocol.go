@@ -118,6 +118,12 @@ const (
 	// once. A view shows an idle agent as done while its finish is after
 	// its visit. Without it no agent is done.
 	CapAttention = "attention"
+	// CapGitStatus is the git object on worktree records: the branch's
+	// diff against its base, the uncommitted diff, ahead and behind, and
+	// the dirty, conflict and rebase marks, read by the host's daemon. A
+	// merging daemon with it forwards the object; one without drops it,
+	// as it decodes the record without the field.
+	CapGitStatus = "git-status"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -428,8 +434,44 @@ type Worktree struct {
 	// a pane laatmux made at Root, all of whose panes are inside Root;
 	// jump attaches to it. "" when there is none. A daemon without
 	// attribution names it only while it has that single pane.
-	Session   string    `json:"session,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Session string `json:"session,omitempty"`
+	// Git, from a daemon with git-status, is the worktree's git state;
+	// nil until its first refresh.
+	Git       *GitStatus `json:"git,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// GitStatus is a worktree's git state as its host reads it. Committed is
+// the branch against its merge base with Base, lines added and deleted;
+// Uncommitted the working tree and index against HEAD with the untracked
+// files that are not ignored, a lower bound when UncommittedPartial.
+// Ahead and Behind count commits against Base. Conflict is nil when the
+// host's git cannot tell (older than 2.38) or the branch is the base.
+// Stale is that the last refresh timed out and the rest is from the one
+// before. ChangedAt is when a value last changed.
+type GitStatus struct {
+	Base               string    `json:"base,omitempty"`
+	Committed          [2]int    `json:"committed"`
+	Uncommitted        [2]int    `json:"uncommitted"`
+	UncommittedPartial bool      `json:"uncommitted_partial,omitempty"`
+	Ahead              int       `json:"ahead"`
+	Behind             int       `json:"behind"`
+	Dirty              bool      `json:"dirty,omitempty"`
+	Conflict           *bool     `json:"conflict,omitempty"`
+	Rebasing           bool      `json:"rebasing,omitempty"`
+	Stale              bool      `json:"stale,omitempty"`
+	ChangedAt          time.Time `json:"changed_at"`
+}
+
+// Same reports whether two states carry the same values, whatever their
+// ChangedAt.
+func (g GitStatus) Same(o GitStatus) bool {
+	g.ChangedAt, o.ChangedAt = time.Time{}, time.Time{}
+	if (g.Conflict == nil) != (o.Conflict == nil) || g.Conflict != nil && *g.Conflict != *o.Conflict {
+		return false
+	}
+	g.Conflict, o.Conflict = nil, nil
+	return g == o
 }
 
 // HostStatus is one configured host as the merging daemon sees it: a

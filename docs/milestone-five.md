@@ -475,16 +475,19 @@ carry the same; the time of the last refresh is not in the record.
   its merge base.
 - **uncommitted:** `git diff --numstat HEAD`, staged and unstaged, plus
   the line counts of untracked files that are not ignored, from `git
-  ls-files --others --exclude-standard`. A binary file counts 0. At most
+  status`'s untracked entries. A binary file counts 0. At most
   200 untracked files are read, each only up to 1 MB; past either the
   count is marked `+` as a lower bound.
 - **ahead, behind:** `git rev-list --left-right --count <base>...HEAD`,
   against the base, as the dashboard shows them beside `→base`. A branch
   `add` makes has no upstream, so `git status`'s counts, which are
   against the upstream, are not used.
-- **dirty:** from `git status --porcelain=v2`.
+- **dirty:** from `git status --porcelain=v2 -z --untracked-files=all`,
+  whose untracked entries are the files counted, so no `ls-files` call is
+  needed.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
-  needs git 2.38; with an older git the field is left out.
+  needs git 2.38; with an older git, found once from `git merge-tree -h`,
+  the field is left out and merge-tree is not run again.
 - **rebasing:** a `rebase-merge` or `rebase-apply` directory in the
   worktree's git dir.
 - **base:** the first that exists of `branch.<b>.laatmux-base` in the
@@ -497,22 +500,36 @@ carry the same; the time of the last refresh is not in the record.
   existing local branch, nor over a key already there. On the base
   branch itself only the uncommitted stats are shown.
 
-Every call runs as `git --no-optional-locks`, so the poll never takes
-the index lock a user's git needs. The two `git diff` calls also take
-`--no-ext-diff` and `--no-textconv`, which are diff options, so they
-never run a user's diff driver.
+Every call runs as `git --no-optional-locks`, and the diff against
+`HEAD` with `-c diff.autoRefreshIndex=false`, since a porcelain `git
+diff` refreshes and rewrites the index under its lock whatever the
+option: the poll never takes the index lock a user's git needs. The two
+`git diff` calls also take `--no-ext-diff` and `--no-textconv`, which
+are diff options, so they never run a user's diff driver. `merge-tree
+--write-tree --quiet` stops at the first conflict and writes no objects;
+it runs the repository's merge drivers, as any merge does, and a git
+before 2.50, without `--quiet`, gets the plain call, which writes the
+merge's objects once per commit pair. Every call runs with
+`GIT_NO_LAZY_FETCH=1`, which git reads from 2.45, and, for an older
+git, `GIT_ALLOW_PROTOCOL=none`, so a partial clone never fetches from
+its remote during a refresh. What needs a missing blob is left out: the
+committed diff or the conflict, read again after a minute, or the
+uncommitted diff, then a lower bound. A branch with no
+merge base with its base, an orphan or a shallow history, gets ahead
+and behind alone.
 
 **Where it runs.** Not in the worktree listing: that poll is serialized
 and stamps the listings that retire tasks, and a slow repository must
 not hold it. A separate worker pool, two at a time, takes the worktrees
 due for a refresh. Each git call has a 10 s timeout; one that times out
 leaves the last object and sets `stale: true` in it. A result is dropped
-when the worktree is gone from the listing, or its `HEAD` has moved,
-since the refresh began.
+when the worktree is gone from the listing, has another branch, or its
+`HEAD` has moved, since the refresh began.
 
 **What is cached.** `committed`, `ahead`, `behind` and `conflict`
-depend only on the base's and `HEAD`'s commits, so they are computed
-again only when either changes; a fetch that moves the base is such a
+depend only on the base's and `HEAD`'s commits and the shallow
+boundary, so they are computed again only when one changes; a fetch
+that moves the base, or one that deepens a shallow history, is such a
 change. `merge-tree --write-tree` does a real merge and writes objects,
 so it runs once per pair and never on the base branch. `dirty` and
 `uncommitted` are read on every refresh; the line counts of untracked
@@ -523,10 +540,20 @@ files that changed.
 every 30 s. `add`, `rm` and a run ending make it due at once, and so does
 a change in an mtime the daemon stats every second: `HEAD` and `index`
 in the worktree's git dir (`.git/worktrees/<name>`), and in the common
-dir `packed-refs` and the loose refs of the branch and of its base. A
-worktree gets at most one refresh every 2 s. Polling comes first;
-kqueue or inotify through `golang.org/x/sys` only if a measurement with
+dir `packed-refs`, `shallow` and the loose refs of the branch and of its
+base. A worktree gets at most one refresh every 2 s. Polling comes
+first; kqueue or inotify through `golang.org/x/sys` only if a measurement with
 twenty worktrees on the VM shows the cost.
+
+Step 4 measured it: twenty worktrees of a repository with 2000 files, each
+with a commit, a changed file and an untracked one, on the VM (8 vCPU,
+Xeon 2.2 GHz, git 2.47). A refresh is four git calls, about 37 ms. The
+daemon with its git calls used 2.6% of a core in a minute before step 4,
+5.6% with the twenty worktrees on the 30 s cadence, and 12.3% with all
+twenty on the 5 s cadence of a worktree with a session. That is about
+half a percent of a core per worktree with a session, which is not
+worth an event watcher; polling stays. The base's name is kept for a
+minute, so a refresh resolves it again only then.
 
 **In the record.** The git object is part of the worktree record. The
 listing rebuilds each record from git's listing and compares four

@@ -182,12 +182,16 @@ type Daemon struct {
 	// logged once per change.
 	lastAttnErr    string
 	lastClientsErr string
-	ctx            context.Context // Run's context, for goroutines that outlive a connection
-	generation     int64
-	revision       uint64
-	listing        protocol.Listing
-	listErr        string
-	pollMu         sync.Mutex
+	// The worktrees' git status refreshes, by root, and the last error
+	// logged; see gitstatus.go.
+	gits       map[string]*gitEntry
+	lastGitErr string
+	ctx        context.Context // Run's context, for goroutines that outlive a connection
+	generation int64
+	revision   uint64
+	listing    protocol.Listing
+	listErr    string
+	pollMu     sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
 	runs     map[string]map[*runJob]struct{}
@@ -327,6 +331,7 @@ func New(cfg Config) *Daemon {
 		poke:         make(chan struct{}, 1),
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
+		gits:         map[string]*gitEntry{},
 		resolved:     map[string]resolution{},
 		resolving:    map[string]bool{},
 		cmds:         map[string]*command{},
@@ -384,7 +389,7 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapNew)
 	}
 	if d.cfg.Store != nil {
-		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution)
+		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
 		}
@@ -395,9 +400,9 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Hosts != nil {
 		caps = append(caps, protocol.CapMerged)
 		if d.cfg.Store == nil {
-			// It forwards what the hosts attribute, though it has no
-			// worktrees of its own.
-			caps = append(caps, protocol.CapAttribution)
+			// It forwards what the hosts attribute and the git objects
+			// they read, though it has no worktrees of its own.
+			caps = append(caps, protocol.CapAttribution, protocol.CapGitStatus)
 		}
 	}
 	if d.relay != nil {
@@ -429,6 +434,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.mu.Unlock()
 	if d.cfg.Store != nil {
 		go d.runWorktrees(ctx)
+		go d.runGitStatus(ctx)
 	} else {
 		d.markDiscovered(&d.worktreesDiscovered)
 	}
