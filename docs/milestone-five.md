@@ -146,7 +146,11 @@ other sessions
   node; the others follow it as task lines without children. When the
   owner hands over or stops standing, the next newest takes the
   children, and when none is left the worktree line has them again.
-  Following, a switch and `session` go to the owner's line.
+  Following, a switch, a handoff and `session` go to the owner's line.
+  Before the host lists the worktree, a standing task's line holds the
+  agent in the task's session whose pane starts at the task's root, as
+  its row does today, so that agent is not in other sessions meanwhile;
+  with several such tasks the newest owns it.
 - **Other sessions** is the last group. It holds agents in no worktree,
   a session `new` made or one observed on a default server, each tagged
   with its host.
@@ -208,8 +212,9 @@ selected node to a node of the other view:
   lands on the worktree's first agent in the tree's order;
 - **from a repository line,** on the first agent of its first worktree;
 - **from a task,** on the same task, which both views show. A task that
-  hands over while selected moves to the node its handoff names, the
-  worktree, in the tree; in the agent view that worktree's first agent,
+  hands over while selected moves to the node its handoff names, in the
+  tree the worktree line, or while another task stands for that
+  worktree the owner's line; in the agent view that worktree's first agent,
   as from a worktree line.
 
 A target the stale fold hides opens the fold; a target in a folded
@@ -985,13 +990,15 @@ view and folds step 6 keeps in memory.
   repository with worktrees on two hosts, a worktree with two agents, a
   shell and a run, other sessions, and folds.
 - **Switching:** selection across `Tab` from an agent, a worktree, a
-  pane, a repository line, a task, a task handing over, a target in the
+  pane, a repository line, a task, a task handing over, a task handing
+  over while another stands for its worktree, a target in the
   stale fold or a folded worktree, and an empty worktree; following
   with two agents in the viewer's worktree.
 - **Tree contents:** laatmux's own panes left out, an older host's
   agents placed by session, an orphaned session under its repository, a
   new worktree whose task needs the user holding the worktree's
-  children, two tasks for one worktree with each child once.
+  children, two tasks for one worktree with each child once, the add's
+  agent under its task line before the listing.
 - **Git:** temporary repositories for base resolution, committed and
   uncommitted counts with untracked and binary files, conflict, rebase,
   the base branch itself, no upsert when a refresh changes nothing, a
