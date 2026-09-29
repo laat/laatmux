@@ -41,6 +41,10 @@ type merged struct {
 	// while it reconnects; the last state stays on screen.
 	daemonErr string
 	change    chan struct{}
+	// stripped is that the records come through a merging daemon
+	// without the attribution capability, which drops the worktree of
+	// every agent it forwards.
+	stripped bool
 	// labels is this machine's name for a repository by its source, for
 	// the rows: a host labels a checkout its config does not list by
 	// its directory. nil keeps the host's labels.
@@ -78,6 +82,9 @@ type hostState struct {
 	Worktrees bool
 	Listed    bool
 	Caps      []string // the daemon's capabilities, from its hello
+	// Attribution is the daemon's attribution capability: its agent
+	// records say which worktree they belong to.
+	Attribution bool
 }
 
 // ready reports whether a one-shot client can stop waiting on the host:
@@ -100,7 +107,8 @@ func (h hostState) down() string {
 // it.
 func fromStatus(st protocol.HostStatus) hostState {
 	return hostState{Local: st.Local(), Connected: st.Connected, Error: st.Error, Reconnecting: st.Reconnecting, Version: st.Version, EnvID: st.EnvironmentID,
-		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities}
+		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities,
+		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution)}
 }
 
 func newMerged() *merged {
@@ -195,7 +203,8 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 			c.Close()
 			m.setHostErr(h.Name, h.Local(), "daemon "+c.Hello.Version+" has no status capability")
 		default:
-			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
+			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees),
+				Attribution: protocol.Has(c.Hello.Capabilities, protocol.CapAttribution)})
 			backoff = time.Second
 			stop := c.CloseOnDone(ctx)
 			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe}); err == nil {
@@ -231,8 +240,11 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	in := rows.Input{Locals: locals, Current: current}
 	for name, st := range m.hosts {
+		// A merging daemon older than attribution forwards agent records
+		// without the field, whatever the host sends.
 		in.Hosts = append(in.Hosts, rows.Host{Name: name, Local: st.Local, EnvironmentID: st.EnvID,
-			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees, Error: st.Error})
+			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees, Error: st.Error,
+			Attribution: st.Attribution && !m.stripped})
 	}
 	// The rows package attributes records to hosts by environment id,
 	// which every host that has answered a hello has, connected or not.
@@ -400,7 +412,8 @@ func cmdLs(ctx context.Context, args []string) error {
 				m.setHost(h.Name, hostState{Local: h.Local(), Error: "daemon " + c.Hello.Version + " has no status capability"})
 				return
 			}
-			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees)})
+			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees),
+				Attribution: protocol.Has(c.Hello.Capabilities, protocol.CapAttribution)})
 			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			snap, err := c.Snapshot(sctx)

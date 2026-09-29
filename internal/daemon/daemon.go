@@ -148,6 +148,14 @@ type Daemon struct {
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change
 	poke         chan struct{}
+	// Attribution: the listed roots, longest first; the pane records of
+	// panes without an agent inside a root, by pane key; the run
+	// records by id; and the resolved-path cache. See attribution.go.
+	roots     []root
+	paneRecs  map[string]protocol.Pane
+	runRecs   map[string]protocol.Run
+	resolveMu sync.Mutex
+	resolved  map[string]string
 
 	cmds  map[string]*command    // recent add, rm and run by id
 	locks map[string]*sync.Mutex // per repository source
@@ -237,6 +245,13 @@ type paneState struct {
 	// waiting on it; written and read under d.mu, where the rest of the
 	// state is the poll goroutine's own.
 	obs observation
+	// The last observation as attribution needs it, under d.mu too: the
+	// pane, its resolved path, whether it has been observed at all, and
+	// whether no agent was identified in it, so it is a pane record's.
+	pane     tmux.Pane
+	path     string
+	observed bool
+	bare     bool
 }
 
 // observation is one poll's view of a pane as a delivery needs it: when
@@ -297,6 +312,9 @@ func New(cfg Config) *Daemon {
 		worktrees:    map[string]protocol.Worktree{},
 		managedRoots: map[string]string{},
 		poke:         make(chan struct{}, 1),
+		paneRecs:     map[string]protocol.Pane{},
+		runRecs:      map[string]protocol.Run{},
+		resolved:     map[string]string{},
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
 		commandTTL:   DefaultCommandTTL,
@@ -344,7 +362,7 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapNew)
 	}
 	if d.cfg.Store != nil {
-		caps = append(caps, protocol.CapWorktrees, protocol.CapRun)
+		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
 		}
@@ -354,6 +372,11 @@ func (d *Daemon) capabilities() []string {
 	}
 	if d.cfg.Hosts != nil {
 		caps = append(caps, protocol.CapMerged)
+		if d.cfg.Store == nil {
+			// It forwards what the hosts attribute, though it has no
+			// worktrees of its own.
+			caps = append(caps, protocol.CapAttribution)
+		}
 	}
 	if d.relay != nil {
 		caps = append(caps, protocol.CapRelay, protocol.CapDismissRoot)
@@ -485,6 +508,7 @@ func (d *Daemon) removeUnseen(t *target, seen map[string]bool) {
 			continue
 		}
 		delete(d.panes, key)
+		d.dropPaneLocked(key)
 		if _, had := d.agents[key]; !had {
 			continue
 		}
@@ -497,10 +521,12 @@ func (d *Daemon) removeUnseen(t *target, seen map[string]bool) {
 func (d *Daemon) agentID(key string) string { return d.cfg.EnvironmentID + "/" + key }
 
 // observe runs one detection cycle for one pane and publishes a change if
-// any. A pane is published once an agent instance has been identified in it;
-// shells and other tools' panes never appear, on any server.
+// any. A pane is published as an agent once an agent instance has been
+// identified in it; before that it is a pane record, while it is inside a
+// worktree root.
 func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.Time) {
 	key := paneKey(t.Label, p.ID)
+	path := d.resolve(panePath(p))
 	d.mu.Lock()
 	st, ok := d.panes[key]
 	if !ok {
@@ -551,9 +577,12 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		}
 	}
 	if !st.hasIdentity {
-		// Nothing identified yet; keep watching without publishing.
+		// Nothing identified yet; keep watching, published as a pane
+		// record while inside a worktree.
 		d.mu.Lock()
 		st.obs = observation{at: now, session: p.Session, serverPID: p.ServerPID}
+		st.pane, st.path, st.observed, st.bare = p, path, true, true
+		d.publishPaneLocked(key, st, now)
 		d.mu.Unlock()
 		return
 	}
@@ -609,6 +638,9 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		verified: checked && !st.gone && !st.identity.Tentative, identity: st.identity,
 		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
 	}
+	st.pane, st.path, st.observed, st.bare = p, path, true, false
+	a.WorktreeID = d.worktreeOfLocked(path)
+	d.dropPaneLocked(key)
 	if had && sameRecord(prev, a) {
 		return
 	}
@@ -659,7 +691,7 @@ func (d *Daemon) nextActivity(st *paneState, res detect.Result, now time.Time) p
 func sameRecord(a, b protocol.Agent) bool {
 	if a.Activity != b.Activity || a.Liveness != b.Liveness || a.Agent != b.Agent ||
 		a.Title != b.Title || a.Cwd != b.Cwd || a.Session != b.Session || a.Window != b.Window ||
-		a.Managed != b.Managed || a.Rule != b.Rule {
+		a.Managed != b.Managed || a.Rule != b.Rule || a.WorktreeID != b.WorktreeID {
 		return false
 	}
 	switch {
@@ -718,7 +750,8 @@ func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(), ListingError: d.listErr}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(),
+		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr}
 	if d.listed {
 		l := d.listing
 		snap.Listing = &l

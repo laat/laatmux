@@ -1,7 +1,8 @@
 // Package rows builds the rows the listing, the sidebar and the dashboard
 // show: the relay's pending tasks first, then each host's worktrees
-// joined with its agents by the managed session the worktree record
-// names, then agents with no worktree, then observed agents on other
+// joined with its agents, by the worktree the host attributed each agent
+// to or, from a host without attribution, by the managed session the
+// worktree record names, then agents with no worktree, then observed agents on other
 // servers, then the local sessions whose worktree is gone. The three
 // views draw the same rows; this is the one place the join is made.
 package rows
@@ -30,7 +31,11 @@ type Host struct {
 	Connected bool
 	Listed    bool
 	Worktrees bool
-	Error     string
+	// Attribution is that the host's agent records carry the worktree
+	// they belong to, and reach the view with it: a worktree row takes
+	// its agent by that, not by session name.
+	Attribution bool
+	Error       string
 }
 
 // Input is everything the rows are built from.
@@ -351,6 +356,18 @@ func Build(in Input) Rows {
 			bySession[a.EnvironmentID+"\x00"+a.Session] = a
 		}
 	}
+	// From a host with attribution the agents come to a worktree by
+	// the worktree id the host gave them, from any session and server.
+	attributes := func(env string) bool {
+		h, ok := hosts[byEnv[env]]
+		return ok && h.Attribution
+	}
+	byWorktree := map[string][]*protocol.Agent{}
+	for i := range in.Agents {
+		if a := &in.Agents[i]; a.WorktreeID != "" && attributes(a.EnvironmentID) {
+			byWorktree[a.WorktreeID] = append(byWorktree[a.WorktreeID], a)
+		}
+	}
 	used := map[*protocol.Agent]bool{}
 	var rows []Row
 	seenKey := map[string]bool{}
@@ -380,7 +397,12 @@ func Build(in Input) Rows {
 		} else {
 			r.Name = w.Repo + "/" + w.Branch
 		}
-		if w.Session != "" {
+		switch {
+		case attributes(w.EnvironmentID):
+			if a := rowAgent(byWorktree[w.ID], w.Session); a != nil {
+				r.Agent, used[a] = a, true
+			}
+		case w.Session != "":
 			if a := bySession[w.EnvironmentID+"\x00"+w.Session]; a != nil {
 				r.Agent, used[a] = a, true
 			}
@@ -448,7 +470,7 @@ func Build(in Input) Rows {
 	}
 	for i := range in.Agents {
 		a := &in.Agents[i]
-		if Server(*a) == tmux.LaatmuxServer.Label() {
+		if Server(*a) == tmux.LaatmuxServer.Label() || used[a] {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]
@@ -511,6 +533,40 @@ func Build(in Input) Rows {
 		}
 	}
 	return out
+}
+
+// rowAgent is the agent a worktree row shows of the agents attributed
+// to it: the one in its home session, else the most pressing, blocked
+// before working before idle, then the most recently active. The rest
+// keep rows of their own until the views show several agents per
+// worktree.
+func rowAgent(agents []*protocol.Agent, home string) *protocol.Agent {
+	isHome := func(a *protocol.Agent) bool {
+		return home != "" && a.Session == home && Server(*a) == tmux.LaatmuxServer.Label()
+	}
+	var best *protocol.Agent
+	for _, a := range agents {
+		if best == nil || isHome(a) && !isHome(best) || isHome(a) == isHome(best) && pressing(a, best) {
+			best = a
+		}
+	}
+	return best
+}
+
+// pressing is a before b: a live agent before a gone one, then rank,
+// then the most recent activity, then id, so the choice is stable.
+func pressing(a, b *protocol.Agent) bool {
+	ra, rb := Row{Agent: a}.Rank(), Row{Agent: b}.Rank()
+	if (a.Liveness == protocol.Gone) != (b.Liveness == protocol.Gone) {
+		return b.Liveness == protocol.Gone
+	}
+	if ra != rb {
+		return ra < rb
+	}
+	if !a.ActivityAt.Equal(b.ActivityAt) {
+		return a.ActivityAt.After(b.ActivityAt)
+	}
+	return a.ID < b.ID
 }
 
 // less is the sort order: rank, then most recent activity first, then

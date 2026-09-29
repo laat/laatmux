@@ -271,7 +271,9 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	}
 	var spec workspace.Spec
 	switch {
-	case r.Worktree != nil:
+	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
+		// A worktree without a home session whose agent runs elsewhere,
+		// on the default server say, is jumped to through the agent.
 		if r.Worktree.Session == "" {
 			return errors.New(addHint(cfg, h, *r.Worktree))
 		}

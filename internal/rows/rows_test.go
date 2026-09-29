@@ -416,3 +416,83 @@ func TestPendingOnRenamedHost(t *testing.T) {
 		}
 	}
 }
+
+// From a host with attribution a worktree takes its agent by the
+// worktree id the host gave it, from any session or server: the home
+// session's first, else the most pressing. The others keep rows of
+// their own. A host without attribution pairs by session name.
+func TestBuildByWorktreeID(t *testing.T) {
+	now := time.Now()
+	wt := func(env, root, session string) protocol.Worktree {
+		return protocol.Worktree{ID: env + "/worktree/" + root, EnvironmentID: env, Repo: "proj", Branch: root[3:], Root: root, Session: session}
+	}
+	in := Input{
+		Hosts: []Host{
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "old", EnvironmentID: "oenv", Connected: true, Listed: true, Worktrees: true},
+		},
+		Agents: []protocol.Agent{
+			// /w/a: no home session; an agent on the default server and
+			// one in another managed session, the blocked one shown.
+			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "scratch", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a"},
+			// /w/b: the home session's idle agent wins over a working one
+			// elsewhere, which keeps its row.
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
+			{ID: "venv/default/%4", EnvironmentID: "venv", Server: "default", Session: "side", Activity: protocol.Working, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
+			// /w/c names a session whose agent is not attributed to it:
+			// with attribution the name is not the link.
+			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Session: "proj/c", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now},
+			// A host without attribution: by session, the field ignored.
+			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
+		},
+		Worktrees: []protocol.Worktree{wt("venv", "/w/a", ""), wt("venv", "/w/b", "proj/b"), wt("venv", "/w/c", "proj/c"), wt("oenv", "/w/d", "proj/d")},
+	}
+	got := Build(in)
+	byID := map[string]Row{}
+	for _, r := range got.All() {
+		byID[r.ID()] = r
+	}
+	agentOf := func(id string) string {
+		if a := byID[id].Agent; a != nil {
+			return a.ID
+		}
+		return ""
+	}
+	for id, want := range map[string]string{
+		"venv/worktree//w/a": "venv/laatmux/%2",
+		"venv/worktree//w/b": "venv/laatmux/%3",
+		"venv/worktree//w/c": "",
+		"oenv/worktree//w/d": "oenv/laatmux/%6",
+	} {
+		if got := agentOf(id); got != want {
+			t.Errorf("%s: agent %q, want %q", id, got, want)
+		}
+	}
+	// Rows of their own: the unchosen default-server agents and the
+	// unattributed one; the chosen ones are not repeated.
+	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5"} {
+		if _, ok := byID[id]; !ok {
+			t.Errorf("%s has no row", id)
+		}
+	}
+	for _, id := range []string{"venv/laatmux/%2", "venv/laatmux/%3", "oenv/laatmux/%6"} {
+		if _, ok := byID[id]; ok {
+			t.Errorf("%s has a row of its own besides its worktree's", id)
+		}
+	}
+	// The same records through a view that has no attribution for the
+	// host, a merging daemon older than it say: by session name.
+	in.Hosts[0].Attribution = false
+	got = Build(in)
+	byID = map[string]Row{}
+	for _, r := range got.All() {
+		byID[r.ID()] = r
+	}
+	if a := byID["venv/worktree//w/c"].Agent; a == nil || a.ID != "venv/laatmux/%5" {
+		t.Errorf("fallback: /w/c agent %+v", a)
+	}
+	if a := byID["venv/worktree//w/a"].Agent; a != nil {
+		t.Errorf("fallback: /w/a agent %+v", a)
+	}
+}

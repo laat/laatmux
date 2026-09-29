@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -90,5 +93,22 @@ func TestJumpMode(t *testing.T) {
 		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
 			t.Errorf("%s --server %s: got %v, want %q", c.h.Name, c.srv, err, c.err)
 		}
+	}
+}
+
+// A worktree row with no home session whose agent runs elsewhere is
+// jumped to through the agent, not answered with the add hint: here an
+// agent on a remote host's default server, which jump refuses as such.
+func TestJumpRowWorktreeThroughAgent(t *testing.T) {
+	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	a := protocol.Agent{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", WorktreeID: w.ID}
+	err := jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err == nil || !strings.Contains(err.Error(), "only observes") {
+		t.Fatalf("jump through the agent: %v", err)
+	}
+	err = jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w})
+	if err == nil || !strings.Contains(err.Error(), "has no managed session") {
+		t.Fatalf("no agent: %v", err)
 	}
 }

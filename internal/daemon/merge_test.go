@@ -668,3 +668,48 @@ func TestPlainSubscribeUnchanged(t *testing.T) {
 		t.Error("a plain subscribe dialled a remote host")
 	}
 }
+
+// A host's pane and run records travel in the merged stream as its
+// agents do: in its snapshot, as upserts and removes, and out with the
+// host when it leaves the config.
+func TestMergedPaneAndRunRecords(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	rd := f.remote.d
+	rd.mu.Lock()
+	rd.paneRecs["default/%3"] = protocol.Pane{ID: "renv/pane/default/%3", EnvironmentID: "renv", WorktreeID: "renv/worktree//w/a", Command: "zsh"}
+	rd.mu.Unlock()
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	msgs := until(t, c, pc, hostStatus("vm", listed))
+	var sawPane bool
+	for _, m := range msgs {
+		sawPane = sawPane || (m.Pane != nil && m.Pane.ID == "renv/pane/default/%3")
+	}
+	if !sawPane {
+		t.Fatalf("remote pane record not forwarded: %+v", msgs)
+	}
+	rd.runStarted(&runJob{id: "r1", root: "/w/a", argv: []string{"make"}}, time.Now())
+	if m := next(t, c, pc); m.Run == nil || m.Run.ID != "renv/run/r1" || m.Run.WorktreeID != "renv/worktree//w/a" {
+		t.Fatalf("run upsert %+v", m)
+	}
+	c2, _, snap := f.subscribe(t, ctx)
+	c2.Close()
+	if len(snap.Panes) != 1 || len(snap.Runs) != 1 {
+		t.Fatalf("snapshot panes %+v runs %+v", snap.Panes, snap.Runs)
+	}
+	rd.mu.Lock()
+	rd.runEndedLocked(&runJob{id: "r1"})
+	rd.mu.Unlock()
+	if m := next(t, c, pc); m.Type != protocol.TypeRemove || m.RunID != "renv/run/r1" {
+		t.Fatalf("run remove %+v", m)
+	}
+	f.hosts.set(client.Host{Name: "here"})
+	c3, _, _ := f.subscribe(t, ctx)
+	c3.Close()
+	got := until(t, c, pc, func(m protocol.Message) bool { return m.PaneRecordID == "renv/pane/default/%3" })
+	if m := got[len(got)-1]; m.Type != protocol.TypeRemove {
+		t.Fatalf("pane remove %+v", m)
+	}
+}

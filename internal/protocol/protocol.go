@@ -95,6 +95,18 @@ const (
 	// entry, as before. A daemon without it ignores the entry and
 	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
+	// CapAttribution is the host attributing what runs to its worktrees:
+	// every agent record carries the worktree_id of the worktree whose
+	// root contains its pane's path, so a worktree has any number of
+	// agents; panes without an agent inside a worktree root are
+	// published as pane records, and run jobs as run records while they
+	// run; and a worktree's session is its home session, the managed
+	// one whose panes are all inside the root. A client pairs agents
+	// with worktrees by worktree_id against a daemon with it, and by
+	// the worktree's session against one without. A merging daemon
+	// with it forwards the field and the records whatever it lists
+	// itself; one without drops them.
+	CapAttribution = "attribution"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -261,8 +273,10 @@ func (p Pending) WorktreeID() string {
 }
 
 // Handoff is a pending record retired into its worktree row, carried in
-// merged snapshots for a day so a view that missed the remove can
-// re-anchor a selection on the worktree row.
+// merged snapshots for as long as the worktree is there: a view that
+// missed the remove re-anchors a selection on the worktree row with it,
+// and it says which task the worktree was made for, whose prompt the
+// relay keeps on this machine.
 type Handoff struct {
 	ID         string `json:"id"`
 	ReplacedBy string `json:"replaced_by"`
@@ -334,8 +348,44 @@ type Agent struct {
 	Rule          string    `json:"rule,omitempty"`   // detection rule that produced Activity
 	Reason        string    `json:"reason,omitempty"` // detection explanation
 	Managed       bool      `json:"managed"`          // created by laatmux new
-	ActivityAt    time.Time `json:"activity_at"`      // when Activity last changed
+	// WorktreeID, from a daemon with attribution, is the id of the
+	// worktree whose root contains the pane's path: the recorded one of
+	// a pane laatmux made, the current one otherwise. "" when the pane
+	// is in no listed worktree, or the worktree has not been listed yet.
+	WorktreeID string    `json:"worktree_id,omitempty"`
+	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Pane is a pane with no identified agent inside a worktree root, from a
+// daemon with attribution: a shell, a test watcher, a dev server. It
+// carries no screen detection, and is upserted when what it shows here
+// changes, not on every poll. A pane outside every worktree root is not
+// published, and one whose agent is identified becomes an agent record.
+type Pane struct {
+	ID            string    `json:"id"` // "<environment_id>/pane/<server>/<pane_id>"; opaque to clients
+	EnvironmentID string    `json:"environment_id"`
+	Server        string    `json:"server"`
+	Session       string    `json:"session"`
+	Window        int       `json:"window"`
+	PaneID        string    `json:"pane_id"`
+	Command       string    `json:"command"` // the foreground command, as tmux names it
+	PID           int       `json:"pid"`     // the pane's first process
+	Cwd           string    `json:"cwd"`
+	WorktreeID    string    `json:"worktree_id"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// Run is one run job while it runs, from a daemon with attribution:
+// published once its process has started, removed when it ends, by
+// itself, by cancel or by rm.
+type Run struct {
+	ID            string    `json:"id"` // "<environment_id>/run/<command id>"; opaque to clients
+	EnvironmentID string    `json:"environment_id"`
+	Root          string    `json:"root"`
+	WorktreeID    string    `json:"worktree_id"`
+	Cmd           []string  `json:"cmd"`
+	StartedAt     time.Time `json:"started_at"`
 }
 
 // Worktree is one git worktree on one host, under the host's configured
@@ -343,14 +393,18 @@ type Agent struct {
 // source of truth: a worktree made by hand is listed, one removed by hand
 // disappears, and one whose directory is gone (prunable) is not published.
 type Worktree struct {
-	ID            string    `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
-	EnvironmentID string    `json:"environment_id"`
-	Repo          string    `json:"repo"`              // repository label from the host's config
-	Source        string    `json:"source,omitempty"`  // repository source, the identity; "" from older daemons
-	Branch        string    `json:"branch"`            // "" for a detached worktree
-	Root          string    `json:"root"`              // absolute path as git registered it
-	Session       string    `json:"session,omitempty"` // managed session whose pane records Root, else ""
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
+	EnvironmentID string `json:"environment_id"`
+	Repo          string `json:"repo"`             // repository label from the host's config
+	Source        string `json:"source,omitempty"` // repository source, the identity; "" from older daemons
+	Branch        string `json:"branch"`           // "" for a detached worktree
+	Root          string `json:"root"`             // absolute path as git registered it
+	// Session is the worktree's home session: the managed session with
+	// a pane laatmux made at Root, all of whose panes are inside Root;
+	// jump attaches to it. "" when there is none. A daemon without
+	// attribution names it only while it has that single pane.
+	Session   string    `json:"session,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // HostStatus is one configured host as the merging daemon sees it: a
@@ -427,6 +481,15 @@ type Message struct {
 	Worktrees  []Worktree `json:"worktrees,omitempty"`
 	Worktree   *Worktree  `json:"worktree,omitempty"`
 	WorktreeID string     `json:"worktree_id,omitempty"`
+	// From a daemon with attribution: the pane records and the run
+	// records, and on a remove the id of the one gone. A client that
+	// does not know them passes over the message.
+	Panes        []Pane `json:"panes,omitempty"`
+	Pane         *Pane  `json:"pane,omitempty"`
+	PaneRecordID string `json:"pane_record_id,omitempty"`
+	Runs         []Run  `json:"runs,omitempty"`
+	Run          *Run   `json:"run,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
 
 	// merged snapshot / upsert / remove, from a daemon with relay: the
 	// pending records and the recent handoffs; a remove names the record

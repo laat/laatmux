@@ -46,6 +46,8 @@ type mergedHost struct {
 	status    protocol.HostStatus
 	agents    map[string]protocol.Agent    // by id; empty for the local host, whose records are the daemon's own
 	worktrees map[string]protocol.Worktree // by id
+	panes     map[string]protocol.Pane     // by id, from a host with attribution
+	runs      map[string]protocol.Run      // by id, from a host with attribution
 	cancel    context.CancelFunc           // stops the follow goroutine; nil while not following
 	// listed is that the current connection has delivered a successful
 	// listing: a snapshot with its stamp, or a stamp upsert after one
@@ -194,7 +196,8 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 			continue
 		}
 		mh := &mergedHost{host: h, status: protocol.HostStatus{Name: h.Name, SSH: h.SSH, Since: now},
-			agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
+			agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{},
+			panes: map[string]protocol.Pane{}, runs: map[string]protocol.Run{}}
 		if h.Local() {
 			// This machine is itself: connected, and listed once its
 			// first poll of every server and of git is complete, which
@@ -217,6 +220,14 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 				w := w
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 			}
+			for _, p := range d.paneRecs {
+				p := p
+				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &p})
+			}
+			for _, r := range d.runRecs {
+				r := r
+				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &r})
+			}
 		}
 	}
 }
@@ -235,12 +246,24 @@ func (d *Daemon) dropHostLocked(mh *mergedHost) {
 		for root := range d.worktrees {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root)})
 		}
+		for key := range d.paneRecs {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: d.paneRecordID(key)})
+		}
+		for id := range d.runRecs {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
+		}
 	}
 	for id := range mh.agents {
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: id})
 	}
 	for id := range mh.worktrees {
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: id})
+	}
+	for id := range mh.panes {
+		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: id})
+	}
+	for id := range mh.runs {
+		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
 	}
 	d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, HostName: mh.status.Name})
 }
@@ -305,6 +328,8 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 				m.Agents = append(m.Agents, a)
 			}
 			m.Worktrees = append(m.Worktrees, d.worktreesLocked()...)
+			m.Panes = append(m.Panes, d.paneRecsLocked()...)
+			m.Runs = append(m.Runs, d.runRecsLocked()...)
 			continue
 		}
 		for _, a := range mh.agents {
@@ -312,6 +337,12 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 		}
 		for _, w := range mh.worktrees {
 			m.Worktrees = append(m.Worktrees, w)
+		}
+		for _, p := range mh.panes {
+			m.Panes = append(m.Panes, p)
+		}
+		for _, r := range mh.runs {
+			m.Runs = append(m.Runs, r)
 		}
 	}
 	for _, s := range d.msessions {
@@ -434,10 +465,34 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			mh.worktrees[w.ID] = w
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 		}
+		for i := range msg.Panes {
+			p := msg.Panes[i]
+			seen[p.ID] = true
+			mh.panes[p.ID] = p
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &p})
+		}
+		for i := range msg.Runs {
+			r := msg.Runs[i]
+			seen[r.ID] = true
+			mh.runs[r.ID] = r
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &r})
+		}
 		for id := range mh.agents {
 			if !seen[id] {
 				delete(mh.agents, id)
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: id})
+			}
+		}
+		for id := range mh.panes {
+			if !seen[id] {
+				delete(mh.panes, id)
+				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: id})
+			}
+		}
+		for id := range mh.runs {
+			if !seen[id] {
+				delete(mh.runs, id)
+				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
 			}
 		}
 		for id := range mh.worktrees {
@@ -486,8 +541,14 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		if msg.Worktree != nil {
 			mh.worktrees[msg.Worktree.ID] = *msg.Worktree
 		}
-		if msg.Agent != nil || msg.Worktree != nil {
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: msg.Agent, Worktree: msg.Worktree})
+		if msg.Pane != nil {
+			mh.panes[msg.Pane.ID] = *msg.Pane
+		}
+		if msg.Run != nil {
+			mh.runs[msg.Run.ID] = *msg.Run
+		}
+		if msg.Agent != nil || msg.Worktree != nil || msg.Pane != nil || msg.Run != nil {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: msg.Agent, Worktree: msg.Worktree, Pane: msg.Pane, Run: msg.Run})
 		}
 	case protocol.TypeRemove:
 		if msg.AgentID != "" {
@@ -497,8 +558,14 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			delete(mh.worktrees, msg.WorktreeID)
 			d.worktreeRemovedLocked(msg.WorktreeID)
 		}
-		if msg.AgentID != "" || msg.WorktreeID != "" {
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: msg.AgentID, WorktreeID: msg.WorktreeID})
+		if msg.PaneRecordID != "" {
+			delete(mh.panes, msg.PaneRecordID)
+		}
+		if msg.RunID != "" {
+			delete(mh.runs, msg.RunID)
+		}
+		if msg.AgentID != "" || msg.WorktreeID != "" || msg.PaneRecordID != "" || msg.RunID != "" {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: msg.AgentID, WorktreeID: msg.WorktreeID, PaneRecordID: msg.PaneRecordID, RunID: msg.RunID})
 		}
 	}
 }

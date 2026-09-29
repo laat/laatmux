@@ -42,6 +42,7 @@ func (m *merged) readMerged(ctx context.Context, c *client.Conn, wait time.Durat
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	defer c.CloseOnDone(ctx)()
+	m.via(c)
 	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err != nil {
 		return nil, err
 	}
@@ -101,6 +102,7 @@ func (m *merged) followMerged(ctx context.Context, c *client.Conn) {
 			// subscription every time is retried as slowly as one that
 			// does not answer at all.
 			stop := c.CloseOnDone(ctx)
+			m.via(c)
 			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err == nil {
 				for {
 					msg, err := c.Read()
@@ -141,6 +143,13 @@ var (
 	followBackoffMin = time.Second
 	followBackoffMax = 30 * time.Second
 )
+
+// via records what the merging daemon at the other end of c forwards.
+func (m *merged) via(c *client.Conn) {
+	m.mu.Lock()
+	m.stripped = !protocol.Has(c.Hello.Capabilities, protocol.CapAttribution)
+	m.mu.Unlock()
+}
 
 func (m *merged) setDaemonErr(s string) {
 	m.mu.Lock()

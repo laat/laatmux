@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -415,4 +417,62 @@ func TestRelayCancelledCheckLeavesNoMemo(t *testing.T) {
 		t.Fatal("the listing was not checked again")
 	}
 	f.local.stopRunners("c1")
+}
+
+// delivered makes a task that hands over: the add done and its prompt
+// delivered on the argv.
+func delivered(t *testing.T, f *relayFixture, id, branch string) pendingFile {
+	t.Helper()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: id, Relay: "vm", Repo: f.source(), Name: "proj", Branch: branch, AgentName: "argv", Prompt: "made for " + branch, SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	return f.awaitRecord(t, id, 30*time.Second, func(p pendingFile) bool { return p.retired() })
+}
+
+// A task that handed over is kept, prompt and all, while its worktree
+// is there, and goes when the host says the worktree is gone.
+func TestRelayRetiredGoesWithWorktree(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, nil)
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	p := delivered(t, f, "h1", "kept")
+	if p.PromptText != "made for kept" {
+		t.Fatalf("record %+v", p)
+	}
+	// Listings that have the worktree keep it.
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{p.ReplacedBy: true}, false)
+	f.local.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	if _, ok := f.local.relay.get("h1"); !ok {
+		t.Fatal("dropped while the worktree is listed")
+	}
+	rmOnHost(t, f, "rm-h1", "kept", p.Root)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, ok := f.local.relay.get("h1"); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retired record kept after its worktree went")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("h1"))); err == nil {
+		t.Fatal("file kept")
+	}
+}
+
+// rm's dismiss at the worktree drops a task that handed over there.
+func TestRelayDismissAtRetired(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, nil)
+	p := delivered(t, f, "h2", "gone")
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-h2", EnvironmentID: "henv", Root: p.Root}); !res.OK {
+		t.Fatalf("dismiss at: %+v", res)
+	}
+	if _, ok := f.local.relay.get("h2"); ok {
+		t.Fatal("the retired task at the root stayed")
+	}
 }

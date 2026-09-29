@@ -235,3 +235,31 @@ func TestRecordRepoKeepsSpelling(t *testing.T) {
 		t.Fatal("an unknown source matched")
 	}
 }
+
+// A host's attribution reaches the rows only when the merging daemon
+// forwards it: one older than attribution drops the worktree from every
+// agent it forwards, and the rows then pair by session name.
+func TestMergedAttributionNeedsForwarding(t *testing.T) {
+	m := newMerged()
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
+			Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution}}}})
+	attribution := func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, h := range m.input(nil, "").Hosts {
+			if h.Name == "vm" {
+				return h.Attribution
+			}
+		}
+		t.Fatal("no host vm")
+		return false
+	}
+	if !attribution() {
+		t.Fatal("attribution lost on the direct path")
+	}
+	m.stripped = true
+	if attribution() {
+		t.Fatal("attribution through a merging daemon that drops it")
+	}
+}
