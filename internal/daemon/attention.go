@@ -129,7 +129,6 @@ func (d *Daemon) flushAttentionLocked() {
 	if a == nil || !a.dirty {
 		return
 	}
-	a.dirty = false
 	b, err := json.Marshal(attnFile{Entries: a.entries})
 	if err == nil {
 		if err = os.MkdirAll(filepath.Dir(a.path), 0o700); err == nil {
@@ -140,10 +139,13 @@ func (d *Daemon) flushAttentionLocked() {
 		}
 	}
 	if err != nil {
+		// Still dirty: the next batch, or the seen loop's next tick,
+		// tries again.
 		d.logOnce(&d.lastAttnErr, "attention: %v", err)
-	} else {
-		d.lastAttnErr = ""
+		return
 	}
+	a.dirty = false
+	d.lastAttnErr = ""
 }
 
 // tracked reports whether an agent can be done: one in a managed session
@@ -393,11 +395,18 @@ func (d *Daemon) runSeen(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			d.mu.Lock()
+			d.flushAttentionLocked() // a write that failed, again
+			d.mu.Unlock()
 			if !d.seenWanted() {
 				continue
 			}
 		case <-d.attn.poke:
 		}
+		// A listing sees only the finishes before it began: one
+		// observed while it ran may come after the user left, and the
+		// listing that finish pokes decides it.
+		began := time.Now()
 		views, err := d.cfg.Clients(ctx)
 		if ctx.Err() != nil {
 			return
@@ -407,7 +416,7 @@ func (d *Daemon) runSeen(ctx context.Context) {
 			d.logOnce(&d.lastClientsErr, "clients: %v", err)
 		} else {
 			d.lastClientsErr = ""
-			d.markSeenLocked(views)
+			d.markSeenLocked(views, began)
 		}
 		d.mu.Unlock()
 	}
@@ -429,12 +438,13 @@ func (d *Daemon) seenWanted() bool {
 }
 
 // markSeenLocked moves the visit of every done agent a client shows to
-// now. A client sitting on an agent that is not done writes nothing.
-func (d *Daemon) markSeenLocked(views []ClientView) {
+// now, of the finishes before began, when the listing began. A client
+// sitting on an agent that is not done writes nothing.
+func (d *Daemon) markSeenLocked(views []ClientView, began time.Time) {
 	changed := false
 	now := time.Now()
 	for id, e := range d.attn.entries {
-		if !e.unseen() || !d.shownLocked(views, id, e) {
+		if !e.unseen() || !e.FinishedAt.Before(began) || !d.shownLocked(views, id, e) {
 			continue
 		}
 		e.SeenAt = now

@@ -59,7 +59,7 @@ func done(d *Daemon, id string) bool {
 
 func look(d *Daemon, views ...ClientView) {
 	d.mu.Lock()
-	d.markSeenLocked(views)
+	d.markSeenLocked(views, time.Now())
 	d.mu.Unlock()
 }
 
@@ -471,5 +471,74 @@ func TestAttentionUnknownWritesNothing(t *testing.T) {
 	fromVM(d, u)
 	if info, _ := os.Stat(d.attn.path); !info.ModTime().Equal(before) {
 		t.Error("the file was written for nothing")
+	}
+}
+
+// A listing that began before a finish does not see it, whatever it
+// shows: the user may have left while it ran.
+func TestAttentionListingBeforeFinish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release := make(chan struct{}, 4), make(chan struct{})
+	var calls atomic.Int32
+	hosts := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
+		Clients: func(ctx context.Context) ([]ClientView, error) {
+			if calls.Add(1) == 1 {
+				started <- struct{}{}
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return []ClientView{attachTo("mac", "s")}, nil
+			}
+			return []ClientView{attachTo("mac", "elsewhere")}, nil
+		}})
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	publish(d, "laatmux/%1", a)
+	go d.runSeen(ctx)
+	d.Poke()
+	<-started
+	// The first listing shows the agent; while it runs the agent
+	// finishes.
+	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if !done(d, a.ID) {
+		t.Error("a listing from before the finish saw it")
+	}
+}
+
+// A write that fails keeps the file dirty and is tried again, so a visit
+// is not lost to a full disk and a restart does not bring back done.
+func TestAttentionWriteRetried(t *testing.T) {
+	dir := t.TempDir()
+	d := attnDaemon(t, dir)
+	t0 := time.Now()
+	fromVM(d, remoteAgent("%1", "s", protocol.Working, t0))
+	fromVM(d, remoteAgent("%1", "s", protocol.Idle, t0.Add(time.Second)))
+	// The directory made unwritable: the visit is not saved.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	look(d, attachTo("vm", "s"))
+	d.mu.Lock()
+	dirty := d.attn.dirty
+	d.mu.Unlock()
+	if !dirty {
+		t.Fatal("a failed write cleared dirty")
+	}
+	os.Chmod(dir, 0o700)
+	d.mu.Lock()
+	d.flushAttentionLocked()
+	d.mu.Unlock()
+	d = attnDaemon(t, dir)
+	if a, ok := attnOf(d, "venv/laatmux/%1"); !ok || a.Done() {
+		t.Errorf("after a retried write and a restart: %+v", a)
 	}
 }
