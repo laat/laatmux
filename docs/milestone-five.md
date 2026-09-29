@@ -486,7 +486,8 @@ carry the same; the time of the last refresh is not in the record.
   whose untracked entries are the files counted, so no `ls-files` call is
   needed.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
-  needs git 2.38; with an older git the field is left out.
+  needs git 2.38; with an older git, found once from `git merge-tree -h`,
+  the field is left out and merge-tree is not run again.
 - **rebasing:** a `rebase-merge` or `rebase-apply` directory in the
   worktree's git dir.
 - **base:** the first that exists of `branch.<b>.laatmux-base` in the

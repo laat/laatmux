@@ -297,8 +297,16 @@ func onBase(base, branch string) bool {
 	return base == branch || strings.HasPrefix(base, "origin/") && strings.TrimPrefix(base, "origin/") == branch
 }
 
-// noQuietMerge is that this machine's git has no merge-tree --quiet.
-var noQuietMerge atomic.Bool
+// noQuietMerge is that this machine's git has no merge-tree --quiet;
+// noWriteTree that it has no --write-tree either, before 2.38, and no
+// conflict is read at all.
+var noQuietMerge, noWriteTree atomic.Bool
+
+// hasWriteTree asks git's merge-tree help whether it knows --write-tree.
+func hasWriteTree(ctx context.Context, root string) bool {
+	out, _ := statusGit(ctx, root, "merge-tree", "-h")
+	return strings.Contains(out, "--write-tree")
+}
 
 // readCommitted is what depends on the commit pair: the branch's diff
 // against its merge base with base, ahead and behind, and whether a
@@ -352,8 +360,17 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 			noQuietMerge.Store(true)
 		}
 	}
+	if noWriteTree.Load() {
+		// No conflict to read on this git: the pair is complete
+		// without it.
+		return c, nil
+	}
 	if noQuietMerge.Load() {
 		_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
+		if errors.As(err, &ee) && ee.ExitCode() == 128 && !hasWriteTree(ctx, root) {
+			noWriteTree.Store(true)
+			return c, nil
+		}
 	}
 	switch {
 	case err == nil:
@@ -365,9 +382,8 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		return c, err
 	default:
-		// git older than 2.38 has no --write-tree, or the merge lacks a
-		// blob it may not fetch: the field is left out, and the pair
-		// read again later.
+		// The merge lacks a blob it may not fetch: the field is left
+		// out, and the pair read again later.
 		c.incomplete = true
 	}
 	return c, nil
