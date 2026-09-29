@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -34,8 +35,14 @@ const (
 	untrackedBytes = 1 << 20
 )
 
-// GitTimeout bounds each git call of a refresh.
-const GitTimeout = 10 * time.Second
+// GitTimeout bounds each git call of a refresh; gitWaitDelay how long
+// its output is drained after that, since a child that keeps git's
+// pipes open, a merge driver's, would otherwise hold the call. Variables
+// for tests.
+var (
+	GitTimeout   = 10 * time.Second
+	gitWaitDelay = time.Second
+)
 
 // baseTTL is how long a resolved base name is kept: a key set by hand,
 // or a new origin/HEAD, shows within it.
@@ -50,8 +57,14 @@ type Paths struct {
 	Refs      []string // loose ref files of the branch and the base, which may not exist
 }
 
-// Pair is the commits the committed stats depend on.
-type Pair struct{ Base, Head string }
+// Pair is what the committed stats depend on: the two commits, and the
+// shallow boundary, the mtime of the common dir's shallow file, zero
+// when there is none, since deepening a shallow history can find a merge
+// base without moving either commit.
+type Pair struct {
+	Base, Head string
+	Shallow    time.Time
+}
 
 // Committed is what depends on the commit pair alone.
 type Committed struct {
@@ -145,11 +158,14 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	if cache.baseRef != "" {
 		paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, filepath.FromSlash(cache.baseRef)))
 	}
-	paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, "packed-refs"))
+	paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, "packed-refs"), filepath.Join(paths.CommonDir, "shallow"))
 
 	// The committed side, on anything but the base branch itself.
 	if baseOID != "" && !onBase(base, branch) {
 		pair := Pair{Base: baseOID, Head: head}
+		if fi, err := os.Stat(filepath.Join(paths.CommonDir, "shallow")); err == nil {
+			pair.Shallow = fi.ModTime()
+		}
 		if !cache.have || cache.pair != pair {
 			c, err := readCommitted(ctx, root, pair)
 			if err != nil {
@@ -431,6 +447,11 @@ func statusGit(ctx context.Context, dir string, args ...string) (string, error) 
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv()
+	// Its own process group, killed whole at the timeout: a merge
+	// driver or a hook git started goes with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = gitWaitDelay
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

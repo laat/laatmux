@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -344,5 +345,47 @@ func TestStatusIndexAndOrphan(t *testing.T) {
 	}
 	if st.Ahead != 1 || st.Behind < 1 || st.Committed != [2]int{} || st.Conflict != nil {
 		t.Errorf("orphan: %+v", st)
+	}
+}
+
+// A git call that times out returns at once, though a child it started
+// holds its output: the process group is killed and the pipes drained
+// for a bounded time.
+func TestStatusGitTimeoutWithChild(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "git"), "#!/bin/sh\nsleep 30 &\nsleep 30\n")
+	os.Chmod(filepath.Join(dir, "git"), 0o755)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldT, oldW := GitTimeout, gitWaitDelay
+	GitTimeout, gitWaitDelay = 200*time.Millisecond, 200*time.Millisecond
+	defer func() { GitTimeout, gitWaitDelay = oldT, oldW }()
+	start := time.Now()
+	_, err := statusGit(context.Background(), dir, "status")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Errorf("%v after %v", err, time.Since(start))
+	}
+}
+
+// The committed stats are recomputed when the shallow boundary changes,
+// though neither commit moved: a deepened history may have a merge base
+// now.
+func TestStatusShallowInKey(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("shal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache StatusCache
+	_, _, paths, err := Status(f.ctx, a.Root, "shal", &cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.committed.Ahead = 99 // a sentinel: kept while the key holds
+	if st, _, _, _ := Status(f.ctx, a.Root, "shal", &cache); st.Ahead != 99 {
+		t.Fatalf("the cache was not used: %+v", st)
+	}
+	write(t, filepath.Join(paths.CommonDir, "shallow"), "")
+	if st, _, _, _ := Status(f.ctx, a.Root, "shal", &cache); st.Ahead == 99 {
+		t.Error("a new shallow boundary kept the cached stats")
 	}
 }
