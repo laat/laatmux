@@ -355,6 +355,9 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 		m.Pendings, m.Handoffs = d.relay.pendingsLocked()
 	}
 	m.Attentions = d.attentionsLocked()
+	if d.branches != nil {
+		m.BranchStatuses, m.GitHubError = d.branchStatusesLocked(), d.githubErr
+	}
 	return m
 }
 

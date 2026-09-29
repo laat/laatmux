@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -1307,4 +1308,40 @@ func TestRenderGit(t *testing.T) {
 	golden(t, "git-narrow", Debug(m.Render()))
 	m.Layout, m.Width, m.Height = Compact, 90, 20
 	golden(t, "git-compact", Debug(m.Render()))
+}
+
+// The PR and checks on the third line: the PR number coloured by state,
+// ✓, × with the counts, a spinner with the counts; a draft dim; a stale
+// answer dim with ?; on main only failing checks; narrow, the counts go
+// first.
+func TestRenderPR(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	src := "git@github.com:laat/proj.git"
+	for i := range in.Worktrees {
+		in.Worktrees[i].Source = src
+	}
+	key := func(branch string) protocol.BranchKey {
+		return protocol.BranchKey{Source: config.SourceKey(src), Branch: branch}
+	}
+	in.Branches = map[protocol.BranchKey]protocol.BranchStatus{
+		key("fix-ls"): {PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}},
+		key("task"):   {PR: &protocol.PullRequest{Number: 49, State: "open", Draft: true}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5}},
+		key("other"):  {PR: &protocol.PullRequest{Number: 12, State: "merged"}, Checks: &protocol.Checks{State: protocol.ChecksPending, Passed: 1, Total: 4}},
+		key("dead"):   {PR: &protocol.PullRequest{Number: 7, State: "closed"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess}, Stale: true},
+	}
+	for i := range in.Worktrees {
+		if in.Worktrees[i].Branch == "spike" {
+			in.Worktrees[i].Branch = "main"
+			in.Branches[key("main")] = protocol.BranchStatus{PR: &protocol.PullRequest{Number: 1, State: "merged"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 2, Total: 3}}
+		}
+	}
+	m := model(now)
+	m.SetRows(rows.Build(in))
+	m.Layout, m.Width, m.Height = Tiles, 48, 44
+	golden(t, "pr-tiles", Debug(m.Render()))
+	m.Width = 22
+	golden(t, "pr-narrow", Debug(m.Render()))
+	m.Layout, m.Titles, m.Width, m.Height = Compact, true, 90, 30
+	golden(t, "pr-compact", Debug(m.Render()))
 }

@@ -124,6 +124,11 @@ const (
 	// merging daemon with it forwards the object; one without drops it,
 	// as it decodes the record without the field.
 	CapGitStatus = "git-status"
+	// CapBranches is the merging daemon's PR and check state per branch,
+	// read from GitHub through gh on this machine: branch_status records
+	// in the merged stream, keyed by source and branch, and github_error
+	// when it cannot read them. Without it no PR state is shown.
+	CapBranches = "branches"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -419,6 +424,58 @@ type Attention struct {
 // Done reports whether the finish is after the last visit.
 func (a Attention) Done() bool { return a.FinishedAt.After(a.SeenAt) }
 
+// BranchKey is what a branch_status record is keyed by: the source key,
+// normalised as the config's SourceKey does, and the branch.
+type BranchKey struct {
+	Source string `json:"source"`
+	Branch string `json:"branch"`
+}
+
+// BranchStatus is a pushed branch's PR and checks as GitHub has them,
+// fetched at FetchedAt, this machine's clock; Stale is that the answer is
+// older than the daemon trusts, or the last query for it failed.
+// HeadOID is the commit the checks are of: the PR's last commit, or the
+// branch's own. ChecksURL is the PR's checks page, or the commit's.
+type BranchStatus struct {
+	BranchKey
+	FetchedAt time.Time    `json:"fetched_at"`
+	Stale     bool         `json:"stale,omitempty"`
+	HeadOID   string       `json:"head_oid,omitempty"`
+	ChecksURL string       `json:"checks_url,omitempty"`
+	PR        *PullRequest `json:"pr,omitempty"`
+	Checks    *Checks      `json:"checks,omitempty"`
+}
+
+// PullRequest is a branch's PR: an open one, else the newest merged or
+// closed, from the source's own repository. State is open, merged or
+// closed.
+type PullRequest struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
+	Draft  bool   `json:"draft,omitempty"`
+	URL    string `json:"url"`
+}
+
+// Checks is the head commit's check rollup, counted from its aggregates:
+// State is success, failure or pending; Passed and Total leave out
+// neutral, skipped and stale contexts; Failing is the first failing
+// check's name; PendingSince is when this machine first saw the head's
+// checks pending.
+type Checks struct {
+	State        string    `json:"state"`
+	Passed       int       `json:"passed"`
+	Total        int       `json:"total"`
+	Failing      string    `json:"failing,omitempty"`
+	PendingSince time.Time `json:"pending_since,omitzero"`
+}
+
+// Check states.
+const (
+	ChecksSuccess = "success"
+	ChecksFailure = "failure"
+	ChecksPending = "pending"
+)
+
 // Worktree is one git worktree on one host, under the host's configured
 // worktree directory, in a checkout of a known repository. Git is the
 // source of truth: a worktree made by hand is listed, one removed by hand
@@ -565,6 +622,16 @@ type Message struct {
 	Attentions  []Attention `json:"attentions,omitempty"`
 	Attention   *Attention  `json:"attention,omitempty"`
 	AttentionID string      `json:"attention_id,omitempty"`
+
+	// merged snapshot / upsert / remove, from a daemon with branches:
+	// the branch status records, and on a remove the key of the one
+	// gone; GitHubError, in a snapshot or an upsert, is why the daemon
+	// cannot read GitHub, and GitHubOK in an upsert clears it.
+	BranchStatuses  []BranchStatus `json:"branch_statuses,omitempty"`
+	BranchStatus    *BranchStatus  `json:"branch_status,omitempty"`
+	BranchStatusKey *BranchKey     `json:"branch_status_key,omitempty"`
+	GitHubError     string         `json:"github_error,omitempty"`
+	GitHubOK        bool           `json:"github_ok,omitempty"`
 
 	// merged snapshot / upsert / remove, from a daemon with relay: the
 	// pending records and the recent handoffs; a remove names the record

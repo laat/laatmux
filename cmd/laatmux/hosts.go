@@ -9,6 +9,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
 )
 
 func cmdHosts(ctx context.Context, args []string) error {
@@ -38,7 +39,39 @@ func cmdHosts(ctx context.Context, args []string) error {
 	}
 	wg.Wait()
 	fmt.Print(hostsReport(rows, version))
+	if line := githubLine(ctx); line != "" {
+		fmt.Println(line)
+	}
 	return nil
+}
+
+// githubLine is the local daemon's GitHub state, from its merged
+// snapshot: why it cannot read PRs and checks, or that it can. "" when
+// the daemon is not running or has no branches capability.
+func githubLine(ctx context.Context) string {
+	c, ok := dialMerged(ctx)
+	if !ok {
+		return ""
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapBranches) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	defer c.CloseOnDone(ctx)()
+	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err != nil {
+		return ""
+	}
+	msg, err := c.Read()
+	if err != nil || msg.Type != protocol.TypeSnapshot {
+		return ""
+	}
+	status := "ok"
+	if msg.GitHubError != "" {
+		status = msg.GitHubError
+	}
+	return fmt.Sprintf("  %-16s %s", "github:", status)
 }
 
 // hostRow is one host in the listing.

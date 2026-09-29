@@ -598,8 +598,9 @@ every worktree in the merged stream, keyed by source and branch.
   has it at once. An answer older than five minutes is stale: the view
   draws it dim with `?` after the checks. A failed query, whole or for
   one chunk, keeps the last answers of the branches it covered and
-  marks them stale; a branch the answer says has no ref drops its
-  entry, and an entry whose branch has had no worktree in the merged
+  marks them stale; a branch the answer says has no ref, and no PR of
+  the source's own, drops its entry, while one deleted after its PR
+  merged keeps the PR, with that PR's last commit's checks, and an entry whose branch has had no worktree in the merged
   stream for a day is dropped.
 - **Non-GitHub sources and a missing or logged-out `gh`** show nothing.
   The reason is the daemon's own, not a host's: it travels in the merged

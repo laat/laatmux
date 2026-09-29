@@ -29,6 +29,10 @@ func SourceKey(source string) string {
 // SameSource reports whether two sources name one repository.
 func SameSource(a, b string) bool { return a == b || SourceKey(a) == SourceKey(b) }
 
+// Forge splits a source in one of the forge forms into its host and its
+// path, owner/repo on GitHub; ok is false for any other source.
+func Forge(source string) (host, path string, ok bool) { return forge(source) }
+
 // forge splits a source in one of the forge forms into host and path,
 // the path without a trailing slash or .git.
 func forge(source string) (host, path string, ok bool) {

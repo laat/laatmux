@@ -1,0 +1,44 @@
+..B|⟨danger:box  DOWN  ssh: connec⟩
+S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls       2:00
+S..|⟨accent:▌⟩    laatmux ‹@vm›      
+S..|⟨accent:▌⟩    Permission  ⟨success:#52⟩ ⟨success:✓⟩
+S..|‹⟨border:──────────────────────⟩›
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes 0:01
+...|⟨info:▌⟩    ‹@vm/default›
+...|⟨info:▌⟩    remote
+...|‹⟨border:──────────────────────⟩›
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩»         0:08
+...|⟨info:▌⟩    proj @mac
+...|⟨info:▌⟩    Editing ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
+...|‹⟨border:──────────────────────⟩›
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down        10:00
+.D.|⟨info:▌⟩    proj ‹@box›
+.D.|⟨info:▌⟩    last seen
+...|‹⟨border:──────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ scratch      0:40
+...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩    
+...|‹⟨border:──────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ notes        5:00
+...|⟨border:▌⟩    @mac/default
+...|⟨border:▌⟩    
+...|‹⟨border:──────────────────────⟩›
+...|⟨border:▌⟩ ⟨border:  ⟩ other          1h
+...|⟨border:▌⟩    proj ‹@vm›
+...|⟨border:▌⟩    Done.   ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
+...|‹⟨border:──────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead           3h
+.D.|⟨border:▌⟩    proj ‹@vm›
+.D.|⟨border:▌⟩    claude gone ‹#7›‹ ›‹✓›‹?›
+...|‹⟨border:──────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ proj
+.D.|⟨border:▌⟩    main @mac
+.D.|⟨border:▌⟩    no session  ⟨danger:×⟩⟨danger: 2/3⟩
+...|‹⟨border:──────────────────────⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell
+.D.|⟨border:▌⟩    proj ‹@vm›
+.D.|⟨border:▌⟩    no agent
+...|‹⟨border:──────────────────────⟩›
+...|‹⟨header:settled 1  orphaned 1 ⟩›
+...|
+.D.|

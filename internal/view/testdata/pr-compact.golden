@@ -1,0 +1,30 @@
+..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No route to host⟩
+S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux ‹@vm›                                                               2:00
+S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?                                    ⟨success:#52⟩ ⟨success:✓⟩
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes ‹@vm/default›                                                         0:01
+...|⟨info:▌⟩    remote
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩» proj @mac                                                                   0:08
+...|⟨info:▌⟩    Editing src/api.ts                                                          ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down proj ‹@box›                                                                  10:00
+.D.|⟨info:▌⟩    last seen
+...|⟨border:▌⟩ ⟨border:  ⟩ scratch @mac                                                                     0:40
+...|⟨border:▌⟩    
+...|⟨border:▌⟩ ⟨border:  ⟩ notes @mac/default                                                               5:00
+...|⟨border:▌⟩    
+...|⟨border:▌⟩ ⟨border:  ⟩ other proj ‹@vm›                                                                     1h
+...|⟨border:▌⟩    Done. 日本語のタイトル that is long enough to be trimmed at the edge        ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj ‹@vm›                                                                      3h
+.D.|⟨border:▌⟩    claude gone                                                                     ‹#7›‹ ›‹✓›‹?›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ proj main @mac
+.D.|⟨border:▌⟩    no session                                                                      ⟨danger:×⟩⟨danger: 2/3⟩
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›
+.D.|⟨border:▌⟩    no agent
+...|‹⟨header:settled 1  orphaned 1  (f shows)⟩›
+...|
+...|
+...|
+...|
+...|
+...|
+...|
+.D.|
