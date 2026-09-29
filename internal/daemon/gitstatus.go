@@ -36,7 +36,9 @@ var (
 )
 
 // gitEntry is one worktree's refresh state. The cache is the running
-// refresh's while running is set; the rest is under d.mu. The listing
+// refresh's while running is set; the rest is under d.mu, but for the
+// paths, which the running refresh reads without it, since only its own
+// completion writes them. The listing
 // drops an entry when its root goes or changes branch, so a refresh
 // still running for it publishes nothing.
 type gitEntry struct {

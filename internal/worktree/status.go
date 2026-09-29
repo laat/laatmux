@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -282,8 +283,11 @@ func onBase(base, branch string) bool {
 
 // readCommitted is what depends on the commit pair: the branch's diff
 // against its merge base with base, ahead and behind, and whether a
-// merge would conflict. merge-tree --write-tree writes objects, which is
-// why this runs once per pair.
+// merge would conflict. It runs once per pair: a merge-tree without
+// --quiet writes objects.
+// noQuietMerge is that this machine's git has no merge-tree --quiet.
+var noQuietMerge atomic.Bool
+
 func readCommitted(ctx context.Context, root string, pair Pair) (Committed, error) {
 	var c Committed
 	// The commits, not the names: a fetch or a commit between the calls
@@ -317,9 +321,15 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	}
 	c.Behind, c.Ahead = leftRight(counts)
 	// --quiet stops at the first conflict and writes no objects; a git
-	// without it, before 2.40, exits 129 and gets the plain call.
-	_, err = statusGit(ctx, root, "merge-tree", "--write-tree", "--quiet", pair.Base, pair.Head)
-	if errors.As(err, &ee) && ee.ExitCode() == 129 {
+	// without it, before 2.50, exits 129 and gets the plain call, which
+	// writes the merge's objects once per pair. The 129 is remembered.
+	if !noQuietMerge.Load() {
+		_, err = statusGit(ctx, root, "merge-tree", "--write-tree", "--quiet", pair.Base, pair.Head)
+		if errors.As(err, &ee) && ee.ExitCode() == 129 {
+			noQuietMerge.Store(true)
+		}
+	}
+	if noQuietMerge.Load() {
 		_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
 	}
 	switch {
@@ -366,7 +376,7 @@ func numstat(out string) [2]int {
 	return n
 }
 
-// countUntracked counts the lines of the untracked files ls-files -z
+// countUntracked counts the lines of the untracked files git status
 // listed, reading only those whose size or mtime changed since the last
 // refresh; past the limits the count is a lower bound.
 func (c *StatusCache) countUntracked(root string, listed []string) (lines int, partial bool) {
@@ -446,7 +456,10 @@ func statusGit(ctx context.Context, dir string, args ...string) (string, error) 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv()
+	// A partial clone does not fetch the blobs a merge-tree or a diff
+	// lacks: a refresh never goes to the network. The conflict is then
+	// left out for the pair; git before 2.45 ignores the variable.
+	cmd.Env = append(gitEnv(), "GIT_NO_LAZY_FETCH=1")
 	// Its own process group, killed whole at the timeout: a merge
 	// driver or a hook git started goes with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

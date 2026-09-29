@@ -507,7 +507,10 @@ option: the poll never takes the index lock a user's git needs. The two
 are diff options, so they never run a user's diff driver. `merge-tree
 --write-tree --quiet` stops at the first conflict and writes no objects;
 it runs the repository's merge drivers, as any merge does, and a git
-before 2.40, without `--quiet`, gets the plain call. A branch with no
+before 2.50, without `--quiet`, gets the plain call, which writes the
+merge's objects once per commit pair. Every call runs with
+`GIT_NO_LAZY_FETCH=1`, so a partial clone never fetches from its
+remote during a refresh; the conflict is then left out. A branch with no
 merge base with its base, an orphan or a shallow history, gets ahead
 and behind alone.
 
@@ -516,8 +519,8 @@ and stamps the listings that retire tasks, and a slow repository must
 not hold it. A separate worker pool, two at a time, takes the worktrees
 due for a refresh. Each git call has a 10 s timeout; one that times out
 leaves the last object and sets `stale: true` in it. A result is dropped
-when the worktree is gone from the listing, or its `HEAD` has moved,
-since the refresh began.
+when the worktree is gone from the listing, has another branch, or its
+`HEAD` has moved, since the refresh began.
 
 **What is cached.** `committed`, `ahead`, `behind` and `conflict`
 depend only on the base's and `HEAD`'s commits, so they are computed

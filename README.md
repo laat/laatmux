@@ -208,8 +208,9 @@ truth; labels only place new things.
   on the listing, and upserts only when a value changed. Git runs with
   `--no-optional-locks`, the diff against HEAD without refreshing the
   index, and the diffs with `--no-ext-diff --no-textconv`, so a refresh
-  never takes the index lock or runs a diff driver. The views show the stats on a tile's second line and
-  before the time in the compact line: `R` while rebasing, the committed
+  never takes the index lock or runs a diff driver, and without lazy
+  fetches in a partial clone. The views show the stats on a tile's
+  second line and before the time in the compact line: `R` while rebasing, the committed
   `+N -M`, then `✎` and the uncommitted `+X -Y`. A merging daemon that
   knows the field forwards it.
 - **Worktree records** arrive in the subscription stream next to agents:
