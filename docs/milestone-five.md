@@ -60,7 +60,8 @@ without one the stored dashboard default applies, then compact. Its
 view is its own stored default, else `agents`; neither `sidebar.view`
 nor the CLI touches it. The
 dashboard starts at scope `all`, whatever the sidebar's default; `F`
-narrows it to the session of the client the popup opened on. `--all`
+narrows it to the `session` scope (see Placement, scope and controls)
+of the client the popup opened on. `--all`
 does not reach it, since it has no socket.
 
 ### The agent view
@@ -761,8 +762,13 @@ Five settlements differ from the plan in #52:
     it, whatever session each runs in, and in the tree its worktree line
     with its children under its repository line; with no worktree, the
     viewer's session's line in other sessions;
-  - `project`: every worktree of the viewer's worktree's repository,
-    under its repository line; with no worktree, the same as `session`.
+  - `project`: every line under the viewer's worktree's repository line,
+    its worktrees, its pending tasks and its orphaned sessions, and in
+    the agent view that repository's agents and tasks; with no worktree,
+    the same as `session`.
+
+  `session` keeps no task: a task makes a new worktree, never the one
+  the viewer is in.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The
@@ -999,6 +1005,9 @@ view and folds step 6 keeps in memory.
   leftover socket; a window with no sidebar; `F` from `all`, from
   `session`, and after a `scope` from the CLI; the dashboard with and
   without `--layout`.
+- **Scopes:** `session` with the viewer's worktree's agents in two
+  managed sessions, a session with no worktree, a session with no row,
+  and `project` with a pending task and an orphaned session.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
