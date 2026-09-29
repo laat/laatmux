@@ -10,7 +10,11 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // A fake ssh on PATH scripted through an env var: exit code, stderr, delay.
@@ -90,5 +94,64 @@ func TestJumpMode(t *testing.T) {
 		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
 			t.Errorf("%s --server %s: got %v, want %q", c.h.Name, c.srv, err, c.err)
 		}
+	}
+}
+
+// A worktree row with no home session whose agent runs elsewhere is
+// jumped to through the agent, not answered with the add hint: here an
+// agent on a remote host's default server, which jump refuses as such.
+func TestJumpRowWorktreeThroughAgent(t *testing.T) {
+	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	a := protocol.Agent{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", WorktreeID: w.ID}
+	err := jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err == nil || !strings.Contains(err.Error(), "only observes") {
+		t.Fatalf("jump through the agent: %v", err)
+	}
+	err = jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w})
+	if err == nil || !strings.Contains(err.Error(), "has no managed session") {
+		t.Fatalf("no agent: %v", err)
+	}
+}
+
+// A worktree row with no home session whose agent is in a managed
+// session attaches through the worktree's own workspace session, keyed
+// by the worktree, so it never collides with the name that session has.
+func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
+	h := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Source: "git@example.com:o/proj.git"}
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", WorktreeID: w.ID}
+	spec, session, err := rowSpec(cfg, h, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err != nil || session != "" || spec.Key != "venv//w/a" || spec.Managed != "proj/a" || spec.Name != "vm/proj/a" || spec.Branch != "a" {
+		t.Fatalf("spec %+v session %q err %v", spec, session, err)
+	}
+	// With the home back the spec is the same session's.
+	w.Session = "proj/a"
+	home, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	if err != nil || home != spec {
+		t.Fatalf("home %+v, without %+v, err %v", home, spec, err)
+	}
+	// Two worktrees whose agents were moved into one managed session
+	// by hand keep a local session each.
+	w.Session = ""
+	w2 := protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/w/b"}
+	a.Session = "shared"
+	a2 := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "shared", WorktreeID: w2.ID}
+	s1, _, err1 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	s2, _, err2 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w2, Agent: &a2})
+	if err1 != nil || err2 != nil || s1.Name == s2.Name || s1.Key == s2.Key || s1.Managed != "shared" || s2.Managed != "shared" {
+		t.Fatalf("shared session: %+v %+v %v %v", s1, s2, err1, err2)
+	}
+	// The name is encoded as add encodes it: tmux takes no dot in one.
+	w.Branch = "fix/v1.2"
+	s3, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	if err != nil || strings.Contains(s3.Name, ".") || s3.Name != workspace.SessionName("vm", "proj", "fix/v1.2") {
+		t.Fatalf("encoded branch: %+v %v", s3, err)
+	}
+	w.Branch, w.Root = "", "/w/x.y"
+	s4, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	if err != nil || strings.Contains(s4.Name, ".") {
+		t.Fatalf("detached: %+v %v", s4, err)
 	}
 }

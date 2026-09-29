@@ -15,7 +15,7 @@ four, the task form and the background add, is designed in
 | Package | What |
 |---|---|
 | `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain` |
-| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, host and session records |
+| `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, pane, run, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
@@ -199,12 +199,49 @@ truth; labels only place new things.
   views show the laptop's own name for a source it knows. Prunable
   entries, whose directory is gone, are not published; a detached
   worktree has an empty branch. The record's
-  `session` is the managed session whose single pane records the root in
-  `@laatmux_cwd`, joined from the pane poll, so an agent exiting updates
-  the record without a git call. Origin reads are cached by the mtime of
+  `session` is the worktree's home session: the managed session with a
+  pane that records the root in `@laatmux_cwd`, all of whose panes are
+  inside the root, joined from the pane poll, so an agent exiting updates
+  the record without a git call. A split for a shell keeps the home; a
+  pane gone elsewhere takes it away, and the views then jump to the
+  worktree through its agent. For the agent laatmux made at the root,
+  the worktree's workspace session attaches to that agent's managed
+  session. For an agent on this machine's default server, the jump
+  switches to the agent's session; one on a remote host's default
+  server, or on another observed server, cannot be jumped to. `rm`
+  still kills every managed session with a pane laatmux
+  made at the root, home or not, so no agent is left in a removed
+  directory. Origin reads are cached by the mtime of
   `.git/config`, and a checkout with no linked worktree under
   `worktrees/` is not asked, so an idle poll spawns one git process per
   checkout that has one. The id is `<environment_id>/worktree/<root>`.
+- **Attribution**, capability `attribution` (issue #55): every polled
+  pane, on every server in `tmux_servers`, belongs to the worktree whose
+  root contains its path, the recorded `@laatmux_cwd` of a pane laatmux
+  made and `pane_current_path` otherwise. Paths are compared with
+  symlinks resolved, on path separators (`/w/foo-2` is not inside
+  `/w/foo`), the deepest root winning; a pane under no root, the main
+  checkout's included, belongs to none. An agent record carries
+  `worktree_id`, so a worktree has any number of agents. A pane with no
+  agent inside a root is a pane record, `{id, environment_id, server,
+  session, window, pane_id, command, pid, cwd, worktree_id}`, upserted
+  when its command, path or place changes and removed when it leaves
+  every root, goes, or has an agent identified in it: `panes` in a
+  snapshot, `pane` in an upsert, `pane_record_id` in a remove. A `run`
+  job is a run record `{id, environment_id, root, worktree_id, cmd,
+  started_at}` while its process runs: `runs`, `run`, `run_id`. Panes
+  are polled far more often than git lists worktrees; a listing that
+  changes the roots attributes every pane again, so a worktree listed
+  after its pane was seen gains it at once. The views pair a worktree
+  with its agents by `worktree_id` against a host with the capability,
+  reached directly or through a merging daemon that has it too, and by
+  `session` otherwise. A worktree row shows an agent in its home
+  session, or, with no home session, the first started of the agent
+  laatmux made at its root and those on the default server, never chosen
+  by activity, so rows do not swap as agents work; an agent in another
+  managed session stays that session's, and the others keep rows of
+  their own for now. A pane's path is resolved off
+  the poll, so a shell on a hung mount never holds detection up.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
   stages in the note, each step skipped by inspection: resolve, clone
   (refused when `<repos>/<name>` exists with another origin), fetch,
@@ -387,7 +424,11 @@ truth; labels only place new things.
   of `listing` alone when it changes, with `listing_error` when the last
   listing failed. An add's result carries the barrier its mutation made;
   a listing at that revision or later in the same generation reflects
-  it, and so does any successful listing of a later generation.
+  it, and so does any successful listing of a later generation. From a
+  daemon with `attribution` an `rm` that removed a worktree carries the
+  stamp of its removal as `listing` in its result too, and the remove
+  of a worktree carries `removed_in`, the stamp of the listing that
+  found it gone; both date a removal against an add at the same root.
 
 ## Workspaces, client side
 
@@ -398,7 +439,8 @@ running the attach command (`env -u TMUX tmux -L laatmux attach` locally,
 the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
 `<environment_id>/<root>`, the workspace key, `@laatmux_host`, and
 `@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
-pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions are
+pane carries `@laatmux_attach_pane`, `@laatmux_attach_target`, the
+managed session it attaches to, and `remain-on-exit`. Sessions are
 matched on the key, never the name, so a renamed host or repository label
 still finds its session. The host tag is refreshed on every reuse, and the
 source and branch whenever the reuse knows them: the worktree record
@@ -457,7 +499,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   is matched by label. `rm` finds its record the same way.
 - **`jump <host>/<repo>/<branch>`** switches to the workspace session,
   creating it from the record when missing, respawning a dead attach pane,
-  and opening a new attach window when the pane is gone altogether. A
+  and opening a new attach window when the pane is gone altogether. An
+  attach pane on another managed session than the jump's, the worktree's
+  agent having moved to another since, is restarted on the jump's; a
+  pane from before the target was tagged is left as it is, and closing
+  it has the next jump make a tagged one. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. The repository in the target is read as this
@@ -736,8 +782,8 @@ is switched to.
   refused with a message, leaves the sidebar focused and selects the
   row clicked, so the message and `p` and `x` are about it. A
   task's row hands the selection to its worktree row when it hands
-  over, through the handoffs the merged stream carries for a day even
-  when the view missed the steps between. A selected row that goes with
+  over, through the handoffs the merged stream carries even when the
+  view missed the steps between. A selected row that goes with
   nothing to hand over to leaves the selection on none, not on the row
   that took its place, until the row is back or a key moves it.
 - Both refuse a local daemon without `merged` with what to do; a sidebar
@@ -790,9 +836,9 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
 -> {type: subscribe, merged: true}
 <- {type: snapshot, seq, hosts, agents, worktrees, sessions, sessions_error}
 <- {type: upsert, seq, host_status: {...}}          a host's connectivity changed
-<- {type: upsert, seq, agent | worktree: {...}}      as before, from any host
+<- {type: upsert, seq, agent | worktree | pane | run: {...}}   as before, from any host
 <- {type: upsert, seq, local_session: {...}}         a local workspace session changed
-<- {type: remove, seq, host_name | agent_id | worktree_id | local_session_name}
+<- {type: remove, seq, host_name | agent_id | worktree_id | pane_record_id | run_id | local_session_name}
 ```
 
 - **Host records** `{name, ssh, environment_id, connected, listed, error,
@@ -834,8 +880,18 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   is delivered or there was none; the relay takes the host's listings
   until one passes the result's barrier, and a complete record whose
   worktree is in it is retired: the handoff is written to the file,
-  which is kept a day, then the remove is published with `replaced_by`,
-  the worktree row's id. No worktree at the root is `gone`, a record
+  then the remove is published with `replaced_by`, the worktree row's
+  id. The retired record is what says what the worktree was made for:
+  the file is kept, prompt and all, for as long as the worktree is
+  there, and its handoff joins the task to the worktree row in every
+  snapshot. The prompt stays on this machine; the host keeps none of
+  it, and the stream carries the handoff, not the text. The file goes
+  on `laatmux tasks dismiss <id>`, when `rm` drops the tasks at the
+  worktree, when the host reports the worktree removed by a listing
+  after the task's add (`removed_in` on the remove stamps that
+  listing), when the host's listing no longer has it, asked as for a task that needs the
+  user, and a day after the handoff once its host has left the config
+  or answers as another machine. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
   retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
   delivers it; its worktree removed meanwhile, by `rm` here or
@@ -844,8 +900,11 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   reconnect's snapshot or a later poll's, have the host asked again, as
   the handoff asks it, until it answers; a remote host's listings are
   followed while a view is subscribed. `rm` drops the finished tasks at the worktree it
-  removed, through `{type: dismiss, environment_id, root}` to a local
-  daemon that is running and has the capability `dismiss-root`. Until then, `{type: prompt, id}`
+  removed, through `{type: dismiss, environment_id, root, listing}` to a
+  local daemon that is running and has the capability `dismiss-root`,
+  `listing` being the removal's stamp from rm's result; a task that
+  handed over goes only when that stamp is from after its add, and
+  without one the host's listing decides. Until then, `{type: prompt, id}`
   delivers it as the next attempt, written to the file first, one
   unresolved at a time; `recovery expired` from the host ends that, and
   `laatmux tasks show <id>` prints the prompt for pasting by hand. An add
@@ -855,7 +914,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   starts resumes every file: adds without an outcome, open attempts
   first, listings owed. A host gone from the config leaves its records
   waiting with `host removed`. `laatmux add --detach` submits; `laatmux
-  tasks` lists.
+  tasks` lists, the tasks that handed over to their worktrees after the
+  pending ones.
 - **Hosts follow the config file.** The daemon re-reads `hosts` on every
   merged subscription, so a host added shows up on the next `ls`; one
   removed gets a `remove` for its records and then its host record.

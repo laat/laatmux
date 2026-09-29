@@ -51,6 +51,14 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	var roots []root
+	if err == nil {
+		paths := make([]string, 0, len(recs))
+		for _, r := range recs {
+			paths = append(paths, r.Root)
+		}
+		roots = resolveRoots(paths)
+	}
 	if err != nil {
 		if msg := err.Error(); msg != d.lastListErr {
 			d.cfg.Logger.Printf("worktrees: %v", err)
@@ -66,7 +74,9 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		d.lastList = recs
 		d.listed = true
 		d.listing, d.listErr = stamp, ""
-		d.publishWorktreesLocked(time.Now())
+		now := time.Now()
+		d.publishWorktreesLocked(now)
+		d.setRootsLocked(roots, now)
 		d.publishListingLocked()
 		listed := map[string]bool{}
 		for root := range d.worktrees {
@@ -106,15 +116,15 @@ func (d *Daemon) pokeWorktrees() {
 	}
 }
 
-// setManagedRoots records which roots have a managed session, from the
+// setManagedRoots records which roots have a home session, from the
 // managed server's panes. A change re-derives the worktree records from
 // the last git listing, so a session appearing or exiting updates the
 // record without a git call.
 func (d *Daemon) setManagedRoots(panes []tmux.Pane, now time.Time) {
-	roots := managedRoots(panes)
+	roots := homeSessions(panes, d.resolve)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if sameRoots(roots, d.managedRoots) {
+	if sameSessions(roots, d.managedRoots) {
 		return
 	}
 	d.managedRoots = roots
@@ -123,27 +133,7 @@ func (d *Daemon) setManagedRoots(panes []tmux.Pane, now time.Time) {
 	}
 }
 
-// managedRoots maps a root to the managed session whose single pane
-// records it. Two sessions on one root is not a state add creates; the
-// lexically first name wins so the record is stable.
-func managedRoots(panes []tmux.Pane) map[string]string {
-	count := map[string]int{}
-	for _, p := range panes {
-		count[p.Session]++
-	}
-	roots := map[string]string{}
-	for _, p := range panes {
-		if !p.Managed || p.Cwd == "" || count[p.Session] != 1 {
-			continue
-		}
-		if cur, ok := roots[p.Cwd]; !ok || p.Session < cur {
-			roots[p.Cwd] = p.Session
-		}
-	}
-	return roots
-}
-
-func sameRoots(a, b map[string]string) bool {
+func sameSessions(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -184,8 +174,9 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		}
 		delete(d.worktrees, root)
 		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, WorktreeID: d.worktreeID(root)})
-		d.worktreeRemovedLocked(d.worktreeID(root))
+		l := d.listing
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, WorktreeID: d.worktreeID(root), RemovedIn: &l})
+		d.worktreeRemovedLocked(d.worktreeID(root), &l)
 	}
 }
 

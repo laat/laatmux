@@ -416,3 +416,198 @@ func TestPendingOnRenamedHost(t *testing.T) {
 		}
 	}
 }
+
+// From a host with attribution a worktree takes its agent by the
+// worktree id the host gave it: one in its home session, or, with no
+// home session, the first started of the one laatmux made at its root
+// and those on a default server. The others keep rows of their own. A
+// host without attribution pairs by session name.
+func TestBuildByWorktreeID(t *testing.T) {
+	now := time.Now()
+	wt := func(env, root, session string) protocol.Worktree {
+		return protocol.Worktree{ID: env + "/worktree/" + root, EnvironmentID: env, Repo: "proj", Branch: root[3:], Root: root, Session: session}
+	}
+	in := Input{
+		Hosts: []Host{
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "old", EnvironmentID: "oenv", Connected: true, Listed: true, Worktrees: true},
+		},
+		Agents: []protocol.Agent{
+			// /w/a: no home session, a split having left its session; the
+			// agent laatmux made at the root and one on the default
+			// server, the first started shown, and one in another
+			// managed session, which is that session's.
+			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 1, StartUnix: 200}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Managed: true, Cwd: "/w/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 2, StartUnix: 100}},
+			{ID: "venv/laatmux/%8", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/a/sub", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 8, StartUnix: 50}},
+			// /w/b: the home session's idle agent wins over a working one
+			// elsewhere, which keeps its row.
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
+			{ID: "venv/default/%4", EnvironmentID: "venv", Server: "default", Session: "side", Activity: protocol.Working, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
+			// /w/c names a session whose agent is not attributed to it:
+			// with attribution the name is not the link.
+			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Session: "proj/c", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now},
+			// /w/e has a home session with no agent in it: an agent
+			// elsewhere is not the row's, which jumps to the home.
+			{ID: "venv/default/%7", EnvironmentID: "venv", Server: "default", Session: "other", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/e"},
+			// On another observed server, which is not jumped to: never
+			// the row's, though it started first.
+			{ID: "venv//tmp/sock/%9", EnvironmentID: "venv", Server: "/tmp/sock", Session: "obs", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 9, StartUnix: 10}},
+			// A host without attribution: by session, the field ignored.
+			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
+		},
+		Worktrees: []protocol.Worktree{wt("venv", "/w/a", ""), wt("venv", "/w/b", "proj/b"), wt("venv", "/w/c", "proj/c"), wt("oenv", "/w/d", "proj/d"), wt("venv", "/w/e", "proj/e")},
+	}
+	got := Build(in)
+	byID := map[string]Row{}
+	for _, r := range got.All() {
+		byID[r.ID()] = r
+	}
+	agentOf := func(id string) string {
+		if a := byID[id].Agent; a != nil {
+			return a.ID
+		}
+		return ""
+	}
+	for id, want := range map[string]string{
+		"venv/worktree//w/a": "venv/laatmux/%2",
+		"venv/worktree//w/b": "venv/laatmux/%3",
+		"venv/worktree//w/c": "",
+		"oenv/worktree//w/d": "oenv/laatmux/%6",
+		"venv/worktree//w/e": "",
+	} {
+		if got := agentOf(id); got != want {
+			t.Errorf("%s: agent %q, want %q", id, got, want)
+		}
+	}
+	// Rows of their own: the unchosen default-server agents and the
+	// unattributed one; the chosen ones are not repeated.
+	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7", "venv/laatmux/%8", "venv//tmp/sock/%9"} {
+		if _, ok := byID[id]; !ok {
+			t.Errorf("%s has no row", id)
+		}
+	}
+	for _, id := range []string{"venv/laatmux/%2", "venv/laatmux/%3", "oenv/laatmux/%6"} {
+		if _, ok := byID[id]; ok {
+			t.Errorf("%s has a row of its own besides its worktree's", id)
+		}
+	}
+	// The choice does not turn on activity: the two agents of /w/a
+	// swapping which works keep the rows where they were.
+	in.Agents[0].Activity, in.Agents[1].Activity = protocol.Idle, protocol.Blocked
+	for _, r := range Build(in).All() {
+		if r.ID() == "venv/worktree//w/a" && (r.Agent == nil || r.Agent.ID != "venv/laatmux/%2") {
+			t.Errorf("the row's agent changed with activity: %+v", r.Agent)
+		}
+	}
+	// The same records through a view that has no attribution for the
+	// host, a merging daemon older than it say: by session name.
+	in.Hosts[0].Attribution = false
+	got = Build(in)
+	byID = map[string]Row{}
+	for _, r := range got.All() {
+		byID[r.ID()] = r
+	}
+	if a := byID["venv/worktree//w/c"].Agent; a == nil || a.ID != "venv/laatmux/%5" {
+		t.Errorf("fallback: /w/c agent %+v", a)
+	}
+	if a := byID["venv/worktree//w/a"].Agent; a != nil {
+		t.Errorf("fallback: /w/a agent %+v", a)
+	}
+}
+
+// Two agents in one home session: the worktree row shows one and the
+// other keeps a row of its own, whatever order the records come in.
+func TestBuildTwoAgentsOneSession(t *testing.T) {
+	now := time.Now()
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	b := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	for _, attribution := range []bool{true, false} {
+		for _, agents := range [][]protocol.Agent{{a, b}, {b, a}} {
+			got := Build(Input{
+				Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: attribution}},
+				Agents:    agents,
+				Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Session: "proj/a"}},
+			})
+			seen := map[string]int{}
+			for _, r := range got.All() {
+				if r.Agent != nil {
+					seen[r.Agent.ID]++
+				}
+			}
+			if seen[a.ID] != 1 || seen[b.ID] != 1 {
+				t.Errorf("attribution %v, order %s first: agents shown %v", attribution, agents[0].ID, seen)
+			}
+		}
+	}
+}
+
+// A worktree row with no home session whose agent is on this machine's
+// default server stands for that session: the viewer in it is on the
+// row.
+func TestBuildWorktreeRowTakesAgentSession(t *testing.T) {
+	got := Build(Input{
+		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Activity: protocol.Idle,
+			Liveness: protocol.Alive, WorktreeID: "menv/worktree//w/a"}},
+		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}},
+		Locals:    []workspace.Local{{Name: "notes"}},
+		Current:   "notes",
+	})
+	all := got.All()
+	if len(all) != 1 || all[0].Worktree == nil || all[0].Local == nil || all[0].Local.Name != "notes" || !all[0].Current {
+		t.Fatalf("rows %+v", all)
+	}
+}
+
+// A homeless worktree row stands for the session its jump goes to: the
+// worktree's workspace session when its agent is the one laatmux made at
+// the root, never a plain attachment to that session; the agent's own
+// session when the agent is on this machine's default server, whatever
+// workspace session is left.
+func TestBuildHomelessRowLocal(t *testing.T) {
+	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	locals := []workspace.Local{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
+	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
+	got := Build(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}).All()
+	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
+		t.Fatalf("managed agent: %+v", got)
+	}
+	// With no workspace session yet, the plain attachment to the same
+	// managed session is not the row's either.
+	got = Build(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals[1:], Current: "mac/proj/a-old"}).All()
+	if len(got) != 1 || got[0].Local != nil || got[0].Current {
+		t.Fatalf("managed agent without a workspace session: %+v", got)
+	}
+	// An agent on the default server: its session, not the workspace
+	// session left, which, settled, does not settle the row.
+	locals[0].Settled = true
+	notes := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: w.ID}
+	rs := Build(Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "notes"})
+	if len(rs.Main) != 1 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || rs.Main[0].Settled {
+		t.Fatalf("default-server agent: %+v", rs)
+	}
+	// The agent in the worktree's workspace session itself: the row is
+	// settled as that session is.
+	inWorkspace := notes
+	inWorkspace.Session = "mac/proj/a"
+	rs = Build(Input{Hosts: hosts, Agents: []protocol.Agent{inWorkspace}, Worktrees: []protocol.Worktree{w}, Locals: locals})
+	if len(rs.Settled) != 1 || rs.Settled[0].Local == nil || rs.Settled[0].Local.Name != "mac/proj/a" {
+		t.Fatalf("agent in the workspace session: %+v", rs)
+	}
+	// On a remote host's default server the agent's session is not
+	// this machine's: the row keeps the workspace session.
+	remote := []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	rw := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	ra := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: rw.ID}
+	rs = Build(Input{Hosts: remote, Agents: []protocol.Agent{ra}, Worktrees: []protocol.Worktree{rw},
+		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"})
+	if all := rs.All(); len(all) != 1 || all[0].Local == nil || all[0].Local.Name != "vm/proj/a" || !all[0].Current {
+		t.Fatalf("remote default-server agent: %+v", rs)
+	}
+}

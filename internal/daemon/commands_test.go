@@ -438,20 +438,29 @@ func TestWorktreeRecords(t *testing.T) {
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	up := <-got
+	// The pane, with no agent in it, is the worktree's pane record.
+	worktreeMsg := func() protocol.Message {
+		for m := range got {
+			if m.Pane == nil && m.PaneRecordID == "" {
+				return m
+			}
+		}
+		return protocol.Message{}
+	}
+	up := worktreeMsg()
 	if up.Type != protocol.TypeUpsert || up.Worktree == nil || up.Worktree.Session != "proj/task" {
 		t.Fatalf("upsert %+v", up)
 	}
 	// The pane goes: the session field clears.
 	ft.panes = nil
 	d.poll(ctx)
-	if up := <-got; up.Worktree == nil || up.Worktree.Session != "" {
+	if up := worktreeMsg(); up.Worktree == nil || up.Worktree.Session != "" {
 		t.Fatalf("upsert %+v", up)
 	}
 	// The directory goes: git calls it prunable and the record is removed.
 	os.RemoveAll(added.Root)
 	d.pollWorktrees(ctx)
-	if rm := <-got; rm.Type != protocol.TypeRemove || rm.WorktreeID != "env/worktree/"+added.Root {
+	if rm := worktreeMsg(); rm.Type != protocol.TypeRemove || rm.WorktreeID != "env/worktree/"+added.Root || rm.RemovedIn == nil || rm.Listing != nil {
 		t.Fatalf("remove %+v", rm)
 	}
 }

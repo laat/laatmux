@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/laat/laatmux/internal/client"
@@ -269,30 +270,60 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", r.Host)
 	}
-	var spec workspace.Spec
-	switch {
-	case r.Worktree != nil:
-		if r.Worktree.Session == "" {
-			return errors.New(addHint(cfg, h, *r.Worktree))
-		}
-		spec = worktreeSpec(cfg, h, *r.Worktree)
-	case r.Agent != nil:
-		how, err := jumpMode(h.Host, tmux.Parse(rows.Server(*r.Agent)), r.Agent.Session)
-		if err != nil {
-			return err
-		}
-		if how == jumpSwitch {
-			return switchTo(ctx, r.Agent.Session)
-		}
-		spec = workspace.Spec{Host: h.Host, Managed: r.Agent.Session, Name: h.Name + "/" + r.Agent.Session}
-	default:
-		return errors.New(r.Name + ": nothing to jump to")
+	spec, session, err := rowSpec(cfg, h, r)
+	if err != nil {
+		return err
+	}
+	if session != "" {
+		return switchTo(ctx, session)
 	}
 	name, _, err := workspace.Ensure(ctx, spec)
 	if err != nil {
 		return err
 	}
 	return switchTo(ctx, name)
+}
+
+// rowSpec is where a row's jump goes: the workspace session to make or
+// find, or the session on this machine's default server to switch to.
+func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec, session string, err error) {
+	switch {
+	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
+		if r.Worktree.Session == "" {
+			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))
+		}
+		return worktreeSpec(cfg, h, *r.Worktree), "", nil
+	case r.Worktree != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
+		// A worktree whose own session lost the home, a split in it gone
+		// elsewhere say: the row's agent is the one laatmux made at the
+		// root, and the worktree's workspace session attaches to that
+		// session as it did while it was the home, so the worktree keeps
+		// one local session whether or not it has a home. The local
+		// session is named after the worktree, as add names the one it
+		// makes, not after the agent's session, which panes moved in by
+		// hand could make another worktree's too.
+		w := *r.Worktree
+		w.Session = r.Agent.Session
+		spec := worktreeSpec(cfg, h, w)
+		if w.Branch != "" {
+			spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
+		} else {
+			spec.Name = h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
+		}
+		return spec, "", nil
+	case r.Agent != nil:
+		// An agent's row, or a worktree's without a home session whose
+		// agent is on a default server.
+		how, err := jumpMode(h.Host, tmux.Parse(rows.Server(*r.Agent)), r.Agent.Session)
+		if err != nil {
+			return spec, "", err
+		}
+		if how == jumpSwitch {
+			return spec, r.Agent.Session, nil
+		}
+		return workspace.Spec{Host: h.Host, Managed: r.Agent.Session, Name: h.Name + "/" + r.Agent.Session}, "", nil
+	}
+	return spec, "", errors.New(r.Name + ": nothing to jump to")
 }
 
 // pendingTarget is a pending task's row made ready for the jump: a

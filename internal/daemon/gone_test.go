@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -415,4 +418,179 @@ func TestRelayCancelledCheckLeavesNoMemo(t *testing.T) {
 		t.Fatal("the listing was not checked again")
 	}
 	f.local.stopRunners("c1")
+}
+
+// delivered makes a task that hands over: the add done and its prompt
+// delivered on the argv.
+func delivered(t *testing.T, f *relayFixture, id, branch string) pendingFile {
+	t.Helper()
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: id, Relay: "vm", Repo: f.source(), Name: "proj", Branch: branch, AgentName: "argv", Prompt: "made for " + branch, SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	return f.awaitRecord(t, id, 30*time.Second, func(p pendingFile) bool { return p.retired() })
+}
+
+// A task that handed over is kept, prompt and all, while its worktree
+// is there, and goes when the host says the worktree is gone.
+func TestRelayRetiredGoesWithWorktree(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, nil)
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	p := delivered(t, f, "h1", "kept")
+	if p.PromptText != "made for kept" {
+		t.Fatalf("record %+v", p)
+	}
+	// Listings that have the worktree keep it.
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{p.ReplacedBy: true}, false)
+	f.local.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	if _, ok := f.local.relay.get("h1"); !ok {
+		t.Fatal("dropped while the worktree is listed")
+	}
+	rmOnHost(t, f, "rm-h1", "kept", p.Root)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, ok := f.local.relay.get("h1"); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retired record kept after its worktree went")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("h1"))); err == nil {
+		t.Fatal("file kept")
+	}
+}
+
+// rm's dismiss at the worktree drops a task that handed over there.
+// Only by the removal's stamp, and only when the stamp is from after the
+// task's add: an rm answered late must not take the task of a worktree
+// made at the root since.
+func TestRelayDismissAtRetired(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, nil)
+	p := delivered(t, f, "h2", "gone")
+	b := *p.Barrier
+	for i, stamp := range []*protocol.Listing{nil, {Generation: b.Generation, Revision: b.Revision - 1}, {Generation: b.Generation, Revision: b.Revision + 1}} {
+		if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "req-h2", EnvironmentID: "henv", Root: p.Root, Listing: stamp}); !res.OK {
+			t.Fatalf("dismiss at: %+v", res)
+		}
+		if _, ok := f.local.relay.get("h2"); ok != (i < 2) {
+			t.Fatalf("stamp %+v: kept %v", stamp, ok)
+		}
+	}
+}
+
+// A check that began on a task that then handed over drops the retired
+// record rather than leaving it, prompt and all, for good.
+func TestRelayGoneAfterHandoffDrops(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	f.local.relay.mu.Lock()
+	f.local.relay.recs["k3"] = &pendingFile{Pending: protocol.Pending{ID: "k3", Host: "vm", EnvironmentID: "henv", Root: "/w/k3", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k3"}
+	f.local.relay.recs["k4"] = &pendingFile{Pending: protocol.Pending{ID: "k4", Host: "vm", EnvironmentID: "henv", Root: "/w/k4", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}, PromptText: "p"}
+	f.local.relay.mu.Unlock()
+	f.local.worktreeGone(f.ctx, "k3")
+	if _, ok := f.local.relay.get("k3"); ok {
+		t.Fatal("retired record kept")
+	}
+	f.local.worktreeGone(f.ctx, "k4")
+	if p, ok := f.local.relay.get("k4"); !ok || !p.Gone {
+		t.Fatalf("task needing the user: %+v %v", p, ok)
+	}
+}
+
+// A retired record whose file cannot be removed is tried again on the
+// next listing, the same listing included.
+func TestRelayDropRetiredRetries(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k5", Host: "vm", EnvironmentID: "henv", Root: "/w/k5", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k5"}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.relay.mu.Lock()
+	f.local.relay.checked["k5"] = "sig"
+	f.local.relay.mu.Unlock()
+	if err := os.Chmod(f.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	f.local.dropRetired("k5")
+	os.Chmod(f.dir, 0o700)
+	f.local.relay.mu.Lock()
+	_, kept := f.local.relay.recs["k5"]
+	_, checked := f.local.relay.checked["k5"]
+	f.local.relay.mu.Unlock()
+	if !kept || checked {
+		t.Fatalf("after a failed removal: kept %v, checked %v", kept, checked)
+	}
+	f.local.dropRetired("k5")
+	if _, ok := f.local.relay.get("k5"); ok {
+		t.Fatal("kept after the directory was writable again")
+	}
+}
+
+// A host's report that a worktree is gone drops the task that handed
+// over to it at once when the listing that found it gone reflects the
+// task's add; a report from before the add, delayed, is of a worktree
+// the root had before, and leaves the task to the listing's check.
+func TestRelayRetiredDroppedOnRemoval(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k6", Host: "vm", EnvironmentID: "henv", Root: "/w/k6", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered},
+		PromptText: "p", ReplacedBy: "henv/worktree//w/k6", Barrier: &protocol.Listing{Generation: 5, Revision: 3}}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.dropRetiredAt("henv/worktree//w/other", protocol.Listing{Generation: 5, Revision: 9})
+	f.local.dropRetiredAt("henv/worktree//w/k6", protocol.Listing{Generation: 5, Revision: 2})
+	if _, ok := f.local.relay.get("k6"); !ok {
+		t.Fatal("dropped for another worktree, or by a removal from before the add")
+	}
+	f.local.mu.Lock()
+	f.local.worktreeRemovedLocked("henv/worktree//w/k6", &protocol.Listing{Generation: 5, Revision: 3})
+	f.local.mu.Unlock()
+	f.awaitGone(t, "k6")
+}
+
+// The sweep takes a host's answer only from the host as the config has
+// it now: a cached answer from an entry since changed drops nothing.
+func TestRelaySweepIgnoresStaleAnswer(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k7", Host: "vm", EnvironmentID: "henv", Root: "/w/k7", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered},
+		PromptText: "p", ReplacedBy: "henv/worktree//w/k7", RetiredAt: time.Now().Add(-2 * handoffRetention)}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.mu.Lock()
+	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "elsewhere"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "other"}}
+	f.local.mu.Unlock()
+	f.local.sweepRelay(time.Now())
+	if _, ok := f.local.relay.get("k7"); !ok {
+		t.Fatal("swept on an answer from an entry the config no longer has")
+	}
+	f.local.mu.Lock()
+	f.local.mhosts["vm"].host = client.Host{Name: "vm", SSH: "vm"}
+	f.local.mu.Unlock()
+	f.local.sweepRelay(time.Now())
+	if _, ok := f.local.relay.get("k7"); ok {
+		t.Fatal("kept though the host answers as another machine")
+	}
+}
+
+// awaitGone waits for the relay to have dropped the record.
+func (f *relayFixture) awaitGone(t *testing.T, id string) {
+	t.Helper()
+	for i := 0; ; i++ {
+		if _, ok := f.local.relay.get(id); !ok {
+			return
+		}
+		if i > 500 {
+			t.Fatalf("%s kept", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

@@ -19,6 +19,10 @@ import (
 // worktree the listing does not have makes the task gone. A host that
 // disconnects, or whose listing failed, says nothing about its
 // worktrees and is not a removal.
+//
+// A task that has handed over to its worktree row is kept for the
+// worktree's life, and is checked the same way: once the host says the
+// worktree is gone, its record goes, prompt and all.
 
 // tasksAtLocked schedules the check for every listed task that match
 // selects, against the listing sig names, "" for a reported removal or a
@@ -31,9 +35,30 @@ func (d *Daemon) tasksAtLocked(sig string, match, shown func(protocol.Pending) b
 	go d.recheckTasks(sig, match, shown)
 }
 
-// worktreeRemovedLocked is a worktree the host reported gone.
-func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
+// worktreeRemovedLocked is a worktree the host reported gone, in the
+// listing stamped at, nil from a daemon that does not say. A task that
+// handed over to it goes at once when that listing reflects its add:
+// the report is then the end of the worktree the task made, and asking
+// the listing could find one made again at the root since. A report
+// from before the add, delayed, is of a worktree the root had before,
+// and the task is checked against the listing as every other is.
+func (d *Daemon) worktreeRemovedLocked(worktreeID string, at *protocol.Listing) {
+	if d.relay != nil && at != nil {
+		go d.dropRetiredAt(worktreeID, *at)
+	}
 	d.tasksAtLocked("", func(p protocol.Pending) bool { return p.WorktreeID() == worktreeID }, nil)
+}
+
+// dropRetiredAt drops the tasks that handed over to the worktree whose
+// adds the listing that found it gone reflects.
+func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	for id, p := range d.relay.recs {
+		if p.retired() && p.ReplacedBy == worktreeID && p.Barrier != nil && at.Satisfies(*p.Barrier) {
+			d.dropRetiredLocked(id)
+		}
+	}
 }
 
 // hostListedLocked is a host's successful listing of worktrees: a task
@@ -63,7 +88,7 @@ func (d *Daemon) hostListedLocked(environmentID string, listed map[string]bool, 
 }
 
 // recheckTasks starts a check for each task that match selects and
-// that is listed, not gone and not retired. A task already checked
+// that is listed and not gone, retired or not. A task already checked
 // against a listing with this very content is not checked again, until
 // a listing that shows its worktree, which shown selects, clears that:
 // content can recur, a listing from before the worktree was made and
@@ -83,7 +108,7 @@ func (d *Daemon) recheckTasks(sig string, match, shown func(protocol.Pending) bo
 			delete(d.relay.checked, id)
 			continue
 		}
-		if !p.Listed || p.Gone || p.retired() || p.WorktreeID() == "" || !match(p.Pending) {
+		if !p.Listed || p.Gone || p.WorktreeID() == "" || !match(p.Pending) {
 			continue
 		}
 		if sig != "" && d.relay.checked[id] == sig {
@@ -120,20 +145,21 @@ func (d *Daemon) recheckTasks(sig string, match, shown func(protocol.Pending) bo
 }
 
 // checkGone asks the task's host whether its worktree is still listed,
-// and marks the task gone when it is not. A host that cannot be asked,
-// down or its listings failing, is asked again with backoff until it
-// answers, the task is dismissed, or the daemon stops.
+// and marks the task gone when it is not, or drops it when it had handed
+// over. A host that cannot be asked, down or its listings failing, is
+// asked again with backoff until it answers, the task is dismissed, or
+// the daemon stops.
 func (d *Daemon) checkGone(ctx context.Context, id string) {
 	wait := d.cfg.ReconnectMin
 	for ctx.Err() == nil {
 		p, ok := d.relay.get(id)
-		if !ok || !p.Listed || p.Gone || p.retired() {
+		if !ok || !p.Listed || p.Gone {
 			return
 		}
 		present, ok := d.listingHas(ctx, id, p)
 		if ok {
 			if !present {
-				d.persist(ctx, id, func(p *pendingFile) { p.Gone = true })
+				d.worktreeGone(ctx, id)
 			}
 			return
 		}
@@ -148,8 +174,11 @@ func (d *Daemon) checkGone(ctx context.Context, id string) {
 // a finished one goes, through the settled path under the record's own
 // locks: one whose add is still running, or whose attempt is open,
 // stays, whatever its host, and is marked gone once the listing lacks
-// its worktree. The answer is ok whatever was dropped.
-func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Message {
+// its worktree. A task that handed over goes when removed, the stamp of
+// rm's removal, reflects its add: an rm answered late must not take the
+// task of a worktree made at the root since, and without the stamp the
+// listing's check decides. The answer is ok whatever was dropped.
+func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *protocol.Listing) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: requestID, OK: true}
 	if d.relay == nil {
 		res.OK, res.Error = false, "this daemon has no relay capability"
@@ -158,13 +187,57 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Messa
 	var ids []string
 	d.relay.mu.Lock()
 	for id, p := range d.relay.recs {
-		if p.EnvironmentID == environmentID && p.Root == root && !p.retired() {
-			ids = append(ids, id)
+		if p.EnvironmentID != environmentID || p.Root != root {
+			continue
 		}
+		if p.retired() {
+			if removed != nil && p.Barrier != nil && removed.Satisfies(*p.Barrier) {
+				d.dropRetiredLocked(id)
+			}
+			continue
+		}
+		ids = append(ids, id)
 	}
 	d.relay.mu.Unlock()
 	for _, id := range ids {
 		d.dismissEnded(id)
 	}
 	return res
+}
+
+// worktreeGone marks the task gone, its worktree not listed, or drops
+// it when it has handed over. The record as it is now decides, not the
+// copy the check began with: one that handed over while the host was
+// asked is dropped, which persist, refusing a retired record, leaves to
+// dropRetired.
+func (d *Daemon) worktreeGone(ctx context.Context, id string) {
+	if _, ok := d.persist(ctx, id, func(p *pendingFile) { p.Gone = true }); !ok {
+		d.dropRetired(id)
+	}
+}
+
+// dropRetired removes a record that had handed over, its worktree gone:
+// nothing is left for the prompt to say what it was made for. The
+// stream has no message for it; its handoff is absent from the next
+// snapshot.
+func (d *Daemon) dropRetired(id string) error {
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	return d.dropRetiredLocked(id)
+}
+
+// dropRetiredLocked is dropRetired with the relay's mutex held. A file
+// that cannot be removed leaves the record unchecked, so the next
+// listing without its worktree tries again rather than passing over a
+// listing already checked.
+func (d *Daemon) dropRetiredLocked(id string) error {
+	if p, ok := d.relay.recs[id]; !ok || !p.retired() {
+		return nil
+	}
+	if err := d.relay.removeLocked(id); err != nil {
+		d.cfg.Logger.Printf("pending: drop %s: %v", id, err)
+		delete(d.relay.checked, id)
+		return err
+	}
+	return nil
 }

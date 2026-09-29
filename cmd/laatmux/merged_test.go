@@ -235,3 +235,56 @@ func TestRecordRepoKeepsSpelling(t *testing.T) {
 		t.Fatal("an unknown source matched")
 	}
 }
+
+// A host's attribution reaches the rows only when the merging daemon
+// forwards it: one older than attribution drops the worktree from every
+// agent it forwards, and the rows then pair by session name.
+func TestMergedAttributionNeedsForwarding(t *testing.T) {
+	m := newMerged()
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
+			Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution}}}})
+	attribution := func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, h := range m.input(nil, "").Hosts {
+			if h.Name == "vm" {
+				return h.Attribution
+			}
+		}
+		t.Fatal("no host vm")
+		return false
+	}
+	if !attribution() {
+		t.Fatal("attribution lost on the direct path")
+	}
+	m.stripped = true
+	if attribution() {
+		t.Fatal("attribution through a merging daemon that drops it")
+	}
+}
+
+// tasks lists the pending records, then the tasks that handed over,
+// named by their worktree when it is listed; handed-over tasks alone
+// are listed too.
+func TestTaskReport(t *testing.T) {
+	m := newMerged()
+	if got := m.taskReport(); got != "no pending tasks\n" {
+		t.Fatalf("empty: %q", got)
+	}
+	m.hosts["vm"] = hostState{EnvID: "venv"}
+	m.worktrees["venv/worktree//w/a"] = protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	m.byHost["venv/worktree//w/a"] = "vm"
+	m.handoffLocked("t1", "venv/worktree//w/a")
+	m.handoffLocked("t2", "venv/worktree//w/gone")
+	got := m.taskReport()
+	want := "t1  handed over to proj/a on vm; laatmux tasks show t1 prints its prompt, tasks dismiss drops it\n" +
+		"t2  handed over to venv/worktree//w/gone; laatmux tasks show t2 prints its prompt, tasks dismiss drops it\n"
+	if got != want {
+		t.Fatalf("handed over only:\n%s\nwant\n%s", got, want)
+	}
+	m.pendings["p1"] = protocol.Pending{ID: "p1", Host: "vm", Repo: "proj", Branch: "b"}
+	if got := m.taskReport(); !strings.HasPrefix(got, "p1  proj/b on vm") || !strings.HasSuffix(got, want) {
+		t.Fatalf("with a pending record:\n%s", got)
+	}
+}

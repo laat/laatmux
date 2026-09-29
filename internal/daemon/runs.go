@@ -25,6 +25,8 @@ const DefaultKillDelay = 5 * time.Second
 // root so rm can stop it. It is cancellable from registration on; a
 // cancel before the process has started means it never starts.
 type runJob struct {
+	id   string   // the command id
+	argv []string // the command
 	root string
 	mu   sync.Mutex // holds the start, so a cancel lands before or after it, never during
 	// cancelled is set by the first cancel, under mu; cancel is closed
@@ -83,6 +85,7 @@ func (d *Daemon) registerRun(r *runJob, gen uint64) error {
 func (d *Daemon) unregisterRun(r *runJob) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.runEndedLocked(r)
 	if rs := d.runs[r.root]; rs != nil {
 		delete(rs, r)
 		if len(rs) == 0 {
@@ -182,7 +185,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		if !d.cfg.Store.Owns(root) {
 			return fmt.Errorf("%s is not under the worktrees directory %s", root, d.cfg.Store.Dirs.Worktrees)
 		}
-		r.root = root
+		r.id, r.argv, r.root = m.ID, m.Cmd, root
 		// The generation is read before git is asked, so a removal
 		// between the two is seen at registration.
 		gen := d.runGen(root)
@@ -277,6 +280,7 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 	if err != nil {
 		return 0, err
 	}
+	d.runStarted(r, time.Now())
 	var wg sync.WaitGroup
 	for i, pr := range pipes {
 		wg.Add(1)

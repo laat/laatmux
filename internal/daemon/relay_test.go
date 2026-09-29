@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -185,8 +187,7 @@ func (f *relayFixture) awaitRecord(t *testing.T, id string, wait time.Duration, 
 // A relayed add: accepted once the file is on disk, prompt included;
 // run against the host and followed to its result, the record in the
 // merged stream as it goes; then, the listing after the result seen,
-// handed over to the worktree row with the prompt scrubbed and the
-// handoff kept.
+// handed over to the worktree row, the handoff and the prompt kept.
 func TestRelayAdd(t *testing.T) {
 	f := newRelayFixture(t, nil)
 	c, pc, snap := f.merged(t)
@@ -218,9 +219,18 @@ func TestRelayAdd(t *testing.T) {
 	if !last.Done || !last.OK || last.Prompt != protocol.DeliveryDelivered || last.Root != root || last.Branch != "task" || last.EnvironmentID != "henv" || !last.Taken || !last.Reachable || !last.Sent {
 		t.Fatalf("last record %+v", last)
 	}
+	// The prompt stays with the record for the worktree's life.
 	p := readPending(t, f.dir, "t1")
-	if p.PromptText != "" || p.ReplacedBy != rm.ReplacedBy || p.RetiredAt.IsZero() || !p.Listed {
+	if p.PromptText != "the secret" || p.ReplacedBy != rm.ReplacedBy || p.RetiredAt.IsZero() || !p.Listed {
 		t.Fatalf("file after handoff: %+v", p)
+	}
+	// A daemon that starts again reads it back.
+	again, err := openRelay(f.dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := again.get("t1"); !ok || p.PromptText != "the secret" || !p.retired() {
+		t.Fatalf("after a restart: %+v %v", p, ok)
 	}
 	c2, _, snap2 := f.merged(t)
 	defer c2.Close()
@@ -255,17 +265,24 @@ func TestRelayAdd(t *testing.T) {
 	if added != 2 { // the add's connection and the listing's
 		t.Fatalf("%d dials for one task", added)
 	}
-	// A retired record is not dismissed: its handoff is kept.
-	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1"}); res.OK || !strings.Contains(res.Error, "handed over") {
+	// Kept past the retention while its host is configured and answers
+	// as the machine it ran on, prompt and all, and swept after it once
+	// the host has left the config or answers as another machine.
+	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(host, env string) bool { return host == "vm" && env == "henv" })
+	if p, ok := f.local.relay.get("t1"); !ok || p.PromptText == "" {
+		t.Fatalf("retired record %+v kept %v", p, ok)
+	}
+	// A retired record is the user's to drop, prompt and all, before
+	// its worktree goes.
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "t1b"}); !res.OK {
 		t.Fatalf("dismiss retired %+v", res)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err != nil {
-		t.Fatal("retired file dismissed")
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1b"))); err == nil {
+		t.Fatal("retired file kept after dismiss")
 	}
-	// Swept after the retention.
-	f.local.relay.sweep(time.Now().Add(handoffRetention + time.Second))
+	f.local.relay.sweep(time.Now().Add(handoffRetention+time.Second), func(host, env string) bool { return host != "vm" || env != "henv" })
 	if _, err := os.Stat(filepath.Join(f.dir, FileName("t1"))); err == nil {
-		t.Fatal("retired file kept past the retention")
+		t.Fatal("retired file kept past the retention with its host gone")
 	}
 }
 
@@ -295,7 +312,7 @@ func TestRelayPromptLater(t *testing.T) {
 	if rm.ReplacedBy == "" {
 		t.Fatalf("remove %+v", rm)
 	}
-	if p := readPending(t, f.dir, "t2"); p.PromptText != "" || p.Attempt != 1 || p.AttemptOpen {
+	if p := readPending(t, f.dir, "t2"); p.PromptText != "later" || p.Attempt != 1 || p.AttemptOpen {
 		t.Fatalf("file %+v", p)
 	}
 	if e := readEntry(t, f.host, "t2"); len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered {
@@ -355,7 +372,7 @@ func TestRelayResumesFiles(t *testing.T) {
 		}
 	}
 	p := f.awaitRecord(t, "r3", 30*time.Second, func(p pendingFile) bool { return !p.AttemptOpen })
-	if p.Prompt != protocol.DeliveryDelivered || p.PromptText != "" {
+	if p.Prompt != protocol.DeliveryDelivered || p.PromptText != "three" {
 		t.Fatalf("r3: %+v", p)
 	}
 	if e := readEntry(t, f.host, "r3"); len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered {

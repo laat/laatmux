@@ -32,12 +32,20 @@ import (
 //
 // Accepting a task means it cannot be lost: the file is on disk before
 // the answer, prompt included, mode 0600, and a daemon that starts
-// picks up every file it finds. The prompt leaves the file when the
-// delivery is delivered or none, or on dismiss.
+// picks up every file it finds.
+//
+// The file is also what says what a worktree was made for. A record
+// that has handed over to its worktree row is kept, prompt and all, for
+// as long as the worktree is there, and its handoff joins the task to
+// the row in the merged stream. The prompt never leaves this machine
+// after the add: the host keeps none of it, and the stream carries the
+// handoff, not the text; tasks show prints it. The file goes on
+// dismiss, when rm removes the worktree, and when the host's listing
+// no longer has the worktree.
 
 const (
-	// handoffRetention is how long a retired record's file, and its
-	// handoff in snapshots, are kept.
+	// handoffRetention is how long a retired record whose host has left
+	// the config is kept: nothing can say its worktree is gone then.
 	handoffRetention = 24 * time.Hour
 	relaySweep       = time.Hour
 	// relayOutcomeUnknown is the error of an add that cannot be sent
@@ -217,12 +225,15 @@ func (r *relay) removeLocked(id string) error {
 	return nil
 }
 
-// sweep deletes the records retired longer than the handoff retention.
-func (r *relay) sweep(now time.Time) {
+// sweep deletes the records retired longer than the handoff retention
+// that nothing can check any more: keep says which can, a host still
+// configured and answering as the machine the task ran on. Those go
+// with their worktree.
+func (r *relay) sweep(now time.Time, keep func(host, environmentID string) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, p := range r.recs {
-		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention {
+		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention || keep(p.Host, p.EnvironmentID) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -494,7 +505,7 @@ func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFil
 // startRelays resumes every record a daemon finds at start: an add
 // without an outcome is followed, an attempt left open is followed
 // before anything else, a success whose listing has not been seen is
-// waited on, and a retired record is kept for its handoff.
+// waited on, and a retired record is kept for its worktree's life.
 func (d *Daemon) startRelays(ctx context.Context) {
 	ps, _ := d.relay.pendings()
 	for _, p := range ps {
@@ -520,13 +531,43 @@ func (d *Daemon) runRelaySweep(ctx context.Context) {
 	t := time.NewTicker(relaySweep)
 	defer t.Stop()
 	for {
-		d.relay.sweep(time.Now())
+		d.sweepRelay(time.Now())
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// sweepRelay sweeps the retired records nothing can check any more. A
+// config that does not read keeps every record. A host that answers as
+// another machine now, reinstalled under its name say, lists none of
+// the old one's worktrees; its answer is only taken from the host as
+// the config has it now, since one cached from an entry changed since
+// says nothing.
+func (d *Daemon) sweepRelay(now time.Time) {
+	hosts, err := d.cfg.Hosts()
+	configured := map[string]client.Host{}
+	for _, h := range hosts {
+		configured[h.Name] = h
+	}
+	answers := map[string]string{}
+	d.mu.Lock()
+	for name, mh := range d.mhosts {
+		if h, ok := configured[name]; ok && h == mh.host {
+			answers[name] = mh.status.EnvironmentID
+		}
+	}
+	d.mu.Unlock()
+	d.relay.sweep(now, func(host, env string) bool {
+		if err != nil {
+			return true
+		}
+		_, isConfigured := configured[host]
+		answer, known := answers[host]
+		return isConfigured && (!known || answer == "" || answer == env)
+	})
 }
 
 // relayConn is one connection to the task's host, held to the
@@ -743,9 +784,6 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 					p.Error = "failed at " + res.Stage + ": " + res.Error
 				}
 			}
-			if p.Delivered() {
-				p.PromptText = ""
-			}
 		})
 		break
 	}
@@ -929,8 +967,8 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 }
 
 // handoff retires the record into its worktree row: the handoff is
-// written to the file, which is kept for a day, before the removal is
-// published, so a daemon restarted in between still carries it. When
+// written to the file, which is kept for the worktree's life, before the
+// removal is published, so a daemon restarted in between still carries it. When
 // a merged subscriber is watching, the removal waits for the merged
 // stream to show the worktree, so the row is never gone before the
 // one it became is there.
@@ -986,7 +1024,7 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		}
 		now := time.Now()
 		_, err := d.relay.updateLocked(id, true, func(p *pendingFile) {
-			p.Listed, p.ReplacedBy, p.RetiredAt, p.PromptText = true, worktreeID, now, ""
+			p.Listed, p.ReplacedBy, p.RetiredAt = true, worktreeID, now
 		})
 		if err == nil {
 			d.publishRemoved(id, worktreeID)
@@ -1043,9 +1081,14 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 	}
 	switch {
 	case p.retired():
-		// Kept for its handoff, which a view may still need; the sweep
-		// takes it after the day.
-		res.Error = "the task " + id + " has handed over to its worktree row; nothing to dismiss"
+		// Kept for what its worktree was made for; the user may drop it,
+		// prompt and all, before the worktree goes. Its handoff leaves
+		// the next snapshot, as when the worktree goes.
+		if err := d.dropRetired(id); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
 		return res
 	case !p.Sent && !p.Taken:
 		// The host has no trace of it: removed first, under the relay's
@@ -1205,10 +1248,10 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "no pending record " + id
 	case !p.Done:
 		res.Error = "the add is still running"
-	case p.PromptText == "":
-		res.Error = "no prompt retained for " + id
 	case p.Delivered():
 		res.Error = "the prompt is delivered"
+	case p.PromptText == "":
+		res.Error = "no prompt retained for " + id
 	case !p.OK:
 		// An add that failed has no agent of its own to deliver to; the
 		// prompt is the user's, tasks show prints it.
@@ -1347,9 +1390,6 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 			p.AttemptOpen = false
 			if res.OK {
 				p.Prompt, p.Error, p.AttemptError = res.Prompt, res.Error, ""
-				if p.Delivered() {
-					p.PromptText = ""
-				}
 				return
 			}
 			// The host refused the attempt and recorded nothing: the

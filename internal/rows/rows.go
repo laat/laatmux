@@ -1,13 +1,15 @@
 // Package rows builds the rows the listing, the sidebar and the dashboard
 // show: the relay's pending tasks first, then each host's worktrees
-// joined with its agents by the managed session the worktree record
-// names, then agents with no worktree, then observed agents on other
+// joined with its agents, by the worktree the host attributed each agent
+// to or, from a host without attribution, by the managed session the
+// worktree record names, then agents with no worktree, then observed agents on other
 // servers, then the local sessions whose worktree is gone. The three
 // views draw the same rows; this is the one place the join is made.
 package rows
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -30,7 +32,11 @@ type Host struct {
 	Connected bool
 	Listed    bool
 	Worktrees bool
-	Error     string
+	// Attribution is that the host's agent records carry the worktree
+	// they belong to, and reach the view with it: a worktree row takes
+	// its agent by that, not by session name.
+	Attribution bool
+	Error       string
 }
 
 // Input is everything the rows are built from.
@@ -351,6 +357,34 @@ func Build(in Input) Rows {
 			bySession[a.EnvironmentID+"\x00"+a.Session] = a
 		}
 	}
+	// From a host with attribution the agents come to a worktree by
+	// the worktree id the host gave them, from any session and server.
+	attributes := func(env string) bool {
+		h, ok := hosts[byEnv[env]]
+		return ok && h.Attribution
+	}
+	byWorktree := map[string][]*protocol.Agent{}
+	for i := range in.Agents {
+		if a := &in.Agents[i]; a.WorktreeID != "" && attributes(a.EnvironmentID) {
+			byWorktree[a.WorktreeID] = append(byWorktree[a.WorktreeID], a)
+		}
+	}
+	// agentLocal is the local session an agent's row stands for: the
+	// plain attachment to its managed session, or the observed session
+	// itself on this machine's own default server, whatever tags it
+	// carries.
+	agentLocal := func(host string, a *protocol.Agent) *workspace.Local {
+		switch {
+		case Server(*a) == tmux.LaatmuxServer.Label():
+			return byAttach[host+"/"+a.Session]
+		case hosts[host].Local && Server(*a) == tmux.DefaultServer.Label():
+			if l := byName[a.Session]; l != nil {
+				return l
+			}
+			return &workspace.Local{Name: a.Session}
+		}
+		return nil
+	}
 	used := map[*protocol.Agent]bool{}
 	var rows []Row
 	seenKey := map[string]bool{}
@@ -380,16 +414,34 @@ func Build(in Input) Rows {
 		} else {
 			r.Name = w.Repo + "/" + w.Branch
 		}
-		if w.Session != "" {
+		switch {
+		case attributes(w.EnvironmentID):
+			if a := rowAgent(byWorktree[w.ID], w); a != nil {
+				r.Agent, used[a] = a, true
+			}
+		case w.Session != "":
 			if a := bySession[w.EnvironmentID+"\x00"+w.Session]; a != nil {
 				r.Agent, used[a] = a, true
 			}
 		}
 		key := workspace.Key(w.EnvironmentID, w.Root)
 		seenKey[key] = true
-		if l := byKey[key]; l != nil {
-			r.Local, r.Settled = l, l.Settled
+		if w.Session == "" && r.Agent != nil && Server(*r.Agent) == tmux.DefaultServer.Label() {
+			// With no home session and its agent on this machine's
+			// default server the row is jumped to by switching to the
+			// agent's session, and stands for it, whatever workspace
+			// session is left. One whose agent is in a managed session
+			// is attached to through the worktree's own workspace
+			// session, and one on a remote host's default server cannot
+			// be jumped to, and keeps the workspace session.
+			r.Local = agentLocal(host, r.Agent)
 		}
+		if r.Local == nil {
+			r.Local = byKey[key]
+		}
+		// Settled as the session the row stands for is: settling is that
+		// session's.
+		r.Settled = r.Local != nil && r.Local.Settled
 		if idx := byAlias[w.ID]; len(idx) > 0 {
 			for _, j := range idx {
 				pendings[j].Worktree, pendings[j].Agent, pendings[j].Local = r.Worktree, r.Agent, r.Local
@@ -435,34 +487,23 @@ func Build(in Input) Rows {
 		}
 	}
 	rows = append(rows, pendings...)
-	for _, a := range bySession {
-		if used[a] {
+	// Every managed agent not shown on a worktree or task row has a row
+	// of its own, a second one in a session included.
+	for i := range in.Agents {
+		a := &in.Agents[i]
+		if Server(*a) != tmux.LaatmuxServer.Label() || used[a] {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]
-		r := Row{Host: host, Name: a.Session, Agent: a}
-		if l := byAttach[host+"/"+a.Session]; l != nil {
-			r.Local = l
-		}
-		rows = append(rows, r)
+		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
 	}
 	for i := range in.Agents {
 		a := &in.Agents[i]
-		if Server(*a) == tmux.LaatmuxServer.Label() {
+		if Server(*a) == tmux.LaatmuxServer.Label() || used[a] {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]
-		r := Row{Host: host, Name: a.Session, Agent: a}
-		if h := hosts[host]; h.Local && Server(*a) == tmux.DefaultServer.Label() {
-			// An observed session on this machine's own default server
-			// is a local session, whatever tags it carries.
-			if l := byName[a.Session]; l != nil {
-				r.Local = l
-			} else {
-				r.Local = &workspace.Local{Name: a.Session}
-			}
-		}
-		rows = append(rows, r)
+		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
 	}
 	// Stale: a local workspace session whose worktree is gone from a
 	// host that can say so. A host that is down, whose snapshot has not
@@ -511,6 +552,60 @@ func Build(in Input) Rows {
 		}
 	}
 	return out
+}
+
+// rowAgent is the agent a worktree row shows of the agents attributed
+// to it, the row being jumped to through it. With a home session it is
+// an agent there or none. Without one it is the agent laatmux made at
+// the root, in the worktree's own session that a pane gone elsewhere
+// took the home from, or one on a default server, never one on another
+// observed server, which is not jumped to: an agent in another
+// managed session is that session's, and keeps its row, since the
+// worktree's workspace session attaches to its own managed session
+// only. Among several the choice never turns on activity, which would
+// swap the row's agent and the others' rows as they work: a live agent
+// before a gone one, then the one that started first, then the id. The
+// rest keep rows of their own until the views show several agents per
+// worktree.
+func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
+	var best *protocol.Agent
+	for _, a := range agents {
+		managed := Server(*a) == tmux.LaatmuxServer.Label()
+		switch {
+		case w.Session != "" && (!managed || a.Session != w.Session):
+			continue
+		case w.Session == "" && managed && !(a.Managed && a.Cwd == w.Root):
+			continue
+		case w.Session == "" && !managed && Server(*a) != tmux.DefaultServer.Label():
+			// Another observed server's sessions are not jumped to.
+			continue
+		}
+		if best == nil || before(a, best) {
+			best = a
+		}
+	}
+	return best
+}
+
+// before is a ahead of b in rowAgent's choice.
+func before(a, b *protocol.Agent) bool {
+	if (a.Liveness == protocol.Gone) != (b.Liveness == protocol.Gone) {
+		return b.Liveness == protocol.Gone
+	}
+	sa, sb := started(a), started(b)
+	if sa != sb {
+		return sa < sb
+	}
+	return a.ID < b.ID
+}
+
+// started is when the agent's process started, the latest possible for
+// one without an identity.
+func started(a *protocol.Agent) int64 {
+	if a.Identity == nil {
+		return math.MaxInt64
+	}
+	return a.Identity.StartUnix
 }
 
 // less is the sort order: rank, then most recent activity first, then

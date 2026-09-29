@@ -67,7 +67,7 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	}
 	// Tasks at the worktree go with it; a failure here is no reason to
 	// say the rm failed, and the daemon marks them gone in any case.
-	if err := DismissAt(ctx, hello.EnvironmentID, out.Root); err != nil {
+	if err := DismissAt(ctx, hello.EnvironmentID, out.Root, res.Listing); err != nil {
 		r.Note("tasks at " + out.Root + " not dropped: " + err.Error())
 	}
 	// The local workspace session is the client's to clean up.

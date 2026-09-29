@@ -668,3 +668,90 @@ func TestPlainSubscribeUnchanged(t *testing.T) {
 		t.Error("a plain subscribe dialled a remote host")
 	}
 }
+
+// A host's pane and run records travel in the merged stream as its
+// agents do: in its snapshot, as upserts and removes, and out with the
+// host when it leaves the config.
+func TestMergedPaneAndRunRecords(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	rd := f.remote.d
+	rd.mu.Lock()
+	rd.paneRecs["default/%3"] = protocol.Pane{ID: "renv/pane/default/%3", EnvironmentID: "renv", WorktreeID: "renv/worktree//w/a", Command: "zsh"}
+	rd.mu.Unlock()
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	msgs := until(t, c, pc, hostStatus("vm", listed))
+	var sawPane bool
+	for _, m := range msgs {
+		sawPane = sawPane || (m.Pane != nil && m.Pane.ID == "renv/pane/default/%3")
+	}
+	if !sawPane {
+		t.Fatalf("remote pane record not forwarded: %+v", msgs)
+	}
+	rd.runStarted(&runJob{id: "r1", root: "/w/a", argv: []string{"make"}}, time.Now())
+	if m := next(t, c, pc); m.Run == nil || m.Run.ID != "renv/run/r1" || m.Run.WorktreeID != "renv/worktree//w/a" {
+		t.Fatalf("run upsert %+v", m)
+	}
+	c2, _, snap := f.subscribe(t, ctx)
+	c2.Close()
+	if len(snap.Panes) != 1 || len(snap.Runs) != 1 {
+		t.Fatalf("snapshot panes %+v runs %+v", snap.Panes, snap.Runs)
+	}
+	rd.mu.Lock()
+	rd.runEndedLocked(&runJob{id: "r1"})
+	rd.mu.Unlock()
+	if m := next(t, c, pc); m.Type != protocol.TypeRemove || m.RunID != "renv/run/r1" {
+		t.Fatalf("run remove %+v", m)
+	}
+	f.hosts.set(client.Host{Name: "here"})
+	c3, _, _ := f.subscribe(t, ctx)
+	c3.Close()
+	got := until(t, c, pc, func(m protocol.Message) bool { return m.PaneRecordID == "renv/pane/default/%3" })
+	if m := got[len(got)-1]; m.Type != protocol.TypeRemove {
+		t.Fatalf("pane remove %+v", m)
+	}
+}
+
+// A reconnect's snapshot is forwarded in the host's own order: the
+// worktrees before what names them, and a shell that became an agent
+// while the connection was down removed as a pane before it comes as an
+// agent.
+func TestMergedSnapshotOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	rd := f.remote.d
+	rd.mu.Lock()
+	rd.paneRecs["default/%3"] = protocol.Pane{ID: "renv/pane/default/%3", EnvironmentID: "renv", WorktreeID: "renv/worktree//w/a"}
+	rd.mu.Unlock()
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	until(t, c, pc, hostStatus("vm", listed))
+	rd.mu.Lock()
+	delete(rd.paneRecs, "default/%3")
+	rd.agents["default/%3"] = protocol.Agent{ID: "renv/default/%3", EnvironmentID: "renv", WorktreeID: "renv/worktree//w/b"}
+	rd.worktrees["/w/b"] = protocol.Worktree{ID: "renv/worktree//w/b", EnvironmentID: "renv", Root: "/w/b"}
+	rd.mu.Unlock()
+	f.remote.dropAll()
+	until(t, c, pc, hostStatus("vm", dropped))
+	msgs := until(t, c, pc, hostStatus("vm", listed))
+	at := map[string]int{}
+	for i, m := range msgs {
+		switch {
+		case m.Worktree != nil && m.Worktree.ID == "renv/worktree//w/b":
+			at["worktree"] = i
+		case m.PaneRecordID == "renv/pane/default/%3":
+			at["pane gone"] = i
+		case m.Agent != nil && m.Agent.ID == "renv/default/%3":
+			at["agent"] = i
+		}
+	}
+	w, wok := at["worktree"]
+	g, gok := at["pane gone"]
+	a, aok := at["agent"]
+	if !wok || !gok || !aok || !(w < a) || !(g < a) {
+		t.Fatalf("order %v in %+v", at, msgs)
+	}
+}

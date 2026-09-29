@@ -272,10 +272,12 @@ func Dismiss(ctx context.Context, id string) error {
 }
 
 // DismissAt asks this machine's daemon, when one is running, to drop
-// the tasks at a worktree rm removed. Best effort: a daemon that is not
-// running holds no task in memory, and marks one gone once its host's
-// listing lacks the worktree; one without the relay has none.
-func DismissAt(ctx context.Context, environmentID, root string) error {
+// the tasks at a worktree rm removed; removed is the removal's stamp
+// from rm's result, nil when the host gave none. Best effort: a daemon
+// that is not running holds no task in memory, and marks one gone once
+// its host's listing lacks the worktree; one without the relay has
+// none.
+func DismissAt(ctx context.Context, environmentID, root string, removed *protocol.Listing) error {
 	nc, err := client.DialLocal(ctx, false)
 	if err != nil {
 		return nil
@@ -290,7 +292,7 @@ func DismissAt(ctx context.Context, environmentID, root string) error {
 		// id; it marks nothing gone either, and the task stays for x.
 		return nil
 	}
-	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, EnvironmentID: environmentID, Root: root})
+	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, EnvironmentID: environmentID, Root: root, Listing: removed})
 	return err
 }
 
