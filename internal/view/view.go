@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
@@ -892,7 +893,10 @@ func runeWidth(r rune) int {
 	case r < 0x300:
 		return 1
 	case r >= 0x300 && r <= 0x36f, r >= 0x200b && r <= 0x200f, r >= 0xfe00 && r <= 0xfe0f,
-		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef:
+		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef,
+		unicode.In(r, unicode.Mn, unicode.Me):
+		// Combining marks, the keycap's U+20E3 among them, joiners,
+		// selectors and skin tones.
 		return 0
 	case r >= 0x1100 && r <= 0x115f,
 		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,

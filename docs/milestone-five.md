@@ -650,9 +650,10 @@ and the selection is reverse video with no colours on it, unless
 `theme.custom` overrides any colour. A stale
 row is drawn in `dimmed` with the dim attribute throughout, the stripe
 and the diff and PR colours included, and so is any other dim row but
-for the viewer's own row's label, and but when selected: under the band
-it is in `text`, under reverse video in the attributes alone, unfaint; a task that needs the user is not
-dim, its waiting icon saying so. Plain text keeps the terminal's
+for the viewer's own row's label. A selected dim row is not faint:
+under the band its plain text is in `text` and its coloured spans keep
+their colours; under reverse video it has no colours. A task that needs
+the user is not dim, its waiting icon saying so. Plain text keeps the terminal's
 foreground, in `text` under the selection band; a host that is down is
 drawn in `danger`, one connecting in `warning`, and a group's header in
 `header`. The row for

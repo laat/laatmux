@@ -712,6 +712,18 @@ func TestPromptEditVS16(t *testing.T) {
 	if string(f.prompt) != "ab" || f.cursor != 1 {
 		t.Errorf("delete: %q at %d", string(f.prompt), f.cursor)
 	}
+	f = &Form{prompt: []rune("1️⃣z"), focus: fieldPrompt, cursor: 4}
+	f.promptKey(Key{Kind: KeyLeft})
+	if f.cursor != 3 {
+		t.Errorf("left past z: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyBackspace})
+	if string(f.prompt) != "z" || f.cursor != 0 {
+		t.Errorf("backspace a keycap: %q at %d", string(f.prompt), f.cursor)
+	}
+	if w := width("1️⃣"); w != 2 {
+		t.Errorf("keycap is %d cells", w)
+	}
 	if got := tail("abcdefgh⚠️x", 2); width(got) > 2 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
 	}
