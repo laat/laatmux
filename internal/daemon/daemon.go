@@ -141,6 +141,10 @@ type Config struct {
 	// none. See branches.go.
 	GitHub   github.Runner
 	Branches string
+	// GitHubHosts are the GitHub Enterprise hosts the config trusts
+	// beside github.com: a source on any other host is never asked
+	// about, so gh never sends a token to it.
+	GitHubHosts []string
 }
 
 // Daemon holds the derived state for every watched tmux server.

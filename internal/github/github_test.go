@@ -79,7 +79,14 @@ func TestParse(t *testing.T) {
 	}
 	ok := rollupJSON("R1", "SUCCESS", map[string]int{"SUCCESS": 2}, nil)
 	body := func(ref string, prs ...string) string {
-		return `{"data":{"b0":{"url":"https://github.com/o/r","ref":` + ref + `,"pullRequests":{"nodes":[` + strings.Join(prs, ",") + `]}}}}`
+		var open []string
+		for _, p := range prs {
+			if strings.Contains(p, `"state":"OPEN"`) {
+				open = append(open, p)
+			}
+		}
+		return `{"data":{"b0":{"url":"https://github.com/o/r","ref":` + ref + `,"open":{"nodes":[` + strings.Join(open, ",") +
+			`]},"pullRequests":{"nodes":[` + strings.Join(prs, ",") + `]}}}}`
 	}
 	ref := `{"target":{"oid":"own","statusCheckRollup":null}}`
 	for _, c := range []struct {
@@ -168,5 +175,25 @@ func TestFetchErrors(t *testing.T) {
 	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 	if err != nil || rs[0].Err == nil || !strings.Contains(rs[0].Err.Error(), "rate limited") {
 		t.Errorf("a failed chunk: %v %+v", err, rs)
+	}
+}
+
+// An error under a branch's alias makes its answer partial: a null ref
+// there is not taken for a branch gone, and the other branches stand.
+func TestPartialErrors(t *testing.T) {
+	f := &fake{answer: func(map[string]string) (string, error) {
+		return `{"data":{"b0":{"url":"u","ref":null,"open":{"nodes":[]},"pullRequests":{"nodes":[]}},` +
+			`"b1":{"url":"u","ref":{"target":{"oid":"h"}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}},` +
+			`"errors":[{"message":"Something went wrong","path":["b0","ref"]},{"message":"x","path":["b9","pullRequests","nodes",0]}]}`, nil
+	}}
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "a"}, {Owner: "o", Repo: "r", Branch: "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs[0].Err == nil || rs[0].NoRef {
+		t.Errorf("partial answer: %+v", rs[0])
+	}
+	if rs[1].Err != nil || rs[1].HeadOID != "h" {
+		t.Errorf("the other branch: %+v", rs[1])
 	}
 }

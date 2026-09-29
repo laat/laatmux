@@ -131,6 +131,11 @@ type Config struct {
 	Copy []string `yaml:"copy"`
 	// Sidebar is the sidebar pane on this machine's tmux.
 	Sidebar Sidebar `yaml:"sidebar"`
+	// GitHubHosts are GitHub Enterprise hosts whose sources' PRs and
+	// checks are read through gh, beside github.com, which always is.
+	// A source on a host not listed is never sent to gh, whose token
+	// for it would go there.
+	GitHubHosts []string `yaml:"github_hosts"`
 	// Icons is the icon set the views draw statuses with: emoji, the
 	// default, nerdfont or ascii. StatusIcons overrides single icons by
 	// status; "" keeps the set's. AgentIcons overrides the agent icons

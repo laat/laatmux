@@ -1022,7 +1022,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   groups would be.
 - **PR and checks**, capability `branches` (milestone five, step 5): the
   daemon asks GitHub, through `gh api graphql` on this machine, about
-  every branch a worktree in the stream has, 32 branches to a query,
+  every branch a worktree in the stream has on github.com or a host in
+  the config's `github_hosts`, 32 branches to a query,
   with the names as variables. It asks every 30 s while a view is open,
   and at once when the set of branches changes. Each branch gets a
   `branch_status` record keyed by source key and branch:
@@ -1036,7 +1037,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   older than five minutes, or whose last query failed, is stale; a
   branch no worktree has had for a day is dropped. A missing or
   logged-out `gh` is the daemon's `github_error`, printed by `laatmux
-  hosts` on a `github:` line. The views show `#N` and the checks at the
+  hosts` on a `github:` line, which asks gh itself when the daemon has
+  not. The views show `#N` and the checks at the
   right of a tile's third line: `✓`, `× 3/5` or a spinner and `3/5`,
   dim with `?` when stale; on `main` and `master` only failing checks.
   The dashboard's `o` opens the PR and `O` its checks.

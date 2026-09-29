@@ -106,7 +106,7 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 			return
 		}
 		host, path, ok := config.Forge(w.Source)
-		if !ok {
+		if !ok || !d.githubHost(host) {
 			return
 		}
 		owner, repo, ok := strings.Cut(path, "/")
@@ -130,6 +130,35 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 	return out
 }
 
+// githubHost reports whether a source's host is one gh is asked about:
+// github.com, or a GitHub Enterprise host the config names.
+func (d *Daemon) githubHost(host string) bool {
+	if strings.EqualFold(host, "github.com") {
+		return true
+	}
+	for _, h := range d.cfg.GitHubHosts {
+		if strings.EqualFold(h, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostsListedLocked reports whether every configured host has a listing
+// of this connection's, so a branch missing from the set is missing
+// from the hosts, not only not yet heard of.
+func (d *Daemon) hostsListedLocked() bool {
+	if len(d.mhosts) == 0 {
+		return false
+	}
+	for _, mh := range d.mhosts {
+		if !mh.status.Listed {
+			return false
+		}
+	}
+	return true
+}
+
 func sameKeys(a map[string]branchQuery, b map[string]bool) bool {
 	if len(a) != len(b) {
 		return false
@@ -142,23 +171,34 @@ func sameKeys(a map[string]branchQuery, b map[string]bool) bool {
 	return true
 }
 
-// runBranches keeps the branch records until ctx is done.
+// branchRound bounds one round of queries, every host's chunks and
+// failing names: a slow GitHub delays the next round, never the aging.
+const branchRound = 2 * time.Minute
+
+// runBranches keeps the branch records until ctx is done. A round of
+// queries runs beside the loop, one at a time, so the records keep
+// aging while it waits on GitHub.
 func (d *Daemon) runBranches(ctx context.Context) {
 	t := time.NewTicker(branchTick)
 	defer t.Stop()
 	var asked map[string]bool
 	var last time.Time
+	done := make(chan struct{}, 1)
+	running := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-done:
+			running = false
+			continue
 		}
 		now := time.Now()
 		d.mu.Lock()
 		set := d.branchSetLocked()
 		d.ageBranchesLocked(set, now)
-		due := len(d.msubs) > 0 && (!sameKeys(set, asked) || now.Sub(last) >= branchEvery)
+		due := !running && len(d.msubs) > 0 && (!sameKeys(set, asked) || now.Sub(last) >= branchEvery)
 		d.mu.Unlock()
 		if !due {
 			continue
@@ -167,8 +207,13 @@ func (d *Daemon) runBranches(ctx context.Context) {
 		for k := range set {
 			asked[k] = true
 		}
-		last = now
-		d.fetchBranches(ctx, set)
+		last, running = now, true
+		go func() {
+			rctx, cancel := context.WithTimeout(ctx, branchRound)
+			defer cancel()
+			d.fetchBranches(rctx, set)
+			done <- struct{}{}
+		}()
 	}
 }
 
@@ -182,9 +227,13 @@ func (d *Daemon) ageBranchesLocked(set map[string]branchQuery, now time.Time) {
 			e.LastSeen = now
 		}
 	}
+	// A branch is known gone only once every host has listed: after a
+	// restart, before a subscription has reached them, the set is
+	// empty, and the kept answers stand.
+	listed := d.hostsListedLocked()
 	for k, e := range d.branches {
 		switch {
-		case set[k].key == "" && now.Sub(e.LastSeen) > branchForget:
+		case listed && set[k].key == "" && now.Sub(e.LastSeen) > branchForget:
 			bk := e.Status.BranchKey
 			delete(d.branches, k)
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
@@ -223,6 +272,14 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		}
 		results, err := github.Fetch(ctx, d.cfg.GitHub, host, bs)
 		if ctx.Err() != nil {
+			// The round ran out of time: what it did not answer is
+			// marked stale, as a failed query's is.
+			for i := range results {
+				if results[i].Err == nil && results[i].HeadOID == "" && !results[i].NoRef {
+					results[i].Err = ctx.Err()
+				}
+			}
+			d.applyBranches(qs, results)
 			return
 		}
 		if err != nil && ghErr == "" && (host == "github.com" || errors.Is(err, github.ErrNoGH)) {

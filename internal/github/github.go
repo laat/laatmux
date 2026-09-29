@@ -90,6 +90,8 @@ type Result struct {
 // Chunk is how many branches one query asks about.
 const Chunk = 32
 
+const prFragment = `fragment P on PullRequestConnection { nodes { number state isDraft url headRepository { nameWithOwner } commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
+
 const rollupFragment = `fragment R on StatusCheckRollup { id state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }`
 
 // query is the GraphQL text for n branches: aliases and variable names
@@ -103,11 +105,10 @@ func query(n int) string {
 		fmt.Fprintf(&decl, "$o%d: String!, $r%d: String!, $q%d: String!, $b%d: String!", i, i, i, i)
 		fmt.Fprintf(&body, ` b%d: repository(owner: $o%d, name: $r%d) { url `+
 			`ref(qualifiedName: $q%d) { target { oid ... on Commit { statusCheckRollup { ...R } } } } `+
-			`pullRequests(headRefName: $b%d, first: 20, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { `+
-			`number state isDraft url headRepository { nameWithOwner } `+
-			`commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } } }`, i, i, i, i, i)
+			`open: pullRequests(headRefName: $b%d, states: [OPEN], first: 50, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } `+
+			`pullRequests(headRefName: $b%d, first: 50, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } }`, i, i, i, i, i, i)
 	}
-	return "query(" + decl.String() + ") {" + body.String() + " } " + rollupFragment
+	return "query(" + decl.String() + ") {" + body.String() + " } " + rollupFragment + " " + prFragment
 }
 
 type counts []struct {
@@ -124,6 +125,26 @@ type rollup struct {
 	} `json:"contexts"`
 }
 
+type prConnection struct {
+	Nodes []struct {
+		Number   int    `json:"number"`
+		State    string `json:"state"`
+		IsDraft  bool   `json:"isDraft"`
+		URL      string `json:"url"`
+		HeadRepo *struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"headRepository"`
+		Commits struct {
+			Nodes []struct {
+				Commit struct {
+					OID    string  `json:"oid"`
+					Rollup *rollup `json:"statusCheckRollup"`
+				} `json:"commit"`
+			} `json:"nodes"`
+		} `json:"commits"`
+	} `json:"nodes"`
+}
+
 type repoAnswer struct {
 	URL string `json:"url"`
 	Ref *struct {
@@ -132,25 +153,8 @@ type repoAnswer struct {
 			Rollup *rollup `json:"statusCheckRollup"`
 		} `json:"target"`
 	} `json:"ref"`
-	PullRequests struct {
-		Nodes []struct {
-			Number   int    `json:"number"`
-			State    string `json:"state"`
-			IsDraft  bool   `json:"isDraft"`
-			URL      string `json:"url"`
-			HeadRepo *struct {
-				NameWithOwner string `json:"nameWithOwner"`
-			} `json:"headRepository"`
-			Commits struct {
-				Nodes []struct {
-					Commit struct {
-						OID    string  `json:"oid"`
-						Rollup *rollup `json:"statusCheckRollup"`
-					} `json:"commit"`
-				} `json:"nodes"`
-			} `json:"commits"`
-		} `json:"nodes"`
-	} `json:"pullRequests"`
+	Open         prConnection `json:"open"`
+	PullRequests prConnection `json:"pullRequests"`
 }
 
 // Fetch asks host about branches, Chunk at a time, then for the name of
@@ -200,8 +204,8 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 	var resp struct {
 		Data   map[string]*repoAnswer `json:"data"`
 		Errors []struct {
-			Message string   `json:"message"`
-			Path    []string `json:"path"`
+			Message string `json:"message"`
+			Path    []any  `json:"path"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -214,8 +218,24 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 		}
 		return fmt.Errorf("gh api graphql: %s", msg)
 	}
+	// An error names the alias it is under: that branch's answer is
+	// partial, a resolver that failed reads as null, and is not taken
+	// for what it seems, no ref say.
+	partial := map[string]string{}
+	for _, e := range resp.Errors {
+		if len(e.Path) > 0 {
+			if alias, ok := e.Path[0].(string); ok {
+				partial[alias] = e.Message
+			}
+		}
+	}
 	for i, b := range branches {
-		out[i] = parse(resp.Data[fmt.Sprintf("b%d", i)], b)
+		alias := fmt.Sprintf("b%d", i)
+		if msg, ok := partial[alias]; ok {
+			out[i] = Result{Err: fmt.Errorf("%s/%s: %s", b.Owner, b.Repo, msg)}
+			continue
+		}
+		out[i] = parse(resp.Data[alias], b)
 	}
 	return nil
 }
@@ -233,21 +253,18 @@ func parse(a *repoAnswer, b Branch) Result {
 		r.HeadOID, rl = a.Ref.Target.OID, a.Ref.Target.Rollup
 	}
 	own := strings.ToLower(b.Owner + "/" + b.Repo)
+	// The open ones are asked for apart, so newer closed ones or forks'
+	// do not hide an open one; else the newest of the source's own.
 	pick := -1
-	for i, pr := range a.PullRequests.Nodes {
-		if pr.HeadRepo == nil || strings.ToLower(pr.HeadRepo.NameWithOwner) != own {
-			continue
-		}
-		if pr.State == "OPEN" {
+	nodes := append(append(a.Open.Nodes[:0:0], a.Open.Nodes...), a.PullRequests.Nodes...)
+	for i, pr := range nodes {
+		if pr.HeadRepo != nil && strings.ToLower(pr.HeadRepo.NameWithOwner) == own {
 			pick = i
 			break
 		}
-		if pick < 0 {
-			pick = i
-		}
 	}
 	if pick >= 0 {
-		pr := a.PullRequests.Nodes[pick]
+		pr := nodes[pick]
 		r.PR = &protocol.PullRequest{Number: pr.Number, State: strings.ToLower(pr.State), Draft: pr.IsDraft, URL: pr.URL}
 		r.ChecksURL = pr.URL + "/checks"
 		if n := pr.Commits.Nodes; len(n) > 0 {

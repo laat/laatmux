@@ -575,13 +575,16 @@ A pushed branch is the same on every host, and `gh` is logged in on the
 laptop, so the laptop's merging daemon fetches PR and check state for
 every worktree in the merged stream, keyed by source and branch.
 
+- **The hosts.** github.com, and the GitHub Enterprise hosts the config
+  lists in `github_hosts`. A source on any other host is never asked
+  about: gh would send it the token it keeps for that host.
 - **The query.** `gh api graphql` calls per GitHub host, each for at
   most 32 branches, with the owner, repository and branch names passed
   as GraphQL variables, never put into the query text. For each branch
   it asks for the PRs on that head ref whose head repository is the
   source's own repository, since a fork's PR can have a head branch of
-  the same name, and takes an open one first, else the newest merged or
-  closed, with its last commit's oid and `statusCheckRollup`. A branch
+  the same name, and takes an open one first, asked for apart so newer
+  closed ones do not hide it, else the newest merged or closed, with its last commit's oid and `statusCheckRollup`. A branch
   with no PR gets its own ref's commit and rollup. When `origin` is
   itself a fork, the PR lives on the upstream repository and is not
   found: the row shows the branch's own checks and no PR. That is a

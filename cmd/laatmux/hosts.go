@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -67,11 +69,25 @@ func githubLine(ctx context.Context) string {
 	if err != nil || msg.Type != protocol.TypeSnapshot {
 		return ""
 	}
-	status := "ok"
-	if msg.GitHubError != "" {
-		status = msg.GitHubError
+	status := msg.GitHubError
+	if status == "" {
+		// The daemon may not have asked yet, with no view open: gh is
+		// asked here, on the same machine, before saying ok.
+		status = ghStatus(ctx)
 	}
 	return fmt.Sprintf("  %-16s %s", "github:", status)
+}
+
+// ghStatus is whether gh on this machine can read github.com: "ok", or
+// why not.
+var ghStatus = func(ctx context.Context) string {
+	if _, err := exec.LookPath("gh"); err != nil {
+		return github.ErrNoGH.Error()
+	}
+	if err := exec.CommandContext(ctx, "gh", "auth", "status", "--hostname", "github.com").Run(); err != nil {
+		return github.ErrLoggedOut.Error() + " to github.com"
+	}
+	return "ok"
 }
 
 // hostRow is one host in the listing.

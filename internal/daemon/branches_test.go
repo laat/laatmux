@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -208,11 +209,16 @@ func TestBranchesAgeAndKeep(t *testing.T) {
 	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute))
 	e := d2.branches[branchKeyString(bkey("a"))]
 	stale := e != nil && e.Status.Stale
+	// Before the hosts have listed, an empty set is no proof of
+	// absence: kept however old.
 	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
-	_, gone := d2.branches[branchKeyString(bkey("a"))]
+	_, kept := d2.branches[branchKeyString(bkey("a"))]
+	d2.mhosts["vm"].status.Listed = true
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
+	_, still := d2.branches[branchKeyString(bkey("a"))]
 	d2.mu.Unlock()
-	if len(snap.BranchStatuses) != 1 || !stale || gone {
-		t.Errorf("kept %d, stale %v, still there after a day %v", len(snap.BranchStatuses), stale, gone)
+	if len(snap.BranchStatuses) != 1 || !stale || !kept || still {
+		t.Errorf("kept %d, stale %v, kept before the listing %v, still there after a day %v", len(snap.BranchStatuses), stale, kept, still)
 	}
 	if _, removes, _ := drainBranches(s2); len(removes) != 1 {
 		t.Errorf("removes after a day: %+v", removes)
@@ -242,4 +248,69 @@ func TestBranchesOldEnvelope(t *testing.T) {
 			t.Errorf("%s: %+v %v", b, old, err)
 		}
 	}
+}
+
+// Only github.com and the hosts the config trusts are asked about: a
+// source on another host never reaches gh, whose token would go there.
+func TestBranchesHostAllowList(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{}}
+	d, _ := branchDaemon(t, t.TempDir(), gh)
+	d.mu.Lock()
+	for i, src := range []string{"git@gitlab.com:o/r.git", "git@ghe.example.com:o/r.git", "https://github.com/o/r"} {
+		root := fmt.Sprintf("/w/%d", i)
+		d.mhosts["vm"].worktrees["venv/worktree/"+root] = protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Source: src, Branch: "b", Root: root}
+	}
+	set := d.branchSetLocked()
+	d.cfg.GitHubHosts = []string{"GHE.example.com"}
+	trusted := d.branchSetLocked()
+	d.mu.Unlock()
+	if len(set) != 1 || len(trusted) != 2 {
+		t.Errorf("github.com alone: %d; with the enterprise host: %d", len(set), len(trusted))
+	}
+	for _, q := range set {
+		if q.host != "github.com" {
+			t.Errorf("asked %s", q.host)
+		}
+	}
+}
+
+// A round of queries that waits on GitHub does not hold the aging: the
+// loop marks answers stale while the round runs.
+func TestBranchesSlowRound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	block := make(chan struct{})
+	gh := &fakeGH{states: map[string]string{"a": "SUCCESS"}}
+	d, _ := branchDaemon(t, t.TempDir(), gh, "a")
+	d.fetchNow(t)
+	slow := func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
+		select {
+		case <-block:
+		case <-ctx.Done():
+		}
+		return nil, ctx.Err()
+	}
+	d.mu.Lock()
+	d.cfg.GitHub = slow
+	// Stale a little after the first tick, which starts the round: only
+	// a loop not held by the round marks it.
+	for _, e := range d.branches {
+		e.Status.FetchedAt = time.Now().Add(-branchStale + branchTick + branchTick/2)
+	}
+	d.mu.Unlock()
+	go d.runBranches(ctx)
+	deadline := time.Now().Add(4 * branchTick)
+	for {
+		d.mu.Lock()
+		stale := d.branches[branchKeyString(bkey("a"))].Status.Stale
+		d.mu.Unlock()
+		if stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("not marked stale while a round waited")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(block)
 }

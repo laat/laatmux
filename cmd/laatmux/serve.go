@@ -122,8 +122,9 @@ func cmdServe(ctx context.Context, args []string) error {
 		Attention: filepath.Join(home.Dir(), "attention.json"),
 		Clients:   listClients,
 		// PR and check state through gh, kept across restarts.
-		GitHub:   github.GH,
-		Branches: filepath.Join(home.Dir(), "branches.json"),
+		GitHub:      github.GH,
+		Branches:    filepath.Join(home.Dir(), "branches.json"),
+		GitHubHosts: cfg.GitHubHosts,
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.
