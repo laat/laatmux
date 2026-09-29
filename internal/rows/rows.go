@@ -457,8 +457,11 @@ func Build(in Input) Rows {
 		}
 	}
 	rows = append(rows, pendings...)
-	for _, a := range bySession {
-		if used[a] {
+	// Every managed agent not shown on a worktree or task row has a row
+	// of its own, a second one in a session included.
+	for i := range in.Agents {
+		a := &in.Agents[i]
+		if Server(*a) != tmux.LaatmuxServer.Label() || used[a] {
 			continue
 		}
 		host := byEnv[a.EnvironmentID]

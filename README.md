@@ -203,8 +203,10 @@ truth; labels only place new things.
   pane that records the root in `@laatmux_cwd`, all of whose panes are
   inside the root, joined from the pane poll, so an agent exiting updates
   the record without a git call. A split for a shell keeps the home; a
-  pane gone elsewhere takes it away, so `rm`, which kills the home
-  session, never takes a pane outside the worktree with it. Origin reads are cached by the mtime of
+  pane gone elsewhere takes it away, and `jump` then has no session to
+  attach to. `rm` still kills every managed session with a pane laatmux
+  made at the root, home or not, so no agent is left in a removed
+  directory. Origin reads are cached by the mtime of
   `.git/config`, and a checkout with no linked worktree under
   `worktrees/` is not asked, so an idle poll spawns one git process per
   checkout that has one. The id is `<environment_id>/worktree/<root>`.

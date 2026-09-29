@@ -137,12 +137,8 @@ func (d *Daemon) checkGone(ctx context.Context, id string) {
 		}
 		present, ok := d.listingHas(ctx, id, p)
 		if ok {
-			switch {
-			case present:
-			case p.retired():
-				d.dropRetired(id)
-			default:
-				d.persist(ctx, id, func(p *pendingFile) { p.Gone = true })
+			if !present {
+				d.worktreeGone(ctx, id)
 			}
 			return
 		}
@@ -181,6 +177,17 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string) protocol.Messa
 		d.dismissEnded(id)
 	}
 	return res
+}
+
+// worktreeGone marks the task gone, its worktree not listed, or drops
+// it when it has handed over. The record as it is now decides, not the
+// copy the check began with: one that handed over while the host was
+// asked is dropped, which persist, refusing a retired record, leaves to
+// dropRetired.
+func (d *Daemon) worktreeGone(ctx context.Context, id string) {
+	if _, ok := d.persist(ctx, id, func(p *pendingFile) { p.Gone = true }); !ok {
+		d.dropRetired(id)
+	}
 }
 
 // dropRetired removes a record that had handed over, its worktree gone:

@@ -128,11 +128,13 @@ func (d *Daemon) worktreeOfLocked(path string) string {
 
 // homeSessions maps a root to its home session on the managed server:
 // the session with a pane laatmux made at the root, all of whose panes
-// are inside it. A split for a shell or a test watcher keeps the home;
-// a pane that has gone elsewhere takes it away, so rm, which kills the
-// home session, never takes a pane outside the worktree with it. Two
-// sessions on one root is not a state add creates; the lexically first
-// name wins so the record is stable. resolve is Daemon.resolve.
+// are inside it, which jump attaches to. A split for a shell or a test
+// watcher keeps the home; a pane that has gone elsewhere takes it away,
+// the session being no longer the worktree's alone. rm kills every
+// managed session with a pane made at the root all the same, so no
+// agent is left in a removed directory. Two sessions on one root is not
+// a state add creates; the lexically first name wins so the record is
+// stable. resolve is Daemon.resolve.
 func homeSessions(panes []tmux.Pane, resolve func(string) string) map[string]string {
 	bySession := map[string][]tmux.Pane{}
 	for _, p := range panes {

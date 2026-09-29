@@ -476,3 +476,21 @@ func TestRelayDismissAtRetired(t *testing.T) {
 		t.Fatal("the retired task at the root stayed")
 	}
 }
+
+// A check that began on a task that then handed over drops the retired
+// record rather than leaving it, prompt and all, for good.
+func TestRelayGoneAfterHandoffDrops(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	f.local.relay.mu.Lock()
+	f.local.relay.recs["k3"] = &pendingFile{Pending: protocol.Pending{ID: "k3", Host: "vm", EnvironmentID: "henv", Root: "/w/k3", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k3"}
+	f.local.relay.recs["k4"] = &pendingFile{Pending: protocol.Pending{ID: "k4", Host: "vm", EnvironmentID: "henv", Root: "/w/k4", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered}, PromptText: "p"}
+	f.local.relay.mu.Unlock()
+	f.local.worktreeGone(f.ctx, "k3")
+	if _, ok := f.local.relay.get("k3"); ok {
+		t.Fatal("retired record kept")
+	}
+	f.local.worktreeGone(f.ctx, "k4")
+	if p, ok := f.local.relay.get("k4"); !ok || !p.Gone {
+		t.Fatalf("task needing the user: %+v %v", p, ok)
+	}
+}

@@ -211,14 +211,15 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
 		if h.Local() {
 			// Subscribers from before the local host was configured
-			// have never seen its records.
-			for _, a := range d.agents {
-				a := a
-				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
-			}
+			// have never seen its records: the worktrees first, which
+			// the others name.
 			for _, w := range d.worktrees {
 				w := w
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
+			}
+			for _, a := range d.agents {
+				a := a
+				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 			}
 			for _, p := range d.paneRecs {
 				p := p
@@ -452,30 +453,26 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 	}
 	switch msg.Type {
 	case protocol.TypeSnapshot:
+		// In the order a host's own stream keeps: the worktrees first,
+		// so no record names one a subscriber has not had; then what is
+		// gone of the rest, so a shell that became an agent while the
+		// connection was down is never both at once; then what is there;
+		// the worktrees gone last.
 		seen := map[string]bool{}
-		for i := range msg.Agents {
-			a := msg.Agents[i]
-			seen[a.ID] = true
-			mh.agents[a.ID] = a
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
-		}
 		for i := range msg.Worktrees {
 			w := msg.Worktrees[i]
 			seen[w.ID] = true
 			mh.worktrees[w.ID] = w
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 		}
-		for i := range msg.Panes {
-			p := msg.Panes[i]
-			seen[p.ID] = true
-			mh.panes[p.ID] = p
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &p})
+		for _, a := range msg.Agents {
+			seen[a.ID] = true
 		}
-		for i := range msg.Runs {
-			r := msg.Runs[i]
+		for _, p := range msg.Panes {
+			seen[p.ID] = true
+		}
+		for _, r := range msg.Runs {
 			seen[r.ID] = true
-			mh.runs[r.ID] = r
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &r})
 		}
 		for id := range mh.agents {
 			if !seen[id] {
@@ -494,6 +491,21 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 				delete(mh.runs, id)
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
 			}
+		}
+		for i := range msg.Agents {
+			a := msg.Agents[i]
+			mh.agents[a.ID] = a
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
+		}
+		for i := range msg.Panes {
+			p := msg.Panes[i]
+			mh.panes[p.ID] = p
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &p})
+		}
+		for i := range msg.Runs {
+			r := msg.Runs[i]
+			mh.runs[r.ID] = r
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &r})
 		}
 		for id := range mh.worktrees {
 			if !seen[id] {

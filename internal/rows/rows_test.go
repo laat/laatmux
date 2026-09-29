@@ -496,3 +496,29 @@ func TestBuildByWorktreeID(t *testing.T) {
 		t.Errorf("fallback: /w/a agent %+v", a)
 	}
 }
+
+// Two agents in one home session: the worktree row shows one and the
+// other keeps a row of its own, whatever order the records come in.
+func TestBuildTwoAgentsOneSession(t *testing.T) {
+	now := time.Now()
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	b := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	for _, attribution := range []bool{true, false} {
+		for _, agents := range [][]protocol.Agent{{a, b}, {b, a}} {
+			got := Build(Input{
+				Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: attribution}},
+				Agents:    agents,
+				Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Session: "proj/a"}},
+			})
+			seen := map[string]int{}
+			for _, r := range got.All() {
+				if r.Agent != nil {
+					seen[r.Agent.ID]++
+				}
+			}
+			if seen[a.ID] != 1 || seen[b.ID] != 1 {
+				t.Errorf("attribution %v, order %s first: agents shown %v", attribution, agents[0].ID, seen)
+			}
+		}
+	}
+}
