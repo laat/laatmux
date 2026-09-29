@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
@@ -30,19 +32,40 @@ func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.The
 	if os.Getenv("NO_COLOR") != "" {
 		return palette.Mono(), icons
 	}
-	dark := true
+	dark, known := true, true
 	switch cfg.Theme.Mode {
 	case palette.ModeLight:
 		dark = false
 	case palette.ModeDark:
 	default:
+		// The terminal's answer, else COLORFGBG as some terminals and
+		// shells set it; a tmux popup gets no answer to the query.
 		if d, ok := background(); ok {
 			dark = d
+		} else if d, ok := colorFgBg(os.Getenv("COLORFGBG")); ok {
+			dark = d
+		} else {
+			known = false
 		}
 	}
 	th, err := palette.New(dark, cfg.Theme.Custom)
 	if err != nil {
 		return palette.Mono(), icons
 	}
+	th.Guessed = !known
 	return th, icons
+}
+
+// colorFgBg reads COLORFGBG, `fg;bg` or `fg;default;bg` with ANSI colour
+// numbers: a background of 0 to 6 or 8 is dark, 7 and 9 to 15 light.
+func colorFgBg(v string) (dark, ok bool) {
+	parts := strings.Split(v, ";")
+	if len(parts) < 2 {
+		return false, false
+	}
+	bg, err := strconv.Atoi(parts[len(parts)-1])
+	if err != nil || bg < 0 || bg > 15 {
+		return false, false
+	}
+	return bg <= 6 || bg == 8, true
 }

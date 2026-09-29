@@ -28,6 +28,7 @@ func TestLook(t *testing.T) {
 		{"auto, no answer", "auto", "", false, false, dark, true},
 	} {
 		t.Setenv("NO_COLOR", c.noColor)
+		t.Setenv("COLORFGBG", "")
 		asked := false
 		cfg := config.Config{Theme: config.Theme{Mode: c.mode}, Icons: "ascii", StatusIcons: map[string]string{"waiting": "?"}}
 		th, icons := lookWith(cfg, func() (bool, bool) { asked = true; return c.answer, c.answered })
@@ -37,8 +38,33 @@ func TestLook(t *testing.T) {
 		if th.SGR(palette.Text, false) != c.want.SGR(palette.Text, false) || th.Mono != c.want.Mono {
 			t.Errorf("%s: wrong theme", c.name)
 		}
+		if guessed := c.asks && !c.answered; th.Guessed != guessed {
+			t.Errorf("%s: guessed %v", c.name, th.Guessed)
+		}
 		if icons.Set != "ascii" || icons.Waiting != "?" {
 			t.Errorf("%s: icons %+v", c.name, icons)
+		}
+	}
+}
+
+// COLORFGBG says the background when the terminal does not answer: a
+// light one is taken, and the theme is not a guess.
+func TestLookColorFgBg(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORFGBG", "0;15")
+	light, _ := palette.New(false, nil)
+	th, _ := lookWith(config.Config{}, func() (bool, bool) { return false, false })
+	if th.Guessed || th.SGR(palette.Text, false) != light.SGR(palette.Text, false) {
+		t.Errorf("COLORFGBG light: guessed %v", th.Guessed)
+	}
+	for v, want := range map[string]bool{"15;0": true, "0;15": false, "7;default;0": true, "0;7": false, "15;8": true} {
+		if dark, ok := colorFgBg(v); !ok || dark != want {
+			t.Errorf("%q: dark %v ok %v", v, dark, ok)
+		}
+	}
+	for _, bad := range []string{"", "15", "x;y", "0;16"} {
+		if _, ok := colorFgBg(bad); ok {
+			t.Errorf("%q read", bad)
 		}
 	}
 }

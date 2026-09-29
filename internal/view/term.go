@@ -75,7 +75,7 @@ func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 		left := time.Until(deadline)
 		if left <= 0 {
 			// An answer under way gets its end once.
-			if start := strings.Index(string(got), "\x1b]"); start >= 0 && oscEnd(got[start:]) < 0 && !extended {
+			if start := strings.Index(string(got), oscAnswer); start >= 0 && oscEnd(got[start:]) < 0 && !extended {
 				extended, deadline = true, time.Now().Add(oscWait)
 				continue
 			}
@@ -94,12 +94,9 @@ func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 			break
 		}
 		got = append(got, buf[:k]...)
-		if start := strings.Index(string(got), "\x1b]"); start >= 0 {
-			if end := oscEnd(got[start:]); end >= 0 {
-				answer := string(got[start : start+end])
-				t.pending = append(append([]byte(nil), got[:start]...), got[start+end:]...)
-				return palette.DarkBackground(answer)
-			}
+		if answer, rest, found := takeAnswer(got); found {
+			t.pending = rest
+			return palette.DarkBackground(answer)
 		}
 	}
 	t.pending = got
@@ -143,3 +140,35 @@ func (t *Term) Draw(lines []Line) {
 }
 
 func (t *Term) write(s string) { _, _ = t.out.WriteString(s) }
+
+// takeAnswer finds the terminal's answer to the background query in b,
+// an OSC 11 string with a colour, and returns it with the bytes around
+// it. Other OSC strings, the query echoed back say, are dropped, and
+// anything else, the user's keys, an Alt-], is kept.
+func takeAnswer(b []byte) (answer string, rest []byte, found bool) {
+	var kept []byte
+	for i := 0; i < len(b); {
+		if b[i] != 0x1b || i+1 == len(b) || b[i+1] != ']' {
+			kept = append(kept, b[i])
+			i++
+			continue
+		}
+		kind, n, _ := oscScan(b[i:])
+		switch kind {
+		case oscDone:
+			s := string(b[i : i+n])
+			if strings.HasPrefix(s, oscAnswer) {
+				if _, ok := palette.DarkBackground(s); ok {
+					return s, append(kept, b[i+n:]...), true
+				}
+			}
+			i += n
+		case oscMore:
+			return "", nil, false
+		default:
+			kept = append(kept, b[i:i+n]...)
+			i += n
+		}
+	}
+	return "", nil, false
+}

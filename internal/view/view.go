@@ -44,7 +44,7 @@ type Model struct {
 	LocalHost string // the host whose tag is not dimmed
 	// Header lines are drawn above the list: hosts that are not
 	// connected and listed, the local daemon being down.
-	Header []string
+	Header []HeaderLine
 	// Hint is the footer when nothing else claims it.
 	Hint          string
 	Now           time.Time
@@ -162,6 +162,13 @@ func (m *Model) SetRows(rs rows.Rows) {
 		// selection with it.
 		m.Selected, m.lost = -1, true
 	}
+}
+
+// HeaderLine is a line above the list; Down is that it says something is
+// down, drawn in danger, where connecting and the like are a warning.
+type HeaderLine struct {
+	Text string
+	Down bool
 }
 
 // Group is which group a row is in.
@@ -361,7 +368,11 @@ func (m *Model) Render() []Line {
 	}
 	var out []Line
 	for _, h := range m.Header {
-		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width), Fg: palette.Danger}}, Bold: true})
+		fg := palette.Warning
+		if h.Down {
+			fg = palette.Danger
+		}
+		out = append(out, Line{Spans: []Span{{Text: fit(h.Text, m.Width), Fg: fg}}, Bold: true})
 	}
 	body := m.Height - len(out) - 1
 	if body < 1 {
@@ -775,35 +786,32 @@ func Debug(lines []Line) string {
 
 // ANSI encodes a line for the terminal in a theme, ending with a reset.
 // A span's own attributes are set for the span and the line's restored
-// after it. In a theme with colours a dim line is drawn in the dimmed
-// colour throughout, its spans' own colours included, and the selection
-// is the highlight background across the line; without colours the
-// attributes are all there is, and the selection is reverse video.
+// after it. In a theme with colours a span's colour is drawn, and a dim
+// line is drawn in the dimmed colour throughout, but for the viewer's
+// own row's label; plain text keeps the terminal's own foreground, which
+// is right whatever the background. The selection is the highlight
+// background with the theme's text on it when the theme knows the
+// terminal's background, and reverse video otherwise, as it is without
+// colours, where the attributes are all there is.
 func ANSI(l Line, th palette.Theme) string {
 	colour := !th.Mono && th.SGR(palette.Text, false) != ""
+	band := colour && !th.Guessed && l.Reverse
 	var b strings.Builder
 	attrs := func() {
-		if l.Reverse {
-			if colour {
-				b.WriteString(th.SGR(palette.HighlightRowBg, true))
-			} else {
-				b.WriteString("\x1b[7m")
-			}
-		}
 		switch {
-		case l.Dim:
-			// Under the selection band the faint attribute would leave
-			// the text unreadable; the dimmed colour says enough.
-			if !(colour && l.Reverse) {
-				b.WriteString("\x1b[2m")
-			}
+		case band:
+			b.WriteString(th.SGR(palette.HighlightRowBg, true))
+			// A dim line under the band is drawn in the text colour,
+			// not faint: the stripe and icon say it is dim.
+			b.WriteString(th.SGR(palette.Text, false))
+		case l.Reverse:
+			b.WriteString("\x1b[7m")
+		}
+		if l.Dim && !band {
+			b.WriteString("\x1b[2m")
 			if colour {
 				b.WriteString(th.SGR(palette.Dimmed, false))
 			}
-		case colour:
-			// The theme's text, not the terminal's own, which the
-			// highlight band may not suit.
-			b.WriteString(th.SGR(palette.Text, false))
 		}
 		if l.Bold {
 			b.WriteString("\x1b[1m")
@@ -812,13 +820,19 @@ func ANSI(l Line, th palette.Theme) string {
 	attrs()
 	for _, s := range l.Spans {
 		fg := ""
-		// A dim line is dimmed throughout, but for the viewer's own
-		// row's label, the one mark of it the views have.
-		if colour && s.Fg != "" && (!l.Dim || s.Fg == palette.CurrentWorktreeFg) {
+		current := s.Fg == palette.CurrentWorktreeFg
+		if colour && s.Fg != "" && (!l.Dim || band || current) {
 			fg = th.SGR(s.Fg, false)
 		}
-		if (s.Dim && !l.Dim) || s.Bold || fg != "" {
-			if s.Dim && !l.Dim {
+		// A span's faint is for a theme without colours; with them its
+		// colour, the border's say, is faint enough.
+		faint := s.Dim && !l.Dim && fg == ""
+		if faint || s.Bold || fg != "" {
+			if current && l.Dim && !band {
+				// The viewer's label is not faint on a dim line.
+				b.WriteString("\x1b[22m")
+			}
+			if faint {
 				b.WriteString("\x1b[2m")
 			}
 			if s.Bold {
@@ -845,10 +859,22 @@ func ANSI(l Line, th palette.Theme) string {
 // not a wrapped line.
 func width(s string) int {
 	n := 0
-	for _, r := range s {
-		n += runeWidth(r)
+	rs := []rune(s)
+	for i, r := range rs {
+		n += cellWidth(rs, i, r)
 	}
 	return n
+}
+
+// cellWidth is the cells rs[i] takes: runeWidth, but a one-cell symbol
+// followed by the emoji variation selector, U+FE0F, is drawn as an emoji,
+// two cells, as ⚠️ and ✔️ are.
+func cellWidth(rs []rune, i int, r rune) int {
+	w := runeWidth(r)
+	if w == 1 && i+1 < len(rs) && rs[i+1] == 0xfe0f {
+		return 2
+	}
+	return w
 }
 
 func runeWidth(r rune) int {
@@ -896,8 +922,9 @@ func emojiWide(r rune) bool {
 func fit(s string, w int) string {
 	var b strings.Builder
 	n := 0
-	for _, r := range s {
-		rw := runeWidth(r)
+	rs := []rune(s)
+	for i, r := range rs {
+		rw := cellWidth(rs, i, r)
 		if rw == 0 && r < 0x20 || r == 0x7f {
 			continue
 		}

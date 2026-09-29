@@ -641,13 +641,17 @@ palette is #52's:
 `info`, `accent`, `success`, `warning`, `danger`, `dimmed`, `text`,
 `border`, `header`, `highlight_row_bg` and `current_worktree_fg`, with a
 dark and a light default. `theme.mode: auto` picks one from the
-terminal's background, asked with OSC 11 when the view starts, dark
-when there is no answer; `theme.custom` overrides any colour. A stale
+terminal's background, asked with OSC 11 when the view starts, then
+from `COLORFGBG`; with neither, a tmux popup say, the dark defaults
+colour the accents while plain text keeps the terminal's foreground
+and the selection is reverse video; `theme.custom` overrides any colour. A stale
 row is drawn in `dimmed` with the dim attribute throughout, the stripe
 and the diff and PR colours included, and so is any other dim row but
 for the viewer's own row's label; a task that needs the user is not
-dim, its waiting icon saying so. Plain text is drawn in `text`, a host
-that is down in `danger`, and a group's header in `header`. The row for
+dim, its waiting icon saying so. Plain text keeps the terminal's
+foreground, in `text` under the selection band; a host that is down is
+drawn in `danger`, one connecting in `warning`, and a group's header in
+`header`. The row for
 the viewer's own session has its primary label in bold
 `current_worktree_fg`, which replaces the `>` gutter. `NO_COLOR`
 falls back to today's attributes, and the golden tests' `Debug` form

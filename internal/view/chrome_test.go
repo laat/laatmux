@@ -95,8 +95,10 @@ func TestCleanTitle(t *testing.T) {
 		{"AM-KWMQF9PMFC", ""},       // the machine's name, as tmux titles a pane
 		{"AM-KWMQF9PMFC.local", ""}, // with its domain
 		{"AM-KWMQF9PMFC.go", "AM-KWMQF9PMFC.go"},
+		{"AM-KWMQF9PMFC.yaml", "AM-KWMQF9PMFC.yaml"},
+		{"AM-KWMQF9PMFC.test.ts", "AM-KWMQF9PMFC.test.ts"},
 	} {
-		if got := cleanTitle(c.in, "fix-ls", "laatmux", "vm", "AM-KWMQF9PMFC"); got != c.want {
+		if got := cleanTitle(c.in, "fix-ls", "laatmux", "vm", "AM-KWMQF9PMFC.local"); got != c.want {
 			t.Errorf("%q: %q, want %q", c.in, got, c.want)
 		}
 	}
@@ -318,9 +320,32 @@ func TestOSCAcrossFlush(t *testing.T) {
 // divider; no count line for a group header left below; two-cell emoji
 // measured as two; Loading within one cell.
 func TestChromeEdges(t *testing.T) {
+	// Plain text keeps the terminal's foreground; under the band, in a
+	// theme that knows the background, the text is the theme's; with the
+	// background guessed the selection is reverse video; a divider's
+	// border colour is not made faint as well; the viewer's label on a
+	// dim line is not faint.
 	th, _ := palette.New(true, nil)
-	if got := ANSI(plain("x"), th); !strings.HasPrefix(got, th.SGR(palette.Text, false)) {
-		t.Errorf("plain line without the text colour: %q", got)
+	if got := ANSI(plain("x"), th); got != "x\x1b[0m" {
+		t.Errorf("plain line: %q", got)
+	}
+	sel := Line{Reverse: true, Spans: []Span{{Text: "x"}}}
+	if got := ANSI(sel, th); !strings.HasPrefix(got, th.SGR(palette.HighlightRowBg, true)+th.SGR(palette.Text, false)) {
+		t.Errorf("selection with a known background: %q", got)
+	}
+	guessed := th
+	guessed.Guessed = true
+	if got := ANSI(sel, guessed); !strings.HasPrefix(got, "\x1b[7m") || strings.Contains(got, "48;") {
+		t.Errorf("selection with a guessed background: %q", got)
+	}
+	if got := ANSI(Line{Spans: []Span{{Text: "─", Fg: palette.Border, Dim: true}}}, th); strings.Contains(got, "\x1b[2m") {
+		t.Errorf("divider made faint on top of its colour: %q", got)
+	}
+	if got := ANSI(Line{Spans: []Span{{Text: "─", Fg: palette.Border, Dim: true}}}, palette.Mono()); !strings.Contains(got, "\x1b[2m") {
+		t.Errorf("divider without colours not faint: %q", got)
+	}
+	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg}}}, th); !strings.Contains(got, "\x1b[22m\x1b[1m"+th.SGR(palette.CurrentWorktreeFg, false)+"me") {
+		t.Errorf("the viewer's label on a dim line: %q", got)
 	}
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(now)
@@ -372,7 +397,7 @@ func TestAltBracket(t *testing.T) {
 func TestWidthSweep(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	for _, layout := range []Layout{Tiles, Compact} {
-		for _, icons := range []Icons{{}, {Set: IconsASCII}, {Waiting: "✅"}} {
+		for _, icons := range []Icons{{}, {Set: IconsASCII}, {Waiting: "✅"}, {Waiting: "⚠️"}} {
 			for w := 1; w <= 60; w++ {
 				for _, h := range []int{1, 2, 3, 5, 9, 20} {
 					for _, sel := range []int{0, 3, 8} {
@@ -404,5 +429,49 @@ func TestFormFocusWithoutColour(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no bold focus without colour:\n%s", Debug(lines))
+	}
+}
+
+// An answer cut anywhere in its header, `ESC ] 1 1 ;`, is swallowed
+// when its rest comes; a bare Alt-] still is not armed against.
+func TestOSCCutInHeader(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	full := "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"
+	for cut := 3; cut < len(full); cut++ {
+		d := Decoder{now: clock}
+		var ks []Key
+		ks = append(ks, d.Feed([]byte(full[:cut]))...)
+		ks = append(ks, d.Flush()...)
+		ks = append(ks, d.Feed([]byte(full[cut:]+"j"))...)
+		ks = append(ks, d.Flush()...)
+		if len(ks) != 1 || ks[0].Rune != 'j' {
+			t.Errorf("cut at %d: %+v", cut, ks)
+		}
+	}
+}
+
+// The query finds the answer past an echo of itself and past an Alt-]
+// typed before it, and keeps the Alt-] and the keys for Run.
+func TestBackgroundPastEchoAndAlt(t *testing.T) {
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	for _, in := range []string{
+		"\x1b]11;?\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x07j",
+		"\x1b]\x1b]11;rgb:ffff/ffff/ffff\x07j",
+	} {
+		r, w, _ := os.Pipe()
+		w.WriteString(in)
+		term := &Term{in: r, out: devnull}
+		start := time.Now()
+		dark, ok := term.Background(150 * time.Millisecond)
+		if !ok || dark || time.Since(start) > 100*time.Millisecond || !strings.HasSuffix(string(term.pending), "j") {
+			t.Errorf("%q: dark %v ok %v pending %q after %v", in, dark, ok, term.pending, time.Since(start))
+		}
+		r.Close()
+		w.Close()
 	}
 }

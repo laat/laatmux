@@ -166,9 +166,8 @@ var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true
 // starts with `Claude Code`, is a shell's name, repeats a label, or is
 // the host's name or one of the machine names given, dropped. tmux
 // titles a pane with the machine's name until the program sets one.
-// A machine's name matches whole, or as its first label either way,
-// `mac` for `mac.local`; a title that merely begins with a name, a
-// file `vm.py` say, stays.
+// A machine's name matches whole or as its first label; a title that
+// merely begins with a name, a file `dev.yaml` say, stays.
 func cleanTitle(title, primary, secondary, host string, machines ...string) string {
 	t := strings.TrimSpace(title)
 	for {
@@ -186,26 +185,15 @@ func cleanTitle(title, primary, secondary, host string, machines ...string) stri
 		t == primary, secondary != "" && t == secondary, host != "" && t == host:
 		return ""
 	}
-	short := func(s string) string { return strings.SplitN(s, ".", 2)[0] }
+	// A machine's name matches whole, or its first label alone: tmux
+	// titles a pane with the name the system gives, which is one of
+	// the two; a title that merely begins with the name stays.
 	for _, name := range machines {
-		if name != "" && (t == name || t == short(name) || name == short(t) && hostLike(t)) {
+		if name != "" && (t == name || t == strings.SplitN(name, ".", 2)[0]) {
 			return ""
 		}
 	}
 	return t
-}
-
-// hostLike is a title that could be a host name: letters, digits,
-// dashes and dots, and a dot followed by more than a file extension's
-// few letters, as `mac.local` has, which `vm.py` does not.
-func hostLike(t string) bool {
-	for _, c := range t {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
-			return false
-		}
-	}
-	i := strings.IndexByte(t, '.')
-	return i < 0 || len(t)-i-1 > 3
 }
 
 // elapsed is the time since a status changed as the views show it:

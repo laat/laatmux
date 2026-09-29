@@ -643,11 +643,14 @@ secondary label and host tag after the primary, and in the dashboard
 the third line under it. The icon is the status's: a two-cell braille
 spinner at 250 ms for working, 💬 for blocked or a task that needs the
 user; `icons: nerdfont` and `icons: ascii` choose other sets, and
-`status_icons` sets single ones. The selection is a background band;
-with `NO_COLOR` set, the attributes alone, the selection in reverse
-video. `theme.mode: auto` asks the terminal for its background with OSC
-11 when the view starts and takes the dark defaults without an answer;
-`theme.custom` sets palette colours. Before the first snapshot the list
+`status_icons` sets single ones. Plain text keeps the
+terminal's own foreground. `theme.mode: auto` asks the terminal for its
+background with OSC 11 when the view starts, then reads `COLORFGBG`;
+with neither it takes the dark defaults for the accents alone, and the
+selection is reverse video, since a tmux popup may get no answer; with
+a known background, or `dark` or `light` set, the selection is a band
+in `highlight_row_bg` with the text in `text`. With `NO_COLOR` set,
+the attributes alone. `theme.custom` sets palette colours. Before the first snapshot the list
 says `Loading`, an empty one says so, and rows below the window are
 counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
 `Enter` jumps, `1`..`9` jump to the nth row of the selection's group,

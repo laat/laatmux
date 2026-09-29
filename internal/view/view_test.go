@@ -83,7 +83,7 @@ func golden(t *testing.T, name, got string) {
 }
 
 func model(now time.Time) *Model {
-	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []string{"box  DOWN  ssh: connect to host box port 22: No route to host"}}
+	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []HeaderLine{{Text: "box  DOWN  ssh: connect to host box port 22: No route to host", Down: true}}}
 }
 
 // The tile layout at the sidebar's default width: each tile is the
@@ -453,16 +453,23 @@ func TestWidth(t *testing.T) {
 	if w := width("日本"); w != 4 {
 		t.Errorf("wide = %d", w)
 	}
-	// An emoji is two cells; a variation selector, a skin tone and a
-	// joiner add none, so a joined sequence measures as its base emoji.
+	// An emoji is two cells; a skin tone and a joiner add none, so a
+	// joined sequence measures as its base emoji; the emoji variation
+	// selector makes a one-cell symbol two, as terminals draw ⚠️.
 	if w := width("\U0001f600"); w != 2 {
 		t.Errorf("emoji = %d", w)
 	}
 	if w := width("\U0001f44d\U0001f3fd"); w != 2 {
 		t.Errorf("emoji with skin tone = %d", w)
 	}
-	if w := width("\u2764\ufe0f"); w != 1 {
+	if w := width("\u2764\ufe0f"); w != 2 {
 		t.Errorf("heart with variation selector = %d", w)
+	}
+	if w := width("\u26a0\ufe0f x"); w != 4 {
+		t.Errorf("warning sign with variation selector and text = %d", w)
+	}
+	if got := fit("a\u26a0\ufe0f", 2); got != "a" {
+		t.Errorf("fit cut inside a two-cell symbol = %q", got)
 	}
 	if got := fit("ab日本c", 4); got != "ab日" {
 		t.Errorf("fit = %q", got)
@@ -781,7 +788,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	m.Layout, m.Width = Compact, 80
 	m.SetRows(rows.Build(fixtureInput(now)))
 	m.Filter = "proj/task" // the one row is the live working one
-	m.Header = []string{"one", "two"}
+	m.Header = []HeaderLine{{Text: "one"}, {Text: "two"}}
 	m.Height = 4 // headers, the body line, footer: the icon is drawn
 	if lines := m.Render(); len(lines) != 4 || !m.Spinning() {
 		t.Fatalf("one working row under two headers: %d lines, spinning=%v", len(lines), m.Spinning())

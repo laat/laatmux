@@ -455,10 +455,12 @@ func (d *Decoder) Flush() []Key {
 		d.discard = true
 	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && d.pending[1] == ']' {
-		// Only a string whose number and semicolon came is armed
+		// Only a string whose number and semicolon came, or the start
+		// of the one answer the views ask for, `ESC ] 1 1 ;`, is armed
 		// against: an Alt-] alone is the user's, and so are the keys
 		// after it.
-		if kind, _, body := oscScan(d.pending); kind == oscMore && body {
+		kind, _, body := oscScan(d.pending)
+		if kind == oscMore && (body || len(d.pending) >= 3 && strings.HasPrefix(oscAnswer, string(d.pending))) {
 			d.osc, d.oscEsc = true, d.pending[len(d.pending)-1] == 0x1b
 			d.oscLeft, d.oscUntil = oscMax-len(d.pending), d.clock().Add(oscWait)
 		}
@@ -520,6 +522,9 @@ func (d *Decoder) swallowOSC(b []byte) []byte {
 	}
 	return nil
 }
+
+// oscAnswer is how the answer to the background query begins.
+const oscAnswer = "\x1b]11;"
 
 // What oscScan finds at an escape and a right bracket.
 const (

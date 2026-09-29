@@ -221,7 +221,7 @@ func (m *merged) fill(v *view.Model, current string) {
 	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
-		v.Header = append(v.Header, "local daemon  DOWN  "+m.daemonErr)
+		v.Header = append(v.Header, view.HeaderLine{Text: "local daemon  DOWN  " + m.daemonErr, Down: true})
 	}
 	names := make([]string, 0, len(m.hosts))
 	for n := range m.hosts {
@@ -233,15 +233,15 @@ func (m *merged) fill(v *view.Model, current string) {
 		switch {
 		case st.Connected && st.Listed:
 		case st.Connected:
-			v.Header = append(v.Header, n+"  connected  (snapshot pending)")
+			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connected  (snapshot pending)"})
 		case st.Error != "":
-			v.Header = append(v.Header, n+"  DOWN  "+st.down())
+			v.Header = append(v.Header, view.HeaderLine{Text: n + "  DOWN  " + st.down(), Down: true})
 		default:
-			v.Header = append(v.Header, n+"  connecting")
+			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connecting"})
 		}
 	}
 	if m.sessionsErr != "" {
-		v.Header = append(v.Header, "local sessions not listed: "+m.sessionsErr)
+		v.Header = append(v.Header, view.HeaderLine{Text: "local sessions not listed: " + m.sessionsErr})
 	}
 }
 
