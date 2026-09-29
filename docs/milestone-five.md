@@ -340,9 +340,9 @@ the prompt box visible, so the working-to-idle debounce does not hold
 it. The capture is a detection fixture, `claude-interrupted`, in
 `TestRealFixtures`. What the capture proves is the detection: idle, at
 once. Whether the agent then shows ✅ is the seen rule's: the interrupt
-is the user's key in the agent's session, so a client is on that
-session when the idle arrives, within a poll, and the finish is seen at
-once. A user who interrupts and leaves before the poll, or who works in
+is the user's key typed into the attach pane that shows the agent, so a
+client shows that pane when the idle arrives, within a poll, and the
+finish is seen at once. A user who interrupts and leaves before the poll, or who works in
 the session through a direct attach on the host, gets a ✅ they did not
 need; the tests for step 3 cover the first case.
 
