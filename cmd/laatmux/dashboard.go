@@ -293,10 +293,11 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		}
 		return worktreeSpec(cfg, h, *r.Worktree), "", nil
 	case r.Worktree != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
-		// A worktree without a home session, a split in it gone
-		// elsewhere say, whose agent is in a managed session: the
-		// worktree's own workspace session attaches to that one, so the
-		// worktree keeps one local session whether or not it has a home.
+		// A worktree whose own session lost the home, a split in it gone
+		// elsewhere say: the row's agent is the one laatmux made at the
+		// root, and the worktree's workspace session attaches to that
+		// session as it did while it was the home, so the worktree keeps
+		// one local session whether or not it has a home.
 		w := *r.Worktree
 		w.Session = r.Agent.Session
 		return worktreeSpec(cfg, h, w), "", nil

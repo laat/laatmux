@@ -419,9 +419,9 @@ func TestPendingOnRenamedHost(t *testing.T) {
 
 // From a host with attribution a worktree takes its agent by the
 // worktree id the host gave it: one in its home session, or, with no
-// home session, the one that started first, from any session or server.
-// The others keep rows of their own. A host without attribution pairs
-// by session name.
+// home session, the first started of the one laatmux made at its root
+// and those on a default server. The others keep rows of their own. A
+// host without attribution pairs by session name.
 func TestBuildByWorktreeID(t *testing.T) {
 	now := time.Now()
 	wt := func(env, root, session string) protocol.Worktree {
@@ -433,12 +433,16 @@ func TestBuildByWorktreeID(t *testing.T) {
 			{Name: "old", EnvironmentID: "oenv", Connected: true, Listed: true, Worktrees: true},
 		},
 		Agents: []protocol.Agent{
-			// /w/a: no home session; an agent on the default server and
-			// one in another managed session, the first started shown.
+			// /w/a: no home session, a split having left its session; the
+			// agent laatmux made at the root and one on the default
+			// server, the first started shown, and one in another
+			// managed session, which is that session's.
 			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 1, StartUnix: 200}},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "scratch", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Managed: true, Cwd: "/w/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 2, StartUnix: 100}},
+			{ID: "venv/laatmux/%8", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/a/sub", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 8, StartUnix: 50}},
 			// /w/b: the home session's idle agent wins over a working one
 			// elsewhere, which keeps its row.
 			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
@@ -478,7 +482,7 @@ func TestBuildByWorktreeID(t *testing.T) {
 	}
 	// Rows of their own: the unchosen default-server agents and the
 	// unattributed one; the chosen ones are not repeated.
-	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7"} {
+	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7", "venv/laatmux/%8"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("%s has no row", id)
 		}

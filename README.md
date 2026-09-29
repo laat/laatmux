@@ -233,9 +233,11 @@ truth; labels only place new things.
   with its agents by `worktree_id` against a host with the capability,
   reached directly or through a merging daemon that has it too, and by
   `session` otherwise. A worktree row shows an agent in its home
-  session, or, with no home session, the one that started first,
-  never chosen by activity, so rows do not swap as agents work; the
-  others keep rows of their own for now. A pane's path is resolved off
+  session, or, with no home session, the first started of the agent
+  laatmux made at its root and those on a default server, never chosen
+  by activity, so rows do not swap as agents work; an agent in another
+  managed session stays that session's, and the others keep rows of
+  their own for now. A pane's path is resolved off
   the poll, so a shell on a hung mount never holds detection up.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
   stages in the note, each step skipped by inspection: resolve, clone

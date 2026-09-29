@@ -416,7 +416,7 @@ func Build(in Input) Rows {
 		}
 		switch {
 		case attributes(w.EnvironmentID):
-			if a := rowAgent(byWorktree[w.ID], w.Session); a != nil {
+			if a := rowAgent(byWorktree[w.ID], w); a != nil {
 				r.Agent, used[a] = a, true
 			}
 		case w.Session != "":
@@ -548,17 +548,25 @@ func Build(in Input) Rows {
 }
 
 // rowAgent is the agent a worktree row shows of the agents attributed
-// to it. With a home session it is an agent there or none: the row is
-// jumped to through the home session, which an agent elsewhere is not
-// in. Without one it is any of them. Among several the choice never
-// turns on activity, which would swap the row's agent and the others'
-// rows as they work: a live agent before a gone one, then the one that
-// started first, then the id. The rest keep rows of their own until the
-// views show several agents per worktree.
-func rowAgent(agents []*protocol.Agent, home string) *protocol.Agent {
+// to it, the row being jumped to through it. With a home session it is
+// an agent there or none. Without one it is the agent laatmux made at
+// the root, in the worktree's own session that a pane gone elsewhere
+// took the home from, or one on a default server: an agent in another
+// managed session is that session's, and keeps its row, since the
+// worktree's workspace session attaches to its own managed session
+// only. Among several the choice never turns on activity, which would
+// swap the row's agent and the others' rows as they work: a live agent
+// before a gone one, then the one that started first, then the id. The
+// rest keep rows of their own until the views show several agents per
+// worktree.
+func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {
-		if home != "" && (a.Session != home || Server(*a) != tmux.LaatmuxServer.Label()) {
+		managed := Server(*a) == tmux.LaatmuxServer.Label()
+		switch {
+		case w.Session != "" && (!managed || a.Session != w.Session):
+			continue
+		case w.Session == "" && managed && !(a.Managed && a.Cwd == w.Root):
 			continue
 		}
 		if best == nil || before(a, best) {
