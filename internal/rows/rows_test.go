@@ -453,6 +453,10 @@ func TestBuildByWorktreeID(t *testing.T) {
 			// /w/e has a home session with no agent in it: an agent
 			// elsewhere is not the row's, which jumps to the home.
 			{ID: "venv/default/%7", EnvironmentID: "venv", Server: "default", Session: "other", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/e"},
+			// On another observed server, which is not jumped to: never
+			// the row's, though it started first.
+			{ID: "venv//tmp/sock/%9", EnvironmentID: "venv", Server: "/tmp/sock", Session: "obs", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+				Identity: &protocol.Identity{PID: 9, StartUnix: 10}},
 			// A host without attribution: by session, the field ignored.
 			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
 		},
@@ -482,7 +486,7 @@ func TestBuildByWorktreeID(t *testing.T) {
 	}
 	// Rows of their own: the unchosen default-server agents and the
 	// unattributed one; the chosen ones are not repeated.
-	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7", "venv/laatmux/%8"} {
+	for _, id := range []string{"venv/default/%1", "venv/default/%4", "venv/laatmux/%5", "venv/default/%7", "venv/laatmux/%8", "venv//tmp/sock/%9"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("%s has no row", id)
 		}

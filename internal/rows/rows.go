@@ -426,7 +426,7 @@ func Build(in Input) Rows {
 		}
 		key := workspace.Key(w.EnvironmentID, w.Root)
 		seenKey[key] = true
-		if w.Session == "" && r.Agent != nil && Server(*r.Agent) != tmux.LaatmuxServer.Label() {
+		if w.Session == "" && r.Agent != nil && Server(*r.Agent) == tmux.DefaultServer.Label() {
 			// With no home session and its agent on this machine's
 			// default server the row is jumped to by switching to the
 			// agent's session, and stands for it, whatever workspace
@@ -558,7 +558,8 @@ func Build(in Input) Rows {
 // to it, the row being jumped to through it. With a home session it is
 // an agent there or none. Without one it is the agent laatmux made at
 // the root, in the worktree's own session that a pane gone elsewhere
-// took the home from, or one on a default server: an agent in another
+// took the home from, or one on a default server, never one on another
+// observed server, which is not jumped to: an agent in another
 // managed session is that session's, and keeps its row, since the
 // worktree's workspace session attaches to its own managed session
 // only. Among several the choice never turns on activity, which would
@@ -574,6 +575,9 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 		case w.Session != "" && (!managed || a.Session != w.Session):
 			continue
 		case w.Session == "" && managed && !(a.Managed && a.Cwd == w.Root):
+			continue
+		case w.Session == "" && !managed && Server(*a) != tmux.DefaultServer.Label():
+			// Another observed server's sessions are not jumped to.
 			continue
 		}
 		if best == nil || before(a, best) {

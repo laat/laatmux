@@ -49,7 +49,12 @@ type root struct {
 
 // panePath is the path a pane is attributed by: the recorded one of a
 // pane laatmux made, the current one otherwise.
-func panePath(p tmux.Pane) string { return firstNonEmpty(p.Cwd, p.CurrentPath) }
+func panePath(p tmux.Pane) string {
+	if p.Managed && p.Cwd != "" {
+		return p.Cwd
+	}
+	return p.CurrentPath
+}
 
 // resolve is the path with its symlinks resolved as last seen, and the
 // path cleaned until it has been: the file system is asked on a

@@ -66,6 +66,7 @@ func TestAttributionTable(t *testing.T) {
 		{"no path", tmux.Pane{}, ""},
 		{"path reaching the root through a symlink", tmux.Pane{CurrentPath: filepath.Join(link, "src")}, id(foo)},
 		{"a path that is gone", tmux.Pane{CurrentPath: filepath.Join(foo, "gone")}, id(foo)},
+		{"a recorded path on a pane laatmux did not make", tmux.Pane{Cwd: foo, CurrentPath: main}, ""},
 	} {
 		// A pane's path is resolved off the poll: the answer is there
 		// by a later one.

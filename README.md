@@ -204,9 +204,12 @@ truth; labels only place new things.
   inside the root, joined from the pane poll, so an agent exiting updates
   the record without a git call. A split for a shell keeps the home; a
   pane gone elsewhere takes it away, and the views then jump to the
-  worktree through its agent: the worktree's workspace session attaches
-  to the agent's managed session, or, for an agent on a default server,
-  as to that agent. `rm` still kills every managed session with a pane laatmux
+  worktree through its agent. For the agent laatmux made at the root,
+  the worktree's workspace session attaches to that agent's managed
+  session. For an agent on this machine's default server, the jump
+  switches to the agent's session; one on a remote host's default
+  server, or on another observed server, cannot be jumped to. `rm`
+  still kills every managed session with a pane laatmux
   made at the root, home or not, so no agent is left in a removed
   directory. Origin reads are cached by the mtime of
   `.git/config`, and a checkout with no linked worktree under
@@ -234,7 +237,7 @@ truth; labels only place new things.
   reached directly or through a merging daemon that has it too, and by
   `session` otherwise. A worktree row shows an agent in its home
   session, or, with no home session, the first started of the agent
-  laatmux made at its root and those on a default server, never chosen
+  laatmux made at its root and those on the default server, never chosen
   by activity, so rows do not swap as agents work; an agent in another
   managed session stays that session's, and the others keep rows of
   their own for now. A pane's path is resolved off
