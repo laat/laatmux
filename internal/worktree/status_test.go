@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -348,21 +349,34 @@ func TestStatusIndexAndOrphan(t *testing.T) {
 	}
 }
 
-// A git call that times out returns at once, though a child it started
-// holds its output: the process group is killed and the pipes drained
-// for a bounded time.
+// A git call that times out is killed with the children it started: the
+// child that holds its output is gone too, not only waited out.
 func TestStatusGitTimeoutWithChild(t *testing.T) {
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, "git"), "#!/bin/sh\nsleep 30 &\nsleep 30\n")
+	pidFile := filepath.Join(dir, "child.pid")
+	write(t, filepath.Join(dir, "git"), "#!/bin/sh\nsleep 30 &\necho $! > "+pidFile+"\nsleep 30\n")
 	os.Chmod(filepath.Join(dir, "git"), 0o755)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	oldT, oldW := GitTimeout, gitWaitDelay
-	GitTimeout, gitWaitDelay = 200*time.Millisecond, 200*time.Millisecond
+	GitTimeout, gitWaitDelay = 1500*time.Millisecond, 200*time.Millisecond
 	defer func() { GitTimeout, gitWaitDelay = oldT, oldW }()
 	start := time.Now()
 	_, err := statusGit(context.Background(), dir, "status")
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 4*time.Second {
 		t.Errorf("%v after %v", err, time.Since(start))
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("the child never started: %v", err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	deadline := time.Now().Add(2 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatal("the child outlived the timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -414,8 +428,11 @@ func TestStatusPartialCloneNoFetch(t *testing.T) {
 	}
 	before := packs()
 	var cache StatusCache
-	if _, _, _, err := Status(f.ctx, partial, "side", &cache); err != nil {
-		t.Logf("status: %v", err) // a missing blob may fail the diff; no fetch either way
+	st, _, _, err := Status(f.ctx, partial, "side", &cache)
+	if err != nil || st.Ahead != 1 || st.Behind != 1 {
+		// A blob the diff may not fetch leaves the committed diff out,
+		// not the whole object.
+		t.Errorf("status: %+v %v", st, err)
 	}
 	if after := packs(); after != before {
 		t.Errorf("packs %d -> %d: a refresh fetched", before, after)

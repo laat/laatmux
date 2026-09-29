@@ -509,9 +509,10 @@ are diff options, so they never run a user's diff driver. `merge-tree
 it runs the repository's merge drivers, as any merge does, and a git
 before 2.50, without `--quiet`, gets the plain call, which writes the
 merge's objects once per commit pair. Every call runs with
-`GIT_NO_LAZY_FETCH=1` and, for a git before 2.45 that ignores it,
-`GIT_ALLOW_PROTOCOL=none`, so a partial clone never fetches from its
-remote during a refresh; the conflict is then left out. A branch with no
+`GIT_NO_LAZY_FETCH=1`, which git reads from 2.45, and, for an older
+git, `GIT_ALLOW_PROTOCOL=none`, so a partial clone never fetches from
+its remote during a refresh; the committed diff and the conflict are
+then left out when a blob they need is missing. A branch with no
 merge base with its base, an orphan or a shallow history, gets ahead
 and behind alone.
 
@@ -524,8 +525,9 @@ when the worktree is gone from the listing, has another branch, or its
 `HEAD` has moved, since the refresh began.
 
 **What is cached.** `committed`, `ahead`, `behind` and `conflict`
-depend only on the base's and `HEAD`'s commits, so they are computed
-again only when either changes; a fetch that moves the base is such a
+depend only on the base's and `HEAD`'s commits and the shallow
+boundary, so they are computed again only when one changes; a fetch
+that moves the base, or one that deepens a shallow history, is such a
 change. `merge-tree --write-tree` does a real merge and writes objects,
 so it runs once per pair and never on the base branch. `dirty` and
 `uncommitted` are read on every refresh; the line counts of untracked
@@ -536,7 +538,8 @@ files that changed.
 every 30 s. `add`, `rm` and a run ending make it due at once, and so does
 a change in an mtime the daemon stats every second: `HEAD` and `index`
 in the worktree's git dir (`.git/worktrees/<name>`), and in the common
-dir `packed-refs` and the loose refs of the branch and of its base. A
+dir `packed-refs`, `shallow` and the loose refs of the branch and of its
+base. A
 worktree gets at most one refresh every 2 s. Polling comes first;
 kqueue or inotify through `golang.org/x/sys` only if a measurement with
 twenty worktrees on the VM shows the cost.

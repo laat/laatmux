@@ -55,7 +55,7 @@ const baseTTL = time.Minute
 type Paths struct {
 	GitDir    string // .git/worktrees/<name> of the main checkout
 	CommonDir string
-	Refs      []string // loose ref files of the branch and the base, which may not exist
+	Refs      []string // loose ref files of the branch and the base, packed-refs and shallow, which may not exist
 }
 
 // Pair is what the committed stats depend on: the two commits, and the
@@ -281,13 +281,13 @@ func onBase(base, branch string) bool {
 	return base == branch || strings.HasPrefix(base, "origin/") && strings.TrimPrefix(base, "origin/") == branch
 }
 
+// noQuietMerge is that this machine's git has no merge-tree --quiet.
+var noQuietMerge atomic.Bool
+
 // readCommitted is what depends on the commit pair: the branch's diff
 // against its merge base with base, ahead and behind, and whether a
 // merge would conflict. It runs once per pair: a merge-tree without
 // --quiet writes objects.
-// noQuietMerge is that this machine's git has no merge-tree --quiet.
-var noQuietMerge atomic.Bool
-
 func readCommitted(ctx context.Context, root string, pair Pair) (Committed, error) {
 	var c Committed
 	// The commits, not the names: a fetch or a commit between the calls
@@ -311,10 +311,16 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 		return c, err
 	}
 	diff, err := statusGit(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv", span)
-	if err != nil {
+	switch {
+	case err == nil:
+		c.Diff = numstat(diff)
+	case errors.As(err, &ee):
+		// git refused the diff, a partial clone missing a blob it may
+		// not fetch say: the committed diff is left out, the rest of
+		// the pair stands and is kept.
+	default:
 		return c, err
 	}
-	c.Diff = numstat(diff)
 	counts, err := statusGit(ctx, root, "rev-list", "--left-right", "--count", span)
 	if err != nil {
 		return c, err

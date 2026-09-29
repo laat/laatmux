@@ -19,8 +19,8 @@ import (
 // home session every gitSessionEvery, one without every gitIdleEvery,
 // and any at once when add or a run ending makes it due or an mtime the
 // loop stats every gitTick changes: HEAD and index in its git dir, and in
-// the common dir packed-refs and the loose refs of the branch and its
-// base. No worktree is refreshed more than once per gitMinGap.
+// the common dir packed-refs, shallow and the loose refs of the branch
+// and its base. No worktree is refreshed more than once per gitMinGap.
 const (
 	gitWorkers      = 2
 	gitTick         = time.Second
