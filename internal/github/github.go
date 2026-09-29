@@ -206,6 +206,15 @@ func Fetch(ctx context.Context, run Runner, host string, branches []Branch) ([]R
 	return results, nil
 }
 
+// FailingKey is what a failing check's name is kept by: the rollup and
+// its counts, so a rerun that moves the failure changes the key.
+func FailingKey(rollupID string, c *protocol.Checks) string {
+	if c == nil {
+		return rollupID
+	}
+	return fmt.Sprintf("%s %d/%d", rollupID, c.Passed, c.Total)
+}
+
 // FillFailing gives each failing result the name of its first failing
 // check: the one in known for its rollup id, found recently, else paged
 // for.
@@ -215,7 +224,7 @@ func FillFailing(ctx context.Context, run Runner, host string, results []Result,
 		if r.Err != nil || r.Checks == nil || r.Checks.State != protocol.ChecksFailure || r.RollupID == "" || ctx.Err() != nil {
 			continue
 		}
-		if name, ok := known[r.RollupID]; ok {
+		if name, ok := known[FailingKey(r.RollupID, r.Checks)]; ok {
 			r.Checks.Failing = name
 		} else {
 			r.Checks.Failing = failingName(ctx, run, host, r.RollupID)

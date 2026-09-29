@@ -1023,7 +1023,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
 - **PR and checks**, capability `branches` (milestone five, step 5): the
   daemon asks GitHub, through `gh api graphql` on this machine, about
   every branch a worktree in the stream has on github.com or a host in
-  the config's `github_hosts`, 32 branches to a query,
+  the config's `github_hosts` (bare host names, read when the daemon
+  starts), 32 branches to a query,
   with the names as variables. It asks every 30 s while a view is open,
   and at once when the set of branches changes. Each branch gets a
   `branch_status` record keyed by source key and branch:

@@ -596,11 +596,11 @@ every worktree in the merged stream, keyed by source and branch.
   `statusContextCountsByState`, which count every context whatever the
   page. The name of the first failing check is a second, small query,
   only for rollups that fail, paging until one is found, and kept by
-  the rollup's id for five minutes, since a rerun on the same commit can
+  the rollup's id and counts for five minutes, since a rerun on the same commit can
   move the failure to another check. When forks' PRs of the same name
   fill a connection's page, the next pages are asked for, up to five,
   until one of the repository's own is found.
-  A query of 32 branches costs about four of GitHub's rate-limit
+  A query of 32 branches costs about seven of GitHub's rate-limit
   points.
 - **When.** Every 30 s while a merged subscriber is there, and at once
   when the set of branches changes. A round runs beside the loop that

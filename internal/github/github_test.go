@@ -210,7 +210,7 @@ func TestFailingNameKnown(t *testing.T) {
 		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"h","statusCheckRollup":` + failing + `}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}}}`, nil
 	}}
 	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
-	FillFailing(context.Background(), f.run, "github.com", rs, map[string]string{"RID": "lint"})
+	FillFailing(context.Background(), f.run, "github.com", rs, map[string]string{FailingKey("RID", &protocol.Checks{Passed: 0, Total: 1}): "lint"})
 	if err != nil || rs[0].Checks.Failing != "lint" {
 		t.Errorf("%+v %v", rs[0].Checks, err)
 	}

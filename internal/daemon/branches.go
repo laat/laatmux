@@ -154,7 +154,8 @@ func (d *Daemon) githubHost(host string) bool {
 
 // hostsListedLocked reports whether every configured host has a listing
 // of this connection's, so a branch missing from the set is missing
-// from the hosts, not only not yet heard of.
+// from the hosts, not only not yet heard of. Once it has held since the
+// daemon started, a host down later does not stop the forgetting.
 func (d *Daemon) hostsListedLocked() bool {
 	if len(d.mhosts) == 0 {
 		return false
@@ -198,6 +199,11 @@ func (d *Daemon) runBranches(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// A round under way writes the file when it ends: it ends
+			// before the loop does.
+			if running {
+				<-done
+			}
 			return
 		case <-t.C:
 		case <-done:
@@ -240,7 +246,10 @@ func (d *Daemon) ageBranchesLocked(set map[string]branchQuery, now time.Time) {
 	// A branch is known gone only once every host has listed: after a
 	// restart, before a subscription has reached them, the set is
 	// empty, and the kept answers stand.
-	listed := d.hostsListedLocked()
+	if d.hostsListedLocked() {
+		d.branchesListed = true
+	}
+	listed := d.branchesListed
 	for k, e := range d.branches {
 		switch {
 		case listed && set[k].key == "" && now.Sub(e.LastSeen) > branchForget:
@@ -336,7 +345,7 @@ func (d *Daemon) knownFailing(qs []branchQuery) map[string]string {
 	for _, q := range qs {
 		e := d.branches[q.key]
 		if e != nil && e.RollupID != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" && now.Sub(e.FailingAt) < branchStale {
-			known[e.RollupID] = e.Status.Checks.Failing
+			known[github.FailingKey(e.RollupID, e.Status.Checks)] = e.Status.Checks.Failing
 		}
 	}
 	return known
@@ -362,6 +371,16 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
 			}
 		case r.Err != nil:
+			// A branch GitHub answered with an error, a repository it
+			// cannot resolve or an organisation's SSO say, is logged
+			// once per message.
+			if msg := r.Err.Error(); !d.branchErrs[msg] {
+				if d.branchErrs == nil {
+					d.branchErrs = map[string]bool{}
+				}
+				d.branchErrs[msg] = true
+				d.cfg.Logger.Printf("github: %s", msg)
+			}
 			if e != nil && !e.Status.Stale {
 				e.Status.Stale = true
 				st := e.Status
@@ -372,7 +391,7 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 				e = &branchEntry{}
 				d.branches[q.key] = e
 			}
-			if _, cached := known[r.RollupID]; !cached || e.RollupID != r.RollupID {
+			if _, cached := known[github.FailingKey(r.RollupID, r.Checks)]; !cached || e.RollupID != r.RollupID {
 				e.FailingAt = now // a name found now, or none needed
 			}
 			e.LastSeen, e.RollupID = now, r.RollupID

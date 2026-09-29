@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -298,7 +299,7 @@ func TestBranchesSlowRound(t *testing.T) {
 		case <-block:
 		case <-ctx.Done():
 		}
-		return nil, ctx.Err()
+		return nil, errors.New("slow")
 	}
 	d.mu.Lock()
 	d.cfg.GitHub = slow
@@ -308,7 +309,17 @@ func TestBranchesSlowRound(t *testing.T) {
 		e.Status.FetchedAt = time.Now().Add(-branchStale + branchTick + branchTick/2)
 	}
 	d.mu.Unlock()
-	go d.runBranches(ctx)
+	exited := make(chan struct{})
+	go func() {
+		d.runBranches(ctx)
+		close(exited)
+	}()
+	// The loop, and the round it waits on, end before the test does:
+	// the round writes into the test's directory.
+	defer func() {
+		cancel()
+		<-exited
+	}()
 	deadline := time.Now().Add(4 * branchTick)
 	for {
 		d.mu.Lock()
@@ -357,7 +368,7 @@ func TestBranchesFailingNameLifetime(t *testing.T) {
 		Status: protocol.BranchStatus{BranchKey: bkey("a"), Checks: &protocol.Checks{State: protocol.ChecksFailure, Failing: "lint"}}}
 	d.mu.Unlock()
 	q := []branchQuery{{key: k}}
-	if known := d.knownFailing(q); known["R"] != "lint" {
+	if known := d.knownFailing(q); known[github.FailingKey("R", &protocol.Checks{})] != "lint" {
 		t.Errorf("a recent name not known: %v", known)
 	}
 	d.mu.Lock()
