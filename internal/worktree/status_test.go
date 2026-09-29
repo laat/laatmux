@@ -516,3 +516,30 @@ func TestStatusPartialSoftReset(t *testing.T) {
 		t.Error("fetched")
 	}
 }
+
+// The --write-tree probe: a git whose help lacks it is unsupported; one
+// whose help lists it is supported; a help that did not answer says
+// nothing either way.
+func TestProbeWriteTree(t *testing.T) {
+	path := os.Getenv("PATH")
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name, script     string
+		supported, valid bool
+	}{
+		{"old", "echo 'usage: git merge-tree <base-tree> <branch1> <branch2>'; exit 129", false, true},
+		{"new", "echo 'usage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>'; exit 129", true, true},
+		{"failed", "exit 1", false, false},
+	} {
+		write(t, filepath.Join(dir, "git"), "#!/bin/sh\n"+c.script+"\n")
+		os.Chmod(filepath.Join(dir, "git"), 0o755)
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if s, v := probeWriteTree(context.Background(), dir); s != c.supported || v != c.valid {
+			t.Errorf("%s: supported %v valid %v", c.name, s, v)
+		}
+	}
+	t.Setenv("PATH", path)
+	if s, v := probeWriteTree(context.Background(), t.TempDir()); !s || !v {
+		t.Errorf("this machine's git: supported %v valid %v", s, v)
+	}
+}

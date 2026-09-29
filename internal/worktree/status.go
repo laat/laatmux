@@ -302,10 +302,16 @@ func onBase(base, branch string) bool {
 // conflict is read at all.
 var noQuietMerge, noWriteTree atomic.Bool
 
-// hasWriteTree asks git's merge-tree help whether it knows --write-tree.
-func hasWriteTree(ctx context.Context, root string) bool {
+// probeWriteTree asks git's merge-tree help whether it knows
+// --write-tree. valid is that the help answered, its usage printed: a
+// probe that timed out or failed says nothing, and nothing is
+// remembered from it.
+func probeWriteTree(ctx context.Context, root string) (supported, valid bool) {
 	out, _ := statusGit(ctx, root, "merge-tree", "-h")
-	return strings.Contains(out, "--write-tree")
+	if !strings.Contains(out, "usage: git merge-tree") {
+		return false, false
+	}
+	return strings.Contains(out, "--write-tree"), true
 }
 
 // readCommitted is what depends on the commit pair: the branch's diff
@@ -367,9 +373,11 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	}
 	if noQuietMerge.Load() {
 		_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
-		if errors.As(err, &ee) && ee.ExitCode() == 128 && !hasWriteTree(ctx, root) {
-			noWriteTree.Store(true)
-			return c, nil
+		if errors.As(err, &ee) && ee.ExitCode() == 128 {
+			if supported, valid := probeWriteTree(ctx, root); valid && !supported {
+				noWriteTree.Store(true)
+				return c, nil
+			}
 		}
 	}
 	switch {
