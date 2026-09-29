@@ -17,9 +17,11 @@ import (
 
 // The git status of a worktree, as the host's daemon reads it for the
 // views: see milestone five's note, Diff stats. Every call runs as `git
-// --no-optional-locks`, so it never takes the index lock a user's git
-// needs, and the diffs take --no-ext-diff and --no-textconv, so no diff
-// driver of the user's runs.
+// --no-optional-locks`, and the diff against HEAD with
+// diff.autoRefreshIndex off, so no call takes the index lock a user's
+// git needs or rewrites the index; the diffs take --no-ext-diff and
+// --no-textconv, so no diff driver of the user's runs. merge-tree runs
+// the repository's merge drivers, as any merge would.
 
 // BaseKey is the branch config key add sets to the base a branch was
 // made from, resolved: origin/main, not origin/HEAD.
@@ -78,6 +80,7 @@ type StatusCache struct {
 	base      string
 	baseRef   string // its full ref name, for the mtime trigger
 	baseAt    time.Time
+	resolved  bool // baseAt is a resolution's, one that found none too
 	pair      Pair
 	committed Committed
 	have      bool
@@ -94,7 +97,8 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	// the base is resolved again when it is old or cannot be read.
 	var baseOID string
 	base := cache.base
-	if base == "" || time.Since(cache.baseAt) > baseTTL {
+	fresh := cache.resolved && time.Since(cache.baseAt) <= baseTTL
+	if !fresh {
 		base = ""
 	}
 	for {
@@ -106,7 +110,7 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		f := strings.Split(strings.TrimSpace(out), "\n")
 		if err != nil && base != "" && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
 			// The base is gone: resolved again.
-			base = ""
+			base, fresh = "", false
 			continue
 		}
 		if err != nil {
@@ -124,13 +128,15 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	if !filepath.IsAbs(paths.CommonDir) {
 		paths.CommonDir = filepath.Join(root, paths.CommonDir)
 	}
-	if base == "" {
+	if !fresh {
+		// A repository with no base at all is not asked again for the
+		// minute either.
 		var ref string
 		base, ref, baseOID, err = resolveBase(ctx, root, branch)
 		if err != nil {
 			return st, head, paths, err
 		}
-		cache.base, cache.baseRef, cache.baseAt = base, ref, time.Now()
+		cache.base, cache.baseRef, cache.baseAt, cache.resolved = base, ref, time.Now(), true
 	}
 	st.Base = base
 	if branch != "" {
@@ -179,7 +185,7 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 			st.Dirty = true
 		}
 	}
-	diff, err := g("diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD")
+	diff, err := g("-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD")
 	if err != nil {
 		return st, head, paths, err
 	}
@@ -267,6 +273,23 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	// The commits, not the names: a fetch or a commit between the calls
 	// cannot mix two pairs under one key.
 	span := pair.Base + "..." + pair.Head
+	// A branch with no merge base with its base, an orphan or a
+	// shallow history, has no diff against it and no merge to try:
+	// ahead and behind alone.
+	_, err := statusGit(ctx, root, "merge-base", pair.Base, pair.Head)
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &ee) && ee.ExitCode() == 1:
+		counts, err := statusGit(ctx, root, "rev-list", "--left-right", "--count", span)
+		if err != nil {
+			return c, err
+		}
+		c.Behind, c.Ahead = leftRight(counts)
+		return c, nil
+	default:
+		return c, err
+	}
 	diff, err := statusGit(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv", span)
 	if err != nil {
 		return c, err
@@ -276,12 +299,13 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 	if err != nil {
 		return c, err
 	}
-	if f := strings.Fields(counts); len(f) == 2 {
-		c.Behind, _ = strconv.Atoi(f[0])
-		c.Ahead, _ = strconv.Atoi(f[1])
+	c.Behind, c.Ahead = leftRight(counts)
+	// --quiet stops at the first conflict and writes no objects; a git
+	// without it, before 2.40, exits 129 and gets the plain call.
+	_, err = statusGit(ctx, root, "merge-tree", "--write-tree", "--quiet", pair.Base, pair.Head)
+	if errors.As(err, &ee) && ee.ExitCode() == 129 {
+		_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
 	}
-	_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
-	var ee *exec.ExitError
 	switch {
 	case err == nil:
 		no := false
@@ -295,6 +319,16 @@ func readCommitted(ctx context.Context, root string, pair Pair) (Committed, erro
 		// git older than 2.38 has no --write-tree: the field is left out.
 	}
 	return c, nil
+}
+
+// leftRight reads rev-list --left-right --count: the base's side, then
+// HEAD's.
+func leftRight(out string) (behind, ahead int) {
+	if f := strings.Fields(out); len(f) == 2 {
+		behind, _ = strconv.Atoi(f[0])
+		ahead, _ = strconv.Atoi(f[1])
+	}
+	return behind, ahead
 }
 
 // numstat sums `git diff --numstat` output; a binary file counts 0.

@@ -305,3 +305,44 @@ func TestStatusEdges(t *testing.T) {
 		t.Errorf("readable again, not counted: %+v", st)
 	}
 }
+
+// Review round 1 (Opus): a refresh never rewrites the index, even with
+// files whose stat data changed and content did not; an orphan branch,
+// with no merge base, gets ahead and behind alone.
+func TestStatusIndexAndOrphan(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := a.Root
+	gitCfg(t, root)
+	var cache StatusCache
+	Status(f.ctx, root, "idx", &cache)
+	gitDir := strings.TrimSpace(run(t, root, "git", "rev-parse", "--absolute-git-dir"))
+	index := filepath.Join(gitDir, "index")
+	past := time.Now().Add(-time.Hour)
+	os.Chtimes(index, past, past)
+	later := time.Now().Add(time.Minute)
+	os.Chtimes(filepath.Join(root, "README"), later, later) // same content, new stat
+	if _, _, _, err := Status(f.ctx, root, "idx", &cache); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(index); !fi.ModTime().Equal(past) {
+		t.Errorf("the index was rewritten: %v", fi.ModTime())
+	}
+	if _, err := os.Stat(index + ".lock"); err == nil {
+		t.Error("an index lock left behind")
+	}
+
+	run(t, root, "git", "checkout", "-q", "--orphan", "lonely")
+	run(t, root, "git", "commit", "-q", "-m", "orphan")
+	cache = StatusCache{}
+	st, _, _, err := Status(f.ctx, root, "lonely", &cache)
+	if err != nil {
+		t.Fatalf("orphan: %v", err)
+	}
+	if st.Ahead != 1 || st.Behind < 1 || st.Committed != [2]int{} || st.Conflict != nil {
+		t.Errorf("orphan: %+v", st)
+	}
+}

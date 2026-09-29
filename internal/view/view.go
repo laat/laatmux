@@ -706,11 +706,15 @@ func gitSpans(r rows.Row, w int) []Span {
 		if g.UncommittedPartial {
 			added += "+"
 		}
-		uncommitted = []Span{
-			{Text: "✎ "},
-			{Text: added, Fg: palette.Success, Bold: true},
-			{Text: " "},
-			{Text: fmt.Sprintf("-%d", g.Uncommitted[1]), Fg: palette.Danger, Bold: true},
+		uncommitted = []Span{{Text: "✎"}}
+		if g.Uncommitted != [2]int{} || g.UncommittedPartial {
+			// Dirty with no lines, a mode change or a binary file, is
+			// the mark alone.
+			uncommitted = append(uncommitted,
+				Span{Text: " "},
+				Span{Text: added, Fg: palette.Success, Bold: true},
+				Span{Text: " "},
+				Span{Text: fmt.Sprintf("-%d", g.Uncommitted[1]), Fg: palette.Danger, Bold: true})
 		}
 	}
 	join := func(parts ...[]Span) []Span {

@@ -499,10 +499,17 @@ carry the same; the time of the last refresh is not in the record.
   existing local branch, nor over a key already there. On the base
   branch itself only the uncommitted stats are shown.
 
-Every call runs as `git --no-optional-locks`, so the poll never takes
-the index lock a user's git needs. The two `git diff` calls also take
-`--no-ext-diff` and `--no-textconv`, which are diff options, so they
-never run a user's diff driver.
+Every call runs as `git --no-optional-locks`, and the diff against
+`HEAD` with `-c diff.autoRefreshIndex=false`, since a porcelain `git
+diff` refreshes and rewrites the index under its lock whatever the
+option: the poll never takes the index lock a user's git needs. The two
+`git diff` calls also take `--no-ext-diff` and `--no-textconv`, which
+are diff options, so they never run a user's diff driver. `merge-tree
+--write-tree --quiet` stops at the first conflict and writes no objects;
+it runs the repository's merge drivers, as any merge does, and a git
+before 2.40, without `--quiet`, gets the plain call. A branch with no
+merge base with its base, an orphan or a shallow history, gets ahead
+and behind alone.
 
 **Where it runs.** Not in the worktree listing: that poll is serialized
 and stamps the listings that retire tasks, and a slow repository must

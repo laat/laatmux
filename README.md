@@ -206,8 +206,9 @@ truth; labels only place new things.
   run ending, or a change to `HEAD`, `index` or the refs of the branch
   and its base. A refresh is at least 2 s after the last one, never waits
   on the listing, and upserts only when a value changed. Git runs with
-  `--no-optional-locks`, and the diffs with `--no-ext-diff
-  --no-textconv`. The views show the stats on a tile's second line and
+  `--no-optional-locks`, the diff against HEAD without refreshing the
+  index, and the diffs with `--no-ext-diff --no-textconv`, so a refresh
+  never takes the index lock or runs a diff driver. The views show the stats on a tile's second line and
   before the time in the compact line: `R` while rebasing, the committed
   `+N -M`, then `✎` and the uncommitted `+X -Y`. A merging daemon that
   knows the field forwards it.

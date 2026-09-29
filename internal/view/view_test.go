@@ -1291,6 +1291,8 @@ func TestRenderGit(t *testing.T) {
 		"menv/worktree//w/task":   {Base: "origin/main", Committed: [2]int{318, 87}, Rebasing: true, Conflict: &yes},
 		"venv/worktree//r/other":  {Base: "origin/main", Uncommitted: [2]int{4, 1}, UncommittedPartial: true, Dirty: true},
 		"menv/worktree//w/spike":  {Base: "origin/main", Committed: [2]int{153, 41}, Stale: true},
+		// Dirty with no lines, a mode change say: the mark alone.
+		"venv/worktree//r/shell": {Base: "origin/main", Dirty: true},
 	}
 	for i := range in.Worktrees {
 		if g, ok := stats[in.Worktrees[i].ID]; ok {
