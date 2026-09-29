@@ -2,6 +2,8 @@ package view
 
 import (
 	"strings"
+
+	"github.com/laat/laatmux/internal/palette"
 )
 
 // Form is the task form of milestone four: three chips for the
@@ -214,25 +216,43 @@ func (f *Form) promptKey(k Key) {
 		f.insert([]rune{'\n'})
 	case KeyPaste:
 		f.insert([]rune(k.Text))
+	// Moves and deletes step over the zero-width runes after a rune,
+	// a variation selector say, so the cursor never splits a symbol
+	// from its selector.
 	case KeyBackspace:
 		if f.cursor > 0 {
-			f.prompt = append(f.prompt[:f.cursor-1], f.prompt[f.cursor:]...)
-			f.cursor--
+			i := f.cursor - 1
+			for i > 0 && joins(f.prompt[i]) {
+				i--
+			}
+			f.prompt = append(f.prompt[:i], f.prompt[f.cursor:]...)
+			f.cursor = i
 			f.propose()
 		}
 	case KeyDelete:
 		if f.cursor < len(f.prompt) {
-			f.prompt = append(f.prompt[:f.cursor], f.prompt[f.cursor+1:]...)
+			j := f.cursor + 1
+			for j < len(f.prompt) && joins(f.prompt[j]) {
+				j++
+			}
+			f.prompt = append(f.prompt[:f.cursor], f.prompt[j:]...)
 			f.propose()
 		}
 	case KeyLeft:
 		// Within the line: Up and Down change lines.
-		if f.cursor > f.lineStart(f.cursor) {
+		start := f.lineStart(f.cursor)
+		if f.cursor > start {
 			f.cursor--
+			for f.cursor > start && joins(f.prompt[f.cursor]) {
+				f.cursor--
+			}
 		}
 	case KeyRight:
-		if f.cursor < f.lineEnd(f.cursor) {
+		if end := f.lineEnd(f.cursor); f.cursor < end {
 			f.cursor++
+			for f.cursor < end && joins(f.prompt[f.cursor]) {
+				f.cursor++
+			}
 		}
 	case KeyHome:
 		f.cursor = f.lineStart(f.cursor)
@@ -258,6 +278,11 @@ func (f *Form) promptKey(k Key) {
 		f.submit()
 	}
 }
+
+// joins reports whether r is drawn with the rune before it, taking no
+// cell of its own: a combining mark, a joiner, a variation selector or
+// a skin tone.
+func joins(r rune) bool { return r >= 0x20 && runeWidth(r) == 0 }
 
 func (f *Form) insert(rs []rune) {
 	out := make([]rune, 0, len(f.prompt)+len(rs))
@@ -353,7 +378,7 @@ func (f *Form) Render(w, h int) []Line {
 	avail := max(w-8, 0)
 	branch := Line{Spans: []Span{{Text: "branch  "}, {Text: fit(f.branch, avail), Dim: !f.edited}}}
 	if f.focus == fieldBranch {
-		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg}, {Text: tail(f.branch+"█", avail)}}}
+		branch = Line{Spans: []Span{{Text: "branch  ", Fg: focusFg, Bold: true}, {Text: tail(f.branch+"█", avail)}}}
 	}
 	boxLines := h - len(out) - 1 - len(foot)
 	if boxLines < 3 {
@@ -373,7 +398,7 @@ func (f *Form) Render(w, h int) []Line {
 // focusFg is the colour of the focused field's frame; tabStop is how
 // a tab in the prompt is drawn.
 const (
-	focusFg = 36
+	focusFg = palette.Info
 	tabStop = 4
 )
 
@@ -388,7 +413,7 @@ func (f *Form) chipLines(w int) []Line {
 		for i, c := range f.Chips {
 			l := plain(fit(c.Title+" "+c.Label(), w))
 			if f.focus == i {
-				l = Line{Spans: []Span{{Text: fit(c.Title+" "+c.Label(), w), Fg: focusFg}}}
+				l = Line{Spans: []Span{{Text: fit(c.Title+" "+c.Label(), w), Fg: focusFg, Bold: true}}}
 			}
 			out = append(out, l)
 		}
@@ -406,7 +431,7 @@ func (f *Form) chipLines(w int) []Line {
 		t := "┌" + title + strings.Repeat("─", max(cw-2-width(title), 0)) + "┐"
 		v := "│" + pad(fit(" "+c.Label(), cw-2), cw-2) + "│"
 		b := "└" + strings.Repeat("─", cw-2) + "┘"
-		fg := 0
+		fg := ""
 		if f.focus == i {
 			fg = focusFg
 		}
@@ -414,9 +439,12 @@ func (f *Form) chipLines(w int) []Line {
 		if i > 0 {
 			gap = " "
 		}
-		top.Spans = append(top.Spans, Span{Text: gap + t, Fg: fg})
-		mid.Spans = append(mid.Spans, Span{Text: gap + v, Fg: fg})
-		bot.Spans = append(bot.Spans, Span{Text: gap + b, Fg: fg})
+		// The focus is bold as well as coloured, so it shows with
+		// NO_COLOR, where the colour does not.
+		bold := fg != ""
+		top.Spans = append(top.Spans, Span{Text: gap + t, Fg: fg, Bold: bold})
+		mid.Spans = append(mid.Spans, Span{Text: gap + v, Fg: fg, Bold: bold})
+		bot.Spans = append(bot.Spans, Span{Text: gap + b, Fg: fg, Bold: bold})
 	}
 	return []Line{top, mid, bot}
 }
@@ -430,9 +458,13 @@ func tail(s string, w int) string {
 	rs := []rune(s)
 	n := 0
 	i := len(rs)
-	for i > 0 && n+runeWidth(rs[i-1]) <= w-1 {
+	for i > 0 && n+cellWidth(rs, i-1, rs[i-1]) <= w-1 {
 		i--
-		n += runeWidth(rs[i])
+		n += cellWidth(rs, i, rs[i])
+	}
+	// A selector cut from its symbol is dropped with it.
+	for i < len(rs) && joins(rs[i]) {
+		i++
 	}
 	return "…" + string(rs[i:])
 }
@@ -453,7 +485,7 @@ func (f *Form) promptBox(w, n int) []Line {
 	if inner < 1 {
 		inner = 1
 	}
-	fg := 0
+	fg := ""
 	if f.focus == fieldPrompt {
 		fg = focusFg
 	}
@@ -471,15 +503,16 @@ func (f *Form) promptBox(w, n int) []Line {
 	if cursorLine >= body {
 		scroll = cursorLine - body + 1
 	}
-	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg}}}}
+	bold := fg != ""
+	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg, Bold: bold}}}}
 	for i := 0; i < body; i++ {
 		text := ""
 		if j := scroll + i; j < len(lines) {
 			text = lines[j]
 		}
-		out = append(out, Line{Spans: []Span{{Text: "│ ", Fg: fg}, {Text: pad(fit(text, inner), inner)}, {Text: " │", Fg: fg}}})
+		out = append(out, Line{Spans: []Span{{Text: "│ ", Fg: fg, Bold: bold}, {Text: pad(fit(text, inner), inner)}, {Text: " │", Fg: fg, Bold: bold}}})
 	}
-	return append(out, Line{Spans: []Span{{Text: fit(bot, w), Fg: fg}}})
+	return append(out, Line{Spans: []Span{{Text: fit(bot, w), Fg: fg, Bold: bold}}})
 }
 
 // wrapPrompt wraps the prompt to lines of at most inner cells, with the
@@ -528,7 +561,7 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 			curW += n
 			continue
 		}
-		rw := runeWidth(r)
+		rw := cellWidth(f.prompt, i, r)
 		if curW+rw > inner {
 			// Break at the last space of the line when there is one
 			// past its first third, carrying the word over.
@@ -538,8 +571,8 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 				flush()
 				cur = carry
 				curW = 0
-				for _, c := range cur {
-					curW += runeWidth(c)
+				for k, c := range cur {
+					curW += cellWidth(cur, k, c)
 				}
 				if strings.ContainsRune(string(carry), '█') {
 					cursorLine = len(lines)

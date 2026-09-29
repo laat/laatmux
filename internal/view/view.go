@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
@@ -43,7 +45,7 @@ type Model struct {
 	LocalHost string // the host whose tag is not dimmed
 	// Header lines are drawn above the list: hosts that are not
 	// connected and listed, the local daemon being down.
-	Header []string
+	Header []HeaderLine
 	// Hint is the footer when nothing else claims it.
 	Hint          string
 	Now           time.Time
@@ -51,7 +53,7 @@ type Model struct {
 
 	Filter     string
 	Filtering  bool // typing into the filter
-	ShowHidden bool // the settled and stale groups are expanded
+	ShowHidden bool // the settled and orphaned groups are expanded
 	Selected   int  // index into Visible; -1 for none while Follow holds
 	// Follow keeps the selection on the viewer's own row, wherever the
 	// sort moves it, and on nothing when there is no such row, until a
@@ -65,6 +67,13 @@ type Model struct {
 	ConfirmTag string
 	// Overlay, when set, takes the screen and the keys until Done.
 	Overlay Overlay
+	// Icons is the icon set statuses are drawn with. Loading is that the
+	// host has no snapshot yet: the body says so.
+	Icons   Icons
+	Loading bool
+	// Machine is this machine's host name, which tmux titles a pane with
+	// until its program sets a title: such a title is dropped.
+	Machine string
 	scroll  int // first body line drawn
 	// hitIDs is the id of the row each body line drew, "" for none, and
 	// hitTop the header lines above the body, both as the last Render
@@ -93,8 +102,10 @@ type Model struct {
 	anchor string
 	alias  string
 	lost   bool
-	// spinning is whether the last Render drew a spinner frame.
+	// spinning is whether the last Render drew a spinner frame, ticking
+	// whether it drew a time in seconds.
 	spinning bool
+	ticking  bool
 }
 
 // SetRows replaces the rows, keeping the selection on the row it was on
@@ -154,13 +165,20 @@ func (m *Model) SetRows(rs rows.Rows) {
 	}
 }
 
+// HeaderLine is a line above the list; Down is that it says something is
+// down, drawn in danger, where connecting and the like are a warning.
+type HeaderLine struct {
+	Text string
+	Down bool
+}
+
 // Group is which group a row is in.
 type Group int
 
 const (
 	GroupMain Group = iota
 	GroupSettled
-	GroupStale
+	GroupOrphaned
 )
 
 // Item is one entry of the list as drawn: a row, or a group header.
@@ -171,9 +189,11 @@ type Item struct {
 	// Index is the item's position among the selectable rows, -1 for
 	// a header.
 	Index int
+	// Hidden is how many rows a collapsed group's header stands for.
+	Hidden int
 }
 
-// Items is the list as drawn: main rows, then the settled and stale
+// Items is the list as drawn: main rows, then the settled and orphaned
 // groups, collapsed to one header line unless ShowHidden. The filter
 // keeps rows whose name or host contains it, case-insensitively.
 func (m *Model) Items() []Item {
@@ -193,8 +213,8 @@ func (m *Model) Items() []Item {
 		return added
 	}
 	add(m.Rows.Main, GroupMain)
-	settled, stale := m.count(m.Rows.Settled), m.count(m.Rows.Stale)
-	if settled+stale == 0 {
+	settled, orphaned := m.count(m.Rows.Settled), m.count(m.Rows.Orphaned)
+	if settled+orphaned == 0 {
 		return out
 	}
 	if !m.ShowHidden {
@@ -202,19 +222,19 @@ func (m *Model) Items() []Item {
 		if settled > 0 {
 			parts = append(parts, fmt.Sprintf("settled %d", settled))
 		}
-		if stale > 0 {
-			parts = append(parts, fmt.Sprintf("stale %d", stale))
+		if orphaned > 0 {
+			parts = append(parts, fmt.Sprintf("orphaned %d", orphaned))
 		}
-		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1})
+		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1, Hidden: settled + orphaned})
 		return out
 	}
 	if settled > 0 {
 		out = append(out, Item{Header: "settled", Group: GroupSettled, Index: -1})
 		add(m.Rows.Settled, GroupSettled)
 	}
-	if stale > 0 {
-		out = append(out, Item{Header: "stale", Group: GroupStale, Index: -1})
-		add(m.Rows.Stale, GroupStale)
+	if orphaned > 0 {
+		out = append(out, Item{Header: "orphaned", Group: GroupOrphaned, Index: -1})
+		add(m.Rows.Orphaned, GroupOrphaned)
 	}
 	return out
 }
@@ -297,69 +317,34 @@ func (m *Model) clamp(n int) {
 	}
 }
 
-// Span is a run of text with its own attributes. Fg is an SGR colour
-// code, 0 for the terminal's own.
+// Span is a run of text with its own attributes. Fg is a palette name,
+// or a colour as the config writes it for an agent's own; "" is the
+// terminal's own. spin marks the spinner, so Render knows one is drawn.
 type Span struct {
 	Text string
 	Dim  bool
-	Fg   int
-}
-
-// The spinner a working row's mark cycles through: braille frames as
-// workmux drew them, in cyan, one frame per spinTick from the clock,
-// so the panes in every window spin in step. It replaces the "*" ls
-// prints for a live working agent in the views only; a dim row, whose
-// agent is gone or whose host is down, keeps the mark.
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-const (
-	spinTick  = 100 * time.Millisecond
-	spinnerFg = 36 // cyan
-)
-
-// spins reports whether the row's mark is the spinner: a live working
-// agent on a row that is not dim, or a pending task that runs.
-func spins(r rows.Row) bool {
-	if r.Pending != nil {
-		return !r.NeedsUser()
-	}
-	return r.Agent != nil && !r.Dim && r.Agent.Activity == protocol.Working && r.Agent.Liveness == protocol.Alive
+	Bold bool
+	Fg   string
+	spin bool
+	// tick marks a time in seconds, `m:ss`, so Render knows the clock
+	// on screen moves every second.
+	tick bool
 }
 
 // Spinning reports whether the last Render drew a spinner, so the host
 // ticks the spinner only while one is on screen: a working row that is
-// filtered out, in a collapsed group, or scrolled off with its mark, is
+// filtered out, in a collapsed group, or scrolled off with its icon, is
 // not drawn and not ticked for.
 func (m *Model) Spinning() bool { return m.spinning }
 
-// marked is the head of a row as spans, the gutter, the mark with its
-// colour, and the rest, clipped to w cells so a narrow pane keeps the
-// mark's colour rather than flattening it into text.
-func marked(gutter string, mark Span, rest string, w int) []Span {
-	switch {
-	case w <= 0:
-		return nil
-	case w == 1:
-		return []Span{{Text: gutter}}
-	case w == 2:
-		return []Span{{Text: gutter}, mark}
-	}
-	return []Span{{Text: gutter}, mark, {Text: fit(rest, w-2)}}
-}
+// Ticking reports whether the last Render drew a time in seconds, so
+// the host redraws every second while one is on screen and not at all
+// otherwise.
+func (m *Model) Ticking() bool { return m.ticking }
 
-// mark is the row's mark as a span: the spinner frame for Now on a
-// spinning row, else the mark ls prints.
-func (m *Model) mark(r rows.Row) Span {
-	if spins(r) {
-		// A zero Now, before the first draw, is a negative count.
-		n := int64(len(spinnerFrames))
-		i := (m.Now.UnixNano()/int64(spinTick))%n + n
-		return Span{Text: spinnerFrames[i%n], Fg: spinnerFg}
-	}
-	return Span{Text: r.Mark()}
-}
-
-// Line is one drawn line: spans and line-wide attributes.
+// Line is one drawn line: spans and line-wide attributes. Reverse is the
+// selection: a background band in a theme with colours, reverse video
+// without.
 type Line struct {
 	Spans   []Span
 	Dim     bool
@@ -371,8 +356,11 @@ func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 
 // Render draws the model into exactly Height lines of at most Width
 // cells each, and records which body line shows which row for the mouse.
+// Before the first snapshot the body says it is loading, and a list with
+// nothing to show says so. When rows are below the window, its last line
+// counts them.
 func (m *Model) Render() []Line {
-	m.spinning = false
+	m.spinning, m.ticking = false, false
 	if m.Width <= 0 || m.Height <= 0 {
 		return nil
 	}
@@ -381,7 +369,11 @@ func (m *Model) Render() []Line {
 	}
 	var out []Line
 	for _, h := range m.Header {
-		out = append(out, Line{Spans: []Span{{Text: fit(h, m.Width)}}, Bold: true})
+		fg := palette.Warning
+		if h.Down {
+			fg = palette.Danger
+		}
+		out = append(out, Line{Spans: []Span{{Text: fit(h.Text, m.Width), Fg: fg}}, Bold: true})
 	}
 	body := m.Height - len(out) - 1
 	if body < 1 {
@@ -389,18 +381,38 @@ func (m *Model) Render() []Line {
 	}
 	var lines []Line
 	var ids []string
+	// starts is where each row begins, and what it counts for below
+	// the window: a row one, a collapsed group's header its rows.
+	type start struct{ line, count int }
+	var starts []start
 	selStart, selEnd := -1, -1
 	m.Selection()
-	for _, it := range m.Items() {
+	items := m.Items()
+	for _, it := range items {
+		switch {
+		case it.Row != nil:
+			starts = append(starts, start{len(lines), 1})
+		case it.Hidden > 0:
+			starts = append(starts, start{len(lines), it.Hidden})
+		}
 		var ls []Line
 		if it.Row == nil {
-			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width)}}, Dim: true}}
+			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width), Fg: palette.Header, Dim: true}}}}
 		} else {
 			ls = m.row(*it.Row)
 			if it.Index == m.Selected {
+				// The divider after a tile is not the tile: a short
+				// pane shows the tile's lines, its head first.
 				selStart, selEnd = len(lines), len(lines)+len(ls)
+				if m.Layout != Compact && len(ls) > 1 {
+					selEnd--
+				}
 				for i := range ls {
 					ls[i].Reverse = true
+					// The band spans the width, not the text alone.
+					if n := m.Width - lineWidth(ls[i]); n > 0 {
+						ls[i].Spans = append(ls[i].Spans, Span{Text: strings.Repeat(" ", n)})
+					}
 				}
 			}
 		}
@@ -413,31 +425,78 @@ func (m *Model) Render() []Line {
 		}
 		lines = append(lines, ls...)
 	}
+	if m.Loading || len(items) == 0 {
+		starts = nil
+	}
+	switch {
+	case m.Loading:
+		lines, ids = []Line{{Spans: clip([]Span{{Text: frame(m.Now), Fg: palette.Info, spin: true}, {Text: " Loading"}}, m.Width)}}, []string{""}
+	case len(items) == 0 && m.Filter != "":
+		lines, ids = []Line{{Spans: []Span{{Text: fit("Nothing matches /"+m.Filter, m.Width)}}, Dim: true}}, []string{""}
+	case len(items) == 0:
+		lines, ids = []Line{{Spans: []Span{{Text: fit("No worktrees or agents", m.Width)}}, Dim: true}}, []string{""}
+	}
 	// Scroll so the selection is on screen, moving as little as
-	// possible; a separator after the selected tile may fall off.
-	if selStart >= 0 {
-		if selStart < m.scroll {
-			m.scroll = selStart
+	// possible; a separator after the selected tile may fall off. With
+	// rows below the window its last line is the count of them, so the
+	// window is a line shorter.
+	window := body
+	scrollTo := func() {
+		if selStart >= 0 {
+			if selStart < m.scroll {
+				m.scroll = selStart
+			}
+			if selEnd > m.scroll+window {
+				m.scroll = selEnd - window
+			}
+			// A tile taller than the window shows its head.
+			if selEnd-selStart > window {
+				m.scroll = selStart
+			}
 		}
-		if selEnd > m.scroll+body {
-			m.scroll = selEnd - body
+		if m.scroll > len(lines)-window {
+			m.scroll = len(lines) - window
+		}
+		if m.scroll < 0 {
+			m.scroll = 0
 		}
 	}
-	if m.scroll > len(lines)-body {
-		m.scroll = len(lines) - body
+	scrollTo()
+	// rowsFrom counts the rows that begin at or after line i, a
+	// partly shown row not among them, with a collapsed group's.
+	rowsFrom := func(i int) int {
+		n := 0
+		for _, st := range starts {
+			if st.line >= i {
+				n += st.count
+			}
+		}
+		return n
 	}
-	if m.scroll < 0 {
-		m.scroll = 0
+	more := 0
+	if body > 1 && rowsFrom(m.scroll+body) > 0 {
+		// Only rows count: a group's header or a divider left below is
+		// no reason to give up a line.
+		window = body - 1
+		scrollTo()
+		more = rowsFrom(m.scroll + window)
+		if more == 0 {
+			window = body
+			scrollTo()
+		}
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
 	m.hitIDs = make([]string, body)
 	m.hitTop = len(m.Header)
 	m.hitAt = m.Now
 	for i := 0; i < body; i++ {
-		if j := m.scroll + i; j < len(lines) {
+		switch j := m.scroll + i; {
+		case i == window:
+			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
+		case j < len(lines):
 			out = append(out, lines[j])
 			m.hitIDs[i] = ids[j]
-		} else {
+		default:
 			out = append(out, plain(""))
 		}
 	}
@@ -450,12 +509,24 @@ func (m *Model) Render() []Line {
 	// below the header lines does not count.
 	for _, l := range out {
 		for _, sp := range l.Spans {
-			if sp.Fg == spinnerFg {
+			if sp.spin {
 				m.spinning = true
+			}
+			if sp.tick {
+				m.ticking = true
 			}
 		}
 	}
 	return out
+}
+
+// lineWidth is the cells a line's spans take.
+func lineWidth(l Line) int {
+	n := 0
+	for _, sp := range l.Spans {
+		n += width(sp.Text)
+	}
+	return n
 }
 
 func (m *Model) footer() Line {
@@ -480,15 +551,9 @@ func (m *Model) row(r rows.Row) []Line {
 	return m.tile(r)
 }
 
-func (m *Model) gutter(r rows.Row) string {
-	if r.Current {
-		return ">"
-	}
-	return " "
-}
-
 // where is the host tag: @host, with the server after it for an agent
-// observed off the managed server, as ls prints it.
+// observed off the managed server, as ls prints it; dim for every host
+// but this machine.
 func (m *Model) where(r rows.Row) Span {
 	host := r.Host
 	if host == "" {
@@ -503,95 +568,170 @@ func (m *Model) where(r rows.Row) Span {
 	return Span{Text: s, Dim: r.Host != m.LocalHost}
 }
 
-func (m *Model) activity(r rows.Row) string {
-	s := string(r.Agent.Activity)
-	if r.Agent.Liveness == protocol.Gone {
-		s += " (gone)"
+// primary is the primary label as a span: bold, in the current
+// worktree's colour, on the viewer's own row, which the gutter's `>`
+// marked before.
+func (m *Model) primary(r rows.Row, w int) Span {
+	p, _ := r.Labels()
+	sp := Span{Text: fit(p, w)}
+	if r.Current {
+		sp.Bold, sp.Fg = true, palette.CurrentWorktreeFg
 	}
-	return s
+	return sp
 }
 
-func (m *Model) age(r rows.Row) string {
-	return strings.TrimSpace(rows.Ago(m.Now.Sub(r.Agent.ActivityAt)))
-}
-
-// tile is three lines: the mark and name with the host tag right-aligned,
-// the agent with its activity and age, and the pane title; two lines
-// for a row without an agent, whose second says what it is instead.
-// A separator follows.
-func (m *Model) tile(r rows.Row) []Line {
-	w := m.Width
-	where := m.where(r)
-	mark := m.mark(r)
-	head := m.gutter(r) + mark.Text + " "
-	nameW := w - width(head) - width(where.Text) - 1
-	first := Line{Dim: r.Dim}
-	if nameW < 4 {
-		first.Spans = marked(m.gutter(r), mark, " "+r.Name, w)
-	} else {
-		name := fit(r.Name, nameW)
-		gap := w - width(head) - width(name) - width(where.Text)
-		first.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: " " + name + strings.Repeat(" ", gap)}, where}
-	}
-	lines := []Line{first}
+// since is the time on the right of a row's first line: since its
+// agent's status changed, or since a task was submitted; "" for a row
+// with neither. secs is that it is in seconds, under an hour.
+func (m *Model) since(r rows.Row) (t string, secs bool) {
+	var d time.Duration
 	switch {
 	case r.Pending != nil:
-		// Where the add is, and the detail or the reason under it.
-		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.State(), w)}}})
-		if d := r.Detail(); d != "" {
-			lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+d, w)}}})
-		}
-	case r.Agent == nil:
-		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.State(), w)}}})
+		d = m.Now.Sub(r.Pending.SubmittedAt)
+	case r.Agent != nil:
+		d = m.Now.Sub(r.Agent.ActivityAt)
 	default:
-		lines = append(lines,
-			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+r.AgentName()+"  "+m.activity(r)+"  "+m.age(r), w)}}},
-			Line{Dim: r.Dim, Spans: []Span{{Text: fit("   "+strings.TrimSpace(r.Agent.Title), w)}}})
+		return "", false
 	}
-	return append(lines, Line{Dim: true, Spans: []Span{{Text: strings.Repeat("─", w)}}})
+	return elapsed(d), d < time.Hour
 }
 
-// compact is one line: mark, activity, agent, name, host tag and age;
-// a row without an agent puts what it is in the activity and agent
-// columns. With Titles, the pane title follows on a second line.
-func (m *Model) compact(r rows.Row) []Line {
-	w := m.Width
-	where := m.where(r)
-	mark := m.mark(r)
-	left := m.gutter(r) + mark.Text + " "
-	age := ""
-	if r.Agent == nil || r.Pending != nil {
-		left += fmt.Sprintf("%-16s ", fit(r.State(), 16))
-	} else {
-		left += fmt.Sprintf("%-8s %-7s ", r.Agent.Activity, r.AgentName())
-		age = " " + rows.Ago(m.Now.Sub(r.Agent.ActivityAt))
-		if r.Agent.Liveness == protocol.Gone {
-			age += " gone"
-		}
-	}
-	nameW := w - width(left) - 1 - width(where.Text) - width(age)
-	line := Line{Dim: r.Dim}
-	rest := left[len(m.gutter(r))+len(mark.Text):]
-	if nameW < 4 {
-		line.Spans = marked(m.gutter(r), mark, rest+r.Name, w)
-	} else {
-		name := fit(r.Name, nameW)
-		line.Spans = []Span{{Text: m.gutter(r)}, mark, {Text: rest + name + strings.Repeat(" ", nameW-width(name)+1)}, where, {Text: age}}
-	}
-	lines := []Line{line}
+// third is what a row's third line says: a task's state and its detail;
+// for a row without an agent, what it is instead; for a gone agent, that
+// it is gone; else the pane title, cleaned.
+func (m *Model) third(r rows.Row) string {
 	switch {
-	case m.Titles && r.Pending != nil:
-		// The state is cut to its column; the title line has it whole
-		// with the detail or the reason.
+	case r.Pending != nil:
 		s := r.State()
 		if d := r.Detail(); d != "" {
 			s += ": " + d
 		}
-		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("     "+s, w)}}})
-	case m.Titles && r.Agent != nil:
-		lines = append(lines, Line{Dim: r.Dim, Spans: []Span{{Text: fit("     "+strings.TrimSpace(r.Agent.Title), w)}}})
+		return s
+	case r.Agent == nil:
+		return r.State()
+	case r.Agent.Liveness == protocol.Gone:
+		return r.AgentName() + " gone"
+	}
+	p, sec := r.Labels()
+	return cleanTitle(r.Agent.Title, p, sec, r.Host, m.Machine)
+}
+
+// head is a row's first line: the stripe, the icon, the primary label,
+// and the time since its status changed against the right edge.
+func (m *Model) head(r rows.Row) []Span {
+	w := m.Width
+	icon := m.iconSpan(r)
+	lead := []Span{m.stripe(r), {Text: " "}, icon, {Text: " "}}
+	used := 1 + 1 + iconWidth + 1
+	if w <= used {
+		return clip(lead, w)
+	}
+	t, secs := m.since(r)
+	room := w - used
+	if t != "" && room-width(t)-1 >= 4 {
+		p := m.primary(r, room-width(t)-1)
+		gap := room - width(p.Text) - width(t)
+		return append(lead, p, Span{Text: strings.Repeat(" ", gap)}, Span{Text: t, tick: secs})
+	}
+	return append(lead, m.primary(r, room))
+}
+
+// second is a row's second line after the stripe: the secondary label
+// and the host tag.
+func (m *Model) second(r rows.Row, indent string) []Span {
+	_, sec := r.Labels()
+	room := m.Width - 1 - width(indent)
+	where := m.where(r)
+	if sec == "" {
+		where.Text = fit(where.Text, room)
+		return []Span{m.stripe(r), {Text: indent}, where}
+	}
+	s := fit(sec, room)
+	out := []Span{m.stripe(r), {Text: indent + s}}
+	if room-width(s)-1 > 0 {
+		where.Text = fit(where.Text, room-width(s)-1)
+		out = append(out, Span{Text: " "}, where)
+	}
+	return out
+}
+
+// tile is three lines: the head; the secondary label and the host tag;
+// and the pane title, or what the row is instead. A divider follows. An
+// empty third line keeps its place, so tiles keep their height.
+func (m *Model) tile(r rows.Row) []Line {
+	const indent = "    "
+	room := m.Width - 1 - len(indent)
+	third := []Span{m.stripe(r)}
+	if room > 0 {
+		third = append(third, Span{Text: indent + fit(m.third(r), room)})
+	}
+	return []Line{
+		{Dim: r.Dim, Spans: m.head(r)},
+		{Dim: r.Dim, Spans: clip(m.second(r, indent), m.Width)},
+		{Dim: r.Dim, Spans: clip(third, m.Width)},
+		{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}},
+	}
+}
+
+// compact is one line: the head with the secondary label and host tag
+// after the primary. With Titles, the third line of a tile follows.
+func (m *Model) compact(r rows.Row) []Line {
+	w := m.Width
+	icon := m.iconSpan(r)
+	lead := []Span{m.stripe(r), {Text: " "}, icon, {Text: " "}}
+	used := 1 + 1 + iconWidth + 1
+	var line []Span
+	if w <= used {
+		line = clip(lead, w)
+	} else {
+		t, secs := m.since(r)
+		room := w - used
+		if t != "" && room-width(t)-1 >= 4 {
+			room -= width(t) + 1
+		} else {
+			t = ""
+		}
+		p := m.primary(r, room)
+		line = append(lead, p)
+		left := room - width(p.Text)
+		_, sec := r.Labels()
+		if sec != "" && left > 2 {
+			s := fit(sec, left-1)
+			line = append(line, Span{Text: " " + s})
+			left -= 1 + width(s)
+		}
+		if where := m.where(r); left > 1 {
+			where.Text = fit(where.Text, left-1)
+			line = append(line, Span{Text: " "}, where)
+			left -= 1 + width(where.Text)
+		}
+		if t != "" {
+			line = append(line, Span{Text: strings.Repeat(" ", left+1)}, Span{Text: t, tick: secs})
+		}
+	}
+	lines := []Line{{Dim: r.Dim, Spans: line}}
+	if m.Titles {
+		const indent = "    "
+		if room := w - 1 - len(indent); room > 0 {
+			lines = append(lines, Line{Dim: r.Dim, Spans: []Span{m.stripe(r), {Text: indent + fit(m.third(r), room)}}})
+		}
 	}
 	return lines
+}
+
+// clip cuts spans to w cells, keeping each span's attributes.
+func clip(spans []Span, w int) []Span {
+	var out []Span
+	for _, sp := range spans {
+		if w <= 0 {
+			break
+		}
+		t := fit(sp.Text, w)
+		w -= width(t)
+		sp.Text = t
+		out = append(out, sp)
+	}
+	return out
 }
 
 // Text is the lines as plain text, one per line, for tests and for a
@@ -609,8 +749,9 @@ func Text(lines []Line) string {
 
 // Debug is the lines with their attributes made visible, for golden
 // tests: a flag column with S for the selection, D for a dim line, B
-// for bold, then the text with dim spans between ‹ and › and coloured
-// spans between ⟨ and ⟩.
+// for bold, then the text with dim spans between ‹ and ›, bold ones
+// between « and », and coloured ones between ⟨ and ⟩ with the palette
+// name first.
 func Debug(lines []Line) string {
 	var b strings.Builder
 	for _, l := range lines {
@@ -627,31 +768,59 @@ func Debug(lines []Line) string {
 		b.Write(flags)
 		b.WriteByte('|')
 		for _, s := range l.Spans {
-			switch {
-			case s.Dim:
-				b.WriteString("‹" + s.Text + "›")
-			case s.Fg != 0:
-				b.WriteString("⟨" + s.Text + "⟩")
-			default:
-				b.WriteString(s.Text)
+			t := s.Text
+			if s.Fg != "" {
+				t = "⟨" + s.Fg + ":" + t + "⟩"
 			}
+			if s.Bold {
+				t = "«" + t + "»"
+			}
+			if s.Dim {
+				t = "‹" + t + "›"
+			}
+			b.WriteString(t)
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-// ANSI encodes a line for the terminal, ending with a reset. A span's
-// own attribute, dim or a colour, is set for the span and the line's
-// restored after it.
-func ANSI(l Line) string {
+// ANSI encodes a line for the terminal in a theme, ending with a reset.
+// A span's own attributes are set for the span and the line's restored
+// after it. In a theme with colours a span's colour is drawn, and a dim
+// line is drawn in the dimmed colour throughout, but for the viewer's
+// own row's label; plain text keeps the terminal's own foreground, which
+// is right whatever the background. The selection is the highlight
+// background with the theme's text on it when the theme knows the
+// terminal's background, and reverse video otherwise, as it is without
+// colours, where the attributes are all there is: under reverse video
+// a line has no colours and no dimming, which would land in the
+// background.
+func ANSI(l Line, th palette.Theme) string {
+	colour := !th.Mono && th.SGR(palette.Text, false) != ""
+	band := colour && !th.Guessed && l.Reverse
+	if l.Reverse && !band {
+		// Reverse video swaps every colour into the background: the
+		// selection with a guessed background is the terminal's own
+		// pair, reversed, and the attributes alone.
+		colour = false
+	}
 	var b strings.Builder
 	attrs := func() {
-		if l.Reverse {
+		switch {
+		case band:
+			b.WriteString(th.SGR(palette.HighlightRowBg, true))
+			// A dim line under the band is drawn in the text colour,
+			// not faint: the stripe and icon say it is dim.
+			b.WriteString(th.SGR(palette.Text, false))
+		case l.Reverse:
 			b.WriteString("\x1b[7m")
 		}
-		if l.Dim {
+		if l.Dim && !band && !l.Reverse {
 			b.WriteString("\x1b[2m")
+			if colour {
+				b.WriteString(th.SGR(palette.Dimmed, false))
+			}
 		}
 		if l.Bold {
 			b.WriteString("\x1b[1m")
@@ -659,13 +828,26 @@ func ANSI(l Line) string {
 	}
 	attrs()
 	for _, s := range l.Spans {
-		if (s.Dim && !l.Dim) || s.Fg != 0 {
-			if s.Dim && !l.Dim {
+		fg := ""
+		current := s.Fg == palette.CurrentWorktreeFg
+		if colour && s.Fg != "" && (!l.Dim || band || current) {
+			fg = th.SGR(s.Fg, false)
+		}
+		// A span's faint is for a theme without colours; with them its
+		// colour, the border's say, is faint enough.
+		faint := s.Dim && !l.Dim && fg == ""
+		if faint || s.Bold || fg != "" {
+			if current && l.Dim && !band {
+				// The viewer's label is not faint on a dim line.
+				b.WriteString("\x1b[22m")
+			}
+			if faint {
 				b.WriteString("\x1b[2m")
 			}
-			if s.Fg != 0 {
-				fmt.Fprintf(&b, "\x1b[%dm", s.Fg)
+			if s.Bold {
+				b.WriteString("\x1b[1m")
 			}
+			b.WriteString(fg)
 			b.WriteString(s.Text)
 			b.WriteString("\x1b[0m")
 			attrs()
@@ -686,10 +868,22 @@ func ANSI(l Line) string {
 // not a wrapped line.
 func width(s string) int {
 	n := 0
-	for _, r := range s {
-		n += runeWidth(r)
+	rs := []rune(s)
+	for i, r := range rs {
+		n += cellWidth(rs, i, r)
 	}
 	return n
+}
+
+// cellWidth is the cells rs[i] takes: runeWidth, but a one-cell symbol
+// followed by the emoji variation selector, U+FE0F, is drawn as an emoji,
+// two cells, as ⚠️ and ✔️ are.
+func cellWidth(rs []rune, i int, r rune) int {
+	w := runeWidth(r)
+	if w == 1 && i+1 < len(rs) && rs[i+1] == 0xfe0f {
+		return 2
+	}
+	return w
 }
 
 func runeWidth(r rune) int {
@@ -699,7 +893,10 @@ func runeWidth(r rune) int {
 	case r < 0x300:
 		return 1
 	case r >= 0x300 && r <= 0x36f, r >= 0x200b && r <= 0x200f, r >= 0xfe00 && r <= 0xfe0f,
-		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef:
+		r >= 0x1f3fb && r <= 0x1f3ff, r >= 0xe0100 && r <= 0xe01ef,
+		unicode.In(r, unicode.Mn, unicode.Me):
+		// Combining marks, the keycap's U+20E3 among them, joiners,
+		// selectors and skin tones.
 		return 0
 	case r >= 0x1100 && r <= 0x115f,
 		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,
@@ -709,18 +906,37 @@ func runeWidth(r rune) int {
 		r >= 0xff00 && r <= 0xff60,
 		r >= 0xffe0 && r <= 0xffe6,
 		r >= 0x1f000 && r <= 0x1faff,
-		r >= 0x20000 && r <= 0x3fffd:
+		r >= 0x20000 && r <= 0x3fffd,
+		emojiWide(r):
 		return 2
 	}
 	return 1
+}
+
+// emojiWide is the runes below the emoji planes that terminals draw two
+// cells wide by default: the symbols Unicode gives emoji presentation,
+// ✅ ⌛ ⭐ ❌ and the like, which a status icon set in the config may be.
+func emojiWide(r rune) bool {
+	switch {
+	case r == 0x231a, r == 0x231b, r >= 0x23e9 && r <= 0x23ec, r == 0x23f0, r == 0x23f3,
+		r == 0x25fd, r == 0x25fe, r == 0x2614, r == 0x2615, r >= 0x2648 && r <= 0x2653,
+		r == 0x267f, r == 0x2693, r == 0x26a1, r == 0x26aa, r == 0x26ab, r == 0x26bd, r == 0x26be,
+		r == 0x26c4, r == 0x26c5, r == 0x26ce, r == 0x26d4, r == 0x26ea, r == 0x26f2, r == 0x26f3,
+		r == 0x26f5, r == 0x26fa, r == 0x26fd, r == 0x2705, r == 0x270a, r == 0x270b, r == 0x2728,
+		r == 0x274c, r == 0x274e, r >= 0x2753 && r <= 0x2755, r == 0x2757, r >= 0x2795 && r <= 0x2797,
+		r == 0x27b0, r == 0x27bf, r == 0x2b1b, r == 0x2b1c, r == 0x2b50, r == 0x2b55:
+		return true
+	}
+	return false
 }
 
 // fit trims s to at most w cells, dropping control characters.
 func fit(s string, w int) string {
 	var b strings.Builder
 	n := 0
-	for _, r := range s {
-		rw := runeWidth(r)
+	rs := []rune(s)
+	for i, r := range rs {
+		rw := cellWidth(rs, i, r)
 		if rw == 0 && r < 0x20 || r == 0x7f {
 			continue
 		}

@@ -129,7 +129,7 @@ func TestFindWorktreeBySource(t *testing.T) {
 // ls pairs a worktree with the agent in its managed session, lists a
 // worktree without an agent and an agent without a worktree on their own,
 // moves settled workspaces to their section, and reports a local session
-// whose workspace is gone from a connected host as stale.
+// whose workspace is gone from a connected host as orphaned.
 func TestRender(t *testing.T) {
 	m := newMerged()
 	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1", Worktrees: true})
@@ -163,7 +163,7 @@ func TestRender(t *testing.T) {
 	m.apply("old", protocol.Message{Type: protocol.TypeSnapshot})
 	out := m.render(locals)
 	if strings.Contains(out, "slow/proj/y") || strings.Contains(out, "old/proj/z") {
-		t.Errorf("workspace listed as stale without evidence:\n%s", out)
+		t.Errorf("workspace listed as orphaned without evidence:\n%s", out)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	find := func(sub string) int {
@@ -194,8 +194,8 @@ func TestRender(t *testing.T) {
 	if find("settled") > find("proj/old") {
 		t.Error("settled workspace listed before the settled header")
 	}
-	if find("proj/gone") < find("stale") || strings.Contains(out, "box/proj/x") {
-		t.Errorf("stale detection wrong:\n%s", out)
+	if find("proj/gone") < find("orphaned") || strings.Contains(out, "box/proj/x") {
+		t.Errorf("orphaned detection wrong:\n%s", out)
 	}
 	if find("blocked") > find("proj/fix") {
 		t.Error("blocked agent not first")

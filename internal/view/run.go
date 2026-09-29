@@ -19,10 +19,19 @@ type Host struct {
 	Act func(m *Model, a Action) (done bool)
 }
 
-// tick is how often the ages are redrawn. The spinner on a working row
-// is redrawn every spinTick, and only while a visible row spins, so an
-// idle pane costs nothing between the ticks.
-const tick = 5 * time.Second
+// tick is how often the ages are redrawn when no time in seconds is on
+// screen. The spinner on a working row is redrawn every spinTick, only
+// while a visible row spins, and a time in seconds, `m:ss`, every
+// second, only while one is drawn, so an idle pane costs nothing
+// between the ticks.
+const (
+	tick       = 5 * time.Second
+	secondTick = time.Second
+)
+
+// answerLate is how long an answer to the background query is expected
+// after the query gave up on it.
+const answerLate = 3 * time.Second
 
 // escapeWait is how long a bare escape, or the start of a sequence, is
 // held for the rest before it is read as the escape key. tmux writes a
@@ -31,8 +40,9 @@ const escapeWait = 50 * time.Millisecond
 
 // Run draws the model and handles keys until the host is done, q is
 // pressed, or ctx ends. The rows are refreshed on every change signal
-// and the ages every five seconds, the spinner ten times a second while
-// a working row is on the list; a resize redraws. An overlay that
+// and the ages every five seconds, every second while a time in seconds
+// is drawn, the spinner four times a second while a working row is on
+// the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
 func Run(ctx context.Context, t *Term, m *Model, h Host) error {
@@ -88,11 +98,30 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	var dec Decoder
 	var flush, spin <-chan time.Time
 	h.Refresh(m)
+	// An answer the query did not get may come late: the decoder
+	// expects it a while. Keys that came while the terminal was asked
+	// for its background are the first input.
+	if t.unanswered {
+		dec.ExpectAnswer(time.Now().Add(answerLate))
+	}
+	if len(t.pending) > 0 {
+		ks := dec.FeedAt(t.pending, time.Now())
+		t.pending = nil
+		if handle(ks) {
+			return nil
+		}
+		if w := dec.Wait(); w > 0 {
+			flush = time.After(w)
+		}
+	}
 	draw()
 	for {
 		spin = nil
-		if m.Spinning() {
+		switch {
+		case m.Spinning():
 			spin = time.After(spinTick)
+		case m.Ticking():
+			spin = time.After(secondTick)
 		}
 		select {
 		case <-ctx.Done():

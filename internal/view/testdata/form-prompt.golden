@@ -2,11 +2,11 @@
 ...|┌ repository ───────┐ ┌ host ───────┐ ┌ agent ─────────────┐
 ...|│ laatmux           │ │ vm          │ │ claude             │
 ...|└───────────────────┘ └─────────────┘ └────────────────────┘
-...|⟨┌ prompt ──────────────────────────────────────────────────┐⟩
-...|⟨│ ⟩Make the sidebar follow the current row when the sort   ⟨ │⟩
-...|⟨│ ⟩moves it, and select nothing when no row is this        ⟨ │⟩
-...|⟨│ ⟩session.█                                               ⟨ │⟩
-...|⟨│ ⟩                                                        ⟨ │⟩
-...|⟨└──────────────────────────────────────────────────────────┘⟩
+...|«⟨info:┌ prompt ──────────────────────────────────────────────────┐⟩»
+...|«⟨info:│ ⟩»Make the sidebar follow the current row when the sort   «⟨info: │⟩»
+...|«⟨info:│ ⟩»moves it, and select nothing when no row is this        «⟨info: │⟩»
+...|«⟨info:│ ⟩»session.█                                               «⟨info: │⟩»
+...|«⟨info:│ ⟩»                                                        «⟨info: │⟩»
+...|«⟨info:└──────────────────────────────────────────────────────────┘⟩»
 ...|branch  ‹make-the-sidebar-follow-the-current-row-when-the-sor›
 .D.|tab next field  enter submit  ctrl-j newline  esc cancel

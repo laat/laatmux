@@ -86,10 +86,10 @@ func TestApplyMerged(t *testing.T) {
 	}
 }
 
-// A one-shot client that gave up on a host says so in its row; a stale
+// A one-shot client that gave up on a host says so in its row; an orphaned
 // local session is judged only against a host that is connected and
 // listed.
-func TestMergedTimedOutAndStale(t *testing.T) {
+func TestMergedTimedOutAndOrphaned(t *testing.T) {
 	m := newMerged()
 	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
 		Hosts: []protocol.HostStatus{
@@ -117,7 +117,7 @@ func TestMergedTimedOutAndStale(t *testing.T) {
 		t.Errorf("reconnecting host after the timeout:\n%s", out)
 	}
 	if !strings.Contains(out, "mac/proj/gone") || strings.Contains(out, "vm/proj/maybe") {
-		t.Errorf("stale judged wrongly:\n%s", out)
+		t.Errorf("orphaned judged wrongly:\n%s", out)
 	}
 	m.mu.Lock()
 	m.sessionsErr = "tmux: permission denied"

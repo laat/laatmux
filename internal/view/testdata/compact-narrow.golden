@@ -1,8 +1,8 @@
-..B|box  DOWN  ssh: connect to host box port
-S..|>⟨⠋⟩ working  codex   proj/task   @mac  8s
-.D.| * working  claude  proj/down   ‹@box› 10m
-...| - idle     claude  proj/other   ‹@vm›  1h
-.D.| - idle     claude  proj/de ‹@vm›  3h gone
-.D.|   no session       proj/spike      @mac
-.D.|   no agent         proj/shell       ‹@vm›
+..B|⟨danger:box  DOWN  ssh: connect to host box port⟩
+S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩» proj @mac                 0:08
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down proj ‹@box›                10:00
+...|⟨border:▌⟩ ⟨border:  ⟩ other proj ‹@vm›                   1h
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj ‹@vm›                    3h
+.D.|⟨border:▌⟩ ⟨border:  ⟩ spike proj @mac
+.D.|↓ 3 more
 ...|/proj  (esc clears)

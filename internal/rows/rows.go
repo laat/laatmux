@@ -10,6 +10,7 @@ package rows
 import (
 	"fmt"
 	"math"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -58,7 +59,7 @@ type Input struct {
 // is gone.
 type Row struct {
 	Host string // configured host name; "" when no host record claims the record
-	Name string // <repo>/<branch>, the agent's session, or the stale session's name
+	Name string // <repo>/<branch>, the agent's session, or the orphaned session's name
 	// Pending is the relay's record of a background add. Its row stands
 	// for the worktree row with the same environment and root until the
 	// record hands over, so it carries that row's worktree, agent and
@@ -78,28 +79,28 @@ type Row struct {
 	// observed session itself on the local default server.
 	Local    *workspace.Local
 	Settled  bool
-	Stale    bool // a local workspace session with no worktree on a listed host
+	Orphaned bool // a local workspace session with no worktree on a listed host
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
 	// Dim is decided from measured axes only: no identified agent, an
-	// agent that is gone, a host that is down, a stale session, a settled
+	// agent that is gone, a host that is down, an orphaned session, a settled
 	// workspace. Age is never a reason.
 	Dim bool
 }
 
 // Rows are the three groups in display order.
 type Rows struct {
-	Main    []Row
-	Settled []Row
-	Stale   []Row
+	Main     []Row
+	Settled  []Row
+	Orphaned []Row
 }
 
-// All is every row in display order: main, settled, stale.
+// All is every row in display order: main, settled, orphaned.
 func (r Rows) All() []Row {
-	out := make([]Row, 0, len(r.Main)+len(r.Settled)+len(r.Stale))
+	out := make([]Row, 0, len(r.Main)+len(r.Settled)+len(r.Orphaned))
 	out = append(out, r.Main...)
 	out = append(out, r.Settled...)
-	return append(out, r.Stale...)
+	return append(out, r.Orphaned...)
 }
 
 // ID identifies the row across rebuilds: a pending task's command id,
@@ -201,7 +202,7 @@ func (r Row) State() string {
 	case r.Pending != nil:
 		s, _ := r.pendingState()
 		return s
-	case r.Stale:
+	case r.Orphaned:
 		return "no worktree"
 	case r.Agent != nil:
 		return ""
@@ -295,6 +296,33 @@ func firstOf(s ...string) string {
 		}
 	}
 	return ""
+}
+
+// Labels are the row's names as the views draw them: the primary, the
+// branch, and the secondary, the repository. `main` and `master` are
+// never primary when there is a better name: on them the repository is
+// primary and the branch secondary. A detached worktree is named by its
+// root's last element, with the repository and "detached" after it. A
+// row that is no worktree's, an agent in a session `new` made or one
+// observed, and an orphaned session, is its session's name alone.
+func (r Row) Labels() (primary, secondary string) {
+	switch {
+	case r.Pending != nil:
+		return mainless(r.Pending.Branch, r.Pending.Repo)
+	case r.Worktree != nil && r.Worktree.Branch == "":
+		return path.Base(r.Worktree.Root), r.Worktree.Repo + " detached"
+	case r.Worktree != nil:
+		return mainless(r.Worktree.Branch, r.Worktree.Repo)
+	}
+	return r.Name, ""
+}
+
+// mainless is the labels of a branch of a repository.
+func mainless(branch, repo string) (string, string) {
+	if branch == "main" || branch == "master" {
+		return repo, branch
+	}
+	return branch, repo
 }
 
 // AgentName is the agent's name, "shell" for an identified pane with no
@@ -454,12 +482,12 @@ func Build(in Input) Rows {
 	// worktree that has it, and a jump makes the local session before
 	// the listing too; the task takes both by what the host reported,
 	// so the agent is not a row of its own meanwhile, the session not a
-	// stale one, and the viewer's own row is followed.
+	// orphaned one, and the viewer's own row is followed.
 	for i := range pendings {
 		p := pendings[i].Pending
 		if p.EnvironmentID != "" && p.Root != "" && !p.Gone && !(p.Done && !p.OK) {
 			// A session at the root of an add that may still make the
-			// worktree is not stale, whether or not the task stands for
+			// worktree is not orphaned, whether or not the task stands for
 			// it: a host renamed mid-add has not listed it yet.
 			seenKey[workspace.Key(p.EnvironmentID, p.Root)] = true
 		}
@@ -505,10 +533,10 @@ func Build(in Input) Rows {
 		host := byEnv[a.EnvironmentID]
 		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
 	}
-	// Stale: a local workspace session whose worktree is gone from a
+	// Orphaned: a local workspace session whose worktree is gone from a
 	// host that can say so. A host that is down, whose snapshot has not
 	// arrived, or whose daemon does not publish worktrees cannot, so its
-	// sessions are not stale.
+	// sessions are not orphaned.
 	up := map[string]bool{} // environment id
 	for _, h := range in.Hosts {
 		if h.Connected && h.Listed && h.Worktrees && h.EnvironmentID != "" {
@@ -524,7 +552,7 @@ func Build(in Input) Rows {
 			// The host is the one that answers for the environment id
 			// now, not the name the session was tagged with, which a
 			// renamed host leaves behind.
-			rows = append(rows, Row{Host: byEnv[env], Name: l.Name, Local: l, Stale: true, Settled: l.Settled})
+			rows = append(rows, Row{Host: byEnv[env], Name: l.Name, Local: l, Orphaned: true, Settled: l.Settled})
 		}
 	}
 	for i := range rows {
@@ -532,19 +560,20 @@ func Build(in Input) Rows {
 		h, known := hosts[r.Host]
 		r.HostDown = !known || !h.Connected
 		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current
-		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Stale || r.Settled
+		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned || r.Settled
 		if r.Pending != nil {
-			// Not dim while it runs, dim once it needs the user, as a
-			// stale row is; never settled away from the main group.
-			r.Dim, r.Settled = r.NeedsUser(), false
+			// Never dim: a task that runs is under way, and one that
+			// needs the user wants them, which its waiting icon says;
+			// never settled away from the main group.
+			r.Dim, r.Settled = false, false
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return less(rows[i], rows[j]) })
 	var out Rows
 	for _, r := range rows {
 		switch {
-		case r.Stale:
-			out.Stale = append(out.Stale, r)
+		case r.Orphaned:
+			out.Orphaned = append(out.Orphaned, r)
 		case r.Settled:
 			out.Settled = append(out.Settled, r)
 		default:
@@ -610,12 +639,12 @@ func started(a *protocol.Agent) int64 {
 
 // less is the sort order: rank, then most recent activity first, then
 // host, then name. Pending tasks come first, the newest first, since a
-// task is what the user just asked for. Stale rows sort by name alone,
+// task is what the user just asked for. Orphaned rows sort by name alone,
 // as ls lists them.
 func less(a, b Row) bool {
-	if a.Stale || b.Stale {
-		if a.Stale != b.Stale {
-			return !a.Stale
+	if a.Orphaned || b.Orphaned {
+		if a.Orphaned != b.Orphaned {
+			return !a.Orphaned
 		}
 		return a.Name < b.Name
 	}

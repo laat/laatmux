@@ -1,30 +1,30 @@
-..B|box  DOWN  ssh: connect to host box port 22: No route to host
-...| ! blocked  claude  laatmux/fix-ls                                                 ‹@vm›  2m
-...|     Permission to run pnpm test in packages/api?
-...| ⟨⠋⟩ working  codex   remote-notes                                           ‹@vm/default›  1s
-...|     remote
-S..|>⟨⠋⟩ working  codex   proj/task                                                     @mac  8s
-S..|     Editing src/api.ts
-.D.| * working  claude  proj/down                                                     ‹@box› 10m
-.D.|     last seen
-...| - idle     shell   scratch                                                       @mac 40s
-...|     zsh
-...| - idle     claude  notes                                                 @mac/default  5m
-...|     notes
-...| - idle     claude  proj/other                                                     ‹@vm›  1h
-...|     ✳ Done. 日本語のタイトル that is long enough to be trimmed at the edge
-.D.| - idle     claude  proj/dead                                                 ‹@vm›  3h gone
-.D.|     
-.D.|   no session       proj/spike                                                        @mac
-.D.|   no agent         proj/shell                                                         ‹@vm›
-.D.|settled
-.D.| - idle     claude  proj/done                                                     @mac 26h
-.D.|     finished
-.D.|stale
-.D.|   no worktree      vm/proj/gone                                                       ‹@vm›
-...|
-...|
-...|
+..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No route to host⟩
+...|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux ‹@vm›                                                               2:00
+...|⟨accent:▌⟩    Permission to run pnpm test in packages/api?
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes ‹@vm/default›                                                         0:01
+...|⟨info:▌⟩    remote
+S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩» proj @mac                                                                   0:08
+S..|⟨info:▌⟩    Editing src/api.ts                                                                   
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down proj ‹@box›                                                                  10:00
+.D.|⟨info:▌⟩    last seen
+...|⟨border:▌⟩ ⟨border:  ⟩ scratch @mac                                                                     0:40
+...|⟨border:▌⟩    
+...|⟨border:▌⟩ ⟨border:  ⟩ notes @mac/default                                                               5:00
+...|⟨border:▌⟩    
+...|⟨border:▌⟩ ⟨border:  ⟩ other proj ‹@vm›                                                                     1h
+...|⟨border:▌⟩    Done. 日本語のタイトル that is long enough to be trimmed at the edge
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj ‹@vm›                                                                      3h
+.D.|⟨border:▌⟩    claude gone
+.D.|⟨border:▌⟩ ⟨border:  ⟩ spike proj @mac
+.D.|⟨border:▌⟩    no session
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›
+.D.|⟨border:▌⟩    no agent
+...|‹⟨header:settled⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ done proj @mac                                                                     1d
+.D.|⟨border:▌⟩    finished
+...|‹⟨header:orphaned⟩›
+.D.|⟨border:▌⟩ ⟨border:  ⟩ vm/proj/gone ‹@vm›
+.D.|⟨border:▌⟩    no worktree
 ...|
 ...|
 .D.|enter jump  v layout  / filter  f settled  q quit

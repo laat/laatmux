@@ -669,3 +669,62 @@ func TestNarrowTab(t *testing.T) {
 		}
 	}
 }
+
+// A symbol with VS16 takes two cells in the prompt's wrap, the branch
+// line's tail and a notice's wrap, as it does in fit: nothing is cut
+// that the wrap thought fit, and nothing is wider than asked.
+func TestWrapVS16(t *testing.T) {
+	f := &Form{prompt: []rune("12345678⚠️x"), focus: fieldPrompt}
+	f.cursor = len(f.prompt)
+	lines, cur := f.wrapPrompt(10)
+	if len(lines) != 2 || lines[0] != "12345678⚠️" || lines[1] != "x█" || cur != 1 {
+		t.Errorf("wrapPrompt: %q, cursor line %d", lines, cur)
+	}
+	if got := tail("abcdefgh⚠️x", 4); width(got) > 4 {
+		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+	for _, line := range hardWrap("abc⚠️⚠️", 4) {
+		if width(line) > 4 {
+			t.Errorf("hardWrap: %q is %d cells", line, width(line))
+		}
+	}
+}
+
+// Left, Right, Backspace and Delete keep a symbol and its selector
+// together.
+func TestPromptEditVS16(t *testing.T) {
+	f := &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt}
+	f.cursor = 3
+	f.promptKey(Key{Kind: KeyLeft})
+	if f.cursor != 1 {
+		t.Errorf("left: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyRight})
+	if f.cursor != 3 {
+		t.Errorf("right: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyBackspace})
+	if string(f.prompt) != "ab" || f.cursor != 1 {
+		t.Errorf("backspace: %q at %d", string(f.prompt), f.cursor)
+	}
+	f = &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt, cursor: 1}
+	f.promptKey(Key{Kind: KeyDelete})
+	if string(f.prompt) != "ab" || f.cursor != 1 {
+		t.Errorf("delete: %q at %d", string(f.prompt), f.cursor)
+	}
+	f = &Form{prompt: []rune("1️⃣z"), focus: fieldPrompt, cursor: 4}
+	f.promptKey(Key{Kind: KeyLeft})
+	if f.cursor != 3 {
+		t.Errorf("left past z: cursor %d", f.cursor)
+	}
+	f.promptKey(Key{Kind: KeyBackspace})
+	if string(f.prompt) != "z" || f.cursor != 0 {
+		t.Errorf("backspace a keycap: %q at %d", string(f.prompt), f.cursor)
+	}
+	if w := width("1️⃣"); w != 2 {
+		t.Errorf("keycap is %d cells", w)
+	}
+	if got := tail("abcdefgh⚠️x", 2); width(got) > 2 {
+		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+}

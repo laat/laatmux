@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/laat/laatmux/internal/palette"
 	"golang.org/x/sys/unix"
 )
 
@@ -14,6 +16,14 @@ import (
 type Term struct {
 	in, out *os.File
 	saved   *unix.Termios
+	// Theme is what the lines are drawn in; the zero Theme has no
+	// colours and draws with the attributes alone.
+	Theme palette.Theme
+	// pending is input Background read that was not its answer, for
+	// Run to decode first; unanswered is that the query went and no
+	// answer came, so Run's decoder expects one for a while.
+	pending    []byte
+	unanswered bool
 }
 
 // Open puts the terminal into raw mode. Not a terminal is an error.
@@ -49,6 +59,52 @@ func Open(in, out *os.File) (*Term, error) {
 	return t, nil
 }
 
+// Background asks the terminal for its background colour with OSC 11 and
+// reports whether it is dark, waiting at most wait for the answer; ok is
+// false when none came or it could not be read. It is called before Run
+// reads the keys, so it reads the terminal itself: whatever else comes
+// meanwhile, keys typed or the start of a paste, is kept for Run, and
+// an answer begun by the deadline is waited on a while longer for its
+// end. One cut short is left for Run's decoder, which swallows it; so
+// is one that comes later. tmux answers for its pane.
+func (t *Term) Background(wait time.Duration) (dark, ok bool) {
+	t.write("\x1b]11;?\x1b\\")
+	deadline := time.Now().Add(wait)
+	extended := false
+	var got []byte
+	buf := make([]byte, 64)
+	for len(got) < 1024 {
+		left := time.Until(deadline)
+		if left <= 0 {
+			// An answer under way gets its end once.
+			if _, _, _, partial := takeAnswer(got); partial && !extended {
+				extended, deadline = true, time.Now().Add(oscWait)
+				continue
+			}
+			break
+		}
+		fds := []unix.PollFd{{Fd: int32(t.in.Fd()), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, int(left.Milliseconds())+1)
+		if err != nil && err != unix.EINTR {
+			break
+		}
+		if n <= 0 {
+			continue
+		}
+		k, err := unix.Read(int(t.in.Fd()), buf)
+		if err != nil || k <= 0 {
+			break
+		}
+		got = append(got, buf[:k]...)
+		if answer, rest, found, _ := takeAnswer(got); found {
+			t.pending = rest
+			return palette.DarkBackground(answer)
+		}
+	}
+	t.pending, t.unanswered = got, true
+	return false, false
+}
+
 // Close restores the terminal.
 func (t *Term) Close() {
 	if t.saved == nil {
@@ -79,10 +135,44 @@ func (t *Term) Draw(lines []Line) {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		b.WriteString(ANSI(l))
+		b.WriteString(ANSI(l, t.Theme))
 		b.WriteString("\x1b[K")
 	}
 	t.write(b.String())
 }
 
 func (t *Term) write(s string) { _, _ = t.out.WriteString(s) }
+
+// takeAnswer finds the terminal's answer to the background query in b,
+// an OSC 11 string with a colour, and returns it with the bytes around
+// it. Other OSC strings, the query echoed back say, are dropped, and
+// anything else, the user's keys, an Alt-], is kept. partial is that an
+// answer is under way at the end of b.
+func takeAnswer(b []byte) (answer string, rest []byte, found, partial bool) {
+	var kept []byte
+	for i := 0; i < len(b); {
+		if b[i] != 0x1b || i+1 == len(b) || b[i+1] != ']' {
+			kept = append(kept, b[i])
+			i++
+			continue
+		}
+		kind, n, _ := oscScan(b[i:])
+		switch kind {
+		case oscDone:
+			s := string(b[i : i+n])
+			if strings.HasPrefix(s, oscAnswer) {
+				if _, ok := palette.DarkBackground(s); ok {
+					return s, append(kept, b[i+n:]...), true, false
+				}
+			}
+			i += n
+		case oscMore:
+			tail := string(b[i:])
+			return "", nil, false, strings.HasPrefix(tail, oscAnswer) || strings.HasPrefix(oscAnswer, tail)
+		default:
+			kept = append(kept, b[i:i+n]...)
+			i += n
+		}
+	}
+	return "", nil, false, false
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/workspace"
@@ -19,7 +20,7 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // fixture is a listing with one of everything: the three activities, a
 // gone agent, a worktree without a session, one without an agent, a
 // managed agent with no worktree, observed agents on the local and a
-// remote default server, a host down, a settled and a stale workspace.
+// remote default server, a host down, a settled and an orphaned workspace.
 func fixture(now time.Time) rows.Rows { return rows.Build(fixtureInput(now)) }
 
 func fixtureInput(now time.Time) rows.Input {
@@ -82,15 +83,15 @@ func golden(t *testing.T, name, got string) {
 }
 
 func model(now time.Time) *Model {
-	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []string{"box  DOWN  ssh: connect to host box port 22: No route to host"}}
+	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []HeaderLine{{Text: "box  DOWN  ssh: connect to host box port 22: No route to host", Down: true}}}
 }
 
-// The tile layout at the sidebar's default width: each tile is the mark
-// and name with the host tag right-aligned, dim for every host but the
-// local one, the agent, activity and age, and the title trimmed to the
-// width; rows without an agent say what they are instead; the current
-// session is marked in the gutter; the settled and stale groups are
-// collapsed to one line.
+// The tile layout at the sidebar's default width: each tile is the
+// stripe and the icon in the status colour, the primary label and the
+// time since the status changed; the secondary label and the host tag,
+// dim for every host but the local one; and the cleaned title, or what
+// a row without an agent is instead; the current row's label is bold in
+// its own colour; rows below the window are counted.
 func TestRenderTiles(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -143,7 +144,7 @@ func TestRenderScroll(t *testing.T) {
 	// Back to the top: the scroll follows.
 	m.Selected = 0
 	txt = Text(m.Render())
-	if !strings.HasPrefix(txt, " ! laatmux/fix-ls") {
+	if !strings.HasPrefix(txt, "▌ 💬 fix-ls") {
 		t.Errorf("did not scroll back:\n%s", txt)
 	}
 }
@@ -452,16 +453,23 @@ func TestWidth(t *testing.T) {
 	if w := width("日本"); w != 4 {
 		t.Errorf("wide = %d", w)
 	}
-	// An emoji is two cells; a variation selector, a skin tone and a
-	// joiner add none, so a joined sequence measures as its base emoji.
+	// An emoji is two cells; a skin tone and a joiner add none, so a
+	// joined sequence measures as its base emoji; the emoji variation
+	// selector makes a one-cell symbol two, as terminals draw ⚠️.
 	if w := width("\U0001f600"); w != 2 {
 		t.Errorf("emoji = %d", w)
 	}
 	if w := width("\U0001f44d\U0001f3fd"); w != 2 {
 		t.Errorf("emoji with skin tone = %d", w)
 	}
-	if w := width("\u2764\ufe0f"); w != 1 {
+	if w := width("\u2764\ufe0f"); w != 2 {
 		t.Errorf("heart with variation selector = %d", w)
+	}
+	if w := width("\u26a0\ufe0f x"); w != 4 {
+		t.Errorf("warning sign with variation selector and text = %d", w)
+	}
+	if got := fit("a\u26a0\ufe0f", 2); got != "a" {
+		t.Errorf("fit cut inside a two-cell symbol = %q", got)
 	}
 	if got := fit("ab日本c", 4); got != "ab日" {
 		t.Errorf("fit = %q", got)
@@ -649,9 +657,9 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	}
 }
 
-// A live working row's mark is the spinner frame for the clock, in
-// colour; the frame advances every spinTick and wraps; a gone or dim
-// working agent keeps the plain mark; Spinning says whether a tick is
+// A live working row's icon is the spinner frame for the clock, in the
+// info colour; the frame advances every spinTick and wraps; a dim
+// working agent's spinner stands still; Spinning says whether a tick is
 // wanted at all.
 func TestSpinner(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
@@ -667,31 +675,31 @@ func TestSpinner(t *testing.T) {
 		m.Now = at
 		for _, it := range m.Visible() {
 			if it.Row.Name == name {
-				return m.mark(*it.Row)
+				return m.iconSpan(*it.Row)
 			}
 		}
 		t.Fatalf("no row %s", name)
 		return Span{}
 	}
 	first := frameOf("proj/task", now)
-	if first.Fg != spinnerFg || first.Text != spinnerFrames[0] {
+	if first.Fg != palette.Info || first.Text != spinnerFrames[0] || !first.spin {
 		t.Fatalf("frame at t0: %+v", first)
 	}
-	if next := frameOf("proj/task", now.Add(spinTick)); next.Text != spinnerFrames[1] || next.Fg != spinnerFg {
+	if next := frameOf("proj/task", now.Add(spinTick)); next.Text != spinnerFrames[1] || next.Fg != palette.Info {
 		t.Fatalf("frame at t0+tick: %+v", next)
 	}
 	if wrapped := frameOf("proj/task", now.Add(time.Duration(len(spinnerFrames))*spinTick)); wrapped.Text != spinnerFrames[0] {
 		t.Fatalf("frame after a full cycle: %+v", wrapped)
 	}
 	// A zero Now, before the first draw, is a frame too, not a panic.
-	if z := frameOf("proj/task", time.Time{}); z.Fg != spinnerFg || z.Text == "" {
+	if z := frameOf("proj/task", time.Time{}); z.Fg != palette.Info || z.Text == "" {
 		t.Fatalf("frame at the zero time: %+v", z)
 	}
-	// Working but dim, on the down host: the plain mark.
-	if down := frameOf("proj/down", now); down.Text != "*" || down.Fg != 0 {
+	// Working but dim, on the down host: the spinner stands still.
+	if down := frameOf("proj/down", now); down.Text != spinnerFrames[0] || down.spin {
 		t.Fatalf("dim working row: %+v", down)
 	}
-	if blocked := frameOf("laatmux/fix-ls", now); blocked.Text != "!" || blocked.Fg != 0 {
+	if blocked := frameOf("laatmux/fix-ls", now); blocked.Text != "💬" || blocked.Fg != palette.Accent {
 		t.Fatalf("blocked row: %+v", blocked)
 	}
 	// Every working agent gone: nothing spins.
@@ -707,22 +715,26 @@ func TestSpinner(t *testing.T) {
 	}
 	// The colour reaches the terminal and the plain text does not
 	// carry it.
-	l := Line{Spans: []Span{{Text: ">"}, {Text: "⠋", Fg: spinnerFg}, {Text: " x"}}}
-	if got := ANSI(l); !strings.Contains(got, "\x1b[36m⠋\x1b[0m") || !strings.HasSuffix(got, " x\x1b[0m") {
+	th, _ := palette.New(true, nil)
+	l := Line{Spans: []Span{{Text: ">"}, {Text: "⠋", Fg: palette.Info}, {Text: " x"}}}
+	if got := ANSI(l, th); !strings.Contains(got, "\x1b[38;2;125;207;255m⠋\x1b[0m") || !strings.HasSuffix(got, " x\x1b[0m") {
 		t.Errorf("ANSI: %q", got)
+	}
+	if got := ANSI(l, palette.Mono()); strings.Contains(got, "38;") {
+		t.Errorf("ANSI without colours: %q", got)
 	}
 	if got := Text([]Line{l}); got != ">⠋ x\n" {
 		t.Errorf("Text: %q", got)
 	}
-	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨⠋⟩ x") {
+	if got := Debug([]Line{l}); !strings.Contains(got, ">⟨info:⠋⟩ x") {
 		t.Errorf("Debug: %q", got)
 	}
 }
 
 // The spinner ticks only while a frame is on screen: working rows
 // scrolled off, or filtered out, or behind an overlay, are not ticked
-// for; and a narrow pane keeps the mark's colour in both layouts, down
-// to the two cells the gutter and the mark take.
+// for; and a narrow pane keeps the stripe's and icon's colours in both
+// layouts, down to a single cell.
 func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -755,16 +767,17 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	}
 	m.Overlay = nil
 	// Tiles, the blocked tile selected at the top: the first working
-	// tile's head line is the fifth body line, so five body lines show
-	// its mark and four cut the tile off above it.
+	// tile's head line is the fifth body line. Rows below take the
+	// window's last line for their count, so six body lines show its
+	// icon and five cut the tile off above it.
 	m.Layout = Tiles
 	m.Handle(Key{Rune: 'g'})
-	m.Height = len(m.Header) + 5 + 1
+	m.Height = len(m.Header) + 6 + 1
 	m.Render()
 	if !m.Spinning() {
 		t.Fatalf("tile head on screen and not spinning:\n%s", Debug(m.Render()))
 	}
-	m.Height = len(m.Header) + 4 + 1
+	m.Height = len(m.Header) + 5 + 1
 	m.Render()
 	if m.Spinning() {
 		t.Fatalf("tile head clipped and still spinning:\n%s", Debug(m.Render()))
@@ -775,8 +788,8 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	m.Layout, m.Width = Compact, 80
 	m.SetRows(rows.Build(fixtureInput(now)))
 	m.Filter = "proj/task" // the one row is the live working one
-	m.Header = []string{"one", "two"}
-	m.Height = 4 // headers, the body line, footer: the mark is drawn
+	m.Header = []HeaderLine{{Text: "one"}, {Text: "two"}}
+	m.Height = 4 // headers, the body line, footer: the icon is drawn
 	if lines := m.Render(); len(lines) != 4 || !m.Spinning() {
 		t.Fatalf("one working row under two headers: %d lines, spinning=%v", len(lines), m.Spinning())
 	}
@@ -784,7 +797,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	if lines := m.Render(); len(lines) != 2 || m.Spinning() {
 		t.Fatalf("headers filling the terminal: %d lines, spinning=%v", len(lines), m.Spinning())
 	}
-	// Narrow: the coloured mark survives the fallback in both layouts,
+	// Narrow: the coloured stripe survives the fallback in both layouts,
 	// and no line is wider than the pane.
 	for _, layout := range []Layout{Compact, Tiles} {
 		for _, w := range []int{12, 6, 3, 2} {
@@ -793,7 +806,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 			m.SetRows(rows.Build(fixtureInput(now)))
 			lines := m.Render()
 			if out := Debug(lines); !strings.Contains(out, "⟨") {
-				t.Errorf("layout %v width %d: no coloured mark:\n%s", layout, w, out)
+				t.Errorf("layout %v width %d: no colour:\n%s", layout, w, out)
 			}
 			for _, l := range lines {
 				if width(strings.TrimSuffix(Text([]Line{l}), "\n")) > w {
@@ -804,7 +817,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		m = model(now)
 		m.Layout, m.Width, m.Height = layout, 1, 30
 		m.SetRows(rows.Build(fixtureInput(now)))
-		m.Render() // one cell: the gutter alone, no panic
+		m.Render() // one cell: the stripe alone, no panic
 	}
 }
 

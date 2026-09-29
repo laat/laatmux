@@ -229,8 +229,8 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if err != nil || l.Host != "vm" {
 		t.Errorf("observed agent in a workspace window: localFor = %+v, %v", l, err)
 	}
-	if _, err := d.localFor(rows.Row{Name: "s", Stale: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
-		t.Error("stale row accepted")
+	if _, err := d.localFor(rows.Row{Name: "s", Orphaned: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
+		t.Error("orphaned row accepted")
 	}
 	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
 		t.Error("plain attachment accepted")
@@ -290,7 +290,7 @@ func TestAddPartialSuccess(t *testing.T) {
 // x asks about the selected worktree, naming it and its root, with the
 // request built from the record: by source and branch when this
 // machine knows the repository, by root alone when it does not, and
-// from a stale session's tags and key; X asks with force.
+// from an orphaned session's tags and key; X asks with force.
 func TestRmFor(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
@@ -320,7 +320,7 @@ func TestRmFor(t *testing.T) {
 	selectRow(t, m, "vm/proj/gone")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
 	if d.rm.Repo.Source != cfg.Repos[1].Source || d.rm.Branch != "gone" || d.rm.Root != "/w/proj/gone" || d.rm.Host.Name != "vm" {
-		t.Errorf("stale: rm = %+v", d.rm)
+		t.Errorf("orphaned: rm = %+v", d.rm)
 	}
 	m.Handle(view.Key{Rune: 'n'})
 
