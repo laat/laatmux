@@ -210,20 +210,23 @@ func TestFailingNameKnown(t *testing.T) {
 		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"h","statusCheckRollup":` + failing + `}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}}}`, nil
 	}}
 	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
-	FillFailing(context.Background(), f.run, "github.com", rs, map[string]string{FailingKey("RID", &protocol.Checks{Passed: 0, Total: 1}): "lint"})
+	FillFailing(context.Background(), f.run, "github.com", rs, map[string]string{rs[0].FailingKey(): "lint"})
 	if err != nil || rs[0].Checks.Failing != "lint" {
 		t.Errorf("%+v %v", rs[0].Checks, err)
 	}
 }
 
 // Forks' open PRs filling the first page do not hide the repository's
-// own: the next pages are asked for.
+// own: the next pages are asked for, light, and the own one then in full.
 func TestOwnPRPastForks(t *testing.T) {
 	fork := `{"number":9,"state":"OPEN","isDraft":false,"url":"u9","isCrossRepository":true,"commits":{"nodes":[]}}`
 	own := `{"number":3,"state":"OPEN","isDraft":false,"url":"u3","isCrossRepository":false,"commits":{"nodes":[{"commit":{"oid":"p","statusCheckRollup":null}}]}}`
 	f := &fake{answer: func(vars map[string]string) (string, error) {
-		if vars["after"] == "C1" {
-			return `{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[` + own + `]}}}}`, nil
+		switch {
+		case vars["after"] == "C1":
+			return `{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"number":8,"isCrossRepository":true},{"number":3,"isCrossRepository":false}]}}}}`, nil
+		case vars["o"] != "" && vars["b"] == "":
+			return `{"data":{"repository":{"pullRequest":` + own + `}}}`, nil
 		}
 		forks := strings.Repeat(fork+",", 4) + fork
 		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"p"}},"open":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + forks +
@@ -232,6 +235,9 @@ func TestOwnPRPastForks(t *testing.T) {
 	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 	if err != nil || rs[0].PR == nil || rs[0].PR.Number != 3 {
 		t.Errorf("%+v %v", rs[0], err)
+	}
+	if !strings.Contains(f.queries[2], "pullRequest(number: 3)") || strings.Contains(f.queries[1], "commits") {
+		t.Errorf("the page not light, or the own one not asked for by number: %q", f.queries[1:])
 	}
 }
 
@@ -247,8 +253,8 @@ func TestPRPageFails(t *testing.T) {
 			if vars["after"] != "" {
 				return page()
 			}
-			return `{"data":{"b0":{"url":"u","ref":null,"open":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + fork +
-				`]},"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[` + fork + `]}}}}`, nil
+			return `{"data":{"b0":{"url":"u","ref":null,"open":{"pageInfo":{"hasNextPage":false},"nodes":[` + fork +
+				`]},"pullRequests":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + fork + `]}}}}`, nil
 		}}
 		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 		if err != nil || rs[0].Err == nil || rs[0].NoRef {

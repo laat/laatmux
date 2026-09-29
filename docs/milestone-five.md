@@ -597,9 +597,13 @@ every worktree in the merged stream, keyed by source and branch.
   page. The name of the first failing check is a second, small query,
   only for rollups that fail, paging until one is found, and kept by
   the rollup's id and counts for five minutes, since a rerun on the same commit can
-  move the failure to another check. When forks' PRs of the same name
-  fill a connection's page, the next pages are asked for, up to five,
-  until one of the repository's own is found.
+  move the failure to another check; the key is the rollup and every
+  count by state. When forks' PRs of the same name fill a connection's
+  page, the next pages are asked for, up to five, with the number and
+  the fork mark alone, and the repository's own PR, once found, in full:
+  the open ones while the branch is there, any once it is gone, since a
+  closed one counts only then or while the branch is at its last
+  commit.
   A query of 32 branches costs about seven of GitHub's rate-limit
   points.
 - **When.** Every 30 s while a merged subscriber is there, and at once
@@ -625,8 +629,8 @@ every worktree in the merged stream, keyed by source and branch.
   `sessions_error` does, and `laatmux hosts` prints it on a `github:`
   line after the hosts, never in a host's connectivity. A trusted
   enterprise host that is logged out is named in it too; with no error
-  from the daemon, `hosts` asks gh's active account for github.com
-  itself.
+  from the daemon, `hosts` asks github.com itself with the smallest
+  query, through the same code, so it tells the same failures apart.
 - **The record,** from a merging daemon with the capability `branches`.
   `branch` is a string in the envelope already (the branch of an add or
   rm), so the record has a key of its own, `branch_status`:

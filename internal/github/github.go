@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,15 +90,18 @@ type Result struct {
 	ChecksURL string
 	PR        *protocol.PullRequest
 	Checks    *protocol.Checks
-	// RollupID identifies the head's check rollup, which a failing
-	// check's name is kept by.
+	// RollupID identifies the head's check rollup, which with counts,
+	// every count by state, a failing check's name is kept by.
 	RollupID string
+	counts   string
 }
 
 // Chunk is how many branches one query asks about.
 const Chunk = 32
 
-const prFragment = `fragment P on PullRequestConnection { pageInfo { hasNextPage endCursor } nodes { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
+const prFragment = `fragment P on PullRequestConnection { pageInfo { hasNextPage endCursor } nodes { ...Q } } ` + prNodeFragment
+
+const prNodeFragment = `fragment Q on PullRequest { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } }`
 
 const rollupFragment = `fragment R on StatusCheckRollup { id state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }`
 
@@ -207,13 +212,8 @@ func Fetch(ctx context.Context, run Runner, host string, branches []Branch) ([]R
 }
 
 // FailingKey is what a failing check's name is kept by: the rollup and
-// its counts, so a rerun that moves the failure changes the key.
-func FailingKey(rollupID string, c *protocol.Checks) string {
-	if c == nil {
-		return rollupID
-	}
-	return fmt.Sprintf("%s %d/%d", rollupID, c.Passed, c.Total)
-}
+// every count by state, so a rerun, pending or done, changes the key.
+func (r Result) FailingKey() string { return r.RollupID + " " + r.counts }
 
 // FillFailing gives each failing result the name of its first failing
 // check: the one in known for its rollup id, found recently, else paged
@@ -224,7 +224,7 @@ func FillFailing(ctx context.Context, run Runner, host string, results []Result,
 		if r.Err != nil || r.Checks == nil || r.Checks.State != protocol.ChecksFailure || r.RollupID == "" || ctx.Err() != nil {
 			continue
 		}
-		if name, ok := known[FailingKey(r.RollupID, r.Checks)]; ok {
+		if name, ok := known[r.FailingKey()]; ok {
 			r.Checks.Failing = name
 		} else {
 			r.Checks.Failing = failingName(ctx, run, host, r.RollupID)
@@ -236,49 +236,100 @@ func FillFailing(ctx context.Context, run Runner, host string, results []Result,
 const prPages = 5
 
 // morePRs pages a branch's PRs past the first answer's, open ones or
-// all, until one of the repository's own is found.
+// all, with the number and the fork mark alone, until one of the
+// repository's own is found; then asks for that one in full. On a
+// repository whose main branch has hundreds of forks' PRs of the same
+// name this is a few light pages, not full ones.
 func morePRs(ctx context.Context, run Runner, host string, b Branch, open bool, after string) ([]prNode, error) {
 	states := ""
 	if open {
 		states = "states: [OPEN], "
 	}
 	q := `query($o: String!, $r: String!, $b: String!, $after: String!) { repository(owner: $o, name: $r) { ` +
-		`pullRequests(headRefName: $b, ` + states + `first: 20, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } } } ` +
-		rollupFragment + " " + prFragment
-	var out []prNode
+		`pullRequests(headRefName: $b, ` + states + `first: 100, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) { ` +
+		`pageInfo { hasNextPage endCursor } nodes { number isCrossRepository } } } }`
+	vars := map[string]string{"o": b.Owner, "r": b.Repo, "b": b.Branch}
 	for page := 0; page < prPages && after != ""; page++ {
-		body, err := run(ctx, host, q, map[string]string{"o": b.Owner, "r": b.Repo, "b": b.Branch, "after": after})
-		if err != nil {
-			return out, err
-		}
+		vars["after"] = after
 		var resp struct {
 			Data struct {
 				Repository *struct {
-					PullRequests prConnection `json:"pullRequests"`
+					PullRequests struct {
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+						Nodes []struct {
+							Number          int  `json:"number"`
+							CrossRepository bool `json:"isCrossRepository"`
+						} `json:"nodes"`
+					} `json:"pullRequests"`
 				} `json:"repository"`
 			} `json:"data"`
-			Errors []struct {
-				Message string `json:"message"`
-			} `json:"errors"`
 		}
-		if err := json.Unmarshal(body, &resp); err != nil {
-			return out, fmt.Errorf("gh api graphql: %w", err)
-		}
-		if len(resp.Errors) > 0 || resp.Data.Repository == nil {
-			msg := "no repository"
-			if len(resp.Errors) > 0 {
-				msg = resp.Errors[0].Message
-			}
-			return out, fmt.Errorf("%s/%s: %s", b.Owner, b.Repo, msg)
+		if err := graphql(ctx, run, host, q, vars, &resp, b); err != nil {
+			return nil, err
 		}
 		c := resp.Data.Repository.PullRequests
-		out = append(out, c.Nodes...)
-		if c.own() || !c.PageInfo.HasNextPage {
-			return out, nil
+		for _, n := range c.Nodes {
+			if !n.CrossRepository {
+				return onePR(ctx, run, host, b, n.Number)
+			}
+		}
+		if !c.PageInfo.HasNextPage {
+			return nil, nil
 		}
 		after = c.PageInfo.EndCursor
 	}
-	return out, nil
+	return nil, nil
+}
+
+// onePR asks for one PR in full by its number, which is GitHub's own
+// answer, not a name of the user's, and so is put in the query text.
+func onePR(ctx context.Context, run Runner, host string, b Branch, number int) ([]prNode, error) {
+	q := `query($o: String!, $r: String!) { repository(owner: $o, name: $r) { pullRequest(number: ` + strconv.Itoa(number) + `) { ...Q } } } ` +
+		rollupFragment + " " + prNodeFragment
+	var resp struct {
+		Data struct {
+			Repository *struct {
+				PullRequest *prNode `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := graphql(ctx, run, host, q, map[string]string{"o": b.Owner, "r": b.Repo}, &resp, b); err != nil {
+		return nil, err
+	}
+	if resp.Data.Repository.PullRequest == nil {
+		return nil, fmt.Errorf("%s/%s: pull request %d not found", b.Owner, b.Repo, number)
+	}
+	return []prNode{*resp.Data.Repository.PullRequest}, nil
+}
+
+// graphql runs one follow-up query and decodes its data into v; an
+// error in the answer, or no repository, is an error.
+func graphql(ctx context.Context, run Runner, host, q string, vars map[string]string, v any, b Branch) error {
+	body, err := run(ctx, host, q, vars)
+	if err != nil {
+		return err
+	}
+	var check struct {
+		Data struct {
+			Repository json.RawMessage `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &check); err != nil {
+		return fmt.Errorf("gh api graphql: %w", err)
+	}
+	if len(check.Errors) > 0 {
+		return fmt.Errorf("%s/%s: %s", b.Owner, b.Repo, check.Errors[0].Message)
+	}
+	if len(check.Data.Repository) == 0 || string(check.Data.Repository) == "null" {
+		return fmt.Errorf("%s/%s: no repository", b.Owner, b.Repo)
+	}
+	return json.Unmarshal(body, v)
 }
 
 func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch, out []Result) error {
@@ -332,13 +383,16 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 			// Forks' PRs of the same name may fill a page: the next
 			// pages are asked for until one of the repository's own. A
 			// page that fails leaves the answer partial, not absent.
+			// Only what can change the answer is paged: an open PR while
+			// the branch is there; any PR once it is gone, a closed one
+			// counting then.
 			var err error
-			if !a.Open.own() && a.Open.PageInfo.HasNextPage {
+			if a.Ref != nil && !a.Open.own() && a.Open.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)
 				a.Open.Nodes = append(a.Open.Nodes, more...)
 			}
-			if err == nil && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
+			if err == nil && a.Ref == nil && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)
 				a.PullRequests.Nodes = append(a.PullRequests.Nodes, more...)
@@ -407,6 +461,14 @@ func parse(a *repoAnswer, b Branch) Result {
 	if rl != nil {
 		r.Checks = aggregate(rl)
 		r.RollupID = rl.ID
+		var sig []string
+		for _, list := range []counts{rl.Contexts.CheckRuns, rl.Contexts.Statuses} {
+			for _, c := range list {
+				sig = append(sig, fmt.Sprintf("%s=%d", c.State, c.Count))
+			}
+		}
+		sort.Strings(sig)
+		r.counts = strings.Join(sig, ",")
 	}
 	return r
 }

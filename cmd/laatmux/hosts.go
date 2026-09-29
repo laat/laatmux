@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -76,25 +75,14 @@ func githubLine(ctx context.Context) string {
 }
 
 // ghStatus is whether gh on this machine can read github.com: "ok", or
-// why not.
+// why not, from the smallest query the daemon's own reading would make,
+// so the two tell the same failures apart.
 var ghStatus = func(ctx context.Context) string {
-	if _, err := exec.LookPath("gh"); err != nil {
-		return github.ErrNoGH.Error()
+	_, err := github.GH(ctx, "github.com", "query { viewer { login } }", nil)
+	if err != nil {
+		return err.Error()
 	}
-	// The active account alone, the one gh's queries use; a failure
-	// that is not about the login, the network say, is said as it is.
-	out, err := exec.CommandContext(ctx, "gh", "auth", "status", "--active", "--hostname", "github.com").CombinedOutput()
-	if err == nil {
-		return "ok"
-	}
-	text := strings.ToLower(string(out))
-	for _, s := range []string{"not logged", "invalid", "expired", "gh auth login", "no oauth token"} {
-		if strings.Contains(text, s) {
-			return github.ErrLoggedOut.Error() + " to github.com"
-		}
-	}
-	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	return "gh auth status: " + first
+	return "ok"
 }
 
 // hostRow is one host in the listing.

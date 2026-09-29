@@ -40,9 +40,9 @@ type branchEntry struct {
 	LastSeen     time.Time             `json:"last_seen"`
 	PendingOID   string                `json:"pending_oid,omitempty"`
 	PendingSince time.Time             `json:"pending_since,omitzero"`
-	// RollupID is the checks' rollup, whose failing check's name is
-	// not asked for again while it holds.
-	RollupID string `json:"rollup_id,omitempty"`
+	// FailingKey is the checks' rollup and counts, whose failing
+	// check's name is not asked for again while it holds.
+	FailingKey string `json:"failing_key,omitempty"`
 	// FailingAt is when the failing check's name was last asked for.
 	FailingAt time.Time `json:"failing_at,omitzero"`
 }
@@ -294,6 +294,14 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 	}
 	answers := make([]answer, 0, len(hosts))
 	var ghErrs []string
+	d.mu.Lock()
+	d.roundErrs = map[string]bool{}
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.branchErrs, d.roundErrs = d.roundErrs, nil
+		d.mu.Unlock()
+	}()
 	deadline, bounded := ctx.Deadline()
 	for n, host := range hosts {
 		qs := byHost[host]
@@ -363,8 +371,8 @@ func (d *Daemon) knownFailing(qs []branchQuery) map[string]string {
 	now := time.Now().Round(0)
 	for _, q := range qs {
 		e := d.branches[q.key]
-		if e != nil && e.RollupID != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" && now.Sub(e.FailingAt) < branchStale {
-			known[github.FailingKey(e.RollupID, e.Status.Checks)] = e.Status.Checks.Failing
+		if e != nil && e.FailingKey != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" && now.Sub(e.FailingAt) < branchStale {
+			known[e.FailingKey] = e.Status.Checks.Failing
 		}
 	}
 	return known
@@ -392,13 +400,16 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 		case r.Err != nil:
 			// A branch GitHub answered with an error, a repository it
 			// cannot resolve or an organisation's SSO say, is logged
-			// once per message.
-			if msg := r.Err.Error(); !d.branchErrs[msg] {
-				if d.branchErrs == nil {
-					d.branchErrs = map[string]bool{}
+			// when the round before did not have it; gh's own failures
+			// are github_error's.
+			if !errors.Is(r.Err, github.ErrNoGH) && !errors.Is(r.Err, github.ErrLoggedOut) {
+				msg := q.host + ": " + r.Err.Error()
+				if !d.branchErrs[msg] {
+					d.cfg.Logger.Printf("github: %s", msg)
 				}
-				d.branchErrs[msg] = true
-				d.cfg.Logger.Printf("github: %s", msg)
+				if d.roundErrs != nil {
+					d.roundErrs[msg] = true
+				}
 			}
 			if e != nil && !e.Status.Stale {
 				e.Status.Stale = true
@@ -410,10 +421,10 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 				e = &branchEntry{}
 				d.branches[q.key] = e
 			}
-			if _, cached := known[github.FailingKey(r.RollupID, r.Checks)]; !cached || e.RollupID != r.RollupID {
+			if _, cached := known[r.FailingKey()]; !cached {
 				e.FailingAt = now // a name found now, or none needed
 			}
-			e.LastSeen, e.RollupID = now, r.RollupID
+			e.LastSeen, e.FailingKey = now, r.FailingKey()
 			st := protocol.BranchStatus{BranchKey: q.bk, FetchedAt: now, HeadOID: r.HeadOID, ChecksURL: r.ChecksURL, PR: r.PR, Checks: r.Checks}
 			if c := st.Checks; c != nil && c.State == protocol.ChecksPending {
 				if e.PendingOID != r.HeadOID {

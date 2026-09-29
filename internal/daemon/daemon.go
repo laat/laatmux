@@ -205,7 +205,8 @@ type Daemon struct {
 	githubErr       string
 	lastBranchesErr string
 	branchesListed  bool            // every host has listed once since start
-	branchErrs      map[string]bool // per-branch errors logged
+	branchErrs      map[string]bool // per-branch errors of the last round, logged
+	roundErrs       map[string]bool // and of the round under way
 	ctx             context.Context // Run's context, for goroutines that outlive a connection
 	generation      int64
 	revision        uint64

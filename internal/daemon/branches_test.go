@@ -364,11 +364,11 @@ func TestBranchesFailingNameLifetime(t *testing.T) {
 	d, _ := branchDaemon(t, t.TempDir(), &fakeGH{})
 	k := branchKeyString(bkey("a"))
 	d.mu.Lock()
-	d.branches[k] = &branchEntry{RollupID: "R", FailingAt: time.Now().Add(-time.Minute),
+	d.branches[k] = &branchEntry{FailingKey: "R x", FailingAt: time.Now().Add(-time.Minute),
 		Status: protocol.BranchStatus{BranchKey: bkey("a"), Checks: &protocol.Checks{State: protocol.ChecksFailure, Failing: "lint"}}}
 	d.mu.Unlock()
 	q := []branchQuery{{key: k}}
-	if known := d.knownFailing(q); known[github.FailingKey("R", &protocol.Checks{})] != "lint" {
+	if known := d.knownFailing(q); known["R x"] != "lint" {
 		t.Errorf("a recent name not known: %v", known)
 	}
 	d.mu.Lock()
