@@ -280,7 +280,8 @@ func (f *Form) promptKey(k Key) {
 }
 
 // joins reports whether r is drawn with the rune before it, taking no
-// cell of its own: a combining mark or a variation selector.
+// cell of its own: a combining mark, a joiner, a variation selector or
+// a skin tone.
 func joins(r rune) bool { return r >= 0x20 && runeWidth(r) == 0 }
 
 func (f *Form) insert(rs []rune) {
