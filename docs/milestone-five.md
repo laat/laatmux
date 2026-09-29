@@ -53,7 +53,10 @@ above the list:
 pressed in; other panes keep theirs. The last view chosen is written to
 `sidebar.json` (see Persistence) as the default a new or restarted pane
 starts in, which no running pane reads. The dashboard keeps its own
-default in the same file.
+view and layout defaults in the same file, under keys of its own, since
+it opens in a wide popup where compact suits; its `--layout` flag wins
+over both. In the dashboard, the scope and `F` take the session of the
+client the popup opened on.
 
 ### The agent view
 
@@ -276,28 +279,43 @@ it.
 - **Not tracked:** an agent on a remote host's default server or on
   another observed server. No view can take the user there, so it can
   never be seen; it never shows ✅.
-- **Seen.** The daemon learns which session each tmux client of this
-  machine's default server is on through `list-clients`, every second
-  while a merged subscriber is there or any entry is unseen, subscriber
-  or not, and at once when it records a finish. The sidebar's `on` also sets a
-  `client-session-changed[9106]` hook running `laatmux sidebar seen`,
-  which sends the local daemon `{type: poke}` so it lists clients at
-  once; `off` removes the hook with the others. A client on the agent's
-  workspace session, its plain attachment, or its own session on this
-  machine's default server sees the agent: when that agent's
-  `finished_at` is after its `seen_at`, `seen_at` moves to now, and a
-  finish observed while a client is there is seen at once. `seen_at`
-  moves only then, so a client sitting on a session writes nothing.
-  Every attached client counts, one left open in another terminal too.
+- **Seen.** The daemon learns what each tmux client of this machine's
+  default server shows through `list-clients -F '#{client_name}
+  #{pane_id}'`, every second while a merged subscriber is there or any
+  entry is unseen, subscriber or not, and at once when it records a
+  finish. With no subscriber that is one `list-clients` a second, which
+  is the cost this rule accepts. A client *sees* an agent by the pane
+  it shows:
+  - an attach pane, tagged `@laatmux_attach_pane`, whose
+    `@laatmux_attach_target` is the agent's managed session on the
+    agent's host, in a workspace session or a plain attachment alike;
+  - on this machine's default server, the agent's own pane.
+
+  A client on a workspace session's shell window sees nothing. The
+  laptop does not know which window of a managed session the attach
+  shows, so every agent in that managed session counts as seen: that is
+  the one coarseness left. When a seen agent's `finished_at` is after
+  its `seen_at`, `seen_at` moves to now, and a finish observed while a
+  client shows the agent is seen at once. `seen_at` moves only then, so
+  a client sitting on a session writes nothing. Every attached client
+  counts, one left open in another terminal too.
+- **The poke.** The sidebar's `on` sets a `client-session-changed[9106]`
+  hook running `laatmux sidebar seen`, which sends the local daemon
+  `{type: poke}` so it lists clients at once. The hook is global, with
+  `--session` too, since the sessions a client switches into are the
+  workspace sessions and attachments, not the one holding the sidebar;
+  `off` removes it only when no sidebar pane is left. The poll covers
+  a missing hook; the hook only makes it quicker.
 - **The record.** A new record type in the merged stream, from a
   merging daemon with the capability `attention`:
   `{agent_id, finished_at, seen_at}`. A view shows ✅ for an idle agent
   whose `finished_at` is after its `seen_at`.
 - **Kept across restarts** in `attention.json` under the state
   directory, written when an entry changes, so a restart does not bring
-  back ✅ on everything. An entry goes with its agent's remove, and one
+  back ✅ on everything. An entry goes with its agent's remove, one
   whose agent a listed host's snapshot no longer has goes with that
-  snapshot.
+  snapshot, and the entries of a host no longer in the config go when
+  the daemon starts and when a subscription reads the config.
 - **Limits.** A visit made while the laptop was not following the
   agent's host, or before the snapshot that shows the finish arrived,
   is not recorded, since the finish is dated when it is seen: the agent
@@ -642,7 +660,7 @@ them, and `j` and `k` stop on them; the numbers skip them.
   session's key, with the repository and branch when its tags have
   them, as on a stale row today.
 
-Four settlements differ from the plan in #52:
+Five settlements differ from the plan in #52:
 
 - **`S` stays the shell.** workmux uses `S` for toggling every fold; in
   laatmux `S` has opened a shell since milestone three, and `f` already
@@ -653,12 +671,17 @@ Four settlements differ from the plan in #52:
 - **Working worktrees start open in the tree.** A worktree with a
   working agent starts unfolded, so its spinner is in sight; #52 folded
   whatever did not need the user.
+- **View, layout and scope are start defaults.** #52 shared them live
+  between every pane; here a change in one pane stays in it, the last
+  one chosen is what a new pane starts with, and `--all` changes every
+  running pane.
 - **`M-1`..`M-9` are opt-in.** Bound in tmux's root table they take the
   keys from every pane, where shells and editors use them.
   `sidebar.jump_keys: true` has `on` bind them to `run-shell "laatmux
-  sidebar jump N -t '#{window_id}'"`, so the window is the key's own
-  with any number of clients attached, and the `{jump_key}` token then
-  shows them; by default they are unbound and the token is empty.
+  sidebar jump N -t '#{window_id}' -c '#{client_name}'"`, so the window
+  and the client are the key's own with any number of clients
+  attached, and the `{jump_key}` token then shows them; by default they
+  are unbound and the token is empty.
 
 ## Placement, scope and controls
 
@@ -675,20 +698,32 @@ Four settlements differ from the plan in #52:
   current session's windows only, and its hooks for new windows are set
   on that session with `set-hook -t`, not globally, so other sessions
   get none. This reverses the rule against a per-session scope, and is
-  #52's meaning. `F` in a view is a different thing, a row filter for
-  that pane: it limits the rows to those of the session the pane sits
-  in, until pressed again.
+  #52's meaning.
+- **`F`** toggles the pane's scope between `session` and the scope the
+  pane started with, for that pane only, not persisted. `F` and the
+  scope are one setting.
 - **CLI:** `laatmux sidebar next | prev | jump N | view agents|tree |
   scope all|session|project` act on one sidebar pane: the one in the
   window the command runs for, `-t` a window or the current one, or on
-  every pane with `--all`. Each sidebar pane listens on a unix socket of
-  its own, `sidebar-<pane id>.sock` under the state directory, and the
-  command is one message to it, handled as a navigation event, not as
+  every pane with `--all`, which only `view` and `scope` take. Each
+  sidebar pane listens on a unix socket of its own under the state
+  directory, named by the tmux server's pid and the pane id, since pane
+  ids restart after a server restart; it writes the path to the pane
+  option `@laatmux_sidebar_socket`, and the CLI reads the path from the
+  tagged pane rather than building it. A pane unlinks a leftover socket
+  of its name before it listens and removes its socket on exit, and
+  `sidebar reap` removes those of panes that are gone. The command is
+  one message to the socket, handled as a navigation event, not as
   typed keys: it moves the selection or switches the view whether the
   pane is filtering or not, and is ignored while an overlay or a
-  question is open. Nothing is written to a file, so none is replayed.
-  A window with no sidebar pane makes the command exit quietly, since a
-  binding's error flashes in the status line.
+  question is open. `jump N` counts the rows the pane shows, the
+  filtered ones when a filter is on, and switches the client the
+  command names with `-c`, or the one it ran from, with `switch-client
+  -c`. For `view` and `scope` the CLI writes the new default to
+  `sidebar.json` once, whether or not a pane answered; the panes only
+  apply the change. Nothing is replayed. A window with no sidebar pane,
+  or a socket that refuses the connection, makes the command exit
+  quietly, since a binding's error flashes in the status line.
   The scope is what a pane shows: every row, the rows of the session
   the pane sits in, or the rows of the repository of that session's
   worktree. #52 called it `filter none|all|…`; `none` was the same as
@@ -901,7 +936,8 @@ view and folds step 6 keeps in memory.
   the user left, a cached record replayed on reconnect not counted, a local
   agent's finish with no subscriber, a new identity in the same pane, a
   reused pane id after a server restart, an agent on a remote default
-  server never done, a host clock hours ahead of the laptop's, and an
+  server never done, a client on a workspace session's shell window
+  seeing nothing, a host taken out of the config, a host clock hours ahead of the laptop's, and an
   agent removed.
 - **Precedence:** done beats stale, blocked is never stale, a settled
   workspace's blocked agent stays in place.
@@ -911,7 +947,8 @@ view and folds step 6 keeps in memory.
   existing workspace session left on a shell window.
 - **Sidebar control:** two panes, a `Tab` in one, `sidebar view` to the
   other, `--all`, and a pane started after; `next` while filtering and
-  while a question is open.
+  while a question is open; `jump N` with two clients on one window; a
+  leftover socket; a window with no sidebar.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
