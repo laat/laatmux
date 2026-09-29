@@ -157,16 +157,21 @@ other sessions
 - **Order:** repositories by name, worktrees by branch. Status never
   reorders the tree, so it stays put while agents work.
 - **Folds:** repositories and worktrees fold. A worktree gets its fold
-  once, the first time the pane sees it: open when an agent in it is
-  blocked, working or done, folded otherwise. After that it stays as it
+  once, the first time the pane shows it holding a child: open when an
+  agent in it is blocked, working or done, folded otherwise. A line
+  hidden behind a task line is not shown, so not yet seen. After that it stays as it
   is until the user toggles it, so the tree does not open and close as
   agents work; a folded worktree line shows the icon of its most
   pressing agent, so a blocked or done agent inside is not missed.
   Repositories start open. A task line that holds children folds as a
-  worktree line does, by its own node id and the same first-seen rule.
-  The node that takes its children, the worktree line at handoff or the
-  next newest task, takes its fold too, unless the pane has a fold of
-  its own for that node, so a fold the user set survives the handoff.
+  worktree line does, by its own node id and the same rule: it gets its
+  fold when first shown holding a child, the add's agent say, not when
+  it appears empty at submit. The node that takes its children, the
+  worktree line at handoff or the next newest task, takes the task
+  line's fold, unless the user has toggled that node's own fold, so a
+  fold the user set survives the handoff. A toggled fold carried so is
+  written to `sidebar.json` under the node's id, as a toggle is (see
+  Persistence).
 - **Jumps:** `Enter` on a worktree line jumps to its workspace session,
   as the row does today. On a repository line it folds and unfolds. On
   an agent or a pane it goes to that pane, routed by the record's
@@ -817,7 +822,11 @@ Five settlements differ from the plan in #52:
   under a lock file and replace it by rename, so two panes toggling
   folds at once lose neither change; the CLI and the dashboard, which
   write it too, do the same. The dashboard shares the folds with the
-  sidebar panes. The selection is each
+  sidebar panes. At a handoff, a pane that finds a toggled fold under
+  the task's id and none under the node taking its children writes it
+  under that node's id, under the same lock; every running pane writes
+  the same value, and with none running the fold is lost, which is
+  accepted. The selection is each
   pane's own and is not kept. A fold is kept by node id with the time
   its node was last seen, and one not seen for a day is dropped. At
   start a pane takes the file's values and the config's for what the
