@@ -783,7 +783,8 @@ func forceHint(err error, force bool) error {
 // settle toggles the settled tag on the selected row's workspace
 // session. The merged stream carries the change back within a second
 // and the row moves to or from the settled group, but for the viewer's
-// own, which stays in place, dim and 💤, to be unsettled.
+// own, which stays unfolded, sorted with the stale rows, to be
+// unsettled.
 func (d *dash) settle(m *view.Model) {
 	r := m.Selection()
 	if r == nil {
