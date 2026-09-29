@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // A fake ssh on PATH scripted through an env var: exit code, stderr, delay.
@@ -141,5 +142,16 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	s2, _, err2 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w2, Agent: &a2})
 	if err1 != nil || err2 != nil || s1.Name == s2.Name || s1.Key == s2.Key || s1.Managed != "shared" || s2.Managed != "shared" {
 		t.Fatalf("shared session: %+v %+v %v %v", s1, s2, err1, err2)
+	}
+	// The name is encoded as add encodes it: tmux takes no dot in one.
+	w.Branch = "fix/v1.2"
+	s3, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	if err != nil || strings.Contains(s3.Name, ".") || s3.Name != workspace.SessionName("vm", "proj", "fix/v1.2") {
+		t.Fatalf("encoded branch: %+v %v", s3, err)
+	}
+	w.Branch, w.Root = "", "/w/x.y"
+	s4, _, err := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	if err != nil || strings.Contains(s4.Name, ".") {
+		t.Fatalf("detached: %+v %v", s4, err)
 	}
 }

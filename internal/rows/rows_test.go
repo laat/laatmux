@@ -574,11 +574,18 @@ func TestBuildHomelessRowLocal(t *testing.T) {
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
 		t.Fatalf("managed agent: %+v", got)
 	}
+	// With no workspace session yet, the plain attachment to the same
+	// managed session is not the row's either.
+	got = Build(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals[1:], Current: "mac/proj/a-old"}).All()
+	if len(got) != 1 || got[0].Local != nil || got[0].Current {
+		t.Fatalf("managed agent without a workspace session: %+v", got)
+	}
+	// An agent on the default server: its session, not the workspace
+	// session left, which, settled, does not settle the row.
+	locals[0].Settled = true
 	notes := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: w.ID}
-	got = Build(Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "notes"}).All()
-	for _, r := range got {
-		if r.Worktree != nil && (r.Local == nil || r.Local.Name != "notes" || !r.Current) {
-			t.Fatalf("default-server agent: %+v", r)
-		}
+	rs := Build(Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "notes"})
+	if len(rs.Main) != 1 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || rs.Main[0].Settled {
+		t.Fatalf("default-server agent: %+v", rs)
 	}
 }

@@ -306,9 +306,9 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		w.Session = r.Agent.Session
 		spec := worktreeSpec(cfg, h, w)
 		if w.Branch != "" {
-			spec.Name = h.Name + "/" + w.Repo + "/" + w.Branch
+			spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
 		} else {
-			spec.Name = h.Name + "/" + w.Repo + "@" + filepath.Base(w.Root)
+			spec.Name = h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
 		}
 		return spec, "", nil
 	case r.Agent != nil:
