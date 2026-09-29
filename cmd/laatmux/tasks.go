@@ -75,14 +75,18 @@ func listTasks(ctx context.Context) error {
 	if _, err := m.readMerged(ctx, c, 5*time.Second, func(*merged) bool { return true }); err != nil {
 		return err
 	}
+	fmt.Print(m.taskReport())
+	return nil
+}
+
+// taskReport is what tasks prints of the merged state: the pending
+// records, oldest first, then the tasks that handed over, by id.
+func (m *merged) taskReport() string {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	ps := make([]protocol.Pending, 0, len(m.pendings))
 	for _, p := range m.pendings {
 		ps = append(ps, p)
-	}
-	configured := map[string]bool{}
-	for name := range m.hosts {
-		configured[name] = true
 	}
 	var handed []string
 	for id, h := range m.handoffs {
@@ -95,20 +99,20 @@ func listTasks(ctx context.Context) error {
 		}
 		handed = append(handed, fmt.Sprintf("%s  handed over to %s; laatmux tasks show %s prints its prompt, tasks dismiss drops it", id, where, id))
 	}
-	m.mu.Unlock()
 	if len(ps) == 0 && len(handed) == 0 {
-		fmt.Println("no pending tasks")
-		return nil
+		return "no pending tasks\n"
 	}
+	var b strings.Builder
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
-		fmt.Printf("%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured[p.Host]))
+		_, configured := m.hosts[p.Host]
+		fmt.Fprintf(&b, "%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured))
 	}
 	sort.Strings(handed)
 	for _, l := range handed {
-		fmt.Println(l)
+		b.WriteString(l + "\n")
 	}
-	return nil
+	return b.String()
 }
 
 // TaskState is one line saying where a pending record is, as the

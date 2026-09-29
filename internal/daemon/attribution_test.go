@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -540,5 +541,41 @@ func TestHomeSessionAndRm(t *testing.T) {
 		if !killed {
 			t.Fatalf("%s: rm left the managed session", c.branch)
 		}
+	}
+}
+
+// A full cache loses the entries no poll has asked for in a while, or
+// one entry when all are fresh; never all of them.
+func TestEvictResolved(t *testing.T) {
+	d := New(Config{EnvironmentID: "env"})
+	old := time.Now().Add(-4 * resolveTTL)
+	d.resolveMu.Lock()
+	for i := 0; i < maxResolved; i++ {
+		at := time.Now()
+		if i%2 == 0 {
+			at = old
+		}
+		d.resolved[fmt.Sprintf("/p/%d", i)] = resolution{real: "/r", at: at}
+	}
+	d.evictResolvedLocked()
+	n := len(d.resolved)
+	for p, r := range d.resolved {
+		if r.at.Equal(old) {
+			t.Fatalf("stale entry %s kept", p)
+		}
+	}
+	d.resolveMu.Unlock()
+	if n != maxResolved/2 {
+		t.Fatalf("%d entries left, want the %d fresh ones", n, maxResolved/2)
+	}
+	d.resolveMu.Lock()
+	for i := 0; len(d.resolved) < maxResolved; i++ {
+		d.resolved[fmt.Sprintf("/q/%d", i)] = resolution{real: "/r", at: time.Now()}
+	}
+	d.evictResolvedLocked()
+	n = len(d.resolved)
+	d.resolveMu.Unlock()
+	if n != maxResolved-1 {
+		t.Fatalf("all fresh: %d entries left, want %d", n, maxResolved-1)
 	}
 }

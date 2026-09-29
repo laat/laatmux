@@ -421,7 +421,11 @@ truth; labels only place new things.
   of `listing` alone when it changes, with `listing_error` when the last
   listing failed. An add's result carries the barrier its mutation made;
   a listing at that revision or later in the same generation reflects
-  it, and so does any successful listing of a later generation.
+  it, and so does any successful listing of a later generation. From a
+  daemon with `attribution` an `rm` that removed a worktree carries the
+  stamp of its removal as `listing` in its result too, and the remove
+  of a worktree carries `removed_in`, the stamp of the listing that
+  found it gone; both date a removal against an add at the same root.
 
 ## Workspaces, client side
 
@@ -432,7 +436,8 @@ running the attach command (`env -u TMUX tmux -L laatmux attach` locally,
 the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
 `<environment_id>/<root>`, the workspace key, `@laatmux_host`, and
 `@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
-pane carries `@laatmux_attach_pane` and `remain-on-exit`. Sessions are
+pane carries `@laatmux_attach_pane`, `@laatmux_attach_target`, the
+managed session it attaches to, and `remain-on-exit`. Sessions are
 matched on the key, never the name, so a renamed host or repository label
 still finds its session. The host tag is refreshed on every reuse, and the
 source and branch whenever the reuse knows them: the worktree record
@@ -491,7 +496,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   is matched by label. `rm` finds its record the same way.
 - **`jump <host>/<repo>/<branch>`** switches to the workspace session,
   creating it from the record when missing, respawning a dead attach pane,
-  and opening a new attach window when the pane is gone altogether. A
+  and opening a new attach window when the pane is gone altogether. An
+  attach pane on another managed session than the jump's, the worktree's
+  agent having moved to another since, is restarted on the jump's; a
+  pane from before the target was tagged is left as it is, and closing
+  it has the next jump make a tagged one. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. The repository in the target is read as this
@@ -888,8 +897,11 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   reconnect's snapshot or a later poll's, have the host asked again, as
   the handoff asks it, until it answers; a remote host's listings are
   followed while a view is subscribed. `rm` drops the finished tasks at the worktree it
-  removed, through `{type: dismiss, environment_id, root}` to a local
-  daemon that is running and has the capability `dismiss-root`. Until then, `{type: prompt, id}`
+  removed, through `{type: dismiss, environment_id, root, listing}` to a
+  local daemon that is running and has the capability `dismiss-root`,
+  `listing` being the removal's stamp from rm's result; a task that
+  handed over goes only when that stamp is from after its add, and
+  without one the host's listing decides. Until then, `{type: prompt, id}`
   delivers it as the next attempt, written to the file first, one
   unresolved at a time; `recovery expired` from the host ends that, and
   `laatmux tasks show <id>` prints the prompt for pasting by hand. An add

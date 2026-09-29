@@ -263,3 +263,28 @@ func TestMergedAttributionNeedsForwarding(t *testing.T) {
 		t.Fatal("attribution through a merging daemon that drops it")
 	}
 }
+
+// tasks lists the pending records, then the tasks that handed over,
+// named by their worktree when it is listed; handed-over tasks alone
+// are listed too.
+func TestTaskReport(t *testing.T) {
+	m := newMerged()
+	if got := m.taskReport(); got != "no pending tasks\n" {
+		t.Fatalf("empty: %q", got)
+	}
+	m.hosts["vm"] = hostState{EnvID: "venv"}
+	m.worktrees["venv/worktree//w/a"] = protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	m.byHost["venv/worktree//w/a"] = "vm"
+	m.handoffLocked("t1", "venv/worktree//w/a")
+	m.handoffLocked("t2", "venv/worktree//w/gone")
+	got := m.taskReport()
+	want := "t1  handed over to proj/a on vm; laatmux tasks show t1 prints its prompt, tasks dismiss drops it\n" +
+		"t2  handed over to venv/worktree//w/gone; laatmux tasks show t2 prints its prompt, tasks dismiss drops it\n"
+	if got != want {
+		t.Fatalf("handed over only:\n%s\nwant\n%s", got, want)
+	}
+	m.pendings["p1"] = protocol.Pending{ID: "p1", Host: "vm", Repo: "proj", Branch: "b"}
+	if got := m.taskReport(); !strings.HasPrefix(got, "p1  proj/b on vm") || !strings.HasSuffix(got, want) {
+		t.Fatalf("with a pending record:\n%s", got)
+	}
+}

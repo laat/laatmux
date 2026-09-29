@@ -559,3 +559,26 @@ func TestBuildWorktreeRowTakesAgentSession(t *testing.T) {
 		t.Fatalf("rows %+v", all)
 	}
 }
+
+// A homeless worktree row stands for the session its jump goes to: the
+// worktree's workspace session when its agent is the one laatmux made at
+// the root, never a plain attachment to that session; the agent's own
+// session when the agent is on this machine's default server, whatever
+// workspace session is left.
+func TestBuildHomelessRowLocal(t *testing.T) {
+	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	locals := []workspace.Local{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
+	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
+	got := Build(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}).All()
+	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
+		t.Fatalf("managed agent: %+v", got)
+	}
+	notes := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: w.ID}
+	got = Build(Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "notes"}).All()
+	for _, r := range got {
+		if r.Worktree != nil && (r.Local == nil || r.Local.Name != "notes" || !r.Current) {
+			t.Fatalf("default-server agent: %+v", r)
+		}
+	}
+}

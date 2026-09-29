@@ -32,7 +32,7 @@ const (
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
-	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user; with environment_id and root, the finished ones at that worktree, the id then the request's own
+	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user, or one that handed over; with environment_id and root, the finished ones at that worktree, the id then the request's own, and with listing, rm's stamp, the handed-over ones whose add it is after
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
 	TypePing      = "ping"
@@ -80,8 +80,10 @@ const (
 	CapRelay = "relay"
 	// CapDismissRoot is dismiss with environment_id and root: the relay
 	// drops the finished records at that worktree, which rm sends after
-	// removing it. A daemon without it reads the message as a dismiss of
-	// the request's own id.
+	// removing it, and with listing, the stamp of the removal from rm's
+	// result, the records that handed over there from an add before it;
+	// without the stamp the host's listing decides those. A daemon
+	// without it reads the message as a dismiss of the request's own id.
 	CapDismissRoot = "dismiss-root"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
