@@ -51,8 +51,9 @@ above the list:
 
 `Tab`, or a click on a tab header, switches the view of the pane it is
 pressed in; other panes keep theirs. The last view chosen is written to
-`sidebar.json` (see Persistence) as the one a new or restarted pane
-starts in. The dashboard keeps its own last choice in the same file.
+`sidebar.json` (see Persistence) as the default a new or restarted pane
+starts in, which no running pane reads. The dashboard keeps its own
+default in the same file.
 
 ### The agent view
 
@@ -63,8 +64,10 @@ starts in. The dashboard keeps its own last choice in the same file.
   first.
 - **Left out:** shells, servers, runs, and worktrees without an agent.
   They are the tree's.
-- **Several agents in one session** are told apart by a `(1)`, `(2)`
-  suffix on the primary label, in pane order.
+- **Agents that share a primary label,** several in one worktree, or
+  several in one session outside any worktree, are told apart by a
+  `(1)`, `(2)` suffix, in the tree's child order, start time, so the
+  tiles and the tree agree. `{pane_suffix}` is that suffix.
 - **Stale:** stale agents and those of settled workspaces fold into
   `▸ N stale` at the end, unless blocked or done (see Precedence).
 - **Orphaned sessions** have no agent and are not in this view; they
@@ -141,13 +144,15 @@ other sessions
   - **a pane in the worktree's home session** on the host's managed
     server: the jump to the workspace session, then a `select` command
     to the host's daemon (below), which runs `select-window` and
-    `select-pane` on its managed server. The attach in the workspace
-    session shows the managed session's current window and pane, so the
-    selection is what it shows, whether the attach was just made or had
-    been there;
+    `select-pane` on its managed server. The attach shows the managed
+    session's current window and pane, so the selection is what it
+    shows, whether the attach was just made or had been there. On the
+    laptop the jump also selects the attach pane's window and the attach
+    pane in the workspace session, found by its `@laatmux_attach_pane`
+    tag, since the user may have left that session on a shell window;
   - **a pane in another managed session:** the jump an agent row makes
     today, through the plain attachment `<host>/<session>`, then the
-    same `select`;
+    same `select` and the same selection of the attach pane;
   - **a pane on this machine's default server:** `switch-client` to its
     session, then `select-window` and `select-pane` there, all local;
   - **a pane on a remote host's default server or another observed
@@ -272,9 +277,9 @@ it.
   another observed server. No view can take the user there, so it can
   never be seen; it never shows ✅.
 - **Seen.** The daemon learns which session each tmux client of this
-  machine's default server is on through `list-clients`, polled with the
-  local sessions it already lists, every second while a merged
-  subscriber is there. The sidebar's `on` also sets a
+  machine's default server is on through `list-clients`, every second
+  while a merged subscriber is there or any entry is unseen, subscriber
+  or not, and at once when it records a finish. The sidebar's `on` also sets a
   `client-session-changed[9106]` hook running `laatmux sidebar seen`,
   which sends the local daemon `{type: poke}` so it lists clients at
   once; `off` removes the hook with the others. A client on the agent's
@@ -293,7 +298,10 @@ it.
   back ✅ on everything. An entry goes with its agent's remove, and one
   whose agent a listed host's snapshot no longer has goes with that
   snapshot.
-- **Limits.** Only this machine's clients count: a session attached
+- **Limits.** A visit made while the laptop was not following the
+  agent's host, or before the snapshot that shows the finish arrived,
+  is not recorded, since the finish is dated when it is seen: the agent
+  shows ✅ though the user was there. Only this machine's clients count: a session attached
   directly on a host, not through laatmux, is never seen, so an agent
   the user works with that way shows ✅ until they visit it through
   laatmux or it starts working again. An agent the laptop has never
@@ -318,19 +326,21 @@ is the user's key in the agent's session, so a client is on that
 session when the idle arrives, within a poll, and the finish is seen at
 once. A user who interrupts and leaves before the poll, or who works in
 the session through a direct attach on the host, gets a ✅ they did not
-need; the tests for step 3 cover the first case. The fixture is one
-screen, taken after the interrupt; it proves the detector's half. The
-daemon's half, that `nextActivity` passes a visible idle through
-without the debounce, gets its own test in step 3, and while capturing,
-the title read `✳ Essay about terminals` six seconds into the turn,
-with no spinner. If Claude Code 2.1.284 no longer spins the title,
-`osc_title_working` misses it and the footer rule carries the working
-state; step 3 adds a working capture of 2.1.284 to check.
+need; the tests for step 3 cover the first case.
+
+The fixture is one screen, taken after the interrupt, and proves the
+detector's half. The daemon's half, that `nextActivity` passes a visible
+idle through without the debounce, gets its own test in step 3. While
+capturing, the title read `✳ Essay about terminals` six seconds into
+the turn, with no spinner. If Claude Code 2.1.284 no longer spins the
+title, `osc_title_working` misses it and the footer rule carries the
+working state; step 3 adds a working capture of 2.1.284 to check.
 
 ### Stale and settled
 
 A row whose agent has been idle for more than `stale_after`, an hour by
-default, is stale: dim, with 💤, sorted after the live ones, and folded
+default, measured from the host's `activity_at` as the age on a row is
+today, is stale: dim, with 💤, sorted after the live ones, and folded
 in the agent view. This reverses milestone three's "age is never a
 reason" rule; `dim_stale: false` restores it.
 
@@ -354,6 +364,15 @@ token, off in the default templates: `CC` for claude in #d97757, `CX`
 for codex in #10a37f, and the rest of workmux's table for the agents
 laatmux detects, each overridable.
 
+### Times from the hosts
+
+Done and seen use the laptop's clock only. The other times a view shows
+are the hosts', as today: the age since `activity_at`, stale by age,
+the `recency` sort, and a run's elapsed time from `started_at`, each
+against the laptop's clock. A host whose clock is off by minutes shifts
+them by as much; a time in the future shows as `0:00`. Hosts are
+expected to keep their clocks set; laatmux does not correct them.
+
 ## Diff stats, on the host
 
 The worktree lives on its host, so git is read there, by the daemon
@@ -376,15 +395,24 @@ carry the same; the time of the last refresh is not in the record.
   ls-files --others --exclude-standard`. A binary file counts 0. At most
   200 untracked files are read, each only up to 1 MB; past either the
   count is marked `+` as a lower bound.
-- **ahead, behind, dirty:** from `git status --porcelain=v2 --branch`.
+- **ahead, behind:** `git rev-list --left-right --count <base>...HEAD`,
+  against the base, as the dashboard shows them beside `→base`. A branch
+  `add` makes has no upstream, so `git status`'s counts, which are
+  against the upstream, are not used.
+- **dirty:** from `git status --porcelain=v2`.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
   needs git 2.38; with an older git the field is left out.
 - **rebasing:** a `rebase-merge` or `rebase-apply` directory in the
   worktree's git dir.
 - **base:** the first that exists of `branch.<b>.laatmux-base` in the
-  repository's config, which `add` sets from what it branched off;
-  `origin/HEAD`; `main`; `master`. On the base branch itself only the
-  uncommitted stats are shown.
+  repository's config; `origin/HEAD`; `main`; `master`. `add` writes the
+  key when it makes a branch, with the resolved name, `origin/main` and
+  not `origin/HEAD`, so a later change of the default branch does not
+  move it: for a new branch from `origin/HEAD`, the branch that points
+  to; for a new branch tracking `origin/<b>`, the same, since that is
+  where the remote branch is meant to land. It writes nothing for an
+  existing local branch, nor over a key already there. On the base
+  branch itself only the uncommitted stats are shown.
 
 Every call runs as `git --no-optional-locks`, so the poll never takes
 the index lock a user's git needs. The two `git diff` calls also take
@@ -401,9 +429,12 @@ since the refresh began.
 
 **What is cached.** `committed`, `ahead`, `behind` and `conflict`
 depend only on the base's and `HEAD`'s commits, so they are computed
-again only when either changes. `merge-tree --write-tree` does a real
-merge and writes objects, so it runs once per pair and never on the
-base branch. `uncommitted` and `dirty` are read on every refresh.
+again only when either changes; a fetch that moves the base is such a
+change. `merge-tree --write-tree` does a real merge and writes objects,
+so it runs once per pair and never on the base branch. `dirty` and
+`uncommitted` are read on every refresh; the line counts of untracked
+files are kept by path, size and mtime, so a refresh reads only the
+files that changed.
 
 **Refresh.** A worktree with a session is due every 5 s, one without
 every 30 s. `add`, `rm` and a run ending make it due at once, and so does
@@ -481,14 +512,17 @@ every worktree in the merged stream, keyed by source and branch.
   with no PR. `pending_since` is the laptop time the checks of this
   `head_oid` were first seen pending, which the dashboard shows as the
   elapsed time. In the stream: `branch_statuses` in a snapshot,
-  `branch_status` in an upsert, `branch_status_key` in a remove, the
-  key being the source key and the branch.
+  `branch_status` in an upsert, `branch_status_key` in a remove, an
+  object `{source, branch}` whose source is the source key, normalised
+  as #53 does, the same as in `repo/<source key>`. `github_error` is
+  cleared by an upsert with `github_ok: true`, as `sessions_listed`
+  clears `sessions_error`.
 
 - **Aggregation.** Failure is FAILURE, CANCELLED, TIMED_OUT,
   STARTUP_FAILURE, ACTION_REQUIRED or ERROR, and beats pending. Pending
   is IN_PROGRESS, QUEUED, PENDING, REQUESTED, WAITING or EXPECTED.
-  NEUTRAL, SKIPPED and STALE do not count, and a rollup of only those is
-  success.
+  NEUTRAL, SKIPPED and STALE are left out of `passed` and `total`
+  alike, and a rollup of only those is success with `total` 0.
 - **Rendering.** `#N` is green when open, purple when merged, red when
   closed, dim when a draft. Checks are `✓` in green, `× 3/5` in red, or a
   spinner and `3/5` in purple; when narrow the counts go first. On
@@ -542,8 +576,8 @@ The branch is the primary label and the repository the secondary, with
 the host tag after it. A detached worktree, a `new` session and an
 observed agent fall back to the session name. `main` and `master` are
 never primary when there is a better name. The pane title is cleaned
-before it is shown: leading braille and `✳ ● ○ ◌ ✓ ✗` characters are
-stripped, and so is an `OC |` prefix; a title that starts with `Claude
+before it is shown: leading braille, the half-circle spinner `◐ ◑ ◒ ◓`
+and `✳ ● ○ ◌ ✓ ✗` characters are stripped, and so is an `OC |` prefix; a title that starts with `Claude
 Code`, is a shell's name, repeats the primary or secondary label, or is
 the host name is dropped.
 
@@ -604,10 +638,11 @@ them, and `j` and `k` stop on them; the numbers skip them.
 - `a` preselects the repository and host of the selected row's
   worktree, from a tile or any tree line under a worktree, as from a
   worktree row today.
-- `x` on an orphaned session's line kills the session, as on a stale
-  row today.
+- `x` on an orphaned session's line sends `rm` by the root from the
+  session's key, with the repository and branch when its tags have
+  them, as on a stale row today.
 
-Three settlements differ from the plan in #52:
+Four settlements differ from the plan in #52:
 
 - **`S` stays the shell.** workmux uses `S` for toggling every fold; in
   laatmux `S` has opened a shell since milestone three, and `f` already
@@ -615,14 +650,15 @@ Three settlements differ from the plan in #52:
 - **`Esc` does not ask to quit.** In a sidebar pane an Esc meant for
   another pane is common; it clears a filter and otherwise does nothing.
   `q` and `Ctrl-c` ask.
-- **`s` folds, `z` settles, in both.** #52 had `z` in the view; here
-  settle moves from the dashboard's `s` to `z` in the sidebar and the
-  dashboard alike.
+- **Working worktrees start open in the tree.** A worktree with a
+  working agent starts unfolded, so its spinner is in sight; #52 folded
+  whatever did not need the user.
 - **`M-1`..`M-9` are opt-in.** Bound in tmux's root table they take the
   keys from every pane, where shells and editors use them.
-  `sidebar.jump_keys: true` has `on` bind them to `sidebar jump N`, and
-  the `{jump_key}` token then shows them; by default they are unbound
-  and the token is empty.
+  `sidebar.jump_keys: true` has `on` bind them to `run-shell "laatmux
+  sidebar jump N -t '#{window_id}'"`, so the window is the key's own
+  with any number of clients attached, and the `{jump_key}` token then
+  shows them; by default they are unbound and the token is empty.
 
 ## Placement, scope and controls
 
@@ -642,24 +678,32 @@ Three settlements differ from the plan in #52:
   #52's meaning. `F` in a view is a different thing, a row filter for
   that pane: it limits the rows to those of the session the pane sits
   in, until pressed again.
-- **CLI:** `laatmux sidebar next | prev | jump N` act on one sidebar
-  pane: the one in the window the command runs for, `-t` a window or
-  the current one. They reach it through tmux, `send-keys` to the tagged
-  pane with the key the view already takes (`j`, `k`, the digit), so
-  each command is one key press in one pane, and none is replayed.
-  `laatmux sidebar scope all|session|project` and `view agents|tree`
-  change shared preferences, written to `sidebar.json`. The scope is
-  what a pane shows: every row, the rows of the session the pane sits
-  in, or the rows of the repository of that session's worktree. #52
-  called it `filter none|all|…`; `none` was the same as `all`, and the
-  word `filter` is the view's `/` text filter, which stays the pane's
-  own and is not persisted, as is `F`.
-- **Persistence:** `sidebar.json` under the state directory holds the
-  last view chosen, the layout, the scope, and the folds the user
-  toggled, shared by every sidebar pane on the machine. Panes write it
-  read-modify-write under a lock file and replace it by rename, so two
-  panes toggling folds at once lose neither change, and read it again
-  when its mtime changes, checked every second. The selection is each
+- **CLI:** `laatmux sidebar next | prev | jump N | view agents|tree |
+  scope all|session|project` act on one sidebar pane: the one in the
+  window the command runs for, `-t` a window or the current one, or on
+  every pane with `--all`. Each sidebar pane listens on a unix socket of
+  its own, `sidebar-<pane id>.sock` under the state directory, and the
+  command is one message to it, handled as a navigation event, not as
+  typed keys: it moves the selection or switches the view whether the
+  pane is filtering or not, and is ignored while an overlay or a
+  question is open. Nothing is written to a file, so none is replayed.
+  A window with no sidebar pane makes the command exit quietly, since a
+  binding's error flashes in the status line.
+  The scope is what a pane shows: every row, the rows of the session
+  the pane sits in, or the rows of the repository of that session's
+  worktree. #52 called it `filter none|all|…`; `none` was the same as
+  `all`, and the word `filter` is the view's `/` text filter, which
+  stays the pane's own and is not persisted, as is `F`.
+- **Persistence:** `sidebar.json` under the state directory holds two
+  kinds of thing. The view, layout and scope are *defaults*: the last
+  chosen, by a key or the CLI, is written there, and a pane reads them
+  only when it starts. A change in one pane never moves another; the CLI
+  with `--all` is how to change every pane. The folds the user toggled
+  are *shared*: every pane reads them again when the file's mtime
+  changes, checked every second. Panes write the file read-modify-write
+  under a lock file and replace it by rename, so two panes toggling
+  folds at once lose neither change. The dashboard shares the folds with
+  the sidebar panes. The selection is each
   pane's own and is not kept. A fold is kept by node id with the time
   its node was last seen, and one not seen for a day is dropped. At
   start a pane takes the file's values and the config's for what the
@@ -808,21 +852,24 @@ Each step is one issue and one PR, reviewed as the others were.
    numbers, and the actions on the new rows; jumps to a pane with the
    host's `select` command; orphaned sessions in the tree; laatmux's own
    panes left out of the pane records; `ls` printing the tree; both
-   views in the dashboard.
+   views in the dashboard. Hosts need the build for `select` and for
+   leaving laatmux's own panes out; an older host still shows `$ tmux`
+   and `$ laatmux` children under a worktree whose sessions are local,
+   until it is upgraded.
 7. **Templates.** The tokens, `{fill}`, overflow, styles, template
    errors, and the tree templates.
 8. **Placement and controls.** `top`, `%` widths, `--session` with its
-   session hooks, `F`, the `sidebar` subcommands with `send-keys` for
-   navigation, `scope`, `jump_keys`, `?`, the quit question, and
-   `sidebar.json` with its lock and last-seen folds.
+   session hooks, `F`, the `sidebar` subcommands over each pane's
+   socket, `scope`, `jump_keys`, `?`, the quit question, and
+   `sidebar.json` with its defaults, its shared folds, its lock and the
+   folds' last-seen times.
 9. **Dashboard columns.** The git and PR columns and the failing check.
 
 Steps 2, 3 and 4 are independent of each other after this note, but for
 step 2's rename, which step 3 needs first. Step 6 comes after step 3,
 which moves settle from `s` to `z` before the tree takes `s` for folds,
 so no build is without a settle key, and which gives the agent view's
-stale fold something to hold. Step 5 needs
-step 4's base only for the base branch. Step 7 goes after 2 through 6,
+stale fold something to hold. Step 7 goes after 2 through 6,
 so its tokens have something to show; step 8's persistence takes the
 view and folds step 6 keeps in memory.
 
@@ -840,7 +887,7 @@ view and folds step 6 keeps in memory.
   agents placed by session, an orphaned session under its repository.
 - **Git:** temporary repositories for base resolution, committed and
   uncommitted counts with untracked and binary files, conflict, rebase,
-  the base branch itself, no upsert when only `checked_at` changed, a
+  the base branch itself, no upsert when a refresh changes nothing, a
   slow repository not holding the listing, a result dropped after the
   worktree's `HEAD` moved, and the cache by commit pair.
 - **GitHub:** a fake `gh` for chunking, the aggregation from the count
@@ -850,7 +897,8 @@ view and folds step 6 keeps in memory.
 - **Attention:** a working-to-idle transition with the user in the
   session, one with the user elsewhere, an interrupt followed at once by
   a switch away, a finish across a daemon restart seen in the next
-  snapshot, a cached record replayed on reconnect not counted, a local
+  snapshot, a finish watched with no view open and a view opened after
+  the user left, a cached record replayed on reconnect not counted, a local
   agent's finish with no subscriber, a new identity in the same pane, a
   reused pane id after a server restart, an agent on a remote default
   server never done, a host clock hours ahead of the laptop's, and an
@@ -859,7 +907,11 @@ view and folds step 6 keeps in memory.
   workspace's blocked agent stays in place.
 - **Jumps:** a tree jump to a pane in the home session, in another
   managed session, in another window, and on this machine's default
-  server, against a fake daemon with and without `select`.
+  server, against a fake daemon with and without `select`, and into an
+  existing workspace session left on a shell window.
+- **Sidebar control:** two panes, a `Tab` in one, `sidebar view` to the
+  other, `--all`, and a pane started after; `next` while filtering and
+  while a question is open.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
