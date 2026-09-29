@@ -531,33 +531,43 @@ func (d *Daemon) runRelaySweep(ctx context.Context) {
 	t := time.NewTicker(relaySweep)
 	defer t.Stop()
 	for {
-		// A config that does not read keeps every record. A host that
-		// answers as another machine now, reinstalled under its name
-		// say, lists none of the old one's worktrees.
-		hosts, err := d.cfg.Hosts()
-		configured := map[string]bool{}
-		for _, h := range hosts {
-			configured[h.Name] = true
-		}
-		answers := map[string]string{}
-		d.mu.Lock()
-		for name, mh := range d.mhosts {
-			answers[name] = mh.status.EnvironmentID
-		}
-		d.mu.Unlock()
-		d.relay.sweep(time.Now(), func(host, env string) bool {
-			if err != nil {
-				return true
-			}
-			now, known := answers[host]
-			return configured[host] && (!known || now == "" || now == env)
-		})
+		d.sweepRelay(time.Now())
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// sweepRelay sweeps the retired records nothing can check any more. A
+// config that does not read keeps every record. A host that answers as
+// another machine now, reinstalled under its name say, lists none of
+// the old one's worktrees; its answer is only taken from the host as
+// the config has it now, since one cached from an entry changed since
+// says nothing.
+func (d *Daemon) sweepRelay(now time.Time) {
+	hosts, err := d.cfg.Hosts()
+	configured := map[string]client.Host{}
+	for _, h := range hosts {
+		configured[h.Name] = h
+	}
+	answers := map[string]string{}
+	d.mu.Lock()
+	for name, mh := range d.mhosts {
+		if h, ok := configured[name]; ok && h == mh.host {
+			answers[name] = mh.status.EnvironmentID
+		}
+	}
+	d.mu.Unlock()
+	d.relay.sweep(now, func(host, env string) bool {
+		if err != nil {
+			return true
+		}
+		_, isConfigured := configured[host]
+		answer, known := answers[host]
+		return isConfigured && (!known || answer == "" || answer == env)
+	})
 }
 
 // relayConn is one connection to the task's host, held to the

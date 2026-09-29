@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -528,25 +529,50 @@ func TestRelayDropRetiredRetries(t *testing.T) {
 }
 
 // A host's report that a worktree is gone drops the task that handed
-// over to it at once, without asking the listing, which could already
-// have a worktree made again at the root.
+// over to it at once when the listing that found it gone reflects the
+// task's add; a report from before the add, delayed, is of a worktree
+// the root had before, and leaves the task to the listing's check.
 func TestRelayRetiredDroppedOnRemoval(t *testing.T) {
 	f := newRelayFixture(t, nil)
-	rec := pendingFile{Pending: protocol.Pending{ID: "k6", Host: "vm", EnvironmentID: "henv", Root: "/w/k6", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered}, PromptText: "p", ReplacedBy: "henv/worktree//w/k6"}
+	rec := pendingFile{Pending: protocol.Pending{ID: "k6", Host: "vm", EnvironmentID: "henv", Root: "/w/k6", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered},
+		PromptText: "p", ReplacedBy: "henv/worktree//w/k6", Barrier: &protocol.Listing{Generation: 5, Revision: 3}}
+	if _, err := f.local.relay.create(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.local.dropRetiredAt("henv/worktree//w/other", protocol.Listing{Generation: 5, Revision: 9})
+	f.local.dropRetiredAt("henv/worktree//w/k6", protocol.Listing{Generation: 5, Revision: 2})
+	if _, ok := f.local.relay.get("k6"); !ok {
+		t.Fatal("dropped for another worktree, or by a removal from before the add")
+	}
+	f.local.mu.Lock()
+	f.local.worktreeRemovedLocked("henv/worktree//w/k6", &protocol.Listing{Generation: 5, Revision: 3})
+	f.local.mu.Unlock()
+	f.awaitGone(t, "k6")
+}
+
+// The sweep takes a host's answer only from the host as the config has
+// it now: a cached answer from an entry since changed drops nothing.
+func TestRelaySweepIgnoresStaleAnswer(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	rec := pendingFile{Pending: protocol.Pending{ID: "k7", Host: "vm", EnvironmentID: "henv", Root: "/w/k7", Listed: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered},
+		PromptText: "p", ReplacedBy: "henv/worktree//w/k7", RetiredAt: time.Now().Add(-2 * handoffRetention)}
 	if _, err := f.local.relay.create(rec); err != nil {
 		t.Fatal(err)
 	}
 	f.local.mu.Lock()
-	f.local.worktreeRemovedLocked("henv/worktree//w/other")
+	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "elsewhere"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "other"}}
 	f.local.mu.Unlock()
-	time.Sleep(100 * time.Millisecond)
-	if _, ok := f.local.relay.get("k6"); !ok {
-		t.Fatal("dropped for another worktree")
+	f.local.sweepRelay(time.Now())
+	if _, ok := f.local.relay.get("k7"); !ok {
+		t.Fatal("swept on an answer from an entry the config no longer has")
 	}
 	f.local.mu.Lock()
-	f.local.worktreeRemovedLocked("henv/worktree//w/k6")
+	f.local.mhosts["vm"].host = client.Host{Name: "vm", SSH: "vm"}
 	f.local.mu.Unlock()
-	f.awaitGone(t, "k6")
+	f.local.sweepRelay(time.Now())
+	if _, ok := f.local.relay.get("k7"); ok {
+		t.Fatal("kept though the host answers as another machine")
+	}
 }
 
 // awaitGone waits for the relay to have dropped the record.

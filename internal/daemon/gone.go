@@ -35,23 +35,27 @@ func (d *Daemon) tasksAtLocked(sig string, match, shown func(protocol.Pending) b
 	go d.recheckTasks(sig, match, shown)
 }
 
-// worktreeRemovedLocked is a worktree the host reported gone. A task
-// that handed over to it goes at once: the report is the worktree's
-// end, and one made again at the root is not the one the task made, so
-// the listing is not asked, which could have the new one already.
-func (d *Daemon) worktreeRemovedLocked(worktreeID string) {
-	if d.relay != nil {
-		go d.dropRetiredAt(worktreeID)
+// worktreeRemovedLocked is a worktree the host reported gone, in the
+// listing stamped at, nil from a daemon that does not say. A task that
+// handed over to it goes at once when that listing reflects its add:
+// the report is then the end of the worktree the task made, and asking
+// the listing could find one made again at the root since. A report
+// from before the add, delayed, is of a worktree the root had before,
+// and the task is checked against the listing as every other is.
+func (d *Daemon) worktreeRemovedLocked(worktreeID string, at *protocol.Listing) {
+	if d.relay != nil && at != nil {
+		go d.dropRetiredAt(worktreeID, *at)
 	}
 	d.tasksAtLocked("", func(p protocol.Pending) bool { return p.WorktreeID() == worktreeID }, nil)
 }
 
-// dropRetiredAt drops the tasks that handed over to the worktree.
-func (d *Daemon) dropRetiredAt(worktreeID string) {
+// dropRetiredAt drops the tasks that handed over to the worktree whose
+// adds the listing that found it gone reflects.
+func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
 	for id, p := range d.relay.recs {
-		if p.retired() && p.ReplacedBy == worktreeID {
+		if p.retired() && p.ReplacedBy == worktreeID && p.Barrier != nil && at.Satisfies(*p.Barrier) {
 			d.dropRetiredLocked(id)
 		}
 	}

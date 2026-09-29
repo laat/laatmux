@@ -563,6 +563,12 @@ type Message struct {
 	// stamp alone, is why the last listing failed; the stamp is then
 	// the last successful listing's.
 	ListingError string `json:"listing_error,omitempty"`
+	// RemovedIn, on the remove of a worktree from a daemon with
+	// attribution, is the stamp of the listing that found it gone: a
+	// remove that satisfies an add's barrier is of the worktree that add
+	// made or a later one at its root, never of one from before. It is
+	// kept apart from Listing, which marks a listing complete.
+	RemovedIn *Listing `json:"removed_in,omitempty"`
 	// Root on rm is the worktree root from the record. It is what reaches
 	// a managed session whose worktree is already gone, since a branch
 	// alone cannot be mapped to a root then; send it whenever it is known.

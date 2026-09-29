@@ -568,7 +568,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		}
 		if msg.WorktreeID != "" {
 			delete(mh.worktrees, msg.WorktreeID)
-			d.worktreeRemovedLocked(msg.WorktreeID)
+			d.worktreeRemovedLocked(msg.WorktreeID, msg.RemovedIn)
 		}
 		if msg.PaneRecordID != "" {
 			delete(mh.panes, msg.PaneRecordID)

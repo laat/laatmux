@@ -460,7 +460,7 @@ func TestWorktreeRecords(t *testing.T) {
 	// The directory goes: git calls it prunable and the record is removed.
 	os.RemoveAll(added.Root)
 	d.pollWorktrees(ctx)
-	if rm := worktreeMsg(); rm.Type != protocol.TypeRemove || rm.WorktreeID != "env/worktree/"+added.Root {
+	if rm := worktreeMsg(); rm.Type != protocol.TypeRemove || rm.WorktreeID != "env/worktree/"+added.Root || rm.RemovedIn == nil || rm.Listing != nil {
 		t.Fatalf("remove %+v", rm)
 	}
 }

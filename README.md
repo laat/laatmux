@@ -871,8 +871,9 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   snapshot. The prompt stays on this machine; the host keeps none of
   it, and the stream carries the handoff, not the text. The file goes
   on `laatmux tasks dismiss <id>`, when `rm` drops the tasks at the
-  worktree, when the host reports the worktree removed, when the
-  host's listing no longer has it, asked as for a task that needs the
+  worktree, when the host reports the worktree removed by a listing
+  after the task's add (`removed_in` on the remove stamps that
+  listing), when the host's listing no longer has it, asked as for a task that needs the
   user, and a day after the handoff once its host has left the config
   or answers as another machine. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
