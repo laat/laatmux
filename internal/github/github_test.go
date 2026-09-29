@@ -53,7 +53,7 @@ func TestQueryVariablesAndChunks(t *testing.T) {
 	for i := 0; i < 70; i++ {
 		bs = append(bs, Branch{Owner: "o", Repo: "r", Branch: fmt.Sprintf(`x") { evil } #%d`, i)})
 	}
-	rs, err := Fetch(context.Background(), f.run, "github.com", bs, nil)
+	rs, err := Fetch(context.Background(), f.run, "github.com", bs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestParse(t *testing.T) {
 		{"only a fork's", body(ref, pr(9, "OPEN", true, "f", ok)), Result{HeadOID: "own"}},
 	} {
 		f := &fake{answer: func(map[string]string) (string, error) { return c.body, nil }}
-		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
+		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,10 +153,11 @@ func TestFailingName(t *testing.T) {
 		}
 		return `{"data":{"node":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"name":"test (ubuntu)","conclusion":"FAILURE"}]}}}}`, nil
 	}}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	FillFailing(context.Background(), f.run, "github.com", rs, nil)
 	if rs[0].Checks == nil || rs[0].Checks.Failing != "test (ubuntu)" || rs[0].Checks.State != protocol.ChecksFailure {
 		t.Errorf("%+v", rs[0].Checks)
 	}
@@ -167,13 +168,13 @@ func TestFailingName(t *testing.T) {
 func TestFetchErrors(t *testing.T) {
 	for _, want := range []error{ErrNoGH, fmt.Errorf("%w to github.com", ErrLoggedOut)} {
 		f := &fake{answer: func(map[string]string) (string, error) { return "", want }}
-		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
+		rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 		if err == nil || rs[0].Err == nil {
 			t.Errorf("%v: %v %+v", want, err, rs)
 		}
 	}
 	f := &fake{answer: func(map[string]string) (string, error) { return `{"errors":[{"message":"rate limited"}]}`, nil }}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, nil)
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
 	if err != nil || rs[0].Err == nil || !strings.Contains(rs[0].Err.Error(), "rate limited") {
 		t.Errorf("a failed chunk: %v %+v", err, rs)
 	}
@@ -187,7 +188,7 @@ func TestPartialErrors(t *testing.T) {
 			`"b1":{"url":"u","ref":{"target":{"oid":"h"}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}},` +
 			`"errors":[{"message":"Something went wrong","path":["b0","ref"]},{"message":"x","path":["b9","pullRequests","nodes",0]}]}`, nil
 	}}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "a"}, {Owner: "o", Repo: "r", Branch: "b"}}, nil)
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "a"}, {Owner: "o", Repo: "r", Branch: "b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +209,28 @@ func TestFailingNameKnown(t *testing.T) {
 		}
 		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"h","statusCheckRollup":` + failing + `}},"open":{"nodes":[]},"pullRequests":{"nodes":[]}}}}`, nil
 	}}
-	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}}, map[string]string{"RID": "lint"})
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+	FillFailing(context.Background(), f.run, "github.com", rs, map[string]string{"RID": "lint"})
 	if err != nil || rs[0].Checks.Failing != "lint" {
 		t.Errorf("%+v %v", rs[0].Checks, err)
+	}
+}
+
+// Forks' open PRs filling the first page do not hide the repository's
+// own: the next pages are asked for.
+func TestOwnPRPastForks(t *testing.T) {
+	fork := `{"number":9,"state":"OPEN","isDraft":false,"url":"u9","isCrossRepository":true,"commits":{"nodes":[]}}`
+	own := `{"number":3,"state":"OPEN","isDraft":false,"url":"u3","isCrossRepository":false,"commits":{"nodes":[{"commit":{"oid":"p","statusCheckRollup":null}}]}}`
+	f := &fake{answer: func(vars map[string]string) (string, error) {
+		if vars["after"] == "C1" {
+			return `{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[` + own + `]}}}}`, nil
+		}
+		forks := strings.Repeat(fork+",", 4) + fork
+		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"p"}},"open":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + forks +
+			`]},"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[` + forks + `]}}}}`, nil
+	}}
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+	if err != nil || rs[0].PR == nil || rs[0].PR.Number != 3 {
+		t.Errorf("%+v %v", rs[0], err)
 	}
 }

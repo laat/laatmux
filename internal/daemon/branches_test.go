@@ -213,7 +213,17 @@ func TestBranchesAgeAndKeep(t *testing.T) {
 	// absence: kept however old.
 	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
 	_, kept := d2.branches[branchKeyString(bkey("a"))]
-	d2.mhosts["vm"].status.Listed = true
+	// A snapshot from a host whose git listing failed is no listing.
+	d2.mu.Unlock()
+	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, ListingError: "git failed"})
+	d2.mu.Lock()
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
+	if _, ok := d2.branches[branchKeyString(bkey("a"))]; !ok {
+		t.Error("dropped after a failed listing")
+	}
+	d2.mu.Unlock()
+	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1}})
+	d2.mu.Lock()
 	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
 	_, still := d2.branches[branchKeyString(bkey("a"))]
 	d2.mu.Unlock()
@@ -334,5 +344,54 @@ func TestBranchesStaleAfterRestart(t *testing.T) {
 	d2.mu.Unlock()
 	if len(snap.BranchStatuses) != 1 || !snap.BranchStatuses[0].Stale {
 		t.Errorf("%+v", snap.BranchStatuses)
+	}
+}
+
+// A failing check's name is asked for again once it is old: on the same
+// rollup a rerun can move the failure to another check.
+func TestBranchesFailingNameLifetime(t *testing.T) {
+	d, _ := branchDaemon(t, t.TempDir(), &fakeGH{})
+	k := branchKeyString(bkey("a"))
+	d.mu.Lock()
+	d.branches[k] = &branchEntry{RollupID: "R", FailingAt: time.Now().Add(-time.Minute),
+		Status: protocol.BranchStatus{BranchKey: bkey("a"), Checks: &protocol.Checks{State: protocol.ChecksFailure, Failing: "lint"}}}
+	d.mu.Unlock()
+	q := []branchQuery{{key: k}}
+	if known := d.knownFailing(q); known["R"] != "lint" {
+		t.Errorf("a recent name not known: %v", known)
+	}
+	d.mu.Lock()
+	d.branches[k].FailingAt = time.Now().Add(-2 * branchStale)
+	d.mu.Unlock()
+	if known := d.knownFailing(q); len(known) != 0 {
+		t.Errorf("an old name still known: %v", known)
+	}
+}
+
+// A slow host holds only its share of the round: the next host is still
+// asked, and answered.
+func TestBranchesSlowHostShare(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{"b": "SUCCESS"}}
+	d, s := branchDaemon(t, t.TempDir(), gh)
+	d.mu.Lock()
+	d.cfg.GitHubHosts = []string{"aaa.example.com"}
+	d.mhosts["vm"].worktrees["venv/worktree//w/a"] = protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Source: "git@aaa.example.com:o/r.git", Branch: "a", Root: "/w/a"}
+	d.mhosts["vm"].worktrees["venv/worktree//w/b"] = protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Source: ghSource, Branch: "b", Root: "/w/b"}
+	fast := d.cfg.GitHub
+	d.cfg.GitHub = func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
+		if host == "aaa.example.com" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return fast(ctx, host, q, vars)
+	}
+	set := d.branchSetLocked()
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	d.fetchBranches(ctx, set)
+	ups, _, _ := drainBranches(s)
+	if len(ups) != 1 || ups[0].BranchKey != bkey("b") {
+		t.Errorf("the second host: %+v", ups)
 	}
 }

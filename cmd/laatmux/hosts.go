@@ -81,10 +81,20 @@ var ghStatus = func(ctx context.Context) string {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return github.ErrNoGH.Error()
 	}
-	if err := exec.CommandContext(ctx, "gh", "auth", "status", "--hostname", "github.com").Run(); err != nil {
-		return github.ErrLoggedOut.Error() + " to github.com"
+	// The active account alone, the one gh's queries use; a failure
+	// that is not about the login, the network say, is said as it is.
+	out, err := exec.CommandContext(ctx, "gh", "auth", "status", "--active", "--hostname", "github.com").CombinedOutput()
+	if err == nil {
+		return "ok"
 	}
-	return "ok"
+	text := strings.ToLower(string(out))
+	for _, s := range []string{"not logged", "invalid", "expired", "gh auth login", "no oauth token"} {
+		if strings.Contains(text, s) {
+			return github.ErrLoggedOut.Error() + " to github.com"
+		}
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return "gh auth status: " + first
 }
 
 // hostRow is one host in the listing.

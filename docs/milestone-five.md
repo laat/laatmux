@@ -596,12 +596,17 @@ every worktree in the merged stream, keyed by source and branch.
   `statusContextCountsByState`, which count every context whatever the
   page. The name of the first failing check is a second, small query,
   only for rollups that fail, paging until one is found, and kept by
-  the rollup's id, so a rollup that does not change is not paged again.
+  the rollup's id for five minutes, since a rerun on the same commit can
+  move the failure to another check. When forks' PRs of the same name
+  fill a connection's page, the next pages are asked for, up to five,
+  until one of the repository's own is found.
   A query of 32 branches costs about four of GitHub's rate-limit
   points.
 - **When.** Every 30 s while a merged subscriber is there, and at once
   when the set of branches changes. A round runs beside the loop that
-  ages the answers, bounded to two minutes.
+  ages the answers, bounded to two minutes: every host's status first,
+  each host within its share of what is left, then the failing checks'
+  names, so a slow host starves no other.
 - **The cache.** The last answer per branch is kept under the state
   directory with the laptop's wall-clock time it was fetched, so a
   restarted sidebar has it at once, stale when it is old, and a laptop
@@ -613,12 +618,15 @@ every worktree in the merged stream, keyed by source and branch.
   own, drops its entry, while one deleted after its PR merged keeps the
   PR, with that PR's last commit's checks. An entry whose branch has had
   no worktree in the merged stream for a day is dropped, once every host
-  has listed since the daemon started.
+  has listed successfully since the daemon started.
 - **Non-GitHub sources and a missing or logged-out `gh`** show nothing.
   The reason is the daemon's own, not a host's: it travels in the merged
   stream as `github_error` in the snapshot and in an upsert, as
   `sessions_error` does, and `laatmux hosts` prints it on a `github:`
-  line after the hosts, never in a host's connectivity.
+  line after the hosts, never in a host's connectivity. A trusted
+  enterprise host that is logged out is named in it too; with no error
+  from the daemon, `hosts` asks gh's active account for github.com
+  itself.
 - **The record,** from a merging daemon with the capability `branches`.
   `branch` is a string in the envelope already (the branch of an add or
   rm), so the record has a key of its own, `branch_status`:

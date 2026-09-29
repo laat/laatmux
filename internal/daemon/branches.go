@@ -43,6 +43,8 @@ type branchEntry struct {
 	// RollupID is the checks' rollup, whose failing check's name is
 	// not asked for again while it holds.
 	RollupID string `json:"rollup_id,omitempty"`
+	// FailingAt is when the failing check's name was last asked for.
+	FailingAt time.Time `json:"failing_at,omitzero"`
 }
 
 // branchQuery is one branch the loop asks about, with where.
@@ -157,8 +159,10 @@ func (d *Daemon) hostsListedLocked() bool {
 	if len(d.mhosts) == 0 {
 		return false
 	}
+	// A listing that succeeded, not only a snapshot: a host whose git
+	// failed sends one with no worktrees.
 	for _, mh := range d.mhosts {
-		if !mh.status.Listed {
+		if mh.host.Local() && !d.listed || !mh.host.Local() && !mh.listed {
 			return false
 		}
 	}
@@ -268,42 +272,46 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		hosts = append(hosts, h)
 	}
 	sort.Strings(hosts)
-	ghErr := ""
-	for _, host := range hosts {
+	// Every host's status first, each within its share of the round,
+	// so a slow host starves no other; the failing checks' names after.
+	type answer struct {
+		qs      []branchQuery
+		results []github.Result
+	}
+	answers := make([]answer, 0, len(hosts))
+	var ghErrs []string
+	deadline, bounded := ctx.Deadline()
+	for n, host := range hosts {
 		qs := byHost[host]
 		sort.Slice(qs, func(i, j int) bool { return qs[i].key < qs[j].key })
 		bs := make([]github.Branch, len(qs))
 		for i, q := range qs {
 			bs[i] = q.b
 		}
-		known := map[string]string{}
-		d.mu.Lock()
-		for _, q := range qs {
-			if e := d.branches[q.key]; e != nil && e.RollupID != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" {
-				known[e.RollupID] = e.Status.Checks.Failing
-			}
+		hctx, cancel := ctx, context.CancelFunc(func() {})
+		if bounded {
+			hctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(hosts)-n))
 		}
-		d.mu.Unlock()
-		results, err := github.Fetch(ctx, d.cfg.GitHub, host, bs, known)
+		results, err := github.Fetch(hctx, d.cfg.GitHub, host, bs)
+		cancel()
 		if ctx.Err() != nil {
-			// The round ran out of time: what it did not answer is
-			// marked stale, as a failed query's is.
-			for i := range results {
-				if results[i].Err == nil && results[i].HeadOID == "" && !results[i].NoRef {
-					results[i].Err = ctx.Err()
-				}
-			}
-			d.applyBranches(qs, results)
 			return
 		}
-		if err != nil && ghErr == "" && (host == "github.com" || errors.Is(err, github.ErrNoGH)) {
-			// gh missing, or logged out of github.com, is the daemon's
-			// reason for showing nothing; another host that is not
-			// GitHub, or not logged in, is only not shown.
-			ghErr = err.Error()
+		if errors.Is(err, github.ErrNoGH) || errors.Is(err, github.ErrLoggedOut) {
+			// gh missing, or logged out of a host the config trusts,
+			// is the daemon's reason for showing nothing there.
+			if msg := err.Error(); len(ghErrs) == 0 || ghErrs[len(ghErrs)-1] != msg {
+				ghErrs = append(ghErrs, msg)
+			}
 		}
-		d.applyBranches(qs, results)
+		answers = append(answers, answer{qs, results})
 	}
+	for _, a := range answers {
+		known := d.knownFailing(a.qs)
+		github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
+		d.applyBranches(a.qs, a.results, known)
+	}
+	ghErr := strings.Join(ghErrs, "; ")
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
@@ -317,10 +325,27 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 	}
 }
 
+// knownFailing is the failing names found for the branches' rollups
+// within branchStale: a rollup's failing check can change on the same
+// commit, a rerun say, so a name is asked for again once it is old.
+func (d *Daemon) knownFailing(qs []branchQuery) map[string]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	known := map[string]string{}
+	now := time.Now().Round(0)
+	for _, q := range qs {
+		e := d.branches[q.key]
+		if e != nil && e.RollupID != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" && now.Sub(e.FailingAt) < branchStale {
+			known[e.RollupID] = e.Status.Checks.Failing
+		}
+	}
+	return known
+}
+
 // applyBranches takes one host's answers: a branch GitHub does not have
 // drops its entry; a failed answer keeps the last one, marked stale; an
 // answer upserts the record when a value changed.
-func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result) {
+func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known map[string]string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// The wall clock: a laptop that slept has its answers aged by the
@@ -346,6 +371,9 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result) {
 			if e == nil {
 				e = &branchEntry{}
 				d.branches[q.key] = e
+			}
+			if _, cached := known[r.RollupID]; !cached || e.RollupID != r.RollupID {
+				e.FailingAt = now // a name found now, or none needed
 			}
 			e.LastSeen, e.RollupID = now, r.RollupID
 			st := protocol.BranchStatus{BranchKey: q.bk, FetchedAt: now, HeadOID: r.HeadOID, ChecksURL: r.ChecksURL, PR: r.PR, Checks: r.Checks}

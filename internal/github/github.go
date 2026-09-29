@@ -96,7 +96,7 @@ type Result struct {
 // Chunk is how many branches one query asks about.
 const Chunk = 32
 
-const prFragment = `fragment P on PullRequestConnection { nodes { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
+const prFragment = `fragment P on PullRequestConnection { pageInfo { hasNextPage endCursor } nodes { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } } }`
 
 const rollupFragment = `fragment R on StatusCheckRollup { id state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }`
 
@@ -131,22 +131,38 @@ type rollup struct {
 	} `json:"contexts"`
 }
 
+type prNode struct {
+	Number          int    `json:"number"`
+	State           string `json:"state"`
+	IsDraft         bool   `json:"isDraft"`
+	URL             string `json:"url"`
+	CrossRepository bool   `json:"isCrossRepository"`
+	Commits         struct {
+		Nodes []struct {
+			Commit struct {
+				OID    string  `json:"oid"`
+				Rollup *rollup `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
 type prConnection struct {
-	Nodes []struct {
-		Number          int    `json:"number"`
-		State           string `json:"state"`
-		IsDraft         bool   `json:"isDraft"`
-		URL             string `json:"url"`
-		CrossRepository bool   `json:"isCrossRepository"`
-		Commits         struct {
-			Nodes []struct {
-				Commit struct {
-					OID    string  `json:"oid"`
-					Rollup *rollup `json:"statusCheckRollup"`
-				} `json:"commit"`
-			} `json:"nodes"`
-		} `json:"commits"`
-	} `json:"nodes"`
+	PageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	} `json:"pageInfo"`
+	Nodes []prNode `json:"nodes"`
+}
+
+// own reports whether a connection holds a PR of the repository's own.
+func (c prConnection) own() bool {
+	for _, n := range c.Nodes {
+		if !n.CrossRepository {
+			return true
+		}
+	}
+	return false
 }
 
 type repoAnswer struct {
@@ -166,9 +182,9 @@ type repoAnswer struct {
 // sets Err on its branches; the error returned is the runner's own when
 // every chunk failed with it, ErrNoGH or ErrLoggedOut say.
 //
-// known is the failing names already found, by rollup id: a rollup that
-// does not change is not paged again.
-func Fetch(ctx context.Context, run Runner, host string, branches []Branch, known map[string]string) ([]Result, error) {
+// The failing checks' names are FillFailing's, asked for after every
+// host's status, so a slow host's names hold no other host's status.
+func Fetch(ctx context.Context, run Runner, host string, branches []Branch) ([]Result, error) {
 	results := make([]Result, len(branches))
 	var last error
 	failed := 0
@@ -184,20 +200,66 @@ func Fetch(ctx context.Context, run Runner, host string, branches []Branch, know
 			failed++
 		}
 	}
-	for i := range results {
-		r := &results[i]
-		if r.Err == nil && r.Checks != nil && r.Checks.State == protocol.ChecksFailure && r.RollupID != "" {
-			if name, ok := known[r.RollupID]; ok {
-				r.Checks.Failing = name
-			} else {
-				r.Checks.Failing = failingName(ctx, run, host, r.RollupID)
-			}
-		}
-	}
 	if chunks > 0 && failed == chunks && (errors.Is(last, ErrNoGH) || errors.Is(last, ErrLoggedOut)) {
 		return results, last
 	}
 	return results, nil
+}
+
+// FillFailing gives each failing result the name of its first failing
+// check: the one in known for its rollup id, found recently, else paged
+// for.
+func FillFailing(ctx context.Context, run Runner, host string, results []Result, known map[string]string) {
+	for i := range results {
+		r := &results[i]
+		if r.Err != nil || r.Checks == nil || r.Checks.State != protocol.ChecksFailure || r.RollupID == "" || ctx.Err() != nil {
+			continue
+		}
+		if name, ok := known[r.RollupID]; ok {
+			r.Checks.Failing = name
+		} else {
+			r.Checks.Failing = failingName(ctx, run, host, r.RollupID)
+		}
+	}
+}
+
+// prPages bounds the paging for a branch's own PR past the first page.
+const prPages = 5
+
+// morePRs pages a branch's PRs past the first answer's, open ones or
+// all, until one of the repository's own is found.
+func morePRs(ctx context.Context, run Runner, host string, b Branch, open bool, after string) []prNode {
+	states := ""
+	if open {
+		states = "states: [OPEN], "
+	}
+	q := `query($o: String!, $r: String!, $b: String!, $after: String!) { repository(owner: $o, name: $r) { ` +
+		`pullRequests(headRefName: $b, ` + states + `first: 20, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } } } ` +
+		rollupFragment + " " + prFragment
+	var out []prNode
+	for page := 0; page < prPages && after != ""; page++ {
+		body, err := run(ctx, host, q, map[string]string{"o": b.Owner, "r": b.Repo, "b": b.Branch, "after": after})
+		if err != nil {
+			return out
+		}
+		var resp struct {
+			Data struct {
+				Repository struct {
+					PullRequests prConnection `json:"pullRequests"`
+				} `json:"repository"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &resp) != nil {
+			return out
+		}
+		c := resp.Data.Repository.PullRequests
+		out = append(out, c.Nodes...)
+		if c.own() || !c.PageInfo.HasNextPage {
+			return out
+		}
+		after = c.PageInfo.EndCursor
+	}
+	return out
 }
 
 func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch, out []Result) error {
@@ -246,7 +308,18 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 			out[i] = Result{Err: fmt.Errorf("%s/%s: %s", b.Owner, b.Repo, msg)}
 			continue
 		}
-		out[i] = parse(resp.Data[alias], b)
+		a := resp.Data[alias]
+		if a != nil {
+			// Forks' PRs of the same name may fill a page: the next
+			// pages are asked for until one of the repository's own.
+			if !a.Open.own() && a.Open.PageInfo.HasNextPage {
+				a.Open.Nodes = append(a.Open.Nodes, morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)...)
+			}
+			if !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
+				a.PullRequests.Nodes = append(a.PullRequests.Nodes, morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)...)
+			}
+		}
+		out[i] = parse(a, b)
 	}
 	return nil
 }
