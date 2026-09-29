@@ -303,12 +303,14 @@ func onBase(base, branch string) bool {
 var noQuietMerge, noWriteTree atomic.Bool
 
 // probeWriteTree asks git's merge-tree help whether it knows
-// --write-tree. valid is that the help answered, its usage printed: a
-// probe that timed out or failed says nothing, and nothing is
-// remembered from it.
+// --write-tree. valid is that the help answered, exiting 129 as -h does
+// (a git before 2.38 prints its usage to stderr, a later one to stdout):
+// a probe that timed out, was cancelled or did not start says nothing,
+// and nothing is remembered from it.
 func probeWriteTree(ctx context.Context, root string) (supported, valid bool) {
-	out, _ := statusGit(ctx, root, "merge-tree", "-h")
-	if !strings.Contains(out, "usage: git merge-tree") {
+	out, err := statusGit(ctx, root, "merge-tree", "-h")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 129 {
 		return false, false
 	}
 	return strings.Contains(out, "--write-tree"), true

@@ -527,9 +527,10 @@ func TestProbeWriteTree(t *testing.T) {
 		name, script     string
 		supported, valid bool
 	}{
-		{"old", "echo 'usage: git merge-tree <base-tree> <branch1> <branch2>'; exit 129", false, true},
+		{"old", "echo 'usage: git merge-tree <base-tree> <branch1> <branch2>' >&2; exit 129", false, true},
 		{"new", "echo 'usage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>'; exit 129", true, true},
 		{"failed", "exit 1", false, false},
+		{"killed", "echo 'usage: git merge-tree [--write-tree]'; kill -9 $$", false, false},
 	} {
 		write(t, filepath.Join(dir, "git"), "#!/bin/sh\n"+c.script+"\n")
 		os.Chmod(filepath.Join(dir, "git"), 0o755)
