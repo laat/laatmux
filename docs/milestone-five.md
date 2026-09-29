@@ -644,7 +644,9 @@ dark and a light default. `theme.mode: auto` picks one from the
 terminal's background, asked with OSC 11 when the view starts, then
 from `COLORFGBG`; with neither, a tmux popup say, the dark defaults
 colour the accents while plain text keeps the terminal's foreground
-and the selection is reverse video; `theme.custom` overrides any colour. A stale
+and the selection is reverse video with no colours on it, unless
+`theme.custom` sets both `highlight_row_bg` and `text`;
+`theme.custom` overrides any colour. A stale
 row is drawn in `dimmed` with the dim attribute throughout, the stripe
 and the diff and PR colours included, and so is any other dim row but
 for the viewer's own row's label; a task that needs the user is not

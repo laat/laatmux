@@ -47,6 +47,22 @@ func TestLook(t *testing.T) {
 	}
 }
 
+// A band whose colours the config sets itself is drawn without an
+// answer: the colours do not depend on the background.
+func TestLookCustomBand(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORFGBG", "")
+	no := func() (bool, bool) { return false, false }
+	both := config.Config{Theme: config.Theme{Custom: map[string]string{"highlight_row_bg": "#303030", "text": "#e0e0e0"}}}
+	if th, _ := lookWith(both, no); th.Guessed {
+		t.Error("both set: guessed")
+	}
+	one := config.Config{Theme: config.Theme{Custom: map[string]string{"highlight_row_bg": "#303030"}}}
+	if th, _ := lookWith(one, no); !th.Guessed {
+		t.Error("one set: not guessed")
+	}
+}
+
 // COLORFGBG says the background when the terminal does not answer: a
 // light one is taken, and the theme is not a guess.
 func TestLookColorFgBg(t *testing.T) {

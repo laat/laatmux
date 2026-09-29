@@ -52,7 +52,11 @@ func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.The
 	if err != nil {
 		return palette.Mono(), icons
 	}
-	th.Guessed = !known
+	// Band colours the config sets itself do not depend on the
+	// background: they are used whatever it is.
+	_, bg := cfg.Theme.Custom[palette.HighlightRowBg]
+	_, fg := cfg.Theme.Custom[palette.Text]
+	th.Guessed = !known && !(bg && fg)
 	return th, icons
 }
 

@@ -20,8 +20,10 @@ type Term struct {
 	// colours and draws with the attributes alone.
 	Theme palette.Theme
 	// pending is input Background read that was not its answer, for
-	// Run to decode first.
-	pending []byte
+	// Run to decode first; unanswered is that the query went and no
+	// answer came, so Run's decoder expects one for a while.
+	pending    []byte
+	unanswered bool
 }
 
 // Open puts the terminal into raw mode. Not a terminal is an error.
@@ -75,7 +77,7 @@ func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 		left := time.Until(deadline)
 		if left <= 0 {
 			// An answer under way gets its end once.
-			if start := strings.Index(string(got), oscAnswer); start >= 0 && oscEnd(got[start:]) < 0 && !extended {
+			if _, _, _, partial := takeAnswer(got); partial && !extended {
 				extended, deadline = true, time.Now().Add(oscWait)
 				continue
 			}
@@ -94,12 +96,12 @@ func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 			break
 		}
 		got = append(got, buf[:k]...)
-		if answer, rest, found := takeAnswer(got); found {
+		if answer, rest, found, _ := takeAnswer(got); found {
 			t.pending = rest
 			return palette.DarkBackground(answer)
 		}
 	}
-	t.pending = got
+	t.pending, t.unanswered = got, true
 	return false, false
 }
 
@@ -144,8 +146,9 @@ func (t *Term) write(s string) { _, _ = t.out.WriteString(s) }
 // takeAnswer finds the terminal's answer to the background query in b,
 // an OSC 11 string with a colour, and returns it with the bytes around
 // it. Other OSC strings, the query echoed back say, are dropped, and
-// anything else, the user's keys, an Alt-], is kept.
-func takeAnswer(b []byte) (answer string, rest []byte, found bool) {
+// anything else, the user's keys, an Alt-], is kept. partial is that an
+// answer is under way at the end of b.
+func takeAnswer(b []byte) (answer string, rest []byte, found, partial bool) {
 	var kept []byte
 	for i := 0; i < len(b); {
 		if b[i] != 0x1b || i+1 == len(b) || b[i+1] != ']' {
@@ -159,16 +162,17 @@ func takeAnswer(b []byte) (answer string, rest []byte, found bool) {
 			s := string(b[i : i+n])
 			if strings.HasPrefix(s, oscAnswer) {
 				if _, ok := palette.DarkBackground(s); ok {
-					return s, append(kept, b[i+n:]...), true
+					return s, append(kept, b[i+n:]...), true, false
 				}
 			}
 			i += n
 		case oscMore:
-			return "", nil, false
+			tail := string(b[i:])
+			return "", nil, false, strings.HasPrefix(tail, oscAnswer) || strings.HasPrefix(oscAnswer, tail)
 		default:
 			kept = append(kept, b[i:i+n]...)
 			i += n
 		}
 	}
-	return "", nil, false
+	return "", nil, false, false
 }

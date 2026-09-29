@@ -647,9 +647,10 @@ user; `icons: nerdfont` and `icons: ascii` choose other sets, and
 terminal's own foreground. `theme.mode: auto` asks the terminal for its
 background with OSC 11 when the view starts, then reads `COLORFGBG`;
 with neither it takes the dark defaults for the accents alone, and the
-selection is reverse video, since a tmux popup may get no answer; with
-a known background, or `dark` or `light` set, the selection is a band
-in `highlight_row_bg` with the text in `text`. With `NO_COLOR` set,
+selection is reverse video with no colours on it, since a tmux popup
+may get no answer; with a known background, `dark` or `light` set, or
+both `highlight_row_bg` and `text` in `theme.custom`, the selection is
+a band in `highlight_row_bg` with the text in `text`. With `NO_COLOR` set,
 the attributes alone. `theme.custom` sets palette colours. Before the first snapshot the list
 says `Loading`, an empty one says so, and rows below the window are
 counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows move, `g` `G` first and last,

@@ -435,9 +435,9 @@ func tail(s string, w int) string {
 	rs := []rune(s)
 	n := 0
 	i := len(rs)
-	for i > 0 && n+runeWidth(rs[i-1]) <= w-1 {
+	for i > 0 && n+cellWidth(rs, i-1, rs[i-1]) <= w-1 {
 		i--
-		n += runeWidth(rs[i])
+		n += cellWidth(rs, i, rs[i])
 	}
 	return "…" + string(rs[i:])
 }
@@ -534,7 +534,7 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 			curW += n
 			continue
 		}
-		rw := runeWidth(r)
+		rw := cellWidth(f.prompt, i, r)
 		if curW+rw > inner {
 			// Break at the last space of the line when there is one
 			// past its first third, carrying the word over.
@@ -544,8 +544,8 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 				flush()
 				cur = carry
 				curW = 0
-				for _, c := range cur {
-					curW += runeWidth(c)
+				for k, c := range cur {
+					curW += cellWidth(cur, k, c)
 				}
 				if strings.ContainsRune(string(carry), '█') {
 					cursorLine = len(lines)

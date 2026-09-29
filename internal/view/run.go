@@ -29,6 +29,10 @@ const (
 	secondTick = time.Second
 )
 
+// answerLate is how long an answer to the background query is expected
+// after the query gave up on it.
+const answerLate = 3 * time.Second
+
 // escapeWait is how long a bare escape, or the start of a sequence, is
 // held for the rest before it is read as the escape key. tmux writes a
 // sequence in one go, so the wait is only ever paid for the escape key.
@@ -94,8 +98,12 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	var dec Decoder
 	var flush, spin <-chan time.Time
 	h.Refresh(m)
-	// Keys that came while the terminal was asked for its background are
-	// the first input.
+	// An answer the query did not get may come late: the decoder
+	// expects it a while. Keys that came while the terminal was asked
+	// for its background are the first input.
+	if t.unanswered {
+		dec.ExpectAnswer(time.Now().Add(answerLate))
+	}
 	if len(t.pending) > 0 {
 		ks := dec.FeedAt(t.pending, time.Now())
 		t.pending = nil

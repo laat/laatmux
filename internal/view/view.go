@@ -792,10 +792,18 @@ func Debug(lines []Line) string {
 // is right whatever the background. The selection is the highlight
 // background with the theme's text on it when the theme knows the
 // terminal's background, and reverse video otherwise, as it is without
-// colours, where the attributes are all there is.
+// colours, where the attributes are all there is: under reverse video
+// a line has no colours and no dimming, which would land in the
+// background.
 func ANSI(l Line, th palette.Theme) string {
 	colour := !th.Mono && th.SGR(palette.Text, false) != ""
 	band := colour && !th.Guessed && l.Reverse
+	if l.Reverse && !band {
+		// Reverse video swaps every colour into the background: the
+		// selection with a guessed background is the terminal's own
+		// pair, reversed, and the attributes alone.
+		colour = false
+	}
 	var b strings.Builder
 	attrs := func() {
 		switch {
@@ -807,7 +815,7 @@ func ANSI(l Line, th palette.Theme) string {
 		case l.Reverse:
 			b.WriteString("\x1b[7m")
 		}
-		if l.Dim && !band {
+		if l.Dim && !band && !l.Reverse {
 			b.WriteString("\x1b[2m")
 			if colour {
 				b.WriteString(th.SGR(palette.Dimmed, false))

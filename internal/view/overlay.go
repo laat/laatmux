@@ -380,7 +380,8 @@ func hardWrap(s string, w int) []string {
 		out = append(out, string(cur))
 		cur, n = nil, 0
 	}
-	for _, r := range s {
+	rs := []rune(s)
+	for i, r := range rs {
 		if r == '\t' {
 			k := 4 - n%4
 			if n+k > w {
@@ -396,7 +397,7 @@ func hardWrap(s string, w int) []string {
 		if r < 0x20 || r == 0x7f {
 			continue
 		}
-		rw := runeWidth(r)
+		rw := cellWidth(rs, i, r)
 		if n+rw > w && n > 0 {
 			flush()
 		}

@@ -1,6 +1,7 @@
 package view
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,12 @@ type Decoder struct {
 	oscEsc   bool
 	oscLeft  int
 	oscUntil time.Time
+	// expectUntil is how long an answer to the background query may
+	// still come: until then an OSC cut anywhere, right after its
+	// escape and bracket too, is armed against; after it only one whose
+	// number and semicolon came, so an Alt-] and the keys after it are
+	// the user's.
+	expectUntil time.Time
 	// paste is the text of a bracketed paste whose end has not arrived;
 	// pasting is set from its start marker to its end. A paste is held
 	// across reads and flushes however long it takes.
@@ -127,6 +134,10 @@ func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
 // a click they begin and this read's for one begun in it, whatever the
 // held bytes turned out to be.
 func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
+	if bytes.Contains(b, []byte(oscAnswer)) {
+		// The late answer came: an Alt-] from here on is the user's.
+		d.expectUntil = time.Time{}
+	}
 	if d.osc {
 		b = d.swallowOSC(b)
 		if b == nil {
@@ -455,12 +466,13 @@ func (d *Decoder) Flush() []Key {
 		d.discard = true
 	}
 	if len(d.pending) >= 2 && d.pending[0] == 0x1b && d.pending[1] == ']' {
-		// Only a string whose number and semicolon came, or the start
-		// of the one answer the views ask for, `ESC ] 1 1 ;`, is armed
-		// against: an Alt-] alone is the user's, and so are the keys
-		// after it.
+		// A string whose number and semicolon came is armed against;
+		// so, while the answer to the background query may still
+		// come, is any start of it, `ESC ] 1 1 ;`. Otherwise an Alt-]
+		// is the user's, and so are the keys after it.
 		kind, _, body := oscScan(d.pending)
-		if kind == oscMore && (body || len(d.pending) >= 3 && strings.HasPrefix(oscAnswer, string(d.pending))) {
+		expecting := d.clock().Before(d.expectUntil) && strings.HasPrefix(oscAnswer, string(d.pending))
+		if kind == oscMore && (body || expecting) {
 			d.osc, d.oscEsc = true, d.pending[len(d.pending)-1] == 0x1b
 			d.oscLeft, d.oscUntil = oscMax-len(d.pending), d.clock().Add(oscWait)
 		}
@@ -522,6 +534,10 @@ func (d *Decoder) swallowOSC(b []byte) []byte {
 	}
 	return nil
 }
+
+// ExpectAnswer says the answer to the background query may still come
+// until the time given.
+func (d *Decoder) ExpectAnswer(until time.Time) { d.expectUntil = until }
 
 // oscAnswer is how the answer to the background query begins.
 const oscAnswer = "\x1b]11;"

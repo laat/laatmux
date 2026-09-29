@@ -438,8 +438,9 @@ func TestOSCCutInHeader(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	full := "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"
-	for cut := 3; cut < len(full); cut++ {
+	for cut := 2; cut < len(full); cut++ {
 		d := Decoder{now: clock}
+		d.ExpectAnswer(now.Add(time.Second))
 		var ks []Key
 		ks = append(ks, d.Feed([]byte(full[:cut]))...)
 		ks = append(ks, d.Flush()...)
@@ -473,5 +474,56 @@ func TestBackgroundPastEchoAndAlt(t *testing.T) {
 		}
 		r.Close()
 		w.Close()
+	}
+}
+
+// Past the time an answer is expected, the keys typed after an Alt-]
+// are the user's, whatever a flush cuts; a string whose number and
+// semicolon came is still dropped.
+func TestOSCNotExpected(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	d := Decoder{now: clock}
+	d.ExpectAnswer(now.Add(-time.Second))
+	var ks []Key
+	ks = append(ks, d.Feed([]byte("\x1b]"))...)
+	ks = append(ks, d.Flush()...)
+	ks = append(ks, d.Feed([]byte("1j"))...)
+	ks = append(ks, d.Flush()...)
+	if len(ks) != 2 || ks[0].Rune != '1' || ks[1].Rune != 'j' {
+		t.Errorf("Alt-] then 1j: %+v", ks)
+	}
+	ks = append(d.Feed([]byte("\x1b]11;rgb:1a")), d.Flush()...)
+	ks = append(ks, d.Feed([]byte("1a/1b1b/2626\x07j"))...)
+	ks = append(ks, d.Flush()...)
+	if len(ks) != 1 || ks[0].Rune != 'j' {
+		t.Errorf("a cut answer: %+v", ks)
+	}
+}
+
+// The answer arriving ends the expectation.
+func TestOSCAnswerEndsExpectation(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	d := Decoder{now: func() time.Time { return now }}
+	d.ExpectAnswer(now.Add(time.Second))
+	d.Feed([]byte("\x1b]11;rgb:1a1a/1b1b/2626\x07"))
+	if !d.expectUntil.IsZero() {
+		t.Errorf("still expecting until %v", d.expectUntil)
+	}
+}
+
+// Under a guessed background the selection is reverse video alone: no
+// span colours, no dimming, which would turn into the background.
+func TestGuessedSelection(t *testing.T) {
+	th, _ := palette.New(true, nil)
+	th.Guessed = true
+	l := Line{Reverse: true, Dim: true, Spans: []Span{{Text: "a", Fg: palette.Info}, {Text: "b", Dim: true}}}
+	got := ANSI(l, th)
+	if strings.Contains(got, "38;") || strings.Contains(got, "48;") || strings.Contains(got, "\x1b[2m") || !strings.Contains(got, "\x1b[7m") {
+		t.Errorf("%q", got)
+	}
+	l.Reverse = false
+	if got := ANSI(l, th); !strings.Contains(got, "38;") {
+		t.Errorf("unselected has no colour: %q", got)
 	}
 }
