@@ -76,6 +76,7 @@ type StatusCache struct {
 	// base is the base resolved at baseAt; it is resolved again after
 	// baseTTL, or when its commit cannot be read.
 	base      string
+	baseRef   string // its full ref name, for the mtime trigger
 	baseAt    time.Time
 	pair      Pair
 	committed Committed
@@ -124,15 +125,19 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		paths.CommonDir = filepath.Join(root, paths.CommonDir)
 	}
 	if base == "" {
-		base, baseOID = resolveBase(ctx, root, branch)
-		cache.base, cache.baseAt = base, time.Now()
+		var ref string
+		base, ref, baseOID, err = resolveBase(ctx, root, branch)
+		if err != nil {
+			return st, head, paths, err
+		}
+		cache.base, cache.baseRef, cache.baseAt = base, ref, time.Now()
 	}
 	st.Base = base
 	if branch != "" {
 		paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, "refs", "heads", branch))
 	}
-	if base != "" {
-		paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, refPath(base)))
+	if cache.baseRef != "" {
+		paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, filepath.FromSlash(cache.baseRef)))
 	}
 	paths.Refs = append(paths.Refs, filepath.Join(paths.CommonDir, "packed-refs"))
 
@@ -140,7 +145,7 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	if baseOID != "" && !onBase(base, branch) {
 		pair := Pair{Base: baseOID, Head: head}
 		if !cache.have || cache.pair != pair {
-			c, err := readCommitted(ctx, root, base)
+			c, err := readCommitted(ctx, root, pair)
 			if err != nil {
 				return st, head, paths, err
 			}
@@ -149,25 +154,39 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		st.Committed, st.Ahead, st.Behind, st.Conflict = cache.committed.Diff, cache.committed.Ahead, cache.committed.Behind, cache.committed.Conflict
 	}
 
-	// The uncommitted side, every refresh. Dirty is any path in the
-	// diff against HEAD, a mode change or a binary file too, or any
-	// untracked file: what `git status` would list, without its call.
+	// The uncommitted side, every refresh: git status for dirty, a
+	// staged change the working tree undoes included, and for the
+	// untracked files that are not ignored; the diff against HEAD for
+	// the counts.
+	status, err := g("status", "--porcelain=v2", "-z", "--untracked-files=all")
+	if err != nil {
+		return st, head, paths, err
+	}
+	var untracked []string
+	entries := strings.Split(status, "\x00")
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		switch {
+		case e == "" || strings.HasPrefix(e, "# "):
+		case strings.HasPrefix(e, "? "):
+			untracked = append(untracked, e[2:])
+			st.Dirty = true
+		case strings.HasPrefix(e, "2 "):
+			// A rename or copy: its original path is the next entry.
+			st.Dirty = true
+			i++
+		default:
+			st.Dirty = true
+		}
+	}
 	diff, err := g("diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD")
 	if err != nil {
 		return st, head, paths, err
 	}
 	st.Uncommitted = numstat(diff)
-	st.Dirty = strings.TrimSpace(diff) != ""
-	others, err := g("ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return st, head, paths, err
-	}
-	lines, partial := cache.countUntracked(root, others)
+	lines, partial := cache.countUntracked(root, untracked)
 	st.Uncommitted[0] += lines
 	st.UncommittedPartial = partial
-	if others != "" {
-		st.Dirty = true
-	}
 	for _, d := range []string{"rebase-merge", "rebase-apply"} {
 		if fi, err := os.Stat(filepath.Join(paths.GitDir, d)); err == nil && fi.IsDir() {
 			st.Rebasing = true
@@ -183,33 +202,51 @@ func Head(ctx context.Context, root string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
-// resolveBase is the base a branch is compared with, and its commit: the
-// first that exists of the branch's laatmux-base key, origin/HEAD's
-// branch, main, master. "" when none does.
-func resolveBase(ctx context.Context, root, branch string) (name, oid string) {
+// resolveBase is the base a branch is compared with, its full ref name
+// and its commit: the first that exists of the branch's laatmux-base key,
+// origin/HEAD's branch, main, master. "" when none does. A call that
+// times out is an error, not a missing ref, so a slow repository keeps
+// its last stats rather than switching base.
+func resolveBase(ctx context.Context, root, branch string) (name, ref, oid string, err error) {
+	failed := func(err error) bool {
+		return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+	}
 	var candidates []string
 	if branch != "" {
-		if out, err := statusGit(ctx, root, "config", "--get", "branch."+branch+"."+BaseKey); err == nil {
-			if b := strings.TrimSpace(out); b != "" {
-				candidates = append(candidates, b)
-			}
+		out, err := statusGit(ctx, root, "config", "--get", "branch."+branch+"."+BaseKey)
+		if failed(err) {
+			return "", "", "", err
 		}
-	}
-	if out, err := statusGit(ctx, root, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
-		if b := strings.TrimSpace(out); b != "" && b != "origin/HEAD" {
+		if b := strings.TrimSpace(out); err == nil && b != "" {
 			candidates = append(candidates, b)
 		}
 	}
+	out, err := statusGit(ctx, root, "rev-parse", "--abbrev-ref", "origin/HEAD")
+	if failed(err) {
+		return "", "", "", err
+	}
+	if b := strings.TrimSpace(out); err == nil && b != "" && b != "origin/HEAD" {
+		candidates = append(candidates, b)
+	}
 	candidates = append(candidates, "main", "master")
 	for _, c := range candidates {
-		out, err := statusGit(ctx, root, "rev-parse", "--verify", "--quiet", c+"^{commit}")
-		if err == nil {
-			if oid := strings.TrimSpace(out); oid != "" {
-				return c, oid
-			}
+		out, err := statusGit(ctx, root, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", c)
+		if failed(err) {
+			return "", "", "", err
+		}
+		full := strings.TrimSpace(out)
+		if err != nil || full == "" {
+			continue
+		}
+		out, err = statusGit(ctx, root, "rev-parse", "--verify", "--quiet", c+"^{commit}")
+		if failed(err) {
+			return "", "", "", err
+		}
+		if oid := strings.TrimSpace(out); err == nil && oid != "" {
+			return c, full, oid, nil
 		}
 	}
-	return "", ""
+	return "", "", "", nil
 }
 
 // onBase reports whether the branch is its own base: main against main,
@@ -221,30 +258,21 @@ func onBase(base, branch string) bool {
 	return base == branch || strings.HasPrefix(base, "origin/") && strings.TrimPrefix(base, "origin/") == branch
 }
 
-// refPath is the loose ref file of a branch name as rev-parse takes it:
-// origin/main is refs/remotes/origin/main, main refs/heads/main.
-func refPath(name string) string {
-	if strings.HasPrefix(name, "refs/") {
-		return name
-	}
-	if strings.Contains(name, "/") {
-		return filepath.Join("refs", "remotes", name)
-	}
-	return filepath.Join("refs", "heads", name)
-}
-
 // readCommitted is what depends on the commit pair: the branch's diff
 // against its merge base with base, ahead and behind, and whether a
 // merge would conflict. merge-tree --write-tree writes objects, which is
 // why this runs once per pair.
-func readCommitted(ctx context.Context, root, base string) (Committed, error) {
+func readCommitted(ctx context.Context, root string, pair Pair) (Committed, error) {
 	var c Committed
-	diff, err := statusGit(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv", base+"...HEAD")
+	// The commits, not the names: a fetch or a commit between the calls
+	// cannot mix two pairs under one key.
+	span := pair.Base + "..." + pair.Head
+	diff, err := statusGit(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv", span)
 	if err != nil {
 		return c, err
 	}
 	c.Diff = numstat(diff)
-	counts, err := statusGit(ctx, root, "rev-list", "--left-right", "--count", base+"...HEAD")
+	counts, err := statusGit(ctx, root, "rev-list", "--left-right", "--count", span)
 	if err != nil {
 		return c, err
 	}
@@ -252,7 +280,7 @@ func readCommitted(ctx context.Context, root, base string) (Committed, error) {
 		c.Behind, _ = strconv.Atoi(f[0])
 		c.Ahead, _ = strconv.Atoi(f[1])
 	}
-	_, err = statusGit(ctx, root, "merge-tree", "--write-tree", base, "HEAD")
+	_, err = statusGit(ctx, root, "merge-tree", "--write-tree", pair.Base, pair.Head)
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -291,16 +319,13 @@ func numstat(out string) [2]int {
 // countUntracked counts the lines of the untracked files ls-files -z
 // listed, reading only those whose size or mtime changed since the last
 // refresh; past the limits the count is a lower bound.
-func (c *StatusCache) countUntracked(root, listed string) (lines int, partial bool) {
+func (c *StatusCache) countUntracked(root string, listed []string) (lines int, partial bool) {
 	if c.untracked == nil {
 		c.untracked, c.keys = map[string]untrackedCount{}, map[string]untrackedKey{}
 	}
 	seen := map[string]bool{}
 	n := 0
-	for _, p := range strings.Split(listed, "\x00") {
-		if p == "" {
-			continue
-		}
+	for _, p := range listed {
 		if n == untrackedFiles {
 			partial = true
 			break
@@ -313,7 +338,16 @@ func (c *StatusCache) countUntracked(root, listed string) (lines int, partial bo
 		}
 		key := untrackedKey{size: fi.Size(), mtime: fi.ModTime()}
 		if k, ok := c.keys[p]; !ok || k != key {
-			c.untracked[p] = countFile(filepath.Join(root, p))
+			cnt, ok := countFile(filepath.Join(root, p))
+			if !ok {
+				// Unreadable now: not kept, so a read that works later
+				// counts it, and the count is a lower bound meanwhile.
+				delete(c.untracked, p)
+				delete(c.keys, p)
+				partial = true
+				continue
+			}
+			c.untracked[p] = cnt
 			c.keys[p] = key
 		}
 		cnt := c.untracked[p]
@@ -331,28 +365,28 @@ func (c *StatusCache) countUntracked(root, listed string) (lines int, partial bo
 
 // countFile is a file's line count, up to untrackedBytes of it; a binary
 // file, one with a NUL in its first 8000 bytes as git judges it, counts 0.
-func countFile(p string) untrackedCount {
+func countFile(p string) (untrackedCount, bool) {
 	f, err := os.Open(p)
 	if err != nil {
-		return untrackedCount{}
+		return untrackedCount{}, false
 	}
 	defer f.Close()
 	buf, err := io.ReadAll(io.LimitReader(f, untrackedBytes+1))
 	if err != nil {
-		return untrackedCount{}
+		return untrackedCount{}, false
 	}
 	partial := len(buf) > untrackedBytes
 	if partial {
 		buf = buf[:untrackedBytes]
 	}
 	if bytes.IndexByte(buf[:min(len(buf), 8000)], 0) >= 0 {
-		return untrackedCount{}
+		return untrackedCount{}, true
 	}
 	n := bytes.Count(buf, []byte{'\n'})
 	if len(buf) > 0 && buf[len(buf)-1] != '\n' && !partial {
 		n++
 	}
-	return untrackedCount{lines: n, partial: partial}
+	return untrackedCount{lines: n, partial: partial}, true
 }
 
 // statusGit runs one git call of a refresh, with the timeout and without

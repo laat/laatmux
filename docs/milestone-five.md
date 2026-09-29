@@ -475,16 +475,16 @@ carry the same; the time of the last refresh is not in the record.
   its merge base.
 - **uncommitted:** `git diff --numstat HEAD`, staged and unstaged, plus
   the line counts of untracked files that are not ignored, from `git
-  ls-files --others --exclude-standard`. A binary file counts 0. At most
+  status`'s untracked entries. A binary file counts 0. At most
   200 untracked files are read, each only up to 1 MB; past either the
   count is marked `+` as a lower bound.
 - **ahead, behind:** `git rev-list --left-right --count <base>...HEAD`,
   against the base, as the dashboard shows them beside `→base`. A branch
   `add` makes has no upstream, so `git status`'s counts, which are
   against the upstream, are not used.
-- **dirty:** any path in the `git diff HEAD` output, a mode change or a
-  binary file too, or any untracked file: what `git status` would list,
-  without a call of its own.
+- **dirty:** from `git status --porcelain=v2 -z --untracked-files=all`,
+  whose untracked entries are the files counted, so no `ls-files` call is
+  needed.
 - **conflict:** `git merge-tree --write-tree <base> HEAD` exits 1. It
   needs git 2.38; with an older git the field is left out.
 - **rebasing:** a `rebase-merge` or `rebase-apply` directory in the

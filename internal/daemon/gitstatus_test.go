@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -293,5 +294,89 @@ func TestGitForwarded(t *testing.T) {
 	})
 	if w := msgs[len(msgs)-1].Worktree; w.Git == nil || w.Git.Committed != [2]int{5, 1} {
 		t.Errorf("forwarded: %+v", w)
+	}
+}
+
+// Review round 1: a refresh whose root changed branch, or went and came
+// back, while it ran publishes nothing; a watched file changed during the
+// read makes the worktree due again.
+func TestGitRefreshAcrossListing(t *testing.T) {
+	f := installFakeGit(t)
+	d, s := gitDaemon(t)
+	f.status["/w/a"] = protocol.GitStatus{Base: "origin/main", Ahead: 1}
+	f.head["/w/a"] = "h1"
+	for _, change := range []func(){
+		func() { // another branch at the root
+			d.lastList = []worktree.Record{{Repo: "proj", Branch: "b", Root: "/w/a"}}
+			d.publishWorktreesLocked(time.Now())
+		},
+		func() { // gone and back
+			d.lastList = nil
+			d.publishWorktreesLocked(time.Now())
+			d.lastList = []worktree.Record{{Repo: "proj", Branch: "b", Root: "/w/a"}}
+			d.publishWorktreesLocked(time.Now())
+		},
+	} {
+		f.mu.Lock()
+		f.block = make(chan struct{})
+		block := f.block
+		f.mu.Unlock()
+		makeDue(d)
+		d.gitRound(context.Background(), make(chan struct{}, gitWorkers))
+		d.mu.Lock()
+		change()
+		d.mu.Unlock()
+		upserts(s)
+		close(block)
+		time.Sleep(20 * time.Millisecond)
+		for _, w := range upserts(s) {
+			if w.Git != nil {
+				t.Errorf("a stale refresh published: %+v", w)
+			}
+		}
+		f.mu.Lock()
+		f.block = nil
+		f.mu.Unlock()
+	}
+}
+
+func TestGitTriggerDuringRead(t *testing.T) {
+	f := installFakeGit(t)
+	d, _ := gitDaemon(t)
+	dir := t.TempDir()
+	index := dir + "/index"
+	os.WriteFile(index, []byte("1"), 0o644)
+	f.head["/w/a"] = "h1"
+	orig := gitStatusRead
+	gitStatusRead = func(ctx context.Context, root, branch string, c *worktree.StatusCache) (protocol.GitStatus, string, worktree.Paths, error) {
+		st, h, _, err := orig(ctx, root, branch, c)
+		return st, h, worktree.Paths{GitDir: dir, CommonDir: dir}, err
+	}
+	refresh(t, d) // learns the paths
+	makeDue(d)
+	f.mu.Lock()
+	f.block = make(chan struct{})
+	block := f.block
+	f.mu.Unlock()
+	d.gitRound(context.Background(), make(chan struct{}, gitWorkers))
+	time.Sleep(20 * time.Millisecond)
+	later := time.Now().Add(time.Hour)
+	os.Chtimes(index, later, later) // staged while the diff was read
+	close(block)
+	idle(t, d)
+	d.mu.Lock()
+	// Past the minimum gap, short of the cadence: only the trigger can
+	// make it due.
+	d.gits["/w/a"].last = time.Now().Add(-gitMinGap - time.Second)
+	d.mu.Unlock()
+	f.mu.Lock()
+	f.block = nil
+	n := f.reads
+	f.mu.Unlock()
+	refresh(t, d)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reads == n {
+		t.Error("a change during the read did not make the worktree due")
 	}
 }

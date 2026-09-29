@@ -35,8 +35,10 @@ var (
 	gitHeadRead   = worktree.Head
 )
 
-// gitEntry is one worktree's refresh state. The cache and the paths are
-// the running refresh's while running is set, and the loop's otherwise.
+// gitEntry is one worktree's refresh state. The cache is the running
+// refresh's while running is set; the rest is under d.mu. The listing
+// drops an entry when its root goes or changes branch, so a refresh
+// still running for it publishes nothing.
 type gitEntry struct {
 	branch  string
 	cache   worktree.StatusCache
@@ -182,12 +184,19 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 // its HEAD moved, while the refresh ran; the next one reads it again. A
 // refresh that timed out keeps the last object and marks it stale.
 func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
+	// The watched mtimes before the read are the baseline the loop
+	// compares with: a change during the read, an index staged after
+	// the diff say, makes the worktree due again. The first refresh has
+	// none, and the loop's first look then refreshes once more.
+	var before map[string]time.Time
+	if files := e.watched(); len(files) > 0 {
+		before = statMtimes(files)
+	}
 	st, head, paths, err := gitStatusRead(ctx, root, e.branch, &e.cache)
 	after := ""
 	if err == nil {
 		after, err = gitHeadRead(ctx, root)
 	}
-	mtimes := statMtimes((&gitEntry{paths: paths}).watched())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	e.running = false
@@ -195,11 +204,12 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 		return
 	}
 	w, ok := d.worktrees[root]
-	if !ok {
+	if !ok || w.Branch != e.branch {
+		// Another branch at the root since: its own entry reads it.
 		return
 	}
 	if paths.GitDir != "" {
-		e.paths, e.mtimes = paths, mtimes
+		e.paths, e.mtimes = paths, before
 	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):

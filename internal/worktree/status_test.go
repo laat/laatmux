@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -217,5 +218,90 @@ func BenchmarkStatus(b *testing.B) {
 		if _, _, _, err := Status(f.ctx, a.Root, "bench", &cache); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// Review round 1: a staged change the working tree undoes is dirty; the
+// committed stats are of the commits given, whatever the names point at
+// now; a local base with a slash is watched under refs/heads; a cancelled
+// resolution is an error, not a missing base; an unreadable untracked
+// file is a lower bound, counted once it can be read.
+func TestStatusEdges(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("edges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := a.Root
+	gitCfg(t, root)
+	var cache StatusCache
+	if _, _, _, err := Status(f.ctx, root, "edges", &cache); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"log", ".envrc"} {
+		os.Remove(filepath.Join(root, p))
+	}
+	write(t, filepath.Join(root, "README"), "staged\n")
+	run(t, root, "git", "add", "README")
+	write(t, filepath.Join(root, "README"), "hello\n") // the working tree back at HEAD
+	st, head, _, err := Status(f.ctx, root, "edges", &cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Dirty {
+		t.Errorf("a staged change undone in the working tree is clean: %+v", st)
+	}
+
+	// Committed by commits: the base moves, the old pair still counts
+	// against the old base.
+	c := f.checkout()
+	gitCfg(t, c)
+	oldBase := strings.TrimSpace(run(t, c, "git", "rev-parse", "origin/main"))
+	write(t, filepath.Join(c, "more.txt"), "m\n")
+	run(t, c, "git", "add", "more.txt")
+	run(t, c, "git", "commit", "-q", "-m", "more")
+	run(t, c, "git", "push", "-q", "origin", "main")
+	run(t, c, "git", "fetch", "-q", "origin")
+	got, err := readCommitted(f.ctx, root, Pair{Base: oldBase, Head: head})
+	if err != nil || got.Behind != 0 {
+		t.Errorf("old pair: %+v %v", got, err)
+	}
+
+	// A local base with a slash.
+	run(t, c, "git", "branch", "release/next", "main")
+	run(t, root, "git", "config", "branch.edges."+BaseKey, "release/next")
+	cache = StatusCache{}
+	st, _, paths, err := Status(f.ctx, root, "edges", &cache)
+	if err != nil || st.Base != "release/next" {
+		t.Fatalf("slashed base: %+v %v", st, err)
+	}
+	want := filepath.Join(paths.CommonDir, "refs", "heads", "release", "next")
+	found := false
+	for _, r := range paths.Refs {
+		found = found || r == want
+	}
+	if !found {
+		t.Errorf("watched %v, want %s", paths.Refs, want)
+	}
+
+	// A cancelled resolution.
+	ctx, cancel := context.WithCancel(f.ctx)
+	cancel()
+	if _, _, _, err := resolveBase(ctx, root, "edges"); err == nil {
+		t.Error("a cancelled resolution is not an error")
+	}
+
+	// An unreadable untracked file.
+	p := filepath.Join(root, "secret.txt")
+	write(t, p, "a\nb\n")
+	os.Chmod(p, 0)
+	st, _, _, _ = Status(f.ctx, root, "edges", &cache)
+	if !st.UncommittedPartial {
+		t.Error("an unreadable file is not a lower bound")
+	}
+	os.Chmod(p, 0o644)
+	st, _, _, _ = Status(f.ctx, root, "edges", &cache)
+	if st.UncommittedPartial || st.Uncommitted[0] < 2 {
+		t.Errorf("readable again, not counted: %+v", st)
 	}
 }

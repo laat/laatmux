@@ -169,6 +169,8 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			// The git object is the refresh's, carried across the
 			// rebuild; a new branch at the root waits for its own.
 			w.Git = prev.Git
+		} else {
+			delete(d.gits, r.Root)
 		}
 		d.worktrees[r.Root] = w
 		d.seq++
@@ -179,6 +181,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			continue
 		}
 		delete(d.worktrees, root)
+		delete(d.gits, root)
 		d.seq++
 		l := d.listing
 		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, WorktreeID: d.worktreeID(root), RemovedIn: &l})
