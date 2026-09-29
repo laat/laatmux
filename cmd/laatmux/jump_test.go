@@ -131,4 +131,15 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	if err != nil || home != spec {
 		t.Fatalf("home %+v, without %+v, err %v", home, spec, err)
 	}
+	// Two worktrees whose agents were moved into one managed session
+	// by hand keep a local session each.
+	w.Session = ""
+	w2 := protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/w/b"}
+	a.Session = "shared"
+	a2 := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "shared", WorktreeID: w2.ID}
+	s1, _, err1 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
+	s2, _, err2 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w2, Agent: &a2})
+	if err1 != nil || err2 != nil || s1.Name == s2.Name || s1.Key == s2.Key || s1.Managed != "shared" || s2.Managed != "shared" {
+		t.Fatalf("shared session: %+v %+v %v %v", s1, s2, err1, err2)
+	}
 }

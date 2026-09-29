@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/laat/laatmux/internal/client"
@@ -297,10 +298,19 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		// elsewhere say: the row's agent is the one laatmux made at the
 		// root, and the worktree's workspace session attaches to that
 		// session as it did while it was the home, so the worktree keeps
-		// one local session whether or not it has a home.
+		// one local session whether or not it has a home. The local
+		// session is named after the worktree, as add names the one it
+		// makes, not after the agent's session, which panes moved in by
+		// hand could make another worktree's too.
 		w := *r.Worktree
 		w.Session = r.Agent.Session
-		return worktreeSpec(cfg, h, w), "", nil
+		spec := worktreeSpec(cfg, h, w)
+		if w.Branch != "" {
+			spec.Name = h.Name + "/" + w.Repo + "/" + w.Branch
+		} else {
+			spec.Name = h.Name + "/" + w.Repo + "@" + filepath.Base(w.Root)
+		}
+		return spec, "", nil
 	case r.Agent != nil:
 		// An agent's row, or a worktree's without a home session whose
 		// agent is on a default server.

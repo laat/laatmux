@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/tmux"
@@ -44,8 +43,6 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 	if _, created, err := Ensure(ctx, spec); err != nil || !created {
 		t.Fatalf("first ensure: %v %v", created, err)
 	}
-	// The attach is started asynchronously; its tag is set before.
-	time.Sleep(200 * time.Millisecond)
 	if tag, cmd := target(); tag != "s1" || !strings.Contains(cmd, "s1") {
 		t.Fatalf("attach %q %q", tag, cmd)
 	}
