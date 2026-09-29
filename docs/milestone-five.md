@@ -133,11 +133,20 @@ other sessions
   today.
 - **Tasks:** a pending task sits under its repository as a worktree line,
   with the task's state where the git stats would be, until it hands
-  over to the worktree line at its root. A task for a worktree that
-  already exists, an add of an existing branch, stands for that
-  worktree's line while it stands, as its row does today: the task's
-  line takes the worktree's place, with the worktree's children under
-  it.
+  over to the worktree line at its root. While a task stands for a
+  worktree the host lists, one the add made, a new worktree whose
+  prompt was not delivered say, or one that already existed, an add of
+  an existing branch, the task's line takes the worktree line's place,
+  with the worktree's children under it, as its row does today. A task
+  at a root that no longer stands, one that failed after the worktree
+  was made, whose host left the config or answers as another machine,
+  or whose worktree went and was made again, is a line of its own
+  beside the worktree line, as today. When several tasks stand for one worktree, two adds of one branch
+  say, the newest submitted owns the children, so each record is one
+  node; the others follow it as task lines without children. When the
+  owner hands over or stops standing, the next newest takes the
+  children, and when none is left the worktree line has them again.
+  Following, a switch and `session` go to the owner's line.
 - **Other sessions** is the last group. It holds agents in no worktree,
   a session `new` made or one observed on a default server, each tagged
   with its host.
@@ -215,9 +224,11 @@ row.
 following it in the new view. In the agent view it follows the first
 tile in sort order among the agents of the viewer's session or
 worktree; in the tree, the worktree line of the viewer's worktree, or
-the task line standing for it, or, with no worktree, the viewer's
-session's own line, wherever it sits: under its repository for an
-orphaned session with a repository tag, in other sessions otherwise.
+the task line standing for it or at its session's root, the session a
+task's add or jump made before the host listed the worktree; or, with
+no worktree and no task, the viewer's session's own line, wherever it
+sits: under its repository for an orphaned session with a repository
+tag, in other sessions otherwise.
 
 ### The rows package
 
@@ -767,8 +778,9 @@ Five settlements differ from the plan in #52:
   - `session`: the viewer's worktree, in the agent view every agent of
     it, whatever session each runs in, and every task at its root, and
     in the tree its worktree line, or the task line standing for it,
-    with its children under its repository line; with no worktree, the
-    viewer's session's own line, wherever it sits, as in Following;
+    with its children, and any other task at its root as a line of its
+    own beside it, under its repository line; with no worktree, the
+    viewer's line as Following finds it;
   - `project`: every line under the viewer's worktree's repository line,
     its worktrees, its pending tasks and its orphaned sessions, and in
     the agent view that repository's agents and tasks; with no worktree,
@@ -977,7 +989,9 @@ view and folds step 6 keeps in memory.
   stale fold or a folded worktree, and an empty worktree; following
   with two agents in the viewer's worktree.
 - **Tree contents:** laatmux's own panes left out, an older host's
-  agents placed by session, an orphaned session under its repository.
+  agents placed by session, an orphaned session under its repository, a
+  new worktree whose task needs the user holding the worktree's
+  children, two tasks for one worktree with each child once.
 - **Git:** temporary repositories for base resolution, committed and
   uncommitted counts with untracked and binary files, conflict, rebase,
   the base branch itself, no upsert when a refresh changes nothing, a
@@ -1015,8 +1029,10 @@ view and folds step 6 keeps in memory.
   `session`, and after a `scope` from the CLI; the dashboard with and
   without `--layout`.
 - **Scopes:** `session` with the viewer's worktree's agents in two
-  managed sessions, with a task at the viewer's worktree's root awaiting
-  its prompt, a session with no worktree, an orphaned session under its
+  managed sessions, with a task at the viewer's worktree's root whose
+  prompt was not delivered, with a failed task at that root, with two
+  tasks at that root and the owner handing over first, the viewer in a
+  task's session before the listing, a session with no worktree, an orphaned session under its
   repository, a session with no row, and `project` with a pending task
   and an orphaned session.
 - **Old envelope:** each new record decoded by the envelope before its
