@@ -203,7 +203,17 @@ func (m *merged) applyMerged(msg protocol.Message) {
 			m.handoffLocked(h.ID, h.ReplacedBy)
 		}
 		m.pruneHandoffsLocked()
+		m.attentions = map[string]protocol.Attention{}
+		for _, a := range msg.Attentions {
+			m.attentions[a.AgentID] = a
+		}
 	case protocol.TypeUpsert:
+		if a := msg.Attention; a != nil {
+			if m.attentions == nil {
+				m.attentions = map[string]protocol.Attention{}
+			}
+			m.attentions[a.AgentID] = *a
+		}
 		if st := msg.HostStatus; st != nil {
 			m.hosts[st.Name] = fromStatus(*st)
 		}
@@ -234,6 +244,9 @@ func (m *merged) applyMerged(msg protocol.Message) {
 			m.pendings[p.ID] = *p
 		}
 	case protocol.TypeRemove:
+		if msg.AttentionID != "" {
+			delete(m.attentions, msg.AttentionID)
+		}
 		if msg.PendingID != "" {
 			delete(m.pendings, msg.PendingID)
 			if msg.ReplacedBy != "" {

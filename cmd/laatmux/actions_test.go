@@ -942,9 +942,9 @@ func TestPendingOffers(t *testing.T) {
 	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
 		t.Errorf("p on an expired prompt: %q", m.Message)
 	}
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 's'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'z'}})
 	if !strings.Contains(m.Message, "pending task") {
-		t.Errorf("s on a task: %q", m.Message)
+		t.Errorf("z on a task: %q", m.Message)
 	}
 	m.Handle(view.Key{Rune: 'j'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})

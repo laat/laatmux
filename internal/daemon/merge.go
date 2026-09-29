@@ -189,6 +189,7 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 	}
 	// Names are unique: the config rejects a host listed twice.
 	d.mnames = d.mnames[:0]
+	defer func() { d.forgetUnconfiguredLocked(d.mnames) }()
 	now := time.Now()
 	for _, h := range hosts {
 		d.mnames = append(d.mnames, h.Name)
@@ -353,6 +354,7 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 	if d.relay != nil {
 		m.Pendings, m.Handoffs = d.relay.pendingsLocked()
 	}
+	m.Attentions = d.attentionsLocked()
 	return m
 }
 
@@ -451,6 +453,8 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 	if ctx.Err() != nil || d.mhosts[mh.status.Name] != mh {
 		return
 	}
+	// The attention file is written once for the whole message.
+	defer d.flushAttentionLocked()
 	switch msg.Type {
 	case protocol.TypeSnapshot:
 		// In the order a host's own stream keeps: the worktrees first,
@@ -492,11 +496,15 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
 			}
 		}
+		keep := map[string]bool{}
 		for i := range msg.Agents {
 			a := msg.Agents[i]
 			mh.agents[a.ID] = a
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
+			d.attendLocked(mh.status.Name, false, a)
+			keep[a.ID] = true
 		}
+		d.forgetHostLocked(mh.status.Name, keep)
 		for i := range msg.Panes {
 			p := msg.Panes[i]
 			mh.panes[p.ID] = p
@@ -562,6 +570,11 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		if msg.Agent != nil || msg.Worktree != nil || msg.Pane != nil || msg.Run != nil {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: msg.Agent, Worktree: msg.Worktree, Pane: msg.Pane, Run: msg.Run})
 		}
+		if msg.Agent != nil {
+			// After the agent's upsert, so a finish's record never names
+			// an agent a subscriber has not had.
+			d.attendLocked(mh.status.Name, false, *msg.Agent)
+		}
 	case protocol.TypeRemove:
 		if msg.AgentID != "" {
 			delete(mh.agents, msg.AgentID)
@@ -578,6 +591,9 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		}
 		if msg.AgentID != "" || msg.WorktreeID != "" || msg.PaneRecordID != "" || msg.RunID != "" {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: msg.AgentID, WorktreeID: msg.WorktreeID, PaneRecordID: msg.PaneRecordID, RunID: msg.RunID})
+		}
+		if msg.AgentID != "" {
+			d.forgetLocked(msg.AgentID)
 		}
 	}
 }

@@ -25,7 +25,7 @@ import (
 // merged stream. The default layout is compact because a popup is wide
 // and short; the title line under each row uses the room. Beyond the
 // shared keys it has actions: a adds through pickers, x and X remove,
-// s settles, S opens a shell; see actions.go.
+// z settles, S opens a shell; see actions.go.
 func cmdDashboard(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
 	layoutFlag := fs.String("layout", string(view.Compact), "tiles or compact")
@@ -48,7 +48,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  p prompt  s settle  S shell  v layout  / filter  f settled  q quit"}
+		Hint: "enter jump  a add  x rm  p prompt  z settle  S shell  v layout  / filter  f folded  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 
@@ -62,7 +62,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		current = cur.Name
 	}
 	st := newMerged()
-	st.labels = repoLabels(cfg)
+	st.configure(cfg)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.followMerged(ctx, c)
@@ -83,9 +83,10 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
-			case taskAction(m, a):
+			case taskAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == view.KeyRune && a.Key.Rune == 'z':
 				// The sidebar takes a task's p and x, and what follows
-				// from them, and none of the dashboard's other keys.
+				// from them, and z, which settles; none of the
+				// dashboard's other keys.
 				return d.act(m, a)
 			}
 			return false

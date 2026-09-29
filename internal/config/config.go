@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/palette"
@@ -162,10 +163,34 @@ var (
 )
 
 // Sidebar configures the sidebar pane: its width in columns and which
-// layout it starts in. Zero values are the defaults.
+// layout it starts in; and for the sidebar and the dashboard alike, the
+// order of the rows and what stale is. Zero values are the defaults.
 type Sidebar struct {
 	Width  int    `yaml:"width"`
 	Layout string `yaml:"layout"`
+	// Sort is priority, recency or window.
+	Sort string `yaml:"sort"`
+	// DimStale draws a stale row dim; CollapseStale folds the stale rows
+	// with the settled ones. Both default to true. StaleAfter is how long
+	// an agent is idle before it is stale, an hour by default.
+	DimStale      *bool  `yaml:"dim_stale"`
+	CollapseStale *bool  `yaml:"collapse_stale"`
+	StaleAfter    string `yaml:"stale_after"`
+}
+
+// Sort orders.
+var SortOrders = []string{"priority", "recency", "window"}
+
+// DefaultStaleAfter is how long an agent is idle before it is stale.
+const DefaultStaleAfter = time.Hour
+
+// Stale is the stale settings with the defaults filled in.
+func (s Sidebar) Stale() (after time.Duration, dim, collapse bool) {
+	after = DefaultStaleAfter
+	if d, err := time.ParseDuration(s.StaleAfter); err == nil && s.StaleAfter != "" {
+		after = d
+	}
+	return after, s.DimStale == nil || *s.DimStale, s.CollapseStale == nil || *s.CollapseStale
 }
 
 // DefaultSidebarWidth is the sidebar's width when the config sets none.
@@ -273,6 +298,14 @@ func Parse(b []byte) (Config, error) {
 	case "", "tiles", "compact":
 	default:
 		return c, fmt.Errorf("sidebar: layout %q is not tiles or compact", c.Sidebar.Layout)
+	}
+	if c.Sidebar.Sort != "" && !contains(SortOrders, c.Sidebar.Sort) {
+		return c, fmt.Errorf("sidebar: sort %q is not one of %s", c.Sidebar.Sort, strings.Join(SortOrders, ", "))
+	}
+	if c.Sidebar.StaleAfter != "" {
+		if d, err := time.ParseDuration(c.Sidebar.StaleAfter); err != nil || d <= 0 {
+			return c, fmt.Errorf("sidebar: stale_after %q is not a positive duration, 1h or 30m say", c.Sidebar.StaleAfter)
+		}
 	}
 	if err := c.validateLook(); err != nil {
 		return c, err

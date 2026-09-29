@@ -46,10 +46,15 @@ var sidebarHooks = []struct{ hook, cmd string }{
 	{"pane-exited[9103]", "sidebar reap"},
 	{"after-kill-pane[9104]", "sidebar reap"},
 	{"window-resized[9105]", "sidebar fit '#{window_id}'"},
+	// What a client shows decides what the user has seen: a move to
+	// another session, window or pane has the daemon look at once.
+	{"client-session-changed[9106]", "sidebar seen"},
+	{"session-window-changed[9107]", "sidebar seen"},
+	{"window-pane-changed[9108]", "sidebar seen"},
 }
 
 func cmdSidebar(ctx context.Context, args []string) error {
-	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | fit <window> | reap")
+	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | fit <window> | reap | seen")
 	sub := "toggle"
 	if len(args) > 0 {
 		sub = args[0]
@@ -88,6 +93,8 @@ func cmdSidebar(ctx context.Context, args []string) error {
 		return sidebarFit(ctx, cfg, args[0])
 	case "reap":
 		return sidebarReap(ctx)
+	case "seen":
+		return sidebarSeen(ctx)
 	}
 	return usage
 }
@@ -419,6 +426,6 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, Follow: true, LocalHost: localHostName(cfg), Hint: "v layout  / filter  f all  p/x task  q quit"}
+	m := &view.Model{Layout: layout, Follow: true, LocalHost: localHostName(cfg), Hint: "v layout  / filter  f all  z settle  p/x task  q quit"}
 	return runView(ctx, cfg, c, m, false, false)
 }

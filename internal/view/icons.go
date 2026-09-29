@@ -10,9 +10,9 @@ import (
 	"github.com/laat/laatmux/internal/rows"
 )
 
-// Status is what a row's icon and stripe say, in the order milestone
-// five's note gives the statuses: waiting (blocked, or a task that needs
-// the user), working, and none. Done and stale come with step 3.
+// Status is what a row's icon and stripe say: waiting (blocked, or a
+// task that needs the user), working, done, stale (idle for long, or a
+// settled workspace's agent that does not want the user), and none.
 type Status int
 
 const (
@@ -85,8 +85,10 @@ func frame(t time.Time) string {
 	return spinnerFrames[i%n]
 }
 
-// status is a row's status. A dim row keeps its status for the icon,
-// but does not spin: its agent is gone, its host down, or it is settled.
+// status is a row's status, in the note's precedence: blocked, done,
+// then stale or settled, then working. A dim row keeps its status for the
+// icon, but does not spin: its agent is gone, its host down, or it is
+// settled.
 func status(r rows.Row) Status {
 	switch {
 	case r.Pending != nil && r.NeedsUser():
@@ -97,6 +99,10 @@ func status(r rows.Row) Status {
 		return StatusNone
 	case r.Agent.Activity == protocol.Blocked:
 		return StatusWaiting
+	case r.Done:
+		return StatusDone
+	case r.Stale || r.Settled:
+		return StatusStale
 	case r.Agent.Activity == protocol.Working:
 		return StatusWorking
 	}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/tmux"
 )
@@ -466,6 +467,31 @@ func TestLook(t *testing.T) {
 		"theme: {mode: solarized}\n",
 		"theme: {custom: {purple: \"#000000\"}}\n",
 		"theme: {custom: {accent: \"#12\"}}\n",
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
+// The sort order and the stale settings: defaults when unset, the
+// config's when set, and an order or a duration it cannot use an error.
+func TestSidebarStale(t *testing.T) {
+	c, err := Parse([]byte("sidebar: {sort: recency, dim_stale: false, stale_after: 30m}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, dim, collapse := c.Sidebar.Stale()
+	if c.Sidebar.Sort != "recency" || after != 30*time.Minute || dim || !collapse {
+		t.Errorf("sort %q, stale %v %v %v", c.Sidebar.Sort, after, dim, collapse)
+	}
+	if after, dim, collapse := (Sidebar{}).Stale(); after != time.Hour || !dim || !collapse {
+		t.Errorf("defaults: %v %v %v", after, dim, collapse)
+	}
+	for _, bad := range []string{
+		"sidebar: {sort: alphabetical}\n",
+		"sidebar: {stale_after: soon}\n",
+		"sidebar: {stale_after: -1h}\n",
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("%q parsed", bad)

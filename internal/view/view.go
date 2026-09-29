@@ -177,6 +177,7 @@ type Group int
 
 const (
 	GroupMain Group = iota
+	GroupStale
 	GroupSettled
 	GroupOrphaned
 )
@@ -193,8 +194,8 @@ type Item struct {
 	Hidden int
 }
 
-// Items is the list as drawn: main rows, then the settled and orphaned
-// groups, collapsed to one header line unless ShowHidden. The filter
+// Items is the list as drawn: main rows, then the stale, settled and
+// orphaned groups, collapsed to one header line unless ShowHidden. The filter
 // keeps rows whose name or host contains it, case-insensitively.
 func (m *Model) Items() []Item {
 	var out []Item
@@ -213,20 +214,27 @@ func (m *Model) Items() []Item {
 		return added
 	}
 	add(m.Rows.Main, GroupMain)
-	settled, orphaned := m.count(m.Rows.Settled), m.count(m.Rows.Orphaned)
-	if settled+orphaned == 0 {
+	stale, settled, orphaned := m.count(m.Rows.Stale), m.count(m.Rows.Settled), m.count(m.Rows.Orphaned)
+	if stale+settled+orphaned == 0 {
 		return out
 	}
 	if !m.ShowHidden {
 		var parts []string
+		if stale > 0 {
+			parts = append(parts, fmt.Sprintf("stale %d", stale))
+		}
 		if settled > 0 {
 			parts = append(parts, fmt.Sprintf("settled %d", settled))
 		}
 		if orphaned > 0 {
 			parts = append(parts, fmt.Sprintf("orphaned %d", orphaned))
 		}
-		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1, Hidden: settled + orphaned})
+		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1, Hidden: stale + settled + orphaned})
 		return out
+	}
+	if stale > 0 {
+		out = append(out, Item{Header: "stale", Group: GroupStale, Index: -1})
+		add(m.Rows.Stale, GroupStale)
 	}
 	if settled > 0 {
 		out = append(out, Item{Header: "settled", Group: GroupSettled, Index: -1})

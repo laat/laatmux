@@ -52,7 +52,26 @@ type Input struct {
 	// Current is the local session the viewer is in, "" when none: the
 	// session the sidebar pane sits in or the popup was opened from.
 	Current string
+	// Attention is the merging daemon's attention records by agent id:
+	// an idle agent whose finish is after the user's last visit is done.
+	Attention map[string]protocol.Attention
+	// Now is the time stale is measured at; StaleAfter how long an agent
+	// is idle before it is stale, 0 for never. DimStale draws a stale row
+	// dim, CollapseStale folds it into the Stale group. Sort is the order
+	// of the main group: priority, the default, recency or window.
+	Now           time.Time
+	StaleAfter    time.Duration
+	DimStale      bool
+	CollapseStale bool
+	Sort          string
 }
+
+// Sort orders of the main group.
+const (
+	SortPriority = "priority"
+	SortRecency  = "recency"
+	SortWindow   = "window"
+)
 
 // Row is one entry: a pending task, a worktree with or without its
 // agent, an agent with no worktree, or a local session whose worktree
@@ -80,27 +99,41 @@ type Row struct {
 	Local    *workspace.Local
 	Settled  bool
 	Orphaned bool // a local workspace session with no worktree on a listed host
+	// Done is an idle agent that went from working to idle since the
+	// user last saw it; Stale an idle agent idle for longer than the
+	// stale time. A done agent is never stale.
+	Done     bool
+	Stale    bool
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
-	// Dim is decided from measured axes only: no identified agent, an
-	// agent that is gone, a host that is down, an orphaned session, a settled
-	// workspace. Age is never a reason.
+	// Dim is no identified agent, an agent that is gone, a host that is
+	// down, an orphaned session, a settled workspace whose agent does not
+	// want the user, or a stale agent when stale rows are dimmed.
 	Dim bool
 }
 
-// Rows are the three groups in display order.
+// Rows are the groups in display order: the stale rows fold with the
+// settled ones, in the view's collapsed group.
 type Rows struct {
 	Main     []Row
+	Stale    []Row
 	Settled  []Row
 	Orphaned []Row
 }
 
-// All is every row in display order: main, settled, orphaned.
+// All is every row in display order: main, stale, settled, orphaned.
 func (r Rows) All() []Row {
-	out := make([]Row, 0, len(r.Main)+len(r.Settled)+len(r.Orphaned))
+	out := make([]Row, 0, len(r.Main)+len(r.Stale)+len(r.Settled)+len(r.Orphaned))
 	out = append(out, r.Main...)
+	out = append(out, r.Stale...)
 	out = append(out, r.Settled...)
 	return append(out, r.Orphaned...)
+}
+
+// Pressing is an agent that wants the user: blocked, or done. It is never
+// stale, and stays in place in a settled workspace.
+func (r Row) Pressing() bool {
+	return r.Done || r.Agent != nil && r.Agent.Activity == protocol.Blocked && r.Agent.Liveness != protocol.Gone
 }
 
 // ID identifies the row across rebuilds: a pending task's command id,
@@ -149,25 +182,25 @@ func (r Row) NeedsUser() bool {
 	return !p.Complete() || p.Gone
 }
 
-// Rank is the row's sort group: pending tasks, then blocked, working,
-// idle, unknown, then rows without a live agent.
+// Rank is the row's sort group in priority order: pending tasks, then
+// blocked, done, working, idle and unknown, stale or settled, then rows
+// without an agent.
 func (r Row) Rank() int {
-	if r.Pending != nil {
+	switch {
+	case r.Pending != nil:
 		return -1
-	}
-	if r.Agent == nil {
-		return 4
-	}
-	switch r.Agent.Activity {
-	case protocol.Blocked:
+	case r.Agent == nil:
+		return 5
+	case r.Agent.Activity == protocol.Blocked:
 		return 0
-	case protocol.Working:
+	case r.Done:
 		return 1
-	case protocol.Idle:
+	case r.Stale || r.Settled:
+		return 4
+	case r.Agent.Activity == protocol.Working:
 		return 2
-	default:
-		return 3
 	}
+	return 3
 }
 
 // Mark is the activity mark ls prints: "!" blocked, "*" working, "-"
@@ -560,7 +593,12 @@ func Build(in Input) Rows {
 		h, known := hosts[r.Host]
 		r.HostDown = !known || !h.Connected
 		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current
-		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned || r.Settled
+		if a := r.Agent; a != nil && r.Pending == nil && a.Liveness != protocol.Gone && a.Activity == protocol.Idle {
+			r.Done = in.Attention[a.ID].Done()
+			r.Stale = !r.Done && in.StaleAfter > 0 && in.Now.Sub(a.ActivityAt) > in.StaleAfter
+		}
+		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned ||
+			r.Settled && !r.Pressing() || r.Stale && in.DimStale
 		if r.Pending != nil {
 			// Never dim: a task that runs is under way, and one that
 			// needs the user wants them, which its waiting icon says;
@@ -568,14 +606,23 @@ func Build(in Input) Rows {
 			r.Dim, r.Settled = false, false
 		}
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return less(rows[i], rows[j]) })
+	sort.SliceStable(rows, func(i, j int) bool { return less(rows[i], rows[j], in.Sort) })
 	var out Rows
 	for _, r := range rows {
 		switch {
 		case r.Orphaned:
 			out.Orphaned = append(out.Orphaned, r)
-		case r.Settled:
+		case r.Current:
+			// The viewer's own row stays in sight, settled or stale, so
+			// the pane always shows the session it sits in, and z there
+			// can unsettle it.
+			out.Main = append(out.Main, r)
+		case r.Settled && !r.Pressing():
+			// A settled workspace's agent that wants the user stays in
+			// place with its own icon.
 			out.Settled = append(out.Settled, r)
+		case r.Stale && in.CollapseStale:
+			out.Stale = append(out.Stale, r)
 		default:
 			out.Main = append(out.Main, r)
 		}
@@ -637,26 +684,44 @@ func started(a *protocol.Agent) int64 {
 	return a.Identity.StartUnix
 }
 
-// less is the sort order: rank, then most recent activity first, then
-// host, then name. Pending tasks come first, the newest first, since a
-// task is what the user just asked for. Orphaned rows sort by name alone,
-// as ls lists them.
-func less(a, b Row) bool {
+// less is the sort order. Pending tasks come first in every order, the
+// newest first, since a task is what the user just asked for; orphaned
+// rows sort by name alone, as ls lists them. The rest, by priority: rank,
+// then most recent activity first; by recency: most recent activity
+// first, rows without an agent last; by window: the session, then the
+// window. Ties go by host, then name.
+func less(a, b Row, order string) bool {
 	if a.Orphaned || b.Orphaned {
 		if a.Orphaned != b.Orphaned {
 			return !a.Orphaned
 		}
 		return a.Name < b.Name
 	}
-	ra, rb := a.Rank(), b.Rank()
-	if ra != rb {
-		return ra < rb
+	if (a.Pending != nil) != (b.Pending != nil) {
+		return a.Pending != nil
 	}
-	if a.Pending != nil && b.Pending != nil {
+	if a.Pending != nil {
 		if !a.Pending.SubmittedAt.Equal(b.Pending.SubmittedAt) {
 			return a.Pending.SubmittedAt.After(b.Pending.SubmittedAt)
 		}
 		return a.Pending.ID < b.Pending.ID
+	}
+	switch order {
+	case SortRecency:
+		if (a.Agent != nil) != (b.Agent != nil) {
+			return a.Agent != nil
+		}
+	case SortWindow:
+		if sa, sb := a.session(), b.session(); sa != sb {
+			return sa < sb
+		}
+		if wa, wb := a.window(), b.window(); wa != wb {
+			return wa < wb
+		}
+	default:
+		if ra, rb := a.Rank(), b.Rank(); ra != rb {
+			return ra < rb
+		}
 	}
 	if a.Agent != nil && b.Agent != nil && !a.Agent.ActivityAt.Equal(b.Agent.ActivityAt) {
 		return a.Agent.ActivityAt.After(b.Agent.ActivityAt)
@@ -665,6 +730,23 @@ func less(a, b Row) bool {
 		return a.Host < b.Host
 	}
 	return a.Name < b.Name
+}
+
+// session is what a row sorts by first in window order: its host and its
+// agent's session, else its host and its name.
+func (r Row) session() string {
+	if r.Agent != nil {
+		return r.Host + "\x00" + r.Agent.Session
+	}
+	return r.Host + "\x00" + r.Name
+}
+
+// window is the agent's window index, -1 without an agent.
+func (r Row) window() int {
+	if r.Agent == nil {
+		return -1
+	}
+	return r.Agent.Window
 }
 
 // Ago formats how long ago something happened, in the unit that fits,

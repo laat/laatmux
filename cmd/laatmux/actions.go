@@ -94,7 +94,9 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 			d.askRm(m, a.Key.Rune == 'X')
 		case 'p':
 			d.deliverPrompt(m)
-		case 's':
+		case 'z':
+			// s is the tree's fold from step 6 on; until then it does
+			// nothing.
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
@@ -780,16 +782,18 @@ func forceHint(err error, force bool) error {
 
 // settle toggles the settled tag on the selected row's workspace
 // session. The merged stream carries the change back within a second
-// and the row moves to or from the settled group.
+// and the row moves to or from the settled group, but for the viewer's
+// own, which stays unfolded, sorted with the stale rows, to be
+// unsettled.
 func (d *dash) settle(m *view.Model) {
 	r := m.Selection()
 	if r == nil {
 		return
 	}
 	if r.Pending != nil {
-		// The row is the task's until it hands over: s settles the
+		// The row is the task's until it hands over: z settles the
 		// worktree row it becomes.
-		m.Message = r.Name + ": a pending task; s settles its worktree row once it hands over"
+		m.Message = r.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
 	if r.Local == nil || !r.Local.Workspace() {

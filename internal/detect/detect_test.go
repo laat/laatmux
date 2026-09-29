@@ -28,9 +28,12 @@ func title(t *testing.T, name string) string {
 // Real panes captured on a clean Debian VM with tmux capture-pane -p, 100x40,
 // Claude Code 2.1.278 in manual mode; titles from #{pane_title} at the same
 // moment. claude-interrupted is from 2.1.284, captured the same way four
-// seconds after Esc. codex-idle is from a local pane. Each case is a
-// distinct rule, but for claude-interrupted, which checks that an
-// interrupted turn reads as idle on its own.
+// seconds after Esc, and claude-working-2.1.284 seven seconds into a
+// turn. codex-idle is from a local pane. Each case is a distinct rule,
+// but for claude-interrupted, which checks that an interrupted turn
+// reads as idle on its own, and claude-working-2.1.284, which checks
+// that the footer rule carries working now that the title does not
+// spin.
 func TestRealFixtures(t *testing.T) {
 	cases := []struct {
 		name, agent string
@@ -49,6 +52,8 @@ func TestRealFixtures(t *testing.T) {
 			"'✻ Brewed for 12s · done' and an empty prompt box"},
 		{"claude-idle-after-tool", "claude", Idle, "live_prompt_box", false,
 			"a shell tool ran without a prompt in manual mode; back at the prompt box"},
+		{"claude-working-2.1.284", "claude", Working, "live_turn_working", false,
+			"Claude Code 2.1.284 in auto mode seven seconds into a turn streaming an essay: the title is '✳ <topic>' with no spinner, so osc_title_working misses it and the footer's 'esc to interrupt' carries working"},
 		{"claude-interrupted", "claude", Idle, "live_prompt_box", false,
 			"Esc during a turn, Claude Code 2.1.284 in auto mode: '⎿ Interrupted · What should Claude do instead?' above an empty prompt box, no 'esc to interrupt'"},
 		{"claude-permission-prompt", "claude", Blocked, "bash_permission_prompt", false,

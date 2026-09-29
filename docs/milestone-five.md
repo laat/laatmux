@@ -78,7 +78,8 @@ does not reach it, since it has no socket.
   `(1)`, `(2)` suffix, in the tree's child order, start time, so the
   tiles and the tree agree. `{pane_suffix}` is that suffix.
 - **Stale:** stale agents and those of settled workspaces fold into
-  `▸ N stale` at the end, unless blocked or done (see Precedence).
+  `▸ N stale` at the end, unless blocked or done, or the viewer's own
+  (see Precedence).
 - **Orphaned sessions** have no agent and are not in this view; they
   are the tree's.
 - **Enter** on a tile goes to the agent's pane, as on an agent in the
@@ -280,7 +281,9 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   most needs, however old. A blocked agent is never stale either.
 - **Settled** is the workspace's, not the agent's: the agents of a
   settled workspace fold with the stale ones and show 💤, unless blocked
-  or done, which stay in place with their own icon.
+  or done, which stay in place with their own icon. The viewer's own
+  row never folds: settled or stale, it stays in sight, sorted with the
+  stale ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:
   its most pressing agent's, in the order above; with no agent, none.
 
@@ -407,9 +410,11 @@ The fixture is one screen, taken after the interrupt, and proves the
 detector's half. The daemon's half, that `nextActivity` passes a visible
 idle through without the debounce, gets its own test in step 3. While
 capturing, the title read `✳ Essay about terminals` six seconds into
-the turn, with no spinner. If Claude Code 2.1.284 no longer spins the
-title, `osc_title_working` misses it and the footer rule carries the
-working state; step 3 adds a working capture of 2.1.284 to check.
+the turn, with no spinner. Step 3's working capture of 2.1.284,
+`claude-working-2.1.284`, confirms it: seven seconds into a turn the
+title is `✳` and the topic, `osc_title_working` misses it, and
+`live_turn_working`, the footer's `esc to interrupt`, carries the
+working state.
 
 ### Stale and settled
 
@@ -417,7 +422,10 @@ A row whose agent has been idle for more than `stale_after`, an hour by
 default, measured from the host's `activity_at` as the age on a row is
 today, is stale: dim, with 💤, sorted after the live ones, and folded
 in the agent view. This reverses milestone three's "age is never a
-reason" rule; `dim_stale: false` restores it.
+reason" rule; `dim_stale: false` stops the dimming and
+`collapse_stale: false` the fold, while the icon and the place in
+`priority` order stay. The viewer's own row is never folded away, stale
+or settled, so `z` in the sidebar can undo itself.
 
 workmux's sleep is laatmux's settle, and moves to workmux's key: `z`
 settles or unsettles the selected workspace in the sidebar and the
