@@ -24,6 +24,26 @@ func look(cfg config.Config, t *view.Term) (palette.Theme, view.Icons) {
 	return lookWith(cfg, func() (bool, bool) { return t.Background(backgroundWait) })
 }
 
+// templates compiles the config's line templates, the defaults for what
+// it leaves out; a template that does not parse draws its error in the
+// view rather than failing the pane.
+func templates(cfg config.Config) view.Templates {
+	t := cfg.Sidebar.Templates
+	return view.CompileTemplates(t.Tiles, t.Compact, t.Top, t.Tree.Repo, t.Tree.Worktree, t.Tree.Agent, t.Tree.Pane, t.Tree.Run)
+}
+
+// agentIcons is the config's agent icons as the view keeps them.
+func agentIcons(cfg config.Config) map[string]view.AgentIcon {
+	if len(cfg.AgentIcons) == 0 {
+		return nil
+	}
+	out := make(map[string]view.AgentIcon, len(cfg.AgentIcons))
+	for name, a := range cfg.AgentIcons {
+		out[name] = view.AgentIcon{Icon: a.Icon, Color: a.Color}
+	}
+	return out
+}
+
 // lookWith is look with the terminal's background asked through
 // background, which only a mode of auto calls.
 func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.Theme, view.Icons) {

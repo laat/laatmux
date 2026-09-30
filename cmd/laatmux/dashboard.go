@@ -75,6 +75,8 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	defer t.Close()
 	t.Theme, m.Icons = look(cfg, t)
 	m.Machine, _ = os.Hostname()
+	m.SetTemplates(templates(cfg))
+	m.AgentIcons = agentIcons(cfg)
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
 	return view.Run(ctx, t, m, view.Host{
 		Changed: st.change,

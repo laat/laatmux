@@ -1,15 +1,15 @@
 ...| ‹Agents›‹⟨border: │ ⟩›«⟨header:Tree⟩»
 ...|«⟨header:anki-llm⟩»
 ...|  ▾ batch-processing (mac)
-...|    ⟨accent:💬⟩ claude‹  Refactoring queue handling now›
+...|    ⟨accent:💬⟩ claude  ‹Refactoring queue handling now›
 ...|«⟨header:laatmux⟩»
-S..|  ▾ «⟨current_worktree_fg:agents-config⟩»‹ (vm)›               ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»  «⟨success:#52⟩» ⟨success:✓⟩
-...|    ⟨info:⠋⠙⟩ claude‹  Adding per-agent config to the loader›
-...|    ⟨border:  ⟩ codex‹  Reading the config›
+S..|  ▾ «⟨current_worktree_fg:agents-config⟩» (‹vm›)               ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»  «⟨success:#52⟩» ⟨success:✓⟩
+...|    ⟨info:⠋⠙⟩ claude  ‹Adding per-agent config to the loader›
+...|    ⟨border:  ⟩ codex  ‹Reading the config›
 .D.|    $ zsh
 .D.|    ▶ make test                                         0:42
-...|  ▾ auto-layout‹ (vm)›                     ‹⟨success:+318⟩› ‹⟨danger:-87⟩›  «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
-...|    ⟨success:✅⟩ claude‹  done›
+...|  ▾ auto-layout (‹vm›)                     ‹⟨success:+318⟩› ‹⟨danger:-87⟩›  «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
+...|    ⟨success:✅⟩ claude  ‹done›
 .D.|    fix-sidebar (mac)                                ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
 .D.|    mac/laatmux/gone (mac)                     ‹worktree gone›
 ...|‹⟨header:other sessions⟩›
