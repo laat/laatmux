@@ -18,7 +18,7 @@ func TestParseTemplate(t *testing.T) {
 	for _, src := range []string{
 		"", "plain text", "{primary}", "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}",
 		"#[fg=accent,bold]{repo}#[default] x #[bg=#112233,dim,nobold,nodim]{host}", "#[fg=colour42]{idx}",
-		DefaultTile1, DefaultTile2, DefaultTile3, DefaultCompact, DefaultTop, DefaultRepo, DefaultWorktree, DefaultAgent, DefaultPane, DefaultRun,
+		DefaultTile1, DefaultTile2, DefaultTile3, DefaultCompact, DefaultTop1, DefaultTop2, DefaultTop3, DefaultRepo, DefaultWorktree, DefaultAgent, DefaultPane, DefaultRun,
 	} {
 		if _, err := ParseTemplate(src); err != nil {
 			t.Errorf("%q: %v", src, err)
@@ -45,10 +45,10 @@ func TestParseTemplate(t *testing.T) {
 	}
 	// The default set parses whole, and a nil tiles list is the three.
 	d := DefaultTemplates()
-	if len(d.Tiles) != 3 {
-		t.Fatalf("default tiles: %d", len(d.Tiles))
+	if len(d.Tiles) != 3 || len(d.Top) != 3 {
+		t.Fatalf("default tiles: %d top: %d", len(d.Tiles), len(d.Top))
 	}
-	for _, c := range append([]Compiled{d.Compact, d.Top, d.Tree.Repo, d.Tree.Worktree, d.Tree.Agent, d.Tree.Pane, d.Tree.Run}, d.Tiles...) {
+	for _, c := range append(append([]Compiled{d.Compact, d.Tree.Repo, d.Tree.Worktree, d.Tree.Agent, d.Tree.Pane, d.Tree.Run}, d.Tiles...), d.Top...) {
 		if c.Err != "" {
 			t.Error(c.Err)
 		}
@@ -149,7 +149,7 @@ func TestTokens(t *testing.T) {
 	tree.SetTree(rows.Tree(in))
 	tree.SetRows(rows.Agents(in))
 	// {idx} through Render counts as the digits do.
-	tree.SetTemplates(CompileTemplates(nil, "", "", "", "{indent}{fold}{idx}:{primary}", "{indent}{idx}:{agent_label}", "", ""))
+	tree.SetTemplates(CompileTemplates(nil, "", nil, "", "{indent}{fold}{idx}:{primary}", "{indent}{idx}:{agent_label}", "", ""))
 	tree.Height = 30
 	text := Text(tree.Render())
 	for i, want := range []string{"1:batch-processing", "2:agents-config", "3:auto-layout", "4:fix-sidebar", "5:mac/laatmux/gone"} {
@@ -428,14 +428,14 @@ func TestConfiguredTemplates(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	m := model(now)
 	m.Layout, m.Width, m.Height = Tiles, 40, 12
-	m.SetTemplates(CompileTemplates([]string{"{status_icon} {primary}", "", "{secondary}"}, "", "", "", "", "", "", ""))
+	m.SetTemplates(CompileTemplates([]string{"{status_icon} {primary}", "", "{secondary}"}, "", nil, "", "", "", "", ""))
 	out := Text(m.Render())
 	lines := strings.Split(out, "\n")
 	if strings.TrimRight(lines[1], " ") != "💬 fix-ls" || strings.TrimRight(lines[2], " ") != "laatmux" || !strings.HasPrefix(lines[3], "───") {
 		t.Errorf("two-line tiles:\n%s", out)
 	}
 	m.Layout, m.Titles = Compact, true
-	m.SetTemplates(CompileTemplates([]string{"{primary}", "{secondary}", "{pane_title} {pr_number}"}, "{status_icon} {primary} @{host}", "", "", "", "", "", ""))
+	m.SetTemplates(CompileTemplates([]string{"{primary}", "{secondary}", "{pane_title} {pr_number}"}, "{status_icon} {primary} @{host}", nil, "", "", "", "", ""))
 	out = Text(m.Render())
 	lines = strings.Split(out, "\n")
 	if strings.TrimRight(lines[1], " ") != "💬 fix-ls @vm" || !strings.HasPrefix(lines[2], "Permission to run pnpm test") {
@@ -445,7 +445,7 @@ func TestConfiguredTemplates(t *testing.T) {
 	// count; an agent template that does not parse.
 	in := treeInput(now)
 	tree := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 20}
-	tree.SetTemplates(CompileTemplates(nil, "", "", "{repo} ({repo_count})", "{indent}{fold}{branch} [{child_count}]", "{indent}{status_icon} {nope}", "", ""))
+	tree.SetTemplates(CompileTemplates(nil, "", nil, "{repo} ({repo_count})", "{indent}{fold}{branch} [{child_count}]", "{indent}{status_icon} {nope}", "", ""))
 	tree.SetTree(rows.Tree(in))
 	tree.SetRows(rows.Agents(in))
 	out = Text(tree.Render())
@@ -461,7 +461,7 @@ func TestConfiguredTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 	ct := CompileTemplates(cfg.Sidebar.Templates.Tiles, cfg.Sidebar.Templates.Compact, cfg.Sidebar.Templates.Top, cfg.Sidebar.Templates.Tree.Repo, cfg.Sidebar.Templates.Tree.Worktree, cfg.Sidebar.Templates.Tree.Agent, cfg.Sidebar.Templates.Tree.Pane, cfg.Sidebar.Templates.Tree.Run)
-	if len(ct.Tiles) != 2 || ct.Tiles[1].Err != "template error: unknown token {nope} at column 1 in tiles[1]" || ct.Tree.Run.src != "{indent}> {command}" || ct.Compact.src != DefaultCompact {
+	if len(ct.Tiles) != 2 || ct.Tiles[1].Err != "template error: unknown token {nope} at column 1 in tiles[1]" || ct.Tree.Run.src != "{indent}> {command}" || ct.Compact.src != DefaultCompact || len(ct.Top) != 3 {
 		t.Errorf("compiled from the config: %+v", ct)
 	}
 	// The painter draws a background, not under the selection's band,

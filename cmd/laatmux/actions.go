@@ -60,7 +60,10 @@ type dash struct {
 	// and refocus the return of focus after a click in the sidebar.
 	switcher func(session string) error
 	jumper   func(r rows.Row) error
-	refocus  func()
+	// client is the tmux client the next jump switches, from a sidebar
+	// command with -c; "" is the view's own.
+	client  string
+	refocus func()
 	// quitting is that the notice up is the last thing shown: its
 	// dismissal ends the view.
 	quitting bool

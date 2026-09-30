@@ -390,7 +390,13 @@ func Tree(in Input) []Row {
 				a := &in.Agents[k]
 				if !used[a] && a.EnvironmentID == p.EnvironmentID && Server(*a) == tmux.LaatmuxServer.Label() && a.Session == p.Session && a.Cwd == p.Root {
 					used[a] = true
-					c := Row{Kind: KindAgent, Node: a.ID, Host: t.Host, Name: a.Session, Agent: a, Local: t.Local, Depth: 2}
+					// The task's workspace session, or the attachment
+					// to the add's session the viewer may be in.
+					local := t.Local
+					if local == nil {
+						local = j.agentLocal(t.Host, a)
+					}
+					c := Row{Kind: KindAgent, Node: a.ID, Host: t.Host, Name: a.Session, Agent: a, Local: local, Depth: 2}
 					j.finish(&c)
 					children = append(children, c)
 					break

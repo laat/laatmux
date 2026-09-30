@@ -846,7 +846,9 @@ Five settlements differ from the plan in #52:
   current session's windows only, and its hooks for new windows are set
   on that session with `set-hook -t`, not globally, so other sessions
   get none. This reverses the rule against a per-session scope, and is
-  #52's meaning.
+  #52's meaning. The hooks that reap, fit and mark seen stay global,
+  and no new-session hook is set; `off` takes the session's hook off
+  every session.
 - **`F`** switches the pane's scope to `session`, and pressed again back
   to the scope the pane had before, whatever set it; a pane already on
   `session` goes to `all`. It acts on that pane only and is not
@@ -922,6 +924,11 @@ Five settlements differ from the plan in #52:
   its node was last seen, and one not seen for a day is dropped. At
   start a pane takes the file's values and the config's for what the
   file lacks; the config is the default, the file the last choice.
+  The view tells its host of a setting changed, the view, layout,
+  scope or a fold, once after the key or command that changed it; the
+  host writes the view, layout and folds then, and the file's folds
+  reach the view as a command on its own goroutine when the poll sees
+  the mtime move.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
 
@@ -986,12 +993,13 @@ the defaults.
   the next, through the fill's padding, and leaves a token's own
   colours alone; a background gives way to the selection's band.
 - **Config:** `sidebar.templates.{compact, tiles, top, tree.{repo,
-  worktree, agent, pane, run}}`. An unknown token is shown in the view
+  worktree, agent, pane, run}}`; `top`, like `tiles`, is a list of
+  lines, three by default. An unknown token is shown in the view
   as `template error: unknown token … at column N in tiles[0]` instead
   of failing the pane. With `Titles` the compact layout draws the
   tiles' third line under each row. The stale fold row, the `other
   sessions` header and the session lines under it are fixed, not
-  templates; `top` is parsed now and drawn by step 8.
+  templates.
 
 ## The dashboard
 

@@ -17,6 +17,11 @@ type Host struct {
 	Refresh func(m *Model)
 	// Act handles a jump or another key; true ends the view.
 	Act func(m *Model, a Action) (done bool)
+	// Commands carries what reaches the view from outside the
+	// terminal: a sidebar subcommand over the pane's socket, folds
+	// another pane wrote. Each runs on the view's goroutine with the
+	// model, and its action goes to Act as a key's would.
+	Commands <-chan func(m *Model) Action
 }
 
 // tick is how often the ages are redrawn when no time in seconds is on
@@ -92,6 +97,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			if a.Kind != ActionNone && h.Act(m, a) {
 				return true
 			}
+			if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
+				return true
+			}
 		}
 		return false
 	}
@@ -131,10 +139,23 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			if a := m.Poll(); a.Kind != ActionNone && h.Act(m, a) {
 				return nil
 			}
+			// A fold carried across a handoff is a setting changed.
+			if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
+				return nil
+			}
 		case <-tk.C:
 			// The rows again, not only the ages: an agent idle long
 			// enough turns stale with no record changing.
 			h.Refresh(m)
+		case f := <-h.Commands:
+			if a := f(m); a.Kind != ActionNone && a.Kind != ActionQuit && h.Act(m, a) {
+				return nil
+			} else if a.Kind == ActionQuit {
+				return nil
+			}
+			if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
+				return nil
+			}
 		case <-spin:
 		case <-winch:
 		case <-flush:

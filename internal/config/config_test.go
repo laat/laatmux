@@ -390,14 +390,19 @@ func TestLoadSetup(t *testing.T) {
 // The sidebar section: defaults when absent, validated when present.
 func TestSidebarConfig(t *testing.T) {
 	c, err := Parse([]byte("hosts:\n  - name: mac\n"))
-	if err != nil || c.Sidebar.Columns() != DefaultSidebarWidth || c.Sidebar.Layout != "" {
+	if err != nil || c.Sidebar.Columns(0) != DefaultSidebarWidth || c.Sidebar.Columns(200) != 25 || c.Sidebar.Columns(400) != 40 || c.Sidebar.Columns(800) != 50 || c.Sidebar.Layout != "" {
 		t.Fatalf("defaults: %+v %v", c.Sidebar, err)
 	}
 	c, err = Parse([]byte("sidebar:\n  width: 40\n  layout: compact\n"))
-	if err != nil || c.Sidebar.Columns() != 40 || c.Sidebar.Layout != "compact" {
+	if err != nil || c.Sidebar.Columns(0) != 40 || c.Sidebar.Columns(1000) != 40 || c.Sidebar.Layout != "compact" {
 		t.Fatalf("set: %+v %v", c.Sidebar, err)
 	}
-	for _, bad := range []string{"sidebar:\n  width: 5\n", "sidebar:\n  width: -1\n", "sidebar:\n  layout: wide\n"} {
+	// A percentage, of the window; the default with no window known.
+	c, err = Parse([]byte("sidebar:\n  width: 20%\n  position: top\n  height: 4\n  horizontal: {item_width: 30}\n"))
+	if err != nil || c.Sidebar.Columns(200) != 40 || c.Sidebar.Columns(0) != DefaultSidebarWidth || !c.Sidebar.Top() || c.Sidebar.Lines() != 4 || c.Sidebar.ItemWidth() != 30 {
+		t.Fatalf("percent: %+v %v", c.Sidebar, err)
+	}
+	for _, bad := range []string{"sidebar:\n  width: 5\n", "sidebar:\n  width: -1\n", "sidebar:\n  width: 0%\n", "sidebar:\n  width: 120%\n", "sidebar:\n  width: wide\n", "sidebar:\n  position: right\n", "sidebar:\n  layout: wide\n"} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

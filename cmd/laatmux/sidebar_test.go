@@ -67,7 +67,7 @@ func TestSidebarFit(t *testing.T) {
 	if w := width(); w == "35" {
 		t.Fatalf("the window grew and the sidebar did not: %s", w)
 	}
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	if err := sidebarFit(ctx, cfg, window); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestSidebarFitBounds(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	window := run("new-session", "-d", "-s", "n", "-x", "120", "-y", "30", "-P", "-F", "#{window_id}", "sleep 1000")
 	id := run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
 	run("set-option", "-p", "-t", id, sidebarTag, "1")
@@ -173,7 +173,7 @@ func TestSidebarHooksRun(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+logf+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := setSidebarHooks(ctx, exe); err != nil {
+	if err := setSidebarHooks(ctx, exe, ""); err != nil {
 		t.Fatal(err)
 	}
 	out, err := workspace.Server.Run(ctx, "show-hooks", "-gw", "window-resized")
@@ -202,6 +202,39 @@ func TestSidebarHooksRun(t *testing.T) {
 			t.Fatalf("%s left after unset", h.hook)
 		}
 	}
+	// With a session, the new-window hook is that session's: a window
+	// made there runs attach, one made in another session does not, and
+	// the reap hook is global still, which toggle reads.
+	os.Remove(logf)
+	sid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "boot", "#{session_id}"))))
+	if err := setSidebarHooks(ctx, exe, sid); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := sidebarHooksSet(ctx); err != nil || !on {
+		t.Fatalf("hooks set for a session not seen as on: %v %v", on, err)
+	}
+	must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "sleep 1000"))
+	otherWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "other:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	bootWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	for i := 0; i < 100; i++ {
+		b, _ := os.ReadFile(logf)
+		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	b, _ := os.ReadFile(logf)
+	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin) || strings.Contains(got, "sidebar attach "+otherWin) {
+		t.Fatalf("session hooks ran %q: want attach for %s, none for %s", got, bootWin, otherWin)
+	}
+	if out, _ := workspace.Server.Run(ctx, "show-hooks", "-g", "after-new-session"); strings.Contains(string(out), sidebarHooks[1].hook) {
+		t.Fatal("the new-session hook set for a session")
+	}
+	must(workspace.Server.Run(ctx, "set-hook", "-u", "-t", sid, sidebarHooks[0].hook))
+	for _, h := range sidebarHooks[2:] {
+		must(workspace.Server.Run(ctx, "set-hook", "-gu", h.hook))
+	}
 }
 
 func must(b []byte, err error) []byte {
@@ -214,10 +247,23 @@ func must(b []byte, err error) []byte {
 // The width rule split and fit share: the configured width, half a
 // narrow window, the configured width for a window not known.
 func TestSidebarWidth(t *testing.T) {
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	for _, c := range []struct{ window, want int }{{200, 35}, {70, 35}, {50, 25}, {36, 18}, {1, 1}, {0, 35}} {
 		if got := sidebarWidth(cfg, c.window); got != c.want {
 			t.Errorf("window %d: %d, want %d", c.window, got, c.want)
+		}
+	}
+	// A percentage of the window, and the default's clamp.
+	cfg.Sidebar.Width = "20%"
+	for _, c := range []struct{ window, want int }{{200, 40}, {50, 10}, {0, 35}} {
+		if got := sidebarWidth(cfg, c.window); got != c.want {
+			t.Errorf("20%% of %d: %d, want %d", c.window, got, c.want)
+		}
+	}
+	cfg.Sidebar.Width = ""
+	for _, c := range []struct{ window, want int }{{200, 25}, {300, 30}, {600, 50}, {40, 20}, {0, 35}} {
+		if got := sidebarWidth(cfg, c.window); got != c.want {
+			t.Errorf("unset at %d: %d, want %d", c.window, got, c.want)
 		}
 	}
 }
