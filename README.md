@@ -784,8 +784,9 @@ is switched to.
   and `after-new-session[9102]` running `sidebar attach '#{window_id}'
   '#{session_id}'`,
   `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
-  and `window-resized[9105]` running `sidebar fit '#{window_id}'`,
-  then walks every window on the default server and splits a pane off
+  `window-resized[9105]` running `sidebar fit '#{window_id}'`, and
+  `client-session-changed[9106]`, `session-window-changed[9107]` and
+  `window-pane-changed[9108]` running `sidebar seen`, then walks every window on the default server and splits a pane off
   the left edge of each that has none, full height, at the configured
   width, running `sidebar pane`. The split is detached, so focus stays
   where it was, and the pane is tagged `@laatmux_sidebar` by the id
@@ -806,7 +807,7 @@ is switched to.
   is split off as when it is fitted. The width is the
   sidebar's own, set in the config: a border dragged by hand is put
   back at the next resize of the window. A zoomed window stays zoomed. A sidebar turned on by an older build gets the
-  hook when `on` runs again. `off` unsets the five hooks and kills every tagged pane. `toggle` reads the hooks. The hook
+  hook when `on` runs again. `off` unsets the hooks and kills every tagged pane. `toggle` reads the hooks. The hook
   commands name the binary by its absolute path. `q` in a sidebar pane
   closes it; that window has no sidebar until a new window is made or
   `on` runs again.
