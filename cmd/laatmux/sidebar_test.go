@@ -103,6 +103,19 @@ func TestSidebarFit(t *testing.T) {
 	if w := width(); w != "35" {
 		t.Fatalf("after unzoom: %s", w)
 	}
+	// A strip on top: fit sets its height, full width.
+	top := run("new-window", "-d", "-t", "s:", "-P", "-F", "#{window_id}", "sleep 1000")
+	tcfg := config.Config{Sidebar: config.Sidebar{Position: "top"}}
+	strip := run(append(sidebarSplit(tcfg, 0), "-t", top, "-P", "-F", "#{pane_id}", "sleep 1000")...)
+	run("set-option", "-p", "-t", strip, sidebarTag, "1")
+	run("resize-window", "-t", top, "-x", "172", "-y", "50")
+	run("resize-pane", "-t", strip, "-y", "10")
+	if err := sidebarFit(ctx, tcfg, top); err != nil {
+		t.Fatal(err)
+	}
+	if h, w := run("display", "-p", "-t", strip, "#{pane_height}"), run("display", "-p", "-t", strip, "#{pane_width}"); h != "3" || w != "172" {
+		t.Fatalf("a strip after fit: %s lines, %s wide", h, w)
+	}
 }
 
 // A narrow window gives the sidebar half; a border dragged by hand is
@@ -342,6 +355,18 @@ func must(b []byte, err error) []byte {
 // narrow window, the configured width for a window not known.
 func TestSidebarWidth(t *testing.T) {
 	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
+	// The split: left at the width, or top at the height.
+	if got := strings.Join(sidebarSplit(cfg, 200), " "); got != "split-window -d -h -b -f -l 35" {
+		t.Errorf("the left split: %s", got)
+	}
+	if got := strings.Join(sidebarSplit(config.Config{Sidebar: config.Sidebar{Position: "top", Height: 4}}, 200), " "); got != "split-window -d -v -b -f -l 4" {
+		t.Errorf("the top split: %s", got)
+	}
+	// The jump keys' labels: in a pane that listens, not the dashboard.
+	cfg.Sidebar.JumpKeys = true
+	if !jumpKeysShown(cfg, viewOptions{listen: true}) || jumpKeysShown(cfg, viewOptions{actions: true}) || jumpKeysShown(config.Config{}, viewOptions{listen: true}) {
+		t.Error("the jump keys shown in the wrong host")
+	}
 	for _, c := range []struct{ window, want int }{{200, 35}, {70, 35}, {50, 25}, {36, 18}, {1, 1}, {0, 35}} {
 		if got := sidebarWidth(cfg, c.window); got != c.want {
 			t.Errorf("window %d: %d, want %d", c.window, got, c.want)

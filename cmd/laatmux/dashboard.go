@@ -71,6 +71,14 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
 }
 
+// jumpKeysShown is whether the {jump_key} labels are drawn: the keys
+// reach a sidebar pane over its socket, and a popup gets the keys
+// itself and drops them, while a window's binding goes to the window's
+// sidebar, so only a pane that listens shows them.
+func jumpKeysShown(cfg config.Config, o viewOptions) bool {
+	return cfg.Sidebar.JumpKeys && o.listen
+}
+
 // runView runs the view on the terminal against the merged stream. With
 // exitOnJump a successful jump ends the view, which is what a popup
 // wants; a sidebar pane stays. With actions the dashboard's keys are
@@ -104,10 +112,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	m.Machine, _ = os.Hostname()
 	m.SetTemplates(templates(cfg))
 	m.AgentIcons = agentIcons(cfg)
-	// The jump keys reach a sidebar pane over its socket: a popup gets
-	// the keys itself and drops them, and a window's binding goes to
-	// the window's sidebar, so only a pane that listens shows them.
-	m.JumpKeys = cfg.Sidebar.JumpKeys && o.listen
+	m.JumpKeys = jumpKeysShown(cfg, o)
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)

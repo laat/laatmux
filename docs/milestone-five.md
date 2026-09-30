@@ -867,8 +867,9 @@ Five settlements differ from the plan in #52:
   tagged pane rather than building it. A pane unlinks a leftover socket
   of its name before it listens and removes its socket on exit, and
   `sidebar reap` removes a socket whose server pid is the default
-  server's and whose pane is gone, or one that refuses a connection; it
-  leaves the sockets of other servers, which it cannot list, alone. The command is
+  server's and whose pane is gone, or one that refuses a connection; a
+  socket of another server, which it cannot list, goes only when it
+  refuses. The command is
   one message to the socket, handled as a navigation event, not as
   typed keys: it moves the selection or switches the view whether the
   pane is filtering or not, and is ignored while an overlay or a

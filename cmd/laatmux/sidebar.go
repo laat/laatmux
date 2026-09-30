@@ -379,13 +379,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	if err != nil {
 		return err
 	}
-	// Off the left edge, full height, at the width; or, with position
-	// top, off the top edge, full width, at the height.
-	split := []string{"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth))}
-	if cfg.Sidebar.Top() {
-		split = []string{"split-window", "-d", "-v", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Lines())}
-	}
-	out, err = workspace.Server.Run(ctx, append(split, "-t", window, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))...)
+	out, err = workspace.Server.Run(ctx, append(sidebarSplit(cfg, windowWidth), "-t", window, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))...)
 	if err != nil {
 		return err
 	}
@@ -444,6 +438,16 @@ func sidebarWidth(cfg config.Config, windowWidth int) int {
 		return cfg.Sidebar.Columns(0)
 	}
 	return min(cfg.Sidebar.Columns(windowWidth), max(windowWidth/2, 1))
+}
+
+// sidebarSplit is the split-window that adds the pane: off the left
+// edge, full height, at the width; or, with position top, off the top
+// edge, full width, at the height.
+func sidebarSplit(cfg config.Config, windowWidth int) []string {
+	if cfg.Sidebar.Top() {
+		return []string{"split-window", "-d", "-v", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Lines())}
+	}
+	return []string{"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth))}
 }
 
 // sidebarFit puts the window's sidebar pane back to its width. tmux

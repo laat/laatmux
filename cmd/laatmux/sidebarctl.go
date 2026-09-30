@@ -224,8 +224,8 @@ func send(path, line string) error {
 }
 
 // reapSockets removes a socket whose server pid is the default server's
-// and whose pane is gone, or one that refuses a connection; it leaves
-// the sockets of other servers, which it cannot list, alone.
+// and whose pane is gone, or one that refuses a connection; a socket
+// of another server, which it cannot list, goes only when it refuses.
 func reapSockets(ctx context.Context) {
 	entries, err := os.ReadDir(socketDir())
 	if err != nil {
