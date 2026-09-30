@@ -223,11 +223,30 @@ func TestPaneJumpRouting(t *testing.T) {
 			t.Errorf("%v in %s: spec %+v", c.row.Kind, c.target.session, spec)
 		}
 	}
-	// The task line's own jump attaches the session Home names.
-	if target, err := pendingTarget(*moved); err != nil {
-		t.Errorf("the moved task's target: %v", err)
-	} else if spec, _, err := rowSpec(cfg, h, target); err != nil || spec.Managed != moved.Home() {
-		t.Errorf("the moved task's jump: %+v %v, home %q", spec, err, moved.Home())
+	// The task line's own jump attaches the session Home names, and
+	// the pane jump routed to the line names the local session as the
+	// line's own does: a task's session under any name, a home renamed.
+	foo := *task
+	foo.Pending = &protocol.Pending{}
+	*foo.Pending = *task.Pending
+	foo.Pending.Session = "laatmux/foo"
+	renamed := *owner
+	renamed.Worktree = &protocol.Worktree{}
+	*renamed.Worktree = *listed
+	renamed.Worktree.Session = "foo"
+	for _, line := range []*rows.Row{task, owner, moved, &foo, &renamed} {
+		target, err := pendingTarget(*line)
+		if err != nil {
+			t.Errorf("%s's target: %v", line.Pending.Session, err)
+			continue
+		}
+		spec, session, err := rowSpec(cfg, h, target)
+		if err != nil || session != "" || spec.Managed != line.Home() {
+			t.Errorf("%s's jump: %+v %q %v, home %q", line.Pending.Session, spec, session, err, line.Home())
+		}
+		if got := paneSpec(cfg, h, line, rows.Row{Kind: rows.KindAgent, Agent: a}, paneTarget{"laatmux", line.Home(), "%1"}); got != spec {
+			t.Errorf("%s: the pane jump's spec %+v, the line's %+v", line.Pending.Session, got, spec)
+		}
 	}
 	// The line a pane's session routes by, from the tree.
 	m := &view.Model{Tree: []rows.Row{
@@ -239,6 +258,7 @@ func TestPaneJumpRouting(t *testing.T) {
 		{"vm", "laatmux/y", other.ID}, {"vm", "scratch", ""}, {"mac", "laatmux/x", "menv/worktree//r/x"}, {"vm", "", ""},
 		{"vm", "laatmux/z-2", "add-1"},
 	} {
+		m.Tree[3] = *task
 		switch c.session {
 		case "laatmux/z":
 			m.Tree[3] = *owner

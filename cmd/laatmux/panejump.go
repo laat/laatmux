@@ -109,6 +109,20 @@ const selectTimeout = 5 * time.Second
 // session's name, unless a pane was left in a session a worktree's
 // root agent moved out of.
 func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) workspace.Spec {
+	if line != nil {
+		// The line's own jump, when it attaches the pane's session:
+		// the same spec, so the session is named alike whichever jump
+		// comes first.
+		t, err := *line, error(nil)
+		if t.Pending != nil {
+			t, err = pendingTarget(t)
+		}
+		if err == nil {
+			if spec, session, err := rowSpec(cfg, h, t); err == nil && session == "" && spec.Managed == p.session {
+				return spec
+			}
+		}
+	}
 	var w protocol.Worktree
 	home := "" // the session the line's own jump attaches
 	switch {

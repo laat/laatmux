@@ -960,17 +960,33 @@ func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
 		}
 		return l, nil
 	}
-	if r.Worktree == nil || r.Worktree.Session == "" {
-		return workspace.Local{}, errors.New(r.Name + ": not a workspace")
+	spec, err := localSpec(d.cfg, r)
+	if err != nil {
+		return workspace.Local{}, err
 	}
-	h, ok := d.cfg.Find(r.Host)
-	if !ok {
-		return workspace.Local{}, fmt.Errorf("unknown host %q", r.Host)
-	}
-	spec := worktreeSpec(d.cfg, h, *r.Worktree)
 	name, _, err := workspace.Ensure(d.ctx, spec)
 	if err != nil {
 		return workspace.Local{}, err
 	}
-	return workspace.Local{Name: name, Key: spec.Key, Host: h.Name, Source: spec.Source, Branch: spec.Branch}, nil
+	return workspace.Local{Name: name, Key: spec.Key, Host: spec.Host.Name, Source: spec.Source, Branch: spec.Branch}, nil
+}
+
+// localSpec is the workspace session a row without one gets for its
+// shell: the one the row's own jump makes, through the worktree's root
+// agent when the home is lost; a row whose jump is no workspace
+// session, a switch on this machine's default server or a plain
+// attachment, has none.
+func localSpec(cfg config.Config, r rows.Row) (workspace.Spec, error) {
+	if r.Worktree == nil {
+		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	}
+	h, ok := cfg.Find(r.Host)
+	if !ok {
+		return workspace.Spec{}, fmt.Errorf("unknown host %q", r.Host)
+	}
+	spec, session, err := rowSpec(cfg, h, r)
+	if err != nil || session != "" || spec.Key == "" {
+		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	}
+	return spec, nil
 }

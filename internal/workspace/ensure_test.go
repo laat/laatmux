@@ -11,6 +11,28 @@ import (
 	"github.com/laat/laatmux/internal/tmux"
 )
 
+// startServers starts both servers without the user's config, whose
+// hooks could split a new session, and keeps them up with no session;
+// each is killed at the end. A server the previous test killed may
+// still be going: a start that reaches it is tried again.
+func startServers(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	for _, s := range []tmux.Server{tmux.LaatmuxServer, tmux.DefaultServer} {
+		var err error
+		for i := 0; i < 50; i++ {
+			if _, err = s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Run(ctx, "kill-server") })
+	}
+}
+
 // A workspace session found again for a spec that names another
 // managed session has its attach pane moved there: the worktree's
 // agent is in another session now. The pane's tag says which.
@@ -19,14 +41,7 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
-	// Both servers start without the user's config, whose hooks could
-	// split a new session, and stay up with no session.
-	for _, s := range []tmux.Server{tmux.LaatmuxServer, tmux.DefaultServer} {
-		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { s.Run(ctx, "kill-server") })
-	}
+	startServers(t)
 	for _, name := range []string{"s1", "s2"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
@@ -102,12 +117,7 @@ func TestPaneJumpSteps(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
-	for _, s := range []tmux.Server{tmux.LaatmuxServer, tmux.DefaultServer} {
-		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { s.Run(ctx, "kill-server") })
-	}
+	startServers(t)
 	managed := tmux.LaatmuxServer
 	if _, err := managed.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
 		t.Fatal(err)

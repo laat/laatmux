@@ -1631,17 +1631,24 @@ func TestTreeEdges(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
 		t.Errorf("f opening every fold moved the selection: %+v", r)
 	}
-	// f under a filter goes by the folds shown: with the hidden line
+	// f under a filter goes by the folds shown: with a hidden line
 	// folded and the shown one open, the first f closes the shown.
 	m.Follow = false
-	m.Handle(Key{Rune: 'f'}) // every fold open
-	m.Handle(Key{Rune: 'f'}) // every fold closed
-	m.Select("venv/worktree//r/agents-config")
-	m.Handle(Key{Rune: 'l'}) // agents-config open, the rest closed
+	shown, hidden := "venv/worktree//r/agents-config", "venv/worktree//r/auto-layout"
+	m.Select(hidden)
+	m.Handle(Key{Rune: 'h'})
+	m.Select(shown)
+	m.Handle(Key{Rune: 'l'})
+	if !m.closed(&m.Tree[m.indexOf(hidden)]) || m.closed(&m.Tree[m.indexOf(shown)]) {
+		t.Fatal("the folds before the filter")
+	}
 	m.Filter = "agents-config"
 	m.Render()
+	if vis := m.Visible(); len(vis) != 6 || vis[1].Row.ID() != shown {
+		t.Fatalf("the filtered tree: %d rows", len(vis))
+	}
 	m.Handle(Key{Rune: 'f'})
-	if !m.closed(&m.Tree[m.indexOf("venv/worktree//r/agents-config")]) {
+	if !m.closed(&m.Tree[m.indexOf(shown)]) {
 		t.Error("f under a filter opened by a hidden fold")
 	}
 	m.Filter = ""

@@ -235,6 +235,39 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
 		t.Error("plain attachment accepted")
 	}
+	// A row without a local session gets the one its own jump makes: a
+	// worktree with a home; one with the home lost, through its root
+	// agent, as a task line standing for it after pendingTarget; none
+	// for a worktree with neither, or whose agent is on a default
+	// server.
+	w := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	lost := w
+	lost.Session = ""
+	root := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/z-2", Managed: true, Cwd: "/w/proj/z"}
+	deflt := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes"}
+	task := rows.Row{Kind: rows.KindTask, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &root, Pending: &protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: "proj/z", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
+	target, err := pendingTarget(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		row     rows.Row
+		managed string
+	}{
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &w}, "proj/z"},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &root}, "proj/z-2"},
+		{target, "proj/z-2"},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost}, ""},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &deflt}, ""},
+	} {
+		spec, err := localSpec(cfg, c.row)
+		switch {
+		case c.managed == "" && (err == nil || !strings.Contains(err.Error(), "not a workspace")):
+			t.Errorf("%+v: spec %+v, %v", c.row.Agent, spec, err)
+		case c.managed != "" && (err != nil || spec.Managed != c.managed || spec.Key != "venv//w/proj/z"):
+			t.Errorf("%+v: spec %+v, %v", c.row.Agent, spec, err)
+		}
+	}
 }
 
 // An rm whose host side succeeded and whose local cleanup then failed
