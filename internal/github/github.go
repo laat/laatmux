@@ -384,15 +384,18 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 			// pages are asked for until one of the repository's own. A
 			// page that fails leaves the answer partial, not absent.
 			// Only what can change the answer is paged: an open PR while
-			// the branch is there; any PR once it is gone, a closed one
-			// counting then.
+			// the branch is there; any PR when no own one is in sight,
+			// a closed one counting once the branch is gone or while it
+			// is at that PR's last commit. Not on main or master, whose
+			// PR the views never show and whose forks' PRs are many.
 			var err error
+			mainline := b.Branch == "main" || b.Branch == "master"
 			if a.Ref != nil && !a.Open.own() && a.Open.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)
 				a.Open.Nodes = append(a.Open.Nodes, more...)
 			}
-			if err == nil && a.Ref == nil && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
+			if err == nil && !mainline && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)
 				a.PullRequests.Nodes = append(a.PullRequests.Nodes, more...)

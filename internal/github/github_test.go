@@ -262,3 +262,31 @@ func TestPRPageFails(t *testing.T) {
 		}
 	}
 }
+
+// A merged PR past forks' first page, with the branch still at its last
+// commit, is found; on main the full connection is not paged.
+func TestMergedPRPastForks(t *testing.T) {
+	fork := `{"number":9,"state":"OPEN","isDraft":false,"url":"u9","isCrossRepository":true,"commits":{"nodes":[]}}`
+	merged := `{"number":4,"state":"MERGED","isDraft":false,"url":"u4","isCrossRepository":false,"commits":{"nodes":[{"commit":{"oid":"own","statusCheckRollup":null}}]}}`
+	pages := 0
+	f := &fake{answer: func(vars map[string]string) (string, error) {
+		switch {
+		case vars["after"] != "":
+			pages++
+			return `{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4,"isCrossRepository":false}]}}}}`, nil
+		case vars["o"] != "" && vars["b"] == "":
+			return `{"data":{"repository":{"pullRequest":` + merged + `}}}`, nil
+		}
+		forks := strings.Repeat(fork+",", 4) + fork
+		return `{"data":{"b0":{"url":"u","ref":{"target":{"oid":"own"}},"open":{"pageInfo":{"hasNextPage":false},"nodes":[]},` +
+			`"pullRequests":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + forks + `]}}}}`, nil
+	}}
+	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
+	if err != nil || rs[0].PR == nil || rs[0].PR.Number != 4 || rs[0].PR.State != "merged" {
+		t.Errorf("%+v %v", rs[0], err)
+	}
+	rs, _ = Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "main"}})
+	if rs[0].PR != nil || pages != 1 {
+		t.Errorf("main: %+v, pages %d", rs[0], pages)
+	}
+}

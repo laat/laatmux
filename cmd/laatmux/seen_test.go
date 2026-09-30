@@ -69,3 +69,17 @@ func TestMergedBranches(t *testing.T) {
 		t.Error("github_ok did not clear")
 	}
 }
+
+// The github line trusts only an answer with a viewer: a body with data
+// null and errors, which gh returns with exit 0, is the error.
+func TestViewerStatus(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"data":{"viewer":{"login":"laat"}}}`:                           "ok",
+		`{"data":null,"errors":[{"message":"API rate limit exceeded"}]}`: "gh api graphql: API rate limit exceeded",
+		`{"data":{"viewer":null}}`:                                       "gh api graphql: no viewer",
+	} {
+		if got := viewerStatus([]byte(body)); got != want {
+			t.Errorf("%s: %q, want %q", body, got, want)
+		}
+	}
+}

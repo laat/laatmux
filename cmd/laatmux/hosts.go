@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -78,9 +79,34 @@ func githubLine(ctx context.Context) string {
 // why not, from the smallest query the daemon's own reading would make,
 // so the two tell the same failures apart.
 var ghStatus = func(ctx context.Context) string {
-	_, err := github.GH(ctx, "github.com", "query { viewer { login } }", nil)
+	body, err := github.GH(ctx, "github.com", "query { viewer { login } }", nil)
 	if err != nil {
 		return err.Error()
+	}
+	return viewerStatus(body)
+}
+
+// viewerStatus reads the viewer query's answer: ok with a login, else
+// the answer's first error.
+func viewerStatus(body []byte) string {
+	var resp struct {
+		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "gh api graphql: " + err.Error()
+	}
+	if len(resp.Errors) > 0 {
+		return "gh api graphql: " + resp.Errors[0].Message
+	}
+	if resp.Data.Viewer.Login == "" {
+		return "gh api graphql: no viewer"
 	}
 	return "ok"
 }

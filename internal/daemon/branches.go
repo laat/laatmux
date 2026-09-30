@@ -331,6 +331,9 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 			for _, a := range answers {
 				d.applyBranches(a.qs, a.results, nil)
 			}
+			// A login failure found before the time ran out is said;
+			// the hosts not reached clear nothing.
+			d.publishGitHubErr(strings.Join(ghErrs, "; "), true)
 			return
 		}
 		if errors.Is(err, github.ErrNoGH) || errors.Is(err, github.ErrLoggedOut) {
@@ -347,7 +350,13 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
 		d.applyBranches(a.qs, a.results, known)
 	}
-	ghErr := strings.Join(ghErrs, "; ")
+	d.publishGitHubErr(strings.Join(ghErrs, "; "), false)
+}
+
+// publishGitHubErr sets the daemon's reason for reading no PR state, or
+// clears it with github_ok; with keep, an empty reason clears nothing,
+// since not every host was asked.
+func (d *Daemon) publishGitHubErr(ghErr string, keep bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
@@ -355,7 +364,7 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		d.githubErr = ghErr
 		d.cfg.Logger.Printf("github: %s", ghErr)
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubError: ghErr})
-	case ghErr == "" && d.githubErr != "":
+	case ghErr == "" && d.githubErr != "" && !keep:
 		d.githubErr = ""
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
 	}

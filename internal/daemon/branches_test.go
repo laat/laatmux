@@ -433,6 +433,22 @@ func TestBranchesSlowHostLast(t *testing.T) {
 	if len(ups) != 1 || ups[0].BranchKey != bkey("b") {
 		t.Errorf("the host answered before the slow one: %+v", ups)
 	}
+	// A login failure on the host answered first is said though the
+	// round ran out on the last.
+	gh.mu.Lock()
+	gh.err = fmt.Errorf("%w to github.com", github.ErrLoggedOut)
+	gh.mu.Unlock()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel2()
+	d.fetchBranches(ctx2, set)
+	_, _, msgs := drainBranches(s)
+	said := false
+	for _, m := range msgs {
+		said = said || strings.Contains(m.GitHubError, "not logged in")
+	}
+	if !said {
+		t.Errorf("the login failure was not said: %+v", msgs)
+	}
 }
 
 // A host with no worktrees to list, a daemon without the capability,
