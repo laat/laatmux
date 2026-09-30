@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1737,6 +1738,80 @@ func TestTreePinned(t *testing.T) {
 		t.Errorf("a repository pinned over other sessions:\n%s", text)
 	}
 	walk(m, Key{Kind: KeyUp})
+}
+
+// Two repositories with an empty worktree each and one observed agent
+// in other sessions, in a five-line body: the pin and the more line
+// settle on a layout that shows the selection at the end, blank lines
+// left over or not.
+func TestTreePinnedSmall(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := rows.Input{
+		Hosts:  []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "venv/default/%5", EnvironmentID: "venv", Server: "default", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive}},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "alpha", Source: "git@github.com:laat/alpha.git", Branch: "a", Root: "/r/a"},
+			{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "beta", Source: "git@github.com:laat/beta.git", Branch: "b", Root: "/r/b"},
+		},
+		Now: now,
+	}
+	for h := 6; h <= 9; h++ {
+		m := &Model{Now: now, View: ViewTree, Tabs: true, Width: 60, Height: h}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
+		m.Render()
+		m.Handle(Key{Rune: 'G'})
+		text := Debug(m.Render())
+		if !strings.Contains(text, "\nS") || strings.Contains(text, "↓ 0 more") {
+			t.Errorf("height %d: the selection is not shown:\n%s", h, text)
+		}
+		if again := Debug(m.Render()); again != text {
+			t.Errorf("height %d: the next render differs:\n%s\nthen:\n%s", h, text, again)
+		}
+		for m.Selected > 0 {
+			m.Handle(Key{Kind: KeyUp})
+			if text := Debug(m.Render()); !strings.Contains(text, "\nS") {
+				t.Errorf("height %d: the selection is not shown:\n%s", h, text)
+			}
+		}
+	}
+}
+
+// Three repositories, the last with an empty worktree, in a ten-line
+// body: G shows the selection, a blank line left over rather than a
+// pin and a more line fighting over the scroll.
+func TestTreePinnedEnd(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}, Now: now}
+	n := 0
+	for r, counts := range map[string][]int{"r0": {2, 3}, "r1": {3, 1}, "r2": {0}} {
+		for i, agents := range counts {
+			w := protocol.Worktree{ID: "venv/worktree//" + r + "/w" + string(rune('0'+i)), EnvironmentID: "venv", Repo: r, Source: "git@github.com:laat/" + r + ".git", Branch: "w" + string(rune('0'+i)), Root: "/" + r + "/w" + string(rune('0'+i)), Session: r + "/w" + string(rune('0'+i))}
+			in.Worktrees = append(in.Worktrees, w)
+			for k := 0; k < agents; k++ {
+				n++
+				in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%" + strconv.Itoa(n), EnvironmentID: "venv", Session: w.Session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: w.ID, Identity: &protocol.Identity{PID: n, StartUnix: int64(n)}})
+			}
+		}
+	}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 11}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	m.Handle(Key{Rune: 'G'})
+	out := m.Render()
+	text := Debug(out)
+	if !strings.Contains(text, "\nS") || strings.Contains(text, "↓") {
+		t.Errorf("G at the end:\n%s", text)
+	}
+	// The window starts on the second repository's line, which needs
+	// no pin.
+	if !out[0].Spans[0].Bold || m.hitIDs[0] != rows.RepoNode("git@github.com:laat/r1.git") || m.scroll != 8 {
+		t.Errorf("the top of the window at scroll %d:\n%s", m.scroll, text)
+	}
+	if again := Debug(m.Render()); again != text {
+		t.Errorf("the next render differs:\n%s\nthen:\n%s", text, again)
+	}
 }
 
 // A task handing over while another stands for its worktree: the

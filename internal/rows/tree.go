@@ -558,7 +558,8 @@ func (r Row) Wants() bool {
 // Home is the managed session a depth-1 line's workspace session
 // attaches to: the worktree's home session; with the home lost, the
 // session of the agent laatmux made at its root; a task's before the
-// host lists the worktree; "" for a line with none.
+// host lists the worktree, or while it lists it without a home; "" for
+// a line with none.
 func (r Row) Home() string {
 	switch {
 	case r.Depth != 1:

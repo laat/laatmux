@@ -198,6 +198,7 @@ func TestPaneJumpRouting(t *testing.T) {
 	// add's agent is identified: the task's session is the home.
 	listed := &protocol.Worktree{ID: "venv/worktree//r/z", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "z", Root: "/r/z"}
 	owner := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending}
+	moved := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending, Agent: &protocol.Agent{ID: "venv/laatmux/%5", Session: "laatmux/z-2", Managed: true, Cwd: "/r/z"}}
 	otherLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: other}
 	for _, c := range []struct {
 		line    *rows.Row
@@ -212,6 +213,9 @@ func TestPaneJumpRouting(t *testing.T) {
 		{task, rows.Row{Kind: rows.KindAgent, Agent: a}, paneTarget{"laatmux", "laatmux/z", "%1"}, "vm/laatmux/z", "laatmux/z", "venv//r/z"},
 		{otherLine, rows.Row{Kind: rows.KindAgent, Worktree: wt, Agent: a}, paneTarget{"laatmux", "laatmux/y", "%1"}, "vm/laatmux/y", "laatmux/y", "venv//r/y"},
 		{owner, rows.Row{Kind: rows.KindPane, Pane: p}, paneTarget{"laatmux", "laatmux/z", "%2"}, "vm/laatmux/z", "laatmux/z", "venv//r/z"},
+		// The task's root agent went to another session than the task
+		// recorded: the pane's session, not the record's.
+		{moved, rows.Row{Kind: rows.KindAgent, Agent: a}, paneTarget{"laatmux", "laatmux/z-2", "%1"}, "vm/laatmux/z", "laatmux/z-2", "venv//r/z"},
 		{nil, rows.Row{Kind: rows.KindAgent, Worktree: &lost, Agent: a}, paneTarget{"laatmux", "scratch", "%1"}, "vm/scratch", "scratch", ""},
 	} {
 		spec := paneSpec(cfg, h, c.line, c.row, c.target)
@@ -227,10 +231,14 @@ func TestPaneJumpRouting(t *testing.T) {
 	for _, c := range []struct{ host, session, want string }{
 		{"vm", "laatmux/x", home.Worktree.ID}, {"vm", "laatmux/x-2", lostLine.Worktree.ID}, {"vm", "laatmux/z", "add-1"},
 		{"vm", "laatmux/y", other.ID}, {"vm", "scratch", ""}, {"mac", "laatmux/x", "menv/worktree//r/x"}, {"vm", "", ""},
+		{"vm", "laatmux/z-2", "add-1"},
 	} {
-		if c.session == "laatmux/z" {
+		switch c.session {
+		case "laatmux/z":
 			m.Tree[3] = *owner
 			c.want = "add-1"
+		case "laatmux/z-2":
+			m.Tree[3] = *moved
 		}
 		got := ""
 		if l := m.LineFor(c.host, c.session); l != nil {

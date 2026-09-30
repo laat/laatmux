@@ -108,29 +108,34 @@ const selectTimeout = 5 * time.Second
 // workspace session, and a plain attachment never takes a workspace
 // session's name.
 func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) workspace.Spec {
+	var w protocol.Worktree
+	home := "" // the session the line's own jump attaches
 	switch {
-	case line != nil && line.Worktree != nil && line.Worktree.Session != "":
-		return worktreeSpec(cfg, h, *line.Worktree)
-	case line != nil && line.Worktree != nil && line.Pending == nil:
-		// The home lost: the session named after the worktree, as the
-		// line's jump names it.
-		w := *line.Worktree
-		w.Session = p.session
-		spec := worktreeSpec(cfg, h, w)
-		spec.Name = worktreeSessionName(h, w)
-		return spec
 	case line != nil && line.Pending != nil:
-		// The task's, as its own jump attaches it, with the worktree's
-		// record when the host lists one without a home.
+		// The task's, with the worktree's record when the host lists
+		// one without a home.
 		pd := line.Pending
-		w := protocol.Worktree{ID: pd.WorktreeID(), EnvironmentID: pd.EnvironmentID, Root: pd.Root, Repo: pd.Repo, Branch: pd.Branch, Source: pd.Source}
+		w = protocol.Worktree{ID: pd.WorktreeID(), EnvironmentID: pd.EnvironmentID, Root: pd.Root, Repo: pd.Repo, Branch: pd.Branch, Source: pd.Source}
 		if line.Worktree != nil {
 			w = *line.Worktree
 		}
-		w.Session = pd.Session
-		return worktreeSpec(cfg, h, w)
+		home = pd.Session
+	case line != nil && line.Worktree != nil:
+		w = *line.Worktree
+		home = w.Session
+	default:
+		return workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
 	}
-	return workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
+	// The pane's session, the one the line resolved to: its home, or
+	// the root agent's when the home is lost or the task's session is
+	// not where the agent went, and then the session named after the
+	// worktree, as the line's jump names it.
+	w.Session = p.session
+	spec := worktreeSpec(cfg, h, w)
+	if home != p.session {
+		spec.Name = worktreeSessionName(h, w)
+	}
+	return spec
 }
 
 // selectRemote asks the host's daemon to make the pane current on its

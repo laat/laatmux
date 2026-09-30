@@ -480,27 +480,6 @@ func (m *Model) Render() []Line {
 	// possible; a separator after the selected tile may fall off. With
 	// rows below the window its last line is the count of them, so the
 	// window is a line shorter.
-	window := body
-	scrollTo := func() {
-		if selStart >= 0 {
-			if selStart < m.scroll {
-				m.scroll = selStart
-			}
-			if selEnd > m.scroll+window {
-				m.scroll = selEnd - window
-			}
-			// A tile taller than the window shows its head.
-			if selEnd-selStart > window {
-				m.scroll = selStart
-			}
-		}
-		if m.scroll > len(lines)-window {
-			m.scroll = len(lines) - window
-		}
-		if m.scroll < 0 {
-			m.scroll = 0
-		}
-	}
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
 	rowsFrom := func(i int) int {
@@ -512,41 +491,48 @@ func (m *Model) Render() []Line {
 		}
 		return n
 	}
-	// Two lines the window gives up when needed: in the tree, the
-	// repository line of the node at the top, pinned above the window
-	// while the list scrolls past it; and "↓ N more" at the bottom for
-	// rows left below. Only rows count for the latter: a group's header
-	// or a divider left below is no reason to give up a line. Each
-	// reservation moves the scroll, which can call for the other: a few
-	// passes settle it.
-	reserved, tail := false, false
-	for pass := 0; pass < 4; pass++ {
-		scrollTo()
-		pin := false
+	// The scroll: where it was, back up to the selection when that is
+	// above, never past the end with a full window; then down, a line
+	// at a time, until the selection is in the window. Two lines the
+	// window gives up when needed, decided at each candidate: in the
+	// tree, the repository line of the node at the top, pinned above
+	// the window while the list scrolls past it; and "↓ N more" at the
+	// bottom for rows left below, where only rows count: a group's
+	// header or a divider left below is no reason to give up a line.
+	// Deciding both at the scroll drawn makes the render its own fixed
+	// point: the next one, from the same state, draws the same.
+	window := body
+	reserved, tail, more := false, false, 0
+	s := m.scroll
+	if selStart >= 0 && selStart < s {
+		s = selStart
+	}
+	if s > len(lines)-body {
+		s = len(lines) - body
+	}
+	if s < 0 {
+		s = 0
+	}
+	for ; ; s++ {
+		m.scroll = s
+		reserved = false
 		if m.View == ViewTree && body >= 4 {
 			l, _ := m.pinned(items, ids)
-			pin = l != nil
+			reserved = l != nil
 		}
-		w := body
-		if pin {
-			w--
+		window = body
+		if reserved {
+			window--
 		}
-		below := w > 1 && rowsFrom(m.scroll+w) > 0
-		if below {
-			w--
+		tail = window > 1 && rowsFrom(s+window) > 0
+		more = 0
+		if tail {
+			window--
+			more = rowsFrom(s + window)
 		}
-		if pin == reserved && below == tail && w == window {
+		// A tile taller than the window shows its head.
+		if selStart < 0 || selStart == s || selStart > s && selEnd <= s+window || s >= len(lines)-1 {
 			break
-		}
-		reserved, tail, window = pin, below, w
-	}
-	more := 0
-	if tail {
-		more = rowsFrom(m.scroll + window)
-		if more == 0 {
-			// The shorter window moved the last row into view.
-			tail = false
-			window++
 		}
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
@@ -558,16 +544,10 @@ func (m *Model) Render() []Line {
 	m.hitAt = m.Now
 	shift := 0
 	if reserved {
-		if pinned, id := m.pinned(items, ids); pinned != nil {
-			out = append(out, *pinned)
-			m.hitIDs[0] = id
-			shift = 1
-		} else {
-			// The shorter window moved a repository line to the top:
-			// the line above the window has the slot instead.
-			m.scroll--
-			window++
-		}
+		pinned, id := m.pinned(items, ids)
+		out = append(out, *pinned)
+		m.hitIDs[0] = id
+		shift = 1
 	}
 	for i := shift; i < body; i++ {
 		switch j := m.scroll + i - shift; {
