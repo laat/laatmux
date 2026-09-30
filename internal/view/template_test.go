@@ -376,6 +376,19 @@ func TestTemplateOverflow(t *testing.T) {
 	if got := render("literal text", 7); got != "literal\n" {
 		t.Errorf("literal text clipped: %q", got)
 	}
+	// A bracketed token goes with its brackets, and a dropped token
+	// takes only the spaces beside it, not a neighbour's bracket.
+	r.Worktree.Branch, r.Host = "feature-branch", "build-server"
+	if got := render("{primary} ({host})", 15); got != "feature-branch\n" {
+		t.Errorf("the host's parentheses: %q", got)
+	}
+	r.Worktree.Branch, r.Host = "fix-ls", "vm"
+	if got := render("{host}{fill}{elapsed} [{pr_number}]", 9); got != "vm  [#52]\n" {
+		t.Errorf("a neighbour's bracket: %q", got)
+	}
+	if got := render("{host}{fill}{elapsed} [{pr_number}]", 7); got != "vm\n" {
+		t.Errorf("the number's brackets: %q", got)
+	}
 }
 
 // A blank tile line is no line; the compact layout draws the third tile

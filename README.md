@@ -997,7 +997,8 @@ sidebar:
   themselves, never to nothing; the fields on the right are dropped,
   the widest first and a folded line's icon last; the flexible tokens
   are cut further; the tokens on the left are dropped, the last first;
-  then the line is clipped. What dropping leaves over
+  then the line is clipped. A dropped token takes the spaces beside it,
+  and a bracket pair around it alone, `({host})`, goes with it. What dropping leaves over
   goes back to the cut labels, then to the shrunk stats and checks. A
   stale branch's `?` sits on `{pr_checks}` when they are drawn, else on
   `{pr_number}`: a number drawn on a stale row always has it, and of a

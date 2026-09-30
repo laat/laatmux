@@ -612,8 +612,7 @@ func hasToken(items []item) bool {
 	return false
 }
 
-// dropLast drops the last token with the literal before it, its
-// separator.
+// dropLast drops the last token with its separator.
 func dropLast(items []item) []item {
 	at := -1
 	for i, it := range items {
@@ -624,17 +623,61 @@ func dropLast(items []item) []item {
 	if at < 0 {
 		return items
 	}
-	from := at
+	return remove(items, at)
+}
+
+// remove takes the token at i out with its separator: the run of
+// spaces the literal before it ends with, else the one the literal
+// after it starts with; a bracket pair around the token alone, `({host})`
+// say, goes with it. A literal left empty goes too.
+func remove(items []item, at int) []item {
+	var prev, next *string
 	if at > 0 && items[at-1].part.kind == partText {
-		from = at - 1
+		prev = &items[at-1].spans[0].Text
 	}
-	return append(items[:from:from], items[at+1:]...)
+	if at+1 < len(items) && items[at+1].part.kind == partText {
+		next = &items[at+1].spans[0].Text
+	}
+	if prev != nil && next != nil {
+		if open, ok := lastRune(*prev); ok {
+			if close, ok := brackets[open]; ok && strings.HasPrefix(*next, string(close)) {
+				*prev = strings.TrimSuffix(*prev, string(open))
+				*next = strings.TrimPrefix(*next, string(close))
+			}
+		}
+	}
+	switch {
+	case prev != nil && strings.HasSuffix(*prev, " "):
+		*prev = strings.TrimRight(*prev, " ")
+	case next != nil && strings.HasPrefix(*next, " "):
+		*next = strings.TrimLeft(*next, " ")
+	}
+	out := append(items[:at:at], items[at+1:]...)
+	kept := out[:0]
+	for _, it := range out {
+		if it.part.kind == partText && it.spans[0].Text == "" {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	return kept
+}
+
+// brackets pairs an opening bracket with its closing one.
+var brackets = map[rune]rune{'(': ')', '[': ']', '{': '}', '<': '>'}
+
+// lastRune is the last rune of s, ok for a non-empty s.
+func lastRune(s string) (rune, bool) {
+	rs := []rune(s)
+	if len(rs) == 0 {
+		return 0, false
+	}
+	return rs[len(rs)-1], true
 }
 
 // dropWidest drops the widest token on the right, the last of equals,
-// with the literal before it, its separator; the first token takes the
-// literal after it instead. A folded line's icon, {worst_status}, goes
-// last: a blocked or done agent inside is not to be missed.
+// with its separator. A folded line's icon, {worst_status}, goes last:
+// a blocked or done agent inside is not to be missed.
 func dropWidest(right []item) []item {
 	at, widest := -1, -1
 	for i, it := range right {
@@ -658,14 +701,7 @@ func dropWidest(right []item) []item {
 	if at < 0 {
 		return nil
 	}
-	from, to := at, at+1
-	switch {
-	case at > 0 && right[at-1].part.kind == partText:
-		from = at - 1
-	case at+1 < len(right) && right[at+1].part.kind == partText:
-		to = at + 2
-	}
-	return append(right[:from:from], right[to:]...)
+	return remove(right, at)
 }
 
 // token evaluates a token for a row.
