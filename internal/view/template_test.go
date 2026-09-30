@@ -220,6 +220,38 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{pr_number}{fill}{pr_checks} {host}", 5); got != "...|‹«#52»›‹?›\n" {
 		t.Errorf("a stale number with the checks dropped: %q", got)
 	}
+	// The mark counted in the fitting: with the checks dropped the
+	// number and its mark fit at 13; at 12 the number goes too, before
+	// the title is cut under the floor, and the title grows back.
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksSuccess}
+	r.Branch.PR.Number = 7
+	if got := render(DefaultTile3, 13); got != "...|⟨accent:▌⟩    Per… ‹«#7»›‹?›\n" {
+		t.Errorf("the mark at an exact width: %q", got)
+	}
+	if got := render(DefaultTile3, 12); got != "...|⟨accent:▌⟩    Permis…\n" {
+		t.Errorf("the number dropped before the floor: %q", got)
+	}
+	// Whatever the width, a PR number drawn on a stale row has its mark,
+	// on the checks or on itself; the mark takes the template's style.
+	for _, src := range []string{DefaultTile3, DefaultWorktree, "{fill}{pr_number} {pr_checks}", "#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}"} {
+		for _, st := range []string{protocol.ChecksSuccess, protocol.ChecksFailure, protocol.ChecksPending} {
+			r.Branch.Checks = &protocol.Checks{State: st, Passed: 3, Total: 5}
+			for w := 3; w <= 40; w++ {
+				got := Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}})
+				if strings.Contains(got, "#7") && !strings.Contains(got, "?") {
+					t.Errorf("%q at %d: %q without the stale mark", src, w, got)
+				}
+			}
+		}
+	}
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksSuccess}
+	if got := render("{fill}{pr_number} {pr_checks}", 5); got != "...|‹«#7»› ‹✓›‹?›\n" {
+		t.Errorf("the number's mark not counted while the checks stand: %q", got)
+	}
+	if got := render("#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", 6); got != "...|⟦#112233:f…⟧⟦#112233: ⟧‹«⟦#112233:#7⟧»›‹⟦#112233:?⟧›\n" {
+		t.Errorf("the mark styled: %q", got)
+	}
+	r.Branch.PR.Number = 52
 	r.Branch.Checks = nil
 	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»›‹?›\n" {
 		t.Errorf("a stale number alone: %q", got)
@@ -229,6 +261,9 @@ func TestTemplateStyles(t *testing.T) {
 	r.Suffix = ""
 	if got := render("a {pane_suffix} #[fg=accent] b", 20); got != "...|a ⟨accent:b⟩\n" {
 		t.Errorf("a split run: %q", got)
+	}
+	if got := render("a #[fg=accent] {pane_suffix}", 20); got != "...|a\n" {
+		t.Errorf("a split run before: %q", got)
 	}
 	r = tokenRow(now)
 	// The single git tokens are stale as the stats are.
@@ -442,6 +477,10 @@ func TestTemplateTreeEdges(t *testing.T) {
 	task := rows.Row{Kind: rows.KindTask, Host: "vm", Pending: &protocol.Pending{ID: "t", Session: "laatmux/new"}}
 	if got := line("{session}", task, 40); got != "laatmux/new" {
 		t.Errorf("a task's session: %q", got)
+	}
+	home := rows.Row{Kind: rows.KindWorktree, Host: "vm", Worktree: &protocol.Worktree{Session: "laatmux/x"}}
+	if got := line("{session}", home, 40); got != "laatmux/x" {
+		t.Errorf("a worktree's session: %q", got)
 	}
 }
 

@@ -966,9 +966,10 @@ the defaults.
   a folded worktree line's `{worst_status}` last, so a blocked or done
   agent inside is not missed; then the flexible tokens are cut
   further; then the line is clipped. What dropping leaves over goes
-  back to the cut labels, then to the shrunk stats. A stale branch's
-  `?` sits on `{pr_checks}` when they are drawn, else on
-  `{pr_number}`, so it shows once and always.
+  back to the cut labels, then to the shrunk stats and checks. A stale
+  branch's `?` sits on `{pr_checks}` when they are drawn, else on
+  `{pr_number}`, counted in the fitting: a number drawn on a stale row
+  always has it, and a line too narrow for both drops the number.
 - **Empty tokens:** an empty token takes the adjacent run of spaces
   with it, the one after it, else the one before, so `{a}  {b}  {c}`
   with `{b}` empty is `{a}  {c}`; an empty field keeps its line, so

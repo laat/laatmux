@@ -373,12 +373,14 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 		case shrinkAny(left, right, over):
 		case len(right) > 0:
 			right = dropWidest(right)
+			// The checks gone: the number takes the stale mark, and
+			// the fitting goes on with it counted.
+			staleMark(left, right, stale, true)
 		case cutFlex(left, over, 2):
 		default:
 			return clip(flatten(left), w)
 		}
 	}
-	staleMark(left, right, stale, total() < w)
 	regrow(left, right, w-total())
 	out := flatten(left)
 	if len(right) > 0 {
@@ -391,9 +393,10 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 
 // staleMark puts a stale branch's ? on the PR pair once: the checks
 // carry it when they are drawn, else the number does. Before the
-// fitting the number's goes when the checks are there; after it, with
-// the checks dropped, the number takes it back when a cell is free.
-func staleMark(left, right []item, stale, room bool) {
+// fitting the number's goes when the checks are there; when a drop
+// takes the checks, the number takes it back, and the fitting counts
+// it.
+func staleMark(left, right []item, stale, back bool) {
 	if !stale {
 		return
 	}
@@ -420,8 +423,8 @@ func staleMark(left, right []item, stale, room bool) {
 	switch {
 	case checks && last.Text == "?":
 		number.spans = number.spans[:len(number.spans)-1]
-	case !checks && last.Text != "?" && room:
-		number.spans = append(number.spans, Span{Text: "?", Dim: true})
+	case !checks && last.Text != "?" && back:
+		number.spans = append(number.spans, styled(Span{Text: "?", Dim: true}, number.part.st))
 	}
 }
 
@@ -475,7 +478,15 @@ func collapse(items []item) []item {
 		}
 		out = append(out, it)
 	}
-	return out
+	// Text parts a trim before emptied.
+	kept := out[:0]
+	for _, it := range out {
+		if it.part.kind == partText && it.spans[0].Text == "" {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	return kept
 }
 
 func itemsWidth(items []item) int {

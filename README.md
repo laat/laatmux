@@ -954,7 +954,7 @@ sidebar:
     top: "{status_icon} {primary} {pane_suffix}"
     tree:
       repo: "#[fg=header,bold]{fold}{repo}"
-      worktree: "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default]{git_stats}  {pr_number} {pr_checks}  {worst_status}"
+      worktree: "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
       agent: "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
       pane: "{indent}$ {command}"
       run: "{indent}▶ {command}{fill}{elapsed}"
@@ -997,9 +997,9 @@ sidebar:
   themselves, never to nothing; the fields on the right are dropped,
   the widest first and a folded line's icon last; the flexible tokens
   are cut further; then the line is clipped. What dropping leaves over
-  goes back to the cut labels, then to the shrunk stats. A stale
-  branch's `?` sits on `{pr_checks}` when they are drawn, else on
-  `{pr_number}`.
+  goes back to the cut labels, then to the shrunk stats and checks. A
+  stale branch's `?` sits on `{pr_checks}` when they are drawn, else on
+  `{pr_number}`: a number drawn on a stale row always has it.
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves
