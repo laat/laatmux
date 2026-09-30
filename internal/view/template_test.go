@@ -413,6 +413,12 @@ func TestTemplateOverflow(t *testing.T) {
 	if got := render("{primary} #[dim]@ {host}", 6); got != "fix-ls\n" {
 		t.Errorf("a split separator: %q", got)
 	}
+	if got := render("{primary} #[dim]({host})", 6); got != "fix-ls\n" {
+		t.Errorf("a split separator before a bracket pair: %q", got)
+	}
+	if got := render("{fill}{elapsed} #[dim]· {pr_number}", 5); got != "  #52\n" {
+		t.Errorf("a split separator after: %q", got)
+	}
 }
 
 // A blank tile line is no line; the compact layout draws the third tile

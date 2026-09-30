@@ -652,8 +652,17 @@ func remove(items []item, at int) []item {
 	// The separator may span text parts a style split, as a run of
 	// spaces may for collapse.
 	sep := func(r rune) bool { return !strings.ContainsRune("()[]{}<>", r) }
+	// The side the separator is on: by the last text before the token,
+	// past a part the bracket pair emptied.
+	before := false
+	for j := at - 1; j >= 0 && items[j].part.kind == partText; j-- {
+		if r, ok := lastRune(items[j].spans[0].Text); ok {
+			before = sep(r)
+			break
+		}
+	}
 	switch {
-	case prev != nil && strings.TrimRightFunc(*prev, sep) != *prev:
+	case before:
 		for j := at - 1; j >= 0 && items[j].part.kind == partText; j-- {
 			t := &items[j].spans[0].Text
 			*t = strings.TrimRightFunc(*t, sep)
