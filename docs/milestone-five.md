@@ -966,10 +966,13 @@ the defaults.
 - **Empty tokens:** an empty token takes the adjacent run of spaces
   with it, the one after it, else the one before, so `{a}  {b}  {c}`
   with `{b}` empty is `{a}  {c}`; an empty field keeps its line, so
-  tiles keep their height; a blank template removes the line.
+  tiles keep their height; an empty entry in `tiles` removes that
+  line, while the compact row and a tree node always keep a line, so
+  they can be selected, and their empty template is the default.
 - **Styles:** `#[fg=…,bg=…,bold,dim]`, `nobold`, `nodim` and `default`
   in tmux's syntax, with palette names or colours; a style holds until
-  the next and leaves a token's own colours alone.
+  the next, through the fill's padding, and leaves a token's own
+  colours alone; a background gives way to the selection's band.
 - **Config:** `sidebar.templates.{compact, tiles, top, tree.{repo,
   worktree, agent, pane, run}}`. An unknown token is shown in the view
   as `template error: unknown token … at column N in tiles[0]` instead

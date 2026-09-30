@@ -128,7 +128,7 @@ func ParseTemplate(src string) (Template, error) {
 					return t, fmt.Errorf("a second {fill} at column %d", col)
 				}
 				t.fill = true
-				t.parts = append(t.parts, part{kind: partFill, col: col})
+				t.parts = append(t.parts, part{kind: partFill, st: st, col: col})
 			} else if _, ok := tokens[name]; ok {
 				t.parts = append(t.parts, part{kind: partToken, text: name, st: st, col: col})
 			} else {
@@ -177,7 +177,10 @@ func parseStyle(st style, items string) (style, error) {
 			st.dim = false
 		case strings.HasPrefix(item, "fg=") || strings.HasPrefix(item, "bg="):
 			c := strings.TrimSpace(item[3:])
-			if !paletteName(c) {
+			if c == "default" {
+				// tmux's own: the colour cleared.
+				c = ""
+			} else if !paletteName(c) {
 				if _, err := palette.Parse(c); err != nil {
 					return st, fmt.Errorf("unknown colour %q", c)
 				}
@@ -226,7 +229,10 @@ type Compiled struct {
 }
 
 // Compile parses a template named for its error message, "tiles[0]"
-// say; an empty source is the default given.
+// say; an empty source is the default given. Only a tile line can be
+// removed, by an empty entry in the list: the compact row and a tree
+// node keep a line, so they can be selected, and a template of spaces
+// alone draws it empty.
 func Compile(name, src, def string) Compiled {
 	if src == "" {
 		src = def
@@ -302,6 +308,7 @@ type item struct {
 	kind   tokenKind
 	shrink func(w int) []Span // a shrinking token's smaller forms
 	whole  []Span             // a cut token's spans before the cut
+	shrunk bool               // a shrinking token in a smaller form
 }
 
 func (it item) width() int { return spansWidth(it.spans) }
@@ -314,11 +321,13 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 		return clip([]Span{{Text: t.Err, Fg: palette.Danger}}, w)
 	}
 	var left, right []item
+	var gap style // the fill's style, on the padding
 	side := &left
 	for _, p := range t.parts {
 		switch p.kind {
 		case partFill:
 			side = &right
+			gap = p.st
 		case partText:
 			*side = append(*side, item{part: p, spans: []Span{styled(Span{Text: p.text}, p.st)}})
 		case partToken:
@@ -347,7 +356,7 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 	}
 	total := func() int {
 		n := itemsWidth(left) + itemsWidth(right)
-		if len(right) > 0 {
+		if len(right) > 0 && itemsWidth(left) > 0 {
 			n++ // the gap
 		}
 		return n
@@ -356,7 +365,7 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 	for total() > w {
 		over := total() - w
 		switch {
-		case cutFlex(left, over, floor):
+		case cutFlex(right, over, floor), cutFlex(left, over, floor):
 		case shrinkAny(left, right, over):
 		case len(right) > 0:
 			right = dropWidest(right)
@@ -365,10 +374,11 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 			return clip(flatten(left), w)
 		}
 	}
-	regrow(left, w-total())
+	regrow(left, right, w-total())
 	out := flatten(left)
 	if len(right) > 0 {
-		out = append(out, Span{Text: strings.Repeat(" ", w-total()+1)})
+		pad := w - itemsWidth(left) - itemsWidth(right)
+		out = append(out, styled(Span{Text: strings.Repeat(" ", pad)}, gap))
 		out = append(out, flatten(right)...)
 	}
 	return clip(out, w)
@@ -442,7 +452,7 @@ func shrinkAny(left, right []item, over int) bool {
 				continue
 			}
 			if got := it.shrink(cur - over); spansWidth(got) < cur {
-				it.spans = got
+				it.spans, it.shrunk = got, true
 				return true
 			}
 		}
@@ -473,21 +483,38 @@ func cutFlex(items []item, over, floor int) bool {
 	return false
 }
 
-// regrow gives room cells back to the cut tokens, the leftmost first:
-// what dropping a field on the right left over.
-func regrow(items []item, room int) {
-	for i := range items {
-		it := &items[i]
-		if it.whole == nil || room <= 0 {
-			continue
+// regrow gives room cells back, what dropping a field on the right
+// left over: to the cut tokens first, the leftmost first, never to
+// under two cells, then to the shrunk ones.
+func regrow(left, right []item, room int) {
+	for _, items := range [][]item{left, right} {
+		for i := range items {
+			it := &items[i]
+			if it.whole == nil || room <= 0 {
+				continue
+			}
+			whole := spansWidth(it.whole)
+			switch to := it.width() + room; {
+			case to >= whole:
+				room -= whole - it.width()
+				it.spans = it.whole
+			case to < 2:
+			default:
+				it.spans = cutSpans(it.whole, to)
+				room = 0
+			}
 		}
-		whole := spansWidth(it.whole)
-		if to := it.width() + room; to >= whole {
-			room -= whole - it.width()
-			it.spans = it.whole
-		} else {
-			it.spans = cutSpans(it.whole, to)
-			room = 0
+	}
+	for _, items := range [][]item{left, right} {
+		for i := range items {
+			it := &items[i]
+			if !it.shrunk || room <= 0 {
+				continue
+			}
+			if got := it.shrink(it.width() + room); spansWidth(got) > it.width() && spansWidth(got) <= it.width()+room {
+				room -= spansWidth(got) - it.width()
+				it.spans = got
+			}
 		}
 	}
 }
@@ -574,19 +601,34 @@ func (m *Model) token(name string, r rows.Row) item {
 		}
 		return it
 	case "host":
-		if r.Kind == rows.KindRepo || r.Kind == rows.KindFold || r.Kind == rows.KindGroup {
+		switch r.Kind {
+		case rows.KindRepo, rows.KindFold, rows.KindGroup:
+			return it
+		case rows.KindTile, rows.KindAgent:
+			// The agent's server after the host when observed off the
+			// managed server; ? for a host unknown.
+			where := m.where(r)
+			where.Text = strings.TrimPrefix(where.Text, "@")
+			it.spans = []Span{where}
 			return it
 		}
-		where := m.where(r)
-		where.Text = strings.TrimPrefix(where.Text, "@")
-		it.spans = []Span{where}
+		if r.Host != "" {
+			it.spans = []Span{{Text: r.Host, Dim: r.Host != m.LocalHost}}
+		}
 		return it
 	case "session":
-		if r.Agent != nil {
+		switch {
+		case r.Agent != nil:
 			return text(r.Agent.Session)
-		}
-		if r.Pane != nil {
+		case r.Pane != nil:
 			return text(r.Pane.Session)
+		case r.Worktree != nil && r.Worktree.Session != "":
+			return text(r.Worktree.Session)
+		case r.Pending != nil:
+			return text(r.Pending.Session)
+		case r.Local != nil:
+			// A local session alone, an orphaned one say.
+			return text(r.Local.Name)
 		}
 		return it
 	case "window":
@@ -618,13 +660,21 @@ func (m *Model) token(name string, r rows.Row) item {
 		}
 		return it
 	case "pane_suffix":
-		return text(r.Suffix)
+		if r.Suffix != "" {
+			it.spans = []Span{m.primary(r, r.Suffix)}
+		}
+		return it
 	case "status_icon":
 		if r.Kind == rows.KindTile || r.Kind == rows.KindAgent {
 			it.spans = []Span{m.iconSpan(r)}
 		}
 		return it
 	case "status_label":
+		if r.Orphaned && r.Pending == nil {
+			// Dim, as the line is: no colour a style would give it.
+			it.spans = []Span{{Text: "worktree gone", Dim: true, Fg: palette.Dimmed}}
+			return it
+		}
 		return text(m.statusLabel(r))
 	case "agent_icon":
 		if r.Agent == nil {
@@ -654,19 +704,33 @@ func (m *Model) token(name string, r rows.Row) item {
 	case "git_stats":
 		it.spans = gitSpans(r, 1<<20)
 		if len(it.spans) > 0 {
-			it.shrink = func(w int) []Span { return gitSpans(r, max(w, 1)) }
+			// Never to nothing: the smallest form stays until the
+			// field is dropped.
+			least := gitSpans(r, 1)
+			for w := 2; least == nil && w <= spansWidth(it.spans); w++ {
+				least = gitSpans(r, w)
+			}
+			it.shrink = func(w int) []Span {
+				if s := gitSpans(r, max(w, 1)); s != nil {
+					return s
+				}
+				return least
+			}
 		}
 		return it
 	case "git_committed":
-		if g != nil && g.Committed != [2]int{} {
-			it.spans = gitDiff(g.Committed, false, g.Stale)
+		if g != nil {
+			it.spans = gitCommitted(g)
+			if g.Stale {
+				it.spans = gitStale(it.spans)
+			}
 		}
 		return it
 	case "git_uncommitted":
-		if g != nil && (g.Uncommitted != [2]int{} || g.Dirty) {
-			it.spans = gitDiff(g.Uncommitted, true, g.Stale)
-			if g.UncommittedPartial {
-				it.spans[0].Text += "+"
+		if g != nil {
+			it.spans = gitUncommitted(g)
+			if g.Stale {
+				it.spans = gitStale(it.spans)
 			}
 		}
 		return it
@@ -710,12 +774,12 @@ func (m *Model) token(name string, r rows.Row) item {
 		}
 		return it
 	case "idx":
-		if m.rowIdx > 0 {
+		if r.Numbered() && m.rowIdx > 0 {
 			return text(strconv.Itoa(m.rowIdx))
 		}
 		return it
 	case "jump_key":
-		if m.JumpKeys && m.rowIdx > 0 && m.rowIdx <= 9 {
+		if r.Numbered() && m.JumpKeys && m.rowIdx > 0 && m.rowIdx <= 9 {
 			return text("M-" + strconv.Itoa(m.rowIdx))
 		}
 		return it
@@ -798,25 +862,6 @@ func (m *Model) statusLabel(r rows.Row) string {
 	return "idle"
 }
 
-// gitDiff is +N -M, dim for the committed part, bold for the
-// uncommitted one after ✎; a stale answer plain and dim.
-func gitDiff(d [2]int, uncommitted, stale bool) []Span {
-	out := []Span{
-		{Text: fmt.Sprintf("+%d", d[0]), Fg: palette.Success, Dim: !uncommitted, Bold: uncommitted},
-		{Text: " "},
-		{Text: fmt.Sprintf("-%d", d[1]), Fg: palette.Danger, Dim: !uncommitted, Bold: uncommitted},
-	}
-	if uncommitted {
-		out = append([]Span{{Text: "✎ "}}, out...)
-	}
-	if stale {
-		for i := range out {
-			out[i].Dim, out[i].Bold, out[i].Fg = true, false, ""
-		}
-	}
-	return out
-}
-
 // prNumber is the branch's PR: #N, green when open, purple when
 // merged, red when closed, dim when a draft, and dim with ? after when
 // the answer is stale; nothing on main or master.
@@ -840,9 +885,12 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	}
 	out := []Span{sp}
 	if b.Stale {
-		out = append(out, Span{Text: "?"})
+		// Dim, with ? after unless the checks carry it.
 		for i := range out {
 			out[i].Dim, out[i].Fg = true, ""
+		}
+		if m.prChecks(r, 1<<20) == nil {
+			out = append(out, Span{Text: "?", Dim: true})
 		}
 	}
 	return out

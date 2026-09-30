@@ -11,10 +11,10 @@
 ...|⟨success:▌⟩    laatmux @‹vm›                                    ‹⟨success:+318⟩› ‹⟨danger:-87⟩›
 ...|⟨success:▌⟩    done                                          «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:────────────────────────────────────────────────────────────⟩›
-S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:agents-config⟩» (1)                                  1:00
+S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:agents-config⟩» «⟨current_worktree_fg:(1)⟩»                                  1:00
 S..|⟨info:▌⟩    laatmux @‹vm›                            ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 S..|⟨info:▌⟩    Adding per-agent config to the loader             «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:agents-config⟩» (2)                                  1:00
+...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:agents-config⟩» «⟨current_worktree_fg:(2)⟩»                                  1:00
 ...|⟨border:▌⟩    laatmux @‹vm›                            ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 .D.|

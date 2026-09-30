@@ -700,33 +700,7 @@ func gitSpans(r rows.Row, w int) []Span {
 		return nil
 	}
 	g := r.Worktree.Git
-	var rebase, committed, uncommitted []Span
-	if g.Rebasing {
-		rebase = []Span{{Text: "R", Fg: palette.Warning, Bold: true}}
-	}
-	if g.Committed != [2]int{} {
-		committed = []Span{
-			{Text: fmt.Sprintf("+%d", g.Committed[0]), Fg: palette.Success, Dim: true},
-			{Text: " "},
-			{Text: fmt.Sprintf("-%d", g.Committed[1]), Fg: palette.Danger, Dim: true},
-		}
-	}
-	if g.Uncommitted != [2]int{} || g.Dirty {
-		added := fmt.Sprintf("+%d", g.Uncommitted[0])
-		if g.UncommittedPartial {
-			added += "+"
-		}
-		uncommitted = []Span{{Text: "✎"}}
-		if g.Uncommitted != [2]int{} || g.UncommittedPartial {
-			// Dirty with no lines, a mode change or a binary file, is
-			// the mark alone.
-			uncommitted = append(uncommitted,
-				Span{Text: " "},
-				Span{Text: added, Fg: palette.Success, Bold: true},
-				Span{Text: " "},
-				Span{Text: fmt.Sprintf("-%d", g.Uncommitted[1]), Fg: palette.Danger, Bold: true})
-		}
-	}
+	rebase, committed, uncommitted := gitRebase(g), gitCommitted(g), gitUncommitted(g)
 	join := func(parts ...[]Span) []Span {
 		var out []Span
 		for _, p := range parts {
@@ -751,6 +725,57 @@ func gitSpans(r rows.Row, w int) []Span {
 		}
 	}
 	return nil
+}
+
+// gitRebase is the rebase mark R, nil when not rebasing.
+func gitRebase(g *protocol.GitStatus) []Span {
+	if !g.Rebasing {
+		return nil
+	}
+	return []Span{{Text: "R", Fg: palette.Warning, Bold: true}}
+}
+
+// gitCommitted is the committed diff against the base, +N -M dim in
+// green and red; nil when zero.
+func gitCommitted(g *protocol.GitStatus) []Span {
+	if g.Committed == [2]int{} {
+		return nil
+	}
+	return []Span{
+		{Text: fmt.Sprintf("+%d", g.Committed[0]), Fg: palette.Success, Dim: true},
+		{Text: " "},
+		{Text: fmt.Sprintf("-%d", g.Committed[1]), Fg: palette.Danger, Dim: true},
+	}
+}
+
+// gitUncommitted is ✎ and the uncommitted diff, +X -Y bold, a count
+// past the limits marked +; dirty with no lines, a mode change or a
+// binary file, is the mark alone; nil when clean.
+func gitUncommitted(g *protocol.GitStatus) []Span {
+	if g.Uncommitted == [2]int{} && !g.Dirty {
+		return nil
+	}
+	out := []Span{{Text: "✎"}}
+	if g.Uncommitted != [2]int{} || g.UncommittedPartial {
+		added := fmt.Sprintf("+%d", g.Uncommitted[0])
+		if g.UncommittedPartial {
+			added += "+"
+		}
+		out = append(out,
+			Span{Text: " "},
+			Span{Text: added, Fg: palette.Success, Bold: true},
+			Span{Text: " "},
+			Span{Text: fmt.Sprintf("-%d", g.Uncommitted[1]), Fg: palette.Danger, Bold: true})
+	}
+	return out
+}
+
+// gitStale makes stats from a refresh that timed out dim and plain.
+func gitStale(spans []Span) []Span {
+	for i := range spans {
+		spans[i].Dim, spans[i].Bold, spans[i].Fg = true, false, ""
+	}
+	return spans
 }
 
 // spansWidth is the cells spans take.
@@ -901,19 +926,21 @@ func ANSI(l Line, th palette.Theme) string {
 	}
 	attrs()
 	for _, s := range l.Spans {
-		fg := ""
+		fg, bg := "", ""
 		current := s.Fg == palette.CurrentWorktreeFg
 		if colour && s.Fg != "" && (!l.Dim || band || current) {
 			fg = th.SGR(s.Fg, false)
 		}
-		if colour && s.Bg != "" {
-			// A template's background, over the band's.
-			fg += th.SGR(s.Bg, true)
+		if colour && s.Bg != "" && !band && !l.Dim {
+			// A template's background; the selection's band stays
+			// the band, so the selected row is told apart, and a dim
+			// line is dim throughout.
+			bg = th.SGR(s.Bg, true)
 		}
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.
 		faint := s.Dim && !l.Dim && fg == ""
-		if faint || s.Bold || fg != "" {
+		if faint || s.Bold || fg != "" || bg != "" {
 			if current && l.Dim && !band {
 				// The viewer's label is not faint on a dim line.
 				b.WriteString("\x1b[22m")
@@ -925,6 +952,7 @@ func ANSI(l Line, th palette.Theme) string {
 				b.WriteString("\x1b[1m")
 			}
 			b.WriteString(fg)
+			b.WriteString(bg)
 			b.WriteString(s.Text)
 			b.WriteString("\x1b[0m")
 			attrs()

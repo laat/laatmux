@@ -968,8 +968,8 @@ sidebar:
   `no session`, `claude gone`), `{pane_suffix}` (`(2)` on the second
   of a worktree's agents). Status: `{stripe}`, `{status_icon}`,
   `{status_label}` (`waiting`, `working`, `done`, `stale`, `settled`,
-  `idle`, `gone`; a task's state; `worktree gone` on an orphaned
-  session's line), `{agent_icon}`, `{agent_label}`, `{elapsed}` (the
+  `idle`, `gone`; `no agent` or `no session` on a tile without one; a
+  task's state; `worktree gone`, dim, on an orphaned session's line), `{agent_icon}`, `{agent_label}`, `{elapsed}` (the
   time since the status changed; a run's running time). Git:
   `{git_stats}` (the whole `R +46 -11 ✎ +28 -3`), `{git_committed}`,
   `{git_uncommitted}`, `{git_ahead}` (`↑2`), `{git_behind}` (`↓1`),
@@ -986,7 +986,9 @@ sidebar:
   against the right edge. An empty token takes the adjacent run of
   spaces with it, the one after it, else the one before, so separators
   do not pile up; a line whose tokens are all empty is still a line, so
-  tiles keep their height; a blank template is no line at all.
+  tiles keep their height; an empty entry in `tiles` removes that line.
+  An empty `compact` or tree template is the default: those rows keep a
+  line, so they can be selected.
 - **Overflow.** A line wider than the pane gives way in this order:
   the flexible tokens, the labels and the pane title, are cut with `…`
   down to a third of the width (at most twelve cells), the rightmost
@@ -997,7 +999,9 @@ sidebar:
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves
-  a token's own colours alone.
+  a token's own colours alone; the padding `{fill}` takes the
+  style in force at the fill, and a background gives way to the selection's
+  band.
 - **Errors.** A template that does not parse is shown in the view in
   its place, `template error: unknown token {x} at column 7 in
   tiles[0]`, rather than failing the pane. The fold row, the

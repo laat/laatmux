@@ -128,6 +128,39 @@ func TestTokens(t *testing.T) {
 	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/pane/laatmux/%7"), 80)}}); !strings.HasPrefix(got, "    |") {
 		t.Errorf("a pane's indent: %q", got)
 	}
+	// A worktree line's host is the worktree's, not its agent's server;
+	// a tile's carries the server.
+	in.Worktrees[1].Session = ""
+	in.Agents[3].Server, in.Agents[3].Managed = "default", false
+	tree.SetTree(rows.Tree(in))
+	tree.SetRows(rows.Agents(in))
+	tm, _ = ParseTemplate("({host})")
+	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/auto-layout"), 80)}}); got != "(vm)\n" {
+		t.Errorf("a worktree line's host: %q", got)
+	}
+	for _, r := range tree.Rows.Main {
+		if r.ID() == "venv/laatmux/%8" {
+			if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, r, 80)}}); got != "(vm/default)\n" {
+				t.Errorf("a tile's host: %q", got)
+			}
+		}
+	}
+	in = treeInput(now)
+	tree.SetTree(rows.Tree(in))
+	tree.SetRows(rows.Agents(in))
+	// {idx} through Render counts as the digits do.
+	tree.SetTemplates(CompileTemplates(nil, "", "", "", "{indent}{fold}{idx}:{primary}", "{indent}{idx}:{agent_label}", "", ""))
+	tree.Height = 30
+	text := Text(tree.Render())
+	for i, want := range []string{"1:batch-processing", "2:agents-config", "3:auto-layout", "4:fix-sidebar", "5:mac/laatmux/gone"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("row %d not numbered %q:\n%s", i+1, want, text)
+		}
+	}
+	if strings.Contains(text, "1:claude") || strings.Contains(text, "2:claude") {
+		t.Errorf("an agent line numbered:\n%s", text)
+	}
+	tree.SetTemplates(DefaultTemplates())
 	tree.Select("venv/worktree//r/agents-config")
 	tree.Handle(Key{Rune: 'h'})
 	tm, _ = ParseTemplate("{worst_status}")
@@ -158,12 +191,37 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{primary}{fill}{elapsed}", 20); got != "...|fix-ls          2:00\n" {
 		t.Errorf("fill: %q", got)
 	}
+	// The fill's padding takes the style in force.
+	if got := render("#[bg=#112233]{primary}{fill}{elapsed}", 14); got != "...|⟦#112233:fix-ls⟧⟦#112233:    ⟧⟦#112233:2:00⟧\n" {
+		t.Errorf("a styled fill: %q", got)
+	}
+	// The partial mark on the uncommitted count, as in the stats.
+	r.Worktree.Git.UncommittedPartial = true
+	if got := Text([]Line{{Spans: m.line(mustParse(t, "{git_uncommitted} | {git_stats}"), r, 60)}}); got != "✎ +28+ -3 | R +46 -11 ✎ +28+ -3\n" {
+		t.Errorf("the partial mark: %q", got)
+	}
+	r.Worktree.Git.UncommittedPartial = false
 	r.Suffix = ""
 	if got := render("a {pane_suffix}  b  {repo_count} c", 40); got != "...|a b  c\n" {
 		t.Errorf("empty tokens: %q", got)
 	}
 	if got := render("{stripe}    {repo_count}{fill}{repo_count} {repo_count}", 20); got != "...|⟨accent:▌⟩\n" {
 		t.Errorf("all empty: %q", got)
+	}
+	// A stale answer marks the pair once, on the checks; the number
+	// alone carries it.
+	r.Branch.Stale = true
+	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»› ‹×›‹ 3/5›‹?›\n" {
+		t.Errorf("a stale pair: %q", got)
+	}
+	r.Branch.Checks = nil
+	if got := render("{pr_number}", 40); got != "...|‹«#52»›‹?›\n" {
+		t.Errorf("a stale number alone: %q", got)
+	}
+	r = tokenRow(now)
+	// fg=default clears the colour, as tmux spells it.
+	if got := render("#[fg=accent]a#[fg=default]b", 10); got != "...|⟨accent:a⟩b\n" {
+		t.Errorf("fg=default: %q", got)
 	}
 	c := Compile("tiles[1]", "{nope}", "")
 	if got := Debug([]Line{{Spans: m.line(c, r, 60)}}); got != "...|⟨danger:template error: unknown token {nope} at column 1 in tiles[1]⟩\n" {
@@ -210,8 +268,13 @@ func TestTemplateOverflow(t *testing.T) {
 	}
 	// A cut label grows back into the room a dropped field leaves.
 	r.Worktree.Branch = "feature/long-branch-name"
-	if got := render("{primary}{fill}{session}", 20); got != "feature/long-branch…\n" {
+	if got := render("{primary}{fill}{status_label}", 10); got != "feature/l…\n" {
 		t.Errorf("regrown: %q", got)
+	}
+	// A flexible token on the right is cut like one on the left, the
+	// rightmost first, and grows back after the left.
+	if got := render("{primary}{fill}{session}", 20); got != "feature/long… laatm…\n" {
+		t.Errorf("a flexible token on the right: %q", got)
 	}
 	r.Worktree.Branch = "fix-ls"
 	// Two flexible tokens: the rightmost is cut first, one under the
@@ -224,8 +287,24 @@ func TestTemplateOverflow(t *testing.T) {
 	}
 	// A label with under two cells of room is dropped; a line with no
 	// flexible token is clipped.
-	if got := render("{secondary}", 1); got != "…\n" && got != "\n" {
+	if got := render("{secondary}", 1); got != "\n" {
 		t.Errorf("a label in one cell: %q", got)
+	}
+	// A shrunk token grows back too, after the labels, into the room a
+	// dropped field leaves: the counts return once the stats go.
+	r.Worktree.Git.Rebasing = false
+	if got := render("{host}{fill}{git_stats} {pr_checks}", 12); got != "vm     × 3/5\n" {
+		t.Errorf("a shrunk token regrown: %q", got)
+	}
+	// The stats never shrink to nothing: their smallest form stays
+	// until the field is dropped, and the rebase mark is one.
+	r.Worktree.Git.Rebasing = true
+	if got := render("{host}{fill}{git_stats} {pr_checks}", 12); got != "vm   R × 3/5\n" {
+		t.Errorf("the smallest form: %q", got)
+	}
+	// An empty left side pays no gap.
+	if got := render("{fill}{elapsed}", 4); got != "2:00\n" {
+		t.Errorf("no left side: %q", got)
 	}
 	if got := render("{host}{fill}{elapsed}", 3); got != "vm\n" {
 		t.Errorf("clipped: %q", got)
@@ -275,10 +354,38 @@ func TestConfiguredTemplates(t *testing.T) {
 	if len(ct.Tiles) != 2 || ct.Tiles[1].Err != "template error: unknown token {nope} at column 1 in tiles[1]" || ct.Tree.Run.src != "{indent}> {command}" || ct.Compact.src != DefaultCompact {
 		t.Errorf("compiled from the config: %+v", ct)
 	}
-	// The painter draws a background.
+	// The painter draws a background, not under the selection's band,
+	// and dim with a background stays dim.
 	th, _ := palette.New(true, nil)
 	l := Line{Spans: []Span{{Text: "x", Bg: palette.Accent}}}
 	if s := ANSI(l, th); !strings.Contains(s, th.SGR(palette.Accent, true)) {
 		t.Errorf("no background in %q", s)
 	}
+	l.Reverse = true
+	if s := ANSI(l, th); strings.Contains(s, th.SGR(palette.Accent, true)) {
+		t.Errorf("a background under the band in %q", s)
+	}
+	l = Line{Spans: []Span{{Text: "x", Bg: palette.Accent, Dim: true}}}
+	if s := ANSI(l, th); !strings.Contains(s, "\x1b[2m") || !strings.Contains(s, th.SGR(palette.Accent, true)) {
+		t.Errorf("dim with a background in %q", s)
+	}
+	// The pinned repository line has no number of its own.
+	tree.SetTemplates(CompileTemplates(nil, "", "", "{idx}:{repo}", "{indent}{fold}{idx}:{primary}", "", "", ""))
+	tree.Height = 8
+	tree.Render()
+	tree.Handle(Key{Rune: 'G'})
+	out = Text(tree.Render())
+	if !strings.HasPrefix(out, ":laatmux\n") && !strings.Contains(out, "\n:laatmux\n") {
+		t.Errorf("the pinned line numbered:\n%s", out)
+	}
+}
+
+// mustParse is a template for a test.
+func mustParse(t *testing.T, src string) Compiled {
+	t.Helper()
+	tm, err := ParseTemplate(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Compiled{Template: tm}
 }
