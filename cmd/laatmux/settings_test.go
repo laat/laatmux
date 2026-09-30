@@ -71,7 +71,7 @@ func TestSettings(t *testing.T) {
 	// CLI set it; the view and layout only after Tab and v, never a
 	// layout a flag fixed, never a strip's.
 	m.View, m.Layout, m.Scope = view.ViewTree, view.Tiles, view.ScopeAll
-	m.ApplyFolds(map[string]bool{"repo/y": false})
+	m.ApplyFolds(map[string]bool{"repo/x": true, "repo/y": false}) // the file's, whole
 	m.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}}
 	m.Handle(view.Key{Rune: 'f'}) // repo/x was closed from the file: f opens it here
 	if err := saveSettings(m, now.Add(time.Minute), settingsHost{}); err != nil {
@@ -138,6 +138,21 @@ func TestSettings(t *testing.T) {
 	startSettings(cfg, dash2, settingsHost{dashboard: true, fixedScope: true})
 	if dash2.View != view.ViewTree || dash2.Layout != view.Tiles {
 		t.Errorf("the dashboard from its keys: %s %s", dash2.View, dash2.Layout)
+	}
+	// touchSettings refreshes the sighting of folds whose nodes the
+	// model has, values untouched.
+	toucher := &view.Model{View: view.ViewTree, Tree: []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}}}
+	toucher.ApplyFolds(map[string]bool{"repo/x": true, "repo/gone": true})
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) {
+		s.SetFolds(map[string]bool{"repo/x": true, "repo/gone": true}, nil, nil, now.Add(-2*time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := touchSettings(toucher, now.Add(8*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); !s.Folds["repo/x"].Seen.Equal(now.Add(8*time.Minute)) || !s.Folds["repo/gone"].Seen.Equal(now.Add(-2*time.Hour)) || !s.Folds["repo/x"].Closed {
+		t.Errorf("touched: %+v", s.Folds)
 	}
 	// A carried fold takes only where the file has none.
 	carrier := &view.Model{View: view.ViewTree, Width: 60, Height: 20}

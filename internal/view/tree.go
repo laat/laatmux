@@ -61,10 +61,17 @@ func (m *Model) SetTree(nodes []rows.Row) {
 		if succ == "" || succ == from {
 			return
 		}
-		// Consumed either way: an old fold is no later owner's.
+		// Consumed either way: an old fold is no later owner's. The
+		// value written is the user's, the file's as last seen, not a
+		// reveal this pane made over it; the reveal stays on screen.
 		toggled := m.toggled[from]
+		written, wasFile := m.applied[from]
+		if !wasFile {
+			written = closed
+		}
 		delete(m.folds, from)
 		delete(m.toggled, from)
+		delete(m.applied, from)
 		if !m.toggled[succ] {
 			m.setFold(succ, closed)
 			if toggled {
@@ -76,6 +83,10 @@ func (m *Model) SetTree(nodes []rows.Row) {
 					m.carried = map[string]bool{}
 				}
 				m.carried[succ] = true
+				if m.applied == nil {
+					m.applied = map[string]bool{}
+				}
+				m.applied[succ] = written
 			}
 		}
 	}
@@ -243,12 +254,22 @@ func (m *Model) ChangedDefaults() (view, layout bool) {
 // may have changed it since.
 func (m *Model) DirtyFolds() (folds, carried map[string]bool) {
 	folds, carried = map[string]bool{}, map[string]bool{}
+	if m.applied == nil {
+		m.applied = map[string]bool{}
+	}
 	for id := range m.dirty {
 		if c, ok := m.folds[id]; ok {
-			folds[id] = c
 			if m.carried[id] {
 				carried[id] = true
+				// The user's value carried, not the reveal shown here.
+				if a, ok := m.applied[id]; ok {
+					c = a
+				}
 			}
+			folds[id] = c
+			// What the file holds now, as far as this pane knows: a
+			// later change by another pane is then a change.
+			m.applied[id] = c
 		}
 	}
 	m.dirty, m.carried = nil, nil
@@ -263,6 +284,15 @@ func (m *Model) DirtyFolds() (folds, carried map[string]bool) {
 func (m *Model) ApplyFolds(folds map[string]bool) {
 	if m.applied == nil {
 		m.applied = map[string]bool{}
+	}
+	// A fold the file held and dropped, its node not seen for a day:
+	// forgotten here too, unless this pane set it since.
+	for id := range m.applied {
+		if _, still := folds[id]; !still && !m.dirty[id] {
+			delete(m.applied, id)
+			delete(m.toggled, id)
+			delete(m.folds, id)
+		}
 	}
 	for id, closed := range folds {
 		if was, ok := m.applied[id]; ok && was == closed {
@@ -292,7 +322,19 @@ func (m *Model) foldAll() {
 	// closed would make the first f change nothing on screen.
 	anyClosed := false
 	for _, it := range m.treeItems() {
-		if it.Row != nil && it.Row.Foldable() && m.closed(it.Row) {
+		if it.Row == nil || !it.Row.Foldable() {
+			continue
+		}
+		if it.Row.Kind == rows.KindRepo && m.scope() != ScopeAll {
+			// The repository line over the viewer's, folded by a pane
+			// on all: opened here alone, a reveal, and no say in
+			// whether the lines under it open or close.
+			if m.closed(it.Row) {
+				m.setFold(it.Row.ID(), false)
+			}
+			continue
+		}
+		if m.closed(it.Row) {
 			anyClosed = true
 		}
 	}

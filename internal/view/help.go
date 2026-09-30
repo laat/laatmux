@@ -36,6 +36,7 @@ var stripKeys = []string{
 	"1..9         jump to the nth chip",
 	"Enter click  jump; the stale chip folds",
 	"/            filter; Esc clears",
+	"f            the stale chip, open or closed",
 	"F            scope to the viewer's session, and back",
 	"z            settle or unsettle",
 	"?            this help",

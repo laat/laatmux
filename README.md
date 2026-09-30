@@ -1016,7 +1016,7 @@ is switched to.
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
 
-Config: `sidebar: {position: left, width: 35, height: 3, horizontal:
+Config: `sidebar: {position: left, width: 10%, height: 3, horizontal:
 {item_width: 24}, layout: tiles, view: agents, scope: all, sort:
 priority, dim_stale: true, collapse_stale: true, stale_after: 1h,
 jump_keys: false}`; position `left` or `top`, width at least 10

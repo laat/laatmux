@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,18 @@ func TestScopes(t *testing.T) {
 		t.Errorf("f under session set another worktree's fold: %v", d)
 	}
 	m.Handle(Key{Rune: 'f'}) // open again
+	// With the repository line folded by a pane on all, f opens it here
+	// alone, a reveal, and the lines under it decide the rest.
+	m.ApplyFolds(map[string]bool{rows.RepoNode(src): true})
+	m.DirtyFolds()
+	m.Handle(Key{Rune: 'f'})
+	if m.closed(&m.Tree[m.indexOf(rows.RepoNode(src))]) {
+		t.Error("f under session left the repository line folded")
+	}
+	if d, _ := m.DirtyFolds(); d[rows.RepoNode(src)] || len(d) == 0 {
+		t.Errorf("f under session with the repository folded: %v", d)
+	}
+	m.ApplyFolds(map[string]bool{})
 	m.View, m.Scope = ViewAgents, ScopeAll
 	m.ApplyFolds(map[string]bool{})
 	// F: to session. The viewer is in agents-config's home session.
@@ -206,6 +219,10 @@ func TestChipANSI(t *testing.T) {
 	if s := ANSI(l, guessed); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, warn) {
 		t.Errorf("a chip with the background guessed: %q", s)
 	}
+	dim := Line{Spans: []Span{{Text: "x", Dim: true, band: true}}}
+	if s := ANSI(dim, guessed); strings.Contains(s, "\x1b[2m") {
+		t.Errorf("a dim span faint under a reverse band: %q", s)
+	}
 	if s := ANSI(l, palette.Mono()); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, "\x1b[38") {
 		t.Errorf("a chip without colours: %q", s)
 	}
@@ -321,6 +338,13 @@ func TestHelpQuitSettings(t *testing.T) {
 	if m.Overlay != nil {
 		t.Error("a key did not close the help")
 	}
+	m.Layout = Strip
+	m.Handle(Key{Rune: '?'})
+	if text := Text(m.Render()); strings.Contains(text, "Tab") || !strings.Contains(text, "the stale chip") {
+		t.Errorf("the strip's help:\n%s", text)
+	}
+	m.Handle(Key{Rune: 'x'})
+	m.Layout = Tiles
 	if a := m.Handle(Key{Rune: 'q'}); a.Kind != ActionNone || m.Confirm != "Quit sidebar? y/n" {
 		t.Errorf("q: %+v %q", a, m.Confirm)
 	}
@@ -418,7 +442,56 @@ func TestHelpQuitSettings(t *testing.T) {
 	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) {
 		t.Error("a changed value not applied")
 	}
-	if !other.HasNode("venv/worktree//r/auto-layout") || other.HasNode("nope") {
+	// A value this pane wrote is the baseline: another pane's change
+	// back to the old value is a change.
+	other.Select("venv/worktree//r/agents-config")
+	other.Handle(Key{Rune: 'l'}) // open, the user's
+	other.DirtyFolds()           // written
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
+	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) {
+		t.Error("another pane's change back not applied after a write here")
+	}
+	// A fold the file dropped is forgotten here too, unless set here
+	// since; one dropped and back gets the first fold anew.
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/auto-layout": true})
+	other.ApplyFolds(map[string]bool{})
+	if _, ok := other.toggled["venv/worktree//r/auto-layout"]; ok {
+		t.Error("a fold the file dropped kept")
+	}
+	if other.closed(&other.Tree[other.indexOf("venv/worktree//r/auto-layout")]) {
+		t.Error("a fold the file dropped still closed")
+	}
+	other.Select("venv/worktree//r/auto-layout")
+	other.Handle(Key{Rune: 'h'}) // set here, not yet written
+	other.ApplyFolds(map[string]bool{})
+	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/auto-layout")]) {
+		t.Error("a fold set here forgotten with the file's")
+	}
+	// A handoff carries the user's value, the file's, not a reveal
+	// this pane made over it; the reveal stays on screen.
+	src := "git@github.com:laat/laatmux.git"
+	hin := treeInput(now)
+	hin.Agents = append(hin.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	hin.Pendings = []protocol.Pending{{ID: "add-h", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
+	h := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
+	h.SetTree(rows.Tree(hin))
+	h.SetRows(rows.Agents(hin))
+	h.Render()
+	h.ApplyFolds(map[string]bool{"add-h": true}) // the user's, from the file
+	h.setFold("add-h", false)                    // a reveal here
+	hin.Worktrees = append(hin.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	hin.Agents[len(hin.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	hin.Pendings = nil
+	h.Handoffs = map[string]string{"add-h": "venv/worktree//r/new-one"}
+	h.SetTree(rows.Tree(hin))
+	h.SetRows(rows.Agents(hin))
+	if h.closed(&h.Tree[h.indexOf("venv/worktree//r/new-one")]) {
+		t.Error("the reveal not kept on the successor")
+	}
+	if folds, carried := h.DirtyFolds(); !folds["venv/worktree//r/new-one"] || !carried["venv/worktree//r/new-one"] {
+		t.Errorf("the user's fold not carried: %v %v", folds, carried)
+	}
+	if !other.HasNode("venv/worktree//r/auto-layout") || other.HasNode("nope") || !other.HasNode(rows.NodeStale) {
 		t.Error("HasNode")
 	}
 }
@@ -497,12 +570,15 @@ func TestStrip(t *testing.T) {
 	// lines: with a footer drawn then, its line is no chip.
 	m.Filtering = true
 	m.Render()
-	then := m.Now.Add(-time.Millisecond)
+	then := m.Now.Add(time.Millisecond) // after that frame, before the next
 	m.Filtering = false
 	m.Now = m.Now.Add(time.Second)
 	m.Render()
 	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3, At: then}); a.Kind == ActionJump {
 		t.Error("a click on the footer of the frame before jumped")
+	}
+	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 1, At: then}); a.Kind != ActionJump {
+		t.Errorf("a click on a chip of the frame before: %+v", a)
 	}
 	// A click on the footer line is no chip: with a filter set and not
 	// being typed, the footer shows it and a click there is judged.
@@ -531,6 +607,40 @@ func TestStrip(t *testing.T) {
 	}
 	if a := m.Handle(Key{Kind: KeyMouse, X: stale + 1, Y: 1}); a.Kind != ActionNone || !m.ShowHidden {
 		t.Errorf("a click on the stale chip: %+v shown %v", a, m.ShowHidden)
+	}
+	// The chips' numbers are the digits', fold rows skipped, and a dim
+	// row's chip is dim.
+	m.SetTemplates(CompileTemplates(nil, "", []string{"{idx} {primary}"}, "", "", "", "", ""))
+	m.ShowHidden = true
+	m.Handle(Key{Rune: 'g'})
+	text := Text(m.Render())
+	first := strings.SplitN(text, "\n", 2)[0]
+	var n int
+	for _, it := range m.Visible() {
+		if it.Row.Numbered() {
+			n++
+		}
+	}
+	if i, ok := m.nth(n); !ok || !strings.Contains(first, strconv.Itoa(n)+" "+string([]rune(m.Visible()[i].Row.Name)[:4])) {
+		t.Errorf("the last number %d not on its chip:\n%s", n, text)
+	}
+	out = m.Render()
+	dimmed := false
+	for _, sp := range out[0].Spans {
+		if sp.Dim && strings.Contains(sp.Text, "dead") {
+			dimmed = true
+		}
+	}
+	if !dimmed {
+		t.Errorf("a dim row's chip not dim:\n%s", Debug(out))
+	}
+	m.SetTemplates(DefaultTemplates())
+	m.ShowHidden = false
+	// A strip too narrow for a chip beside the marker still shows one.
+	m.Width, m.ItemWidth = 26, 24
+	m.Render()
+	if len(m.hitCols) != 1 || !strings.Contains(Text(m.Render()), "→") {
+		t.Errorf("a narrow strip: %+v\n%s", m.hitCols, Text(m.Render()))
 	}
 	m.Width, m.ItemWidth = 60, 18
 	m.Scope = ScopeSession

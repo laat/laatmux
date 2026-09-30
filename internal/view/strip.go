@@ -108,37 +108,54 @@ func (m *Model) renderStrip() []Line {
 		}
 		lines[0] = Line{Spans: []Span{{Text: fit(text, m.Width)}}, Dim: true}
 	}
+	// The numbers the digits count, fold rows skipped, from the first
+	// chip, drawn or scrolled past.
+	numbered := make([]int, len(vis))
+	for i, n := 0, 0; i < len(vis); i++ {
+		if vis[i].Row.Numbered() {
+			n++
+			numbered[i] = n
+		}
+	}
 	col := 0
 	shown := 0
-	for i := m.hscroll; i < len(vis) && shown < perLine && col+iw <= m.Width-reserve; i++ {
+	for i := m.hscroll; i < len(vis) && shown < perLine && (shown == 0 || col+iw <= m.Width-reserve); i++ {
 		r := vis[i].Row
-		m.rowIdx = 0
-		if r.Numbered() {
-			m.rowIdx = i + 1
+		m.rowIdx = numbered[i]
+		// The first chip is drawn whatever the room, clipped: a strip
+		// too narrow for a chip beside the marker still shows one.
+		chip := iw
+		if shown == 0 && iw > m.Width-reserve {
+			chip = max(m.Width-reserve, 1)
 		}
 		selected := vis[i].Index == m.Selected
-		m.hitCols = append(m.hitCols, hitCol{from: col, to: col + iw, id: r.ID()})
+		m.hitCols = append(m.hitCols, hitCol{from: col, to: col + chip, id: r.ID()})
 		for l := 0; l < height; l++ {
 			var spans []Span
 			if l < len(tmpl) && !tmpl[l].Blank() {
-				spans = m.line(tmpl[l], *r, iw)
+				spans = m.line(tmpl[l], *r, chip)
 			}
-			if n := iw - spansWidth(spans); n > 0 {
+			if n := chip - spansWidth(spans); n > 0 {
 				spans = append(spans, Span{Text: strings.Repeat(" ", n)})
 			}
 			if col > 0 {
 				lines[l].Spans = append(lines[l].Spans, Span{Text: stripSep, Fg: palette.Border, Dim: true})
 			}
-			if selected {
-				// The band on the chip alone: reverse video span by span.
-				for j := range spans {
+			for j := range spans {
+				if selected {
+					// The band on the chip alone: reverse video span
+					// by span.
 					spans[j].band = true
+				} else if r.Dim && spans[j].Fg != palette.CurrentWorktreeFg {
+					// A dim row's chip is dim throughout, as its line
+					// would be, but for the viewer's own label.
+					spans[j].Dim, spans[j].Fg = true, ""
 				}
 			}
 			lines[l].Spans = append(lines[l].Spans, spans...)
 			lines[l].Dim = false
 		}
-		col += iw + sep
+		col += chip + sep
 		shown++
 	}
 	// The marker in the room kept for it, at the right end of the first
