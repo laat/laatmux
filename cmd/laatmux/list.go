@@ -370,8 +370,8 @@ func (m *merged) render(locals []workspace.Local) string {
 	}
 	renderTree(&b, rows.Tree(m.input(locals, "")), time.Now())
 	if m.sessionsErr != "" {
-		// An incomplete listing says so where the settled and orphaned
-		// groups would be, rather than looking complete.
+		// An incomplete listing says so after the tree, rather than
+		// looking complete.
 		fmt.Fprintf(&b, "\nlocal sessions not listed: %s\n", m.sessionsErr)
 	}
 	return b.String()

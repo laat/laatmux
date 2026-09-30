@@ -681,13 +681,13 @@ has no identified agent, its agent is gone, its host is down, it is
 orphaned, its workspace is settled and its agent does not want the
 user, or it is stale and `sidebar.dim_stale` is not false. The order,
 `sidebar.sort: priority`, is pending tasks, blocked, done, working, idle
-and unknown, stale or settled, then rows without an agent, most recent activity
-first within a group; `recency` is most recent activity first, and
-`window` by session and window, tasks first in both. Stale rows fold,
-unless `sidebar.collapse_stale` is false, and settled rows fold, into a
-collapsed group at the bottom, orphaned rows after them; a settled
-workspace's blocked or done agent stays in place, and so does the
-viewer's own row, whatever it is.
+and unknown, stale or settled, most recent activity first within a
+group; `recency` is most recent activity first, and `window` by session
+and window, tasks first in both. Stale agents, unless
+`sidebar.collapse_stale` is false, and settled workspaces' agents fold
+into `▸ N stale` at the end of the agent view; a settled workspace's
+blocked or done agent stays in place, and so does the viewer's own row,
+whatever it is. Orphaned sessions are lines of the tree.
 
 **Done and seen.** The local daemon keeps, per agent and its process
 identity, the last activity it saw and two times on this machine's
@@ -871,9 +871,10 @@ is switched to.
   `bind-key T display-popup -E -w 80% -h 60% -d '#{pane_current_path}' -T ' task ' 'laatmux compose'`.
   It exits on submit or cancel, the repository defaulting to the
   directory the popup was opened from.
-- In both, and in `ls`, a background add from the form is a row of its
-  own at the top of the main group, the newest first, until it hands
-  over to its worktree row. Its mark spins while the add runs and is
+- In both, a background add from the form is a row of its own until it
+  hands over to its worktree row: a tile at the top of the agent view,
+  the newest first, and in the tree and `ls` a line under its
+  repository where its worktree will be. Its mark spins while the add runs and is
   `!` once it needs the user, when the row is dim too. The second line
   in tiles, or the state column in compact, says where it is:
   `adding: <stage>`, `host unreachable, retrying`, `failed at <stage>`,
@@ -1075,8 +1076,7 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   access of its own. The listing also runs once, synchronously, before
   each merged snapshot, so the snapshot is as fresh as the connection. A
   listing that fails for a reason other than no server puts its message
-  in `sessions_error`, which `ls` prints where the settled and orphaned
-  groups would be.
+  in `sessions_error`, which `ls` prints after the tree.
 - **PR and checks**, capability `branches` (milestone five, step 5): the
   daemon asks GitHub, through `gh api graphql` on this machine, about
   every branch a worktree in the stream has on github.com or a host in

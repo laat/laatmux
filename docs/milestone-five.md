@@ -755,7 +755,8 @@ is the tree, and the host is on every worktree line.
   - `recency`, by the time since the status last changed;
   - `window`, by session, then window.
 - **Folds:** in the agent view, stale rows fold into `▸ N stale`, `▾`
-  when open; `collapse_stale: false` keeps it open. In the tree,
+  when open; `collapse_stale: false` keeps stale rows out of it, in
+  the list, while settled ones still fold. In the tree,
   repositories and worktrees fold, as described there.
 - **Pinned header:** in the tree, the repository line of the row at the
   top stays pinned while the list scrolls.

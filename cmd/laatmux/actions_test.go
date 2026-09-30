@@ -146,6 +146,26 @@ func TestAddFlowDefaults(t *testing.T) {
 	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
 
+	// A repository line preselects by a worktree's source, not the
+	// host's label for it: vm calls laatmux "lmx".
+	m.View = view.ViewTree
+	m.SetTree(rows.Tree(rows.Input{
+		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/lmx/x", EnvironmentID: "venv", Repo: "lmx", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/lmx/x", Session: "lmx/x"}},
+	}))
+	m.Render()
+	if !m.Select(rows.RepoNode("git@github.com:laat/laatmux.git")) {
+		t.Fatal("no repository line")
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	f = m.Overlay.(*view.Form)
+	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" {
+		t.Fatalf("a repository line preselected %q %q", f.Chips[0].Label(), f.Chips[1].Label())
+	}
+	f.Handle(view.Key{Kind: view.KeyEsc})
+	d.act(m, m.Poll())
+	m.View = view.ViewAgents
+
 	// No last-used agent for the repository: the configured default is
 	// preselected; without one, the first agent.
 	if err := home.UpdateLast(func(l *home.Last) { l.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm"}) }); err != nil {
@@ -304,6 +324,11 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 		if spec, err := localSpec(cfg, row); err != nil || spec.Managed != "proj/y" || spec.Key != "venv//w/proj/y" {
 			t.Errorf("%v under a loose task: spec %+v, %v", r.Kind, spec, err)
 		}
+	}
+	// An observed session of the task's name is not the task's.
+	observed := protocol.Agent{ID: "venv/default/%10", EnvironmentID: "venv", Server: "default", Session: "proj/y"}
+	if row, err := shellRow(tm, rows.Row{Kind: rows.KindTile, Host: "vm", Node: observed.ID, Name: "proj/y", Agent: &observed}); err != nil || row.ID() != observed.ID {
+		t.Errorf("an observed agent named as the task: %+v, %v", row, err)
 	}
 }
 
