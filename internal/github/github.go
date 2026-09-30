@@ -78,6 +78,11 @@ func GH(ctx context.Context, host, query string, vars map[string]string) ([]byte
 // Branch is one pushed branch to ask about.
 type Branch struct {
 	Owner, Repo, Branch string
+	// NoPaging is that a recent round paged past the forks' PRs and
+	// found none of the repository's own: the pages are not read again
+	// for a while, since on a crowded name, patch-1 say, they cost every
+	// round and never change.
+	NoPaging bool
 }
 
 // Result is what GitHub says of one branch. Err is set when the answer
@@ -94,6 +99,9 @@ type Result struct {
 	// every count by state, a failing check's name is kept by.
 	RollupID string
 	counts   string
+	// PagedNone is that the forks' PRs were paged past and none of the
+	// repository's own was found.
+	PagedNone bool
 }
 
 // Chunk is how many branches one query asks about.
@@ -114,7 +122,7 @@ func query(n int) string {
 			decl.WriteString(", ")
 		}
 		fmt.Fprintf(&decl, "$o%d: String!, $r%d: String!, $q%d: String!, $b%d: String!", i, i, i, i)
-		fmt.Fprintf(&body, ` b%d: repository(owner: $o%d, name: $r%d) { url `+
+		fmt.Fprintf(&body, ` b%d: repository(owner: $o%d, name: $r%d) { url defaultBranchRef { name } `+
 			`ref(qualifiedName: $q%d) { target { oid ... on Commit { statusCheckRollup { ...R } } } } `+
 			`open: pullRequests(headRefName: $b%d, states: [OPEN], first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } `+
 			`pullRequests(headRefName: $b%d, first: 5, orderBy: {field: CREATED_AT, direction: DESC}) { ...P } }`, i, i, i, i, i, i)
@@ -171,7 +179,10 @@ func (c prConnection) own() bool {
 }
 
 type repoAnswer struct {
-	URL string `json:"url"`
+	URL              string `json:"url"`
+	DefaultBranchRef *struct {
+		Name string `json:"name"`
+	} `json:"defaultBranchRef"`
 	Ref *struct {
 		Target struct {
 			OID    string  `json:"oid"`
@@ -221,12 +232,14 @@ func (r Result) FailingKey() string { return r.RollupID + " " + r.counts }
 func FillFailing(ctx context.Context, run Runner, host string, results []Result, known map[string]string) {
 	for i := range results {
 		r := &results[i]
-		if r.Err != nil || r.Checks == nil || r.Checks.State != protocol.ChecksFailure || r.RollupID == "" || ctx.Err() != nil {
+		if r.Err != nil || r.Checks == nil || r.Checks.State != protocol.ChecksFailure || r.RollupID == "" {
 			continue
 		}
+		// A known name is filled in whatever the time; only a lookup
+		// waits for it.
 		if name, ok := known[r.FailingKey()]; ok {
 			r.Checks.Failing = name
-		} else {
+		} else if ctx.Err() == nil {
 			r.Checks.Failing = failingName(ctx, run, host, r.RollupID)
 		}
 	}
@@ -386,24 +399,33 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 			// Only what can change the answer is paged: an open PR while
 			// the branch is there; any PR when no own one is in sight,
 			// a closed one counting once the branch is gone or while it
-			// is at that PR's last commit. Not on main or master, whose
-			// PR the views never show and whose forks' PRs are many.
+			// is at that PR's last commit. Not on the repository's
+			// default branch, or main or master, whose PR the views
+			// never show and whose forks' PRs are many; and not again
+			// for a while once the pages held none of the repository's
+			// own.
 			var err error
-			mainline := b.Branch == "main" || b.Branch == "master"
-			if a.Ref != nil && !a.Open.own() && a.Open.PageInfo.HasNextPage {
+			mainline := b.Branch == "main" || b.Branch == "master" || a.DefaultBranchRef != nil && a.DefaultBranchRef.Name == b.Branch
+			paged := false
+			if !b.NoPaging && a.Ref != nil && !a.Open.own() && a.Open.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, true, a.Open.PageInfo.EndCursor)
 				a.Open.Nodes = append(a.Open.Nodes, more...)
+				paged = true
 			}
-			if err == nil && !mainline && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
+			if err == nil && !b.NoPaging && !mainline && !a.Open.own() && !a.PullRequests.own() && a.PullRequests.PageInfo.HasNextPage {
 				var more []prNode
 				more, err = morePRs(ctx, run, host, b, false, a.PullRequests.PageInfo.EndCursor)
 				a.PullRequests.Nodes = append(a.PullRequests.Nodes, more...)
+				paged = true
 			}
 			if err != nil {
 				out[i] = Result{Err: err}
 				continue
 			}
+			out[i] = parse(a, b)
+			out[i].PagedNone = paged && !a.Open.own() && !a.PullRequests.own()
+			continue
 		}
 		out[i] = parse(a, b)
 	}

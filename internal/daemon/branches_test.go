@@ -469,3 +469,42 @@ func TestBranchesListedWithoutWorktrees(t *testing.T) {
 		t.Error("a host with worktrees not yet listed does not hold it")
 	}
 }
+
+// A round that runs out of time keeps the failing names it knows, and a
+// branch whose forks' pages held nothing of its own is not paged again
+// within the hour.
+func TestBranchesTimeoutKeepsNames(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{"c": "FAILURE"}}
+	d, s := branchDaemon(t, t.TempDir(), gh, "c")
+	d.fetchNow(t)
+	drainBranches(s)
+	d.mu.Lock()
+	e := d.branches[branchKeyString(bkey("c"))]
+	e.Status.Checks.Failing, e.FailingAt = "lint", time.Now()
+	e.PagedNoneAt = time.Now()
+	d.mu.Unlock()
+	var paging bool
+	slow := func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
+		if b, ok := vars["b0"]; ok && b == "c" {
+			// The status answers; then the deadline passes.
+			out, err := gh.run(ctx, host, q, vars)
+			<-ctx.Done()
+			return out, err
+		}
+		paging = true
+		return nil, ctx.Err()
+	}
+	d.mu.Lock()
+	d.cfg.GitHub = slow
+	set := d.branchSetLocked()
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	d.fetchBranches(ctx, set)
+	d.mu.Lock()
+	failing := d.branches[branchKeyString(bkey("c"))].Status.Checks.Failing
+	d.mu.Unlock()
+	if failing != "lint" || paging {
+		t.Errorf("failing %q, paged %v", failing, paging)
+	}
+}

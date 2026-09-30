@@ -290,3 +290,32 @@ func TestMergedPRPastForks(t *testing.T) {
 		t.Errorf("main: %+v, pages %d", rs[0], pages)
 	}
 }
+
+// Pages that held none of the repository's own say so, and a branch told
+// not to page is not paged; the repository's default branch is not paged
+// for closed PRs either.
+func TestPagedNone(t *testing.T) {
+	fork := `{"number":9,"state":"OPEN","isDraft":false,"url":"u9","isCrossRepository":true,"commits":{"nodes":[]}}`
+	pages := 0
+	f := &fake{answer: func(vars map[string]string) (string, error) {
+		if vars["after"] != "" {
+			pages++
+			return `{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":8,"isCrossRepository":true}]}}}}`, nil
+		}
+		forks := strings.Repeat(fork+",", 4) + fork
+		return `{"data":{"b0":{"url":"u","defaultBranchRef":{"name":"dev"},"ref":null,"open":{"pageInfo":{"hasNextPage":false},"nodes":[]},` +
+			`"pullRequests":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},"nodes":[` + forks + `]}}}}`, nil
+	}}
+	rs, _ := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "patch-1"}})
+	if !rs[0].PagedNone || !rs[0].NoRef || pages != 1 {
+		t.Errorf("paged: %+v, pages %d", rs[0], pages)
+	}
+	rs, _ = Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "patch-1", NoPaging: true}})
+	if rs[0].PagedNone || pages != 1 {
+		t.Errorf("told not to page: %+v, pages %d", rs[0], pages)
+	}
+	rs, _ = Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "dev"}})
+	if pages != 1 {
+		t.Errorf("the default branch was paged: %d", pages)
+	}
+}

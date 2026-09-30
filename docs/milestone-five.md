@@ -581,10 +581,10 @@ every worktree in the merged stream, keyed by source and branch.
 - **The query.** `gh api graphql` calls per GitHub host, each for at
   most 32 branches, with the owner, repository and branch names passed
   as GraphQL variables, never put into the query text. For each branch
-  it asks for the PRs on that head ref that are not cross-repository,
-  since a fork's PR can have a head branch of the same name: the open
-  ones apart, so newer closed ones do not hide one, and the five newest
-  of any state. An open one is taken first, else the newest merged or
+  it asks for the PRs on that head ref, the open ones apart, so newer
+  closed ones do not hide one, and the five newest of any state, and
+  keeps those that are not cross-repository, since a fork's PR can have
+  a head branch of the same name. An open one is taken first, else the newest merged or
   closed, while the branch is where that PR left it or is gone; a
   branch that moved on, `main` after an old PR from it say, has no PR.
   The PR's last commit gives the oid and `statusCheckRollup`; a branch
@@ -603,10 +603,13 @@ every worktree in the merged stream, keyed by source and branch.
   the fork mark alone, and the repository's own PR, once found, in full:
   the open ones while the branch is there, any when no own one is in
   sight, since a closed one counts once the branch is gone or while it
-  is at that PR's last commit; not on `main` or `master`, whose PR the
-  views never show and whose forks' PRs are many.
+  is at that PR's last commit; not on the repository's default branch,
+  `main` or `master`, whose PR the views never show and whose forks'
+  PRs are many; and, once the pages held none of the repository's own,
+  not again for an hour, since on a crowded name, `patch-1` say, they
+  never change.
   A query of 32 branches costs about seven of GitHub's rate-limit
-  points.
+  points; a light page or a PR by number one each.
 - **When.** Every 30 s while a merged subscriber is there, and at once
   when the set of branches changes. A round runs beside the loop that
   ages the answers, bounded to two minutes: every host's status first,

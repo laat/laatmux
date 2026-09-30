@@ -45,7 +45,14 @@ type branchEntry struct {
 	FailingKey string `json:"failing_key,omitempty"`
 	// FailingAt is when the failing check's name was last asked for.
 	FailingAt time.Time `json:"failing_at,omitzero"`
+	// PagedNoneAt is when the forks' PRs were last paged past with none
+	// of the repository's own found: not paged again for branchPaging.
+	PagedNoneAt time.Time `json:"paged_none_at,omitzero"`
 }
+
+// branchPaging is how long a branch whose forks' PRs held none of the
+// repository's own is not paged again.
+const branchPaging = time.Hour
 
 // branchQuery is one branch the loop asks about, with where.
 type branchQuery struct {
@@ -307,9 +314,14 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		qs := byHost[host]
 		sort.Slice(qs, func(i, j int) bool { return qs[i].key < qs[j].key })
 		bs := make([]github.Branch, len(qs))
+		d.mu.Lock()
 		for i, q := range qs {
 			bs[i] = q.b
+			if e := d.branches[q.key]; e != nil && time.Since(e.PagedNoneAt) < branchPaging {
+				bs[i].NoPaging = true
+			}
 		}
+		d.mu.Unlock()
 		hctx, cancel := ctx, context.CancelFunc(func() {})
 		if bounded {
 			hctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(hosts)-n))
@@ -329,7 +341,10 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 				answers = append(answers, answer{rqs, failed})
 			}
 			for _, a := range answers {
-				d.applyBranches(a.qs, a.results, nil)
+				// The names kept are filled in; none is looked up.
+				known := d.knownFailing(a.qs)
+				github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
+				d.applyBranches(a.qs, a.results, known)
 			}
 			// A login failure found before the time ran out is said;
 			// the hosts not reached clear nothing.
@@ -434,6 +449,9 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 				e.FailingAt = now // a name found now, or none needed
 			}
 			e.LastSeen, e.FailingKey = now, r.FailingKey()
+			if r.PagedNone {
+				e.PagedNoneAt = now
+			}
 			st := protocol.BranchStatus{BranchKey: q.bk, FetchedAt: now, HeadOID: r.HeadOID, ChecksURL: r.ChecksURL, PR: r.PR, Checks: r.Checks}
 			if c := st.Checks; c != nil && c.State == protocol.ChecksPending {
 				if e.PendingOID != r.HeadOID {
