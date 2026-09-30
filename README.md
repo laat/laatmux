@@ -996,10 +996,13 @@ sidebar:
   cells), the rightmost first; `{git_stats}` and `{pr_checks}` shrink
   themselves, never to nothing; the fields on the right are dropped,
   the widest first and a folded line's icon last; the flexible tokens
-  are cut further; then the line is clipped. What dropping leaves over
+  are cut further; the tokens on the left are dropped, the last first;
+  then the line is clipped. What dropping leaves over
   goes back to the cut labels, then to the shrunk stats and checks. A
   stale branch's `?` sits on `{pr_checks}` when they are drawn, else on
-  `{pr_number}`: a number drawn on a stale row always has it.
+  `{pr_number}`: a number drawn on a stale row always has it, and of a
+  one-digit number and the marked check, equally wide, the number goes
+  first.
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves

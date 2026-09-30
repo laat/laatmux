@@ -22,8 +22,9 @@ import (
 // rightmost first; `{git_stats}` and `{pr_checks}` shrink themselves,
 // never to nothing; fields on the right are dropped, the widest first
 // and a folded line's `{worst_status}` icon last; the flexible tokens
-// are cut further; then the line is clipped. What dropping leaves over
-// goes back to the cut tokens, then to the shrunk ones. An empty token
+// are cut further; then tokens on the left are dropped, the last
+// first; then the line is clipped. What dropping leaves over goes back
+// to the cut tokens, then to the shrunk ones. An empty token
 // takes the adjacent run of spaces with it, the one after it, else the
 // one before, so separators do not pile up; a line whose tokens are all
 // empty is still a line, so tiles keep their height; a blank entry in
@@ -377,6 +378,11 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 			// the fitting goes on with it counted.
 			staleMark(left, right, stale, true)
 		case cutFlex(left, over, 2):
+		case len(left) > 0 && hasToken(left):
+			// The last token on the left, whole: a PR number clipped
+			// would lose its stale mark.
+			left = dropLast(left)
+			staleMark(left, right, stale, true)
 		default:
 			return clip(flatten(left), w)
 		}
@@ -596,6 +602,35 @@ func cutSpans(spans []Span, w int) []Span {
 	return out
 }
 
+// hasToken reports whether items hold a token.
+func hasToken(items []item) bool {
+	for _, it := range items {
+		if it.part.kind == partToken {
+			return true
+		}
+	}
+	return false
+}
+
+// dropLast drops the last token with the literal before it, its
+// separator.
+func dropLast(items []item) []item {
+	at := -1
+	for i, it := range items {
+		if it.part.kind == partToken {
+			at = i
+		}
+	}
+	if at < 0 {
+		return items
+	}
+	from := at
+	if at > 0 && items[at-1].part.kind == partText {
+		from = at - 1
+	}
+	return append(items[:from:from], items[at+1:]...)
+}
+
 // dropWidest drops the widest token on the right, the last of equals,
 // with the literal before it, its separator; the first token takes the
 // literal after it instead. A folded line's icon, {worst_status}, goes
@@ -603,7 +638,13 @@ func cutSpans(spans []Span, w int) []Span {
 func dropWidest(right []item) []item {
 	at, widest := -1, -1
 	for i, it := range right {
-		if it.part.kind == partToken && it.width() >= widest && it.part.text != "worst_status" {
+		if it.part.kind != partToken || it.part.text == "worst_status" {
+			continue
+		}
+		// Of equals the last goes, except that the number goes before
+		// the checks: on a stale row the number would take the mark
+		// and go too.
+		if it.width() > widest || it.width() == widest && !(right[at].part.text == "pr_number" && it.part.text == "pr_checks") {
 			at, widest = i, it.width()
 		}
 	}

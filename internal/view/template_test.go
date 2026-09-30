@@ -220,20 +220,23 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{pr_number}{fill}{pr_checks} {host}", 5); got != "...|‹«#52»›‹?›\n" {
 		t.Errorf("a stale number with the checks dropped: %q", got)
 	}
-	// The mark counted in the fitting: with the checks dropped the
-	// number and its mark fit at 13; at 12 the number goes too, before
-	// the title is cut under the floor, and the title grows back.
+	// Of a one-digit number and the check mark with the stale mark,
+	// equally wide, the number goes first: the checks keep the mark,
+	// where the number would take it and grow past the room.
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksSuccess}
 	r.Branch.PR.Number = 7
-	if got := render(DefaultTile3, 13); got != "...|⟨accent:▌⟩    Per… ‹«#7»›‹?›\n" {
-		t.Errorf("the mark at an exact width: %q", got)
+	if got := render(DefaultTile3, 13); got != "...|⟨accent:▌⟩    Perm… ‹✓›‹?›\n" {
+		t.Errorf("the number before the checks at 13: %q", got)
 	}
-	if got := render(DefaultTile3, 12); got != "...|⟨accent:▌⟩    Permis…\n" {
-		t.Errorf("the number dropped before the floor: %q", got)
+	if got := render(DefaultTile3, 12); got != "...|⟨accent:▌⟩    Per… ‹✓›‹?›\n" {
+		t.Errorf("the number before the checks at 12: %q", got)
+	}
+	if got := render("{pane_title}{fill}{pr_number}", 8); got != "...|Per… ‹«#7»›‹?›\n" {
+		t.Errorf("the number alone with its mark: %q", got)
 	}
 	// Whatever the width, a PR number drawn on a stale row has its mark,
 	// on the checks or on itself; the mark takes the template's style.
-	for _, src := range []string{DefaultTile3, DefaultWorktree, "{fill}{pr_number} {pr_checks}", "#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}"} {
+	for _, src := range []string{DefaultTile3, DefaultWorktree, "{fill}{pr_number} {pr_checks}", "#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", "{host} {pr_number}", "{pr_number} {pr_checks} {host}", "{pr_checks} {pr_number}{fill}{host}"} {
 		for _, st := range []string{protocol.ChecksSuccess, protocol.ChecksFailure, protocol.ChecksPending} {
 			r.Branch.Checks = &protocol.Checks{State: st, Passed: 3, Total: 5}
 			for w := 3; w <= 40; w++ {
@@ -248,8 +251,11 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{fill}{pr_number} {pr_checks}", 5); got != "...|‹«#7»› ‹✓›‹?›\n" {
 		t.Errorf("the number's mark not counted while the checks stand: %q", got)
 	}
-	if got := render("#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", 6); got != "...|⟦#112233:f…⟧⟦#112233: ⟧‹«⟦#112233:#7⟧»›‹⟦#112233:?⟧›\n" {
+	if got := render("#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", 6); got != "...|⟦#112233:fi…⟧⟦#112233: ⟧‹⟦#112233:✓⟧›‹⟦#112233:?⟧›\n" {
 		t.Errorf("the mark styled: %q", got)
+	}
+	if got := render("#[bg=#112233]{pr_number}{fill}{pr_checks} {host}", 4); got != "...|‹«⟦#112233:#7⟧»›‹⟦#112233:?⟧›\n" {
+		t.Errorf("the mark put back styled: %q", got)
 	}
 	r.Branch.PR.Number = 52
 	r.Branch.Checks = nil
@@ -361,6 +367,14 @@ func TestTemplateOverflow(t *testing.T) {
 	}
 	if got := render("{host}{fill}{elapsed}", 3); got != "vm\n" {
 		t.Errorf("clipped: %q", got)
+	}
+	// Tokens on the left go whole, the last first, before the line is
+	// clipped; literal text alone is clipped.
+	if got := render("{host} {agent_label} {status_label}", 9); got != "vm claude\n" {
+		t.Errorf("the last token dropped: %q", got)
+	}
+	if got := render("literal text", 7); got != "literal\n" {
+		t.Errorf("literal text clipped: %q", got)
 	}
 }
 
