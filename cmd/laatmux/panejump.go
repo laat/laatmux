@@ -105,8 +105,9 @@ const selectTimeout = 5 * time.Second
 // task's before the host lists the worktree, as those lines' own jumps
 // attach it; or the plain attachment to the pane's managed session. A
 // pane of one worktree in another's session so goes to the other's
-// workspace session, and a plain attachment never takes a workspace
-// session's name.
+// workspace session, and a plain attachment takes no workspace
+// session's name, unless a pane was left in a session a worktree's
+// root agent moved out of.
 func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) workspace.Spec {
 	var w protocol.Worktree
 	home := "" // the session the line's own jump attaches

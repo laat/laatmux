@@ -476,10 +476,6 @@ func (m *Model) Render() []Line {
 	case len(items) == 0:
 		lines, ids = []Line{{Spans: []Span{{Text: fit("No agents running", m.Width)}}, Dim: true}}, []string{""}
 	}
-	// Scroll so the selection is on screen, moving as little as
-	// possible; a separator after the selected tile may fall off. With
-	// rows below the window its last line is the count of them, so the
-	// window is a line shorter.
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
 	rowsFrom := func(i int) int {

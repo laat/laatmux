@@ -183,9 +183,11 @@ func (m *Model) foldAll() {
 		m.ShowHidden = !m.ShowHidden
 		return
 	}
+	// The folds shown decide, not ones the filter hides: a hidden fold
+	// closed would make the first f change nothing on screen.
 	anyClosed := false
-	for i := range m.Tree {
-		if r := &m.Tree[i]; r.Foldable() && m.closed(r) {
+	for _, it := range m.treeItems() {
+		if it.Row != nil && it.Row.Foldable() && m.closed(it.Row) {
 			anyClosed = true
 		}
 	}

@@ -362,6 +362,10 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 		// same name is not this task's.
 		return r, errors.New(r.Name + ": host replaced: " + r.Detail())
 	case r.Worktree != nil && r.Worktree.Session != "":
+	case r.Worktree != nil && r.Agent != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
+		// Listed without a home, with the agent laatmux made at the
+		// root in a managed session: the jump goes through that agent,
+		// as the worktree line's does, wherever the agent went.
 	case p.Session == "" || p.Root == "" || p.EnvironmentID == "":
 		if r.Worktree == nil {
 			return r, errors.New(r.Name + ": no session yet")

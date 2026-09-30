@@ -1631,6 +1631,20 @@ func TestTreeEdges(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
 		t.Errorf("f opening every fold moved the selection: %+v", r)
 	}
+	// f under a filter goes by the folds shown: with the hidden line
+	// folded and the shown one open, the first f closes the shown.
+	m.Follow = false
+	m.Handle(Key{Rune: 'f'}) // every fold open
+	m.Handle(Key{Rune: 'f'}) // every fold closed
+	m.Select("venv/worktree//r/agents-config")
+	m.Handle(Key{Rune: 'l'}) // agents-config open, the rest closed
+	m.Filter = "agents-config"
+	m.Render()
+	m.Handle(Key{Rune: 'f'})
+	if !m.closed(&m.Tree[m.indexOf("venv/worktree//r/agents-config")]) {
+		t.Error("f under a filter opened by a hidden fold")
+	}
+	m.Filter = ""
 	// A click on the tab shown does nothing; on the other, a switch.
 	m.Tabs = true
 	m.Render()

@@ -223,6 +223,12 @@ func TestPaneJumpRouting(t *testing.T) {
 			t.Errorf("%v in %s: spec %+v", c.row.Kind, c.target.session, spec)
 		}
 	}
+	// The task line's own jump attaches the session Home names.
+	if target, err := pendingTarget(*moved); err != nil {
+		t.Errorf("the moved task's target: %v", err)
+	} else if spec, _, err := rowSpec(cfg, h, target); err != nil || spec.Managed != moved.Home() {
+		t.Errorf("the moved task's jump: %+v %v, home %q", spec, err, moved.Home())
+	}
 	// The line a pane's session routes by, from the tree.
 	m := &view.Model{Tree: []rows.Row{
 		{Kind: rows.KindRepo, Depth: 0, Node: "repo/x"}, *home, *lostLine, *task, *otherLine,
