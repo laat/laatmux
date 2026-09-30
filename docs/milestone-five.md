@@ -604,8 +604,8 @@ every worktree in the merged stream, keyed by source and branch.
   the open ones while the branch is there, any when no own one is in
   sight, since a closed one counts once the branch is gone or while it
   is at that PR's last commit; not on the repository's default branch,
-  `main` or `master`, whose PR the views never show and whose forks'
-  PRs are many; and, once the pages held none of the repository's own,
+  `main` or `master`, whose forks' PRs are many and whose own PR, on
+  `main` or `master`, the views never show; and, once the pages held none of the repository's own,
   not again for an hour, whether the branch is on GitHub or not, since
   on a crowded name, `patch-1` say, they never change; a PR found ends
   that.
