@@ -935,8 +935,12 @@ Five settlements differ from the plan in #52:
   command on its own goroutine when the poll sees the mtime move; a
   value the file held the last time is not applied again, so a fold a
   pane opened to reveal a selection stays open; a fold carried at a
-  handoff is written only where the file has none; each pane refreshes
-  its folds' sightings once an hour. The dashboard's keys are
+  handoff is written only where the file has none, and the value
+  carried is the user's, the file's as last seen, not a reveal over
+  it; a fold the file dropped is forgotten by the panes too, unless
+  set there since; each pane refreshes its folds' sightings once an
+  hour. Under a scope, `f` opens a folded repository line as a reveal
+  and goes by the lines under it. The dashboard's keys are
   `dashboard_view` and `dashboard_layout`.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
