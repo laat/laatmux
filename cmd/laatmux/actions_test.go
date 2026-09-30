@@ -148,19 +148,27 @@ func TestAddFlowDefaults(t *testing.T) {
 
 	// A repository line preselects by its source, not the host's label
 	// for it: vm calls laatmux "proj", another repository's name here;
-	// one holding an orphaned session
-	// alone, whose source tag ends in another repository's name but is
-	// not configured here, preselects the last used, not that one.
+	// one holding an orphaned session alone, whose source tag ends in
+	// another repository's name but is not configured here, preselects
+	// none, the first configured, not that one; one an older host
+	// names by a label alone goes by the label.
 	m.View = view.ViewTree
 	m.SetTree(rows.Tree(rows.Input{
 		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
-		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"},
+			{ID: "venv/worktree//w/old/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/old/y", Session: "proj/y"},
+		},
 		Locals:    []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
 	}))
 	m.Render()
-	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}} {
-		if !m.Select(rows.RepoNode(c.source)) {
-			t.Fatalf("no repository line for %s", c.source)
+	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}, {"", "proj"}} {
+		id := rows.RepoNode(c.source)
+		if c.source == "" {
+			id = rows.LabelRepoNode("proj")
+		}
+		if !m.Select(id) {
+			t.Fatalf("no repository line for %q", c.source)
 		}
 		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 		f = m.Overlay.(*view.Form)

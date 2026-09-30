@@ -797,11 +797,13 @@ them, and `j` and `k` stop on them; the numbers skip them.
   agent's worktree, as on its worktree line, and the question names the
   worktree and says how many agents go with it. On an agent in no
   worktree they do nothing, as on an observed agent today.
-- On a pane or run line, `x` and `X` do nothing; stopping a run from
-  the view is not in this milestone.
+- On a pane or run line, `x` and `X` say what they remove, as on a
+  repository line or the stale fold; stopping a run from the view is
+  not in this milestone.
 - `a` preselects the repository and host of the selected row's
   worktree, from a tile or any tree line under a worktree, as from a
-  worktree row today.
+  worktree row today, and a repository line's repository when this
+  machine knows its source, by a host's label alone for an older host.
 - `x` on an orphaned session's line sends `rm` by the root from the
   session's key, with the repository and branch when its tags have
   them, as on a stale row today.
