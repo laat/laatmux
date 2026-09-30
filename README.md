@@ -841,7 +841,8 @@ is switched to.
   that pane alone and is not kept. The footer names a scope in force:
   `[session]`; a strip names it at its right end. `f` sets the folds of
   the lines the scope and the filter leave, not a repository line
-  shared with the panes on `all`. The dashboard
+  shared with the panes on `all`: folded, that line is a closed fold
+  shown, and `f` opens it here alone, with the lines under it. The dashboard
   starts at `all`, whatever the file says: a scope the CLI set for the
   panes would empty a popup opened from an unrelated shell. `laatmux
   sidebar on --session` puts panes in the current session's windows

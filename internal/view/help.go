@@ -56,6 +56,25 @@ func (h *Help) Render(w, hgt int) []Line {
 	if w <= 0 || hgt <= 0 {
 		return nil
 	}
+	if hgt < 3 {
+		// A strip a line or two high: the keys alone, scrolled.
+		h.body = hgt
+		if h.scroll > len(h.Lines)-h.body {
+			h.scroll = len(h.Lines) - h.body
+		}
+		if h.scroll < 0 {
+			h.scroll = 0
+		}
+		var out []Line
+		for i := 0; i < hgt; i++ {
+			if j := h.scroll + i; j < len(h.Lines) {
+				out = append(out, plain(fit(h.Lines[j], w)))
+			} else {
+				out = append(out, plain(""))
+			}
+		}
+		return out
+	}
 	out := []Line{{Spans: []Span{{Text: fit(h.Title, w)}}, Bold: true}}
 	h.body = max(hgt-2, 1)
 	if h.scroll > len(h.Lines)-h.body {

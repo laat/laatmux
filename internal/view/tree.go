@@ -321,17 +321,22 @@ func (m *Model) foldAll() {
 	// The folds shown decide, not ones the filter hides: a hidden fold
 	// closed would make the first f change nothing on screen.
 	anyClosed := false
+	if m.scope() != ScopeAll {
+		// The repository line over the viewer's, folded by a pane on
+		// all: a closed fold shown, so f opens, and the line itself
+		// opened here alone, a reveal that is not written.
+		for _, it := range m.treeItems() {
+			if it.Row != nil && it.Row.Kind == rows.KindRepo && m.closed(it.Row) {
+				m.setFold(it.Row.ID(), false)
+				anyClosed = true
+			}
+		}
+	}
 	for _, it := range m.treeItems() {
 		if it.Row == nil || !it.Row.Foldable() {
 			continue
 		}
 		if it.Row.Kind == rows.KindRepo && m.scope() != ScopeAll {
-			// The repository line over the viewer's, folded by a pane
-			// on all: opened here alone, a reveal, and no say in
-			// whether the lines under it open or close.
-			if m.closed(it.Row) {
-				m.setFold(it.Row.ID(), false)
-			}
 			continue
 		}
 		if m.closed(it.Row) {

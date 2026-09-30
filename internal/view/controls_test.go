@@ -75,6 +75,26 @@ func TestScopes(t *testing.T) {
 	if d, _ := m.DirtyFolds(); d[rows.RepoNode(src)] || len(d) == 0 {
 		t.Errorf("f under session with the repository folded: %v", d)
 	}
+	// A folded repository line is a closed fold shown: f opens, the
+	// lines under it too, whether they were open or closed, and writes
+	// them open; the next f closes them.
+	for _, closed := range []bool{false, true} {
+		m.ApplyFolds(map[string]bool{}) // the reveal's value forgotten, so the file's takes again
+		m.ApplyFolds(map[string]bool{rows.RepoNode(src): true, "add-ac": closed})
+		m.DirtyFolds()
+		m.Handle(Key{Rune: 'f'})
+		if m.closed(&m.Tree[m.indexOf("add-ac")]) {
+			t.Errorf("f with the repository folded and add-ac closed=%v did not open it", closed)
+		}
+		if d, _ := m.DirtyFolds(); d["add-ac"] != false || len(d) == 0 {
+			t.Errorf("f with the repository folded wrote %v", d)
+		}
+		m.Handle(Key{Rune: 'f'})
+		if !m.closed(&m.Tree[m.indexOf("add-ac")]) {
+			t.Error("f again with everything open did not close")
+		}
+		m.DirtyFolds() // written
+	}
 	m.ApplyFolds(map[string]bool{})
 	m.View, m.Scope = ViewAgents, ScopeAll
 	m.ApplyFolds(map[string]bool{})
@@ -340,10 +360,22 @@ func TestHelpQuitSettings(t *testing.T) {
 	}
 	m.Layout = Strip
 	m.Handle(Key{Rune: '?'})
-	if text := Text(m.Render()); strings.Contains(text, "Tab") || !strings.Contains(text, "the stale chip") {
+	if text := Text(m.Render()); strings.Contains(text, "Tab") || !strings.Contains(text, "\nf            the stale chip, open or closed") {
 		t.Errorf("the strip's help:\n%s", text)
 	}
 	m.Handle(Key{Rune: 'x'})
+	// A one-line strip: the keys alone, one at a time, scrolled.
+	m.Height = 1
+	m.Handle(Key{Rune: '?'})
+	if out := m.Render(); len(out) != 1 || !strings.HasPrefix(Text(out), "h l") {
+		t.Errorf("help on one line:\n%s", Debug(out))
+	}
+	m.Handle(Key{Kind: KeyDown})
+	if out := m.Render(); !strings.HasPrefix(Text(out), "g G") {
+		t.Errorf("help on one line scrolled:\n%s", Debug(out))
+	}
+	m.Handle(Key{Rune: 'x'})
+	m.Height = 20
 	m.Layout = Tiles
 	if a := m.Handle(Key{Rune: 'q'}); a.Kind != ActionNone || m.Confirm != "Quit sidebar? y/n" {
 		t.Errorf("q: %+v %q", a, m.Confirm)
@@ -461,6 +493,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	if other.closed(&other.Tree[other.indexOf("venv/worktree//r/auto-layout")]) {
 		t.Error("a fold the file dropped still closed")
 	}
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/auto-layout": false})
 	other.Select("venv/worktree//r/auto-layout")
 	other.Handle(Key{Rune: 'h'}) // set here, not yet written
 	other.ApplyFolds(map[string]bool{})
@@ -609,8 +642,8 @@ func TestStrip(t *testing.T) {
 		t.Errorf("a click on the stale chip: %+v shown %v", a, m.ShowHidden)
 	}
 	// The chips' numbers are the digits', fold rows skipped, and a dim
-	// row's chip is dim.
-	m.SetTemplates(CompileTemplates(nil, "", []string{"{idx} {primary}"}, "", "", "", "", ""))
+	// row's chip is dim, its template's colour stripped.
+	m.SetTemplates(CompileTemplates(nil, "", []string{"{idx} #[fg=accent]{primary}"}, "", "", "", "", ""))
 	m.ShowHidden = true
 	m.Handle(Key{Rune: 'g'})
 	text := Text(m.Render())
@@ -627,12 +660,32 @@ func TestStrip(t *testing.T) {
 	out = m.Render()
 	dimmed := false
 	for _, sp := range out[0].Spans {
-		if sp.Dim && strings.Contains(sp.Text, "dead") {
-			dimmed = true
+		if strings.Contains(sp.Text, "dead") {
+			// Dim, and colourless: a colour keeps the faint off.
+			dimmed = sp.Dim && sp.Fg == ""
 		}
 	}
 	if !dimmed {
 		t.Errorf("a dim row's chip not dim:\n%s", Debug(out))
+	}
+	// The viewer's own label keeps its colour on a dim chip.
+	for _, it := range m.Visible() {
+		if it.Row.Name == "proj/dead" {
+			it.Row.Current = true
+		}
+	}
+	out = m.Render()
+	kept := false
+	for _, sp := range out[0].Spans {
+		if strings.Contains(sp.Text, "dead") {
+			kept = sp.Fg == palette.CurrentWorktreeFg && !sp.Dim
+		}
+	}
+	if !kept {
+		t.Errorf("the viewer's label on a dim chip lost its colour:\n%s", Debug(out))
+	}
+	for _, it := range m.Visible() {
+		it.Row.Current = false
 	}
 	m.SetTemplates(DefaultTemplates())
 	m.ShowHidden = false
@@ -641,6 +694,11 @@ func TestStrip(t *testing.T) {
 	m.Render()
 	if len(m.hitCols) != 1 || !strings.Contains(Text(m.Render()), "→") {
 		t.Errorf("a narrow strip: %+v\n%s", m.hitCols, Text(m.Render()))
+	}
+	// The chip clipped short of the marker: a click on the marker is
+	// not a click on the chip.
+	if len(m.hitCols) == 1 && m.hitCols[0].to > m.Width-3 {
+		t.Errorf("the clipped chip's columns reach the marker: %+v", m.hitCols)
 	}
 	m.Width, m.ItemWidth = 60, 18
 	m.Scope = ScopeSession

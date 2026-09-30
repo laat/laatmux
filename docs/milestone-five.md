@@ -939,9 +939,10 @@ Five settlements differ from the plan in #52:
   carried is the user's, the file's as last seen, not a reveal over
   it; a fold the file dropped is forgotten by the panes too, unless
   set there since; each pane refreshes its folds' sightings once an
-  hour. Under a scope, `f` opens a folded repository line as a reveal
-  and goes by the lines under it. The dashboard's keys are
-  `dashboard_view` and `dashboard_layout`.
+  hour. Under a scope, a folded repository line is a closed fold
+  shown: `f` opens it as a reveal, not written, and the lines under it
+  with it. The dashboard's keys are `dashboard_view` and
+  `dashboard_layout`.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
 
@@ -1189,19 +1190,24 @@ view and folds step 6 keeps in memory.
   managed session, in another window, and on this machine's default
   server, against a fake daemon with and without `select`, and into an
   existing workspace session left on a shell window.
-- **Sidebar control:** two panes, a `Tab` in one, `sidebar view` to the
-  other, `--all`, and a pane started after; `next` while filtering and
-  while a question is open; `jump N` with two clients on one window; a
-  leftover socket; a window with no sidebar; `F` from `all`, from
-  `session`, and after a `scope` from the CLI; the dashboard with and
-  without `--layout`.
+- **Sidebar control:** a pane's socket found by the window and by
+  `--all`, each command reaching the pane, `view` and `scope` written
+  whether or not a pane answers; `next` while filtering and while a
+  question is open; `jump N` with its client, switched by the pane's
+  jump once; a leftover socket reaped and a live one kept; a window
+  with no sidebar and a socket refusing; a pane starting from the
+  file's view, layout and scope unless fixed, writing the view, the
+  layout and the folds and never the scope, and another pane's write
+  reaching it through the poll; `F` from `all`, from `session`, and
+  after a `scope` from the CLI; the dashboard with and without
+  `--layout`.
 - **Scopes:** `session` with the viewer's worktree's agents in two
   managed sessions, with a task at the viewer's worktree's root whose
-  prompt was not delivered, with a failed task at that root, with two
-  tasks at that root and the owner handing over first, the viewer in a
-  task's session before the listing, a session with no worktree, an orphaned session under its
-  repository, a session with no row, and `project` with a pending task
-  and an orphaned session.
+  prompt was not delivered, with a failed task at that root, the viewer
+  in a task's session before the listing, a session with no worktree,
+  an orphaned session under its repository, a session with no row, and
+  `project` with a pending task and an orphaned session; `f` under
+  `session` with the repository line open and folded.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.

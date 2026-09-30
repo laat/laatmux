@@ -127,13 +127,16 @@ func watchSettings(ctx context.Context, seen time.Time, cmds chan<- func(*view.M
 				continue
 			}
 			seen = mtime
-			s, _, err := home.ReadSidebar()
-			if err != nil {
-				continue
-			}
-			folds := s.FoldMap()
+			// The file is read on the view's goroutine, when the
+			// command runs: a snapshot taken here and delivered after a
+			// key wrote a newer value would look like a change back.
 			select {
-			case cmds <- func(m *view.Model) view.Action { m.ApplyFolds(folds); return view.Action{} }:
+			case cmds <- func(m *view.Model) view.Action {
+				if s, _, err := home.ReadSidebar(); err == nil {
+					m.ApplyFolds(s.FoldMap())
+				}
+				return view.Action{}
+			}:
 			case <-ctx.Done():
 				return
 			}
