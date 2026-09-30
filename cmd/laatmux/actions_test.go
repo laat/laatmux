@@ -154,12 +154,12 @@ func TestAddFlowDefaults(t *testing.T) {
 	// names by a label alone goes by the label.
 	m.View = view.ViewTree
 	m.SetTree(rows.Tree(rows.Input{
-		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"},
 			{ID: "venv/worktree//w/old/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/old/y", Session: "proj/y"},
 		},
-		Locals:    []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
+		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
 	}))
 	m.Render()
 	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}, {"", "proj"}} {
