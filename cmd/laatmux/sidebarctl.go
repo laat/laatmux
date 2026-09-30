@@ -167,9 +167,16 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 		}
 	}
 	if !all && window == "" {
+		if os.Getenv("TMUX") != "" && !workspace.Inside(ctx) {
+			// A shell nested on another server, the laatmux one: the
+			// default server would take its pane id for one of its
+			// own, or fall back to its latest session, and move a
+			// sidebar the user is not looking at.
+			return nil
+		}
 		out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{window_id}")
 		if err != nil {
-			return nil // no server, or not inside one: nothing to control
+			return nil // no server: nothing to control
 		}
 		window = strings.TrimSpace(string(out))
 	}

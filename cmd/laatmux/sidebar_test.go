@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -398,6 +399,67 @@ func TestSwitchClient(t *testing.T) {
 				t.Errorf("switch of %s: %q", target, l)
 			}
 		}
+	}
+}
+
+// A shell nested on another tmux server: no current window or session
+// on the default server, so a command without -t does nothing and on
+// --session refuses, rather than take the other server's pane id for
+// one of the default server's own.
+func TestNestedShell(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	if out, err := exec.Command("tmux", "-L", "other", "-f", "/dev/null", "new-session", "-d", "-s", "o", "sleep 1000").CombinedOutput(); err != nil {
+		t.Fatalf("start the other server: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "other", "kill-server").Run() })
+	sock, err := exec.Command("tmux", "-L", "other", "display", "-p", "#{socket_path}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := run("split-window", "-d", "-h", "-t", "boot:", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", pane, sidebarTag, "1")
+	t.Setenv("TMUX_PANE", pane)
+	got := make(chan view.Command, 8)
+	cmds := make(chan func(*view.Model) view.Action, 8)
+	stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
+		got <- c
+		return func(m *view.Model) view.Action { return view.Action{} }
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	t.Setenv("TMUX", strings.TrimSpace(string(sock))+",1,0")
+	if workspace.Inside(ctx) {
+		t.Fatal("inside the default server with TMUX naming the other")
+	}
+	if err := sidebarControl(ctx, "next", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-got:
+		t.Errorf("a command from a nested shell reached the default server's pane: %+v", c)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := sidebarControl(ctx, "next", []string{"-t", "boot:"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-got:
+		<-cmds
+	case <-time.After(5 * time.Second):
+		t.Error("-t from a nested shell did not reach the pane")
+	}
+	if _, err := scopeSidebar(ctx, true); err == nil {
+		t.Error("on --session from a nested shell went ahead")
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option set from a nested shell: %v", sessions)
 	}
 }
 

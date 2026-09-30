@@ -225,6 +225,11 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 		}
 		return "", nil
 	}
+	if os.Getenv("TMUX") != "" && !workspace.Inside(ctx) {
+		// The default server would name another session for a shell
+		// nested on the laatmux server, and kill the panes elsewhere.
+		return "", errors.New("sidebar on --session: run it in a session of the default tmux server")
+	}
 	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
 	if err != nil {
 		return "", err

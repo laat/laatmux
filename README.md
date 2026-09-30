@@ -858,8 +858,10 @@ is switched to.
 - **Control from the CLI:** `laatmux sidebar next | prev | jump N |
   view agents|tree | scope all|session|project [-t window] [-c
   client] [--all]` act on the sidebar pane in the window the command
-  runs for, `-t` a window or the current one, or on every pane with
-  `--all`, which `view` and `scope` take. Each pane listens on a unix
+  runs for, `-t` a window or the current one on the default server (a
+  shell nested on the laatmux server has no current window there, and
+  the command does nothing), or on every pane with `--all`, which
+  `view` and `scope` take. Each pane listens on a unix
   socket under `$LAATMUX_HOME/sidebar/`, named by the server's pid and
   the pane id, and writes the path to the pane option
   `@laatmux_sidebar_socket`, which the CLI reads. The command is one

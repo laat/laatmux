@@ -851,15 +851,20 @@ Five settlements differ from the plan in #52:
   session in the server option `@laatmux_sidebar_sessions`, the hooks
   pass the window's session, and `attach` adds no pane to a window in
   a session not named; a plain `on` clears the option, `off` unsets
-  it.
+  it. The current session is the default server's: from a shell nested
+  on the laatmux server `on --session` refuses, since the default
+  server would take the other server's pane id for one of its own, or
+  fall back to its latest session, and kill the panes elsewhere.
 - **`F`** switches the pane's scope to `session`, and pressed again back
   to the scope the pane had before, whatever set it; a pane already on
   `session` goes to `all`. It acts on that pane only and is not
   persisted. `F` and the scope are one setting.
 - **CLI:** `laatmux sidebar next | prev | jump N | view agents|tree |
   scope all|session|project` act on one sidebar pane: the one in the
-  window the command runs for, `-t` a window or the current one, or on
-  every pane with `--all`, which only `view` and `scope` take. Each
+  window the command runs for, `-t` a window or the current one on the
+  default server (from a shell nested on the laatmux server there is
+  none, and the command does nothing), or on every pane with `--all`,
+  which only `view` and `scope` take. Each
   sidebar pane listens on a unix socket of its own under the state
   directory, named by the tmux server's pid and the pane id, since pane
   ids restart after a server restart; it writes the path to the pane
