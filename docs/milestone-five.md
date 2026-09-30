@@ -606,8 +606,9 @@ every worktree in the merged stream, keyed by source and branch.
   is at that PR's last commit; not on the repository's default branch,
   `main` or `master`, whose PR the views never show and whose forks'
   PRs are many; and, once the pages held none of the repository's own,
-  not again for an hour, since on a crowded name, `patch-1` say, they
-  never change.
+  not again for an hour, whether the branch is on GitHub or not, since
+  on a crowded name, `patch-1` say, they never change; a PR found ends
+  that.
   A query of 32 branches costs about seven of GitHub's rate-limit
   points; a light page or a PR by number one each.
 - **When.** Every 30 s while a merged subscriber is there, and at once
@@ -632,7 +633,8 @@ every worktree in the merged stream, keyed by source and branch.
   stream as `github_error` in the snapshot and in an upsert, as
   `sessions_error` does, and `laatmux hosts` prints it on a `github:`
   line after the hosts, never in a host's connectivity. A trusted
-  enterprise host that is logged out is named in it too; with no error
+  enterprise host that is logged out is named in it too, each host's
+  failure kept until that host answers; with no error
   from the daemon, `hosts` asks github.com itself with the smallest
   query, through the same code, so it tells the same failures apart.
 - **The record,** from a merging daemon with the capability `branches`.

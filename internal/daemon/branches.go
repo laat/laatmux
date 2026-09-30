@@ -45,9 +45,6 @@ type branchEntry struct {
 	FailingKey string `json:"failing_key,omitempty"`
 	// FailingAt is when the failing check's name was last asked for.
 	FailingAt time.Time `json:"failing_at,omitzero"`
-	// PagedNoneAt is when the forks' PRs were last paged past with none
-	// of the repository's own found: not paged again for branchPaging.
-	PagedNoneAt time.Time `json:"paged_none_at,omitzero"`
 }
 
 // branchPaging is how long a branch whose forks' PRs held none of the
@@ -300,7 +297,8 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		results []github.Result
 	}
 	answers := make([]answer, 0, len(hosts))
-	var ghErrs []string
+	// gh's own failures by host, "" for a host that answered.
+	hostErrs := map[string]string{}
 	d.mu.Lock()
 	d.roundErrs = map[string]bool{}
 	d.mu.Unlock()
@@ -317,7 +315,7 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		d.mu.Lock()
 		for i, q := range qs {
 			bs[i] = q.b
-			if e := d.branches[q.key]; e != nil && time.Since(e.PagedNoneAt) < branchPaging {
+			if time.Since(d.pagedNone[q.key]) < branchPaging {
 				bs[i].NoPaging = true
 			}
 		}
@@ -346,17 +344,16 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 				github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
 				d.applyBranches(a.qs, a.results, known)
 			}
-			// A login failure found before the time ran out is said;
-			// the hosts not reached clear nothing.
-			d.publishGitHubErr(strings.Join(ghErrs, "; "), true)
+			// The login failures of the hosts asked are said; the hosts
+			// not reached keep what was said of them.
+			d.publishGitHubErr(hostErrs)
 			return
 		}
+		hostErrs[host] = ""
 		if errors.Is(err, github.ErrNoGH) || errors.Is(err, github.ErrLoggedOut) {
 			// gh missing, or logged out of a host the config trusts,
 			// is the daemon's reason for showing nothing there.
-			if msg := err.Error(); len(ghErrs) == 0 || ghErrs[len(ghErrs)-1] != msg {
-				ghErrs = append(ghErrs, msg)
-			}
+			hostErrs[host] = err.Error()
 		}
 		answers = append(answers, answer{qs, results})
 	}
@@ -365,21 +362,37 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
 		d.applyBranches(a.qs, a.results, known)
 	}
-	d.publishGitHubErr(strings.Join(ghErrs, "; "), false)
+	d.publishGitHubErr(hostErrs)
 }
 
-// publishGitHubErr sets the daemon's reason for reading no PR state, or
-// clears it with github_ok; with keep, an empty reason clears nothing,
-// since not every host was asked.
-func (d *Daemon) publishGitHubErr(ghErr string, keep bool) {
+// publishGitHubErr takes the hosts asked this round, with gh's failure
+// for each or "", and says the failures of every host, or clears them
+// with github_ok. A host not asked keeps its last.
+func (d *Daemon) publishGitHubErr(hostErrs map[string]string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.hostErrs == nil {
+		d.hostErrs = map[string]string{}
+	}
+	for h, e := range hostErrs {
+		if e == "" {
+			delete(d.hostErrs, h)
+		} else {
+			d.hostErrs[h] = e
+		}
+	}
+	var msgs []string
+	for _, e := range d.hostErrs {
+		msgs = append(msgs, e)
+	}
+	sort.Strings(msgs)
+	ghErr := strings.Join(msgs, "; ")
 	switch {
 	case ghErr != "" && ghErr != d.githubErr:
 		d.githubErr = ghErr
 		d.cfg.Logger.Printf("github: %s", ghErr)
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubError: ghErr})
-	case ghErr == "" && d.githubErr != "" && !keep:
+	case ghErr == "" && d.githubErr != "":
 		d.githubErr = ""
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
 	}
@@ -414,6 +427,18 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 	for i, q := range qs {
 		r := results[i]
 		e := d.branches[q.key]
+		// The pages held none of the branch's own PR: not paged again
+		// for a while, whether the branch is there or not; one found
+		// ends that, so a PR pushed off the first page is still found.
+		switch {
+		case r.PagedNone:
+			if d.pagedNone == nil {
+				d.pagedNone = map[string]time.Time{}
+			}
+			d.pagedNone[q.key] = now
+		case r.Err == nil && r.PR != nil:
+			delete(d.pagedNone, q.key)
+		}
 		switch {
 		case r.NoRef:
 			if e != nil {
@@ -449,9 +474,6 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 				e.FailingAt = now // a name found now, or none needed
 			}
 			e.LastSeen, e.FailingKey = now, r.FailingKey()
-			if r.PagedNone {
-				e.PagedNoneAt = now
-			}
 			st := protocol.BranchStatus{BranchKey: q.bk, FetchedAt: now, HeadOID: r.HeadOID, ChecksURL: r.ChecksURL, PR: r.PR, Checks: r.Checks}
 			if c := st.Checks; c != nil && c.State == protocol.ChecksPending {
 				if e.PendingOID != r.HeadOID {

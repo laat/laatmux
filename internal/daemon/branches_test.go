@@ -481,7 +481,7 @@ func TestBranchesTimeoutKeepsNames(t *testing.T) {
 	d.mu.Lock()
 	e := d.branches[branchKeyString(bkey("c"))]
 	e.Status.Checks.Failing, e.FailingAt = "lint", time.Now()
-	e.PagedNoneAt = time.Now()
+	d.pagedNone = map[string]time.Time{branchKeyString(bkey("c")): time.Now()}
 	d.mu.Unlock()
 	var paging bool
 	slow := func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
@@ -506,5 +506,45 @@ func TestBranchesTimeoutKeepsNames(t *testing.T) {
 	d.mu.Unlock()
 	if failing != "lint" || paging {
 		t.Errorf("failing %q, paged %v", failing, paging)
+	}
+}
+
+// The paging memory: kept for a branch GitHub does not have, so an
+// unpushed patch-1 is not paged every round; ended by a PR found, so one
+// pushed off the first page later is still paged for.
+func TestBranchesPagingMemory(t *testing.T) {
+	d, _ := branchDaemon(t, t.TempDir(), &fakeGH{})
+	q := []branchQuery{{key: "k", bk: bkey("patch-1"), host: "github.com"}}
+	d.applyBranches(q, []github.Result{{NoRef: true, PagedNone: true}}, nil)
+	d.mu.Lock()
+	_, kept := d.pagedNone["k"]
+	d.mu.Unlock()
+	if !kept {
+		t.Fatal("no ref lost the paging memory")
+	}
+	d.applyBranches(q, []github.Result{{HeadOID: "h", PR: &protocol.PullRequest{Number: 1, State: "open"}}}, nil)
+	d.mu.Lock()
+	_, still := d.pagedNone["k"]
+	d.mu.Unlock()
+	if still {
+		t.Error("a PR found did not end the paging memory")
+	}
+}
+
+// A round that runs out before a host with a login failure said before
+// keeps that failure said, while a host asked and fine clears its own.
+func TestBranchesHostErrorsKept(t *testing.T) {
+	d, s := branchDaemon(t, t.TempDir(), &fakeGH{})
+	d.publishGitHubErr(map[string]string{"github.com": "gh is not logged in to github.com", "ghe.example.com": "gh is not logged in to ghe.example.com"})
+	d.publishGitHubErr(map[string]string{"github.com": ""})
+	_, _, msgs := drainBranches(s)
+	last := ""
+	for _, m := range msgs {
+		if m.GitHubError != "" {
+			last = m.GitHubError
+		}
+	}
+	if last != "gh is not logged in to ghe.example.com" {
+		t.Errorf("after github.com answered: %q", last)
 	}
 }

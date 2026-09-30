@@ -204,10 +204,12 @@ type Daemon struct {
 	branches        map[string]*branchEntry
 	githubErr       string
 	lastBranchesErr string
-	branchesListed  bool            // every host has listed once since start
-	branchErrs      map[string]bool // per-branch errors of the last round, logged
-	roundErrs       map[string]bool // and of the round under way
-	ctx             context.Context // Run's context, for goroutines that outlive a connection
+	branchesListed  bool                 // every host has listed once since start
+	branchErrs      map[string]bool      // per-branch errors of the last round, logged
+	roundErrs       map[string]bool      // and of the round under way
+	hostErrs        map[string]string    // gh's failure by host, what githubErr is joined from
+	pagedNone       map[string]time.Time // when a branch's forks' pages held none of its own
+	ctx             context.Context      // Run's context, for goroutines that outlive a connection
 	generation      int64
 	revision        uint64
 	listing         protocol.Listing
