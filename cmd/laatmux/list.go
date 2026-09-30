@@ -423,7 +423,7 @@ func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
 	if n.Settled {
 		note = strings.TrimSpace(note + "  settled")
 	}
-	fmt.Fprintf(b, "  %-36s %s\n", label+" ("+where(n)+")", note)
+	fmt.Fprintf(b, "%s\n", strings.TrimRight(fmt.Sprintf("  %-36s %s", label+" ("+where(n)+")", note), " "))
 }
 
 // agentText is an agent's mark, state, name, age and title.

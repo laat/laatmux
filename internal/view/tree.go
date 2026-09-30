@@ -401,11 +401,7 @@ func (m *Model) treeLine(r rows.Row) []Line {
 			spans = append(spans, Span{Text: "  " + title, Dim: true})
 		}
 	case rows.KindPane:
-		cmd := r.Name
-		if shells[cmd] {
-			cmd = "$ " + cmd
-		}
-		spans = []Span{{Text: indent + cmd}}
+		spans = []Span{{Text: indent + "$ " + r.Name}}
 	case rows.KindRun:
 		spans = []Span{{Text: indent + "▶ " + r.Name}}
 		if r.Run != nil {
