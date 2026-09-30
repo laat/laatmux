@@ -649,12 +649,26 @@ func remove(items []item, at int) []item {
 			}
 		}
 	}
+	// The separator may span text parts a style split, as a run of
+	// spaces may for collapse.
 	sep := func(r rune) bool { return !strings.ContainsRune("()[]{}<>", r) }
 	switch {
 	case prev != nil && strings.TrimRightFunc(*prev, sep) != *prev:
-		*prev = strings.TrimRightFunc(*prev, sep)
+		for j := at - 1; j >= 0 && items[j].part.kind == partText; j-- {
+			t := &items[j].spans[0].Text
+			*t = strings.TrimRightFunc(*t, sep)
+			if *t != "" {
+				break
+			}
+		}
 	case next != nil:
-		*next = strings.TrimLeftFunc(*next, sep)
+		for j := at + 1; j < len(items) && items[j].part.kind == partText; j++ {
+			t := &items[j].spans[0].Text
+			*t = strings.TrimLeftFunc(*t, sep)
+			if *t != "" {
+				break
+			}
+		}
 	}
 	out := append(items[:at:at], items[at+1:]...)
 	kept := out[:0]

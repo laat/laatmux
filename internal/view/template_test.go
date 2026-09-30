@@ -404,7 +404,14 @@ func TestTemplateOverflow(t *testing.T) {
 		t.Errorf("both spaces: %q", got)
 	}
 	if got := render("({host} {session})", 5); got != "(vm)\n" {
+		t.Errorf("a label cut away leaves with its spaces: %q", got)
+	}
+	if got := render("{host}{fill}[{pr_number} {pr_checks}]", 8); got != "vm   [×]\n" {
 		t.Errorf("a bracket around two tokens: %q", got)
+	}
+	// A separator a style split goes whole.
+	if got := render("{primary} #[dim]@ {host}", 6); got != "fix-ls\n" {
+		t.Errorf("a split separator: %q", got)
 	}
 }
 
