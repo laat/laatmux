@@ -46,7 +46,10 @@ func paneOf(r rows.Row) (paneTarget, bool) {
 // jumpPane goes to the row's pane. The message returned says what the
 // jump could not do beyond reaching the session, a pane gone say; the
 // error is a jump that could not be made at all.
-func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) (message string, err error) {
+//
+// line is the depth-1 line whose workspace session attaches to the
+// pane's managed session, nil for none.
+func jumpPane(ctx context.Context, cfg config.Config, line *rows.Row, r rows.Row, p paneTarget) (message string, err error) {
 	if r.Host == "" {
 		return "", errors.New(r.Name + ": no configured host claims this record")
 	}
@@ -68,7 +71,7 @@ func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) 
 		}
 		return "", nil
 	}
-	name, spec := paneSpec(cfg, h, r, p)
+	name, spec := paneSpec(cfg, h, line, r, p)
 	if spec != nil {
 		if name, _, err = workspace.Ensure(ctx, *spec); err != nil {
 			return "", err
@@ -97,22 +100,35 @@ func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) 
 // own goroutine: a host that stops answering holds the view no longer.
 const selectTimeout = 5 * time.Second
 
-// paneSpec is the local session a managed pane's jump attaches: by name
-// alone, the one a task's jump made before the host listed the
-// worktree; by spec, the worktree's own workspace session when the pane
-// is in its home session or, with the home lost, in the session its
-// agent is in, as the worktree line's jump attaches it; or the plain
-// attachment to the pane's managed session.
-func paneSpec(cfg config.Config, h config.Host, r rows.Row, p paneTarget) (string, *workspace.Spec) {
+// paneSpec is the local session a managed pane's jump attaches, routed
+// by the pane's session, whichever record names it: by spec, the
+// workspace session of the line whose home the session is, or whose
+// agent laatmux made at the root is in it with the home lost, or the
+// task's before the host lists the worktree, as those lines' own jumps
+// attach it; by name alone, the one a task's jump made; or the plain
+// attachment to the pane's managed session. A pane of one worktree in
+// another's session so goes to the other's workspace session, and a
+// plain attachment never takes a workspace session's name.
+func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) (string, *workspace.Spec) {
 	switch {
+	case line != nil && line.Worktree != nil:
+		w := *line.Worktree
+		spec := worktreeSpec(cfg, h, w)
+		if w.Session == "" {
+			// The home lost: the session named after the worktree, as
+			// the line's jump names it.
+			w.Session = p.session
+			spec = worktreeSpec(cfg, h, w)
+			spec.Name = worktreeSessionName(h, w)
+		}
+		return "", &spec
+	case line != nil && line.Pending != nil:
+		pd := line.Pending
+		w := protocol.Worktree{ID: pd.WorktreeID(), EnvironmentID: pd.EnvironmentID, Root: pd.Root, Repo: pd.Repo, Branch: pd.Branch, Source: pd.Source, Session: pd.Session}
+		spec := worktreeSpec(cfg, h, w)
+		return "", &spec
 	case r.Worktree == nil && r.Local != nil && r.Local.Workspace():
 		return r.Local.Name, nil
-	case r.Worktree != nil && (r.Worktree.Session == p.session || r.Worktree.Session == ""):
-		w := *r.Worktree
-		w.Session = p.session
-		spec := worktreeSpec(cfg, h, w)
-		spec.Name = worktreeSessionName(h, w)
-		return "", &spec
 	}
 	return "", &workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
 }
@@ -130,19 +146,8 @@ var selectRemote = func(ctx context.Context, h client.Host, paneID string) error
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapSelect) {
 		return nil
 	}
-	if err := c.Write(protocol.Message{Type: protocol.TypeSelect, ID: "select-" + paneID, PaneID: paneID}); err != nil {
-		return err
-	}
-	for {
-		m, err := c.Read()
-		if err != nil {
-			return err
-		}
-		if m.Type == protocol.TypeResult {
-			if !m.OK {
-				return errors.New(m.Error)
-			}
-			return nil
-		}
-	}
+	// Request closes the connection when the context ends, so a daemon
+	// that stops answering holds the view no longer than the bound.
+	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeSelect, ID: "select-" + paneID, PaneID: paneID})
+	return err
 }

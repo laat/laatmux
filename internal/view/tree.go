@@ -39,20 +39,42 @@ func ParseView(s string) (View, error) {
 // passes its fold to the node that takes its children, unless the user
 // has set that node's own.
 func (m *Model) SetTree(nodes []rows.Row) {
+	// The owner of each worktree's children before: a task line that
+	// stops standing, at a handoff or failing after the worktree was
+	// made, passes its fold to the node that takes them.
+	owners := map[string]string{}
+	for i := range m.Tree {
+		n := &m.Tree[i]
+		if n.Depth == 1 && n.Worktree != nil && n.Children > 0 {
+			owners[n.Worktree.ID] = n.ID()
+		}
+	}
 	m.Tree = nodes
-	for task, to := range m.Handoffs {
-		closed, ok := m.folds[task]
+	carry := func(from, worktreeID string) {
+		closed, ok := m.folds[from]
 		if !ok {
-			continue
+			return
 		}
 		// The node holding the worktree's children now: its line, or
 		// the task standing for it.
-		succ := m.successor(to)
-		if succ == "" || succ == task || m.toggled[succ] {
-			continue
+		succ := m.successor(worktreeID)
+		if succ == "" || succ == from {
+			return
 		}
-		m.setFold(succ, closed)
-		delete(m.folds, task)
+		// Consumed either way: an old fold is no later owner's.
+		delete(m.folds, from)
+		delete(m.toggled, from)
+		if !m.toggled[succ] {
+			m.setFold(succ, closed)
+		}
+	}
+	for worktreeID, from := range owners {
+		if m.indexOf(from) < 0 || m.successor(worktreeID) != from {
+			carry(from, worktreeID)
+		}
+	}
+	for task, to := range m.Handoffs {
+		carry(task, to)
 	}
 	m.reselect()
 }
@@ -94,18 +116,21 @@ func (m *Model) closed(r *rows.Row) bool {
 	case rows.KindFold:
 		return !m.ShowHidden
 	}
-	c := r.Worst == nil || !wants(r.Worst)
+	c := !m.anyWants(r)
 	m.setFold(id, c)
 	return c
 }
 
-// wants is an agent that is blocked, working or done, whatever its
-// workspace: what opens a line's first fold.
-func wants(r *rows.Row) bool {
-	if r.Agent == nil || r.Agent.Liveness == protocol.Gone {
-		return false
+// anyWants is whether a live agent under a line is blocked, working or
+// done, whatever its workspace: what opens the line's first fold.
+func (m *Model) anyWants(line *rows.Row) bool {
+	i := m.indexOf(line.ID())
+	for j := i + 1; i >= 0 && j < len(m.Tree) && m.Tree[j].Depth > line.Depth; j++ {
+		if m.Tree[j].Wants() {
+			return true
+		}
 	}
-	return r.Done || r.Agent.Activity == protocol.Blocked || r.Agent.Activity == protocol.Working
+	return false
 }
 
 func (m *Model) setFold(id string, closed bool) {
@@ -153,8 +178,9 @@ func (m *Model) foldAll() {
 
 // treeItems is the tree as drawn: the nodes the filter and the folds
 // leave, a folded line's children hidden. The filter keeps the lines
-// under a repository whose name or host matches, with their children,
-// the repository over any it keeps, and other sessions likewise.
+// whose name or host matches, with their children, and the repository
+// or the other-sessions header over any line it keeps; a matching
+// repository alone shows as a line without.
 func (m *Model) treeItems() []Item {
 	shown := m.treeShown()
 	var out []Item
@@ -312,6 +338,24 @@ func (m *Model) firstAgentUnder(worktreeID string) string {
 		}
 	}
 	return ""
+}
+
+// LineFor is the depth-1 line on a host whose workspace session
+// attaches to a managed session: the worktree with that home, the one
+// whose agent laatmux made at the root is in it with the home lost, or
+// the task standing for a worktree the host has not listed; nil for
+// none. A pane's jump goes by it.
+func (m *Model) LineFor(host, session string) *rows.Row {
+	if session == "" {
+		return nil
+	}
+	for i := range m.Tree {
+		n := &m.Tree[i]
+		if n.Depth == 1 && n.Host == host && n.Home() == session {
+			return n
+		}
+	}
+	return nil
 }
 
 // indexOf is a node's index in the tree, -1 when none has the id.
@@ -507,13 +551,17 @@ func (m *Model) treeLine(r rows.Row) []Line {
 // at the top of the window, when that node is not a repository line
 // itself. nil otherwise.
 func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
-	if m.scroll >= len(ids) {
+	if m.scroll <= 0 || m.scroll >= len(ids) || ids[m.scroll] == "" {
+		// The top of the window a header: no repository over it.
 		return nil, ""
 	}
 	top := ids[m.scroll]
 	var repo *rows.Row
 	for _, it := range items {
 		if it.Row == nil {
+			// A header, other sessions: what is under it has no
+			// repository.
+			repo = nil
 			continue
 		}
 		if it.Row.Depth == 0 {

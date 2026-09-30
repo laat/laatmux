@@ -1673,11 +1673,132 @@ func TestTreePinned(t *testing.T) {
 	if got := m.hitIDs[0]; got != rows.RepoNode("git@github.com:laat/laatmux.git") {
 		t.Errorf("the pinned line is %q in the hit map", got)
 	}
-	// One row up from the end still shows the selection under the pin.
-	m.Handle(Key{Kind: KeyUp})
+	// Walking up to the top: the selection shown on every step, no row
+	// under the more line, never "0 more", and a repository line at the
+	// top of the window has no pin over it.
+	walk := func(m *Model) {
+		t.Helper()
+		for step := 0; ; step++ {
+			out := m.Render()
+			text := Debug(out)
+			if m.Selection() == nil || !strings.Contains(text, "\nS") {
+				t.Errorf("step %d: the selection is not shown:\n%s", step, text)
+			}
+			if strings.Contains(text, "↓ 0 more") {
+				t.Errorf("step %d: 0 more:\n%s", step, text)
+			}
+			for i, l := range out {
+				if strings.HasPrefix(l.Spans[0].Text, "↓ ") && i < len(out)-2 {
+					t.Errorf("step %d: a line under the more line:\n%s", step, text)
+				}
+			}
+			if m.scroll > 0 && strings.Contains(out[1].Spans[0].Text, "laatmux") && out[1].Spans[0].Bold && out[2].Spans[0].Bold {
+				t.Errorf("step %d: a repository pinned over itself:\n%s", step, text)
+			}
+			if m.Selected == 0 {
+				break
+			}
+			m.Handle(Key{Kind: KeyUp})
+		}
+	}
+	for _, h := range []int{7, 8, 9} {
+		m.Height = h
+		m.Handle(Key{Rune: 'G'})
+		walk(m)
+	}
+	// Rows in other sessions have no repository pinned over them.
+	for i := 2; i <= 6; i++ {
+		in.Agents = append(in.Agents, protocol.Agent{ID: "venv/default/%" + string(rune('0'+i)), EnvironmentID: "venv", Server: "default", Session: "s" + string(rune('0'+i)), Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive})
+	}
+	m.Height = 8
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Handle(Key{Rune: 'G'})
 	text = Debug(m.Render())
-	if r := m.Selection(); r == nil || !strings.Contains(text, r.Name) {
-		t.Errorf("the selection is not shown:\n%s", text)
+	if strings.Contains(text, "laatmux") {
+		t.Errorf("a repository pinned over other sessions:\n%s", text)
+	}
+	walk(m)
+}
+
+// A task handing over while another stands for its worktree: the
+// selection follows to the worktree's line in the tree and to its first
+// agent's tile in the agent view, not to the other task; the owner's
+// fold goes with it. An owner that fails after the worktree is made
+// passes its fold to the next task, with no handoff.
+func TestHandoffStanding(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/laatmux.git"
+	in := treeInput(now)
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	task := func(id string, at time.Time) protocol.Pending {
+		return protocol.Pending{ID: id, Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: at}
+	}
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	set := func(m *Model) {
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
+	}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	set(m)
+	m.Render()
+	if m.closed(&m.Tree[m.indexOf("add-2")]) != true {
+		t.Fatal("the owner with an idle agent started open")
+	}
+	m.Select("add-2")
+	m.Handle(Key{Rune: 'l'}) // opened by the user
+	// add-2 hands over; add-1 stands still.
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = in.Pendings[:1]
+	m.Handoffs = map[string]string{"add-2": "venv/worktree//r/new-one"}
+	set(m)
+	owner := m.successor("venv/worktree//r/new-one")
+	if owner != "add-1" {
+		t.Fatalf("the standing task does not own the children: %q", owner)
+	}
+	if r := m.Selection(); r == nil || r.ID() != "add-1" {
+		t.Errorf("selection after the handoff with a task standing: %+v", r)
+	}
+	if m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Error("the next owner did not take the fold")
+	}
+	// The same in the agent view: the first agent's tile, not add-1's.
+	a := &Model{Now: now, View: ViewAgents, Width: 60, Height: 30}
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	in.Worktrees = in.Worktrees[:len(in.Worktrees)-1]
+	in.Agents[len(in.Agents)-1].WorktreeID = ""
+	set(a)
+	a.Render()
+	a.Select("add-2")
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = in.Pendings[:1]
+	a.Handoffs = map[string]string{"add-2": "venv/worktree//r/new-one"}
+	set(a)
+	if r := a.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
+		t.Errorf("selection in the agent view: %+v", r)
+	}
+	// add-1 owns the children now, open by the carried fold; the user
+	// folds it, then it fails: the worktree line takes the children and
+	// the closed fold, with no handoff.
+	m.Handoffs = nil
+	m.Select("add-1")
+	m.Handle(Key{Rune: 'h'})
+	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Fatal("h did not fold the owner")
+	}
+	in.Pendings[0].Done, in.Pendings[0].OK, in.Pendings[0].Error = true, false, "failed at agent: boom"
+	set(m)
+	if owner := m.successor("venv/worktree//r/new-one"); owner != "venv/worktree//r/new-one" {
+		t.Fatalf("the worktree line does not own the children: %q", owner)
+	}
+	if !m.closed(&m.Tree[m.indexOf("venv/worktree//r/new-one")]) {
+		t.Error("the worktree line did not take the failed owner's fold")
+	}
+	if _, ok := m.folds["add-1"]; ok {
+		t.Error("the failed task's fold was not consumed")
 	}
 }
 

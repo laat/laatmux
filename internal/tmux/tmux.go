@@ -422,7 +422,6 @@ func Submitted(err error) bool {
 	return errors.As(err, &se)
 }
 
-// SendKeys presses tmux key names in the pane, Down or Enter say.
 // SelectPane makes a pane and its window the server's current ones, so
 // a client attached to its session shows it.
 func (s Server) SelectPane(ctx context.Context, paneID string) error {
@@ -433,6 +432,7 @@ func (s Server) SelectPane(ctx context.Context, paneID string) error {
 	return err
 }
 
+// SendKeys presses tmux key names in the pane, Down or Enter say.
 func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	_, err := s.Run(ctx, append([]string{"send-keys", "-t", paneID}, keys...)...)
 	return err

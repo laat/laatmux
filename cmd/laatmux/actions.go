@@ -97,8 +97,6 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 		case 'p':
 			d.deliverPrompt(m)
 		case 'z':
-			// s is the tree's fold from step 6 on; until then it does
-			// nothing.
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
@@ -142,7 +140,7 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	if p, ok := paneOf(r); ok && d.jumper == nil {
 		// A tile, or an agent or a pane in the tree: to the pane, the
 		// session reached whatever the pane's fate.
-		msg, err := jumpPane(d.ctx, d.cfg, r, p)
+		msg, err := jumpPane(d.ctx, d.cfg, m.LineFor(r.Host, p.session), r, p)
 		if err != nil {
 			m.Message = err.Error()
 			return false, false
@@ -615,7 +613,7 @@ func (d *dash) askRm(m *view.Model, force bool) {
 		// From an agent's tile or line: the worktree goes, and every
 		// agent in it with it, counted as the tree joins them.
 		switch n := m.AgentsUnder(r.Worktree.ID); {
-		case n == 1 && r.Agent != nil:
+		case n == 1:
 			with = " with its agent"
 		case n > 1:
 			with = fmt.Sprintf(" with its %d agents", n)
@@ -753,6 +751,12 @@ func (d *dash) deliverPrompt(m *view.Model) {
 // this machine's config does not know is removed by root alone, as
 // --root does.
 func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
+	switch r.Kind {
+	case rows.KindPane, rows.KindRun:
+		return command.Rm{}, errors.New(r.Name + ": a pane or a run; x removes worktrees, from their line or an agent's")
+	case rows.KindRepo, rows.KindGroup, rows.KindFold:
+		return command.Rm{}, errors.New(r.Name + ": x removes worktrees, from their line or an agent's")
+	}
 	if r.Host == "" {
 		return command.Rm{}, errors.New(r.Name + ": no configured host claims this record")
 	}
@@ -762,10 +766,6 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	}
 	rm := command.Rm{Host: h}
 	switch {
-	case r.Kind == rows.KindPane, r.Kind == rows.KindRun:
-		return command.Rm{}, errors.New(r.Name + ": a pane or a run; x removes worktrees, from their line or an agent's")
-	case r.Kind == rows.KindRepo, r.Kind == rows.KindGroup, r.Kind == rows.KindFold:
-		return command.Rm{}, errors.New(r.Name + ": x removes worktrees, from their line or an agent's")
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
 		if repo, ok := recordRepo(d.cfg, r.Worktree.Source); ok {

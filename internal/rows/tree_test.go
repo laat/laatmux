@@ -173,7 +173,9 @@ func TestTreeContents(t *testing.T) {
 		Locals: []workspace.Local{{Name: "vm/proj/lost", Key: "venv//w/lost", Host: "vm"}},
 		Pendings: []protocol.Pending{
 			{ID: "t-old", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, SubmittedAt: now.Add(-time.Minute)},
-			{ID: "t-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, SubmittedAt: now},
+			// Done with the prompt undelivered: it needs the user, and
+			// stands for the worktree still.
+			{ID: "t-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now},
 			{ID: "t-c", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "c", Root: "/w/c", Session: "proj/c", Taken: true, SubmittedAt: now},
 			{ID: "t-d", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "d", Root: "/w/d", Taken: true, Done: true, Error: "failed at setup: boom", Stage: "setup", SubmittedAt: now},
 		},
@@ -204,6 +206,56 @@ func TestTreeContents(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("tree:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, n := range Tree(in) {
+		if n.ID() == "t-new" && (!n.NeedsUser() || n.Children != 1 || n.Worst == nil) {
+			t.Errorf("the task needing the user: %+v", n)
+		}
+	}
+	// The repository's name and place do not follow the worktrees'
+	// order: swapped, the tree is the same.
+	in.Worktrees[0], in.Worktrees[1] = in.Worktrees[1], in.Worktrees[0]
+	in.Worktrees[1].Repo = "zproj"
+	var again []string
+	for _, n := range Tree(in) {
+		again = append(again, n.ID()+" "+n.Name)
+	}
+	var first []string
+	in.Worktrees[0], in.Worktrees[1] = in.Worktrees[1], in.Worktrees[0]
+	for _, n := range Tree(in) {
+		first = append(first, n.ID()+" "+n.Name)
+	}
+	if strings.Join(again, "\n") != strings.Join(first, "\n") {
+		t.Errorf("the tree follows the worktrees' order:\n%s\nagainst:\n%s", strings.Join(again, "\n"), strings.Join(first, "\n"))
+	}
+}
+
+// A settled worktree with an idle agent first and a working one after:
+// the working one is the most pressing, and a gone agent never is.
+func TestPressing(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/proj.git"
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Gone, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
+		},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a", Session: "proj/a"}},
+		Locals:    []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm", Settled: true}},
+		Now:       now,
+	}
+	for _, n := range Tree(in) {
+		if n.Kind != KindWorktree {
+			continue
+		}
+		if !n.Settled || n.Worst == nil || n.Worst.Agent.ID != "venv/laatmux/%2" {
+			t.Errorf("worst: %+v settled %v", n.Worst, n.Settled)
+		}
+		if !n.Worst.Wants() {
+			t.Error("a settled working agent does not open the fold")
+		}
 	}
 }
 

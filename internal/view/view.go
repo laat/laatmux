@@ -169,18 +169,17 @@ func (m *Model) reselect() {
 		return func(r *rows.Row) bool { return want != "" && r.Alias() == want }
 	}
 	// The agent view has no worktree rows: a task that handed over to
-	// its worktree is followed to the worktree's first tile there,
-	// out of the stale fold when it is in it.
-	tileIn := func(want string) func(r *rows.Row) bool {
-		return func(r *rows.Row) bool {
-			return want != "" && r.Kind == rows.KindTile && r.Worktree != nil && r.Worktree.ID == want
-		}
-	}
-	if m.View != ViewTree && handed != "" && !m.ShowHidden {
-		for _, r := range m.Rows.Stale {
-			if tileIn(handed)(&r) {
-				m.ShowHidden = true
-				vis = m.Visible()
+	// its worktree is followed to the worktree's first agent's tile,
+	// in the tree's order, out of the stale fold when it is in it.
+	first := ""
+	if m.View != ViewTree && handed != "" {
+		first = m.firstAgentUnder(handed)
+		if first != "" && !m.ShowHidden {
+			for _, r := range m.Rows.Stale {
+				if r.ID() == first {
+					m.ShowHidden = true
+					vis = m.Visible()
+				}
 			}
 		}
 	}
@@ -189,7 +188,7 @@ func (m *Model) reselect() {
 	case find(id(alias)):
 	case find(standing(anchor)):
 	case find(id(handed)):
-	case find(tileIn(handed)):
+	case find(id(first)):
 	case find(standing(alias)):
 	case find(standing(handed)):
 	default:
@@ -481,16 +480,7 @@ func (m *Model) Render() []Line {
 	// possible; a separator after the selected tile may fall off. With
 	// rows below the window its last line is the count of them, so the
 	// window is a line shorter.
-	// In the tree, the repository line of the node at the top stays
-	// pinned above the window while the list scrolls past it, and the
-	// window is a line shorter for it.
 	window := body
-	pinAt := func() int {
-		if m.View != ViewTree || m.scroll <= 0 || body < 4 {
-			return -1
-		}
-		return m.scroll
-	}
 	scrollTo := func() {
 		if selStart >= 0 {
 			if selStart < m.scroll {
@@ -512,9 +502,16 @@ func (m *Model) Render() []Line {
 		}
 	}
 	scrollTo()
-	if pinAt() >= 0 {
-		window = body - 1
-		scrollTo()
+	// In the tree, the repository line of the node at the top stays
+	// pinned above the window while the list scrolls past it, and the
+	// window is a line shorter for it.
+	reserved := false
+	if m.View == ViewTree && body >= 4 {
+		if l, _ := m.pinned(items, ids); l != nil {
+			reserved = true
+			window = body - 1
+			scrollTo()
+		}
 	}
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
@@ -547,16 +544,18 @@ func (m *Model) Render() []Line {
 		m.hitTop++
 	}
 	m.hitAt = m.Now
-	var pinned *Line
-	pinnedID := ""
-	if pinAt() >= 0 {
-		pinned, pinnedID = m.pinned(items, ids)
-	}
 	shift := 0
-	if pinned != nil {
-		out = append(out, *pinned)
-		m.hitIDs[0] = pinnedID
-		shift = 1
+	if reserved {
+		if pinned, id := m.pinned(items, ids); pinned != nil {
+			out = append(out, *pinned)
+			m.hitIDs[0] = id
+			shift = 1
+		} else {
+			// The shorter window moved a repository line to the top:
+			// the line above the window has the slot instead.
+			m.scroll--
+			window++
+		}
 	}
 	for i := shift; i < body; i++ {
 		switch j := m.scroll + i - shift; {

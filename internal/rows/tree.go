@@ -187,6 +187,16 @@ func Tree(in Input) []Row {
 		}
 		return before(x, y)
 	})
+	// The worktrees likewise, by host and root: a repository this
+	// machine has no label for is named by the first worktree naming it.
+	in.Worktrees = append([]protocol.Worktree(nil), in.Worktrees...)
+	sort.SliceStable(in.Worktrees, func(a, b int) bool {
+		x, y := &in.Worktrees[a], &in.Worktrees[b]
+		if x.EnvironmentID != y.EnvironmentID {
+			return x.EnvironmentID < y.EnvironmentID
+		}
+		return x.Root < y.Root
+	})
 	j := newJoin(in)
 	type repo struct {
 		key, name string
@@ -508,10 +518,11 @@ func pressing(children []Row) *Row {
 	var best *Row
 	for i := range children {
 		c := &children[i]
-		if c.Agent == nil {
+		if c.Agent == nil || c.Agent.Liveness == protocol.Gone {
+			// A gone agent's last activity says nothing now.
 			continue
 		}
-		if best == nil || c.Rank() < best.Rank() {
+		if best == nil || c.Rank() < best.Rank() || c.Rank() == best.Rank() && activityRank(c) < activityRank(best) {
 			best = c
 		}
 	}
@@ -520,6 +531,49 @@ func pressing(children []Row) *Row {
 	}
 	cc := *best
 	return &cc
+}
+
+// activityRank orders agents of one rank by what they do: blocked,
+// working, then the rest, so a settled worktree's working agent is its
+// most pressing over an idle one.
+func activityRank(r *Row) int {
+	switch r.Agent.Activity {
+	case protocol.Blocked:
+		return 0
+	case protocol.Working:
+		return 1
+	}
+	return 2
+}
+
+// Wants is a live agent that is blocked, working or done: what opens a
+// line's first fold.
+func (r Row) Wants() bool {
+	if r.Agent == nil || r.Pending != nil || r.Agent.Liveness == protocol.Gone {
+		return false
+	}
+	return r.Done || r.Agent.Activity == protocol.Blocked || r.Agent.Activity == protocol.Working
+}
+
+// Home is the managed session a depth-1 line's workspace session
+// attaches to: the worktree's home session; with the home lost, the
+// session of the agent laatmux made at its root; a task's before the
+// host lists the worktree; "" for a line with none.
+func (r Row) Home() string {
+	switch {
+	case r.Depth != 1:
+		return ""
+	case r.Worktree != nil && r.Worktree.Session != "":
+		return r.Worktree.Session
+	case r.Worktree != nil:
+		if r.Agent != nil && Server(*r.Agent) == tmux.LaatmuxServer.Label() {
+			return r.Agent.Session
+		}
+		return ""
+	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
+		return r.Pending.Session
+	}
+	return ""
 }
 
 // Agents is the agent view: the tasks first, the newest first, then one
