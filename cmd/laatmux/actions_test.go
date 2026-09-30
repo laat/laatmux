@@ -290,6 +290,21 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if row, err := shellRow(tm, own); err != nil || row.ID() != second.ID {
 		t.Errorf("a tile with its own session: %+v, %v", row, err)
 	}
+	// The add's agent before the host lists the worktree, as a node
+	// under its task and as a tile: the task's session.
+	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/y", Managed: true, Cwd: "/w/proj/y"}
+	taskLine := rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Name: "proj/y", Agent: &add, Children: 1, Pending: &protocol.Pending{ID: "add-y", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
+	tm.Tree = append(tm.Tree, taskLine, rows.Row{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add})
+	for _, r := range []rows.Row{tm.Tree[len(tm.Tree)-1], {Kind: rows.KindTile, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add}} {
+		row, err := shellRow(tm, r)
+		if err != nil || row.Worktree == nil || row.Worktree.Session != "proj/y" {
+			t.Errorf("%v under a loose task: shell row %+v, %v", r.Kind, row, err)
+			continue
+		}
+		if spec, err := localSpec(cfg, row); err != nil || spec.Managed != "proj/y" || spec.Key != "venv//w/proj/y" {
+			t.Errorf("%v under a loose task: spec %+v, %v", r.Kind, spec, err)
+		}
+	}
 }
 
 // An rm whose host side succeeded and whose local cleanup then failed

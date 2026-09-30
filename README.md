@@ -863,7 +863,7 @@ is switched to.
   line, where it needs the user or would otherwise be stuck, and `p`
   delivers a prompt that did not reach the agent, or may not have.
   `z` settles or unsettles; `S` opens the shell window and jumps; `s`
-  does nothing until the tree view takes it for folds.
+  folds and unfolds the selected line.
   The commands are `internal/command`, the same implementations the
   CLI's `add`, `rm`, `run` and `shell` call, with the printing separated
   from the doing.
@@ -896,7 +896,8 @@ is switched to.
 - In both, the selection follows the viewer's own row, the session the
   sidebar pane sits in or the popup was opened from, wherever the sort
   moves it, and rests on nothing when no row is that session, so `Enter`
-  does nothing and a digit counts the main group. The first key or
+  does nothing and a digit counts the tiles or the worktree lines as
+  always. The first key or
   wheel step that moves the selection makes it the user's: from then on
   it stays on the row it was put on across refreshes, as before. A click
   on a row, or a digit, while the selection follows jumps to that row

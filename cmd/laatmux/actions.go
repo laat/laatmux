@@ -942,8 +942,16 @@ func (d *dash) shell(m *view.Model) bool {
 // goes by the line holding it, whose jump agent the lost-home case
 // counts on; a task's row by the task's own rules for its session.
 func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
-	if row.Kind != rows.KindWorktree && row.Kind != rows.KindTask && row.Worktree != nil && (row.Local == nil || !row.Local.Workspace()) {
+	if row.Kind == rows.KindWorktree || row.Kind == rows.KindTask || row.Local != nil && row.Local.Workspace() {
+		// A line, or a row with a workspace session of its own.
+	} else if row.Worktree != nil {
 		if l := m.OwnerLine(row.Worktree.ID); l != nil {
+			row = *l
+		}
+	} else if row.Pending == nil && row.Agent != nil {
+		// The add's agent before the host lists the worktree: the
+		// task line holding it, as the pane jump routes it.
+		if l := m.LineFor(row.Host, row.Agent.Session); l != nil && l.Pending != nil {
 			row = *l
 		}
 	}
