@@ -932,12 +932,76 @@ width is at least 10, layout `tiles` or `compact`, view `agents` or
 `tree`, sort `priority`, `recency` or `window`,
 stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
-{claude: {icon: CC, color: "#d97757"}}` for the agent token milestone
-five's templates bring, and `theme: {mode: auto|dark|light, custom:
-{accent: "#b48ead"}}` with the palette `info`, `accent`, `success`,
-`warning`, `danger`, `dimmed`, `text`, `border`, `header`,
-`highlight_row_bg` and `current_worktree_fg`, colours as `#rrggbb` or
-0 to 255.
+{claude: {icon: CC, color: "#d97757"}}` for the `{agent_icon}` token,
+and `theme: {mode: auto|dark|light, custom: {accent: "#b48ead"}}` with
+the palette `info`, `accent`, `success`, `warning`, `danger`, `dimmed`,
+`text`, `border`, `header`, `highlight_row_bg` and
+`current_worktree_fg`, colours as `#rrggbb` or 0 to 255.
+
+### Templates
+
+Every line of every layout is a template, and the layouts above are
+the defaults, `sidebar.templates` in the config:
+
+```yaml
+sidebar:
+  templates:
+    tiles:
+      - "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}"
+      - "{stripe}    {secondary} @{host}{fill}{git_stats}"
+      - "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
+    compact: "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
+    top: "{status_icon} {primary} {pane_suffix}"
+    tree:
+      repo: "#[fg=header,bold]{fold}{repo}"
+      worktree: "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default]{git_stats}  {pr_number} {pr_checks}  {worst_status}"
+      agent: "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
+      pane: "{indent}$ {command}"
+      run: "{indent}▶ {command}{fill}{elapsed}"
+```
+
+- **Tokens.** Labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`,
+  `{host}` (dim for every host but this machine, with `/server` for an
+  agent observed off the managed server), `{session}`, `{window}`
+  (tmux's `session:index`), `{window_index}`, `{pane_title}` (the
+  cleaned title, or on a tile what the row is instead: a task's state,
+  `no session`, `claude gone`), `{pane_suffix}` (`(2)` on the second
+  of a worktree's agents). Status: `{stripe}`, `{status_icon}`,
+  `{status_label}` (`waiting`, `working`, `done`, `stale`, `settled`,
+  `idle`, `gone`; a task's state; `worktree gone` on an orphaned
+  session's line), `{agent_icon}`, `{agent_label}`, `{elapsed}` (the
+  time since the status changed; a run's running time). Git:
+  `{git_stats}` (the whole `R +46 -11 ✎ +28 -3`), `{git_committed}`,
+  `{git_uncommitted}`, `{git_ahead}` (`↑2`), `{git_behind}` (`↓1`),
+  `{git_dirty}` (`✎`), `{git_conflict}` (`!`), `{git_rebase}` (`R`),
+  `{git_branch}` (the base). PR: `{pr_number}`, `{pr_checks}`.
+  Position: `{idx}` (the row's number, as the digits count),
+  `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
+  (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
+  `{repo_count}` on a repository line, `{child_count}` and
+  `{worst_status}` (the most pressing agent's icon, on a folded line)
+  on a worktree line, `{command}` on a pane or run line. A token that
+  has nothing on a row is empty.
+- **`{fill}`** splits the line into a left and a right part, the right
+  against the right edge. An empty token takes the adjacent run of
+  spaces with it, the one after it, else the one before, so separators
+  do not pile up; a line whose tokens are all empty is still a line, so
+  tiles keep their height; a blank template is no line at all.
+- **Overflow.** A line wider than the pane gives way in this order:
+  the flexible tokens, the labels and the pane title, are cut with `…`
+  down to a third of the width (at most twelve cells), the rightmost
+  first; `{git_stats}` and `{pr_checks}` shrink themselves; the fields
+  on the right are dropped, the widest first, so a folded line keeps
+  its icon; the flexible tokens are cut further; then the line is
+  clipped. A cut label grows back into the room a dropped field leaves.
+- **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
+  `nobold`, `nodim` and `default`, with a palette name or a colour as
+  the config writes them. A style holds until the next one and leaves
+  a token's own colours alone.
+- **Errors.** A template that does not parse is shown in the view in
+  its place, `template error: unknown token {x} at column 7 in
+  tiles[0]`, rather than failing the pane. The fold row, the
+  `other sessions` header and the session lines under it are fixed.
 
 ## Which tmux servers the daemon polls
 

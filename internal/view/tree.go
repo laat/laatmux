@@ -3,10 +3,8 @@ package view
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/laat/laatmux/internal/palette"
-	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 )
 
@@ -467,9 +465,8 @@ func (m *Model) tabs() Line {
 // treeLine draws one node of the tree, or the agent view's stale fold.
 func (m *Model) treeLine(r rows.Row) []Line {
 	w := m.Width
+	t := m.templates().Tree
 	var spans []Span
-	right := []Span{}
-	indent := strings.Repeat("  ", r.Depth)
 	switch r.Kind {
 	case rows.KindFold:
 		mark := "▾ "
@@ -477,93 +474,27 @@ func (m *Model) treeLine(r rows.Row) []Line {
 			mark = "▸ "
 		}
 		spans = []Span{{Text: mark + r.Name, Fg: palette.Header, Dim: true}}
-	case rows.KindRepo:
-		mark := ""
-		if m.closed(&r) {
-			mark = "▸ "
-		}
-		spans = []Span{{Text: mark + r.Name, Fg: palette.Header, Bold: true}}
 	case rows.KindGroup:
 		spans = []Span{{Text: r.Name, Fg: palette.Header, Dim: true}}
+	case rows.KindRepo:
+		spans = m.line(t.Repo, r, w)
 	case rows.KindWorktree, rows.KindTask:
-		mark := "  "
-		if r.Foldable() {
-			mark = "▾ "
-			if m.closed(&r) {
-				mark = "▸ "
-			}
-		}
-		p, _ := r.Labels()
-		if r.Orphaned {
-			p = r.Name
-		}
-		spans = []Span{{Text: indent + mark}, m.primary(r, w)}
-		spans[1].Text = p
-		if r.Host != "" {
-			spans = append(spans, Span{Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost})
-		}
-		switch {
-		case r.Pending != nil:
-			right = append(right, Span{Text: r.State(), Fg: palette.Warning})
-		case r.Orphaned:
-			right = append(right, Span{Text: "worktree gone", Dim: true})
-		default:
-			right = append(right, gitSpans(r, w/2)...)
-			if pr := m.prSpans(r, w/3); len(pr) > 0 {
-				if len(right) > 0 {
-					right = append(right, Span{Text: "  "})
-				}
-				right = append(right, pr...)
-			}
-		}
-		if r.Foldable() && m.closed(&r) && r.Worst != nil {
-			// The most pressing agent inside, so a blocked or done one
-			// is not missed.
-			icon := m.iconSpan(*r.Worst)
-			if strings.TrimSpace(icon.Text) != "" {
-				right = append(right, Span{Text: "  "}, icon)
-			}
-		}
+		spans = m.line(t.Worktree, r, w)
 	case rows.KindAgent:
-		icon := m.iconSpan(r)
-		name := r.AgentName()
 		if r.Depth == 1 {
 			// A session in other sessions: its name, host, then the
-			// agent.
-			spans = []Span{{Text: indent + "  " + r.Name}, {Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost}, {Text: "  "}, icon, {Text: " " + name}}
+			// agent; a line of its own, not the agent template's.
+			indent := strings.Repeat("  ", r.Depth)
+			spans = []Span{{Text: indent + "  " + r.Name}, {Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost}, {Text: "  "}, m.iconSpan(r), {Text: " " + r.AgentName()}}
 			break
 		}
-		title := ""
-		if r.Agent.Liveness == protocol.Gone {
-			title = "gone"
-		} else {
-			p, sec := r.Labels()
-			title = cleanTitle(r.Agent.Title, p, sec, r.Host, m.Machine)
-		}
-		spans = []Span{{Text: indent}, icon, {Text: " " + name}}
-		if title != "" {
-			spans = append(spans, Span{Text: "  " + title, Dim: true})
-		}
+		spans = m.line(t.Agent, r, w)
 	case rows.KindPane:
-		spans = []Span{{Text: indent + "$ " + r.Name}}
+		spans = m.line(t.Pane, r, w)
 	case rows.KindRun:
-		spans = []Span{{Text: indent + "▶ " + r.Name}}
-		if r.Run != nil {
-			right = append(right, Span{Text: elapsed(m.Now.Sub(r.Run.StartedAt)), tick: m.Now.Sub(r.Run.StartedAt) < time.Hour})
-		}
+		spans = m.line(t.Run, r, w)
 	default:
-		spans = []Span{{Text: indent + r.Name}}
-	}
-	// The right side against the edge, the line clipped to fit; a
-	// narrow line drops the stats first, then the PR, and keeps the
-	// folded line's icon last, never the name.
-	left := spansWidth(spans)
-	for _, try := range [][]Span{right, afterSep(right), afterSep(afterSep(right))} {
-		if n := spansWidth(try); n > 0 && left+1+n <= w {
-			spans = append(spans, Span{Text: strings.Repeat(" ", w-left-n)})
-			spans = append(spans, try...)
-			break
-		}
+		spans = []Span{{Text: strings.Repeat("  ", r.Depth) + r.Name}}
 	}
 	return []Line{{Dim: r.Dim, Spans: clip(spans, w)}}
 }
@@ -598,17 +529,6 @@ func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
 	}
 	l := m.treeLine(*repo)[0]
 	return &l, repo.ID()
-}
-
-// afterSep is the spans after the first two-space separator span, nil when there is
-// none.
-func afterSep(spans []Span) []Span {
-	for i, sp := range spans {
-		if sp.Text == "  " && i > 0 {
-			return spans[i+1:]
-		}
-	}
-	return nil
 }
 
 // AgentsUnder counts the agents the tree has under a worktree's line, or

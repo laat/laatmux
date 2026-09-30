@@ -1,10 +1,10 @@
 ..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No ⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls                                 2:00
-S..|⟨accent:▌⟩    laatmux ‹@vm›                                
-S..|⟨accent:▌⟩    Permission to run pnpm test in packag «⟨success:#52⟩» ⟨success:✓⟩
+S..|⟨accent:▌⟩    laatmux @‹vm›                                
+S..|⟨accent:▌⟩    Permission to run pnpm test in packa… «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes                           0:01
-...|⟨info:▌⟩    ‹@vm/default›
+...|⟨info:▌⟩    @‹vm/default›
 ...|⟨info:▌⟩    remote
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩»                                   0:08
@@ -12,31 +12,31 @@ S..|‹⟨border:─────────────────────
 ...|⟨info:▌⟩    Editing src/api.ts                ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down                                  10:00
-.D.|⟨info:▌⟩    proj ‹@box›
+.D.|⟨info:▌⟩    proj @‹box›
 .D.|⟨info:▌⟩    last seen
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch                                0:40
 ...|⟨border:▌⟩    @mac
-...|⟨border:▌⟩    
+...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ notes                                  5:00
 ...|⟨border:▌⟩    @mac/default
-...|⟨border:▌⟩    
+...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ other                                    1h
-...|⟨border:▌⟩    proj ‹@vm›
-...|⟨border:▌⟩    Done. 日本語のタイトル that is lo ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
+...|⟨border:▌⟩    proj @‹vm›
+...|⟨border:▌⟩    Done. 日本語のタイトル that is l… ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ dead                                     3h
-.D.|⟨border:▌⟩    proj ‹@vm›
-.D.|⟨border:▌⟩    claude gone                           ‹#7›‹ ›‹✓›‹?›
+.D.|⟨border:▌⟩    proj @‹vm›
+.D.|⟨border:▌⟩    claude gone                          ‹#7›‹?› ‹✓›‹?›
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ proj
 .D.|⟨border:▌⟩    main @mac
 .D.|⟨border:▌⟩    no session                            ⟨danger:×⟩⟨danger: 2/3⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ shell
-.D.|⟨border:▌⟩    proj ‹@vm›
+.D.|⟨border:▌⟩    proj @‹vm›
 .D.|⟨border:▌⟩    no agent
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|‹⟨header:▸ 2 stale⟩›

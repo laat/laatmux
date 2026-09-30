@@ -84,7 +84,14 @@ type Model struct {
 	// Machine is this machine's host name, which tmux titles a pane with
 	// until its program sets a title: such a title is dropped.
 	Machine string
-	scroll  int // first body line drawn
+	// AgentIcons is the config's agent icons over the defaults, for the
+	// {agent_icon} token; JumpKeys that the tmux jump keys are bound,
+	// which {jump_key} names.
+	AgentIcons map[string]AgentIcon
+	JumpKeys   bool
+	tmpl       *Templates // the lines' templates, the defaults until set
+	rowIdx     int        // the number of the row being drawn, for {idx}
+	scroll     int        // first body line drawn
 	// hitIDs is the id of the row each body line drew, "" for none, and
 	// hitTop the header lines above the body, both as the last Render
 	// drew them: a click names what was on screen, which a refresh or
@@ -360,6 +367,7 @@ type Span struct {
 	Dim  bool
 	Bold bool
 	Fg   string
+	Bg   string // a template's #[bg=…]; "" for the line's
 	spin bool
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.
@@ -426,6 +434,7 @@ func (m *Model) Render() []Line {
 	selStart, selEnd := -1, -1
 	m.Selection()
 	items := m.Items()
+	numbered := 0 // the rows the digits count, for {idx}
 	for _, it := range items {
 		switch {
 		case it.Row != nil:
@@ -437,6 +446,11 @@ func (m *Model) Render() []Line {
 		if it.Row == nil {
 			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width), Fg: palette.Header, Dim: true}}}}
 		} else {
+			m.rowIdx = 0
+			if it.Row.Numbered() {
+				numbered++
+				m.rowIdx = numbered
+			}
 			ls = m.row(*it.Row)
 			if it.Index == m.Selected {
 				// The divider after a tile is not the tile: a short
@@ -631,12 +645,8 @@ func (m *Model) where(r rows.Row) Span {
 // primary is the primary label as a span: bold, in the current
 // worktree's colour, on the viewer's own row, which the gutter's `>`
 // marked before.
-func (m *Model) primary(r rows.Row, w int) Span {
-	p, _ := r.Labels()
-	if r.Suffix != "" {
-		p += " " + r.Suffix
-	}
-	sp := Span{Text: fit(p, w)}
+func (m *Model) primary(r rows.Row, p string) Span {
+	sp := Span{Text: p}
 	if r.Current {
 		sp.Bold, sp.Fg = true, palette.CurrentWorktreeFg
 	}
@@ -677,61 +687,6 @@ func (m *Model) third(r rows.Row) string {
 	}
 	p, sec := r.Labels()
 	return cleanTitle(r.Agent.Title, p, sec, r.Host, m.Machine)
-}
-
-// head is a row's first line: the stripe, the icon, the primary label,
-// and the time since its status changed against the right edge.
-func (m *Model) head(r rows.Row) []Span {
-	w := m.Width
-	icon := m.iconSpan(r)
-	lead := []Span{m.stripe(r), {Text: " "}, icon, {Text: " "}}
-	used := 1 + 1 + iconWidth + 1
-	if w <= used {
-		return clip(lead, w)
-	}
-	t, secs := m.since(r)
-	room := w - used
-	if t != "" && room-width(t)-1 >= 4 {
-		p := m.primary(r, room-width(t)-1)
-		gap := room - width(p.Text) - width(t)
-		return append(lead, p, Span{Text: strings.Repeat(" ", gap)}, Span{Text: t, tick: secs})
-	}
-	return append(lead, m.primary(r, room))
-}
-
-// second is a row's second line after the stripe: the secondary label
-// and the host tag, then the worktree's diff stats against the right
-// edge, as much of them as the room past the labels takes.
-func (m *Model) second(r rows.Row, indent string) []Span {
-	_, sec := r.Labels()
-	room := m.Width - 1 - width(indent)
-	where := m.where(r)
-	labels := width(where.Text)
-	if sec != "" {
-		labels += width(sec) + 1
-	}
-	stats := gitSpans(r, room-labels-1)
-	if n := spansWidth(stats); n > 0 {
-		room -= n + 1
-	}
-	var out []Span
-	if sec == "" {
-		where.Text = fit(where.Text, room)
-		out = []Span{m.stripe(r), {Text: indent}, where}
-	} else {
-		s := fit(sec, room)
-		out = []Span{m.stripe(r), {Text: indent + s}}
-		if room-width(s)-1 > 0 {
-			where.Text = fit(where.Text, room-width(s)-1)
-			out = append(out, Span{Text: " "}, where)
-		}
-	}
-	if len(stats) > 0 {
-		gap := m.Width - spansWidth(out) - spansWidth(stats)
-		out = append(out, Span{Text: strings.Repeat(" ", max(gap, 1))})
-		out = append(out, stats...)
-	}
-	return out
 }
 
 // gitSpans is a worktree's diff stats in at most w cells: the rebase
@@ -807,173 +762,31 @@ func spansWidth(spans []Span) int {
 	return n
 }
 
-// tile is three lines: the head; the secondary label and the host tag;
-// and the pane title, or what the row is instead. A divider follows. An
-// empty third line keeps its place, so tiles keep their height.
+// tile is the tiles template's lines, three by default: the head; the
+// secondary label and the host tag; and the pane title, or what the row
+// is instead. A divider follows. An empty third line keeps its place,
+// so tiles keep their height; a blank template is no line.
 func (m *Model) tile(r rows.Row) []Line {
-	const indent = "    "
-	third := m.titleLine(r, indent)
-	return []Line{
-		{Dim: r.Dim, Spans: m.head(r)},
-		{Dim: r.Dim, Spans: clip(m.second(r, indent), m.Width)},
-		{Dim: r.Dim, Spans: clip(third, m.Width)},
-		{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}},
+	var out []Line
+	for _, t := range m.templates().Tiles {
+		if t.Blank() {
+			continue
+		}
+		out = append(out, Line{Dim: r.Dim, Spans: m.line(t, r, m.Width)})
 	}
+	return append(out, Line{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}})
 }
 
-// compact is one line: the head with the secondary label and host tag
-// after the primary. With Titles, the third line of a tile follows.
+// compact is the compact template's one line: the head with the
+// secondary label and host tag after the primary. With Titles, the
+// third tile line follows.
 func (m *Model) compact(r rows.Row) []Line {
-	w := m.Width
-	icon := m.iconSpan(r)
-	lead := []Span{m.stripe(r), {Text: " "}, icon, {Text: " "}}
-	used := 1 + 1 + iconWidth + 1
-	var line []Span
-	if w <= used {
-		line = clip(lead, w)
-	} else {
-		t, secs := m.since(r)
-		room := w - used
-		if t != "" && room-width(t)-1 >= 4 {
-			room -= width(t) + 1
-		} else {
-			t = ""
-		}
-		p := m.primary(r, room)
-		line = append(lead, p)
-		left := room - width(p.Text)
-		_, sec := r.Labels()
-		if sec != "" && left > 2 {
-			s := fit(sec, left-1)
-			line = append(line, Span{Text: " " + s})
-			left -= 1 + width(s)
-		}
-		if where := m.where(r); left > 1 {
-			where.Text = fit(where.Text, left-1)
-			line = append(line, Span{Text: " "}, where)
-			left -= 1 + width(where.Text)
-		}
-		if stats := gitSpans(r, left-2); len(stats) > 0 {
-			// Against the time, or the right edge without one.
-			n := spansWidth(stats)
-			line = append(line, Span{Text: strings.Repeat(" ", left-n)})
-			line = append(line, stats...)
-			left = 0
-		}
-		if t != "" {
-			line = append(line, Span{Text: strings.Repeat(" ", left+1)}, Span{Text: t, tick: secs})
-		}
-	}
-	lines := []Line{{Dim: r.Dim, Spans: line}}
-	if m.Titles {
-		lines = append(lines, Line{Dim: r.Dim, Spans: clip(m.titleLine(r, "    "), w)})
+	t := m.templates()
+	lines := []Line{{Dim: r.Dim, Spans: m.line(t.Compact, r, m.Width)}}
+	if m.Titles && len(t.Tiles) >= 3 && !t.Tiles[2].Blank() {
+		lines = append(lines, Line{Dim: r.Dim, Spans: m.line(t.Tiles[2], r, m.Width)})
 	}
 	return lines
-}
-
-// titleLine is a row's third line: the stripe, the pane title or what
-// the row is instead, and the branch's PR and checks against the right
-// edge, as much of them as the room past a few cells of title takes.
-func (m *Model) titleLine(r rows.Row, indent string) []Span {
-	room := m.Width - 1 - len(indent)
-	out := []Span{m.stripe(r)}
-	if room <= 0 {
-		return out
-	}
-	pr := m.prSpans(r, room-1-min(room/3, 12))
-	n := spansWidth(pr)
-	if n > 0 {
-		room -= n + 1
-	}
-	title := fit(m.third(r), room)
-	out = append(out, Span{Text: indent + title})
-	if n > 0 {
-		out = append(out, Span{Text: strings.Repeat(" ", max(room-width(title), 0)+1)})
-		out = append(out, pr...)
-	}
-	return out
-}
-
-// prSpans is the branch's PR and checks in at most w cells: #N, green
-// when open, purple when merged, red when closed, dim when a draft;
-// then the checks, ✓ in green, × 3/5 in red, or a spinner and 3/5 in
-// purple; a stale answer dim with ? after. On main or master the PR is
-// left out, and the checks unless they fail. When narrow the counts go
-// first, then the PR.
-func (m *Model) prSpans(r rows.Row, w int) []Span {
-	b := r.Branch
-	if b == nil || w <= 0 {
-		return nil
-	}
-	mainline := r.Worktree != nil && (r.Worktree.Branch == "main" || r.Worktree.Branch == "master")
-	var pr []Span
-	if b.PR != nil && !mainline {
-		// Without colours the states still differ: open bold, merged
-		// plain, closed and draft faint.
-		sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
-		switch {
-		case b.PR.Draft:
-			sp.Dim = true
-		case b.PR.State == "open":
-			sp.Fg, sp.Bold = palette.Success, true
-		case b.PR.State == "merged":
-			sp.Fg = palette.Accent
-		default:
-			sp.Fg, sp.Dim = palette.Danger, true
-		}
-		pr = []Span{sp}
-	}
-	var mark, counts []Span
-	if c := b.Checks; c != nil && (!mainline || c.State == protocol.ChecksFailure) {
-		ratio := fmt.Sprintf("%d/%d", c.Passed, c.Total)
-		ascii := m.Icons.Set == IconsASCII
-		switch c.State {
-		case protocol.ChecksSuccess:
-			mark = []Span{{Text: map[bool]string{false: "✓", true: "ok"}[ascii], Fg: palette.Success}}
-		case protocol.ChecksFailure:
-			mark = []Span{{Text: map[bool]string{false: "×", true: "x"}[ascii], Fg: palette.Danger}}
-			counts = []Span{{Text: " " + ratio, Fg: palette.Danger}}
-		case protocol.ChecksPending:
-			// The spinner spins on a live row with a fresh answer; a
-			// stale or dim one stands still.
-			spinning := !b.Stale && !r.Dim && !ascii
-			text := string([]rune(spinnerFrames[0])[0])
-			switch {
-			case ascii:
-				text = "*"
-			case spinning:
-				text = string([]rune(frame(m.Now))[0])
-			}
-			mark = []Span{{Text: text, Fg: palette.Accent, spin: spinning}}
-			counts = []Span{{Text: " " + ratio, Fg: palette.Accent}}
-		}
-	}
-	join := func(parts ...[]Span) []Span {
-		var out []Span
-		for _, p := range parts {
-			if len(p) == 0 {
-				continue
-			}
-			if len(out) > 0 {
-				out = append(out, Span{Text: " "})
-			}
-			out = append(out, p...)
-		}
-		if len(out) > 0 && b.Stale {
-			out = append(out, Span{Text: "?"})
-			for i := range out {
-				out[i].Dim, out[i].Fg = true, ""
-			}
-		}
-		return out
-	}
-	checks := append(append([]Span{}, mark...), counts...)
-	for _, try := range [][]Span{join(pr, checks), join(pr, mark), join(mark)} {
-		if len(try) > 0 && spansWidth(try) <= w {
-			return try
-		}
-	}
-	return nil
 }
 
 // clip cuts spans to w cells, keeping each span's attributes.
@@ -1028,6 +841,9 @@ func Debug(lines []Line) string {
 			t := s.Text
 			if s.Fg != "" {
 				t = "⟨" + s.Fg + ":" + t + "⟩"
+			}
+			if s.Bg != "" {
+				t = "⟦" + s.Bg + ":" + t + "⟧"
 			}
 			if s.Bold {
 				t = "«" + t + "»"
@@ -1089,6 +905,10 @@ func ANSI(l Line, th palette.Theme) string {
 		current := s.Fg == palette.CurrentWorktreeFg
 		if colour && s.Fg != "" && (!l.Dim || band || current) {
 			fg = th.SGR(s.Fg, false)
+		}
+		if colour && s.Bg != "" {
+			// A template's background, over the band's.
+			fg += th.SGR(s.Bg, true)
 		}
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.

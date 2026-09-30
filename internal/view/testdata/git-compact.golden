@@ -1,14 +1,14 @@
 ..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No route to host⟩
-S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux ‹@vm›                                              ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩» 2:00
-...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes ‹@vm/default›                                                         0:01
+S..|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls laatmux @‹vm›                                              ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩» 2:00
+...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes @‹vm/default›                                                         0:01
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:task⟩» proj @mac                                                        «⟨warning:R⟩» ‹⟨success:+318⟩› ‹⟨danger:-87⟩› 0:08
-.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down proj ‹@box›                                                                  10:00
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down proj @‹box›                                                                  10:00
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch @mac                                                                     0:40
 ...|⟨border:▌⟩ ⟨border:  ⟩ notes @mac/default                                                               5:00
-...|⟨border:▌⟩ ⟨border:  ⟩ other proj ‹@vm›                                                            ✎ «⟨success:+4+⟩» «⟨danger:-1⟩» 1h
-.D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj ‹@vm›                                                                      3h
+...|⟨border:▌⟩ ⟨border:  ⟩ other proj @‹vm›                                                            ✎ «⟨success:+4+⟩» «⟨danger:-1⟩» 1h
+.D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj @‹vm›                                                                      3h
 .D.|⟨border:▌⟩ ⟨border:  ⟩ spike proj @mac                                                              ‹+153›‹ ›‹-41›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›                                                                      ✎
+.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj @‹vm›                                                                      ✎
 ...|‹⟨header:▸ 2 stale⟩›
 ...|
 ...|

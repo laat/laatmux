@@ -931,33 +931,52 @@ Every line of every layout is a template, so the tiles above are only
 the defaults.
 
 - **Tokens:**
-  - labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`, `{host}`,
-    `{session}`, `{window}`, `{window_index}`, `{pane_title}`,
-    `{pane_suffix}`;
-  - status: `{status_icon}`, `{status_label}`, `{agent_icon}`,
-    `{agent_label}`, `{elapsed}`;
+  - labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`, `{host}`
+    (the name alone, dim off this machine, `/server` after it for an
+    agent observed off the managed server; the templates write the `@`
+    and the parentheses), `{session}`, `{window}` (tmux's
+    `session:index`, since the records carry no window name),
+    `{window_index}`, `{pane_title}` (the cleaned title; on a tile,
+    what the row is instead), `{pane_suffix}`;
+  - status: `{stripe}` (the bar in the status colour, on a tile),
+    `{status_icon}`, `{status_label}` (the agent's status as a word, a
+    task's state, `worktree gone` on an orphaned line; "" on a
+    worktree line, whose folded icon says it), `{agent_icon}`,
+    `{agent_label}`, `{elapsed}` (a run's running time on its line);
   - git: `{git_stats}`, `{git_committed}`, `{git_uncommitted}`,
     `{git_ahead}` (`↑N`), `{git_behind}` (`↓N`), `{git_dirty}`,
-    `{git_conflict}`, `{git_rebase}`, `{git_branch}`;
+    `{git_conflict}`, `{git_rebase}`, `{git_branch}` (the base);
   - PR: `{pr_number}`, `{pr_checks}`;
   - position: `{idx}`, `{jump_key}`;
-  - tree lines only: `{repo_count}` on a repository line; `{fold}`,
-    `{worst_status}` and `{child_count}` on a worktree line; `{command}`
-    and `{indent}` on a pane or run line.
+  - tree lines: `{indent}` on every line; `{repo_count}` on a
+    repository line; `{fold}` (`▾ `, `▸ `, or two spaces; on a
+    repository line `▸ ` or nothing), `{worst_status}` and
+    `{child_count}` on a worktree line; `{command}` on a pane or run
+    line. A token with nothing on a row is empty.
 - **`{fill}`** splits a line into a left and a right part; the right part
   sits against the right edge.
-- **Overflow:** fields on the right are dropped last first; then the
-  leftmost flexible token, a label or the title, is cut with `…`.
-  `{git_stats}` and `{pr_checks}` shrink themselves before either.
-- **Empty tokens:** an empty token takes one adjacent space with it; an
-  empty field keeps its line, so tiles keep their height; a blank
-  template removes the line.
-- **Styles:** `#[fg=…,bg=…,bold]` in tmux's syntax, with palette names or
-  colours.
+- **Overflow:** the flexible tokens, the labels and the title, are cut
+  with `…` down to a floor of a third of the width, at most twelve
+  cells, the rightmost first (so the compact line's secondary label
+  goes before its primary); `{git_stats}` and `{pr_checks}` shrink
+  themselves; then fields on the right are dropped, the widest first,
+  so a folded worktree line keeps its icon when the stats go; then the
+  flexible tokens are cut further; then the line is clipped. A cut
+  label grows back into the room a dropped field leaves.
+- **Empty tokens:** an empty token takes the adjacent run of spaces
+  with it, the one after it, else the one before, so `{a}  {b}  {c}`
+  with `{b}` empty is `{a}  {c}`; an empty field keeps its line, so
+  tiles keep their height; a blank template removes the line.
+- **Styles:** `#[fg=…,bg=…,bold,dim]`, `nobold`, `nodim` and `default`
+  in tmux's syntax, with palette names or colours; a style holds until
+  the next and leaves a token's own colours alone.
 - **Config:** `sidebar.templates.{compact, tiles, top, tree.{repo,
   worktree, agent, pane, run}}`. An unknown token is shown in the view
   as `template error: unknown token … at column N in tiles[0]` instead
-  of failing the pane.
+  of failing the pane. With `Titles` the compact layout draws the
+  tiles' third line under each row. The stale fold row, the `other
+  sessions` header and the session lines under it are fixed, not
+  templates; `top` is parsed now and drawn by step 8.
 
 ## The dashboard
 

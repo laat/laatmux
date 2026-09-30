@@ -183,6 +183,29 @@ type Sidebar struct {
 	DimStale      *bool  `yaml:"dim_stale"`
 	CollapseStale *bool  `yaml:"collapse_stale"`
 	StaleAfter    string `yaml:"stale_after"`
+	// Templates are the lines the views draw with, the defaults where
+	// unset; the view parses them and shows an error in a bad one's
+	// place rather than the config failing.
+	Templates Templates `yaml:"templates"`
+}
+
+// Templates are the views' line templates: the tile's lines (nil is
+// the default three; an empty line in the list is a line removed), the
+// compact line, the top layout's item, and the tree's lines by node.
+type Templates struct {
+	Tiles   []string      `yaml:"tiles"`
+	Compact string        `yaml:"compact"`
+	Top     string        `yaml:"top"`
+	Tree    TreeTemplates `yaml:"tree"`
+}
+
+// TreeTemplates are the tree's lines by node kind.
+type TreeTemplates struct {
+	Repo     string `yaml:"repo"`
+	Worktree string `yaml:"worktree"`
+	Agent    string `yaml:"agent"`
+	Pane     string `yaml:"pane"`
+	Run      string `yaml:"run"`
 }
 
 // Sort orders.
