@@ -966,9 +966,10 @@ the defaults.
   a folded worktree line's `{worst_status}` last, so a blocked or done
   agent inside is not missed; then the flexible tokens are cut
   further; then the tokens on the left are dropped, the last first,
-  whole; then the line is clipped. A dropped token takes the spaces
-  beside it, and a bracket pair around it alone, `({host})`, goes with
-  it. What dropping leaves over goes
+  whole; then the line is clipped. A dropped token takes its
+  separator, the literal before it (else the one after) up to a
+  bracket, which is a neighbour's, and a bracket pair around it alone,
+  `({host})`, goes with it. What dropping leaves over goes
   back to the cut labels, then to the shrunk stats and checks. A stale
   branch's `?` sits on `{pr_checks}` when they are drawn, else on
   `{pr_number}`, counted in the fitting: a number drawn on a stale row

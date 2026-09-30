@@ -388,6 +388,9 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 		}
 	}
 	regrow(left, right, w-total())
+	// A label cut away and not grown back leaves as an empty token
+	// does, with its spaces.
+	left, right = collapse(left), collapse(right)
 	out := flatten(left)
 	if len(right) > 0 {
 		pad := w - itemsWidth(left) - itemsWidth(right)
@@ -626,10 +629,10 @@ func dropLast(items []item) []item {
 	return remove(items, at)
 }
 
-// remove takes the token at i out with its separator: the run of
-// spaces the literal before it ends with, else the one the literal
-// after it starts with; a bracket pair around the token alone, `({host})`
-// say, goes with it. A literal left empty goes too.
+// remove takes the token at i out with its separator: what the literal
+// before it ends with, else what the literal after it starts with, up
+// to a bracket, which is a neighbour's; a bracket pair around the token
+// alone, `({host})` say, goes with it. A literal left empty goes too.
 func remove(items []item, at int) []item {
 	var prev, next *string
 	if at > 0 && items[at-1].part.kind == partText {
@@ -646,11 +649,12 @@ func remove(items []item, at int) []item {
 			}
 		}
 	}
+	sep := func(r rune) bool { return !strings.ContainsRune("()[]{}<>", r) }
 	switch {
-	case prev != nil && strings.HasSuffix(*prev, " "):
-		*prev = strings.TrimRight(*prev, " ")
-	case next != nil && strings.HasPrefix(*next, " "):
-		*next = strings.TrimLeft(*next, " ")
+	case prev != nil && strings.TrimRightFunc(*prev, sep) != *prev:
+		*prev = strings.TrimRightFunc(*prev, sep)
+	case next != nil:
+		*next = strings.TrimLeftFunc(*next, sep)
 	}
 	out := append(items[:at:at], items[at+1:]...)
 	kept := out[:0]

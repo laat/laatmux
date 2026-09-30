@@ -389,6 +389,23 @@ func TestTemplateOverflow(t *testing.T) {
 	if got := render("{host}{fill}{elapsed} [{pr_number}]", 7); got != "vm\n" {
 		t.Errorf("the number's brackets: %q", got)
 	}
+	// The separator is whatever is not a bracket: the @ goes with the
+	// host, both spaces with the number, and a bracket around two
+	// tokens stays with the one left.
+	r.Host = "build-server"
+	if got := render("{secondary} @{host}", 9); got != "laatmux\n" {
+		t.Errorf("the @ with the host: %q", got)
+	}
+	if got := render("{session}@{host}", 10); got != "laatmux/f…\n" {
+		t.Errorf("a separator without a space: %q", got)
+	}
+	r.Host = "vm"
+	if got := render("{host}{fill}{git_rebase}  {pr_number} {pr_checks}", 8); got != "vm   R ×\n" {
+		t.Errorf("both spaces: %q", got)
+	}
+	if got := render("({host} {session})", 5); got != "(vm)\n" {
+		t.Errorf("a bracket around two tokens: %q", got)
+	}
 }
 
 // A blank tile line is no line; the compact layout draws the third tile
