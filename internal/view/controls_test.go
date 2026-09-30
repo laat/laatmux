@@ -12,6 +12,12 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
+// has is whether the folds hold the id, whatever its value.
+func has(d map[string]bool, id string) bool {
+	_, ok := d[id]
+	return ok
+}
+
 // ids is the visible rows' ids, one per line.
 func ids(m *Model) string {
 	var out []string
@@ -72,7 +78,7 @@ func TestScopes(t *testing.T) {
 	if m.closed(&m.Tree[m.indexOf(rows.RepoNode(src))]) {
 		t.Error("f under session left the repository line folded")
 	}
-	if d, _ := m.DirtyFolds(); d[rows.RepoNode(src)] || len(d) == 0 {
+	if d, _ := m.DirtyFolds(); has(d, rows.RepoNode(src)) || len(d) == 0 {
 		t.Errorf("f under session with the repository folded: %v", d)
 	}
 	// A folded repository line is a closed fold shown: f opens, the
@@ -86,7 +92,7 @@ func TestScopes(t *testing.T) {
 		if m.closed(&m.Tree[m.indexOf("add-ac")]) {
 			t.Errorf("f with the repository folded and add-ac closed=%v did not open it", closed)
 		}
-		if d, _ := m.DirtyFolds(); d["add-ac"] != false || len(d) == 0 {
+		if d, _ := m.DirtyFolds(); !has(d, "add-ac") || d["add-ac"] || has(d, rows.RepoNode(src)) {
 			t.Errorf("f with the repository folded wrote %v", d)
 		}
 		m.Handle(Key{Rune: 'f'})
@@ -239,6 +245,12 @@ func TestChipANSI(t *testing.T) {
 	if s := ANSI(l, guessed); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, warn) {
 		t.Errorf("a chip with the background guessed: %q", s)
 	}
+	// A template's background stays off the band: the selected chip
+	// is told apart by the band alone.
+	tinted := Line{Spans: []Span{{Text: "x", Bg: palette.Accent, band: true}}}
+	if s := ANSI(tinted, th); strings.Contains(s, th.SGR(palette.Accent, true)) || !strings.Contains(s, bandBg) {
+		t.Errorf("a template's background under the band: %q", s)
+	}
 	dim := Line{Spans: []Span{{Text: "x", Dim: true, band: true}}}
 	if s := ANSI(dim, guessed); strings.Contains(s, "\x1b[2m") {
 		t.Errorf("a dim span faint under a reverse band: %q", s)
@@ -373,6 +385,12 @@ func TestHelpQuitSettings(t *testing.T) {
 	m.Handle(Key{Kind: KeyDown})
 	if out := m.Render(); !strings.HasPrefix(Text(out), "g G") {
 		t.Errorf("help on one line scrolled:\n%s", Debug(out))
+	}
+	for i := 0; i < 20; i++ {
+		m.Handle(Key{Kind: KeyDown})
+	}
+	if out := m.Render(); !strings.HasPrefix(Text(out), "z            settle") {
+		t.Errorf("help on one line scrolled past the end:\n%s", Debug(out))
 	}
 	m.Handle(Key{Rune: 'x'})
 	m.Height = 20

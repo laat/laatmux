@@ -828,7 +828,8 @@ Five settlements differ from the plan in #52:
   `sidebar.jump_keys: true` has `on` bind them to `run-shell "laatmux
   sidebar jump N -t '#{window_id}' -c '#{client_name}'"`, so the window
   and the client are the key's own with any number of clients
-  attached, and the `{jump_key}` token then shows them; by default they
+  attached, and the `{jump_key}` token then shows them in the sidebar
+  panes, where the keys land, not in the dashboard; by default they
   are unbound and the token is empty.
 
 ## Placement, scope and controls
@@ -1072,7 +1073,7 @@ theme: {mode: auto, custom: {accent: "#b48ead"}}
 sidebar:
   view: agents            # agents | tree
   position: left          # left | top
-  width: 10%              # columns or N%
+  # width: 40             # columns or N%; unset: 10%, clamped to 25..50
   height: 3               # top only
   layout: tiles           # tiles | compact
   horizontal: {item_width: 24}

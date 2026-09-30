@@ -18,7 +18,7 @@
 //	  - source: https://github.com/laat/other.git
 //	    name: other
 //	sidebar:
-//	  width: 35               # columns; default 35
+//	  width: 40               # columns or N%; unset: 10%, clamped to 25..50
 //	  layout: tiles           # tiles or compact; default tiles
 //	icons: emoji              # emoji, nerdfont or ascii; default emoji
 //	status_icons: {waiting: "?"}  # per status: working, waiting, done, stale
@@ -299,10 +299,12 @@ func (s Sidebar) Columns(windowWidth int) int {
 	return cols
 }
 
-// parseSize reads columns or N%; set is false for "".
+// parseSize reads columns or N%; set is false for "" and for 0, the
+// zero value, which is the default as it was when the width was a
+// number.
 func parseSize(s string) (cols, pct int, set bool) {
 	s = strings.TrimSpace(s)
-	if s == "" {
+	if s == "" || s == "0" {
 		return 0, 0, false
 	}
 	if strings.HasSuffix(s, "%") {

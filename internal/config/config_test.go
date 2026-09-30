@@ -393,6 +393,9 @@ func TestSidebarConfig(t *testing.T) {
 	if err != nil || c.Sidebar.Columns(0) != DefaultSidebarWidth || c.Sidebar.Columns(200) != 25 || c.Sidebar.Columns(400) != 40 || c.Sidebar.Columns(800) != 50 || c.Sidebar.Layout != "" {
 		t.Fatalf("defaults: %+v %v", c.Sidebar, err)
 	}
+	if c, err := Parse([]byte("sidebar:\n  width: 0\n")); err != nil || c.Sidebar.Columns(200) != 25 {
+		t.Errorf("width 0 is not the default: %v %v", c.Sidebar.Columns(200), err)
+	}
 	c, err = Parse([]byte("sidebar:\n  width: 40\n  layout: compact\n"))
 	if err != nil || c.Sidebar.Columns(0) != 40 || c.Sidebar.Columns(1000) != 40 || c.Sidebar.Layout != "compact" {
 		t.Fatalf("set: %+v %v", c.Sidebar, err)

@@ -288,6 +288,27 @@ func TestSidebarControl(t *testing.T) {
 	if err := sidebarControl(ctx, "next", []string{"-t", window}); err != nil {
 		t.Errorf("a socket refusing: %v", err)
 	}
+	// view and scope write the default whether or not a pane answers:
+	// a window with no sidebar, and none listening anywhere.
+	if err := sidebarControl(ctx, "view", []string{"agents", "-t", other}); err != nil {
+		t.Errorf("view with no sidebar: %v", err)
+	}
+	if err := sidebarControl(ctx, "scope", []string{"project", "--all"}); err != nil {
+		t.Errorf("scope with no pane listening: %v", err)
+	}
+	if s, _, err := home.ReadSidebar(); err != nil || s.View != "agents" || s.Scope != "project" {
+		t.Errorf("the defaults written with no pane answering: %+v %v", s, err)
+	}
+	// A socket of another server's pane, refusing: reaped by the dial,
+	// since the listing cannot say whether its pane is gone.
+	foreign := socketPath(pid+100000, "%1")
+	if err := os.WriteFile(foreign, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reapSockets(ctx)
+	if _, err := os.Stat(foreign); err == nil {
+		t.Error("another server's socket refusing not reaped")
+	}
 	// A command that is no jump leaves no client on the dash; a jump's
 	// client is switched by the pane's jump, once.
 	d := &dash{ctx: ctx}

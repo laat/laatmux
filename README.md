@@ -873,7 +873,8 @@ is switched to.
   a socket whose pane is gone or that refuses. With
   `sidebar.jump_keys: true`, `on` binds `M-1`..`M-9` in tmux's root
   table to `sidebar jump N -t '#{window_id}' -c '#{client_name}'`, the
-  `{jump_key}` token shows them, and `off` unbinds them; by default
+  `{jump_key}` token shows them in the sidebar panes, not in the
+  dashboard, and `off` unbinds them; by default
   they are unbound, since bound there they take the keys from every
   pane.
 - **`sidebar.json`** under the state directory keeps two kinds of
@@ -1017,11 +1018,11 @@ is switched to.
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
 
-Config: `sidebar: {position: left, width: 10%, height: 3, horizontal:
+Config: `sidebar: {position: left, width: 40, height: 3, horizontal:
 {item_width: 24}, layout: tiles, view: agents, scope: all, sort:
 priority, dim_stale: true, collapse_stale: true, stale_after: 1h,
 jump_keys: false}`; position `left` or `top`, width at least 10
-columns or `1%` to `100%`, layout `tiles` or `compact`, view `agents`
+columns or `1%` to `100%` (unset or 0: 10%, clamped to 25..50), layout `tiles` or `compact`, view `agents`
 or `tree`, scope `all`, `session` or `project`, sort `priority`,
 `recency` or `window`, stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:

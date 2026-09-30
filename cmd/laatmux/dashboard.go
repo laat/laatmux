@@ -104,7 +104,10 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	m.Machine, _ = os.Hostname()
 	m.SetTemplates(templates(cfg))
 	m.AgentIcons = agentIcons(cfg)
-	m.JumpKeys = cfg.Sidebar.JumpKeys
+	// The jump keys reach a sidebar pane over its socket: a popup gets
+	// the keys itself and drops them, and a window's binding goes to
+	// the window's sidebar, so only a pane that listens shows them.
+	m.JumpKeys = cfg.Sidebar.JumpKeys && o.listen
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
