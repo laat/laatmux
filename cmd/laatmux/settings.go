@@ -21,9 +21,13 @@ import (
 const settingsPoll = time.Second
 
 // startSettings gives the model the file's start defaults over the
-// config's: the view and layout unless the caller fixed them, the scope,
-// and the folds. It returns the mtime seen, for the poll.
-func startSettings(cfg config.Config, m *view.Model, fixedLayout, fixedView bool) time.Time {
+// config's: the view and layout unless the caller fixed them, the
+// scope unless the caller starts at all, and the folds. It returns the
+// mtime seen, for the poll.
+func startSettings(cfg config.Config, m *view.Model, fixedLayout, fixedView, fixedScope bool) time.Time {
+	if sc, err := view.ParseScope(cfg.Sidebar.Scope); err == nil && !fixedScope {
+		m.Scope = sc
+	}
 	s, mtime, err := home.ReadSidebar()
 	if err != nil {
 		return mtime
@@ -34,7 +38,7 @@ func startSettings(cfg config.Config, m *view.Model, fixedLayout, fixedView bool
 	if l, err := view.ParseLayout(s.Layout); err == nil && s.Layout != "" && !fixedLayout {
 		m.Layout = l
 	}
-	if sc, err := view.ParseScope(s.Scope); err == nil && s.Scope != "" {
+	if sc, err := view.ParseScope(s.Scope); err == nil && s.Scope != "" && !fixedScope {
 		m.Scope = sc
 	}
 	m.ApplyFolds(s.FoldMap())
@@ -42,14 +46,30 @@ func startSettings(cfg config.Config, m *view.Model, fixedLayout, fixedView bool
 }
 
 // saveSettings writes the model's view and layout as the defaults and
-// its toggled folds, each seen now, refreshing the sighting of every
-// fold whose node the model has; the scope is the CLI's to write.
-func saveSettings(m *view.Model, now time.Time) error {
-	folds := m.ToggledFolds()
+// the folds it set since it last wrote, each seen now, refreshing the
+// sighting of every fold whose node the model has; a fold taken from
+// another pane is not written back, so that pane's later change is
+// never lost; the scope is the CLI's to write.
+func saveSettings(m *view.Model, now time.Time, fixedLayout bool) error {
+	folds := m.DirtyFolds()
+	viewSet, layoutSet := m.ChangedDefaults()
+	if m.Layout == view.Strip {
+		// A strip's view and layout are its own, not defaults.
+		viewSet, layoutSet = false, false
+	}
+	if fixedLayout {
+		// A layout a flag chose is not the last chosen by a key.
+		layoutSet = false
+	}
+	if len(folds) == 0 && !viewSet && !layoutSet {
+		return nil
+	}
 	return home.UpdateSidebar(now, func(s *home.Sidebar) {
-		if m.Layout != view.Strip {
-			// A strip's view and layout are its own, not defaults.
-			s.View, s.Layout = string(m.View), string(m.Layout)
+		if viewSet {
+			s.View = string(m.View)
+		}
+		if layoutSet {
+			s.Layout = string(m.Layout)
 		}
 		s.SetFolds(folds, m.HasNode, now)
 	})

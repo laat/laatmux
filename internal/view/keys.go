@@ -1083,7 +1083,7 @@ func (m *Model) Handle(k Key) Action {
 			} else {
 				m.Layout = Tiles
 			}
-			m.settings = true
+			m.settings, m.layoutSet = true, true
 		case '/':
 			m.Filtering = true
 		case 'f':

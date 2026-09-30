@@ -814,8 +814,9 @@ is switched to.
   `TMUX_PANE`, redrawing on every change and every five seconds for the
   ages, staying after a jump. It reads no local sessions itself: settled
   and orphaned come from the stream. `q` and `Ctrl-C` ask `Quit
-  sidebar? y/n` first, while filtering too, since a key meant for
-  another pane is common; `?` lists the keys.
+  sidebar? y/n` first, since a key meant for another pane is common;
+  while filtering `q` is a letter of the filter and `Ctrl-C` asks; `?`
+  lists the keys.
 - **Placement** (milestone five, step 8): `sidebar.position: top` puts
   the sidebar along the top of the window instead, `sidebar.height`
   lines (3) of chips `sidebar.horizontal.item_width` wide (24),
@@ -838,7 +839,10 @@ is switched to.
   `session` and, pressed again, back to the scope the pane had before,
   whatever set it; on `session` already it goes to `all`. `F` acts on
   that pane alone and is not kept. The footer names a scope in force:
-  `[session]`. `laatmux sidebar on --session` puts panes in the
+  `[session]`; a strip names it at its right end. The dashboard
+  starts at `all`, whatever the file says: a scope the CLI set for the
+  panes would empty a popup opened from an unrelated shell. `laatmux
+  sidebar on --session` puts panes in the
   current session's windows only, its new-window hook on that session
   with `set-hook -t`, none for new sessions; `off` takes those off
   too.
@@ -868,14 +872,18 @@ is switched to.
 - **`sidebar.json`** under the state directory keeps two kinds of
   thing. The view and layout last chosen by a key or the CLI and the
   scope last set by the CLI are *start defaults*: a pane reads them
-  when it starts, over the config's, and `F` is never written; a change
-  in one pane never moves another, and `--all` is how to change every
-  pane. The folds the user toggled are *shared*: every pane and the
-  dashboard read them again when the file's mtime changes, checked
-  every second, and a fold carried across a task's handoff is written
-  under the node that took the children. Panes write the file
-  read-modify-write under a lock file and replace it by rename, so two
-  panes toggling folds at once lose neither. A fold is kept by node id
+  when it starts, over the config's (`sidebar.scope` among them), and
+  `F` is never written; a change in one pane never moves another, and
+  `--all` is how to change every pane. The folds the user toggled, the
+  stale fold among them, are *shared*: every pane and the dashboard
+  read them again when the file's mtime changes, checked every second,
+  keeping the selection on its row, and a fold carried across a task's
+  handoff is written under the node that took the children. Panes
+  write the file read-modify-write under a lock file and replace it by
+  rename, and each writes only the folds it set since it last wrote,
+  so two panes toggling folds at once lose neither and a fold taken
+  from another pane is never written back over that pane's later
+  change. A fold is kept by node id
   with the time its node was last seen, and one not seen for a day is
   dropped. The strip's view and layout are its own, never written. The
   dashboard takes the view and, without `--layout`, the layout from the
@@ -993,11 +1001,12 @@ is switched to.
   plain scrolling list for a terminal that is not a tmux pane.
 
 Config: `sidebar: {position: left, width: 35, height: 3, horizontal:
-{item_width: 24}, layout: tiles, view: agents, sort: priority,
-dim_stale: true, collapse_stale: true, stale_after: 1h, jump_keys:
-false}`; position `left` or `top`, width at least 10 columns or `1%`
-to `100%`, layout `tiles` or `compact`, view `agents` or `tree`, sort
-`priority`, `recency` or `window`, stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
+{item_width: 24}, layout: tiles, view: agents, scope: all, sort:
+priority, dim_stale: true, collapse_stale: true, stale_after: 1h,
+jump_keys: false}`; position `left` or `top`, width at least 10
+columns or `1%` to `100%`, layout `tiles` or `compact`, view `agents`
+or `tree`, scope `all`, `session` or `project`, sort `priority`,
+`recency` or `window`, stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
 {claude: {icon: CC, color: "#d97757"}}` for the `{agent_icon}` token,
 and `theme: {mode: auto|dark|light, custom: {accent: "#b48ead"}}` with

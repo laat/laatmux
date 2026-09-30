@@ -131,14 +131,16 @@ func (m *Model) closed(r *rows.Row) bool {
 		return false
 	}
 	id := r.ID()
+	if r.Kind == rows.KindFold {
+		// The stale fold is ShowHidden's, kept in the folds map under
+		// its node id for the file.
+		return !m.ShowHidden
+	}
 	if c, ok := m.folds[id]; ok {
 		return c
 	}
-	switch r.Kind {
-	case rows.KindRepo:
+	if r.Kind == rows.KindRepo {
 		return false
-	case rows.KindFold:
-		return !m.ShowHidden
 	}
 	c := !m.anyWants(r)
 	m.setFold(id, c)
@@ -170,20 +172,31 @@ func (m *Model) toggleFold(r *rows.Row) {
 		return
 	}
 	if r.Kind == rows.KindFold {
-		m.ShowHidden = !m.ShowHidden
+		m.showHidden(!m.ShowHidden)
 		return
 	}
 	m.setFold(r.ID(), !m.closed(r))
 	m.markToggled(r.ID())
 }
 
+// showHidden opens or closes the stale fold as the user's own choice,
+// kept under its node id like a line's.
+func (m *Model) showHidden(open bool) {
+	m.ShowHidden = open
+	m.setFold(rows.NodeStale, !open)
+	m.markToggled(rows.NodeStale)
+}
+
 // markToggled records a fold as the user's own: shared between panes,
-// kept across a handoff, and what the host persists.
+// kept across a handoff, and what the host persists, once.
 func (m *Model) markToggled(id string) {
 	if m.toggled == nil {
 		m.toggled = map[string]bool{}
 	}
-	m.toggled[id] = true
+	if m.dirty == nil {
+		m.dirty = map[string]bool{}
+	}
+	m.toggled[id], m.dirty[id] = true, true
 	m.settings = true
 }
 
@@ -196,7 +209,8 @@ func (m *Model) SettingsChanged() bool {
 	return c
 }
 
-// ToggledFolds is the folds the user set, by node id, closed or open.
+// ToggledFolds is the folds the user set, by node id, closed or open:
+// this pane's own and those taken from the file.
 func (m *Model) ToggledFolds() map[string]bool {
 	out := map[string]bool{}
 	for id := range m.toggled {
@@ -207,23 +221,50 @@ func (m *Model) ToggledFolds() map[string]bool {
 	return out
 }
 
+// ChangedDefaults reports, once, whether the view and the layout were
+// chosen by a key since the last call: what the host writes as the
+// start defaults, and only then.
+func (m *Model) ChangedDefaults() (view, layout bool) {
+	view, layout = m.viewSet, m.layoutSet
+	m.viewSet, m.layoutSet = false, false
+	return view, layout
+}
+
+// DirtyFolds is the folds this pane set since it was last asked, by
+// node id: what it writes to the file, so a fold taken from another
+// pane is never written back over that pane's later change.
+func (m *Model) DirtyFolds() map[string]bool {
+	out := map[string]bool{}
+	for id := range m.dirty {
+		if c, ok := m.folds[id]; ok {
+			out[id] = c
+		}
+	}
+	m.dirty = nil
+	return out
+}
+
 // ApplyFolds takes folds another pane set, or the file's at start, as
-// the user's own here.
+// the user's own here, the selection kept on its row.
 func (m *Model) ApplyFolds(folds map[string]bool) {
 	for id, closed := range folds {
+		if id == rows.NodeStale {
+			m.ShowHidden = !closed
+		}
 		m.setFold(id, closed)
 		if m.toggled == nil {
 			m.toggled = map[string]bool{}
 		}
 		m.toggled[id] = true
 	}
+	m.reselect()
 }
 
 // foldAll opens every fold when any shown is closed, else closes every
 // one; the agent view's f toggles its stale fold.
 func (m *Model) foldAll() {
 	if m.View != ViewTree {
-		m.ShowHidden = !m.ShowHidden
+		m.showHidden(!m.ShowHidden)
 		return
 	}
 	// The folds shown decide, not ones the filter hides: a hidden fold
@@ -234,8 +275,15 @@ func (m *Model) foldAll() {
 			anyClosed = true
 		}
 	}
+	// The nodes the scope and the filter leave, whether a fold hides
+	// them or not: f in a pane on session leaves the other worktrees'
+	// folds, shared with every pane, alone.
+	shown := m.treeShown()
+	for i, in := range m.treeScoped() {
+		shown[i] = shown[i] && in
+	}
 	for i := range m.Tree {
-		if r := &m.Tree[i]; r.Foldable() && r.Kind != rows.KindFold {
+		if r := &m.Tree[i]; shown[i] && r.Foldable() && r.Kind != rows.KindFold {
 			m.setFold(r.ID(), !anyClosed)
 			m.markToggled(r.ID())
 		}
@@ -325,7 +373,7 @@ func (m *Model) treeShown() []bool {
 // fold hides opens the fold. Nothing to resolve to leaves the selection
 // on no row; a following selection follows on.
 func (m *Model) Switch() {
-	m.settings = true
+	m.settings, m.viewSet = true, true
 	r := m.Selection()
 	target := ""
 	if r != nil {

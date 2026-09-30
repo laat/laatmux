@@ -843,12 +843,14 @@ Five settlements differ from the plan in #52:
   is not clamped. `sidebar.height` applies to `top`. `sidebar fit` keeps
   its job of restoring the width after a resize.
 - **Scope:** `laatmux sidebar on --session` puts sidebar panes in the
-  current session's windows only, and its hooks for new windows are set
-  on that session with `set-hook -t`, not globally, so other sessions
-  get none. This reverses the rule against a per-session scope, and is
-  #52's meaning. The hooks that reap, fit and mark seen stay global,
-  and no new-session hook is set; `off` takes the session's hook off
-  every session.
+  current session's windows only, so other sessions get none. This
+  reverses the rule against a per-session scope, and is #52's meaning.
+  The hooks stay global, since a hook set on the session would shadow
+  the user's global hooks of that name there: `on --session` names the
+  session in the server option `@laatmux_sidebar_sessions`, the hooks
+  pass the window's session, and `attach` adds no pane to a window in
+  a session not named; a plain `on` clears the option, `off` unsets
+  it.
 - **`F`** switches the pane's scope to `session`, and pressed again back
   to the scope the pane had before, whatever set it; a pane already on
   `session` goes to `all`. It acts on that pane only and is not

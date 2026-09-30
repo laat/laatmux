@@ -181,8 +181,11 @@ type Sidebar struct {
 	Height     int        `yaml:"height"`
 	Horizontal Horizontal `yaml:"horizontal"`
 	Layout     string     `yaml:"layout"`
-	// View is the view a sidebar pane starts in: agents or tree.
-	View string `yaml:"view"`
+	// View is the view a sidebar pane starts in: agents or tree; Scope
+	// what it shows, all, session or project, the file's last choice
+	// over it.
+	View  string `yaml:"view"`
+	Scope string `yaml:"scope"`
 	// Sort is priority, recency or window.
 	Sort string `yaml:"sort"`
 	// DimStale draws a stale row dim; CollapseStale folds the stale rows
@@ -207,8 +210,30 @@ type Sidebar struct {
 type Templates struct {
 	Tiles   []string      `yaml:"tiles"`
 	Compact string        `yaml:"compact"`
-	Top     []string      `yaml:"top"`
+	Top     Lines         `yaml:"top"`
 	Tree    TreeTemplates `yaml:"tree"`
+}
+
+// Lines is a list of template lines that a config may write as one
+// string, as `top` was before it took several.
+type Lines []string
+
+// UnmarshalYAML reads a list, or a scalar as a list of one.
+func (l *Lines) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*l = Lines{s}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return err
+	}
+	*l = list
+	return nil
 }
 
 // TreeTemplates are the tree's lines by node kind.
@@ -420,6 +445,11 @@ func Parse(b []byte) (Config, error) {
 	case "", "agents", "tree":
 	default:
 		return c, fmt.Errorf("sidebar: view %q is not agents or tree", c.Sidebar.View)
+	}
+	switch c.Sidebar.Scope {
+	case "", "all", "session", "project":
+	default:
+		return c, fmt.Errorf("sidebar: scope %q is not all, session or project", c.Sidebar.Scope)
 	}
 	if c.Sidebar.Sort != "" && !contains(SortOrders, c.Sidebar.Sort) {
 		return c, fmt.Errorf("sidebar: sort %q is not one of %s", c.Sidebar.Sort, strings.Join(SortOrders, ", "))

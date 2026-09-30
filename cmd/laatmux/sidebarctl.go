@@ -140,10 +140,16 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 	if all && cmd.Name != "view" && cmd.Name != "scope" {
 		return fmt.Errorf("sidebar %s: --all is for view and scope", name)
 	}
-	if client != "" {
-		if cmd.Name != "jump" {
-			return fmt.Errorf("sidebar %s: -c is for jump", name)
+	if client != "" && cmd.Name != "jump" {
+		return fmt.Errorf("sidebar %s: -c is for jump", name)
+	}
+	if cmd.Name == "jump" && client == "" && os.Getenv("TMUX") != "" {
+		// The client the command ran from, when tmux can say.
+		if out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "#{client_name}"); err == nil {
+			client = strings.TrimSpace(string(out))
 		}
+	}
+	if client != "" {
 		line += " client=" + client
 	}
 	switch cmd.Name {
@@ -229,9 +235,10 @@ func reapSockets(ctx context.Context) {
 	if err != nil {
 		pid = -1
 	}
-	live := map[string]bool{}
+	live, listed := map[string]bool{}, false
 	if pid > 0 {
 		if out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", "#{pane_id}"); err == nil {
+			listed = true
 			for _, p := range strings.Fields(string(out)) {
 				live[strings.TrimPrefix(p, "%")] = true
 			}
@@ -244,7 +251,9 @@ func reapSockets(ctx context.Context) {
 		}
 		path := filepath.Join(socketDir(), name)
 		parts := strings.SplitN(strings.TrimSuffix(name, ".sock"), "-", 2)
-		if len(parts) == 2 && pid > 0 && parts[0] == strconv.Itoa(pid) && !live[parts[1]] {
+		// A pane gone, by a listing that succeeded: a failed one says
+		// nothing, and the dial below decides.
+		if len(parts) == 2 && listed && parts[0] == strconv.Itoa(pid) && !live[parts[1]] {
 			os.Remove(path)
 			continue
 		}

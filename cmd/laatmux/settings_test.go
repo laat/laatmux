@@ -30,7 +30,7 @@ func TestSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &view.Model{Layout: view.Tiles, View: view.ViewAgents}
-	seen := startSettings(cfg, m, false, false)
+	seen := startSettings(cfg, m, false, false, false)
 	if m.View != view.ViewTree || m.Layout != view.Compact || m.Scope != view.ScopeProject || seen.IsZero() {
 		t.Fatalf("start: %s %s %s %v", m.View, m.Layout, m.Scope, seen)
 	}
@@ -39,23 +39,71 @@ func TestSettings(t *testing.T) {
 		t.Errorf("folds at start: %v", folds)
 	}
 	fixed := &view.Model{Layout: view.Tiles, View: view.ViewAgents}
-	startSettings(cfg, fixed, true, true)
-	if fixed.View != view.ViewAgents || fixed.Layout != view.Tiles {
-		t.Errorf("fixed: %s %s", fixed.View, fixed.Layout)
+	startSettings(cfg, fixed, true, true, true)
+	if fixed.View != view.ViewAgents || fixed.Layout != view.Tiles || fixed.Scope != "" {
+		t.Errorf("fixed: %s %s %s", fixed.View, fixed.Layout, fixed.Scope)
 	}
-	// A change: the view and layout written, the folds with their
-	// sighting, the scope left as the CLI set it.
-	m.View, m.Layout, m.Scope = view.ViewAgents, view.Tiles, view.ScopeSession
+	// The config's scope, with none in the file.
+	cfg.Sidebar.Scope = "session"
+	os.Remove(home.SidebarPath())
+	fromCfg := &view.Model{}
+	startSettings(cfg, fromCfg, false, false, false)
+	if fromCfg.Scope != view.ScopeSession {
+		t.Errorf("the config's scope: %s", fromCfg.Scope)
+	}
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) {
+		s.View, s.Layout, s.Scope = "tree", "compact", "project"
+		s.SetFolds(map[string]bool{"repo/x": true}, nil, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A change: the folds this pane set written with their sighting,
+	// one taken from the file not written back, the scope left as the
+	// CLI set it; the view and layout only after Tab and v, never a
+	// layout a flag fixed, never a strip's.
+	m.View, m.Layout, m.Scope = view.ViewTree, view.Tiles, view.ScopeAll
 	m.ApplyFolds(map[string]bool{"repo/y": false})
-	if err := saveSettings(m, now.Add(time.Minute)); err != nil {
+	m.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}}
+	m.Handle(view.Key{Rune: 'f'}) // repo/x was closed from the file: f opens it here
+	if err := saveSettings(m, now.Add(time.Minute), false); err != nil {
 		t.Fatal(err)
 	}
 	s, _, _ := home.ReadSidebar()
-	if s.View != "agents" || s.Layout != "tiles" || s.Scope != "project" || !s.Folds["repo/x"].Closed || s.Folds["repo/y"].Closed || !s.Folds["repo/y"].Seen.Equal(now.Add(time.Minute)) {
-		t.Errorf("saved: %+v", s)
+	if s.View != "tree" || s.Layout != "compact" || s.Scope != "project" || s.Folds["repo/x"].Closed || !s.Folds["repo/x"].Seen.Equal(now.Add(time.Minute)) {
+		t.Errorf("saved after a fold: %+v", s)
+	}
+	if _, ok := s.Folds["repo/y"]; ok {
+		t.Errorf("a fold taken from the file written back: %+v", s.Folds)
+	}
+	// Written once: another pane closes it, and a second save here
+	// changes nothing of the folds.
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"repo/x": true}, nil, now) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettings(m, now.Add(2*time.Minute), false); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); !s.Folds["repo/x"].Closed {
+		t.Errorf("a fold written twice over another pane's change: %+v", s.Folds)
+	}
+	m.Handle(view.Key{Kind: view.KeyTab}) // agents
+	m.Handle(view.Key{Rune: 'v'})         // compact
+	if err := saveSettings(m, now.Add(3*time.Minute), true); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "compact" {
+		t.Errorf("after Tab and v with the layout fixed: %+v", s)
+	}
+	m.Handle(view.Key{Rune: 'v'}) // tiles
+	if err := saveSettings(m, now.Add(4*time.Minute), false); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); s.Layout != "tiles" {
+		t.Errorf("after v: %+v", s)
 	}
 	strip := &view.Model{Layout: view.Strip, View: view.ViewAgents}
-	if err := saveSettings(strip, now.Add(2*time.Minute)); err != nil {
+	strip.Handle(view.Key{Kind: view.KeyTab})
+	if err := saveSettings(strip, now.Add(5*time.Minute), false); err != nil {
 		t.Fatal(err)
 	}
 	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "tiles" {
@@ -178,8 +226,19 @@ func TestSidebarControl(t *testing.T) {
 	if err := sidebarControl(ctx, "next", []string{"-t", window}); err != nil {
 		t.Errorf("a socket refusing: %v", err)
 	}
-	// The pane's jump switches the client the command named.
-	d := &dash{ctx: ctx, client: "/dev/ttys004"}
+	// A command that is no jump leaves no client on the dash; a jump's
+	// client is switched by the pane's jump, once.
+	d := &dash{ctx: ctx}
+	m0 := dashModel(dashConfig(t))
+	m0.Ask("Quit sidebar? y/n", "quit")
+	d.paneCommand(view.Command{Name: "jump", N: 1, Client: "/dev/ttys004"})(m0)
+	if d.client != "" {
+		t.Errorf("a jump ignored kept the client %q", d.client)
+	}
+	m0.Confirm = ""
+	if a := d.paneCommand(view.Command{Name: "jump", N: 1, Client: "/dev/ttys004"})(m0); a.Kind != view.ActionJump || d.client != "/dev/ttys004" {
+		t.Errorf("a jump's client: %+v %q", a, d.client)
+	}
 	seen := ""
 	d.jumper = func(r rows.Row) error {
 		seen, _ = d.ctx.Value(clientKey{}).(string)

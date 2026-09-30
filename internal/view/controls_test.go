@@ -134,12 +134,43 @@ func TestScopes(t *testing.T) {
 	if got := ids(m); got != "" || !strings.Contains(Text(m.Render()), "No agents running") {
 		t.Errorf("a session that is no row's:\n%s\n%s", got, Text(m.Render()))
 	}
-	// An orphaned session under its repository is the viewer's line.
+	// An orphaned session under its repository is the viewer's line,
+	// under project too: no worktree, so project is session.
 	in.Current = "mac/laatmux/gone"
 	m.View = ViewTree
 	set()
 	if got := ids(m); got != rows.RepoNode(src)+"\nsession/mac/laatmux/gone" {
 		t.Errorf("an orphaned session:\n%s", got)
+	}
+	m.Scope = ScopeProject
+	if got := ids(m); got != rows.RepoNode(src)+"\nsession/mac/laatmux/gone" {
+		t.Errorf("an orphaned session under project:\n%s", got)
+	}
+	// A failed task at the viewer's root is the viewer's under session,
+	// beside the worktree's line; the add's agent before the listing is
+	// in the agent view's scope through its task line.
+	in = treeInput(now)
+	in.Pendings = []protocol.Pending{
+		{ID: "add-fail", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "agents-config", Root: "/r/agents-config", Session: "laatmux/agents-config", Taken: true, Done: true, Error: "failed at agent: boom", SubmittedAt: now},
+	}
+	m.Scope = ScopeSession
+	set()
+	if got := ids(m); !strings.Contains(got, "\nadd-fail") || strings.Contains(got, "auto-layout") {
+		t.Errorf("a failed task at the root:\n%s", got)
+	}
+	in = treeInput(now)
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Pendings = []protocol.Pending{{ID: "add-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
+	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
+	in.Current = "vm/laatmux/new-one"
+	m.View = ViewAgents
+	set()
+	if got := ids(m); got != "add-new\nvenv/laatmux/%9" {
+		t.Errorf("the add's agent under session, tiles:\n%s", got)
+	}
+	m.Scope = ScopeProject
+	if got := ids(m); !strings.Contains(got, "venv/laatmux/%9") || !strings.Contains(got, "venv/laatmux/%1") || strings.Contains(got, "menv/laatmux/%3") {
+		t.Errorf("the add's agent under project, tiles:\n%s", got)
 	}
 }
 
@@ -189,6 +220,16 @@ func TestCommands(t *testing.T) {
 	if m.Scope != ScopeSession || m.SettingsChanged() {
 		t.Errorf("scope session: %s, or a setting to persist", m.Scope)
 	}
+	// A scope set from outside clears F's memory: F from session goes
+	// to all, not back to what F left.
+	m.Scope, m.prevScope = ScopeProject, ""
+	m.Handle(Key{Rune: 'F'})
+	m.Command(Command{Name: "scope", Arg: "session"})
+	m.Handle(Key{Rune: 'F'})
+	if m.Scope != ScopeAll {
+		t.Errorf("F after a scope from outside: %s", m.Scope)
+	}
+	m.Scope = ScopeAll
 	m.Ask("Quit sidebar? y/n", "quit")
 	m.Command(Command{Name: "view", Arg: "agents"})
 	if m.View != ViewTree {
@@ -280,10 +321,38 @@ func TestHelpQuitSettings(t *testing.T) {
 	other := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 20}
 	other.SetTree(rows.Tree(in))
 	other.SetRows(rows.Agents(in))
-	other.ApplyFolds(map[string]bool{"venv/worktree//r/auto-layout": true})
 	other.Render()
-	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/auto-layout")]) || other.SettingsChanged() {
+	other.Select("venv/laatmux/%8") // under auto-layout
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
+	other.Render()
+	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) || other.SettingsChanged() {
 		t.Error("a fold applied from outside: not closed, or reported as a change")
+	}
+	if r := other.Selection(); r == nil || r.ID() != "venv/laatmux/%8" {
+		t.Errorf("a fold applied from outside moved the selection: %+v", r)
+	}
+	// The folds taken from outside are not this pane's to write; its
+	// own are, once.
+	if d := other.DirtyFolds(); len(d) != 0 {
+		t.Errorf("folds from outside dirty: %v", d)
+	}
+	other.Select("venv/worktree//r/auto-layout")
+	other.Handle(Key{Rune: 's'})
+	if d := other.DirtyFolds(); len(d) != 1 || !d["venv/worktree//r/auto-layout"] {
+		t.Errorf("the pane's own fold not dirty: %v", d)
+	}
+	if d := other.DirtyFolds(); len(d) != 0 {
+		t.Errorf("dirty twice: %v", d)
+	}
+	// The stale fold is a fold like the others: toggled, dirty, taken.
+	other.View = ViewAgents
+	other.Handle(Key{Rune: 'f'})
+	if d := other.DirtyFolds(); !other.ShowHidden || len(d) != 1 || d[rows.NodeStale] {
+		t.Errorf("the stale fold opened: shown %v dirty %v", other.ShowHidden, d)
+	}
+	other.ApplyFolds(map[string]bool{rows.NodeStale: true})
+	if other.ShowHidden {
+		t.Error("the stale fold closed from outside still open")
 	}
 	if !other.HasNode("venv/worktree//r/auto-layout") || other.HasNode("nope") {
 		t.Error("HasNode")
@@ -332,5 +401,29 @@ func TestStrip(t *testing.T) {
 	m.Loading = true
 	if !strings.Contains(Text(m.Render()), "Loading") {
 		t.Error("no loading state")
+	}
+	// A one-column strip with chips past the edge, and a one-line one
+	// with a question: no panic, the question shown.
+	m = model(now)
+	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 1, 3, 18
+	m.Render()
+	m.Width, m.Height = 40, 1
+	m.Ask("Quit sidebar? y/n", "quit")
+	if out := m.Render(); len(out) != 1 || !strings.HasPrefix(Text(out), "Quit sidebar?") {
+		t.Errorf("a question on a one-line strip:\n%s", Debug(out))
+	}
+	m.Confirm = ""
+	// A click on the footer line is no chip; one from before the last
+	// draw is on the chips drawn then.
+	m.Height = 3
+	m.Filtering = true
+	m.Render()
+	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3}); a.Kind == ActionJump {
+		t.Error("a click on the footer jumped")
+	}
+	m.Filtering = false
+	m.Scope = ScopeSession
+	if !strings.Contains(Text(m.Render()), "[session]") {
+		t.Error("the strip does not name the scope")
 	}
 }

@@ -106,6 +106,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	var dec Decoder
 	var flush, spin <-chan time.Time
 	h.Refresh(m)
+	if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
+		return nil
+	}
 	// An answer the query did not get may come late: the decoder
 	// expects it a while. Keys that came while the terminal was asked
 	// for its background are the first input.
@@ -147,6 +150,9 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			// The rows again, not only the ages: an agent idle long
 			// enough turns stale with no record changing.
 			h.Refresh(m)
+			if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
+				return nil
+			}
 		case f := <-h.Commands:
 			if a := f(m); a.Kind != ActionNone && a.Kind != ActionQuit && h.Act(m, a) {
 				return nil

@@ -92,7 +92,7 @@ func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
 	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale, m.Rows.Settled, m.Rows.Orphaned} {
 		for i := range rs {
 			if r := &rs[i]; r.Current {
-				return tileWorktree(r), tileRepo(r), true
+				return m.tileWorktree(r), m.tileRepo(r), true
 			}
 		}
 	}
@@ -111,29 +111,66 @@ func (m *Model) inScope(r *rows.Row) bool {
 		return false
 	}
 	if w == "" {
+		// No worktree: project is session, the viewer's tile alone.
 		return r.Current
 	}
 	if m.scope() == ScopeProject && repo != "" {
-		return tileRepo(r) == repo
+		return m.tileRepo(r) == repo
 	}
-	return tileWorktree(r) == w
+	return m.tileWorktree(r) == w
 }
 
-// tileWorktree is the worktree a tile is of: its record's, or the one
-// its task makes.
-func tileWorktree(r *rows.Row) string {
+// tileWorktree is the worktree a tile is of: its record's, the one its
+// task makes, or, for the add's agent before the listing, its task
+// line's in the tree.
+func (m *Model) tileWorktree(r *rows.Row) string {
 	switch {
 	case r.Worktree != nil:
 		return r.Worktree.ID
 	case r.Pending != nil:
 		return r.Pending.WorktreeID()
 	}
+	if line := m.lineOver(r.ID()); line != nil {
+		return worktreeOf(line)
+	}
+	return ""
+}
+
+// lineOver is the depth-1 line over a child node in the tree, nil for
+// none and for a node that is no child.
+func (m *Model) lineOver(id string) *rows.Row {
+	i := m.indexOf(id)
+	if i < 0 || m.Tree[i].Depth < 2 {
+		return nil
+	}
+	for j := i - 1; j >= 0; j-- {
+		if m.Tree[j].Depth == 1 {
+			return &m.Tree[j]
+		}
+		if m.Tree[j].Depth == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+// repoOver is the repository node over a node in the tree, "" for none
+// or for the other-sessions group.
+func (m *Model) repoOver(id string) string {
+	for j := m.indexOf(id); j >= 0; j-- {
+		if m.Tree[j].Depth == 0 {
+			if m.Tree[j].Kind == rows.KindRepo {
+				return m.Tree[j].ID()
+			}
+			return ""
+		}
+	}
 	return ""
 }
 
 // tileRepo is the repository node a tile is under, as the tree names
-// it.
-func tileRepo(r *rows.Row) string {
+// it; for the add's agent before the listing, its task line's.
+func (m *Model) tileRepo(r *rows.Row) string {
 	switch {
 	case r.Worktree != nil && r.Worktree.Source != "":
 		return rows.RepoNode(r.Worktree.Source)
@@ -144,7 +181,20 @@ func tileRepo(r *rows.Row) string {
 	case r.Pending != nil:
 		return rows.LabelRepoNode(r.Pending.Repo)
 	}
-	return ""
+	if line := m.lineOver(r.ID()); line != nil {
+		return m.repoOver(line.ID())
+	}
+	return m.repoOver(r.ID())
+}
+
+// scopeWorktree is the worktree a depth-1 line is or stands for, a
+// task's whether it stands or failed: a failed task at the viewer's
+// root is the viewer's under session.
+func scopeWorktree(r *rows.Row) string {
+	if r.Pending != nil {
+		return r.Pending.WorktreeID()
+	}
+	return worktreeOf(r)
 }
 
 // treeScoped is which tree nodes the scope leaves: under session the
@@ -164,20 +214,23 @@ func (m *Model) treeScoped() []bool {
 	if !ok {
 		return keep
 	}
+	// Project is the repository's every line, with a worktree to be
+	// under it; without one it is session, the viewer's line alone.
+	project := m.scope() == ScopeProject && repo != "" && w != ""
 	parent, line := -1, -1
 	for i := range m.Tree {
 		r := &m.Tree[i]
 		switch r.Depth {
 		case 0:
 			parent, line = i, -1
-			keep[i] = m.scope() == ScopeProject && repo != "" && r.ID() == repo
+			keep[i] = project && r.ID() == repo
 		case 1:
 			line = i
 			switch {
-			case m.scope() == ScopeProject && repo != "":
+			case project:
 				keep[i] = parent >= 0 && keep[parent]
 			case w != "":
-				keep[i] = worktreeOf(r) == w
+				keep[i] = scopeWorktree(r) == w
 			default:
 				keep[i] = r.Current
 			}

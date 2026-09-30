@@ -66,7 +66,9 @@ func cmdDashboard(ctx context.Context, args []string) error {
 			"o O          open the PR, its checks",
 			"q Ctrl-C     quit",
 		}}
-	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout})
+	// The dashboard starts at all: a scope the CLI set for the sidebar
+	// panes would empty a popup opened from an unrelated shell.
+	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
 }
 
 // runView runs the view on the terminal against the merged stream. With
@@ -78,6 +80,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 // the stored default, and commands from a sidebar pane's socket.
 type viewOptions struct {
 	exitOnJump, actions, fixedLayout, fixedView bool
+	fixedScope                                  bool // the dashboard: at all, whatever the file says
 	listen                                      bool // a sidebar pane: its socket
 }
 
@@ -102,23 +105,21 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	m.SetTemplates(templates(cfg))
 	m.AgentIcons = agentIcons(cfg)
 	m.JumpKeys = cfg.Sidebar.JumpKeys
-	seen := startSettings(cfg, m, o.fixedLayout, o.fixedView)
+	seen := startSettings(cfg, m, o.fixedLayout, o.fixedView, o.fixedScope)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds)
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.
-		stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
-			return func(m *view.Model) view.Action {
-				d.client = c.Client
-				return m.Command(c)
-			}
-		})
+		// A socket that cannot be made, a path too long for one say,
+		// leaves the pane useful without the CLI's control.
+		stop, err := listenPane(ctx, cmds, d.paneCommand)
 		if err != nil {
-			return err
+			m.Message = "sidebar socket: " + err.Error()
+		} else {
+			defer stop()
 		}
-		defer stop()
 	}
 	return view.Run(ctx, t, m, view.Host{
 		Changed:  st.change,
@@ -127,7 +128,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionSettings:
-				if err := saveSettings(m, time.Now()); err != nil {
+				if err := saveSettings(m, time.Now(), o.fixedLayout); err != nil {
 					m.Message = "sidebar.json: " + err.Error()
 				}
 				return false
@@ -189,6 +190,20 @@ func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
 		refocus()
 	}
 	return exit
+}
+
+// paneCommand is a sidebar command as the view runs it: the model's
+// event, and, when it is a jump, the client the command named kept on
+// the dash for that jump to switch; a command that jumped nowhere, with
+// a question up say, leaves no client for a later jump by key.
+func (d *dash) paneCommand(c view.Command) func(*view.Model) view.Action {
+	return func(m *view.Model) view.Action {
+		a := m.Command(c)
+		if a.Kind == view.ActionJump {
+			d.client = c.Client
+		}
+		return a
+	}
 }
 
 // lastPane makes the pane active before the view's own the active one

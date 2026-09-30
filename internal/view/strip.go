@@ -3,8 +3,10 @@ package view
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/laat/laatmux/internal/palette"
+	"github.com/laat/laatmux/internal/rows"
 )
 
 // The strip: the sidebar along the top, the agent view as a row of
@@ -41,7 +43,9 @@ func (m *Model) renderStrip() []Line {
 	iw, sep := m.itemWidth(), width(stripSep)
 	height := m.Height
 	footer := m.Confirm != "" || m.Message != "" || m.Filtering || m.Filter != ""
-	if footer && height > 1 {
+	if footer {
+		// The footer takes the last line, the only one too: a question
+		// is not to be missed.
 		height--
 	}
 	perLine := max((m.Width+sep)/(iw+sep), 1)
@@ -62,7 +66,8 @@ func (m *Model) renderStrip() []Line {
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
 	m.hitIDs, m.hitTop, m.hitAt = nil, 0, m.Now
-	m.hitCols = nil
+	m.hitColsPrev, m.hitCols = m.hitCols, nil
+	m.hitLines = height
 	tmpl := m.templates().Top
 	lines := make([]Line, height)
 	if len(vis) == 0 {
@@ -106,15 +111,22 @@ func (m *Model) renderStrip() []Line {
 		col += iw + sep
 		shown++
 	}
-	if more := len(vis) - m.hscroll - shown; more > 0 && height > 0 {
-		mark := "→" + strconv.Itoa(more)
+	// The count of chips past the edge and the scope in force, at the
+	// right end of the first line, the last chip giving way to them.
+	mark := ""
+	if more := len(vis) - m.hscroll - shown; more > 0 {
+		mark = "→" + strconv.Itoa(more)
+	}
+	if s := m.ScopeLabel(); s != "" {
+		mark = strings.TrimSpace(mark + " [" + s + "]")
+	}
+	if mark != "" && height > 0 && m.Width > width(mark) {
 		room := m.Width - spansWidth(lines[0].Spans)
 		if room < width(mark)+1 {
-			// The last chip gives way to the count.
 			lines[0].Spans = clip(lines[0].Spans, m.Width-width(mark)-1)
 			room = m.Width - spansWidth(lines[0].Spans)
 		}
-		lines[0].Spans = append(lines[0].Spans, Span{Text: strings.Repeat(" ", room-width(mark))}, Span{Text: mark, Dim: true})
+		lines[0].Spans = append(lines[0].Spans, Span{Text: strings.Repeat(" ", max(room-width(mark), 0))}, Span{Text: mark, Dim: true})
 	}
 	for l := range lines {
 		lines[l].Spans = clip(lines[l].Spans, m.Width)
@@ -148,7 +160,14 @@ func (m *Model) stripKey(k Key) (Action, bool) {
 			m.move(k.Wheel)
 			return Action{}, true
 		}
-		if i := m.hitChip(k.X); i >= 0 {
+		if i := m.hitChip(k.X, k.Y, k.At); i >= 0 {
+			if r := m.Visible()[i].Row; r.Kind == rows.KindFold {
+				// The stale fold's chip opens and closes it, as its
+				// row does in the list.
+				m.moveTo(i)
+				m.toggleFold(r)
+				return Action{}, true
+			}
 			a := m.jumpTo(i)
 			a.Mouse = a.Kind == ActionJump
 			return a, true
@@ -175,10 +194,21 @@ type hitCol struct {
 	id       string
 }
 
-// hitChip is the visible index of the chip a click at column x hit, -1
-// for none.
-func (m *Model) hitChip(x int) int {
-	for _, c := range m.hitCols {
+// hitChip is the visible index of the chip a click at column x on line
+// y hit, -1 for none: the footer is no chip, and a click from before
+// the last draw is on the chips drawn then.
+func (m *Model) hitChip(x, y int, at time.Time) int {
+	cols := m.hitCols
+	if !at.IsZero() && at.Before(m.hitAt) {
+		if m.hitPrevAt.IsZero() || at.Before(m.hitPrevAt) {
+			return -1
+		}
+		cols = m.hitColsPrev
+	}
+	if y < 1 || y > m.hitLines {
+		return -1
+	}
+	for _, c := range cols {
 		if x-1 >= c.from && x-1 < c.to {
 			for _, it := range m.Visible() {
 				if it.Row.ID() == c.id {

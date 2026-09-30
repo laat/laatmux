@@ -173,7 +173,7 @@ func TestSidebarHooksRun(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+logf+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := setSidebarHooks(ctx, exe, ""); err != nil {
+	if err := setSidebarHooks(ctx, exe); err != nil {
 		t.Fatal(err)
 	}
 	out, err := workspace.Server.Run(ctx, "show-hooks", "-gw", "window-resized")
@@ -202,38 +202,71 @@ func TestSidebarHooksRun(t *testing.T) {
 			t.Fatalf("%s left after unset", h.hook)
 		}
 	}
-	// With a session, the new-window hook is that session's: a window
-	// made there runs attach, one made in another session does not, and
-	// the reap hook is global still, which toggle reads.
+	// With the sidebar on for one session, the hooks stay global, so a
+	// user's own global hook of the same name runs on; attach reads
+	// the sessions option and adds a pane only in the session named,
+	// and off unsets the option.
 	os.Remove(logf)
 	sid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "boot", "#{session_id}"))))
-	if err := setSidebarHooks(ctx, exe, sid); err != nil {
+	must(workspace.Server.Run(ctx, "set-hook", "-g", "after-new-window[0]", "run-shell -b \"echo user >> "+logf+"\""))
+	must(workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, sid))
+	if err := setSidebarHooks(ctx, exe); err != nil {
 		t.Fatal(err)
 	}
 	if on, err := sidebarHooksSet(ctx); err != nil || !on {
-		t.Fatalf("hooks set for a session not seen as on: %v %v", on, err)
+		t.Fatalf("hooks not seen as on: %v %v", on, err)
 	}
 	must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "sleep 1000"))
 	otherWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "other:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 	bootWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 	for i := 0; i < 100; i++ {
 		b, _ := os.ReadFile(logf)
-		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin) {
+		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin+" "+sid) && strings.Count(got, "user") >= 2 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	time.Sleep(100 * time.Millisecond)
 	b, _ := os.ReadFile(logf)
-	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin) || strings.Contains(got, "sidebar attach "+otherWin) {
-		t.Fatalf("session hooks ran %q: want attach for %s, none for %s", got, bootWin, otherWin)
+	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin+" "+sid) || !strings.Contains(got, "sidebar attach "+otherWin) || strings.Count(got, "user") < 2 {
+		t.Fatalf("hooks ran %q: want attach for both windows with the session and the user's hook twice", got)
 	}
-	if out, _ := workspace.Server.Run(ctx, "show-hooks", "-g", "after-new-session"); strings.Contains(string(out), sidebarHooks[1].hook) {
-		t.Fatal("the new-session hook set for a session")
+	// attach itself: a window in a session not named gets no pane.
+	otherSid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "other", "#{session_id}"))))
+	if sessions, err := sidebarSessions(ctx); err != nil || len(sessions) != 1 || sessions[0] != sid {
+		t.Fatalf("sessions option: %v %v", sessions, err)
 	}
-	must(workspace.Server.Run(ctx, "set-hook", "-u", "-t", sid, sidebarHooks[0].hook))
-	for _, h := range sidebarHooks[2:] {
+	if err := sidebarAttach(ctx, otherWin, otherSid); err != nil {
+		t.Fatal(err)
+	}
+	if out := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "list-panes", "-t", otherWin, "-F", "#{"+sidebarTag+"}")))); strings.Contains(out, "1") {
+		t.Fatal("a pane added in a session not named")
+	}
+	must(workspace.Server.Run(ctx, "set-option", "-su", sessionsTag))
+	must(workspace.Server.Run(ctx, "set-hook", "-gu", "after-new-window[0]"))
+	for _, h := range sidebarHooks {
 		must(workspace.Server.Run(ctx, "set-hook", "-gu", h.hook))
+	}
+}
+
+// The jump keys: on binds M-1..M-9 in the root table to a jump with
+// the window and client, off unbinds them and leaves a user's M-0 and
+// a user's M-5 bound to something else alone.
+func TestJumpKeys(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	must(workspace.Server.Run(ctx, "bind-key", "-n", "M-0", "display-message", "sidebar jump mine"))
+	if err := bindJumpKeys(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	keys := func() string { return string(must(workspace.Server.Run(ctx, "list-keys", "-T", "root"))) }
+	if k := keys(); !strings.Contains(k, "M-1") || !strings.Contains(k, "M-9") || !strings.Contains(k, "sidebar jump 3 -t") || !strings.Contains(k, "#{client_name}") {
+		t.Fatalf("bound: %s", k)
+	}
+	must(workspace.Server.Run(ctx, "bind-key", "-n", "M-5", "display-message", "mine"))
+	unbindJumpKeys(ctx)
+	k := keys()
+	if strings.Contains(k, "sidebar jump 1 -t") || strings.Contains(k, "sidebar jump 9 -t") || !strings.Contains(k, "sidebar jump mine") || !strings.Contains(k, "M-5") {
+		t.Fatalf("after unbind: %s", k)
 	}
 }
 

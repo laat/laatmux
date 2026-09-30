@@ -3,6 +3,7 @@ package home
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,18 +43,26 @@ func SidebarPath() string { return filepath.Join(Dir(), "sidebar.json") }
 // state with a zero time.
 func ReadSidebar() (Sidebar, time.Time, error) {
 	var s Sidebar
-	b, err := os.ReadFile(SidebarPath())
+	// The contents and the mtime of one file: a rename between a read
+	// and a stat of the path would pair old contents with the new
+	// file's time, and the poll would miss that write.
+	f, err := os.Open(SidebarPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, time.Time{}, nil
 		}
 		return s, time.Time{}, err
 	}
-	if err := json.Unmarshal(b, &s); err != nil {
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
 		return s, time.Time{}, err
 	}
-	st, err := os.Stat(SidebarPath())
+	b, err := io.ReadAll(f)
 	if err != nil {
+		return s, time.Time{}, err
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
 		return s, time.Time{}, err
 	}
 	return s, st.ModTime(), nil

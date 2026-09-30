@@ -78,6 +78,10 @@ func (m *Model) Command(c Command) Action {
 	if m.Overlay != nil || m.Confirm != "" {
 		return Action{}
 	}
+	// A change already waiting to be written, a fold carried at a
+	// handoff say, stays waiting: the CLI's view and scope are not one.
+	was := m.settings
+	defer func() { m.settings = was }()
 	switch c.Name {
 	case "next":
 		m.move(1)
@@ -92,14 +96,15 @@ func (m *Model) Command(c Command) Action {
 		// shows the agent view alone.
 		if v, err := ParseView(c.Arg); err == nil && v != m.View && m.Layout != Strip {
 			m.Switch()
+			m.viewSet = false
 		}
-		m.settings = false
 	case "scope":
-		if s, err := ParseScope(c.Arg); err == nil && s != m.scope() {
+		// The scope set from outside, and F's memory of what was
+		// before cleared with it.
+		if s, err := ParseScope(c.Arg); err == nil {
 			m.Scope, m.prevScope = s, ""
 			m.Selection()
 		}
-		m.settings = false
 	}
 	return Action{}
 }
