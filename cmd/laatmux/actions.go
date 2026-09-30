@@ -321,12 +321,19 @@ func (d *dash) startAdd(m *view.Model) {
 			branch = r.Worktree.Branch
 		}
 	case r != nil && r.Kind == rows.KindRepo:
-		// By the source of a worktree under it, as a worktree's row:
-		// the line's name is a host's label when this machine has none,
-		// which another local repository could share.
-		preRepo = r.Name
-		if w := m.FirstWorktreeUnder(r.ID()); w != nil {
-			preRepo = localRepoArg(d.cfg, *w)
+		// By its source, as a worktree's row: the line's name is a
+		// host's label when this machine has none, which another local
+		// repository could share, so a source this machine does not
+		// know preselects nothing. A repository known by a label alone
+		// goes by it, as a worktree without a source does.
+		if r.ID() == rows.LabelRepoNode(r.Name) {
+			preRepo = r.Name
+		}
+		for _, repo := range d.cfg.Repos {
+			if rows.RepoNode(repo.Source) == r.ID() {
+				preRepo = repo.Name
+				break
+			}
 		}
 	default:
 		if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {

@@ -146,24 +146,30 @@ func TestAddFlowDefaults(t *testing.T) {
 	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
 
-	// A repository line preselects by a worktree's source, not the
-	// host's label for it: vm calls laatmux "lmx".
+	// A repository line preselects by its source, not the host's label
+	// for it: vm calls laatmux "proj", another repository's name here;
+	// one holding an orphaned session
+	// alone, whose source tag ends in another repository's name but is
+	// not configured here, preselects the last used, not that one.
 	m.View = view.ViewTree
 	m.SetTree(rows.Tree(rows.Input{
 		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
-		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/lmx/x", EnvironmentID: "venv", Repo: "lmx", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/lmx/x", Session: "lmx/x"}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
+		Locals:    []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
 	}))
 	m.Render()
-	if !m.Select(rows.RepoNode("git@github.com:laat/laatmux.git")) {
-		t.Fatal("no repository line")
+	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}} {
+		if !m.Select(rows.RepoNode(c.source)) {
+			t.Fatalf("no repository line for %s", c.source)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+		f = m.Overlay.(*view.Form)
+		if f.Chips[0].Label() != c.want {
+			t.Fatalf("the repository line for %s preselected %q", c.source, f.Chips[0].Label())
+		}
+		f.Handle(view.Key{Kind: view.KeyEsc})
+		d.act(m, m.Poll())
 	}
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
-	f = m.Overlay.(*view.Form)
-	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" {
-		t.Fatalf("a repository line preselected %q %q", f.Chips[0].Label(), f.Chips[1].Label())
-	}
-	f.Handle(view.Key{Kind: view.KeyEsc})
-	d.act(m, m.Poll())
 	m.View = view.ViewAgents
 
 	// No last-used agent for the repository: the configured default is

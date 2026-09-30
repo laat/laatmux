@@ -41,6 +41,10 @@ const (
 // RepoNode is the id of a repository's node: repo/ and the source key.
 func RepoNode(source string) string { return "repo/" + config.SourceKey(source) }
 
+// LabelRepoNode is the id of a repository line known by a host's label
+// alone, from an older host that reports no source.
+func LabelRepoNode(name string) string { return "repo/label\x00" + name }
+
 // Foldable reports whether the node folds: a repository, or a worktree
 // or task line holding children.
 func (r Row) Foldable() bool {
@@ -206,7 +210,7 @@ func Tree(in Input) []Row {
 	repoOf := func(source, name string) *repo {
 		key := config.SourceKey(source)
 		if source == "" {
-			key = "label\x00" + name
+			key = strings.TrimPrefix(LabelRepoNode(name), "repo/")
 		}
 		r := repos[key]
 		if r == nil {

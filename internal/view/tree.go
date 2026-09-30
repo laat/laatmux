@@ -380,18 +380,6 @@ func (m *Model) LineFor(host, session string) *rows.Row {
 	return nil
 }
 
-// FirstWorktreeUnder is the record of the first worktree line under a
-// repository line, nil for a repository with none listed.
-func (m *Model) FirstWorktreeUnder(repoID string) *protocol.Worktree {
-	i := m.indexOf(repoID)
-	for j := i + 1; i >= 0 && j < len(m.Tree) && m.Tree[j].Depth > 0; j++ {
-		if n := &m.Tree[j]; n.Depth == 1 && n.Worktree != nil && !n.Orphaned {
-			return n.Worktree
-		}
-	}
-	return nil
-}
-
 // indexOf is a node's index in the tree, -1 when none has the id.
 func (m *Model) indexOf(id string) int {
 	for i := range m.Tree {

@@ -762,9 +762,11 @@ here; a pane on this machine's default server by `switch-client` and
 the same selection locally; a pane on a remote host's default server is
 refused as `jump` refuses it. A run's line jumps to its worktree's
 session. `x` and `X` on a tile or an agent remove the agent's worktree,
-the question saying how many agents go with it, and do nothing on a
-pane or a run; `a` preselects the repository and host of the selected
-row's worktree. The host daemon leaves laatmux's own panes, the sidebar
+the question saying how many agents go with it, and say what they
+remove on a pane, a run, a repository line or the stale fold; `a`
+preselects the repository and host of the selected row's worktree, and
+a repository line's repository when this machine knows its source. The
+host daemon leaves laatmux's own panes, the sidebar
 panes and the attach panes of workspace sessions, out of its pane
 records by their tags.
 
