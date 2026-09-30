@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -394,6 +395,7 @@ func (d *Daemon) publishGitHubErr(hostErrs map[string]string) {
 		msgs = append(msgs, e)
 	}
 	sort.Strings(msgs)
+	msgs = slices.Compact(msgs) // gh missing names no host: once
 	ghErr := strings.Join(msgs, "; ")
 	switch {
 	case ghErr != "" && ghErr != d.githubErr:

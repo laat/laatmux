@@ -634,7 +634,7 @@ every worktree in the merged stream, keyed by source and branch.
   `sessions_error` does, and `laatmux hosts` prints it on a `github:`
   line after the hosts, never in a host's connectivity. A trusted
   enterprise host that is logged out is named in it too, each host's
-  failure kept until that host answers; with no error
+  failure kept until that host answers or no worktree is on it; with no error
   from the daemon, `hosts` asks github.com itself with the smallest
   query, through the same code, so it tells the same failures apart.
 - **The record,** from a merging daemon with the capability `branches`.

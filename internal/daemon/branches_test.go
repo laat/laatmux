@@ -547,6 +547,14 @@ func TestBranchesHostErrorsKept(t *testing.T) {
 	if last != "gh is not logged in to ghe.example.com" {
 		t.Errorf("after github.com answered: %q", last)
 	}
+	// gh missing names no host: said once for two.
+	d.publishGitHubErr(map[string]string{"github.com": github.ErrNoGH.Error(), "ghe.example.com": github.ErrNoGH.Error()})
+	_, _, msgs = drainBranches(s)
+	if n := len(msgs); n == 0 || msgs[n-1].GitHubError != github.ErrNoGH.Error() {
+		t.Errorf("gh missing on two hosts: %+v", msgs)
+	}
+	d.publishGitHubErr(map[string]string{"github.com": "", "ghe.example.com": "gh is not logged in to ghe.example.com"})
+	drainBranches(s)
 	// The enterprise host's last worktree goes: its failure goes with
 	// it at the next round, which asks nothing of it.
 	d.fetchNow(t)

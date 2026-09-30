@@ -400,10 +400,10 @@ func fetchChunk(ctx context.Context, run Runner, host string, branches []Branch,
 			// the branch is there; any PR when no own one is in sight,
 			// a closed one counting once the branch is gone or while it
 			// is at that PR's last commit. Not on the repository's
-			// default branch, or main or master, whose PR the views
-			// never show and whose forks' PRs are many; and not again
-			// for a while once the pages held none of the repository's
-			// own.
+			// default branch, or main or master, whose forks' PRs are
+			// many and whose own PR the views show only off main and
+			// master; and not again for a while once the pages held
+			// none of the repository's own.
 			var err error
 			mainline := b.Branch == "main" || b.Branch == "master" || a.DefaultBranchRef != nil && a.DefaultBranchRef.Name == b.Branch
 			paged := false
