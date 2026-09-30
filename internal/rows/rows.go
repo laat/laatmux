@@ -53,6 +53,10 @@ type Input struct {
 	// Current is the local session the viewer is in, "" when none: the
 	// session the sidebar pane sits in or the popup was opened from.
 	Current string
+	// Panes and Runs are the pane and run records of hosts with
+	// attribution, the tree's children beside the agents.
+	Panes []protocol.Pane
+	Runs  []protocol.Run
 	// Attention is the merging daemon's attention records by agent id:
 	// an idle agent whose finish is after the user's last visit is done.
 	Attention map[string]protocol.Attention
@@ -110,7 +114,22 @@ type Row struct {
 	Stale bool
 	// Branch is the PR and checks of the row's branch, nil when the
 	// daemon has none.
-	Branch   *protocol.BranchStatus
+	Branch *protocol.BranchStatus
+	// The tree's fields: what the node is, its level, its id when it
+	// has no record's, the pane or run record of a child, how many nodes
+	// are under a foldable one, and the agent view's suffix for tiles
+	// that share a label.
+	Kind     Kind
+	Depth    int
+	Node     string
+	Pane     *protocol.Pane
+	Run      *protocol.Run
+	Children int
+	Suffix   string
+	// Worst is the most pressing agent's row under a worktree or task
+	// line, for the folded line's icon; the line's own Agent is the one
+	// its jump goes through.
+	Worst    *Row
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
 	// Dim is no identified agent, an agent that is gone, a host that is
@@ -148,6 +167,8 @@ func (r Row) Pressing() bool {
 // name. A view keeps its selection on it while rows come and go.
 func (r Row) ID() string {
 	switch {
+	case r.Node != "":
+		return r.Node
 	case r.Pending != nil:
 		return r.Pending.ID
 	case r.Worktree != nil:

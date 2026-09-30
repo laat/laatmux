@@ -32,6 +32,7 @@ const (
 	TypeCancel    = "cancel"    // client -> daemon, stop a run
 	TypeShutdown  = "shutdown"  // client -> daemon, exit cleanly; answered with a result before it does
 	TypePoke      = "poke"      // client -> merging daemon with attention, list this machine's tmux clients now; not answered
+	TypeSelect    = "select"    // client -> daemon with select, make a pane and its window the managed server's current; answered with a result
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
 	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user, or one that handed over; with environment_id and root, the finished ones at that worktree, the id then the request's own, and with listing, rm's stamp, the handed-over ones whose add it is after
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
@@ -129,6 +130,11 @@ const (
 	// in the merged stream, keyed by source and branch, and github_error
 	// when it cannot read them. Without it no PR state is shown.
 	CapBranches = "branches"
+	// CapSelect is the select command: the daemon runs select-window
+	// and select-pane for a pane on its managed server, so a jump from
+	// a view lands on the pane, not only the session. A pane gone
+	// answers an error.
+	CapSelect = "select"
 )
 
 // Progress states, in Message.State of a progress message. A stage may

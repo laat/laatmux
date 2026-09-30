@@ -60,6 +60,10 @@ type merged struct {
 	// source key and branch; githubErr why it cannot read GitHub.
 	branches  map[protocol.BranchKey]protocol.BranchStatus
 	githubErr string
+	// panes and runs are the pane and run records of hosts with
+	// attribution, by id, the tree's children beside the agents.
+	panes map[string]protocol.Pane
+	runs  map[string]protocol.Run
 }
 
 // configure takes what the rows need from the config: this machine's
@@ -174,8 +178,13 @@ func (m *merged) apply(host string, msg protocol.Message) {
 			if h == host {
 				delete(m.agents, id)
 				delete(m.worktrees, id)
+				delete(m.panes, id)
+				delete(m.runs, id)
 				delete(m.byHost, id)
 			}
+		}
+		if m.panes == nil {
+			m.panes, m.runs = map[string]protocol.Pane{}, map[string]protocol.Run{}
 		}
 		for _, a := range msg.Agents {
 			m.agents[a.ID] = a
@@ -184,6 +193,14 @@ func (m *merged) apply(host string, msg protocol.Message) {
 		for _, w := range msg.Worktrees {
 			m.worktrees[w.ID] = w
 			m.byHost[w.ID] = host
+		}
+		for _, p := range msg.Panes {
+			m.panes[p.ID] = p
+			m.byHost[p.ID] = host
+		}
+		for _, r := range msg.Runs {
+			m.runs[r.ID] = r
+			m.byHost[r.ID] = host
 		}
 	case protocol.TypeUpsert:
 		if msg.Agent != nil {
@@ -194,6 +211,20 @@ func (m *merged) apply(host string, msg protocol.Message) {
 			m.worktrees[msg.Worktree.ID] = *msg.Worktree
 			m.byHost[msg.Worktree.ID] = host
 		}
+		if msg.Pane != nil {
+			if m.panes == nil {
+				m.panes = map[string]protocol.Pane{}
+			}
+			m.panes[msg.Pane.ID] = *msg.Pane
+			m.byHost[msg.Pane.ID] = host
+		}
+		if msg.Run != nil {
+			if m.runs == nil {
+				m.runs = map[string]protocol.Run{}
+			}
+			m.runs[msg.Run.ID] = *msg.Run
+			m.byHost[msg.Run.ID] = host
+		}
 	case protocol.TypeRemove:
 		if msg.AgentID != "" {
 			delete(m.agents, msg.AgentID)
@@ -202,6 +233,14 @@ func (m *merged) apply(host string, msg protocol.Message) {
 		if msg.WorktreeID != "" {
 			delete(m.worktrees, msg.WorktreeID)
 			delete(m.byHost, msg.WorktreeID)
+		}
+		if msg.PaneRecordID != "" {
+			delete(m.panes, msg.PaneRecordID)
+			delete(m.byHost, msg.PaneRecordID)
+		}
+		if msg.RunID != "" {
+			delete(m.runs, msg.RunID)
+			delete(m.byHost, msg.RunID)
 		}
 	}
 	m.mu.Unlock()
@@ -282,6 +321,12 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	for _, p := range m.pendings {
 		in.Pendings = append(in.Pendings, p)
 	}
+	for _, p := range m.panes {
+		in.Panes = append(in.Panes, p)
+	}
+	for _, r := range m.runs {
+		in.Runs = append(in.Runs, r)
+	}
 	return in
 }
 
@@ -323,91 +368,104 @@ func (m *merged) render(locals []workspace.Local) string {
 			fmt.Fprintf(&b, "%s  connecting\n", n)
 		}
 	}
-	rs := rows.Build(m.input(locals, ""))
-	now := time.Now()
-	if len(rs.Main) > 0 {
-		b.WriteString("\n")
-	}
-	for _, r := range rs.Main {
-		renderRow(&b, r, now)
-	}
-	if len(rs.Stale) > 0 {
-		b.WriteString("\nstale\n")
-		for _, r := range rs.Stale {
-			renderRow(&b, r, now)
-		}
-	}
-	if len(rs.Settled) > 0 {
-		b.WriteString("\nsettled\n")
-		for _, r := range rs.Settled {
-			renderRow(&b, r, now)
-		}
-	}
-	if len(rs.Orphaned) > 0 {
-		b.WriteString("\norphaned\n")
-		for _, r := range rs.Orphaned {
-			_, root := workspace.SplitKey(r.Local.Key)
-			fmt.Fprintf(&b, "  %-40s no worktree %s on %s\n", r.Name, root, r.Host)
-		}
-	}
+	renderTree(&b, rows.Tree(m.input(locals, "")), time.Now())
 	if m.sessionsErr != "" {
-		// An incomplete listing says so where the settled and orphaned
-		// groups would be, rather than looking complete.
+		// An incomplete listing says so after the tree, rather than
+		// looking complete.
 		fmt.Fprintf(&b, "\nlocal sessions not listed: %s\n", m.sessionsErr)
 	}
 	return b.String()
 }
 
-// renderRow prints one line: activity mark and state, the agent, the
-// name, where it is, and the agent's last change and title. A worktree
-// without an agent, or without a session, says so; so does a managed
-// agent with no worktree.
-func renderRow(b *strings.Builder, r rows.Row, now time.Time) {
-	where := r.Host
-	note := ""
-	if r.HostDown {
-		note += " (host down)"
-	}
-	if r.Pending != nil {
-		// A task the relay holds: where the add is, then the detail.
-		detail := r.Detail()
-		if detail != "" {
-			detail = "  " + detail
+// renderTree prints the tree: a repository per line, its worktrees with
+// their host under it, and under each its agents, panes and runs; a
+// task where its worktree will be; other sessions last.
+func renderTree(b *strings.Builder, nodes []rows.Row, now time.Time) {
+	for _, n := range nodes {
+		switch n.Kind {
+		case rows.KindRepo, rows.KindGroup:
+			fmt.Fprintf(b, "\n%s\n", n.Name)
+		case rows.KindWorktree, rows.KindTask:
+			renderLine(b, n, now)
+		case rows.KindAgent:
+			if n.Depth == 1 {
+				// A session in other sessions.
+				fmt.Fprintf(b, "  %-36s %s\n", n.Name+" ("+where(n)+")", agentText(n, now))
+				continue
+			}
+			fmt.Fprintf(b, "    %s\n", agentText(n, now))
+		case rows.KindPane:
+			cmd := n.Name
+			if n.Pane != nil && n.Pane.Command != "" {
+				cmd = "$ " + n.Pane.Command
+			}
+			fmt.Fprintf(b, "    %s\n", cmd)
+		case rows.KindRun:
+			fmt.Fprintf(b, "    ▶ %s  %s\n", n.Name, rows.Ago(now.Sub(n.Run.StartedAt)))
 		}
-		fmt.Fprintf(b, "%s %-24s %-32s @%s%s%s\n", r.Mark(), r.State(), r.Name, where, note, detail)
-		return
 	}
-	if r.Agent == nil {
-		// A managed session with no identified agent, or no session at
-		// all: the worktree was made by hand, or its session was killed.
-		fmt.Fprintf(b, "  %-15s %-32s @%s%s\n", r.State(), r.Name, where, note)
-		return
+}
+
+// where is a node's host, with the server for an agent observed off the
+// managed server, as jump --server takes it, and a note when the host
+// is down.
+func where(n rows.Row) string {
+	s := n.Host
+	if a := n.Agent; a != nil && n.Kind == rows.KindAgent {
+		if srv := rows.Server(*a); srv != tmux.LaatmuxServer.Label() {
+			s += "/" + srv
+		}
 	}
-	a := r.Agent
-	if a.Liveness == protocol.Gone {
-		note = " (gone)" + note
+	if n.HostDown {
+		s += ", host down"
 	}
-	if r.Worktree == nil && a.Managed {
-		note = " (no worktree)" + note
+	return s
+}
+
+// renderLine is a worktree or task line: its label, host, and what it
+// is instead of stats, a task's state say.
+func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
+	label, _ := n.Labels()
+	if n.Orphaned {
+		label = n.Name
 	}
-	title := strings.TrimSpace(a.Title)
-	if len(title) > 48 {
-		title = title[:48]
+	note := ""
+	switch {
+	case n.Pending != nil:
+		note = n.Mark() + " " + n.State()
+		if d := n.Detail(); d != "" {
+			note += "  " + d
+		}
+	case n.Orphaned:
+		_, root := workspace.SplitKey(n.Local.Key)
+		note = "worktree gone " + root
+	case n.Worktree != nil && n.Children == 0:
+		note = n.State()
 	}
-	// Agents on the managed server are the common case and show the
-	// host alone; anything else names its server, which is also what
-	// jump --server takes.
-	if srv := rows.Server(*a); srv != tmux.LaatmuxServer.Label() {
-		where += "/" + srv
+	if n.Settled {
+		note = strings.TrimSpace(note + "  settled")
 	}
+	fmt.Fprintf(b, "%s\n", strings.TrimRight(fmt.Sprintf("  %-36s %s", label+" ("+where(n)+")", note), " "))
+}
+
+// agentText is an agent's mark, state, name, age and title.
+func agentText(n rows.Row, now time.Time) string {
+	a := n.Agent
 	state := string(a.Activity)
 	switch {
-	case r.Done:
+	case a.Liveness == protocol.Gone:
+		state = "gone"
+	case n.Done:
 		state = "done"
-	case r.Stale:
+	case n.Stale:
 		state = "stale"
 	}
-	fmt.Fprintf(b, "%s %-8s %-6s %-32s @%s%s  %s  %s\n", r.Mark(), state, r.AgentName(), r.Name, where, note, rows.Ago(now.Sub(a.ActivityAt)), title)
+	title := strings.TrimSpace(a.Title)
+	if r := []rune(title); len(r) > 48 {
+		// By rune: a cut in the middle of one prints as garbage.
+		title = string(r[:48])
+	}
+	return fmt.Sprintf("%s %-8s %-6s %s  %s", n.Mark(), state, n.AgentName(), rows.Ago(now.Sub(a.ActivityAt)), title)
 }
 
 func cmdLs(ctx context.Context, args []string) error {

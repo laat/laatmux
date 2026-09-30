@@ -175,30 +175,32 @@ func TestRender(t *testing.T) {
 		t.Fatalf("no line containing %q in:\n%s", sub, out)
 		return -1
 	}
-	fix := lines[find("proj/fix")]
+	// The tree: the repository, its worktrees with their host, and each
+	// worktree's agent on the line under it.
+	if find("proj") > find("fix (vm)") {
+		t.Error("the repository line not over its worktrees")
+	}
+	fix := lines[find("fix (vm)")+1]
 	if !strings.Contains(fix, "working") || !strings.Contains(fix, "claude") || !strings.Contains(fix, "fixing") {
 		t.Errorf("worktree not paired with its agent: %q", fix)
 	}
-	if !strings.Contains(lines[find("proj/bare")], "no session") {
-		t.Errorf("worktree without agent: %q", lines[find("proj/bare")])
+	if !strings.Contains(lines[find("bare (vm)")], "no session") {
+		t.Errorf("worktree without agent: %q", lines[find("bare (vm)")])
 	}
-	if !strings.Contains(lines[find("proj/shell")], "no agent") {
-		t.Errorf("worktree with a session but no agent: %q", lines[find("proj/shell")])
+	if !strings.Contains(lines[find("shell (vm)")], "no agent") {
+		t.Errorf("worktree with a session but no agent: %q", lines[find("shell (vm)")])
 	}
-	if !strings.Contains(lines[find("scratch")], "(no worktree)") {
-		t.Errorf("managed agent without worktree: %q", lines[find("scratch")])
+	if find("scratch") < find("other sessions") {
+		t.Errorf("managed agent without worktree not in other sessions: %q", lines[find("scratch")])
 	}
-	if !strings.Contains(lines[find("notes")], "@vm/default") {
+	if !strings.Contains(lines[find("notes")], "(vm/default)") {
 		t.Errorf("observed agent names its server: %q", lines[find("notes")])
 	}
-	if find("settled") > find("proj/old") {
-		t.Error("settled workspace listed before the settled header")
+	if !strings.Contains(lines[find("old (vm)")], "settled") {
+		t.Error("settled workspace not marked")
 	}
-	if find("proj/gone") < find("orphaned") || strings.Contains(out, "box/proj/x") {
+	if !strings.Contains(lines[find("vm/proj/gone")], "worktree gone") || strings.Contains(out, "box/proj/x") {
 		t.Errorf("orphaned detection wrong:\n%s", out)
-	}
-	if find("blocked") > find("proj/fix") {
-		t.Error("blocked agent not first")
 	}
 }
 
@@ -211,7 +213,7 @@ func TestSetHostErrKeepsIdentity(t *testing.T) {
 		Worktrees: []protocol.Worktree{{ID: "env1/worktree//r/x", EnvironmentID: "env1", Repo: "proj", Branch: "x", Root: "/r/x"}}})
 	m.setHostErr("vm", false, "disconnected")
 	out := m.render(nil)
-	if !strings.Contains(out, "vm  DOWN  disconnected") || !strings.Contains(out, "proj/x") || !strings.Contains(out, "@vm (host down)") {
+	if !strings.Contains(out, "vm  DOWN  disconnected") || !strings.Contains(out, "x (vm, host down)") {
 		t.Errorf("records lost their host:\n%s", out)
 	}
 	if st := m.hosts["vm"]; st.EnvID != "env1" || st.Version != "v" || st.Connected || st.Listed {

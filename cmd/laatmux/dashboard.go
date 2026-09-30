@@ -47,8 +47,10 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  p prompt  z settle  S shell  o/O PR, checks  v layout  / filter  f folded  q quit"}
+	// The dashboard starts in the agent view; its stored default is
+	// step 8's.
+	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
+		Hint: "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  v layout  / filter  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 
@@ -218,7 +220,11 @@ func (m *merged) fill(v *view.Model, current string) {
 	for id, h := range m.handoffs {
 		v.Handoffs[id] = h.to
 	}
-	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
+	in := m.input(m.localsLocked(), current)
+	// The tree first: the agent view's selection follows a handoff to
+	// the worktree's first agent in the tree's order.
+	v.SetTree(rows.Tree(in))
+	v.SetRows(rows.Agents(in))
 	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {
@@ -288,6 +294,15 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	return switchTo(ctx, name)
 }
 
+// worktreeSessionName is the workspace session name for a worktree: by
+// branch, or by the root's base name when detached.
+func worktreeSessionName(h config.Host, w protocol.Worktree) string {
+	if w.Branch != "" {
+		return workspace.SessionName(h.Name, w.Repo, w.Branch)
+	}
+	return h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
+}
+
 // rowSpec is where a row's jump goes: the workspace session to make or
 // find, or the session on this machine's default server to switch to.
 func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec, session string, err error) {
@@ -309,11 +324,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		w := *r.Worktree
 		w.Session = r.Agent.Session
 		spec := worktreeSpec(cfg, h, w)
-		if w.Branch != "" {
-			spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
-		} else {
-			spec.Name = h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
-		}
+		spec.Name = worktreeSessionName(h, w)
 		return spec, "", nil
 	case r.Agent != nil:
 		// An agent's row, or a worktree's without a home session whose
@@ -351,6 +362,10 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 		// same name is not this task's.
 		return r, errors.New(r.Name + ": host replaced: " + r.Detail())
 	case r.Worktree != nil && r.Worktree.Session != "":
+	case r.Worktree != nil && r.Agent != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
+		// Listed without a home, with the agent laatmux made at the
+		// root in a managed session: the jump goes through that agent,
+		// as the worktree line's does, wherever the agent went.
 	case p.Session == "" || p.Root == "" || p.EnvironmentID == "":
 		if r.Worktree == nil {
 			return r, errors.New(r.Name + ": no session yet")

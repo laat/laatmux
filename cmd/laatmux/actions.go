@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
@@ -97,8 +98,6 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 		case 'p':
 			d.deliverPrompt(m)
 		case 'z':
-			// s is the tree's fold from step 6 on; until then it does
-			// nothing.
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
@@ -138,6 +137,26 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	jump := d.jumper
 	if jump == nil {
 		jump = func(r rows.Row) error { return jumpRow(d.ctx, d.cfg, r) }
+	}
+	if p, ok := paneOf(r); ok && d.jumper == nil {
+		// A tile, or an agent or a pane in the tree: to the pane, the
+		// session reached whatever the pane's fate.
+		msg, err := jumpPane(d.ctx, d.cfg, m.LineFor(r.Host, p.session), r, p)
+		if err != nil {
+			m.Message = err.Error()
+			return false, false
+		}
+		m.Message = msg
+		return d.exitOnJump, true
+	}
+	if r.Kind == rows.KindRun {
+		// A run's line: the worktree's session, as its line's jump
+		// reaches it, through the root agent with the home lost.
+		if l := m.OwnerLine(r.Worktree.ID); l != nil {
+			r = *l
+		} else {
+			r.Kind, r.Run = rows.KindWorktree, nil
+		}
 	}
 	if err := jump(r); err != nil {
 		m.Message = err.Error()
@@ -290,11 +309,36 @@ func (d *dash) startAdd(m *view.Model) {
 		m.Message = "last.json: " + err.Error()
 		return
 	}
+	// The repository and host of the selected row's worktree, from a
+	// tile or any tree line under one, with the branch when the worktree
+	// has no session yet, so an agent can be started in it; a
+	// repository line names its repository.
 	preRepo, preHost, branch := "", "", ""
-	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Orphaned {
-		preRepo, preHost, branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
-	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-		preRepo = repo.Name
+	switch r := m.Selection(); {
+	case r != nil && r.Worktree != nil && !r.Orphaned:
+		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
+		if r.Worktree.Session == "" {
+			branch = r.Worktree.Branch
+		}
+	case r != nil && r.Kind == rows.KindRepo:
+		// By its source, as a worktree's row: the line's name is a
+		// host's label when this machine has none, which another local
+		// repository could share, so a source this machine does not
+		// know preselects nothing. A repository known by a label alone
+		// goes by it, as a worktree without a source does.
+		if r.ID() == rows.LabelRepoNode(r.Name) {
+			preRepo = r.Name
+		}
+		for _, repo := range d.cfg.Repos {
+			if rows.RepoNode(repo.Source) == r.ID() {
+				preRepo = repo.Name
+				break
+			}
+		}
+	default:
+		if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
+			preRepo = repo.Name
+		}
 	}
 	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.hostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
@@ -583,7 +627,18 @@ func (d *dash) askRm(m *view.Model, force bool) {
 	if force {
 		verb = "force-remove"
 	}
-	m.Ask(fmt.Sprintf("%s %s on %s (%s)? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root), "rm")
+	with := ""
+	if r.Worktree != nil {
+		// From an agent's tile or line: the worktree goes, and every
+		// agent in it with it, counted as the tree joins them.
+		switch n := m.AgentsUnder(r.Worktree.ID); {
+		case n == 1:
+			with = " with its agent"
+		case n > 1:
+			with = fmt.Sprintf(" with its %d agents", n)
+		}
+	}
+	m.Ask(fmt.Sprintf("%s %s on %s (%s)%s? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root, with), "rm")
 }
 
 // Dismissable is a pending task that x drops: one that needs the user,
@@ -715,6 +770,12 @@ func (d *dash) deliverPrompt(m *view.Model) {
 // this machine's config does not know is removed by root alone, as
 // --root does.
 func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
+	switch r.Kind {
+	case rows.KindPane, rows.KindRun:
+		return command.Rm{}, errors.New(r.Name + ": a pane or a run; x removes worktrees, from their line or an agent's")
+	case rows.KindRepo, rows.KindGroup, rows.KindFold:
+		return command.Rm{}, errors.New(r.Name + ": x removes worktrees, from their line or an agent's")
+	}
 	if r.Host == "" {
 		return command.Rm{}, errors.New(r.Name + ": no configured host claims this record")
 	}
@@ -869,14 +930,10 @@ func (d *dash) shell(m *view.Model) bool {
 	if r == nil {
 		return false
 	}
-	row := *r
-	if row.Pending != nil {
-		// A task's row goes by the task's own rules for its session.
-		var err error
-		if row, err = pendingTarget(row); err != nil {
-			m.Message = err.Error()
-			return false
-		}
+	row, err := shellRow(m, *r)
+	if err != nil {
+		m.Message = err.Error()
+		return false
 	}
 	l, err := d.localFor(row)
 	if err != nil {
@@ -892,6 +949,32 @@ func (d *dash) shell(m *view.Model) bool {
 		return false
 	}
 	return d.exitOnJump
+}
+
+// shellRow is the row whose workspace session the shell opens: a tile,
+// an agent, a pane or a run without a workspace session of its own
+// goes by the line holding it, whose jump agent the lost-home case
+// counts on; a task's row by the task's own rules for its session.
+func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
+	if row.Kind == rows.KindWorktree || row.Kind == rows.KindTask || row.Local != nil && row.Local.Workspace() {
+		// A line, or a row with a workspace session of its own.
+	} else if row.Worktree != nil {
+		if l := m.OwnerLine(row.Worktree.ID); l != nil {
+			row = *l
+		}
+	} else if row.Pending == nil && row.Agent != nil && rows.Server(*row.Agent) == tmux.LaatmuxServer.Label() {
+		// The add's agent before the host lists the worktree: the
+		// task line holding it, as the pane jump routes it. Only on
+		// the managed server: an observed session of the same name
+		// is not the task's.
+		if l := m.LineFor(row.Host, row.Agent.Session); l != nil && l.Pending != nil {
+			row = *l
+		}
+	}
+	if row.Pending != nil {
+		return pendingTarget(row)
+	}
+	return row, nil
 }
 
 // localFor is the row's workspace session, made from the worktree
@@ -913,17 +996,33 @@ func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
 		}
 		return l, nil
 	}
-	if r.Worktree == nil || r.Worktree.Session == "" {
-		return workspace.Local{}, errors.New(r.Name + ": not a workspace")
+	spec, err := localSpec(d.cfg, r)
+	if err != nil {
+		return workspace.Local{}, err
 	}
-	h, ok := d.cfg.Find(r.Host)
-	if !ok {
-		return workspace.Local{}, fmt.Errorf("unknown host %q", r.Host)
-	}
-	spec := worktreeSpec(d.cfg, h, *r.Worktree)
 	name, _, err := workspace.Ensure(d.ctx, spec)
 	if err != nil {
 		return workspace.Local{}, err
 	}
-	return workspace.Local{Name: name, Key: spec.Key, Host: h.Name, Source: spec.Source, Branch: spec.Branch}, nil
+	return workspace.Local{Name: name, Key: spec.Key, Host: spec.Host.Name, Source: spec.Source, Branch: spec.Branch}, nil
+}
+
+// localSpec is the workspace session a row without one gets for its
+// shell: the one the row's own jump makes, through the worktree's root
+// agent when the home is lost; a row whose jump is no workspace
+// session, a switch on this machine's default server or a plain
+// attachment, has none.
+func localSpec(cfg config.Config, r rows.Row) (workspace.Spec, error) {
+	if r.Worktree == nil {
+		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	}
+	h, ok := cfg.Find(r.Host)
+	if !ok {
+		return workspace.Spec{}, fmt.Errorf("unknown host %q", r.Host)
+	}
+	spec, session, err := rowSpec(cfg, h, r)
+	if err != nil || session != "" || spec.Key == "" {
+		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	}
+	return spec, nil
 }

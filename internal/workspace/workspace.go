@@ -413,3 +413,20 @@ func SetSettled(ctx context.Context, name string, settled bool) error {
 	}
 	return err
 }
+
+// AttachPane is the id of a local session's live attach pane, "" when
+// it has none: the pane a jump to an agent's pane selects, so the
+// session shows the attach whatever window the user left it on.
+func AttachPane(ctx context.Context, name string) string {
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) == 3 && f[2] != "" && f[1] != "1" {
+			return f[0]
+		}
+	}
+	return ""
+}

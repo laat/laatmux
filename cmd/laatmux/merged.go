@@ -179,6 +179,13 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		m.hosts, m.byHost = map[string]hostState{}, map[string]string{}
 		m.sessions = map[string]protocol.Session{}
 		m.sessionsErr = msg.SessionsError
+		m.panes, m.runs = map[string]protocol.Pane{}, map[string]protocol.Run{}
+		for _, p := range msg.Panes {
+			m.panes[p.ID] = p
+		}
+		for _, r := range msg.Runs {
+			m.runs[r.ID] = r
+		}
 		for _, st := range msg.Hosts {
 			m.hosts[st.Name] = fromStatus(st)
 		}
@@ -242,6 +249,18 @@ func (m *merged) applyMerged(msg protocol.Message) {
 			m.worktrees[w.ID] = *w
 			m.byHost[w.ID] = m.hostOfLocked(w.EnvironmentID)
 		}
+		if p := msg.Pane; p != nil {
+			if m.panes == nil {
+				m.panes = map[string]protocol.Pane{}
+			}
+			m.panes[p.ID] = *p
+		}
+		if r := msg.Run; r != nil {
+			if m.runs == nil {
+				m.runs = map[string]protocol.Run{}
+			}
+			m.runs[r.ID] = *r
+		}
 		if s := msg.LocalSession; s != nil {
 			if m.sessions == nil {
 				m.sessions = map[string]protocol.Session{}
@@ -274,12 +293,23 @@ func (m *merged) applyMerged(msg protocol.Message) {
 			}
 		}
 		if msg.HostName != "" {
+			env := m.hosts[msg.HostName].EnvID
 			delete(m.hosts, msg.HostName)
 			for id, h := range m.byHost {
 				if h == msg.HostName {
 					delete(m.agents, id)
 					delete(m.worktrees, id)
 					delete(m.byHost, id)
+				}
+			}
+			for id, p := range m.panes {
+				if env != "" && p.EnvironmentID == env {
+					delete(m.panes, id)
+				}
+			}
+			for id, r := range m.runs {
+				if env != "" && r.EnvironmentID == env {
+					delete(m.runs, id)
 				}
 			}
 		}
@@ -290,6 +320,12 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		if msg.WorktreeID != "" {
 			delete(m.worktrees, msg.WorktreeID)
 			delete(m.byHost, msg.WorktreeID)
+		}
+		if msg.PaneRecordID != "" {
+			delete(m.panes, msg.PaneRecordID)
+		}
+		if msg.RunID != "" {
+			delete(m.runs, msg.RunID)
 		}
 		if msg.LocalSessionName != "" {
 			delete(m.sessions, msg.LocalSessionName)

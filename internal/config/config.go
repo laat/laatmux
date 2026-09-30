@@ -173,6 +173,8 @@ var (
 type Sidebar struct {
 	Width  int    `yaml:"width"`
 	Layout string `yaml:"layout"`
+	// View is the view a sidebar pane starts in: agents or tree.
+	View string `yaml:"view"`
 	// Sort is priority, recency or window.
 	Sort string `yaml:"sort"`
 	// DimStale draws a stale row dim; CollapseStale folds the stale rows
@@ -303,6 +305,11 @@ func Parse(b []byte) (Config, error) {
 	case "", "tiles", "compact":
 	default:
 		return c, fmt.Errorf("sidebar: layout %q is not tiles or compact", c.Sidebar.Layout)
+	}
+	switch c.Sidebar.View {
+	case "", "agents", "tree":
+	default:
+		return c, fmt.Errorf("sidebar: view %q is not agents or tree", c.Sidebar.View)
 	}
 	if c.Sidebar.Sort != "" && !contains(SortOrders, c.Sidebar.Sort) {
 		return c, fmt.Errorf("sidebar: sort %q is not one of %s", c.Sidebar.Sort, strings.Join(SortOrders, ", "))

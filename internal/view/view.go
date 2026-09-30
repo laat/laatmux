@@ -39,7 +39,14 @@ func ParseLayout(s string) (Layout, error) {
 
 // Model is the state of one view.
 type Model struct {
-	Rows      rows.Rows
+	Rows rows.Rows
+	// View is which of the two views is shown; Tree is the tree's nodes,
+	// which SetTree sets; folds is the tree's fold state by node id,
+	// true for folded, and toggled which the user set.
+	View      View
+	Tree      []rows.Row
+	folds     map[string]bool
+	toggled   map[string]bool
 	Layout    Layout
 	Titles    bool   // compact draws the pane title under each row
 	LocalHost string // the host whose tag is not dimmed
@@ -53,7 +60,7 @@ type Model struct {
 
 	Filter     string
 	Filtering  bool // typing into the filter
-	ShowHidden bool // the settled and orphaned groups are expanded
+	ShowHidden bool // the agent view's stale fold is open
 	Selected   int  // index into Visible; -1 for none while Follow holds
 	// Follow keeps the selection on the viewer's own row, wherever the
 	// sort moves it, and on nothing when there is no such row, until a
@@ -71,6 +78,9 @@ type Model struct {
 	// host has no snapshot yet: the body says so.
 	Icons   Icons
 	Loading bool
+	// Tabs draws the line naming the views above the list, which Tab
+	// and a click on it switch.
+	Tabs bool
 	// Machine is this machine's host name, which tmux titles a pane with
 	// until its program sets a title: such a title is dropped.
 	Machine string
@@ -106,6 +116,8 @@ type Model struct {
 	// whether it drew a time in seconds.
 	spinning bool
 	ticking  bool
+	// stale is the agent view's fold row, made on each Items.
+	stale rows.Row
 }
 
 // SetRows replaces the rows, keeping the selection on the row it was on
@@ -123,6 +135,12 @@ type Model struct {
 // Follow holds the selection is the viewer's own row instead, or none.
 func (m *Model) SetRows(rs rows.Rows) {
 	m.Rows = rs
+	m.reselect()
+}
+
+// reselect finds the selection again after the rows or the tree
+// changed, as SetRows describes.
+func (m *Model) reselect() {
 	if m.Follow {
 		m.Selected = m.followed(m.Visible())
 		return
@@ -150,11 +168,27 @@ func (m *Model) SetRows(rs rows.Rows) {
 	standing := func(want string) func(r *rows.Row) bool {
 		return func(r *rows.Row) bool { return want != "" && r.Alias() == want }
 	}
+	// The agent view has no worktree rows: a task that handed over to
+	// its worktree is followed to the worktree's first agent's tile,
+	// in the tree's order, out of the stale fold when it is in it.
+	first := ""
+	if m.View != ViewTree && handed != "" {
+		first = m.firstAgentUnder(handed)
+		if first != "" && !m.ShowHidden {
+			for _, r := range m.Rows.Stale {
+				if r.ID() == first {
+					m.ShowHidden = true
+					vis = m.Visible()
+				}
+			}
+		}
+	}
 	switch {
 	case find(id(anchor)):
 	case find(id(alias)):
 	case find(standing(anchor)):
 	case find(id(handed)):
+	case find(id(first)):
 	case find(standing(alias)):
 	case find(standing(handed)):
 	default:
@@ -194,10 +228,14 @@ type Item struct {
 	Hidden int
 }
 
-// Items is the list as drawn: main rows, then the stale, settled and
-// orphaned groups, collapsed to one header line unless ShowHidden. The filter
-// keeps rows whose name or host contains it, case-insensitively.
+// Items is the list as drawn. In the tree view the nodes the filter and
+// the folds leave; in the agent view the main rows, then the stale fold,
+// a selectable row of its own, and the stale rows when it is open. The
+// filter keeps rows whose name or host contains it, case-insensitively.
 func (m *Model) Items() []Item {
+	if m.View == ViewTree {
+		return m.treeItems()
+	}
 	var out []Item
 	n := 0
 	add := func(rs []rows.Row, g Group) int {
@@ -214,35 +252,24 @@ func (m *Model) Items() []Item {
 		return added
 	}
 	add(m.Rows.Main, GroupMain)
-	stale, settled, orphaned := m.count(m.Rows.Stale), m.count(m.Rows.Settled), m.count(m.Rows.Orphaned)
-	if stale+settled+orphaned == 0 {
+	// The stale fold holds the stale agents and those of settled
+	// workspaces; the settled and orphaned groups of the old mixed list
+	// fold with them.
+	stale := m.count(m.Rows.Stale) + m.count(m.Rows.Settled) + m.count(m.Rows.Orphaned)
+	if stale == 0 {
 		return out
 	}
+	m.stale = rows.Row{Kind: rows.KindFold, Node: rows.NodeStale, Name: fmt.Sprintf("%d stale", stale), Children: stale}
+	hidden := 0
 	if !m.ShowHidden {
-		var parts []string
-		if stale > 0 {
-			parts = append(parts, fmt.Sprintf("stale %d", stale))
-		}
-		if settled > 0 {
-			parts = append(parts, fmt.Sprintf("settled %d", settled))
-		}
-		if orphaned > 0 {
-			parts = append(parts, fmt.Sprintf("orphaned %d", orphaned))
-		}
-		out = append(out, Item{Header: strings.Join(parts, "  ") + "  (f shows)", Group: GroupSettled, Index: -1, Hidden: stale + settled + orphaned})
-		return out
+		hidden = stale
 	}
-	if stale > 0 {
-		out = append(out, Item{Header: "stale", Group: GroupStale, Index: -1})
+	out = append(out, Item{Row: &m.stale, Group: GroupStale, Index: n, Hidden: hidden})
+	n++
+	if m.ShowHidden {
 		add(m.Rows.Stale, GroupStale)
-	}
-	if settled > 0 {
-		out = append(out, Item{Header: "settled", Group: GroupSettled, Index: -1})
-		add(m.Rows.Settled, GroupSettled)
-	}
-	if orphaned > 0 {
-		out = append(out, Item{Header: "orphaned", Group: GroupOrphaned, Index: -1})
-		add(m.Rows.Orphaned, GroupOrphaned)
+		add(m.Rows.Settled, GroupStale)
+		add(m.Rows.Orphaned, GroupStale)
 	}
 	return out
 }
@@ -376,6 +403,9 @@ func (m *Model) Render() []Line {
 		return m.Overlay.Render(m.Width, m.Height)
 	}
 	var out []Line
+	if m.Tabs {
+		out = append(out, m.tabs())
+	}
 	for _, h := range m.Header {
 		fg := palette.Warning
 		if h.Down {
@@ -441,35 +471,11 @@ func (m *Model) Render() []Line {
 		lines, ids = []Line{{Spans: clip([]Span{{Text: frame(m.Now), Fg: palette.Info, spin: true}, {Text: " Loading"}}, m.Width)}}, []string{""}
 	case len(items) == 0 && m.Filter != "":
 		lines, ids = []Line{{Spans: []Span{{Text: fit("Nothing matches /"+m.Filter, m.Width)}}, Dim: true}}, []string{""}
+	case len(items) == 0 && m.View == ViewTree:
+		lines, ids = []Line{{Spans: []Span{{Text: fit("No worktrees", m.Width)}}, Dim: true}}, []string{""}
 	case len(items) == 0:
-		lines, ids = []Line{{Spans: []Span{{Text: fit("No worktrees or agents", m.Width)}}, Dim: true}}, []string{""}
+		lines, ids = []Line{{Spans: []Span{{Text: fit("No agents running", m.Width)}}, Dim: true}}, []string{""}
 	}
-	// Scroll so the selection is on screen, moving as little as
-	// possible; a separator after the selected tile may fall off. With
-	// rows below the window its last line is the count of them, so the
-	// window is a line shorter.
-	window := body
-	scrollTo := func() {
-		if selStart >= 0 {
-			if selStart < m.scroll {
-				m.scroll = selStart
-			}
-			if selEnd > m.scroll+window {
-				m.scroll = selEnd - window
-			}
-			// A tile taller than the window shows its head.
-			if selEnd-selStart > window {
-				m.scroll = selStart
-			}
-		}
-		if m.scroll > len(lines)-window {
-			m.scroll = len(lines) - window
-		}
-		if m.scroll < 0 {
-			m.scroll = 0
-		}
-	}
-	scrollTo()
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
 	rowsFrom := func(i int) int {
@@ -481,25 +487,67 @@ func (m *Model) Render() []Line {
 		}
 		return n
 	}
-	more := 0
-	if body > 1 && rowsFrom(m.scroll+body) > 0 {
-		// Only rows count: a group's header or a divider left below is
-		// no reason to give up a line.
-		window = body - 1
-		scrollTo()
-		more = rowsFrom(m.scroll + window)
-		if more == 0 {
-			window = body
-			scrollTo()
+	// The scroll: where it was, back up to the selection when that is
+	// above, never past the end with a full window; then down, a line
+	// at a time, until the selection is in the window. Two lines the
+	// window gives up when needed, decided at each candidate: in the
+	// tree, the repository line of the node at the top, pinned above
+	// the window while the list scrolls past it; and "↓ N more" at the
+	// bottom for rows left below, where only rows count: a group's
+	// header or a divider left below is no reason to give up a line.
+	// Deciding both at the scroll drawn makes the render its own fixed
+	// point: the next one, from the same state, draws the same.
+	window := body
+	reserved, tail, more := false, false, 0
+	s := m.scroll
+	if selStart >= 0 && selStart < s {
+		s = selStart
+	}
+	if s > len(lines)-body {
+		s = len(lines) - body
+	}
+	if s < 0 {
+		s = 0
+	}
+	for ; ; s++ {
+		m.scroll = s
+		reserved = false
+		if m.View == ViewTree && body >= 4 {
+			l, _ := m.pinned(items, ids)
+			reserved = l != nil
+		}
+		window = body
+		if reserved {
+			window--
+		}
+		tail = window > 1 && rowsFrom(s+window) > 0
+		more = 0
+		if tail {
+			window--
+			more = rowsFrom(s + window)
+		}
+		// A tile taller than the window shows its head.
+		if selStart < 0 || selStart == s || selStart > s && selEnd <= s+window || s >= len(lines)-1 {
+			break
 		}
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
 	m.hitIDs = make([]string, body)
 	m.hitTop = len(m.Header)
+	if m.Tabs {
+		m.hitTop++
+	}
 	m.hitAt = m.Now
-	for i := 0; i < body; i++ {
-		switch j := m.scroll + i; {
-		case i == window:
+	shift := 0
+	if reserved {
+		pinned, id := m.pinned(items, ids)
+		out = append(out, *pinned)
+		m.hitIDs[0] = id
+		shift = 1
+	}
+	for i := shift; i < body; i++ {
+		switch j := m.scroll + i - shift; {
+		case tail && i-shift == window:
 			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
 		case j < len(lines):
 			out = append(out, lines[j])
@@ -551,8 +599,12 @@ func (m *Model) footer() Line {
 	return Line{Spans: []Span{{Text: fit(m.Hint, m.Width)}}, Dim: true}
 }
 
-// row draws one row in the current layout.
+// row draws one row in the current layout; a tree's node, and the stale
+// fold, are one line each.
 func (m *Model) row(r rows.Row) []Line {
+	if r.Kind != rows.KindTile {
+		return m.treeLine(r)
+	}
 	if m.Layout == Compact {
 		return m.compact(r)
 	}
@@ -581,6 +633,9 @@ func (m *Model) where(r rows.Row) Span {
 // marked before.
 func (m *Model) primary(r rows.Row, w int) Span {
 	p, _ := r.Labels()
+	if r.Suffix != "" {
+		p += " " + r.Suffix
+	}
 	sp := Span{Text: fit(p, w)}
 	if r.Current {
 		sp.Bold, sp.Fg = true, palette.CurrentWorktreeFg

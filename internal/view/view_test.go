@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,14 +205,11 @@ func TestHandle(t *testing.T) {
 	if len(m.Visible()) != n+2 {
 		t.Errorf("f showed %d rows, want %d", len(m.Visible()), n+2)
 	}
-	// The settled row is in its own group: 1 there is the settled row.
+	// The digits count the numbered rows whatever the fold: 1 is the
+	// first tile from anywhere.
 	m.Handle(Key{Rune: 'G'})
-	m.Handle(Key{Rune: 'k'})
-	if a := m.Handle(Key{Rune: '1'}); a.Kind != ActionJump || !m.Selection().Settled {
-		t.Errorf("1 in the settled group = %+v on %q", a, m.Selection().Name)
-	}
-	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionNone {
-		t.Errorf("2 past the end of the group = %+v", a)
+	if a := m.Handle(Key{Rune: '1'}); a.Kind != ActionJump || m.Selection().Name != "laatmux/fix-ls" {
+		t.Errorf("1 = %+v on %q", a, m.Selection().Name)
 	}
 	m.Handle(Key{Rune: 'f'})
 	m.Handle(Key{Rune: 'g'})
@@ -1346,4 +1344,629 @@ func TestRenderPR(t *testing.T) {
 	golden(t, "pr-compact", Debug(m.Render()))
 	m.Icons = Icons{Set: IconsASCII}
 	golden(t, "pr-ascii", Debug(m.Render()))
+}
+
+// treeInput is the rows package's tree fixture: two repositories on two
+// hosts, a worktree with two agents, a shell and a run, one with no
+// agent, one a task stands for, an orphaned session, and other sessions.
+func treeInput(now time.Time) rows.Input {
+	src := "git@github.com:laat/laatmux.git"
+	agent := func(id, env, session, name string, act protocol.Activity, start int64, wt, title string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: env, Session: session, Agent: name, Activity: act, ActivityAt: now.Add(-time.Minute),
+			Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 1, StartUnix: start}, WorktreeID: wt, Title: title}
+	}
+	return rows.Input{
+		Hosts: []rows.Host{
+			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+		},
+		Agents: []protocol.Agent{
+			agent("venv/laatmux/%2", "venv", "laatmux/agents-config", "codex", protocol.Idle, 20, "venv/worktree//r/agents-config", "Reading the config"),
+			agent("venv/laatmux/%1", "venv", "laatmux/agents-config", "claude", protocol.Working, 10, "venv/worktree//r/agents-config", "✳ Adding per-agent config to the loader"),
+			agent("menv/laatmux/%3", "menv", "proj/batch", "claude", protocol.Blocked, 30, "menv/worktree//w/batch", "Refactoring queue handling now"),
+			agent("venv/laatmux/%8", "venv", "laatmux/auto-layout", "claude", protocol.Idle, 35, "venv/worktree//r/auto-layout", "done"),
+			{ID: "venv/default/%5", EnvironmentID: "venv", Server: "default", Session: "scratch", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//r/agents-config", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "agents-config", Root: "/r/agents-config", Session: "laatmux/agents-config",
+				Git: &protocol.GitStatus{Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true}},
+			{ID: "venv/worktree//r/auto-layout", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "auto-layout", Root: "/r/auto-layout", Session: "laatmux/auto-layout",
+				Git: &protocol.GitStatus{Committed: [2]int{318, 87}}},
+			{ID: "menv/worktree//w/fix-sidebar", EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "fix-sidebar", Root: "/w/fix-sidebar", Git: &protocol.GitStatus{Uncommitted: [2]int{4, 1}, Dirty: true}},
+			{ID: "menv/worktree//w/batch", EnvironmentID: "menv", Repo: "anki-llm", Source: "https://github.com/laat/anki-llm", Branch: "batch-processing", Root: "/w/batch", Session: "proj/batch"},
+		},
+		Panes: []protocol.Pane{{ID: "venv/pane/laatmux/%7", EnvironmentID: "venv", Session: "laatmux/agents-config", Window: 1, PaneID: "%7", Command: "zsh", WorktreeID: "venv/worktree//r/agents-config"}},
+		Runs:  []protocol.Run{{ID: "venv/run/r1", EnvironmentID: "venv", Root: "/r/agents-config", WorktreeID: "venv/worktree//r/agents-config", Cmd: []string{"make", "test"}, StartedAt: now.Add(-42 * time.Second)}},
+		Locals: []workspace.Local{
+			{Name: "vm/laatmux/agents-config", Key: "venv//r/agents-config", Host: "vm"},
+			{Name: "mac/anki-llm/batch-processing", Key: "menv//w/batch", Host: "mac"},
+			{Name: "mac/laatmux/gone", Key: "menv//w/gone", Host: "mac", Source: src},
+		},
+		Branches: map[protocol.BranchKey]protocol.BranchStatus{
+			{Source: config.SourceKey(src), Branch: "agents-config"}: {PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}},
+			{Source: config.SourceKey(src), Branch: "auto-layout"}:   {PR: &protocol.PullRequest{Number: 49, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5}},
+		},
+		Attention: map[string]protocol.Attention{"venv/laatmux/%8": {AgentID: "venv/laatmux/%8", FinishedAt: now.Add(-time.Minute)}},
+		Current:   "vm/laatmux/agents-config",
+		Now:       now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
+	}
+}
+
+// The tree view: repositories, worktree lines with the host, the git
+// stats and the PR, their agents, panes and runs; a folded worktree
+// shows its most pressing agent's icon; the orphaned session under its
+// repository; other sessions last; the tab line on top.
+func TestRenderTree(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 20, Follow: true}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	golden(t, "tree", Debug(m.Render()))
+	// auto-layout, whose agent is done, starts open; fix-sidebar has no
+	// children; folding agents-config shows the working spinner at the
+	// right.
+	m.Handle(Key{Rune: 'h'})
+	golden(t, "tree-folded", Debug(m.Render()))
+	m.Width = 30
+	golden(t, "tree-narrow", Debug(m.Render()))
+	m.Width = 60
+	m.Handle(Key{Kind: KeyTab})
+	golden(t, "tree-agents", Debug(m.Render()))
+}
+
+// Switching: the selection follows across Tab, from an agent to its
+// node and back, from a worktree line or a pane to the worktree's first
+// agent, from a repository line to its first worktree's, from a task to
+// itself; a target in a folded worktree opens it; a worktree with no
+// agent leaves the selection on no row.
+func TestSwitch(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Taken: true, SubmittedAt: now}}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	sel := func() string {
+		r := m.Selection()
+		if r == nil {
+			return ""
+		}
+		return r.ID()
+	}
+	m.Select("venv/laatmux/%2") // codex under agents-config
+	m.Handle(Key{Kind: KeyTab})
+	if m.View != ViewAgents || sel() != "venv/laatmux/%2" {
+		t.Errorf("agent to its tile: view %s, selection %q", m.View, sel())
+	}
+	m.Handle(Key{Kind: KeyTab})
+	if m.View != ViewTree || sel() != "venv/laatmux/%2" {
+		t.Errorf("tile to its node: view %s, selection %q", m.View, sel())
+	}
+	// The worktree line, then a pane under it: the first agent.
+	for _, id := range []string{"venv/worktree//r/agents-config", "venv/pane/laatmux/%7"} {
+		m.Select(id)
+		m.Handle(Key{Kind: KeyTab})
+		if sel() != "venv/laatmux/%1" {
+			t.Errorf("from %s: %q", id, sel())
+		}
+		m.Handle(Key{Kind: KeyTab})
+	}
+	// A repository line: its first worktree's first agent.
+	m.Select(rows.RepoNode("git@github.com:laat/laatmux.git"))
+	m.Handle(Key{Kind: KeyTab})
+	if sel() != "venv/laatmux/%1" {
+		t.Errorf("from the repository: %q", sel())
+	}
+	m.Handle(Key{Kind: KeyTab})
+	// A task: itself.
+	m.Select("add-1")
+	m.Handle(Key{Kind: KeyTab})
+	if sel() != "add-1" {
+		t.Errorf("from a task: %q", sel())
+	}
+	m.Handle(Key{Kind: KeyTab})
+	// A worktree with no agent: no row.
+	m.Select("menv/worktree//w/fix-sidebar")
+	m.Handle(Key{Kind: KeyTab})
+	if sel() != "" {
+		t.Errorf("from an empty worktree: %q", sel())
+	}
+	// Folded away, then reached from the tile: opened.
+	m.Handle(Key{Kind: KeyTab})
+	m.Select("venv/worktree//r/agents-config")
+	before := len(m.Visible())
+	m.Handle(Key{Rune: 'h'})
+	if len(m.Visible()) != before-4 {
+		t.Fatalf("not folded: %d rows, %d before", len(m.Visible()), before)
+	}
+	m.Handle(Key{Kind: KeyTab})
+	m.Select("venv/laatmux/%2")
+	m.Handle(Key{Kind: KeyTab})
+	if sel() != "venv/laatmux/%2" || m.closed(&m.Tree[m.indexOf("venv/worktree//r/agents-config")]) {
+		t.Errorf("a target in a folded worktree: %q, still folded", sel())
+	}
+}
+
+// Folds: a worktree with a working agent starts open and one whose
+// agent is idle folded, then stays as the user set it; h from a child
+// goes to its line; f opens every fold when any is closed, else closes
+// every one; Enter folds a repository line; the numbers count the
+// worktree lines.
+func TestFolds(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	in.Agents[3].Activity = protocol.Idle // auto-layout's agent: idle, and seen
+	in.Attention = nil
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	open := func(id string) bool { return !m.closed(&m.Tree[m.indexOf(id)]) }
+	if !open("venv/worktree//r/agents-config") || open("venv/worktree//r/auto-layout") {
+		t.Errorf("first folds: agents-config open %v, auto-layout open %v", open("venv/worktree//r/agents-config"), open("venv/worktree//r/auto-layout"))
+	}
+	// A working agent appears in auto-layout: the fold stays.
+	in.Agents[3].Activity = protocol.Working
+	m.SetTree(rows.Tree(in))
+	if open("venv/worktree//r/auto-layout") {
+		t.Error("a fold changed as the agent worked")
+	}
+	m.Select("venv/laatmux/%2")
+	m.Handle(Key{Rune: 'h'})
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" {
+		t.Errorf("h from a child: %+v", r)
+	}
+	m.Handle(Key{Rune: 'h'})
+	if open("venv/worktree//r/agents-config") {
+		t.Error("h on the line did not fold")
+	}
+	m.Handle(Key{Rune: 'l'})
+	if !open("venv/worktree//r/agents-config") {
+		t.Error("l did not unfold")
+	}
+	m.Handle(Key{Rune: 'f'})
+	if !open("venv/worktree//r/auto-layout") {
+		t.Error("f with a fold closed did not open every one")
+	}
+	m.Handle(Key{Rune: 'f'})
+	if open("venv/worktree//r/agents-config") || open(rows.RepoNode("git@github.com:laat/laatmux.git")) {
+		t.Error("f with every fold open did not close every one")
+	}
+	m.Handle(Key{Rune: 'f'})
+	m.Select(rows.RepoNode("git@github.com:laat/laatmux.git"))
+	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone || open(rows.RepoNode("git@github.com:laat/laatmux.git")) {
+		t.Errorf("Enter on a repository line: %+v", a)
+	}
+	m.Handle(Key{Kind: KeyEnter})
+	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != "venv/worktree//r/agents-config" {
+		t.Errorf("2: %+v", a)
+	}
+}
+
+// Following in the tree: the viewer's worktree line, and in the agent
+// view the first tile among its agents.
+func TestFollowTree(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30, Follow: true}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" {
+		t.Errorf("tree follows %+v", r)
+	}
+	m.Handle(Key{Kind: KeyTab})
+	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%1" || !m.Follow {
+		t.Errorf("agent view follows %+v", r)
+	}
+}
+
+// Review round 1: a task's first fold is by its agent's status; a task
+// that handed over passes its fold to the node holding the children,
+// and in the agent view the selection to the worktree's first tile;
+// following survives a switch with the viewer's line folded away; f
+// keeps the selection on its row.
+func TestTreeEdges(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	src := "git@github.com:laat/laatmux.git"
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Error("a task with an idle agent started open")
+	}
+	m.Select("add-1")
+	m.Handle(Key{Rune: 'l'}) // the user's own fold: open
+	// The host lists the worktree; the task hands over.
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = nil
+	m.Handoffs = map[string]string{"add-1": "venv/worktree//r/new-one"}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	if m.closed(&m.Tree[m.indexOf("venv/worktree//r/new-one")]) {
+		t.Error("the worktree line did not take the task's fold")
+	}
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/new-one" {
+		t.Errorf("selection after the handoff: %+v", r)
+	}
+	// In the agent view the handoff lands on the worktree's first tile.
+	m.Handle(Key{Kind: KeyTab})
+	m.Handle(Key{Kind: KeyTab})
+	m.Select("add-1")
+	m.View = ViewAgents
+	m.anchor = "add-1"
+	m.SetRows(rows.Agents(in))
+	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
+		t.Errorf("handoff in the agent view: %+v", r)
+	}
+	// Following: every fold closed (all are open, so one f closes
+	// them), a switch away and back.
+	m.View, m.Follow = ViewTree, true
+	m.Selection()
+	m.Handle(Key{Rune: 'f'})
+	if len(m.Visible()) > 6 {
+		t.Fatalf("not folded: %d", len(m.Visible()))
+	}
+	m.Handle(Key{Kind: KeyTab})
+	m.Handle(Key{Kind: KeyTab})
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" || !m.Follow {
+		t.Errorf("following after a switch with folds closed: %+v", r)
+	}
+	// f keeps a user's selection on its row, or on the line over it.
+	m.Handle(Key{Rune: 'f'}) // every fold open again
+	if !m.Select("venv/laatmux/%2") {
+		t.Fatal("the child is not visible")
+	}
+	m.Handle(Key{Rune: 'f'}) // closes every fold: the child is hidden
+	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
+		t.Errorf("f with the selection on a child: %+v", r)
+	}
+	m.Handle(Key{Rune: 'f'})
+	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
+		t.Errorf("f opening every fold moved the selection: %+v", r)
+	}
+	// f under a filter goes by the folds shown: with a hidden line
+	// folded and the shown one open, the first f closes the shown.
+	m.Follow = false
+	shown, hidden := "venv/worktree//r/agents-config", "venv/worktree//r/auto-layout"
+	m.Select(hidden)
+	m.Handle(Key{Rune: 'h'})
+	m.Select(shown)
+	m.Handle(Key{Rune: 'l'})
+	if !m.closed(&m.Tree[m.indexOf(hidden)]) || m.closed(&m.Tree[m.indexOf(shown)]) {
+		t.Fatal("the folds before the filter")
+	}
+	m.Filter = "agents-config"
+	m.Render()
+	if vis := m.Visible(); len(vis) != 6 || vis[1].Row.ID() != shown {
+		t.Fatalf("the filtered tree: %d rows", len(vis))
+	}
+	m.Handle(Key{Rune: 'f'})
+	if !m.closed(&m.Tree[m.indexOf(shown)]) {
+		t.Error("f under a filter opened by a hidden fold")
+	}
+	m.Filter = ""
+	// A click on the tab shown does nothing; on the other, a switch.
+	m.Tabs = true
+	m.Render()
+	m.Handle(Key{Kind: KeyMouse, X: 12, Y: 1})
+	if m.View != ViewTree {
+		t.Error("a click on the shown tab switched")
+	}
+	m.Handle(Key{Kind: KeyMouse, X: 4, Y: 1})
+	if m.View != ViewAgents {
+		t.Error("a click on the other tab did not switch")
+	}
+	m.Handle(Key{Kind: KeyMouse, X: 9, Y: 1})
+	if m.View != ViewAgents {
+		t.Error("a click between the tabs switched")
+	}
+}
+
+// The pinned repository line takes a line of its own above the window,
+// so the last row is still shown when the list is scrolled to its end.
+func TestTreePinned(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 8}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	vis := m.Visible()
+	m.Handle(Key{Rune: 'G'})
+	out := m.Render()
+	last := vis[len(vis)-1].Row
+	if r := m.Selection(); r == nil || r.ID() != last.ID() {
+		t.Fatalf("G selected %+v", r)
+	}
+	text := Debug(out)
+	if !strings.Contains(text, last.Name) {
+		t.Errorf("the last row is not shown:\n%s", text)
+	}
+	if !strings.Contains(out[1].Spans[0].Text, "laatmux") || !out[1].Spans[0].Bold {
+		t.Errorf("no pinned repository line:\n%s", text)
+	}
+	if got := m.hitIDs[0]; got != rows.RepoNode("git@github.com:laat/laatmux.git") {
+		t.Errorf("the pinned line is %q in the hit map", got)
+	}
+	// Walking up to the top: the selection shown on every step, no row
+	// under the more line, never "0 more", and a repository line at the
+	// top of the window has no pin over it.
+	walk := func(m *Model, key Key) {
+		t.Helper()
+		for step := 0; ; step++ {
+			out := m.Render()
+			text := Debug(out)
+			// Stable: the render after a key is the one the next tick
+			// draws.
+			if again := Debug(m.Render()); again != text {
+				t.Errorf("step %d: the next render differs:\n%s\nthen:\n%s", step, text, again)
+			}
+			if m.Selection() == nil || !strings.Contains(text, "\nS") {
+				t.Errorf("step %d: the selection is not shown:\n%s", step, text)
+			}
+			if strings.Contains(text, "↓ 0 more") {
+				t.Errorf("step %d: 0 more:\n%s", step, text)
+			}
+			for i, l := range out {
+				if strings.HasPrefix(l.Spans[0].Text, "↓ ") && i < len(out)-2 {
+					t.Errorf("step %d: a line under the more line:\n%s", step, text)
+				}
+			}
+			if m.scroll > 0 && strings.Contains(out[1].Spans[0].Text, "laatmux") && out[1].Spans[0].Bold && out[2].Spans[0].Bold {
+				t.Errorf("step %d: a repository pinned over itself:\n%s", step, text)
+			}
+			if m.Selected == 0 && key.Kind == KeyUp || m.Selected == len(m.Visible())-1 && key.Kind == KeyDown {
+				break
+			}
+			m.Handle(key)
+		}
+	}
+	for _, h := range []int{7, 8, 9} {
+		m.Height = h
+		m.Handle(Key{Rune: 'G'})
+		walk(m, Key{Kind: KeyUp})
+		m.Handle(Key{Rune: 'g'})
+		walk(m, Key{Kind: KeyDown})
+	}
+	// Moving down to where the more line is needed pins the repository
+	// in the same render.
+	m.Height = 8
+	m.Handle(Key{Rune: 'g'})
+	m.Render()
+	for i := 0; i < 5; i++ {
+		m.Handle(Key{Kind: KeyDown})
+	}
+	if out := m.Render(); m.scroll == 0 || !out[1].Spans[0].Bold || m.hitIDs[0] != rows.RepoNode("git@github.com:laat/anki-llm") && m.hitIDs[0] != rows.RepoNode("git@github.com:laat/laatmux.git") {
+		t.Errorf("scroll %d without a pin:\n%s", m.scroll, Debug(out))
+	}
+	// Rows in other sessions have no repository pinned over them.
+	for i := 2; i <= 6; i++ {
+		in.Agents = append(in.Agents, protocol.Agent{ID: "venv/default/%" + string(rune('0'+i)), EnvironmentID: "venv", Server: "default", Session: "s" + string(rune('0'+i)), Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive})
+	}
+	m.Height = 8
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Handle(Key{Rune: 'G'})
+	text = Debug(m.Render())
+	if strings.Contains(text, "laatmux") {
+		t.Errorf("a repository pinned over other sessions:\n%s", text)
+	}
+	walk(m, Key{Kind: KeyUp})
+}
+
+// Two repositories with an empty worktree each and one observed agent
+// in other sessions, in a five-line body: the pin and the more line
+// settle on a layout that shows the selection at the end, blank lines
+// left over or not.
+func TestTreePinnedSmall(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := rows.Input{
+		Hosts:  []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "venv/default/%5", EnvironmentID: "venv", Server: "default", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive}},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "alpha", Source: "git@github.com:laat/alpha.git", Branch: "a", Root: "/r/a"},
+			{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "beta", Source: "git@github.com:laat/beta.git", Branch: "b", Root: "/r/b"},
+		},
+		Now: now,
+	}
+	for h := 6; h <= 9; h++ {
+		m := &Model{Now: now, View: ViewTree, Tabs: true, Width: 60, Height: h}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
+		m.Render()
+		m.Handle(Key{Rune: 'G'})
+		text := Debug(m.Render())
+		if !strings.Contains(text, "\nS") || strings.Contains(text, "↓ 0 more") {
+			t.Errorf("height %d: the selection is not shown:\n%s", h, text)
+		}
+		if again := Debug(m.Render()); again != text {
+			t.Errorf("height %d: the next render differs:\n%s\nthen:\n%s", h, text, again)
+		}
+		for m.Selected > 0 {
+			m.Handle(Key{Kind: KeyUp})
+			if text := Debug(m.Render()); !strings.Contains(text, "\nS") {
+				t.Errorf("height %d: the selection is not shown:\n%s", h, text)
+			}
+		}
+	}
+}
+
+// Three repositories, the last with an empty worktree, in a ten-line
+// body: G shows the selection, a blank line left over rather than a
+// pin and a more line fighting over the scroll.
+func TestTreePinnedEnd(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}, Now: now}
+	n := 0
+	for r, counts := range map[string][]int{"r0": {2, 3}, "r1": {3, 1}, "r2": {0}} {
+		for i, agents := range counts {
+			w := protocol.Worktree{ID: "venv/worktree//" + r + "/w" + string(rune('0'+i)), EnvironmentID: "venv", Repo: r, Source: "git@github.com:laat/" + r + ".git", Branch: "w" + string(rune('0'+i)), Root: "/" + r + "/w" + string(rune('0'+i)), Session: r + "/w" + string(rune('0'+i))}
+			in.Worktrees = append(in.Worktrees, w)
+			for k := 0; k < agents; k++ {
+				n++
+				in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%" + strconv.Itoa(n), EnvironmentID: "venv", Session: w.Session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: w.ID, Identity: &protocol.Identity{PID: n, StartUnix: int64(n)}})
+			}
+		}
+	}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 11}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	m.Handle(Key{Rune: 'G'})
+	out := m.Render()
+	text := Debug(out)
+	if !strings.Contains(text, "\nS") || strings.Contains(text, "↓") {
+		t.Errorf("G at the end:\n%s", text)
+	}
+	// The window starts on the second repository's line, which needs
+	// no pin.
+	if !out[0].Spans[0].Bold || m.hitIDs[0] != rows.RepoNode("git@github.com:laat/r1.git") || m.scroll != 8 {
+		t.Errorf("the top of the window at scroll %d:\n%s", m.scroll, text)
+	}
+	if again := Debug(m.Render()); again != text {
+		t.Errorf("the next render differs:\n%s\nthen:\n%s", text, again)
+	}
+}
+
+// A task handing over while another stands for its worktree: the
+// selection follows to the worktree's line in the tree and to its first
+// agent's tile in the agent view, not to the other task; the owner's
+// fold goes with it. An owner that fails after the worktree is made
+// passes its fold to the next task, with no handoff.
+func TestHandoffStanding(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/laatmux.git"
+	in := treeInput(now)
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	task := func(id string, at time.Time) protocol.Pending {
+		return protocol.Pending{ID: id, Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: at}
+	}
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	set := func(m *Model) {
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
+	}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	set(m)
+	m.Render()
+	if m.closed(&m.Tree[m.indexOf("add-2")]) != true {
+		t.Fatal("the owner with an idle agent started open")
+	}
+	m.Select("add-2")
+	m.Handle(Key{Rune: 'l'}) // opened by the user
+	// add-2 hands over; add-1 stands still.
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = in.Pendings[:1]
+	m.Handoffs = map[string]string{"add-2": "venv/worktree//r/new-one"}
+	set(m)
+	owner := m.successor("venv/worktree//r/new-one")
+	if owner != "add-1" {
+		t.Fatalf("the standing task does not own the children: %q", owner)
+	}
+	if r := m.Selection(); r == nil || r.ID() != "add-1" {
+		t.Errorf("selection after the handoff with a task standing: %+v", r)
+	}
+	if m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Error("the next owner did not take the fold")
+	}
+	// The same in the agent view: the first agent's tile, not add-1's.
+	a := &Model{Now: now, View: ViewAgents, Width: 60, Height: 30}
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	in.Worktrees = in.Worktrees[:len(in.Worktrees)-1]
+	in.Agents[len(in.Agents)-1].WorktreeID = ""
+	set(a)
+	a.Render()
+	a.Select("add-2")
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = in.Pendings[:1]
+	a.Handoffs = map[string]string{"add-2": "venv/worktree//r/new-one"}
+	set(a)
+	if r := a.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
+		t.Errorf("selection in the agent view: %+v", r)
+	}
+	// add-1 owns the children now, open by the carried fold; the user
+	// folds it, then it fails: the worktree line takes the children and
+	// the closed fold, with no handoff.
+	m.Handoffs = nil
+	m.Select("add-1")
+	m.Handle(Key{Rune: 'h'})
+	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Fatal("h did not fold the owner")
+	}
+	in.Pendings = append([]protocol.Pending(nil), in.Pendings...)
+	in.Pendings[0].Done, in.Pendings[0].OK, in.Pendings[0].Error = true, false, "failed at agent: boom"
+	set(m)
+	if owner := m.successor("venv/worktree//r/new-one"); owner != "venv/worktree//r/new-one" {
+		t.Fatalf("the worktree line does not own the children: %q", owner)
+	}
+	if !m.closed(&m.Tree[m.indexOf("venv/worktree//r/new-one")]) {
+		t.Error("the worktree line did not take the failed owner's fold")
+	}
+	if _, ok := m.folds["add-1"]; ok {
+		t.Error("the failed task's fold was not consumed")
+	}
+	// Two tasks at one root before the listing: the newest holds the
+	// add's agent; opened by the user, then failing, it passes the fold
+	// to the older, with no handoff and no worktree record.
+	in = treeInput(now)
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	m = &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	set(m)
+	m.Render()
+	if m.successor("venv/worktree//r/new-one") != "add-2" || m.Tree[m.indexOf("add-2")].Children != 1 {
+		t.Fatalf("the newest loose task does not hold the agent: %q", m.successor("venv/worktree//r/new-one"))
+	}
+	m.Select("add-2")
+	m.Handle(Key{Rune: 'l'})
+	// A fresh record: the tree's rows point into the input's.
+	in.Pendings = append([]protocol.Pending(nil), in.Pendings...)
+	in.Pendings[1].Done, in.Pendings[1].OK, in.Pendings[1].Error = true, false, "failed at agent: boom"
+	set(m)
+	if m.successor("venv/worktree//r/new-one") != "add-1" {
+		t.Fatalf("the older task does not take the agent: %q", m.successor("venv/worktree//r/new-one"))
+	}
+	if m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Errorf("the older task did not take the failed owner's open fold: folds %v toggled %v", m.folds, m.toggled)
+	}
+}
+
+// A switch to the agent view whose target is a stale tile opens the
+// stale fold and lands on it.
+func TestSwitchToStale(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	// auto-layout's agent, no longer done and two hours idle.
+	in.Attention = nil
+	for i := range in.Agents {
+		if in.Agents[i].ID == "venv/laatmux/%8" {
+			in.Agents[i].ActivityAt = now.Add(-2 * time.Hour)
+		}
+	}
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	if len(m.Rows.Stale) != 1 {
+		t.Fatalf("stale tiles: %d", len(m.Rows.Stale))
+	}
+	m.Handle(Key{Rune: 'f'}) // every fold open
+	if !m.Select("venv/laatmux/%8") {
+		t.Fatal("the stale agent is not visible in the tree")
+	}
+	m.Handle(Key{Kind: KeyTab})
+	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%8" || !m.ShowHidden {
+		t.Errorf("switch to a stale tile: %+v shown %v", r, m.ShowHidden)
+	}
 }

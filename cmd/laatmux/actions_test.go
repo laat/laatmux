@@ -137,14 +137,48 @@ func TestAddFlowDefaults(t *testing.T) {
 	}
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
-	selectRow(t, m, "proj/task") // a row with a session pre-fills nothing
+	selectRow(t, m, "proj/task") // a row with a session pre-fills its repository and host, not the branch
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
-	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "codex" || f.Branch() != "" {
+	if f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" || f.Branch() != "" {
 		t.Fatalf("preselected %q %q %q branch %q", f.Chips[0].Label(), f.Chips[1].Label(), f.Chips[2].Label(), f.Branch())
 	}
 	f.Handle(view.Key{Kind: view.KeyEsc})
 	d.act(m, m.Poll())
+
+	// A repository line preselects by its source, not the host's label
+	// for it: vm calls laatmux "proj", another repository's name here;
+	// one holding an orphaned session alone, whose source tag ends in
+	// another repository's name but is not configured here, preselects
+	// none, the first configured, not that one; one an older host
+	// names by a label alone goes by the label.
+	m.View = view.ViewTree
+	m.SetTree(rows.Tree(rows.Input{
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"},
+			{ID: "venv/worktree//w/old/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/old/y", Session: "proj/y"},
+		},
+		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
+	}))
+	m.Render()
+	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}, {"", "proj"}} {
+		id := rows.RepoNode(c.source)
+		if c.source == "" {
+			id = rows.LabelRepoNode("proj")
+		}
+		if !m.Select(id) {
+			t.Fatalf("no repository line for %q", c.source)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+		f = m.Overlay.(*view.Form)
+		if f.Chips[0].Label() != c.want {
+			t.Fatalf("the repository line for %s preselected %q", c.source, f.Chips[0].Label())
+		}
+		f.Handle(view.Key{Kind: view.KeyEsc})
+		d.act(m, m.Poll())
+	}
+	m.View = view.ViewAgents
 
 	// No last-used agent for the repository: the configured default is
 	// preselected; without one, the first agent.
@@ -234,6 +268,81 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	}
 	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
 		t.Error("plain attachment accepted")
+	}
+	// A row without a local session gets the one its own jump makes: a
+	// worktree with a home; one with the home lost, through its root
+	// agent, as a task line standing for it after pendingTarget; none
+	// for a worktree with neither, or whose agent is on a default
+	// server.
+	w := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	lost := w
+	lost.Session = ""
+	root := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/z-2", Managed: true, Cwd: "/w/proj/z"}
+	deflt := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes"}
+	task := rows.Row{Kind: rows.KindTask, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &root, Pending: &protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: "proj/z", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
+	target, err := pendingTarget(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		row     rows.Row
+		managed string
+	}{
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &w}, "proj/z"},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &root}, "proj/z-2"},
+		{target, "proj/z-2"},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost}, ""},
+		{rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &deflt}, ""},
+	} {
+		spec, err := localSpec(cfg, c.row)
+		switch {
+		case c.managed == "" && (err == nil || !strings.Contains(err.Error(), "not a workspace")):
+			t.Errorf("%+v: spec %+v, %v", c.row.Agent, spec, err)
+		case c.managed != "" && (err != nil || spec.Managed != c.managed || spec.Key != "venv//w/proj/z"):
+			t.Errorf("%+v: spec %+v, %v", c.row.Agent, spec, err)
+		}
+	}
+	// S on a second agent's node, a tile, a pane or a run goes by the
+	// line: the root agent's session, not the second agent's.
+	line := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/z", Worktree: &lost, Agent: &root, Children: 2}
+	second := protocol.Agent{ID: "venv/laatmux/%4", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/proj/z/sub", WorktreeID: lost.ID}
+	tm := &view.Model{Tree: []rows.Row{{Kind: rows.KindRepo, Node: "repo/x"}, line,
+		{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second},
+		{Kind: rows.KindPane, Depth: 2, Host: "vm", Node: "venv/pane/%8", Worktree: &lost, Pane: &protocol.Pane{PaneID: "%8", Session: "scratch"}}}}
+	for _, r := range []rows.Row{tm.Tree[2], tm.Tree[3], {Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/scratch", Attach: "vm/scratch"}}} {
+		row, err := shellRow(tm, r)
+		if err != nil || row.ID() != lost.ID {
+			t.Errorf("%v: shell row %+v, %v", r.Kind, row, err)
+			continue
+		}
+		if spec, err := localSpec(cfg, row); err != nil || spec.Managed != "proj/z-2" {
+			t.Errorf("%v: spec %+v, %v", r.Kind, spec, err)
+		}
+	}
+	// A tile with a workspace session of its own keeps it.
+	own := rows.Row{Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/proj/z", Key: "venv//w/proj/z"}}
+	if row, err := shellRow(tm, own); err != nil || row.ID() != second.ID {
+		t.Errorf("a tile with its own session: %+v, %v", row, err)
+	}
+	// The add's agent before the host lists the worktree, as a node
+	// under its task and as a tile: the task's session.
+	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/y", Managed: true, Cwd: "/w/proj/y"}
+	taskLine := rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Name: "proj/y", Agent: &add, Children: 1, Pending: &protocol.Pending{ID: "add-y", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
+	tm.Tree = append(tm.Tree, taskLine, rows.Row{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add})
+	for _, r := range []rows.Row{tm.Tree[len(tm.Tree)-1], {Kind: rows.KindTile, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add}} {
+		row, err := shellRow(tm, r)
+		if err != nil || row.Worktree == nil || row.Worktree.Session != "proj/y" {
+			t.Errorf("%v under a loose task: shell row %+v, %v", r.Kind, row, err)
+			continue
+		}
+		if spec, err := localSpec(cfg, row); err != nil || spec.Managed != "proj/y" || spec.Key != "venv//w/proj/y" {
+			t.Errorf("%v under a loose task: spec %+v, %v", r.Kind, spec, err)
+		}
+	}
+	// An observed session of the task's name is not the task's.
+	observed := protocol.Agent{ID: "venv/default/%10", EnvironmentID: "venv", Server: "default", Session: "proj/y"}
+	if row, err := shellRow(tm, rows.Row{Kind: rows.KindTile, Host: "vm", Node: observed.ID, Name: "proj/y", Agent: &observed}); err != nil || row.ID() != observed.ID {
+		t.Errorf("an observed agent named as the task: %+v, %v", row, err)
 	}
 }
 
@@ -334,6 +443,74 @@ func TestRmFor(t *testing.T) {
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "not a worktree") {
 		t.Errorf("agent row: confirm=%q message=%q", m.Confirm, m.Message)
+	}
+}
+
+// In the tree, x on a repository line, the stale fold, a pane or a run
+// says what x removes; from a worktree line or an agent under it the
+// question counts the agents the tree joins to the worktree, the jump
+// agent or not.
+func TestRmTreeRows(t *testing.T) {
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	src := "git@github.com:laat/proj.git"
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "codex", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "elsewhere", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/spike", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/task", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "task", Root: "/w/proj/task", Session: "proj/task"},
+			{ID: "venv/worktree//w/proj/spike", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "spike", Root: "/w/proj/spike", Session: "proj/spike"},
+		},
+		Panes: []protocol.Pane{{ID: "venv/pane/laatmux/%7", EnvironmentID: "venv", Session: "proj/task", PaneID: "%7", Command: "zsh", WorktreeID: "venv/worktree//w/proj/task"}},
+		Runs:  []protocol.Run{{ID: "venv/run/r1", EnvironmentID: "venv", Root: "/w/proj/task", WorktreeID: "venv/worktree//w/proj/task", Cmd: []string{"make"}}},
+	}
+	m := &view.Model{Width: 80, Height: 30, View: view.ViewTree}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	m.Handle(view.Key{Rune: 'f'}) // every fold open
+	x := func(id string) {
+		t.Helper()
+		m.Message, m.Confirm = "", ""
+		if !m.Select(id) {
+			t.Fatalf("%s is not visible", id)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	}
+	for _, id := range []string{rows.RepoNode(src), "venv/pane/laatmux/%7", "venv/run/r1"} {
+		x(id)
+		if m.Confirm != "" || !strings.Contains(m.Message, "x removes worktrees") {
+			t.Errorf("%s: confirm=%q message=%q", id, m.Confirm, m.Message)
+		}
+	}
+	// The worktree line, whose one child agent in another session is
+	// not its jump agent, and the agent's own row.
+	for _, id := range []string{"venv/worktree//w/proj/spike", "venv/laatmux/%3"} {
+		x(id)
+		if m.Confirm != "remove proj/spike on vm (/w/proj/spike) with its agent? y/n" {
+			t.Errorf("%s: confirm=%q message=%q", id, m.Confirm, m.Message)
+		}
+		m.Handle(view.Key{Rune: 'n'})
+	}
+	x("venv/laatmux/%2")
+	if m.Confirm != "remove proj/task on vm (/w/proj/task) with its 2 agents? y/n" {
+		t.Errorf("two agents: confirm=%q message=%q", m.Confirm, m.Message)
+	}
+	m.Handle(view.Key{Rune: 'n'})
+	// The agent view's stale fold.
+	m.View = view.ViewAgents
+	in.Agents[2].ActivityAt = time.Time{}
+	in.Now, in.StaleAfter, in.CollapseStale = time.Now(), time.Hour, true
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	x(rows.NodeStale)
+	if m.Confirm != "" || !strings.Contains(m.Message, "x removes worktrees") {
+		t.Errorf("the stale fold: confirm=%q message=%q", m.Confirm, m.Message)
 	}
 }
 
@@ -1021,6 +1198,17 @@ func TestClickJumpRefocuses(t *testing.T) {
 		t.Fatal("a failed jump on the selected row left the selection following")
 	}
 	jumpErr = nil
+	// A run's jump is its worktree line's: through the line's root
+	// agent when the home is lost, as the line itself jumps.
+	lost := protocol.Worktree{ID: "venv/worktree//w/lost", EnvironmentID: "venv", Repo: "proj", Branch: "lost", Root: "/w/lost"}
+	root := protocol.Agent{ID: "venv/laatmux/%7", EnvironmentID: "venv", Session: "proj/lost-2", Managed: true, Cwd: "/w/lost", PaneID: "%7"}
+	m.Tree = append(m.Tree, rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/lost", Worktree: &lost, Agent: &root, Children: 1},
+		rows.Row{Kind: rows.KindRun, Depth: 2, Host: "vm", Node: "venv/run/r9", Name: "make", Worktree: &lost, Run: &protocol.Run{ID: "venv/run/r9"}})
+	jumped = nil
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: &m.Tree[len(m.Tree)-1]})
+	if len(jumped) != 1 || jumped[0] != lost.ID {
+		t.Fatalf("a run's jump: %v", jumped)
+	}
 	// A click on a task still running jumps nowhere and keeps the focus.
 	running := rows.Row{Name: "proj/new", Pending: &protocol.Pending{ID: "add-1"}}
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: &running, Mouse: true})

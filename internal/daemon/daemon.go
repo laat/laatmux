@@ -53,6 +53,9 @@ type Panes interface {
 	// SendKeys presses tmux key names in a pane, on the managed server:
 	// the answer to an agent's question at launch.
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
+	// SelectPane makes a pane and its window current on the managed
+	// server, for the select command.
+	SelectPane(ctx context.Context, paneID string) error
 }
 
 // Target is one tmux server the daemon watches.
@@ -417,7 +420,7 @@ func New(cfg Config) *Daemon {
 func (d *Daemon) capabilities() []string {
 	caps := []string{protocol.CapStatus, protocol.CapFollow}
 	if d.managed != nil {
-		caps = append(caps, protocol.CapNew)
+		caps = append(caps, protocol.CapNew, protocol.CapSelect)
 	}
 	if d.cfg.Store != nil {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus)
@@ -1116,6 +1119,25 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 			}()
 		case protocol.TypeCancel:
 			d.cancelCommand(m.ID)
+		case protocol.TypeSelect:
+			// The pane and its window made current on the managed
+			// server, where the attach shows them.
+			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+			switch {
+			case d.managed == nil:
+				res.Error = "this daemon does not watch the managed laatmux tmux server"
+			case m.PaneID == "":
+				res.Error = "pane id required"
+			default:
+				if err := d.managed.Tmux.SelectPane(ctx, m.PaneID); err != nil {
+					res.Error = err.Error()
+				} else {
+					res.OK = true
+				}
+			}
+			if err := pc.Write(res); err != nil {
+				return
+			}
 		case protocol.TypePoke:
 			// Not answered: the hook that sends it does not wait.
 			d.Poke()

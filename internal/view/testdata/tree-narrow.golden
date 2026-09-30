@@ -1,0 +1,20 @@
+...| ‹Agents›‹⟨border: │ ⟩›«⟨header:Tree⟩»
+...|«⟨header:anki-llm⟩»
+...|  ▾ batch-processing (mac)
+...|    ⟨accent:💬⟩ claude‹  Refactoring que›
+...|«⟨header:laatmux⟩»
+S..|  ▸ «⟨current_worktree_fg:agents-config⟩»‹ (vm)›      ⟨info:⠋⠙⟩
+...|  ▾ auto-layout‹ (vm)› «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
+...|    ⟨success:✅⟩ claude‹  done›
+.D.|    fix-sidebar (mac)  ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
+.D.|    mac/laatmux/gone (mac)
+...|‹⟨header:other sessions⟩›
+...|    scratch‹ (vm)›  ⟨accent:💬⟩ claude
+...|
+...|
+...|
+...|
+...|
+...|
+...|
+.D.|

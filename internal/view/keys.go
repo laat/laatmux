@@ -1019,12 +1019,33 @@ func (m *Model) Handle(k Key) Action {
 		m.Selection()
 	case KeyCtrlC:
 		return Action{Kind: ActionQuit}
+	case KeyTab:
+		m.Switch()
+	case KeyLeft:
+		m.foldKey(false)
+	case KeyRight:
+		m.foldKey(true)
 	case KeyMouse:
 		if k.Wheel != 0 {
 			m.move(k.Wheel)
 			return Action{}
 		}
+		if m.Tabs && k.Y == 1 {
+			// A click on the other tab switches; on the one shown, or
+			// beside them, nothing.
+			if v := tabAt(k.X); v != "" && v != m.View {
+				m.Switch()
+			}
+			return Action{}
+		}
 		if i := m.hitRow(k.Y, k.At); i >= 0 {
+			if r := m.Visible()[i].Row; r.Foldable() && (r.Kind == rows.KindRepo || r.Kind == rows.KindFold || k.X <= 2*r.Depth+2) {
+				// A click on a repository or fold line, or on a
+				// line's fold mark, folds.
+				m.moveTo(i)
+				m.toggleFold(r)
+				return Action{}
+			}
 			a := m.jumpTo(i)
 			a.Mouse = a.Kind == ActionJump
 			return a
@@ -1048,8 +1069,26 @@ func (m *Model) Handle(k Key) Action {
 		case '/':
 			m.Filtering = true
 		case 'f':
-			m.ShowHidden = !m.ShowHidden
+			// The selection stays on its row, or, folded away, on the
+			// line over it.
+			id := ""
+			if r := m.Selection(); r != nil && !m.Follow {
+				id = r.ID()
+			}
+			m.foldAll()
+			if id != "" && !m.Select(id) {
+				m.selectAncestor(id)
+			}
 			m.Selection()
+		case 'h':
+			m.foldKey(false)
+		case 'l':
+			m.foldKey(true)
+		case 's':
+			if r := m.Selection(); r != nil {
+				m.toggleFold(r)
+				m.Selection()
+			}
 		case 'q':
 			return Action{Kind: ActionQuit}
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
@@ -1096,10 +1135,38 @@ func (m *Model) moveTo(i int) {
 }
 
 func (m *Model) jump() Action {
-	if m.Selection() == nil {
+	r := m.Selection()
+	if r == nil {
+		return Action{}
+	}
+	if r.Kind == rows.KindRepo || r.Kind == rows.KindFold {
+		// Enter folds a repository line and the stale fold; a worktree
+		// line jumps, its fold being h, l and s.
+		m.toggleFold(r)
+		m.Selection()
 		return Action{}
 	}
 	return Action{Kind: ActionJump}
+}
+
+// foldKey is h and l, Left and Right: h folds the selected line, or
+// from a child goes to its worktree or task line; l unfolds.
+func (m *Model) foldKey(open bool) {
+	r := m.Selection()
+	if r == nil {
+		return
+	}
+	switch {
+	case open && r.Foldable() && m.closed(r):
+		m.toggleFold(r)
+	case !open && r.Foldable() && !m.closed(r):
+		m.toggleFold(r)
+	case !open:
+		if p := m.parentOf(); p >= 0 {
+			m.moveTo(p)
+		}
+	}
+	m.Selection()
 }
 
 // Select puts the selection on the visible row with the id, as a key
@@ -1137,20 +1204,12 @@ func (m *Model) jumpTo(i int) Action {
 	return Action{Kind: ActionJump, Row: vis[i].Row}
 }
 
-// nth is the index of the nth row of the group the selection is in.
+// nth is the index of the nth numbered row: the nth tile of the agent
+// view, the nth worktree or task line of the tree; folds, groups and
+// repository lines are skipped, and so are a worktree's children.
 func (m *Model) nth(n int) (int, bool) {
-	vis := m.Visible()
-	m.clamp(len(vis))
-	if len(vis) == 0 {
-		return 0, false
-	}
-	// With nothing selected the digits count the main group.
-	g := GroupMain
-	if m.Selected >= 0 {
-		g = vis[m.Selected].Group
-	}
-	for _, it := range vis {
-		if it.Group != g {
+	for _, it := range m.Visible() {
+		if !it.Row.Numbered() {
 			continue
 		}
 		n--

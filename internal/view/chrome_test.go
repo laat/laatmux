@@ -132,9 +132,14 @@ func TestLoadingAndEmpty(t *testing.T) {
 		t.Errorf("loading: %q spinning %v", txt, m.Spinning())
 	}
 	m.Loading = false
-	if txt := Text(m.Render()); !strings.Contains(txt, "No worktrees or agents") || m.Spinning() {
+	if txt := Text(m.Render()); !strings.Contains(txt, "No agents running") || m.Spinning() {
 		t.Errorf("empty: %q", txt)
 	}
+	m.View = ViewTree
+	if txt := Text(m.Render()); !strings.Contains(txt, "No worktrees") {
+		t.Errorf("empty tree: %q", txt)
+	}
+	m.View = ViewAgents
 	m = model(now)
 	m.Width, m.Height, m.Filter = 40, 6, "nothing-like-it"
 	if txt := Text(m.Render()); !strings.Contains(txt, "Nothing matches /nothing-like-it") {
@@ -154,8 +159,8 @@ func TestMoreBelow(t *testing.T) {
 	last := Text(body[len(body)-1:])
 	total := len(m.Visible())
 	// Eight lines show the first two tiles whole; the rest are below,
-	// with the two the collapsed groups hide.
-	if want := fmt.Sprintf("↓ %d more\n", total-2+2); last != want {
+	// the stale fold one row among them.
+	if want := fmt.Sprintf("↓ %d more\n", total-2); last != want {
 		t.Errorf("last body line %q, want %q", last, want)
 	}
 	if m.hitIDs[len(body)-1] != "" {
@@ -358,8 +363,8 @@ func TestChromeEdges(t *testing.T) {
 	two := rows.Rows{Main: m.Rows.Main[:2], Settled: m.Rows.Settled}
 	m = &Model{Rows: two, Now: now, Layout: Tiles, Width: 35, Height: 10, Selected: 1}
 	txt := Text(m.Render())
-	if strings.Contains(txt, "more") || !strings.Contains(txt, "settled") {
-		t.Errorf("group header under the tiles:\n%s", txt)
+	if strings.Contains(txt, "more") || !strings.Contains(txt, "stale") {
+		t.Errorf("the stale fold under the tiles:\n%s", txt)
 	}
 	if width("✅") != 2 || width("⭐") != 2 || width("a") != 1 {
 		t.Errorf("widths: ✅ %d ⭐ %d", width("✅"), width("⭐"))
