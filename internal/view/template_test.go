@@ -577,7 +577,7 @@ func TestColumns(t *testing.T) {
 	for _, c := range []struct {
 		w    int
 		want string
-	}{{40, "→feature ! ↑2 ↓1"}, {15, "! ↑2 ↓1"}, {6, "! ↑2"}, {3, "!"}, {1, "!"}} {
+	}{{40, "→feature ! ↑2 ↓1"}, {15, "→featu… ! ↑2 ↓1"}, {12, "→fe… ! ↑2 ↓1"}, {11, "! ↑2 ↓1"}, {6, "! ↑2"}, {3, "!"}, {1, "!"}} {
 		if got := plain("{fill}{git_sync}", c.w); strings.TrimSpace(got) != c.want {
 			t.Errorf("git_sync at %d: %q, want %q", c.w, got, c.want)
 		}
@@ -599,12 +599,35 @@ func TestColumns(t *testing.T) {
 	if got := plain("{git_sync}", 40); got != "" {
 		t.Errorf("git_sync on master: %q", got)
 	}
-	// Stale: dim and plain.
+	// Stale: dim and plain, the conflict mark too.
 	r.Worktree.Git.Base, r.Worktree.Git.Stale = "topic", true
 	if got := render("{git_sync}", 40); got != "...|‹→topic›\n" {
 		t.Errorf("git_sync stale: %q", got)
 	}
-	r.Worktree.Git.Stale = false
+	yes := true
+	r.Worktree.Git.Conflict = &yes
+	if got := render("{git_sync}", 40); got != "...|‹→topic›‹ ›‹!›\n" {
+		t.Errorf("git_sync stale with a conflict: %q", got)
+	}
+	r.Worktree.Git.Conflict, r.Worktree.Git.Stale = nil, false
+	// A long base is cut to twelve cells; the row's own branch as the
+	// base is left out; the smallest form stays until the field goes.
+	r.Worktree.Git.Base, r.Worktree.Git.Ahead = "origin/feature/JIRA-1234-add-the-thing", 2
+	if got := plain("{git_sync}", 40); got != "→feature/JIR… ↑2" {
+		t.Errorf("git_sync with a long base: %q", got)
+	}
+	r.Worktree.Git.Base = "origin/fix-ls"
+	if got := plain("{git_sync}", 40); got != "↑2" {
+		t.Errorf("git_sync with the branch as its own base: %q", got)
+	}
+	r.Worktree.Git.Base, r.Worktree.Git.Behind = "origin/main", 1
+	if got := plain("{fill}{git_sync} {elapsed}", 5); got != " 2:00" && got != "↑2 ↓1" {
+		t.Errorf("git_sync's smallest form beside a field: %q", got)
+	}
+	if got := plain("{fill}{git_sync} {elapsed}", 5); got != "↑2 ↓1" {
+		t.Errorf("git_sync never to nothing: %q", got)
+	}
+	r.Worktree.Git.Ahead = 0
 	// The PR's state per set, and dim when stale or a draft.
 	for _, c := range []struct {
 		set, state string
@@ -613,8 +636,13 @@ func TestColumns(t *testing.T) {
 	}{
 		{IconsEmoji, "open", false, "...|«⟨success:●⟩»\n"}, {IconsEmoji, "open", true, "...|‹◌›\n"},
 		{IconsEmoji, "merged", false, "...|⟨accent:◆⟩\n"}, {IconsEmoji, "closed", false, "...|‹⟨danger:⊘⟩›\n"},
-		{IconsASCII, "open", false, "...|«⟨success:o⟩»\n"}, {IconsASCII, "merged", false, "...|⟨accent:m⟩\n"},
-		{IconsNerdFont, "closed", false, "...|‹⟨danger:\uf4dc⟩›\n"}, {"", "open", true, "...|‹◌›\n"},
+		{IconsASCII, "open", false, "...|«⟨success:o⟩»\n"}, {IconsASCII, "open", true, "...|‹d›\n"},
+		{IconsASCII, "merged", false, "...|⟨accent:m⟩\n"}, {IconsASCII, "closed", false, "...|‹⟨danger:c⟩›\n"},
+		{IconsNerdFont, "open", false, "...|«⟨success:\uf407⟩»\n"}, {IconsNerdFont, "open", true, "...|‹\uf4dd›\n"},
+		{IconsNerdFont, "merged", false, "...|⟨accent:\uf419⟩\n"}, {IconsNerdFont, "closed", false, "...|‹⟨danger:\uf4dc⟩›\n"},
+		{"", "open", true, "...|‹◌›\n"},
+		// A draft closed as one is closed.
+		{IconsEmoji, "closed", true, "...|‹⟨danger:⊘⟩›\n"}, {IconsEmoji, "merged", true, "...|⟨accent:◆⟩\n"},
 	} {
 		m.Icons.Set = c.set
 		r.Branch.PR.State, r.Branch.PR.Draft = c.state, c.draft
@@ -623,6 +651,10 @@ func TestColumns(t *testing.T) {
 		}
 	}
 	m.Icons.Set = ""
+	r.Branch.PR.State, r.Branch.PR.Draft = "closed", true
+	if got := render("{pr_number}", 40); got != "...|‹⟨danger:#52⟩›\n" {
+		t.Errorf("the number of a closed draft: %q", got)
+	}
 	r.Branch.PR.State, r.Branch.PR.Draft = "open", false
 	r.Branch.Stale = true
 	if got := render("{pr_state}", 40); got != "...|‹●›\n" {
@@ -648,13 +680,27 @@ func TestColumns(t *testing.T) {
 	if len(sp) != 1 || sp[0].Text != "4:12" || sp[0].Fg != palette.Accent || !sp[0].tick {
 		t.Errorf("pr_detail pending: %+v", sp)
 	}
+	// The time is shown whole or dropped, not cut.
+	if got := plain("{host}{fill}{pr_detail}", 6); got != "vm" {
+		t.Errorf("pr_detail's time in six cells: %q", got)
+	}
+	if got := plain("{host}{fill}{pr_detail}", 7); got != "vm 4:12" {
+		t.Errorf("pr_detail's time in seven cells: %q", got)
+	}
 	r.Branch.Checks.PendingSince = now.Add(-3 * time.Hour)
 	sp = m.line(mustParse(t, "{pr_detail}"), r, 40)
 	if len(sp) != 1 || sp[0].Text != "3h" || sp[0].tick {
 		t.Errorf("pr_detail pending for hours: %+v", sp)
 	}
-	r.Branch.Stale = true
-	if got := render("{pr_detail}", 40); got != "...|‹3h›\n" {
+	// Stale: the time as of the last answer, standing still.
+	r.Branch.Stale, r.Branch.FetchedAt = true, now.Add(-10*time.Minute)
+	r.Branch.Checks.PendingSince = now.Add(-14*time.Minute - 12*time.Second)
+	sp = m.line(mustParse(t, "{pr_detail}"), r, 40)
+	if len(sp) != 1 || sp[0].Text != "4:12" || sp[0].tick || !sp[0].Dim || sp[0].Fg != "" {
+		t.Errorf("pr_detail stale under an hour: %+v", sp)
+	}
+	r.Branch.Checks.PendingSince = now.Add(-3 * time.Hour)
+	if got := render("{pr_detail}", 40); got != "...|‹2h›\n" {
 		t.Errorf("pr_detail stale: %q", got)
 	}
 	r.Branch.Stale = false
@@ -701,11 +747,31 @@ func TestColumns(t *testing.T) {
 	m.SetTemplates(dash)
 	m.Layout, m.Titles, m.Width = Compact, true, 100
 	r.Worktree.Git.Base, r.Worktree.Git.Ahead, r.Worktree.Git.Behind = "origin/feature", 2, 1
-	yes := true
 	r.Worktree.Git.Conflict = &yes
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
 	lines := m.compact(r)
-	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                →feature ! ↑2 ↓1  R +46 -11 ✎ +28 -3 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n" {
+	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n" {
 		t.Errorf("the dashboard's compact lines:\n%s", got)
 	}
+	// The worktree line with a long base, at widths going down: the
+	// base is at most twelve cells from the start, so the counts and
+	// the name it outlives, by the engine's order, cost little; then
+	// the base is cut further and the stats shrink. A narrower line
+	// never shows more.
+	r.Worktree.Git.Base, r.Worktree.Git.Rebasing = "origin/feature/JIRA-1234-add-the-thing", false
+	r.Kind, r.Depth = rows.KindWorktree, 1
+	for _, c := range []struct {
+		w    int
+		want string
+	}{
+		{110, "  ▸ fix-ls (vm)                       +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{90, "  ▸ fix-ls (vm)   +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{80, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × test (macos-la…"},
+		{70, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
+	} {
+		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w)}}), "\n"); got != c.want {
+			t.Errorf("the dashboard's worktree line at %d:\n%q\n%q", c.w, got, c.want)
+		}
+	}
+	r.Kind, r.Depth = rows.KindTile, 0
 }

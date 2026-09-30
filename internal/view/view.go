@@ -763,17 +763,22 @@ func gitSpans(r rows.Row, w int) []Span {
 }
 
 // gitSync is how the branch stands against its base, in at most w
-// cells: →base when the base is not main or master, its origin/ taken
-// off; the conflict mark ! in red; ↑A and ↓B. When the line is too
-// narrow the base goes first, then ↓B, then ↑A. A refresh that timed
-// out leaves them dim; nil when there is nothing to say.
+// cells: →base when the base is not main, master or the branch itself,
+// its origin/ taken off and at most gitBaseWidth cells, cut with …; the
+// conflict mark ! in red; ↑A and ↓B. When the line is too narrow the
+// base is cut further, to four cells at the least, then goes, then ↓B,
+// then ↑A. A refresh that timed out leaves them dim; nil when there is
+// nothing to say.
 func gitSync(r rows.Row, w int) []Span {
 	if r.Worktree == nil || r.Worktree.Git == nil || w <= 0 {
 		return nil
 	}
 	g := r.Worktree.Git
 	var base, conflict, ahead, behind []Span
-	if short := strings.TrimPrefix(g.Base, "origin/"); short != "" && short != "main" && short != "master" {
+	if short := strings.TrimPrefix(g.Base, "origin/"); short != "" && short != "main" && short != "master" && short != r.Worktree.Branch {
+		if width(short) > gitBaseWidth {
+			short = fit(short, gitBaseWidth-1) + "…"
+		}
 		base = []Span{{Text: "→" + short}}
 	}
 	if g.Conflict != nil && *g.Conflict {
@@ -798,7 +803,19 @@ func gitSync(r rows.Row, w int) []Span {
 		}
 		return out
 	}
-	for _, try := range [][]Span{join(base, conflict, ahead, behind), join(conflict, ahead, behind), join(conflict, ahead), conflict} {
+	rest := join(conflict, ahead, behind)
+	if base != nil && spansWidth(join(base, rest)) > w {
+		// The base cut to the room left beside the rest, → and two
+		// letters at the least.
+		room := w - spansWidth(rest)
+		if len(rest) > 0 {
+			room--
+		}
+		if room >= 4 {
+			base = cutSpans(base, room)
+		}
+	}
+	for _, try := range [][]Span{join(base, rest), rest, join(conflict, ahead), conflict} {
 		if len(try) > 0 && spansWidth(try) <= w {
 			if g.Stale {
 				for i := range try {
@@ -810,6 +827,11 @@ func gitSync(r rows.Row, w int) []Span {
 	}
 	return nil
 }
+
+// gitBaseWidth is the most cells →base takes before it is cut: a base
+// is a branch name, which can be long, and says less than the stats
+// and the checks beside it.
+const gitBaseWidth = 12
 
 // gitRebase is the rebase mark R, nil when not rebasing.
 func gitRebase(g *protocol.GitStatus) []Span {

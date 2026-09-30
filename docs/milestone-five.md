@@ -976,9 +976,10 @@ the defaults.
   - git: `{git_stats}`, `{git_committed}`, `{git_uncommitted}`,
     `{git_ahead}` (`↑N`), `{git_behind}` (`↓N`), `{git_dirty}`,
     `{git_conflict}`, `{git_rebase}`, `{git_branch}` (the base),
-    `{git_sync}` (step 9: `→base` off `main` and `master`, `origin/`
-    taken off, the conflict mark, `↑A ↓B`; shrinks base first, then
-    `↓B`, then `↑A`, never to nothing);
+    `{git_sync}` (step 9: `→base` off `main`, `master` and the branch
+    itself, `origin/` taken off, at most twelve cells; the conflict
+    mark; `↑A ↓B`; shrinks the base first, cut then gone, then `↓B`,
+    then `↑A`, never to nothing);
   - PR: `{pr_number}`, `{pr_checks}`, `{pr_state}` (step 9: the state
     icon), `{pr_detail}` (step 9: the pending time or the failing
     check's name);
@@ -993,8 +994,9 @@ the defaults.
 - **Overflow:** the flexible tokens, the labels and the title on
   either side, are cut with `…` down to a floor of a third of the
   width, at most twelve cells, the rightmost first (so the compact
-  line's secondary label goes before its primary); `{git_stats}` and
-  `{pr_checks}` shrink themselves, never to nothing (the stats keep
+  line's secondary label goes before its primary); `{git_stats}`,
+  `{git_sync}` and `{pr_checks}` shrink themselves, the rightmost
+  first, never to nothing (the stats keep
   their smallest form, the rebase mark or one part, until the field is
   dropped); then fields on the right are dropped, the widest first and
   a folded worktree line's `{worst_status}` last, so a blocked or done
@@ -1004,7 +1006,7 @@ the defaults.
   separator, the literal before it (else the one after) up to a
   bracket, which is a neighbour's, and a bracket pair around it alone,
   `({host})`, goes with it. What dropping leaves over goes
-  back to the cut labels, then to the shrunk stats and checks. A stale
+  back to the cut labels, then to the shrunk stats, sync and checks. A stale
   branch's `?` sits on `{pr_checks}` when they are drawn, else on
   `{pr_number}`, counted in the fitting: a number drawn on a stale row
   always has it; of a one-digit number and the marked check, equally
@@ -1043,17 +1045,24 @@ the two views included. On top of that:
 The columns are tokens, `{git_sync}`, `{pr_state}` and `{pr_detail}`,
 so a sidebar wide enough can have them too. What differs is the
 defaults: the dashboard's second tile line and its compact line put
-`{git_sync}` before `{git_stats}`, its third tile line reads
-`{pr_state} {pr_number} {pr_checks} {pr_detail}`, and its worktree
-line has both before `{worst_status}`; the sidebar's defaults stay as
-step 7 left them, since at 25 to 50 columns the engine would only
-drop the new fields again. A line the config sets applies to both
-hosts. `{git_sync}` shrinks before it is dropped, the base first, then
-`↓B`, then `↑A`, so the conflict mark is the last to go; `{pr_detail}`
-is a label, cut like the title. The pending time is the laptop's
+`{git_sync}` after `{git_stats}`, where the engine shrinks it first,
+its third tile line reads `{pr_state} {pr_number} {pr_checks}
+{pr_detail}`, and its worktree line has both before `{worst_status}`;
+the sidebar's defaults stay as step 7 left them, since at 25 to 50
+columns the engine would only drop the new fields again. A line the
+config sets applies to both hosts. A base is a branch name, which can
+be long and says less than the stats and checks beside it, so
+`→base` is at most twelve cells from the start and is left out when
+it names the row's own branch; `{git_sync}` shrinks before it is
+dropped, the base cut then gone, then `↓B`, then `↑A`, so the
+conflict mark is the last to go. `{pr_detail}`'s failing name is a
+label, cut like the title; its pending time is shown whole or
+dropped. A draft closed as a draft is closed, in `{pr_state}` and in
+`{pr_number}`'s colour. The pending time is the laptop's
 `pending_since` against the laptop's clock, so it never runs
 backwards across hosts; a stale answer leaves the columns dim and
-plain, and the `?` stays on the number and the checks.
+plain, the pending time then as of the last answer, standing still as
+the spinner does, and the `?` stays on the number and the checks.
 
 ## Protocol
 
@@ -1242,11 +1251,15 @@ view and folds step 6 keeps in memory.
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
 - **Columns:** `{git_sync}` with the base off main and on it, each
-  shrink step, nothing to say, stale; `{pr_state}` per set and state,
-  a draft, stale, no PR; `{pr_detail}` failing, cut, pending under
-  and over an hour, stale, since never, on success, on `main`; the
-  dashboard's defaults against the sidebar's, a configured line in
-  both, and the dashboard's compact lines rendered.
+  shrink step with the base cut, a long base, the branch as its own
+  base, nothing to say, the smallest form beside a field, stale with
+  a conflict; `{pr_state}` per set against every state, a draft open
+  and closed, stale, no PR; `{pr_detail}` failing, cut, pending under
+  and over an hour whole or dropped, stale under an hour as of the
+  answer, since never, on success, on `main`; the dashboard's
+  defaults against the sidebar's, a configured line in both, the
+  host's options picking the set, and the dashboard's compact and
+  worktree lines rendered at widths going down.
 - **Detection:** `claude-interrupted` in `TestRealFixtures`, added with
   this note.
 

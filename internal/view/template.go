@@ -19,7 +19,7 @@ import (
 // A line wider than the pane gives way in this order: the flexible
 // tokens, the labels and the pane title on either side, are cut with …
 // down to a floor of a third of the width, at most twelve cells, the
-// rightmost first; `{git_stats}` and `{pr_checks}` shrink themselves,
+// rightmost first; `{git_stats}`, `{git_sync}` and `{pr_checks}` shrink themselves,
 // never to nothing; fields on the right are dropped, the widest first
 // and a folded line's `{worst_status}` icon last; the flexible tokens
 // are cut further; then tokens on the left are dropped, the last
@@ -75,7 +75,7 @@ type tokenKind int
 const (
 	tokenPlain  tokenKind = iota
 	tokenFlex             // a label or the title: cut with …
-	tokenShrink           // the git stats or the checks: shrink themselves
+	tokenShrink           // the git stats, the sync or the checks: shrink themselves
 )
 
 // tokens is the table of token names.
@@ -252,9 +252,9 @@ func Compile(name, src, def string) Compiled {
 
 // The default templates: the tiles, the compact line, the top layout's
 // item, and the tree's lines. The dashboard's have the git and PR
-// columns the sidebar's leave out: `{git_sync}` before the stats, and
-// `{pr_state}` and `{pr_detail}` around the number and the checks; a
-// popup has the width, a sidebar seldom.
+// columns the sidebar's leave out: `{git_sync}` after the stats, where
+// it is the first to shrink, and `{pr_state}` and `{pr_detail}` around
+// the number and the checks; a popup has the width, a sidebar seldom.
 const (
 	DefaultTile1        = "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}"
 	DefaultTile2        = "{stripe}    {secondary} @{host}{fill}{git_stats}"
@@ -268,10 +268,10 @@ const (
 	DefaultAgent        = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
 	DefaultPane         = "{indent}$ {command}"
 	DefaultRun          = "{indent}▶ {command}{fill}{elapsed}"
-	DefaultDashTile2    = "{stripe}    {secondary} @{host}{fill}{git_sync}  {git_stats}"
+	DefaultDashTile2    = "{stripe}    {secondary} @{host}{fill}{git_stats}  {git_sync}"
 	DefaultDashTile3    = "{stripe}    {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
-	DefaultDashCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_sync}  {git_stats} {elapsed}"
-	DefaultDashWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_sync}  {git_stats}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
+	DefaultDashCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {elapsed}"
+	DefaultDashWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
 )
 
 // DefaultTiles are the tile's three lines; DefaultTops the strip's
@@ -1015,7 +1015,9 @@ func (m *Model) token(name string, r rows.Row) item {
 		it.spans = m.prState(r)
 		return it
 	case "pr_detail":
-		it.spans = m.prDetail(r)
+		if sp, kind := m.prDetail(r); sp.Text != "" {
+			it.spans, it.kind = []Span{sp}, kind
+		}
 		return it
 	case "idx":
 		if r.Numbered() && m.rowIdx > 0 {
@@ -1118,7 +1120,8 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	// plain, closed and draft faint.
 	sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
 	switch {
-	case b.PR.Draft:
+	case b.PR.Draft && b.PR.State == "open":
+		// A draft closed as one keeps its flag; closed is what counts.
 		sp.Dim = true
 	case b.PR.State == "open":
 		sp.Fg, sp.Bold = palette.Success, true
@@ -1153,7 +1156,7 @@ func (m *Model) prState(r rows.Row) []Span {
 	}
 	var sp Span
 	switch {
-	case b.PR.Draft:
+	case b.PR.Draft && b.PR.State == "open":
 		sp = Span{Text: set[prDraft], Dim: true}
 	case b.PR.State == "open":
 		sp = Span{Text: set[prOpen], Fg: palette.Success, Bold: true}
@@ -1179,34 +1182,39 @@ const (
 var prIcons = map[string][]string{
 	IconsEmoji:    {"●", "◌", "◆", "⊘"},
 	IconsNerdFont: {"\uf407", "\uf4dd", "\uf419", "\uf4dc"},
-	IconsASCII:    {"o", "d", "m", "x"},
+	IconsASCII:    {"o", "d", "m", "c"},
 }
 
 // prDetail is what the checks are doing: pending, how long since this
 // machine first saw the head's checks pending, in purple and ticking
 // under an hour; failing, the first failing check's name in red; else
-// nothing. Dim and plain when stale, and on main or master only the
-// failing name, as the checks.
-func (m *Model) prDetail(r rows.Row) []Span {
+// nothing. Dim and plain when stale, the time then as of the last
+// answer, standing still as the spinner does; on main or master only
+// the failing name, as the checks. The time is plain, shown whole or
+// dropped, the name a label, cut.
+func (m *Model) prDetail(r rows.Row) (sp Span, kind tokenKind) {
 	b := r.Branch
 	if b == nil || b.Checks == nil {
-		return nil
+		return Span{}, tokenFlex
 	}
 	ch := b.Checks
-	var sp Span
 	switch {
 	case ch.State == protocol.ChecksFailure && ch.Failing != "":
-		sp = Span{Text: ch.Failing, Fg: palette.Danger}
+		sp, kind = Span{Text: ch.Failing, Fg: palette.Danger}, tokenFlex
 	case ch.State == protocol.ChecksPending && !ch.PendingSince.IsZero() && !mainline(r):
-		d := m.Now.Sub(ch.PendingSince)
-		sp = Span{Text: elapsed(d), Fg: palette.Accent, tick: d < time.Hour && !b.Stale}
+		at := m.Now
+		if b.Stale {
+			at = b.FetchedAt
+		}
+		d := at.Sub(ch.PendingSince)
+		sp, kind = Span{Text: elapsed(d), Fg: palette.Accent, tick: d < time.Hour && !b.Stale}, tokenPlain
 	default:
-		return nil
+		return Span{}, tokenFlex
 	}
 	if b.Stale {
 		sp.Dim, sp.Fg = true, ""
 	}
-	return []Span{sp}
+	return sp, kind
 }
 
 // mainline is a worktree on main or master, whose PR is left out and

@@ -6,6 +6,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/palette"
+	"github.com/laat/laatmux/internal/view"
 )
 
 // The theme: NO_COLOR draws with the attributes alone and asks nothing;
@@ -103,5 +104,13 @@ func TestTemplatesPerHost(t *testing.T) {
 	side, dash = templates(cfg, false), templates(cfg, true)
 	if side.Tiles[2].Source() != "{pr_number}" || dash.Tiles[2].Source() != "{pr_number}" || dash.Tree.Worktree.Source() != "{repo}" {
 		t.Errorf("configured lines: sidebar %q, dashboard %q %q", side.Tiles[2].Source(), dash.Tiles[2].Source(), dash.Tree.Worktree.Source())
+	}
+	// The host's options pick the set.
+	cfg = config.Config{}
+	if got := templatesFor(cfg, viewOptions{actions: true}).Tree.Worktree.Source(); got != view.DefaultDashWorktree {
+		t.Errorf("the dashboard's worktree line: %q", got)
+	}
+	if got := templatesFor(cfg, viewOptions{listen: true}).Tree.Worktree.Source(); got != view.DefaultWorktree {
+		t.Errorf("a pane's worktree line: %q", got)
 	}
 }
