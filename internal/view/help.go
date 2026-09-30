@@ -29,10 +29,26 @@ var helpKeys = []string{
 	"?            this help",
 }
 
-// NewHelp is the overlay for the keys: the shared ones, then the
-// host's own, the dashboard's actions say.
-func NewHelp(title string, extra ...string) *Help {
-	return &Help{Title: title, Lines: append(append([]string{}, helpKeys...), extra...)}
+// stripKeys are the strip's: no views, folds or layouts there.
+var stripKeys = []string{
+	"h l ← → j k  move",
+	"g G          first, last",
+	"1..9         jump to the nth chip",
+	"Enter click  jump; the stale chip folds",
+	"/            filter; Esc clears",
+	"F            scope to the viewer's session, and back",
+	"z            settle or unsettle",
+	"?            this help",
+}
+
+// NewHelp is the overlay for the keys: the shared ones, or the strip's
+// with strip set, then the host's own, the dashboard's actions say.
+func NewHelp(title string, strip bool, extra ...string) *Help {
+	keys := helpKeys
+	if strip {
+		keys = stripKeys
+	}
+	return &Help{Title: title, Lines: append(append([]string{}, keys...), extra...)}
 }
 
 func (h *Help) Render(w, hgt int) []Line {

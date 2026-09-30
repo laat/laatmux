@@ -24,6 +24,20 @@ type Sidebar struct {
 	Layout string          `json:"layout,omitempty"`
 	Scope  string          `json:"scope,omitempty"`
 	Folds  map[string]Fold `json:"folds,omitempty"`
+	// The dashboard's own view and layout defaults: it opens in a wide
+	// popup where compact suits, and neither sidebar.view nor the CLI
+	// touches them.
+	DashboardView   string `json:"dashboard_view,omitempty"`
+	DashboardLayout string `json:"dashboard_layout,omitempty"`
+}
+
+// Defaults is the view and layout a host starts in: the sidebar's or
+// the dashboard's keys.
+func (s *Sidebar) Defaults(dashboard bool) (view, layout *string) {
+	if dashboard {
+		return &s.DashboardView, &s.DashboardLayout
+	}
+	return &s.View, &s.Layout
 }
 
 // Fold is one node's fold: closed or open, and when the node was last
@@ -126,13 +140,17 @@ func UpdateSidebar(now time.Time, fn func(*Sidebar)) error {
 }
 
 // SetFolds writes a pane's toggled folds into the file, each seen now,
-// and refreshes the sighting of every fold whose node the pane has:
-// what a pane does when a fold changes.
-func (s *Sidebar) SetFolds(folds map[string]bool, present func(id string) bool, now time.Time) {
+// those carried by a handoff only where the file has none, and
+// refreshes the sighting of every fold whose node the pane has: what a
+// pane does when a fold changes, and once an hour for the sightings.
+func (s *Sidebar) SetFolds(folds map[string]bool, carried map[string]bool, present func(id string) bool, now time.Time) {
 	if s.Folds == nil {
 		s.Folds = map[string]Fold{}
 	}
 	for id, closed := range folds {
+		if _, has := s.Folds[id]; has && carried[id] {
+			continue
+		}
 		s.Folds[id] = Fold{Closed: closed, Seen: now}
 	}
 	for id, f := range s.Folds {

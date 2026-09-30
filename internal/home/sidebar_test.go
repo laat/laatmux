@@ -20,7 +20,7 @@ func TestSidebarFile(t *testing.T) {
 	}
 	if err := UpdateSidebar(now, func(s *Sidebar) {
 		s.View, s.Layout, s.Scope = "tree", "compact", "session"
-		s.SetFolds(map[string]bool{"a": true, "old": false}, nil, now)
+		s.SetFolds(map[string]bool{"a": true, "old": false}, nil, nil, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestSidebarFile(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			_ = UpdateSidebar(now, func(s *Sidebar) { s.SetFolds(map[string]bool{id: true}, nil, now) })
+			_ = UpdateSidebar(now, func(s *Sidebar) { s.SetFolds(map[string]bool{id: true}, nil, nil, now) })
 		}(id)
 	}
 	wg.Wait()
@@ -45,11 +45,21 @@ func TestSidebarFile(t *testing.T) {
 	if !s.Folds["b"].Closed || !s.Folds["c"].Closed || !s.Folds["a"].Closed {
 		t.Errorf("concurrent writes: %v", s.Folds)
 	}
+	// A carried fold takes only where the file has none.
+	if err := UpdateSidebar(now, func(s *Sidebar) {
+		s.SetFolds(map[string]bool{"a": false, "d": true}, map[string]bool{"a": true, "d": true}, nil, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _ = ReadSidebar()
+	if !s.Folds["a"].Closed || !s.Folds["d"].Closed {
+		t.Errorf("carried folds: %v", s.Folds)
+	}
 	// A day on: the folds whose nodes a writer still has are seen
 	// again, the others dropped.
 	later := now.Add(FoldTTL + time.Hour)
 	if err := UpdateSidebar(later, func(s *Sidebar) {
-		s.SetFolds(nil, func(id string) bool { return id == "a" }, later)
+		s.SetFolds(nil, nil, func(id string) bool { return id == "a" }, later)
 	}); err != nil {
 		t.Fatal(err)
 	}

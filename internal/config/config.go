@@ -225,6 +225,11 @@ func (l *Lines) UnmarshalYAML(value *yaml.Node) error {
 		if err := value.Decode(&s); err != nil {
 			return err
 		}
+		if s == "" {
+			// As before it took several lines: the default.
+			*l = nil
+			return nil
+		}
 		*l = Lines{s}
 		return nil
 	}

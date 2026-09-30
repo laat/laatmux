@@ -141,27 +141,7 @@ func sidebarSwitch(ctx context.Context, sub string, session bool) error {
 		}
 	}
 	if sub == "off" {
-		for _, h := range sidebarHooks {
-			if _, err := workspace.Server.Run(ctx, "set-hook", "-gu", h.hook); err != nil {
-				if tmux.NoServer(err) {
-					// Nothing to turn off; hooks die with the server.
-					return nil
-				}
-				return err
-			}
-		}
-		unbindJumpKeys(ctx)
-		_, _ = workspace.Server.Run(ctx, "set-option", "-su", sessionsTag)
-		panes, err := sidebarPanes(ctx)
-		if err != nil {
-			return err
-		}
-		for _, p := range panes {
-			if p.sidebar {
-				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
-			}
-		}
-		return nil
+		return sidebarOff(ctx)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -174,21 +154,8 @@ func sidebarSwitch(ctx context.Context, sub string, session bool) error {
 	if err != nil {
 		return err
 	}
-	target := ""
-	if session {
-		out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
-		if err != nil {
-			return err
-		}
-		target = strings.TrimSpace(string(out))
-		sessions, _ := sidebarSessions(ctx)
-		if !contains(sessions, target) {
-			sessions = append(sessions, target)
-		}
-		if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
-			return err
-		}
-	} else if _, err := workspace.Server.Run(ctx, "set-option", "-su", sessionsTag); err != nil && !tmux.NoServer(err) {
+	target, err := scopeSidebar(ctx, session)
+	if err != nil {
 		return err
 	}
 	if err := setSidebarHooks(ctx, exe); err != nil {
@@ -218,6 +185,66 @@ func sidebarSwitch(ctx context.Context, sub string, session bool) error {
 		}
 	}
 	return nil
+}
+
+// sidebarOff unsets the hooks, the jump keys and the sessions option,
+// and kills every tagged pane.
+func sidebarOff(ctx context.Context) error {
+	for _, h := range sidebarHooks {
+		if _, err := workspace.Server.Run(ctx, "set-hook", "-gu", h.hook); err != nil {
+			if tmux.NoServer(err) {
+				// Nothing to turn off; hooks die with the server.
+				return nil
+			}
+			return err
+		}
+	}
+	unbindJumpKeys(ctx)
+	_, _ = workspace.Server.Run(ctx, "set-option", "-su", sessionsTag)
+	panes, err := sidebarPanes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range panes {
+		if p.sidebar {
+			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
+		}
+	}
+	return nil
+}
+
+// scopeSidebar sets the sessions option for on: with session, the
+// current session added to it, and the panes a plain on put in other
+// sessions killed, since those sessions get none now; without, the
+// option cleared, so every session gets panes. It returns the current
+// session's id with session.
+func scopeSidebar(ctx context.Context, session bool) (string, error) {
+	if !session {
+		if _, err := workspace.Server.Run(ctx, "set-option", "-su", sessionsTag); err != nil && !tmux.NoServer(err) {
+			return "", err
+		}
+		return "", nil
+	}
+	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
+	if err != nil {
+		return "", err
+	}
+	target := strings.TrimSpace(string(out))
+	sessions, _ := sidebarSessions(ctx)
+	if !contains(sessions, target) {
+		sessions = append(sessions, target)
+	}
+	if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
+		return "", err
+	}
+	if out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", "#{session_id}"+tmux.Sep+"#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); err == nil {
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f := strings.Split(l, tmux.Sep); len(f) == 3 && f[2] != "" && !contains(sessions, f[0]) {
+				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[1])
+			}
+		}
+	}
+	return target, nil
 }
 
 // sidebarSessions is the sessions option's ids, none for every session.

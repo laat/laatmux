@@ -1113,7 +1113,7 @@ func (m *Model) Handle(k Key) Action {
 		case 'q':
 			return m.quit()
 		case '?':
-			m.Overlay = NewHelp(m.HelpTitle, m.Help...)
+			m.Overlay = NewHelp(m.HelpTitle, m.Layout == Strip, m.Help...)
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
 				return m.jumpTo(i)

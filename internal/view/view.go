@@ -53,6 +53,8 @@ type Model struct {
 	viewSet   bool            // the view chosen by a key since ChangedDefaults last asked
 	layoutSet bool            // the layout likewise
 	dirty     map[string]bool // the folds set here since DirtyFolds last asked
+	carried   map[string]bool // of those, the ones a handoff carried
+	applied   map[string]bool // the file's folds as last applied
 	// AskQuit has q and Ctrl-C ask before the view ends, in a sidebar
 	// pane. HelpTitle and Help are the ? overlay's title and the host's
 	// own lines after the shared keys.
@@ -61,16 +63,17 @@ type Model struct {
 	Help      []string
 	// ItemWidth is a strip's chip width; hscroll the first chip drawn
 	// and hitCols the chips' columns, for a click.
-	ItemWidth   int
-	hscroll     int
-	hitCols     []hitCol
-	hitColsPrev []hitCol
-	hitLines    int // the strip's lines of chips, as last drawn
-	folds       map[string]bool
-	toggled     map[string]bool
-	Layout      Layout
-	Titles      bool   // compact draws the pane title under each row
-	LocalHost   string // the host whose tag is not dimmed
+	ItemWidth    int
+	hscroll      int
+	hitCols      []hitCol
+	hitColsPrev  []hitCol
+	hitLines     int // the strip's lines of chips, as last drawn
+	hitLinesPrev int
+	folds        map[string]bool
+	toggled      map[string]bool
+	Layout       Layout
+	Titles       bool   // compact draws the pane title under each row
+	LocalHost    string // the host whose tag is not dimmed
 	// Header lines are drawn above the list: hosts that are not
 	// connected and listed, the local daemon being down.
 	Header []HeaderLine
@@ -975,16 +978,17 @@ func ANSI(l Line, th palette.Theme) string {
 		if s.band {
 			// The band on the span alone, a strip's chip: the
 			// highlight background under the span's own colour, or
-			// reverse video without one.
+			// reverse video without one, where a colour would land in
+			// the background: the attributes alone, as the list's band.
 			if colour && !th.Guessed {
 				pre = th.SGR(palette.HighlightRowBg, true) + th.SGR(palette.Text, false)
 			} else {
-				pre = "\x1b[7m"
+				pre, fg, bg = "\x1b[7m", "", ""
 			}
 		}
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.
-		faint := s.Dim && !l.Dim && fg == ""
+		faint := s.Dim && !l.Dim && fg == "" && !(s.band && pre == "\x1b[7m")
 		if faint || s.Bold || fg != "" || bg != "" || pre != "" {
 			if current && l.Dim && !band {
 				// The viewer's label is not faint on a dim line.

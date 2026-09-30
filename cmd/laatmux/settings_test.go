@@ -9,6 +9,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
@@ -25,12 +26,12 @@ func TestSettings(t *testing.T) {
 	now := time.Now()
 	if err := home.UpdateSidebar(now, func(s *home.Sidebar) {
 		s.View, s.Layout, s.Scope = "tree", "compact", "project"
-		s.SetFolds(map[string]bool{"repo/x": true}, nil, now)
+		s.SetFolds(map[string]bool{"repo/x": true}, nil, nil, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	m := &view.Model{Layout: view.Tiles, View: view.ViewAgents}
-	seen := startSettings(cfg, m, false, false, false)
+	seen := startSettings(cfg, m, settingsHost{})
 	if m.View != view.ViewTree || m.Layout != view.Compact || m.Scope != view.ScopeProject || seen.IsZero() {
 		t.Fatalf("start: %s %s %s %v", m.View, m.Layout, m.Scope, seen)
 	}
@@ -38,22 +39,30 @@ func TestSettings(t *testing.T) {
 	if len(folds) != 1 || !folds["repo/x"] {
 		t.Errorf("folds at start: %v", folds)
 	}
+	// The strip: its view and layout its own; the dashboard: at all,
+	// with keys of its own for the view and layout, compact until
+	// chosen otherwise.
 	fixed := &view.Model{Layout: view.Tiles, View: view.ViewAgents}
-	startSettings(cfg, fixed, true, true, true)
+	startSettings(cfg, fixed, settingsHost{fixedLayout: true, fixedView: true, fixedScope: true})
 	if fixed.View != view.ViewAgents || fixed.Layout != view.Tiles || fixed.Scope != "" {
 		t.Errorf("fixed: %s %s %s", fixed.View, fixed.Layout, fixed.Scope)
+	}
+	dash := &view.Model{Layout: view.Compact, View: view.ViewAgents}
+	startSettings(cfg, dash, settingsHost{dashboard: true, fixedScope: true})
+	if dash.View != view.ViewAgents || dash.Layout != view.Compact || dash.Scope != "" {
+		t.Errorf("the dashboard from the sidebar's keys: %s %s %s", dash.View, dash.Layout, dash.Scope)
 	}
 	// The config's scope, with none in the file.
 	cfg.Sidebar.Scope = "session"
 	os.Remove(home.SidebarPath())
 	fromCfg := &view.Model{}
-	startSettings(cfg, fromCfg, false, false, false)
+	startSettings(cfg, fromCfg, settingsHost{})
 	if fromCfg.Scope != view.ScopeSession {
 		t.Errorf("the config's scope: %s", fromCfg.Scope)
 	}
 	if err := home.UpdateSidebar(now, func(s *home.Sidebar) {
 		s.View, s.Layout, s.Scope = "tree", "compact", "project"
-		s.SetFolds(map[string]bool{"repo/x": true}, nil, now)
+		s.SetFolds(map[string]bool{"repo/x": true}, nil, nil, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +74,7 @@ func TestSettings(t *testing.T) {
 	m.ApplyFolds(map[string]bool{"repo/y": false})
 	m.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}}
 	m.Handle(view.Key{Rune: 'f'}) // repo/x was closed from the file: f opens it here
-	if err := saveSettings(m, now.Add(time.Minute), false); err != nil {
+	if err := saveSettings(m, now.Add(time.Minute), settingsHost{}); err != nil {
 		t.Fatal(err)
 	}
 	s, _, _ := home.ReadSidebar()
@@ -77,37 +86,75 @@ func TestSettings(t *testing.T) {
 	}
 	// Written once: another pane closes it, and a second save here
 	// changes nothing of the folds.
-	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"repo/x": true}, nil, now) }); err != nil {
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"repo/x": true}, nil, nil, now) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveSettings(m, now.Add(2*time.Minute), false); err != nil {
+	if err := saveSettings(m, now.Add(2*time.Minute), settingsHost{}); err != nil {
 		t.Fatal(err)
 	}
 	if s, _, _ := home.ReadSidebar(); !s.Folds["repo/x"].Closed {
 		t.Errorf("a fold written twice over another pane's change: %+v", s.Folds)
 	}
-	m.Handle(view.Key{Kind: view.KeyTab}) // agents
-	m.Handle(view.Key{Rune: 'v'})         // compact
-	if err := saveSettings(m, now.Add(3*time.Minute), true); err != nil {
+	// Tab writes the view; v the layout, unless a flag fixed it: the
+	// file holds compact, v makes the model compact from tiles, and a
+	// fixed layout leaves the file's tiles alone once set so.
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.Layout = "tiles" }); err != nil {
 		t.Fatal(err)
 	}
-	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "compact" {
+	m.Handle(view.Key{Kind: view.KeyTab}) // agents
+	m.Handle(view.Key{Rune: 'v'})         // compact
+	if err := saveSettings(m, now.Add(3*time.Minute), settingsHost{fixedLayout: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "tiles" {
 		t.Errorf("after Tab and v with the layout fixed: %+v", s)
 	}
 	m.Handle(view.Key{Rune: 'v'}) // tiles
-	if err := saveSettings(m, now.Add(4*time.Minute), false); err != nil {
+	m.Handle(view.Key{Rune: 'v'}) // compact
+	if err := saveSettings(m, now.Add(4*time.Minute), settingsHost{}); err != nil {
 		t.Fatal(err)
 	}
-	if s, _, _ := home.ReadSidebar(); s.Layout != "tiles" {
+	if s, _, _ := home.ReadSidebar(); s.Layout != "compact" {
 		t.Errorf("after v: %+v", s)
 	}
 	strip := &view.Model{Layout: view.Strip, View: view.ViewAgents}
 	strip.Handle(view.Key{Kind: view.KeyTab})
-	if err := saveSettings(strip, now.Add(5*time.Minute), false); err != nil {
+	if err := saveSettings(strip, now.Add(5*time.Minute), settingsHost{fixedView: true, fixedLayout: true}); err != nil {
 		t.Fatal(err)
 	}
-	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "tiles" {
+	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "compact" {
 		t.Errorf("a strip wrote the defaults: %+v", s)
+	}
+	// The dashboard's Tab and v write its own keys, not the sidebar's.
+	dash.Handle(view.Key{Kind: view.KeyTab})
+	dash.Handle(view.Key{Rune: 'v'})
+	if err := saveSettings(dash, now.Add(6*time.Minute), settingsHost{dashboard: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "compact" || s.DashboardView != "tree" || s.DashboardLayout != "tiles" {
+		t.Errorf("the dashboard's keys: %+v", s)
+	}
+	dash2 := &view.Model{Layout: view.Compact, View: view.ViewAgents}
+	startSettings(cfg, dash2, settingsHost{dashboard: true, fixedScope: true})
+	if dash2.View != view.ViewTree || dash2.Layout != view.Tiles {
+		t.Errorf("the dashboard from its keys: %s %s", dash2.View, dash2.Layout)
+	}
+	// A carried fold takes only where the file has none.
+	carrier := &view.Model{View: view.ViewTree, Width: 60, Height: 20}
+	carrier.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}, {Kind: rows.KindTask, Depth: 1, Host: "vm", Children: 1, Pending: &protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Root: "/r/z", Session: "z", Taken: true}}}
+	carrier.Select("add-z")
+	carrier.Handle(view.Key{Rune: 'h'})
+	carrier.DirtyFolds()
+	carrier.Handoffs = map[string]string{"add-z": "venv/worktree//r/z"}
+	carrier.SetTree([]rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}, {Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: "venv/worktree//r/z", Children: 1, Worktree: &protocol.Worktree{ID: "venv/worktree//r/z"}}})
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"venv/worktree//r/z": false}, nil, nil, now) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettings(carrier, now.Add(7*time.Minute), settingsHost{}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := home.ReadSidebar(); s.Folds["venv/worktree//r/z"].Closed {
+		t.Errorf("a carried fold written over a pane ahead: %+v", s.Folds)
 	}
 	// Another pane's write reaches the view through the poll.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,7 +165,7 @@ func TestSettings(t *testing.T) {
 	// mtime has second resolution on some file systems: a write a
 	// second on.
 	time.Sleep(1100 * time.Millisecond)
-	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"repo/z": true}, nil, now.Add(time.Hour)) }); err != nil {
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.SetFolds(map[string]bool{"repo/z": true}, nil, nil, now.Add(time.Hour)) }); err != nil {
 		t.Fatal(err)
 	}
 	select {

@@ -48,29 +48,59 @@ func (m *Model) renderStrip() []Line {
 		// is not to be missed.
 		height--
 	}
-	perLine := max((m.Width+sep)/(iw+sep), 1)
+	// The chips that fit whole in a width: the marker at the right end,
+	// the count past the edge and the scope in force, takes its room
+	// first, so no chip is drawn under it. The count depends on how
+	// many fit, which depends on the count: a few passes settle it.
+	fitting := func(w int) int { return max((w+sep)/(iw+sep), 1) }
+	marker := func(more int) string {
+		mark := ""
+		if more > 0 {
+			mark = "→" + strconv.Itoa(more)
+		}
+		if s := m.ScopeLabel(); s != "" {
+			mark = strings.TrimSpace(mark + " [" + s + "]")
+		}
+		return mark
+	}
+	perLine, reserve := fitting(m.Width), 0
 	// The scroll: the selection in view, and never past the end.
-	if m.Selected >= 0 {
-		if m.Selected < m.hscroll {
-			m.hscroll = m.Selected
+	scroll := func() {
+		if m.Selected >= 0 {
+			if m.Selected < m.hscroll {
+				m.hscroll = m.Selected
+			}
+			if m.Selected >= m.hscroll+perLine {
+				m.hscroll = m.Selected - perLine + 1
+			}
 		}
-		if m.Selected >= m.hscroll+perLine {
-			m.hscroll = m.Selected - perLine + 1
+		if m.hscroll > len(vis)-perLine {
+			m.hscroll = len(vis) - perLine
+		}
+		if m.hscroll < 0 {
+			m.hscroll = 0
 		}
 	}
-	if m.hscroll > len(vis)-perLine {
-		m.hscroll = len(vis) - perLine
-	}
-	if m.hscroll < 0 {
-		m.hscroll = 0
+	for pass := 0; pass < 4; pass++ {
+		scroll()
+		mark := marker(len(vis) - m.hscroll - perLine)
+		want := 0
+		if mark != "" {
+			want = width(mark) + 1
+		}
+		if want == reserve {
+			break
+		}
+		reserve = want
+		perLine = fitting(m.Width - reserve)
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
 	m.hitIDs, m.hitTop, m.hitAt = nil, 0, m.Now
 	m.hitColsPrev, m.hitCols = m.hitCols, nil
-	m.hitLines = height
+	m.hitLinesPrev, m.hitLines = m.hitLines, height
 	tmpl := m.templates().Top
 	lines := make([]Line, height)
-	if len(vis) == 0 {
+	if len(vis) == 0 && height > 0 {
 		text := "No agents running"
 		if m.Loading {
 			text = frame(m.Now) + " Loading"
@@ -80,7 +110,7 @@ func (m *Model) renderStrip() []Line {
 	}
 	col := 0
 	shown := 0
-	for i := m.hscroll; i < len(vis) && col+iw <= m.Width; i++ {
+	for i := m.hscroll; i < len(vis) && shown < perLine && col+iw <= m.Width-reserve; i++ {
 		r := vis[i].Row
 		m.rowIdx = 0
 		if r.Numbered() {
@@ -111,16 +141,9 @@ func (m *Model) renderStrip() []Line {
 		col += iw + sep
 		shown++
 	}
-	// The count of chips past the edge and the scope in force, at the
-	// right end of the first line, the last chip giving way to them.
-	mark := ""
-	if more := len(vis) - m.hscroll - shown; more > 0 {
-		mark = "→" + strconv.Itoa(more)
-	}
-	if s := m.ScopeLabel(); s != "" {
-		mark = strings.TrimSpace(mark + " [" + s + "]")
-	}
-	if mark != "" && height > 0 && m.Width > width(mark) {
+	// The marker in the room kept for it, at the right end of the first
+	// line.
+	if mark := marker(len(vis) - m.hscroll - shown); mark != "" && height > 0 && m.Width > width(mark) {
 		room := m.Width - spansWidth(lines[0].Spans)
 		if room < width(mark)+1 {
 			lines[0].Spans = clip(lines[0].Spans, m.Width-width(mark)-1)
@@ -198,14 +221,14 @@ type hitCol struct {
 // y hit, -1 for none: the footer is no chip, and a click from before
 // the last draw is on the chips drawn then.
 func (m *Model) hitChip(x, y int, at time.Time) int {
-	cols := m.hitCols
+	cols, lines := m.hitCols, m.hitLines
 	if !at.IsZero() && at.Before(m.hitAt) {
 		if m.hitPrevAt.IsZero() || at.Before(m.hitPrevAt) {
 			return -1
 		}
-		cols = m.hitColsPrev
+		cols, lines = m.hitColsPrev, m.hitLinesPrev
 	}
-	if y < 1 || y > m.hitLines {
+	if y < 1 || y > lines {
 		return -1
 	}
 	for _, c := range cols {

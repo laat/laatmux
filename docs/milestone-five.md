@@ -786,7 +786,7 @@ alike unless the row says otherwise.
 | `F` | — | scope to the viewer's session, and back |
 | `?` | — | help overlay listing the keys |
 | `o` `O` | — | open the PR, its checks (dashboard) |
-| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n", while filtering too |
+| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n"; while filtering `q` is a letter and `Ctrl-c` asks |
 | `a` `x` `X` `p` | dashboard actions | unchanged, on the rows below |
 
 Fold rows and repository lines are selectable, since `Enter` acts on
@@ -903,7 +903,9 @@ Five settlements differ from the plan in #52:
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The
   dashboard's `F` uses the same rules through the client the popup
-  opened on. #52 called it `filter none|all|…`; `none` was the same as
+  opened on, and starts at `all` whatever the file says, since a scope
+  the CLI set for the panes would empty a popup opened from an
+  unrelated shell. #52 called it `filter none|all|…`; `none` was the same as
   `all`, and the word `filter` is the view's `/` text filter, which
   stays the pane's own and is not persisted, as is `F`.
 - **Persistence:** `sidebar.json` under the state directory holds two
@@ -928,9 +930,14 @@ Five settlements differ from the plan in #52:
   file lacks; the config is the default, the file the last choice.
   The view tells its host of a setting changed, the view, layout,
   scope or a fold, once after the key or command that changed it; the
-  host writes the view, layout and folds then, and the file's folds
-  reach the view as a command on its own goroutine when the poll sees
-  the mtime move.
+  host writes the view after `Tab`, the layout after `v` and the
+  folds set here then, and the file's folds reach the view as a
+  command on its own goroutine when the poll sees the mtime move; a
+  value the file held the last time is not applied again, so a fold a
+  pane opened to reveal a selection stays open; a fold carried at a
+  handoff is written only where the file has none; each pane refreshes
+  its folds' sightings once an hour. The dashboard's keys are
+  `dashboard_view` and `dashboard_layout`.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
 

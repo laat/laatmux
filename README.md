@@ -839,13 +839,19 @@ is switched to.
   `session` and, pressed again, back to the scope the pane had before,
   whatever set it; on `session` already it goes to `all`. `F` acts on
   that pane alone and is not kept. The footer names a scope in force:
-  `[session]`; a strip names it at its right end. The dashboard
+  `[session]`; a strip names it at its right end. `f` sets the folds of
+  the lines the scope and the filter leave, not a repository line
+  shared with the panes on `all`. The dashboard
   starts at `all`, whatever the file says: a scope the CLI set for the
   panes would empty a popup opened from an unrelated shell. `laatmux
-  sidebar on --session` puts panes in the
-  current session's windows only, its new-window hook on that session
-  with `set-hook -t`, none for new sessions; `off` takes those off
-  too.
+  sidebar on --session` puts panes in the current session's windows
+  only: the hooks stay global, since a hook on the session would
+  shadow the user's global hooks of that name there, and `on
+  --session` names the session in the server option
+  `@laatmux_sidebar_sessions`, which `attach` reads for the windows the
+  hooks report; a plain `on` clears the option, so every session gets
+  panes again, and `off` unsets it. `on` with `jump_keys` off unbinds
+  the jump keys an earlier `on` bound.
 - **Control from the CLI:** `laatmux sidebar next | prev | jump N |
   view agents|tree | scope all|session|project [-t window] [-c
   client] [--all]` act on the sidebar pane in the window the command
@@ -883,7 +889,17 @@ is switched to.
   rename, and each writes only the folds it set since it last wrote,
   so two panes toggling folds at once lose neither and a fold taken
   from another pane is never written back over that pane's later
-  change. A fold is kept by node id
+  change. The dashboard keeps its own view and layout defaults in the
+  same file, under `dashboard_view` and `dashboard_layout`: it opens
+  in a wide popup where compact suits, `--layout` wins over the stored
+  one, and neither `sidebar.view` nor the CLI touches them; a fold
+  carried at a handoff is written only where the file has none, since
+  every running pane carries the same value and one ahead may have
+  changed it; a value the file held last time is not applied again, so
+  a fold a pane opened to reveal a selection, its own and not written,
+  stays open when an unrelated write comes round; and each pane
+  refreshes its folds' sightings once an hour, so a node in sight for
+  a day is not dropped by a write elsewhere. A fold is kept by node id
   with the time its node was last seen, and one not seen for a day is
   dropped. The strip's view and layout are its own, never written. The
   dashboard takes the view and, without `--layout`, the layout from the

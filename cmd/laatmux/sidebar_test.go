@@ -248,6 +248,67 @@ func TestSidebarHooksRun(t *testing.T) {
 	}
 }
 
+// on --session names the session in the option, twice once, and kills
+// the tagged panes elsewhere; a plain on clears the option; off unsets
+// the option, the hooks and the jump keys.
+func TestSidebarScopeAndOff(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	t.Setenv("TMUX", "")
+	// The session display-message names with no client attached is
+	// tmux's choice: the other session is whichever it did not.
+	target, err := scopeSidebar(ctx, true)
+	if err != nil || target == "" {
+		t.Fatalf("scope: %q %v", target, err)
+	}
+	elsewhere := "boot"
+	if run("display", "-p", "-t", "boot", "#{session_id}") == target {
+		elsewhere = "other"
+	}
+	otherPane := run("split-window", "-d", "-h", "-t", elsewhere+":", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", otherPane, sidebarTag, "1")
+	if _, err := scopeSidebar(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 1 || sessions[0] != target {
+		t.Errorf("the option after two scoped ons: %v", sessions)
+	}
+	boot := target
+	if out := run("list-panes", "-a", "-F", "#{"+sidebarTag+"}"); strings.Contains(out, "1") {
+		t.Error("the tagged pane in the other session stayed")
+	}
+	if _, err := scopeSidebar(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option after a plain on: %v", sessions)
+	}
+	if err := setSidebarHooks(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := bindJumpKeys(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	run("set-option", "-s", sessionsTag, boot)
+	if err := sidebarOff(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if on, _ := sidebarHooksSet(ctx); on {
+		t.Error("hooks after off")
+	}
+	if k := run("list-keys", "-T", "root"); strings.Contains(k, "sidebar jump") {
+		t.Error("jump keys after off")
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option after off: %v", sessions)
+	}
+}
+
 // The jump keys: on binds M-1..M-9 in the root table to a jump with
 // the window and client, off unbinds them and leaves a user's M-0 and
 // a user's M-5 bound to something else alone.

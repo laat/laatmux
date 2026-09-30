@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/workspace"
@@ -49,6 +50,21 @@ func TestScopes(t *testing.T) {
 	if !strings.Contains(all, "venv/laatmux/%11") || !strings.Contains(all, "add-anki") {
 		t.Fatalf("all:\n%s", all)
 	}
+	// f under session sets the folds of the lines shown, not the
+	// repository line shared with the panes on all.
+	m.View, m.Scope = ViewTree, ScopeSession
+	m.Render()
+	m.Handle(Key{Rune: 'f'})
+	d, _ := m.DirtyFolds()
+	if _, repo := d[rows.RepoNode(src)]; repo || len(d) == 0 {
+		t.Errorf("f under session: %v", d)
+	}
+	if _, other := d["venv/worktree//r/auto-layout"]; other {
+		t.Errorf("f under session set another worktree's fold: %v", d)
+	}
+	m.Handle(Key{Rune: 'f'}) // open again
+	m.View, m.Scope = ViewAgents, ScopeAll
+	m.ApplyFolds(map[string]bool{})
 	// F: to session. The viewer is in agents-config's home session.
 	m.Handle(Key{Rune: 'F'})
 	if !m.SettingsChanged() {
@@ -174,6 +190,27 @@ func TestScopes(t *testing.T) {
 	}
 }
 
+// A chip's band: the highlight background under the span's own colour
+// with the background known; reverse video and no colour without, as
+// the list's band.
+func TestChipANSI(t *testing.T) {
+	th, _ := palette.New(true, nil)
+	l := Line{Spans: []Span{{Text: "●", Fg: palette.Warning, band: true}, {Text: " x", band: true}}}
+	s := ANSI(l, th)
+	bandBg, warn := th.SGR(palette.HighlightRowBg, true), th.SGR(palette.Warning, false)
+	if !strings.Contains(s, bandBg) || !strings.Contains(s, warn) || strings.Index(s, bandBg) > strings.Index(s, warn) {
+		t.Errorf("a chip with the background known: %q", s)
+	}
+	guessed := th
+	guessed.Guessed = true
+	if s := ANSI(l, guessed); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, warn) {
+		t.Errorf("a chip with the background guessed: %q", s)
+	}
+	if s := ANSI(l, palette.Mono()); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, "\x1b[38") {
+		t.Errorf("a chip without colours: %q", s)
+	}
+}
+
 // A command over the socket: next and prev move whether the pane is
 // filtering or not; jump N is the digit's jump; view and scope switch,
 // as the CLI wrote them, without a setting to persist; while a question
@@ -236,13 +273,24 @@ func TestCommands(t *testing.T) {
 		t.Error("a command acted while a question was up")
 	}
 	m.Confirm, m.ConfirmTag = "", ""
-	m.Overlay = NewHelp("h")
+	m.Overlay = NewHelp("h", false)
 	was := m.Selected
 	m.Command(Command{Name: "next"})
 	if m.Selected != was {
 		t.Error("a command acted while an overlay was up")
 	}
 	m.Overlay = nil
+	// A pending change is kept through a command, and a view from the
+	// CLI is no view to write.
+	m.settings, m.viewSet = true, false
+	m.Command(Command{Name: "view", Arg: "agents"})
+	if !m.settings {
+		t.Error("a pending change dropped by a command")
+	}
+	if v, _ := m.ChangedDefaults(); v {
+		t.Error("a view from the CLI to be written")
+	}
+	m.settings = false
 	// A strip keeps the agent view.
 	m.View, m.Layout = ViewAgents, Strip
 	m.Command(Command{Name: "view", Arg: "tree"})
@@ -333,26 +381,42 @@ func TestHelpQuitSettings(t *testing.T) {
 	}
 	// The folds taken from outside are not this pane's to write; its
 	// own are, once.
-	if d := other.DirtyFolds(); len(d) != 0 {
+	if d, _ := other.DirtyFolds(); len(d) != 0 {
 		t.Errorf("folds from outside dirty: %v", d)
 	}
 	other.Select("venv/worktree//r/auto-layout")
 	other.Handle(Key{Rune: 's'})
-	if d := other.DirtyFolds(); len(d) != 1 || !d["venv/worktree//r/auto-layout"] {
-		t.Errorf("the pane's own fold not dirty: %v", d)
+	if d, c := other.DirtyFolds(); len(d) != 1 || !d["venv/worktree//r/auto-layout"] || len(c) != 0 {
+		t.Errorf("the pane's own fold not dirty: %v %v", d, c)
 	}
-	if d := other.DirtyFolds(); len(d) != 0 {
+	if d, _ := other.DirtyFolds(); len(d) != 0 {
 		t.Errorf("dirty twice: %v", d)
 	}
 	// The stale fold is a fold like the others: toggled, dirty, taken.
 	other.View = ViewAgents
 	other.Handle(Key{Rune: 'f'})
-	if d := other.DirtyFolds(); !other.ShowHidden || len(d) != 1 || d[rows.NodeStale] {
+	if d, _ := other.DirtyFolds(); !other.ShowHidden || len(d) != 1 || d[rows.NodeStale] {
 		t.Errorf("the stale fold opened: shown %v dirty %v", other.ShowHidden, d)
 	}
 	other.ApplyFolds(map[string]bool{rows.NodeStale: true})
 	if other.ShowHidden {
 		t.Error("the stale fold closed from outside still open")
+	}
+	// A value the file held last time is not applied again: a fold
+	// opened here to reveal a selection stays open when an unrelated
+	// write comes round.
+	other.View = ViewTree
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
+	other.Render()
+	other.setFold("venv/worktree//r/agents-config", false) // a reveal, not the user's
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true, "repo/other": true})
+	if other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) {
+		t.Error("a reveal undone by a value the file held before")
+	}
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": false})
+	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
+	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) {
+		t.Error("a changed value not applied")
 	}
 	if !other.HasNode("venv/worktree//r/auto-layout") || other.HasNode("nope") {
 		t.Error("HasNode")
@@ -413,15 +477,62 @@ func TestStrip(t *testing.T) {
 		t.Errorf("a question on a one-line strip:\n%s", Debug(out))
 	}
 	m.Confirm = ""
-	// A click on the footer line is no chip; one from before the last
-	// draw is on the chips drawn then.
-	m.Height = 3
+	// A one-line strip with nothing to show and a question: the
+	// question alone, no panic.
+	m.Rows, m.Height = rows.Rows{}, 1
+	m.Ask("Quit sidebar? y/n", "quit")
+	if out := m.Render(); len(out) != 1 || !strings.HasPrefix(Text(out), "Quit sidebar?") {
+		t.Errorf("an empty one-line strip with a question:\n%s", Debug(out))
+	}
+	m.Confirm = ""
+	m = model(now)
+	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 60, 3, 18
+	// The marker keeps its room: no chip is drawn under it, and a click
+	// there lands on nothing.
+	out = m.Render()
+	if a := m.Handle(Key{Kind: KeyMouse, X: 58, Y: 1}); a.Kind == ActionJump {
+		t.Errorf("a click on the marker jumped:\n%s", Debug(out))
+	}
+	// A click from before the last draw is judged by that draw's
+	// lines: with a footer drawn then, its line is no chip.
 	m.Filtering = true
+	m.Render()
+	then := m.Now.Add(-time.Millisecond)
+	m.Filtering = false
+	m.Now = m.Now.Add(time.Second)
+	m.Render()
+	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3, At: then}); a.Kind == ActionJump {
+		t.Error("a click on the footer of the frame before jumped")
+	}
+	// A click on the footer line is no chip: with a filter set and not
+	// being typed, the footer shows it and a click there is judged.
+	m.Height = 3
+	m.Filter, m.Filtering = "a", false
 	m.Render()
 	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3}); a.Kind == ActionJump {
 		t.Error("a click on the footer jumped")
 	}
-	m.Filtering = false
+	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 1}); a.Kind != ActionJump {
+		t.Errorf("a click on a chip: %+v", a)
+	}
+	m.Filter = ""
+	// A click on the stale chip folds it.
+	m.Rows = fixture(now)
+	m.Width, m.ItemWidth = 200, 10
+	m.Render()
+	stale := -1
+	for _, c := range m.hitCols {
+		if c.id == rows.NodeStale {
+			stale = c.from + 1
+		}
+	}
+	if stale < 0 {
+		t.Fatalf("no stale chip: %+v", m.hitCols)
+	}
+	if a := m.Handle(Key{Kind: KeyMouse, X: stale + 1, Y: 1}); a.Kind != ActionNone || !m.ShowHidden {
+		t.Errorf("a click on the stale chip: %+v shown %v", a, m.ShowHidden)
+	}
+	m.Width, m.ItemWidth = 60, 18
 	m.Scope = ScopeSession
 	if !strings.Contains(Text(m.Render()), "[session]") {
 		t.Error("the strip does not name the scope")

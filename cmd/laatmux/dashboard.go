@@ -105,7 +105,8 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	m.SetTemplates(templates(cfg))
 	m.AgentIcons = agentIcons(cfg)
 	m.JumpKeys = cfg.Sidebar.JumpKeys
-	seen := startSettings(cfg, m, o.fixedLayout, o.fixedView, o.fixedScope)
+	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
+	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds)
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
@@ -128,7 +129,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionSettings:
-				if err := saveSettings(m, time.Now(), o.fixedLayout); err != nil {
+				if err := saveSettings(m, time.Now(), host); err != nil {
 					m.Message = "sidebar.json: " + err.Error()
 				}
 				return false
