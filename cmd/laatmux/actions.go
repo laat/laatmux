@@ -916,14 +916,10 @@ func (d *dash) shell(m *view.Model) bool {
 	if r == nil {
 		return false
 	}
-	row := *r
-	if row.Pending != nil {
-		// A task's row goes by the task's own rules for its session.
-		var err error
-		if row, err = pendingTarget(row); err != nil {
-			m.Message = err.Error()
-			return false
-		}
+	row, err := shellRow(m, *r)
+	if err != nil {
+		m.Message = err.Error()
+		return false
 	}
 	l, err := d.localFor(row)
 	if err != nil {
@@ -939,6 +935,22 @@ func (d *dash) shell(m *view.Model) bool {
 		return false
 	}
 	return d.exitOnJump
+}
+
+// shellRow is the row whose workspace session the shell opens: a tile,
+// an agent, a pane or a run without a workspace session of its own
+// goes by the line holding it, whose jump agent the lost-home case
+// counts on; a task's row by the task's own rules for its session.
+func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
+	if row.Kind != rows.KindWorktree && row.Kind != rows.KindTask && row.Worktree != nil && (row.Local == nil || !row.Local.Workspace()) {
+		if l := m.OwnerLine(row.Worktree.ID); l != nil {
+			row = *l
+		}
+	}
+	if row.Pending != nil {
+		return pendingTarget(row)
+	}
+	return row, nil
 }
 
 // localFor is the row's workspace session, made from the worktree

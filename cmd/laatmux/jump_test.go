@@ -226,15 +226,18 @@ func TestPaneJumpRouting(t *testing.T) {
 	// The task line's own jump attaches the session Home names, and
 	// the pane jump routed to the line names the local session as the
 	// line's own does: a task's session under any name, a home renamed.
-	foo := *task
+	foo := *moved
 	foo.Pending = &protocol.Pending{}
 	*foo.Pending = *task.Pending
 	foo.Pending.Session = "laatmux/foo"
+	foo.Agent = &protocol.Agent{ID: "venv/laatmux/%5", Session: "laatmux/foo", Managed: true, Cwd: "/r/z"}
+	loose := *task
+	loose.Pending = foo.Pending
 	renamed := *owner
 	renamed.Worktree = &protocol.Worktree{}
 	*renamed.Worktree = *listed
 	renamed.Worktree.Session = "foo"
-	for _, line := range []*rows.Row{task, owner, moved, &foo, &renamed} {
+	for _, line := range []*rows.Row{task, owner, moved, &foo, &loose, &renamed} {
 		target, err := pendingTarget(*line)
 		if err != nil {
 			t.Errorf("%s's target: %v", line.Pending.Session, err)

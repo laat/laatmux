@@ -268,6 +268,28 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 			t.Errorf("%+v: spec %+v, %v", c.row.Agent, spec, err)
 		}
 	}
+	// S on a second agent's node, a tile, a pane or a run goes by the
+	// line: the root agent's session, not the second agent's.
+	line := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/z", Worktree: &lost, Agent: &root, Children: 2}
+	second := protocol.Agent{ID: "venv/laatmux/%4", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/proj/z/sub", WorktreeID: lost.ID}
+	tm := &view.Model{Tree: []rows.Row{{Kind: rows.KindRepo, Node: "repo/x"}, line,
+		{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second},
+		{Kind: rows.KindPane, Depth: 2, Host: "vm", Node: "venv/pane/%8", Worktree: &lost, Pane: &protocol.Pane{PaneID: "%8", Session: "scratch"}}}}
+	for _, r := range []rows.Row{tm.Tree[2], tm.Tree[3], {Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/scratch", Attach: "vm/scratch"}}} {
+		row, err := shellRow(tm, r)
+		if err != nil || row.ID() != lost.ID {
+			t.Errorf("%v: shell row %+v, %v", r.Kind, row, err)
+			continue
+		}
+		if spec, err := localSpec(cfg, row); err != nil || spec.Managed != "proj/z-2" {
+			t.Errorf("%v: spec %+v, %v", r.Kind, spec, err)
+		}
+	}
+	// A tile with a workspace session of its own keeps it.
+	own := rows.Row{Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/proj/z", Key: "venv//w/proj/z"}}
+	if row, err := shellRow(tm, own); err != nil || row.ID() != second.ID {
+		t.Errorf("a tile with its own session: %+v, %v", row, err)
+	}
 }
 
 // An rm whose host side succeeded and whose local cleanup then failed

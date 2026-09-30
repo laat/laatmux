@@ -461,8 +461,9 @@ func agentText(n rows.Row, now time.Time) string {
 		state = "stale"
 	}
 	title := strings.TrimSpace(a.Title)
-	if len(title) > 48 {
-		title = title[:48]
+	if r := []rune(title); len(r) > 48 {
+		// By rune: a cut in the middle of one prints as garbage.
+		title = string(r[:48])
 	}
 	return fmt.Sprintf("%s %-8s %-6s %s  %s", n.Mark(), state, n.AgentName(), rows.Ago(now.Sub(a.ActivityAt)), title)
 }
