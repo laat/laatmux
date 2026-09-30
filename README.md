@@ -779,9 +779,10 @@ a `switch-client`; one on a remote host's default server is refused with
 would start one in the footer. An orphaned row's session exists locally and
 is switched to.
 
-- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets five
-  server hooks at indexes laatmux owns, `after-new-window[9101]` and
-  `after-new-session[9102]` running `sidebar attach '#{window_id}'`,
+- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
+  eight server hooks at indexes laatmux owns, `after-new-window[9101]`
+  and `after-new-session[9102]` running `sidebar attach '#{window_id}'
+  '#{session_id}'`,
   `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
   and `window-resized[9105]` running `sidebar fit '#{window_id}'`,
   then walks every window on the default server and splits a pane off

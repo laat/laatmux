@@ -877,8 +877,9 @@ Five settlements differ from the plan in #52:
   or the worktree lines in the tree, in the list as drawn, after the
   scope, the filter and the folds, skipping fold rows and repository
   lines, and switches the client the
-  command names with `-c`, or the one it ran from, with `switch-client
-  -c`. For `view` and `scope` the CLI writes the new default to
+  command names with `-c`, or the one it ran from when that is the
+  default server's, with `switch-client -c`; a shell nested on the
+  laatmux server names none, and the pane switches a client of its own. For `view` and `scope` the CLI writes the new default to
   `sidebar.json` once, whether or not a pane answered; the panes only
   apply the change. Nothing is replayed. A window with no sidebar pane,
   or a socket that refuses the connection, makes the command exit

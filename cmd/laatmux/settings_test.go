@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -308,6 +309,18 @@ func TestSidebarControl(t *testing.T) {
 	reapSockets(ctx)
 	if _, err := os.Stat(foreign); err == nil {
 		t.Error("another server's socket refusing not reaped")
+	}
+	// Another server's socket listening: not the listing's to judge,
+	// kept.
+	alive := socketPath(pid+100000, "%998")
+	ln, err := net.Listen("unix", alive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	reapSockets(ctx)
+	if _, err := os.Stat(alive); err != nil {
+		t.Error("another server's live socket reaped")
 	}
 	// A command that is no jump leaves no client on the dash; a jump's
 	// client is switched by the pane's jump, once.

@@ -143,8 +143,10 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 	if client != "" && cmd.Name != "jump" {
 		return fmt.Errorf("sidebar %s: -c is for jump", name)
 	}
-	if cmd.Name == "jump" && client == "" && os.Getenv("TMUX") != "" {
-		// The client the command ran from, when tmux can say.
+	if cmd.Name == "jump" && client == "" && workspace.Inside(ctx) {
+		// The client the command ran from, when it is the default
+		// server's: a shell nested on another server, the laatmux one,
+		// would name a client the pane's switch-client cannot find.
 		if out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "#{client_name}"); err == nil {
 			client = strings.TrimSpace(string(out))
 		}

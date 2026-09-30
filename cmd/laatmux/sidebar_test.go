@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -285,6 +287,8 @@ func TestSidebarScopeAndOff(t *testing.T) {
 	}
 	otherPane := run("split-window", "-d", "-h", "-t", elsewhere+":", "-P", "-F", "#{pane_id}", "sleep 1000")
 	run("set-option", "-p", "-t", otherPane, sidebarTag, "1")
+	ownPane := run("split-window", "-d", "-h", "-t", target+":", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", ownPane, sidebarTag, "1")
 	if _, err := scopeSidebar(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -292,9 +296,11 @@ func TestSidebarScopeAndOff(t *testing.T) {
 		t.Errorf("the option after two scoped ons: %v", sessions)
 	}
 	boot := target
-	if out := run("list-panes", "-a", "-F", "#{"+sidebarTag+"}"); strings.Contains(out, "1") {
-		t.Error("the tagged pane in the other session stayed")
+	// The scoped session's own pane stays, the other session's goes.
+	if out := run("list-panes", "-a", "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); strings.Contains(out, otherPane+tmux.Sep+"1") || !strings.Contains(out, ownPane+tmux.Sep+"1") {
+		t.Errorf("the tagged panes after a scoped on:\n%s", out)
 	}
+	run("kill-pane", "-t", ownPane)
 	if _, err := scopeSidebar(ctx, false); err != nil {
 		t.Fatal(err)
 	}
@@ -344,6 +350,57 @@ func TestJumpKeys(t *testing.T) {
 	}
 }
 
+// A jump's client: switchTo with a client in the context switches
+// that client alone, whichever of two attached it is.
+func TestSwitchClient(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	sock := run("display", "-p", "#{socket_path}")
+	for i := 0; i < 2; i++ {
+		c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+		in, err := c.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Stdout = io.Discard
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	}
+	var clients []string
+	for i := 0; i < 50 && len(clients) != 2; i++ {
+		time.Sleep(100 * time.Millisecond)
+		clients = strings.Fields(run("list-clients", "-F", "#{client_name}"))
+	}
+	if len(clients) != 2 {
+		t.Fatalf("clients: %v", clients)
+	}
+	t.Setenv("TMUX", sock+",1,0")
+	for _, target := range clients {
+		run("switch-client", "-c", clients[0], "-t", "=boot")
+		run("switch-client", "-c", clients[1], "-t", "=boot")
+		if err := switchTo(withClient(ctx, target), "other"); err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(run("list-clients", "-F", "#{client_name} #{client_session}"), "\n") {
+			f := strings.Fields(l)
+			want := "boot"
+			if len(f) == 2 && f[0] == target {
+				want = "other"
+			}
+			if len(f) != 2 || f[1] != want {
+				t.Errorf("switch of %s: %q", target, l)
+			}
+		}
+	}
+}
+
 func must(b []byte, err error) []byte {
 	if err != nil {
 		panic(err)
@@ -358,6 +415,9 @@ func TestSidebarWidth(t *testing.T) {
 	// The split: left at the width, or top at the height.
 	if got := strings.Join(sidebarSplit(cfg, 200), " "); got != "split-window -d -h -b -f -l 35" {
 		t.Errorf("the left split: %s", got)
+	}
+	if got := strings.Join(sidebarSplit(cfg, 50), " "); got != "split-window -d -h -b -f -l 25" {
+		t.Errorf("the left split in a narrow window: %s", got)
 	}
 	if got := strings.Join(sidebarSplit(config.Config{Sidebar: config.Sidebar{Position: "top", Height: 4}}, 200), " "); got != "split-window -d -v -b -f -l 4" {
 		t.Errorf("the top split: %s", got)

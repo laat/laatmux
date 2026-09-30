@@ -344,9 +344,10 @@ func sidebarAttach(ctx context.Context, window, session string) error {
 	return sidebarAdd(ctx, cfg, window)
 }
 
-// sidebarAdd splits a sidebar pane off the left edge of the window, full
-// height, at sidebarWidth's width, the configured one or half a narrow
-// window, unless the window has one. The split
+// sidebarAdd splits a sidebar pane off the window as sidebarSplit says,
+// the left edge at sidebarWidth's width, the configured one or half a
+// narrow window, or the top edge at the strip's height, unless the
+// window has one. The split
 // is detached so focus stays where it was, and the new pane is tagged
 // by the id split-window printed, not as the window's active pane: an
 // after-split-window hook of the user's runs between the two commands
@@ -450,7 +451,8 @@ func sidebarSplit(cfg config.Config, windowWidth int) []string {
 	return []string{"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth))}
 }
 
-// sidebarFit puts the window's sidebar pane back to its width. tmux
+// sidebarFit puts the window's sidebar pane back to its width, or a
+// strip on top to its height. tmux
 // shares a window's change of width out among its panes: a session made
 // detached is 80 columns wide, its sidebar split off at the width, and
 // a client switching to it widens the sidebar by a share of the extra
