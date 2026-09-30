@@ -11,7 +11,7 @@ S..|  ▾ «⟨current_worktree_fg:agents-config⟩» (‹vm›)               �
 ...|  ▾ auto-layout (‹vm›)                     ‹⟨success:+318⟩› ‹⟨danger:-87⟩›  «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
 ...|    ⟨success:✅⟩ claude  ‹done›
 .D.|    fix-sidebar (mac)                                ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
-.D.|    mac/laatmux/gone (mac)                     ‹⟨dimmed:worktree gone⟩›
+.D.|    mac/laatmux/gone (mac)                     ‹worktree gone›
 ...|‹⟨header:other sessions⟩›
 ...|    scratch‹ (vm)›  ⟨accent:💬⟩ claude
 ...|

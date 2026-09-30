@@ -932,9 +932,10 @@ the defaults.
 
 - **Tokens:**
   - labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`, `{host}`
-    (the name alone, dim off this machine, `/server` after it for an
-    agent observed off the managed server; the templates write the `@`
-    and the parentheses), `{session}`, `{window}` (tmux's
+    (the name alone, dim off this machine, `?` when no host claims the
+    record, `/server` after it on a tile or an agent line for an agent
+    observed off the managed server; the templates write the `@` and
+    the parentheses), `{session}`, `{window}` (tmux's
     `session:index`, since the records carry no window name),
     `{window_index}`, `{pane_title}` (the cleaned title; on a tile,
     what the row is instead), `{pane_suffix}`;
@@ -955,14 +956,19 @@ the defaults.
     line. A token with nothing on a row is empty.
 - **`{fill}`** splits a line into a left and a right part; the right part
   sits against the right edge.
-- **Overflow:** the flexible tokens, the labels and the title, are cut
-  with `…` down to a floor of a third of the width, at most twelve
-  cells, the rightmost first (so the compact line's secondary label
-  goes before its primary); `{git_stats}` and `{pr_checks}` shrink
-  themselves; then fields on the right are dropped, the widest first,
-  so a folded worktree line keeps its icon when the stats go; then the
-  flexible tokens are cut further; then the line is clipped. A cut
-  label grows back into the room a dropped field leaves.
+- **Overflow:** the flexible tokens, the labels and the title on
+  either side, are cut with `…` down to a floor of a third of the
+  width, at most twelve cells, the rightmost first (so the compact
+  line's secondary label goes before its primary); `{git_stats}` and
+  `{pr_checks}` shrink themselves, never to nothing (the stats keep
+  their smallest form, the rebase mark or one part, until the field is
+  dropped); then fields on the right are dropped, the widest first and
+  a folded worktree line's `{worst_status}` last, so a blocked or done
+  agent inside is not missed; then the flexible tokens are cut
+  further; then the line is clipped. What dropping leaves over goes
+  back to the cut labels, then to the shrunk stats. A stale branch's
+  `?` sits on `{pr_checks}` when they are drawn, else on
+  `{pr_number}`, so it shows once and always.
 - **Empty tokens:** an empty token takes the adjacent run of spaces
   with it, the one after it, else the one before, so `{a}  {b}  {c}`
   with `{b}` empty is `{a}  {c}`; an empty field keeps its line, so

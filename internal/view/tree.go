@@ -527,7 +527,6 @@ func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
 	if repo == nil || repo.ID() == top || repo.Kind != rows.KindRepo {
 		return nil, ""
 	}
-	m.rowIdx = 0 // no number of its own: the pin is drawn after the rows
 	l := m.treeLine(*repo)[0]
 	return &l, repo.ID()
 }

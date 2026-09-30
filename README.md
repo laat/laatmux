@@ -961,7 +961,8 @@ sidebar:
 ```
 
 - **Tokens.** Labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`,
-  `{host}` (dim for every host but this machine, with `/server` for an
+  `{host}` (dim for every host but this machine, `?` when no host
+  claims the record, with `/server` on a tile or an agent line for an
   agent observed off the managed server), `{session}`, `{window}`
   (tmux's `session:index`), `{window_index}`, `{pane_title}` (the
   cleaned title, or on a tile what the row is instead: a task's state,
@@ -990,12 +991,15 @@ sidebar:
   An empty `compact` or tree template is the default: those rows keep a
   line, so they can be selected.
 - **Overflow.** A line wider than the pane gives way in this order:
-  the flexible tokens, the labels and the pane title, are cut with `…`
-  down to a third of the width (at most twelve cells), the rightmost
-  first; `{git_stats}` and `{pr_checks}` shrink themselves; the fields
-  on the right are dropped, the widest first, so a folded line keeps
-  its icon; the flexible tokens are cut further; then the line is
-  clipped. A cut label grows back into the room a dropped field leaves.
+  the flexible tokens, the labels and the pane title on either side,
+  are cut with `…` down to a third of the width (at most twelve
+  cells), the rightmost first; `{git_stats}` and `{pr_checks}` shrink
+  themselves, never to nothing; the fields on the right are dropped,
+  the widest first and a folded line's icon last; the flexible tokens
+  are cut further; then the line is clipped. What dropping leaves over
+  goes back to the cut labels, then to the shrunk stats. A stale
+  branch's `?` sits on `{pr_checks}` when they are drawn, else on
+  `{pr_number}`.
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves

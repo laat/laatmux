@@ -214,9 +214,27 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»› ‹×›‹ 3/5›‹?›\n" {
 		t.Errorf("a stale pair: %q", got)
 	}
-	r.Branch.Checks = nil
 	if got := render("{pr_number}", 40); got != "...|‹«#52»›‹?›\n" {
+		t.Errorf("a stale number without the checks drawn: %q", got)
+	}
+	if got := render("{pr_number}{fill}{pr_checks} {host}", 5); got != "...|‹«#52»›‹?›\n" {
+		t.Errorf("a stale number with the checks dropped: %q", got)
+	}
+	r.Branch.Checks = nil
+	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»›‹?›\n" {
 		t.Errorf("a stale number alone: %q", got)
+	}
+	r = tokenRow(now)
+	// A run of spaces a style splits still goes with an empty token.
+	r.Suffix = ""
+	if got := render("a {pane_suffix} #[fg=accent] b", 20); got != "...|a ⟨accent:b⟩\n" {
+		t.Errorf("a split run: %q", got)
+	}
+	r = tokenRow(now)
+	// The single git tokens are stale as the stats are.
+	r.Worktree.Git.Stale = true
+	if got := render("{git_rebase} {git_conflict} {git_ahead}", 20); got != "...|‹R› ‹!› ‹↑2›\n" {
+		t.Errorf("stale git tokens: %q", got)
 	}
 	r = tokenRow(now)
 	// fg=default clears the colour, as tmux spells it.
@@ -369,14 +387,61 @@ func TestConfiguredTemplates(t *testing.T) {
 	if s := ANSI(l, th); !strings.Contains(s, "\x1b[2m") || !strings.Contains(s, th.SGR(palette.Accent, true)) {
 		t.Errorf("dim with a background in %q", s)
 	}
-	// The pinned repository line has no number of its own.
-	tree.SetTemplates(CompileTemplates(nil, "", "", "{idx}:{repo}", "{indent}{fold}{idx}:{primary}", "", "", ""))
-	tree.Height = 8
-	tree.Render()
-	tree.Handle(Key{Rune: 'G'})
+	// A dim line draws no background.
+	l = Line{Dim: true, Spans: []Span{{Text: "x", Bg: palette.Accent}}}
+	if s := ANSI(l, th); strings.Contains(s, th.SGR(palette.Accent, true)) {
+		t.Errorf("a background on a dim line in %q", s)
+	}
+	// A task standing on a listed worktree with stats: its state, a
+	// space, the stats and the PR.
+	in.Pendings = []protocol.Pending{{ID: "add-al", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "auto-layout", Root: "/r/auto-layout", Session: "laatmux/auto-layout", Taken: true, SubmittedAt: now}}
+	tree.SetTemplates(DefaultTemplates())
+	tree.Width, tree.Height = 70, 20
+	tree.SetTree(rows.Tree(in))
+	tree.SetRows(rows.Agents(in))
 	out = Text(tree.Render())
-	if !strings.HasPrefix(out, ":laatmux\n") && !strings.Contains(out, "\n:laatmux\n") {
-		t.Errorf("the pinned line numbered:\n%s", out)
+	if !strings.Contains(out, "auto-layout (vm)") || !strings.Contains(out, "adding +318 -87  #49 × 3/5") {
+		t.Errorf("a standing task's line:\n%s", out)
+	}
+}
+
+// The folded line's icon is dropped last, after the check mark; a
+// host unknown on a tree line is ?; {session} falls back to the
+// worktree's, the task's and the local session.
+func TestTemplateTreeEdges(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	m.Select("venv/worktree//r/agents-config")
+	m.Handle(Key{Rune: 'h'})
+	r := m.Tree[m.indexOf("venv/worktree//r/agents-config")]
+	line := func(src string, r rows.Row, w int) string {
+		t.Helper()
+		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}}), "\n")
+	}
+	if got := line(DefaultWorktree, r, 20); got != "  ▸ agents-… (vm) ⠋⠙" {
+		t.Errorf("the icon at 20: %q", got)
+	}
+	if got := line(DefaultWorktree, r, 24); got != "  ▸ agents-c… (vm) ✓  ⠋⠙" {
+		t.Errorf("the icon at 24: %q", got)
+	}
+	r.Host = ""
+	if got := line("{primary} ({host})", r, 40); got != "agents-config (?)" {
+		t.Errorf("a host unknown: %q", got)
+	}
+	for _, c := range []struct{ id, want string }{
+		{"venv/worktree//r/agents-config", "laatmux/agents-config"}, {"menv/worktree//w/fix-sidebar", ""}, {"session/mac/laatmux/gone", "mac/laatmux/gone"},
+	} {
+		if got := line("{session}", m.Tree[m.indexOf(c.id)], 40); got != c.want {
+			t.Errorf("%s {session} = %q, want %q", c.id, got, c.want)
+		}
+	}
+	task := rows.Row{Kind: rows.KindTask, Host: "vm", Pending: &protocol.Pending{ID: "t", Session: "laatmux/new"}}
+	if got := line("{session}", task, 40); got != "laatmux/new" {
+		t.Errorf("a task's session: %q", got)
 	}
 }
 

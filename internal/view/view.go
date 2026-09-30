@@ -368,6 +368,7 @@ type Span struct {
 	Bold bool
 	Fg   string
 	Bg   string // a template's #[bg=…]; "" for the line's
+	own  bool   // the look is the span's own: a template's style leaves it
 	spin bool
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.

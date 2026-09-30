@@ -17,15 +17,17 @@ import (
 // into a left and a right part, the right against the right edge.
 //
 // A line wider than the pane gives way in this order: the flexible
-// tokens, the labels and the pane title, are cut with … down to a floor
-// of a third of the width, at most twelve cells, the rightmost first;
-// `{git_stats}` and `{pr_checks}` shrink themselves; fields on the right
-// are dropped, the widest first; the flexible tokens are cut further;
-// then the line is clipped, and a cut label grows back into whatever
-// dropping left over. An empty token takes the adjacent run of spaces
-// with it, the one after it, else the one before, so separators do not
-// pile up; a line whose tokens are all empty is still a line, so tiles
-// keep their height; a blank template is no line at all.
+// tokens, the labels and the pane title on either side, are cut with …
+// down to a floor of a third of the width, at most twelve cells, the
+// rightmost first; `{git_stats}` and `{pr_checks}` shrink themselves,
+// never to nothing; fields on the right are dropped, the widest first
+// and a folded line's `{worst_status}` icon last; the flexible tokens
+// are cut further; then the line is clipped. What dropping leaves over
+// goes back to the cut tokens, then to the shrunk ones. An empty token
+// takes the adjacent run of spaces with it, the one after it, else the
+// one before, so separators do not pile up; a line whose tokens are all
+// empty is still a line, so tiles keep their height; a blank entry in
+// the tiles list is no line at all.
 
 // partKind is what a piece of a template is.
 type partKind int
@@ -60,7 +62,7 @@ type Template struct {
 }
 
 // Blank reports whether the template draws no line: its source is
-// empty.
+// empty, or spaces alone.
 func (t Template) Blank() bool { return strings.TrimSpace(t.src) == "" }
 
 // tokenKind says how a token gives way on a line too narrow.
@@ -253,7 +255,7 @@ const (
 	DefaultCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
 	DefaultTop      = "{status_icon} {primary} {pane_suffix}"
 	DefaultRepo     = "#[fg=header,bold]{fold}{repo}"
-	DefaultWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default]{git_stats}  {pr_number} {pr_checks}  {worst_status}"
+	DefaultWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
 	DefaultAgent    = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
 	DefaultPane     = "{indent}$ {command}"
 	DefaultRun      = "{indent}▶ {command}{fill}{elapsed}"
@@ -350,6 +352,8 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 		}
 	}
 	left, right = collapse(left), collapse(right)
+	stale := r.Branch != nil && r.Branch.Stale
+	staleMark(left, right, stale, false)
 	if itemsWidth(right) == 0 {
 		// Nothing on the right: no gap, and nothing to drop.
 		right = nil
@@ -374,6 +378,7 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 			return clip(flatten(left), w)
 		}
 	}
+	staleMark(left, right, stale, total() < w)
 	regrow(left, right, w-total())
 	out := flatten(left)
 	if len(right) > 0 {
@@ -384,9 +389,48 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 	return clip(out, w)
 }
 
+// staleMark puts a stale branch's ? on the PR pair once: the checks
+// carry it when they are drawn, else the number does. Before the
+// fitting the number's goes when the checks are there; after it, with
+// the checks dropped, the number takes it back when a cell is free.
+func staleMark(left, right []item, stale, room bool) {
+	if !stale {
+		return
+	}
+	var number *item
+	checks := false
+	for _, items := range [][]item{left, right} {
+		for i := range items {
+			it := &items[i]
+			if it.part.kind != partToken || it.width() == 0 {
+				continue
+			}
+			switch it.part.text {
+			case "pr_number":
+				number = it
+			case "pr_checks":
+				checks = true
+			}
+		}
+	}
+	if number == nil {
+		return
+	}
+	last := number.spans[len(number.spans)-1]
+	switch {
+	case checks && last.Text == "?":
+		number.spans = number.spans[:len(number.spans)-1]
+	case !checks && last.Text != "?" && room:
+		number.spans = append(number.spans, Span{Text: "?", Dim: true})
+	}
+}
+
 // styled is a span with a style's settings where the span has none of
 // its own.
 func styled(sp Span, st style) Span {
+	if sp.own {
+		return sp
+	}
 	if sp.Fg == "" {
 		sp.Fg = st.fg
 	}
@@ -405,12 +449,24 @@ func collapse(items []item) []item {
 	for i := 0; i < len(items); i++ {
 		it := items[i]
 		if it.part.kind == partToken && it.width() == 0 {
+			// The run may span text parts a style split.
 			switch {
 			case i+1 < len(items) && items[i+1].part.kind == partText && strings.HasPrefix(items[i+1].spans[0].Text, " "):
-				items[i+1].spans[0].Text = strings.TrimLeft(items[i+1].spans[0].Text, " ")
+				for j := i + 1; j < len(items) && items[j].part.kind == partText; j++ {
+					t := items[j].spans[0].Text
+					items[j].spans[0].Text = strings.TrimLeft(t, " ")
+					if strings.TrimLeft(t, " ") != "" {
+						break
+					}
+				}
 			case len(out) > 0 && out[len(out)-1].part.kind == partText && strings.HasSuffix(out[len(out)-1].spans[0].Text, " "):
-				last := &out[len(out)-1]
-				last.spans[0].Text = strings.TrimRight(last.spans[0].Text, " ")
+				for j := len(out) - 1; j >= 0 && out[j].part.kind == partText; j-- {
+					t := out[j].spans[0].Text
+					out[j].spans[0].Text = strings.TrimRight(t, " ")
+					if strings.TrimRight(t, " ") != "" {
+						break
+					}
+				}
 			}
 			continue
 		}
@@ -531,12 +587,20 @@ func cutSpans(spans []Span, w int) []Span {
 
 // dropWidest drops the widest token on the right, the last of equals,
 // with the literal before it, its separator; the first token takes the
-// literal after it instead.
+// literal after it instead. A folded line's icon, {worst_status}, goes
+// last: a blocked or done agent inside is not to be missed.
 func dropWidest(right []item) []item {
 	at, widest := -1, -1
 	for i, it := range right {
-		if it.part.kind == partToken && it.width() >= widest {
+		if it.part.kind == partToken && it.width() >= widest && it.part.text != "worst_status" {
 			at, widest = i, it.width()
+		}
+	}
+	if at < 0 {
+		for i, it := range right {
+			if it.part.kind == partToken {
+				at = i
+			}
 		}
 	}
 	if at < 0 {
@@ -612,9 +676,11 @@ func (m *Model) token(name string, r rows.Row) item {
 			it.spans = []Span{where}
 			return it
 		}
-		if r.Host != "" {
-			it.spans = []Span{{Text: r.Host, Dim: r.Host != m.LocalHost}}
+		host := r.Host
+		if host == "" {
+			host = "?" // no host record claims the record
 		}
+		it.spans = []Span{{Text: host, Dim: host != m.LocalHost}}
 		return it
 	case "session":
 		switch {
@@ -672,7 +738,7 @@ func (m *Model) token(name string, r rows.Row) item {
 	case "status_label":
 		if r.Orphaned && r.Pending == nil {
 			// Dim, as the line is: no colour a style would give it.
-			it.spans = []Span{{Text: "worktree gone", Dim: true, Fg: palette.Dimmed}}
+			it.spans = []Span{{Text: "worktree gone", Dim: true, own: true}}
 			return it
 		}
 		return text(m.statusLabel(r))
@@ -734,29 +800,25 @@ func (m *Model) token(name string, r rows.Row) item {
 			}
 		}
 		return it
-	case "git_ahead":
-		if g != nil && g.Ahead > 0 {
-			return text("↑" + strconv.Itoa(g.Ahead))
+	case "git_ahead", "git_behind", "git_dirty", "git_conflict", "git_rebase":
+		if g == nil {
+			return it
 		}
-		return it
-	case "git_behind":
-		if g != nil && g.Behind > 0 {
-			return text("↓" + strconv.Itoa(g.Behind))
-		}
-		return it
-	case "git_dirty":
-		if g != nil && (g.Dirty || g.Uncommitted != [2]int{}) {
-			return text("✎")
-		}
-		return it
-	case "git_conflict":
-		if g != nil && g.Conflict != nil && *g.Conflict {
+		switch {
+		case name == "git_ahead" && g.Ahead > 0:
+			it.spans = []Span{{Text: "↑" + strconv.Itoa(g.Ahead)}}
+		case name == "git_behind" && g.Behind > 0:
+			it.spans = []Span{{Text: "↓" + strconv.Itoa(g.Behind)}}
+		case name == "git_dirty" && (g.Dirty || g.Uncommitted != [2]int{}):
+			it.spans = []Span{{Text: "✎"}}
+		case name == "git_conflict" && g.Conflict != nil && *g.Conflict:
 			it.spans = []Span{{Text: "!", Fg: palette.Danger, Bold: true}}
+		case name == "git_rebase":
+			it.spans = gitRebase(g)
 		}
-		return it
-	case "git_rebase":
-		if g != nil && g.Rebasing {
-			it.spans = []Span{{Text: "R", Fg: palette.Warning, Bold: true}}
+		if g.Stale {
+			// A refresh that timed out: dim and plain, as the stats.
+			it.spans = gitStale(it.spans)
 		}
 		return it
 	case "git_branch":
@@ -885,13 +947,12 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	}
 	out := []Span{sp}
 	if b.Stale {
-		// Dim, with ? after unless the checks carry it.
+		// Dim, with ? after; staleMark takes it off when the checks
+		// are drawn with theirs.
 		for i := range out {
 			out[i].Dim, out[i].Fg = true, ""
 		}
-		if m.prChecks(r, 1<<20) == nil {
-			out = append(out, Span{Text: "?", Dim: true})
-		}
+		out = append(out, Span{Text: "?", Dim: true})
 	}
 	return out
 }
