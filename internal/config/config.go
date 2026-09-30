@@ -18,7 +18,7 @@
 //	  - source: https://github.com/laat/other.git
 //	    name: other
 //	sidebar:
-//	  width: 35               # columns; default 35
+//	  width: 40               # columns or N%; unset: 10%, clamped to 25..50
 //	  layout: tiles           # tiles or compact; default tiles
 //	icons: emoji              # emoji, nerdfont or ascii; default emoji
 //	status_icons: {waiting: "?"}  # per status: working, waiting, done, stale
@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,10 +172,20 @@ var (
 // layout it starts in; and for the sidebar and the dashboard alike, the
 // order of the rows and what stale is. Zero values are the defaults.
 type Sidebar struct {
-	Width  int    `yaml:"width"`
-	Layout string `yaml:"layout"`
-	// View is the view a sidebar pane starts in: agents or tree.
-	View string `yaml:"view"`
+	// Width is columns or N% of the window; unset is 10% clamped to
+	// 25..50 columns, and an explicit width is not clamped. Position is
+	// left or top; Height, for top, the strip's lines, 3 by default;
+	// Horizontal.ItemWidth the strip's chip width, 24 by default.
+	Width      string     `yaml:"width"`
+	Position   string     `yaml:"position"`
+	Height     int        `yaml:"height"`
+	Horizontal Horizontal `yaml:"horizontal"`
+	Layout     string     `yaml:"layout"`
+	// View is the view a sidebar pane starts in: agents or tree; Scope
+	// what it shows, all, session or project, the file's last choice
+	// over it.
+	View  string `yaml:"view"`
+	Scope string `yaml:"scope"`
 	// Sort is priority, recency or window.
 	Sort string `yaml:"sort"`
 	// DimStale draws a stale row dim; CollapseStale folds the stale rows
@@ -187,6 +198,10 @@ type Sidebar struct {
 	// unset; the view parses them and shows an error in a bad one's
 	// place rather than the config failing.
 	Templates Templates `yaml:"templates"`
+	// JumpKeys binds M-1..M-9 in tmux's root table to the sidebar's
+	// jump, off by default: bound there they take the keys from every
+	// pane.
+	JumpKeys bool `yaml:"jump_keys"`
 }
 
 // Templates are the views' line templates: the tile's lines (nil is
@@ -195,8 +210,35 @@ type Sidebar struct {
 type Templates struct {
 	Tiles   []string      `yaml:"tiles"`
 	Compact string        `yaml:"compact"`
-	Top     string        `yaml:"top"`
+	Top     Lines         `yaml:"top"`
 	Tree    TreeTemplates `yaml:"tree"`
+}
+
+// Lines is a list of template lines that a config may write as one
+// string, as `top` was before it took several.
+type Lines []string
+
+// UnmarshalYAML reads a list, or a scalar as a list of one.
+func (l *Lines) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		if s == "" {
+			// As before it took several lines: the default.
+			*l = nil
+			return nil
+		}
+		*l = Lines{s}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return err
+	}
+	*l = list
+	return nil
 }
 
 // TreeTemplates are the tree's lines by node kind.
@@ -223,16 +265,80 @@ func (s Sidebar) Stale() (after time.Duration, dim, collapse bool) {
 	return after, s.DimStale == nil || *s.DimStale, s.CollapseStale == nil || *s.CollapseStale
 }
 
-// DefaultSidebarWidth is the sidebar's width when the config sets none.
+// Horizontal is the top strip's own settings.
+type Horizontal struct {
+	ItemWidth int `yaml:"item_width"`
+}
+
+// The strip's defaults: its height and its chips' width.
+const (
+	DefaultSidebarHeight    = 3
+	DefaultSidebarItemWidth = 24
+)
+
+// DefaultSidebarWidth is the sidebar's width when the config sets none
+// and the window's width is not known.
 const DefaultSidebarWidth = 35
 
-// Columns is the configured width, or the default.
-func (s Sidebar) Columns() int {
-	if s.Width <= 0 {
+// Columns is the sidebar's width in a window of the given width, 0 for
+// one not known: the configured columns; N% of the window; or unset,
+// 10% of the window clamped to 25..50 columns, the default 35 with the
+// window not known.
+func (s Sidebar) Columns(windowWidth int) int {
+	cols, pct, set := parseSize(s.Width)
+	switch {
+	case !set && windowWidth <= 0:
 		return DefaultSidebarWidth
+	case !set:
+		return min(max(windowWidth/10, 25), 50)
+	case pct > 0 && windowWidth <= 0:
+		return DefaultSidebarWidth
+	case pct > 0:
+		return max(windowWidth*pct/100, 1)
 	}
-	return s.Width
+	return cols
 }
+
+// parseSize reads columns or N%; set is false for "" and for 0, the
+// zero value, which is the default as it was when the width was a
+// number.
+func parseSize(s string) (cols, pct int, set bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, 0, false
+	}
+	if strings.HasSuffix(s, "%") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "%"))
+		if err != nil {
+			return 0, 0, true
+		}
+		return 0, n, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, 0, true
+	}
+	return n, 0, true
+}
+
+// Lines is the strip's height, for position top.
+func (s Sidebar) Lines() int {
+	if s.Height <= 0 {
+		return DefaultSidebarHeight
+	}
+	return s.Height
+}
+
+// ItemWidth is the strip's chip width.
+func (s Sidebar) ItemWidth() int {
+	if s.Horizontal.ItemWidth <= 0 {
+		return DefaultSidebarItemWidth
+	}
+	return s.Horizontal.ItemWidth
+}
+
+// Top reports whether the sidebar is a strip along the top.
+func (s Sidebar) Top() bool { return s.Position == "top" }
 
 // Servers resolves TmuxServers, or the default when it is empty.
 func (c Config) Servers() ([]tmux.Server, error) {
@@ -321,8 +427,21 @@ func Parse(b []byte) (Config, error) {
 			}
 		}
 	}
-	if c.Sidebar.Width < 0 || c.Sidebar.Width > 0 && c.Sidebar.Width < 10 {
-		return c, fmt.Errorf("sidebar: width %d must be at least 10", c.Sidebar.Width)
+	if cols, pct, set := parseSize(c.Sidebar.Width); set {
+		switch {
+		case pct > 0 && pct <= 100 && cols == 0:
+		case pct == 0 && cols >= 10:
+		default:
+			return c, fmt.Errorf("sidebar: width %q must be at least 10 columns, or 1%% to 100%%", c.Sidebar.Width)
+		}
+	}
+	switch c.Sidebar.Position {
+	case "", "left", "top":
+	default:
+		return c, fmt.Errorf("sidebar: position %q is not left or top", c.Sidebar.Position)
+	}
+	if c.Sidebar.Height < 0 || c.Sidebar.Horizontal.ItemWidth < 0 {
+		return c, fmt.Errorf("sidebar: height and item_width must be positive")
 	}
 	switch c.Sidebar.Layout {
 	case "", "tiles", "compact":
@@ -333,6 +452,11 @@ func Parse(b []byte) (Config, error) {
 	case "", "agents", "tree":
 	default:
 		return c, fmt.Errorf("sidebar: view %q is not agents or tree", c.Sidebar.View)
+	}
+	switch c.Sidebar.Scope {
+	case "", "all", "session", "project":
+	default:
+		return c, fmt.Errorf("sidebar: scope %q is not all, session or project", c.Sidebar.Scope)
 	}
 	if c.Sidebar.Sort != "" && !contains(SortOrders, c.Sidebar.Sort) {
 		return c, fmt.Errorf("sidebar: sort %q is not one of %s", c.Sidebar.Sort, strings.Join(SortOrders, ", "))

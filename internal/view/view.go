@@ -43,13 +43,37 @@ type Model struct {
 	// View is which of the two views is shown; Tree is the tree's nodes,
 	// which SetTree sets; folds is the tree's fold state by node id,
 	// true for folded, and toggled which the user set.
-	View      View
-	Tree      []rows.Row
-	folds     map[string]bool
-	toggled   map[string]bool
-	Layout    Layout
-	Titles    bool   // compact draws the pane title under each row
-	LocalHost string // the host whose tag is not dimmed
+	View View
+	Tree []rows.Row
+	// Scope is what the pane shows by the viewer's row: all, session or
+	// project; prevScope what F goes back to.
+	Scope     Scope
+	prevScope Scope
+	settings  bool            // a setting changed since SettingsChanged last asked
+	viewSet   bool            // the view chosen by a key since ChangedDefaults last asked
+	layoutSet bool            // the layout likewise
+	dirty     map[string]bool // the folds set here since DirtyFolds last asked
+	carried   map[string]bool // of those, the ones a handoff carried
+	applied   map[string]bool // the file's folds as last applied
+	// AskQuit has q and Ctrl-C ask before the view ends, in a sidebar
+	// pane. HelpTitle and Help are the ? overlay's title and the host's
+	// own lines after the shared keys.
+	AskQuit   bool
+	HelpTitle string
+	Help      []string
+	// ItemWidth is a strip's chip width; hscroll the first chip drawn
+	// and hitCols the chips' columns, for a click.
+	ItemWidth    int
+	hscroll      int
+	hitCols      []hitCol
+	hitColsPrev  []hitCol
+	hitLines     int // the strip's lines of chips, as last drawn
+	hitLinesPrev int
+	folds        map[string]bool
+	toggled      map[string]bool
+	Layout       Layout
+	Titles       bool   // compact draws the pane title under each row
+	LocalHost    string // the host whose tag is not dimmed
 	// Header lines are drawn above the list: hosts that are not
 	// connected and listed, the local daemon being down.
 	Header []HeaderLine
@@ -249,7 +273,7 @@ func (m *Model) Items() []Item {
 		added := 0
 		for i := range rs {
 			r := &rs[i]
-			if !m.matches(r) {
+			if !m.matches(r) || !m.inScope(r) {
 				continue
 			}
 			out = append(out, Item{Row: r, Group: g, Index: n})
@@ -284,7 +308,7 @@ func (m *Model) Items() []Item {
 func (m *Model) count(rs []rows.Row) int {
 	n := 0
 	for i := range rs {
-		if m.matches(&rs[i]) {
+		if m.matches(&rs[i]) && m.inScope(&rs[i]) {
 			n++
 		}
 	}
@@ -369,6 +393,7 @@ type Span struct {
 	Fg   string
 	Bg   string // a template's #[bg=…]; "" for the line's
 	own  bool   // the look is the span's own: a template's style leaves it
+	band bool   // the selection's band on this span alone: a strip's chip
 	spin bool
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.
@@ -410,6 +435,9 @@ func (m *Model) Render() []Line {
 	}
 	if m.Overlay != nil {
 		return m.Overlay.Render(m.Width, m.Height)
+	}
+	if m.Layout == Strip {
+		return m.renderStrip()
 	}
 	var out []Line
 	if m.Tabs {
@@ -611,7 +639,12 @@ func (m *Model) footer() Line {
 	case m.Filter != "":
 		return plain(fit("/"+m.Filter+"  (esc clears)", m.Width))
 	}
-	return Line{Spans: []Span{{Text: fit(m.Hint, m.Width)}}, Dim: true}
+	hint := m.Hint
+	if s := m.ScopeLabel(); s != "" {
+		// The scope in force, ahead of the keys.
+		hint = "[" + s + "]  " + hint
+	}
+	return Line{Spans: []Span{{Text: fit(hint, m.Width)}}, Dim: true}
 }
 
 // row draws one row in the current layout; a tree's node, and the stale
@@ -871,6 +904,9 @@ func Debug(lines []Line) string {
 			if s.Bg != "" {
 				t = "⟦" + s.Bg + ":" + t + "⟧"
 			}
+			if s.band {
+				t = "⟪" + t + "⟫"
+			}
 			if s.Bold {
 				t = "«" + t + "»"
 			}
@@ -932,20 +968,33 @@ func ANSI(l Line, th palette.Theme) string {
 		if colour && s.Fg != "" && (!l.Dim || band || current) {
 			fg = th.SGR(s.Fg, false)
 		}
-		if colour && s.Bg != "" && !band && !l.Dim {
+		if colour && s.Bg != "" && !band && !l.Dim && !s.band {
 			// A template's background; the selection's band stays
 			// the band, so the selected row is told apart, and a dim
 			// line is dim throughout.
 			bg = th.SGR(s.Bg, true)
 		}
+		pre := ""
+		if s.band {
+			// The band on the span alone, a strip's chip: the
+			// highlight background under the span's own colour, or
+			// reverse video without one, where a colour would land in
+			// the background: the attributes alone, as the list's band.
+			if colour && !th.Guessed {
+				pre = th.SGR(palette.HighlightRowBg, true) + th.SGR(palette.Text, false)
+			} else {
+				pre, fg, bg = "\x1b[7m", "", ""
+			}
+		}
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.
-		faint := s.Dim && !l.Dim && fg == ""
-		if faint || s.Bold || fg != "" || bg != "" {
+		faint := s.Dim && !l.Dim && fg == "" && !(s.band && pre == "\x1b[7m")
+		if faint || s.Bold || fg != "" || bg != "" || pre != "" {
 			if current && l.Dim && !band {
 				// The viewer's label is not faint on a dim line.
 				b.WriteString("\x1b[22m")
 			}
+			b.WriteString(pre)
 			if faint {
 				b.WriteString("\x1b[2m")
 			}

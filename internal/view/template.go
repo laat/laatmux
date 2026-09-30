@@ -216,7 +216,7 @@ func paletteName(s string) bool {
 type Templates struct {
 	Tiles   []Compiled
 	Compact Compiled
-	Top     Compiled
+	Top     []Compiled
 	Tree    TreeTemplates
 }
 
@@ -254,7 +254,9 @@ const (
 	DefaultTile2    = "{stripe}    {secondary} @{host}{fill}{git_stats}"
 	DefaultTile3    = "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
 	DefaultCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
-	DefaultTop      = "{status_icon} {primary} {pane_suffix}"
+	DefaultTop1     = "{status_icon} {primary} {pane_suffix}"
+	DefaultTop2     = "{secondary} @{host}"
+	DefaultTop3     = "{pane_title}"
 	DefaultRepo     = "#[fg=header,bold]{fold}{repo}"
 	DefaultWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
 	DefaultAgent    = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
@@ -262,18 +264,22 @@ const (
 	DefaultRun      = "{indent}▶ {command}{fill}{elapsed}"
 )
 
-// DefaultTiles are the tile's three lines.
-var DefaultTiles = []string{DefaultTile1, DefaultTile2, DefaultTile3}
+// DefaultTiles are the tile's three lines; DefaultTops the strip's
+// chip's, drawn as far as its height allows.
+var (
+	DefaultTiles = []string{DefaultTile1, DefaultTile2, DefaultTile3}
+	DefaultTops  = []string{DefaultTop1, DefaultTop2, DefaultTop3}
+)
 
 // DefaultTemplates is the set with nothing configured.
 func DefaultTemplates() Templates {
-	return CompileTemplates(nil, "", "", "", "", "", "", "")
+	return CompileTemplates(nil, "", nil, "", "", "", "", "")
 }
 
 // CompileTemplates compiles the config's templates, the defaults where
-// it sets none: a nil tiles list is the default three, an empty line in
-// it a line removed.
-func CompileTemplates(tiles []string, compact, top, repo, worktree, agent, pane, run string) Templates {
+// it sets none: a nil tiles or top list is the default three, an empty
+// line in it a line removed.
+func CompileTemplates(tiles []string, compact string, top []string, repo, worktree, agent, pane, run string) Templates {
 	var t Templates
 	if tiles == nil {
 		tiles = DefaultTiles
@@ -282,7 +288,12 @@ func CompileTemplates(tiles []string, compact, top, repo, worktree, agent, pane,
 		t.Tiles = append(t.Tiles, Compile("tiles["+strconv.Itoa(i)+"]", src, ""))
 	}
 	t.Compact = Compile("compact", compact, DefaultCompact)
-	t.Top = Compile("top", top, DefaultTop)
+	if top == nil {
+		top = DefaultTops
+	}
+	for i, src := range top {
+		t.Top = append(t.Top, Compile("top["+strconv.Itoa(i)+"]", src, ""))
+	}
 	t.Tree.Repo = Compile("tree.repo", repo, DefaultRepo)
 	t.Tree.Worktree = Compile("tree.worktree", worktree, DefaultWorktree)
 	t.Tree.Agent = Compile("tree.agent", agent, DefaultAgent)

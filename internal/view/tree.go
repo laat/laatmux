@@ -61,11 +61,33 @@ func (m *Model) SetTree(nodes []rows.Row) {
 		if succ == "" || succ == from {
 			return
 		}
-		// Consumed either way: an old fold is no later owner's.
+		// Consumed either way: an old fold is no later owner's. The
+		// value written is the user's, the file's as last seen, not a
+		// reveal this pane made over it; the reveal stays on screen.
+		toggled := m.toggled[from]
+		written, wasFile := m.applied[from]
+		if !wasFile {
+			written = closed
+		}
 		delete(m.folds, from)
 		delete(m.toggled, from)
+		delete(m.applied, from)
 		if !m.toggled[succ] {
 			m.setFold(succ, closed)
+			if toggled {
+				// The user's fold, now under the node taking the
+				// children: written under that id, unless the file
+				// has one there already from a pane that was ahead.
+				m.markToggled(succ)
+				if m.carried == nil {
+					m.carried = map[string]bool{}
+				}
+				m.carried[succ] = true
+				if m.applied == nil {
+					m.applied = map[string]bool{}
+				}
+				m.applied[succ] = written
+			}
 		}
 	}
 	for worktreeID, from := range owners {
@@ -125,14 +147,16 @@ func (m *Model) closed(r *rows.Row) bool {
 		return false
 	}
 	id := r.ID()
+	if r.Kind == rows.KindFold {
+		// The stale fold is ShowHidden's, kept in the folds map under
+		// its node id for the file.
+		return !m.ShowHidden
+	}
 	if c, ok := m.folds[id]; ok {
 		return c
 	}
-	switch r.Kind {
-	case rows.KindRepo:
+	if r.Kind == rows.KindRepo {
 		return false
-	case rows.KindFold:
-		return !m.ShowHidden
 	}
 	c := !m.anyWants(r)
 	m.setFold(id, c)
@@ -164,35 +188,180 @@ func (m *Model) toggleFold(r *rows.Row) {
 		return
 	}
 	if r.Kind == rows.KindFold {
-		m.ShowHidden = !m.ShowHidden
+		m.showHidden(!m.ShowHidden)
 		return
 	}
 	m.setFold(r.ID(), !m.closed(r))
+	m.markToggled(r.ID())
+}
+
+// showHidden opens or closes the stale fold as the user's own choice,
+// kept under its node id like a line's.
+func (m *Model) showHidden(open bool) {
+	m.ShowHidden = open
+	m.setFold(rows.NodeStale, !open)
+	m.markToggled(rows.NodeStale)
+}
+
+// markToggled records a fold as the user's own: shared between panes,
+// kept across a handoff, and what the host persists, once.
+func (m *Model) markToggled(id string) {
 	if m.toggled == nil {
 		m.toggled = map[string]bool{}
 	}
-	m.toggled[r.ID()] = true
+	if m.dirty == nil {
+		m.dirty = map[string]bool{}
+	}
+	m.toggled[id], m.dirty[id] = true, true
+	m.settings = true
+}
+
+// SettingsChanged reports, once, that the view, layout, scope or a
+// fold the user set changed since the last call: the host persists
+// what it keeps.
+func (m *Model) SettingsChanged() bool {
+	c := m.settings
+	m.settings = false
+	return c
+}
+
+// ToggledFolds is the folds the user set, by node id, closed or open:
+// this pane's own and those taken from the file.
+func (m *Model) ToggledFolds() map[string]bool {
+	out := map[string]bool{}
+	for id := range m.toggled {
+		if c, ok := m.folds[id]; ok {
+			out[id] = c
+		}
+	}
+	return out
+}
+
+// ChangedDefaults reports, once, whether the view and the layout were
+// chosen by a key since the last call: what the host writes as the
+// start defaults, and only then.
+func (m *Model) ChangedDefaults() (view, layout bool) {
+	view, layout = m.viewSet, m.layoutSet
+	m.viewSet, m.layoutSet = false, false
+	return view, layout
+}
+
+// DirtyFolds is the folds this pane set since it was last asked, by
+// node id: what it writes to the file, so a fold taken from another
+// pane is never written back over that pane's later change. carried
+// names those a handoff carried, which the file takes only where it
+// has none: every running pane carries the same value, and one ahead
+// may have changed it since.
+func (m *Model) DirtyFolds() (folds, carried map[string]bool) {
+	folds, carried = map[string]bool{}, map[string]bool{}
+	if m.applied == nil {
+		m.applied = map[string]bool{}
+	}
+	for id := range m.dirty {
+		if c, ok := m.folds[id]; ok {
+			if m.carried[id] {
+				carried[id] = true
+				// The user's value carried, not the reveal shown here.
+				if a, ok := m.applied[id]; ok {
+					c = a
+				}
+			}
+			folds[id] = c
+			// What the file holds now, as far as this pane knows: a
+			// later change by another pane is then a change.
+			m.applied[id] = c
+		}
+	}
+	m.dirty, m.carried = nil, nil
+	return folds, carried
+}
+
+// ApplyFolds takes folds another pane set, or the file's at start, as
+// the user's own here, the selection kept on its row. A value the file
+// held the last time is not applied again: a fold this pane opened to
+// reveal a selection, its own and not written, stays as it is until
+// the file changes.
+func (m *Model) ApplyFolds(folds map[string]bool) {
+	if m.applied == nil {
+		m.applied = map[string]bool{}
+	}
+	// A fold the file held and dropped, its node not seen for a day:
+	// forgotten here too, unless this pane set it since.
+	for id := range m.applied {
+		if _, still := folds[id]; !still && !m.dirty[id] {
+			delete(m.applied, id)
+			delete(m.toggled, id)
+			delete(m.folds, id)
+		}
+	}
+	for id, closed := range folds {
+		if was, ok := m.applied[id]; ok && was == closed {
+			continue
+		}
+		m.applied[id] = closed
+		if id == rows.NodeStale {
+			m.ShowHidden = !closed
+		}
+		m.setFold(id, closed)
+		if m.toggled == nil {
+			m.toggled = map[string]bool{}
+		}
+		m.toggled[id] = true
+	}
+	m.reselect()
 }
 
 // foldAll opens every fold when any shown is closed, else closes every
 // one; the agent view's f toggles its stale fold.
 func (m *Model) foldAll() {
 	if m.View != ViewTree {
-		m.ShowHidden = !m.ShowHidden
+		m.showHidden(!m.ShowHidden)
 		return
 	}
 	// The folds shown decide, not ones the filter hides: a hidden fold
 	// closed would make the first f change nothing on screen.
 	anyClosed := false
+	if m.scope() != ScopeAll {
+		// The repository line over the viewer's, folded by a pane on
+		// all: a closed fold shown, so f opens, and the line itself
+		// opened here alone, a reveal that is not written.
+		for _, it := range m.treeItems() {
+			if it.Row != nil && it.Row.Kind == rows.KindRepo && m.closed(it.Row) {
+				m.setFold(it.Row.ID(), false)
+				anyClosed = true
+			}
+		}
+	}
 	for _, it := range m.treeItems() {
-		if it.Row != nil && it.Row.Foldable() && m.closed(it.Row) {
+		if it.Row == nil || !it.Row.Foldable() {
+			continue
+		}
+		if it.Row.Kind == rows.KindRepo && m.scope() != ScopeAll {
+			continue
+		}
+		if m.closed(it.Row) {
 			anyClosed = true
 		}
 	}
+	// The nodes the scope and the filter leave, whether a fold hides
+	// them or not: f in a pane on session leaves the other worktrees'
+	// folds, shared with every pane, alone.
+	shown := m.treeShown()
+	for i, in := range m.treeScoped() {
+		shown[i] = shown[i] && in
+	}
 	for i := range m.Tree {
-		if r := &m.Tree[i]; r.Foldable() {
-			m.setFold(r.ID(), !anyClosed)
+		r := &m.Tree[i]
+		if !shown[i] || !r.Foldable() || r.Kind == rows.KindFold {
+			continue
 		}
+		if r.Kind == rows.KindRepo && m.scope() != ScopeAll {
+			// The repository line over the viewer's is shared with the
+			// panes on all, which it would hide whole.
+			continue
+		}
+		m.setFold(r.ID(), !anyClosed)
+		m.markToggled(r.ID())
 	}
 }
 
@@ -203,6 +372,9 @@ func (m *Model) foldAll() {
 // repository alone shows as a line without.
 func (m *Model) treeItems() []Item {
 	shown := m.treeShown()
+	for i, in := range m.treeScoped() {
+		shown[i] = shown[i] && in
+	}
 	var out []Item
 	n := 0
 	hideBelow := -1
@@ -216,8 +388,18 @@ func (m *Model) treeItems() []Item {
 			continue
 		}
 		if r.Kind == rows.KindGroup {
-			// Other sessions: a header, not a row.
-			out = append(out, Item{Header: r.Name, Group: GroupMain, Index: -1})
+			// Other sessions: a header, not a row, and none without a
+			// line under it.
+			under := false
+			for j := i + 1; j < len(m.Tree) && m.Tree[j].Depth > 0; j++ {
+				if shown[j] {
+					under = true
+					break
+				}
+			}
+			if under {
+				out = append(out, Item{Header: r.Name, Group: GroupMain, Index: -1})
+			}
 			continue
 		}
 		out = append(out, Item{Row: r, Group: GroupMain, Index: n})
@@ -266,6 +448,7 @@ func (m *Model) treeShown() []bool {
 // fold hides opens the fold. Nothing to resolve to leaves the selection
 // on no row; a following selection follows on.
 func (m *Model) Switch() {
+	m.settings, m.viewSet = true, true
 	r := m.Selection()
 	target := ""
 	if r != nil {
@@ -377,6 +560,10 @@ func (m *Model) LineFor(host, session string) *rows.Row {
 	}
 	return nil
 }
+
+// HasNode reports whether the tree has a node with the id: whether a
+// fold's node is in sight; the stale fold always is.
+func (m *Model) HasNode(id string) bool { return id == rows.NodeStale || m.indexOf(id) >= 0 }
 
 // indexOf is a node's index in the tree, -1 when none has the id.
 func (m *Model) indexOf(id string) int {

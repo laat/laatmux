@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
@@ -39,6 +40,12 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	fixedLayout := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "layout" {
+			fixedLayout = true
+		}
+	})
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -47,18 +54,46 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// The dashboard starts in the agent view; its stored default is
-	// step 8's.
+	// The dashboard starts in the view and, without --layout, the layout
+	// last chosen, from sidebar.json.
 	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  v layout  / filter  q quit"}
-	return runView(ctx, cfg, c, m, true, true)
+		Hint:      "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  F scope  v layout  / filter  ? help  q quit",
+		HelpTitle: "laatmux dashboard", Help: []string{
+			"a            add a worktree",
+			"x X          remove the worktree, X with force",
+			"p            deliver a task's prompt",
+			"S            open a shell in the workspace session",
+			"o O          open the PR, its checks",
+			"q Ctrl-C     quit",
+		}}
+	// The dashboard starts at all: a scope the CLI set for the sidebar
+	// panes would empty a popup opened from an unrelated shell.
+	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
+}
+
+// jumpKeysShown is whether the {jump_key} labels are drawn: the keys
+// reach a sidebar pane over its socket, and a popup gets the keys
+// itself and drops them, while a window's binding goes to the window's
+// sidebar, so only a pane that listens shows them.
+func jumpKeysShown(cfg config.Config, o viewOptions) bool {
+	return cfg.Sidebar.JumpKeys && o.listen
 }
 
 // runView runs the view on the terminal against the merged stream. With
 // exitOnJump a successful jump ends the view, which is what a popup
 // wants; a sidebar pane stays. With actions the dashboard's keys are
 // live. A jump that fails puts its message in the footer either way.
-func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, exitOnJump, actions bool) error {
+// viewOptions is how a view runs: exitOnJump for the popup, actions for
+// the dashboard's keys, fixedLayout when a flag chose the layout over
+// the stored default, and commands from a sidebar pane's socket.
+type viewOptions struct {
+	exitOnJump, actions, fixedLayout, fixedView bool
+	fixedScope                                  bool // the dashboard: at all, whatever the file says
+	listen                                      bool // a sidebar pane: its socket
+}
+
+func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, o viewOptions) error {
+	exitOnJump, actions := o.exitOnJump, o.actions
 	current := ""
 	if cur, err := workspace.Current(ctx); err == nil {
 		current = cur.Name
@@ -77,12 +112,35 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	m.Machine, _ = os.Hostname()
 	m.SetTemplates(templates(cfg))
 	m.AgentIcons = agentIcons(cfg)
+	m.JumpKeys = jumpKeysShown(cfg, o)
+	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
+	seen := startSettings(cfg, m, host)
+	cmds := make(chan func(*view.Model) view.Action)
+	watchSettings(ctx, seen, cmds)
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
+	if o.listen {
+		// The pane's socket: a command names the client its jump
+		// switches, kept on the dash until the jump takes it.
+		// A socket that cannot be made, a path too long for one say,
+		// leaves the pane useful without the CLI's control.
+		stop, err := listenPane(ctx, cmds, d.paneCommand)
+		if err != nil {
+			m.Message = "sidebar socket: " + err.Error()
+		} else {
+			defer stop()
+		}
+	}
 	return view.Run(ctx, t, m, view.Host{
-		Changed: st.change,
-		Refresh: func(m *view.Model) { st.fill(m, current) },
+		Changed:  st.change,
+		Commands: cmds,
+		Refresh:  func(m *view.Model) { st.fill(m, current) },
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
+			case a.Kind == view.ActionSettings:
+				if err := saveSettings(m, time.Now(), host); err != nil {
+					m.Message = "sidebar.json: " + err.Error()
+				}
+				return false
 			case a.Kind == view.ActionJump:
 				return d.jumpAction(m, a)
 			case actions:
@@ -112,6 +170,14 @@ func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
 	if r == nil {
 		return false
 	}
+	if d.client != "" {
+		// A jump from the socket switches the client the command
+		// named, this once.
+		base := d.ctx
+		d.ctx = withClient(base, d.client)
+		d.client = ""
+		defer func() { d.ctx = base }()
+	}
 	exit, jumped := d.jumpRow(m, *r)
 	if !jumped {
 		// A click or a digit that jumped nowhere, on a task still
@@ -133,6 +199,20 @@ func (d *dash) jumpAction(m *view.Model, a view.Action) bool {
 		refocus()
 	}
 	return exit
+}
+
+// paneCommand is a sidebar command as the view runs it: the model's
+// event, and, when it is a jump, the client the command named kept on
+// the dash for that jump to switch; a command that jumped nowhere, with
+// a question up say, leaves no client for a later jump by key.
+func (d *dash) paneCommand(c view.Command) func(*view.Model) view.Action {
+	return func(m *view.Model) view.Action {
+		a := m.Command(c)
+		if a.Kind == view.ActionJump {
+			d.client = c.Client
+		}
+		return a
+	}
 }
 
 // lastPane makes the pane active before the view's own the active one
@@ -387,10 +467,26 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 }
 
 // switchTo makes the session current for the client the view runs in,
-// or says how to attach when the view is not inside the default server.
+// or the one the context names, a `sidebar jump -c` client; or says how
+// to attach when the view is not inside the default server.
 func switchTo(ctx context.Context, name string) error {
 	if !workspace.Inside(ctx) {
 		return fmt.Errorf("%s is on the default tmux server; attach with: %s", name, workspace.AttachHint(name))
 	}
+	if c, ok := ctx.Value(clientKey{}).(string); ok && c != "" {
+		return workspace.SwitchClient(ctx, c, name)
+	}
 	return workspace.Switch(ctx, name)
+}
+
+// clientKey carries the tmux client a jump switches through a context.
+type clientKey struct{}
+
+// withClient is ctx with the client a jump switches, "" for the view's
+// own.
+func withClient(ctx context.Context, client string) context.Context {
+	if client == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, clientKey{}, client)
 }

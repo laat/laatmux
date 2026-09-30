@@ -958,6 +958,9 @@ const (
 	ActionOther              // a key the model does not know; the host may
 	ActionConfirm            // y on a Confirm; ConfirmTag says which
 	ActionOverlay            // the overlay is Done; the host reads and clears it
+	// ActionSettings is a change of the view's settings, the view,
+	// layout, scope or a fold: the host may persist what it keeps.
+	ActionSettings
 )
 
 // Handle applies one key to the model and says what the host should
@@ -971,11 +974,20 @@ func (m *Model) Handle(k Key) Action {
 	}
 	if m.Overlay != nil {
 		m.Overlay.Handle(k)
+		if h, ok := m.Overlay.(*Help); ok && h.Done() {
+			// The help is the model's own: closed here.
+			m.Overlay = nil
+			return Action{}
+		}
 		return m.Poll()
 	}
 	if m.Confirm != "" {
 		m.Confirm = ""
 		if k.Kind == KeyRune && (k.Rune == 'y' || k.Rune == 'Y') {
+			if m.ConfirmTag == "quit" {
+				m.ConfirmTag = ""
+				return Action{Kind: ActionQuit}
+			}
 			return Action{Kind: ActionConfirm}
 		}
 		m.ConfirmTag = ""
@@ -1000,10 +1012,15 @@ func (m *Model) Handle(k Key) Action {
 		case KeyDown:
 			m.move(1)
 		case KeyCtrlC:
-			return Action{Kind: ActionQuit}
+			return m.quit()
 		}
 		m.Selection()
 		return Action{}
+	}
+	if m.Layout == Strip {
+		if a, handled := m.stripKey(k); handled {
+			return a
+		}
 	}
 	switch k.Kind {
 	case KeyUp:
@@ -1018,7 +1035,7 @@ func (m *Model) Handle(k Key) Action {
 		m.Filter = ""
 		m.Selection()
 	case KeyCtrlC:
-		return Action{Kind: ActionQuit}
+		return m.quit()
 	case KeyTab:
 		m.Switch()
 	case KeyLeft:
@@ -1066,6 +1083,7 @@ func (m *Model) Handle(k Key) Action {
 			} else {
 				m.Layout = Tiles
 			}
+			m.settings, m.layoutSet = true, true
 		case '/':
 			m.Filtering = true
 		case 'f':
@@ -1089,8 +1107,13 @@ func (m *Model) Handle(k Key) Action {
 				m.toggleFold(r)
 				m.Selection()
 			}
+		case 'F':
+			m.ToggleScope()
+			m.Selection()
 		case 'q':
-			return Action{Kind: ActionQuit}
+			return m.quit()
+		case '?':
+			m.Overlay = NewHelp(m.HelpTitle, m.Layout == Strip, m.Help...)
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			if i, ok := m.nth(int(k.Rune - '0')); ok {
 				return m.jumpTo(i)
@@ -1115,6 +1138,16 @@ func (m *Model) Poll() Action {
 // Ask puts a question in the footer for the next key to answer.
 func (m *Model) Ask(question, tag string) {
 	m.Confirm, m.ConfirmTag = question, tag
+}
+
+// quit is q or Ctrl-C: the end, or in a sidebar pane, where a key meant
+// for another pane is common, a question first.
+func (m *Model) quit() Action {
+	if m.AskQuit {
+		m.Ask("Quit sidebar? y/n", "quit")
+		return Action{}
+	}
+	return Action{Kind: ActionQuit}
 }
 
 func (m *Model) move(d int) { m.moveTo(m.Selected + d) }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -67,7 +70,7 @@ func TestSidebarFit(t *testing.T) {
 	if w := width(); w == "35" {
 		t.Fatalf("the window grew and the sidebar did not: %s", w)
 	}
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	if err := sidebarFit(ctx, cfg, window); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +106,19 @@ func TestSidebarFit(t *testing.T) {
 	if w := width(); w != "35" {
 		t.Fatalf("after unzoom: %s", w)
 	}
+	// A strip on top: fit sets its height, full width.
+	top := run("new-window", "-d", "-t", "s:", "-P", "-F", "#{window_id}", "sleep 1000")
+	tcfg := config.Config{Sidebar: config.Sidebar{Position: "top"}}
+	strip := run(append(sidebarSplit(tcfg, 0), "-t", top, "-P", "-F", "#{pane_id}", "sleep 1000")...)
+	run("set-option", "-p", "-t", strip, sidebarTag, "1")
+	run("resize-window", "-t", top, "-x", "172", "-y", "50")
+	run("resize-pane", "-t", strip, "-y", "10")
+	if err := sidebarFit(ctx, tcfg, top); err != nil {
+		t.Fatal(err)
+	}
+	if h, w := run("display", "-p", "-t", strip, "#{pane_height}"), run("display", "-p", "-t", strip, "#{pane_width}"); h != "3" || w != "172" {
+		t.Fatalf("a strip after fit: %s lines, %s wide", h, w)
+	}
 }
 
 // A narrow window gives the sidebar half; a border dragged by hand is
@@ -118,7 +134,7 @@ func TestSidebarFitBounds(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	window := run("new-session", "-d", "-s", "n", "-x", "120", "-y", "30", "-P", "-F", "#{window_id}", "sleep 1000")
 	id := run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
 	run("set-option", "-p", "-t", id, sidebarTag, "1")
@@ -202,6 +218,249 @@ func TestSidebarHooksRun(t *testing.T) {
 			t.Fatalf("%s left after unset", h.hook)
 		}
 	}
+	// With the sidebar on for one session, the hooks stay global, so a
+	// user's own global hook of the same name runs on; attach reads
+	// the sessions option and adds a pane only in the session named,
+	// and off unsets the option.
+	os.Remove(logf)
+	sid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "boot", "#{session_id}"))))
+	must(workspace.Server.Run(ctx, "set-hook", "-g", "after-new-window[0]", "run-shell -b \"echo user >> "+logf+"\""))
+	must(workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, sid))
+	if err := setSidebarHooks(ctx, exe); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := sidebarHooksSet(ctx); err != nil || !on {
+		t.Fatalf("hooks not seen as on: %v %v", on, err)
+	}
+	must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "sleep 1000"))
+	otherWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "other:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	bootWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	for i := 0; i < 100; i++ {
+		b, _ := os.ReadFile(logf)
+		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin+" "+sid) && strings.Count(got, "user") >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, _ := os.ReadFile(logf)
+	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin+" "+sid) || !strings.Contains(got, "sidebar attach "+otherWin) || strings.Count(got, "user") < 2 {
+		t.Fatalf("hooks ran %q: want attach for both windows with the session and the user's hook twice", got)
+	}
+	// attach itself: a window in a session not named gets no pane.
+	otherSid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "other", "#{session_id}"))))
+	if sessions, err := sidebarSessions(ctx); err != nil || len(sessions) != 1 || sessions[0] != sid {
+		t.Fatalf("sessions option: %v %v", sessions, err)
+	}
+	if err := sidebarAttach(ctx, otherWin, otherSid); err != nil {
+		t.Fatal(err)
+	}
+	if out := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "list-panes", "-t", otherWin, "-F", "#{"+sidebarTag+"}")))); strings.Contains(out, "1") {
+		t.Fatal("a pane added in a session not named")
+	}
+	must(workspace.Server.Run(ctx, "set-option", "-su", sessionsTag))
+	must(workspace.Server.Run(ctx, "set-hook", "-gu", "after-new-window[0]"))
+	for _, h := range sidebarHooks {
+		must(workspace.Server.Run(ctx, "set-hook", "-gu", h.hook))
+	}
+}
+
+// on --session names the session in the option, twice once, and kills
+// the tagged panes elsewhere; a plain on clears the option; off unsets
+// the option, the hooks and the jump keys.
+func TestSidebarScopeAndOff(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	t.Setenv("TMUX", "")
+	// The session display-message names with no client attached is
+	// tmux's choice: the other session is whichever it did not.
+	target, err := scopeSidebar(ctx, true)
+	if err != nil || target == "" {
+		t.Fatalf("scope: %q %v", target, err)
+	}
+	elsewhere := "boot"
+	if run("display", "-p", "-t", "boot", "#{session_id}") == target {
+		elsewhere = "other"
+	}
+	otherPane := run("split-window", "-d", "-h", "-t", elsewhere+":", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", otherPane, sidebarTag, "1")
+	ownPane := run("split-window", "-d", "-h", "-t", target+":", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", ownPane, sidebarTag, "1")
+	if _, err := scopeSidebar(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 1 || sessions[0] != target {
+		t.Errorf("the option after two scoped ons: %v", sessions)
+	}
+	boot := target
+	// The scoped session's own pane stays, the other session's goes.
+	if out := run("list-panes", "-a", "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); strings.Contains(out, otherPane+tmux.Sep+"1") || !strings.Contains(out, ownPane+tmux.Sep+"1") {
+		t.Errorf("the tagged panes after a scoped on:\n%s", out)
+	}
+	run("kill-pane", "-t", ownPane)
+	if _, err := scopeSidebar(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option after a plain on: %v", sessions)
+	}
+	if err := setSidebarHooks(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := bindJumpKeys(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	run("set-option", "-s", sessionsTag, boot)
+	if err := sidebarOff(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if on, _ := sidebarHooksSet(ctx); on {
+		t.Error("hooks after off")
+	}
+	if k := run("list-keys", "-T", "root"); strings.Contains(k, "sidebar jump") {
+		t.Error("jump keys after off")
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option after off: %v", sessions)
+	}
+}
+
+// The jump keys: on binds M-1..M-9 in the root table to a jump with
+// the window and client, off unbinds them and leaves a user's M-0 and
+// a user's M-5 bound to something else alone.
+func TestJumpKeys(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	must(workspace.Server.Run(ctx, "bind-key", "-n", "M-0", "display-message", "sidebar jump mine"))
+	if err := bindJumpKeys(ctx, "/usr/local/bin/laatmux"); err != nil {
+		t.Fatal(err)
+	}
+	keys := func() string { return string(must(workspace.Server.Run(ctx, "list-keys", "-T", "root"))) }
+	if k := keys(); !strings.Contains(k, "M-1") || !strings.Contains(k, "M-9") || !strings.Contains(k, "sidebar jump 3 -t") || !strings.Contains(k, "#{client_name}") {
+		t.Fatalf("bound: %s", k)
+	}
+	must(workspace.Server.Run(ctx, "bind-key", "-n", "M-5", "display-message", "mine"))
+	unbindJumpKeys(ctx)
+	k := keys()
+	if strings.Contains(k, "sidebar jump 1 -t") || strings.Contains(k, "sidebar jump 9 -t") || !strings.Contains(k, "sidebar jump mine") || !strings.Contains(k, "M-5") {
+		t.Fatalf("after unbind: %s", k)
+	}
+}
+
+// A jump's client: switchTo with a client in the context switches
+// that client alone, whichever of two attached it is.
+func TestSwitchClient(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	sock := run("display", "-p", "#{socket_path}")
+	for i := 0; i < 2; i++ {
+		c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+		in, err := c.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Stdout = io.Discard
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	}
+	var clients []string
+	for i := 0; i < 50 && len(clients) != 2; i++ {
+		time.Sleep(100 * time.Millisecond)
+		clients = strings.Fields(run("list-clients", "-F", "#{client_name}"))
+	}
+	if len(clients) != 2 {
+		t.Fatalf("clients: %v", clients)
+	}
+	t.Setenv("TMUX", sock+",1,0")
+	for _, target := range clients {
+		run("switch-client", "-c", clients[0], "-t", "=boot")
+		run("switch-client", "-c", clients[1], "-t", "=boot")
+		if err := switchTo(withClient(ctx, target), "other"); err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(run("list-clients", "-F", "#{client_name} #{client_session}"), "\n") {
+			f := strings.Fields(l)
+			want := "boot"
+			if len(f) == 2 && f[0] == target {
+				want = "other"
+			}
+			if len(f) != 2 || f[1] != want {
+				t.Errorf("switch of %s: %q", target, l)
+			}
+		}
+	}
+}
+
+// A shell nested on another tmux server: no current window or session
+// on the default server, so a command without -t does nothing and on
+// --session refuses, rather than take the other server's pane id for
+// one of the default server's own.
+func TestNestedShell(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	if out, err := exec.Command("tmux", "-L", "other", "-f", "/dev/null", "new-session", "-d", "-s", "o", "sleep 1000").CombinedOutput(); err != nil {
+		t.Fatalf("start the other server: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "other", "kill-server").Run() })
+	sock, err := exec.Command("tmux", "-L", "other", "display", "-p", "#{socket_path}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := run("split-window", "-d", "-h", "-t", "boot:", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", pane, sidebarTag, "1")
+	t.Setenv("TMUX_PANE", pane)
+	got := make(chan view.Command, 8)
+	cmds := make(chan func(*view.Model) view.Action, 8)
+	stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
+		got <- c
+		return func(m *view.Model) view.Action { return view.Action{} }
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	t.Setenv("TMUX", strings.TrimSpace(string(sock))+",1,0")
+	if workspace.Inside(ctx) {
+		t.Fatal("inside the default server with TMUX naming the other")
+	}
+	if err := sidebarControl(ctx, "next", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-got:
+		t.Errorf("a command from a nested shell reached the default server's pane: %+v", c)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := sidebarControl(ctx, "next", []string{"-t", "boot:"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-got:
+		<-cmds
+	case <-time.After(5 * time.Second):
+		t.Error("-t from a nested shell did not reach the pane")
+	}
+	if _, err := scopeSidebar(ctx, true); err == nil {
+		t.Error("on --session from a nested shell went ahead")
+	}
+	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
+		t.Errorf("the option set from a nested shell: %v", sessions)
+	}
 }
 
 func must(b []byte, err error) []byte {
@@ -214,10 +473,38 @@ func must(b []byte, err error) []byte {
 // The width rule split and fit share: the configured width, half a
 // narrow window, the configured width for a window not known.
 func TestSidebarWidth(t *testing.T) {
-	cfg := config.Config{Sidebar: config.Sidebar{Width: 35}}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
+	// The split: left at the width, or top at the height.
+	if got := strings.Join(sidebarSplit(cfg, 200), " "); got != "split-window -d -h -b -f -l 35" {
+		t.Errorf("the left split: %s", got)
+	}
+	if got := strings.Join(sidebarSplit(cfg, 50), " "); got != "split-window -d -h -b -f -l 25" {
+		t.Errorf("the left split in a narrow window: %s", got)
+	}
+	if got := strings.Join(sidebarSplit(config.Config{Sidebar: config.Sidebar{Position: "top", Height: 4}}, 200), " "); got != "split-window -d -v -b -f -l 4" {
+		t.Errorf("the top split: %s", got)
+	}
+	// The jump keys' labels: in a pane that listens, not the dashboard.
+	cfg.Sidebar.JumpKeys = true
+	if !jumpKeysShown(cfg, viewOptions{listen: true}) || jumpKeysShown(cfg, viewOptions{actions: true}) || jumpKeysShown(config.Config{}, viewOptions{listen: true}) {
+		t.Error("the jump keys shown in the wrong host")
+	}
 	for _, c := range []struct{ window, want int }{{200, 35}, {70, 35}, {50, 25}, {36, 18}, {1, 1}, {0, 35}} {
 		if got := sidebarWidth(cfg, c.window); got != c.want {
 			t.Errorf("window %d: %d, want %d", c.window, got, c.want)
+		}
+	}
+	// A percentage of the window, and the default's clamp.
+	cfg.Sidebar.Width = "20%"
+	for _, c := range []struct{ window, want int }{{200, 40}, {50, 10}, {0, 35}} {
+		if got := sidebarWidth(cfg, c.window); got != c.want {
+			t.Errorf("20%% of %d: %d, want %d", c.window, got, c.want)
+		}
+	}
+	cfg.Sidebar.Width = ""
+	for _, c := range []struct{ window, want int }{{200, 25}, {300, 30}, {600, 50}, {40, 20}, {0, 35}} {
+		if got := sidebarWidth(cfg, c.window); got != c.want {
+			t.Errorf("unset at %d: %d, want %d", c.window, got, c.want)
 		}
 	}
 }

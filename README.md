@@ -779,12 +779,14 @@ a `switch-client`; one on a remote host's default server is refused with
 would start one in the footer. An orphaned row's session exists locally and
 is switched to.
 
-- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets five
-  server hooks at indexes laatmux owns, `after-new-window[9101]` and
-  `after-new-session[9102]` running `sidebar attach '#{window_id}'`,
+- **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
+  eight server hooks at indexes laatmux owns, `after-new-window[9101]`
+  and `after-new-session[9102]` running `sidebar attach '#{window_id}'
+  '#{session_id}'`,
   `pane-exited[9103]` and `after-kill-pane[9104]` running `sidebar reap`,
-  and `window-resized[9105]` running `sidebar fit '#{window_id}'`,
-  then walks every window on the default server and splits a pane off
+  `window-resized[9105]` running `sidebar fit '#{window_id}'`, and
+  `client-session-changed[9106]`, `session-window-changed[9107]` and
+  `window-pane-changed[9108]` running `sidebar seen`, then walks every window on the default server and splits a pane off
   the left edge of each that has none, full height, at the configured
   width, running `sidebar pane`. The split is detached, so focus stays
   where it was, and the pane is tagged `@laatmux_sidebar` by the id
@@ -805,7 +807,7 @@ is switched to.
   is split off as when it is fitted. The width is the
   sidebar's own, set in the config: a border dragged by hand is put
   back at the next resize of the window. A zoomed window stays zoomed. A sidebar turned on by an older build gets the
-  hook when `on` runs again. `off` unsets the five hooks and kills every tagged pane. `toggle` reads the hooks. The hook
+  hook when `on` runs again. `off` unsets the hooks and kills every tagged pane. `toggle` reads the hooks. The hook
   commands name the binary by its absolute path. `q` in a sidebar pane
   closes it; that window has no sidebar until a new window is made or
   `on` runs again.
@@ -813,7 +815,101 @@ is switched to.
   in the configured layout, marking the session it sits in from
   `TMUX_PANE`, redrawing on every change and every five seconds for the
   ages, staying after a jump. It reads no local sessions itself: settled
-  and orphaned come from the stream.
+  and orphaned come from the stream. `q` and `Ctrl-C` ask `Quit
+  sidebar? y/n` first, since a key meant for another pane is common;
+  while filtering `q` is a letter of the filter and `Ctrl-C` asks; `?`
+  lists the keys.
+- **Placement** (milestone five, step 8): `sidebar.position: top` puts
+  the sidebar along the top of the window instead, `sidebar.height`
+  lines (3) of chips `sidebar.horizontal.item_width` wide (24),
+  separated by ` │ `, each the `top` template's lines as far as the
+  height allows; the strip scrolls sideways to keep the selection in
+  view and counts the chips past the edge, `→8`; `h`, `l` and the
+  arrows move through them, a click lands on one, and it shows the
+  agent view alone. `sidebar.width` takes columns or `N%` of the
+  window; unset it is 10% of the window clamped to 25..50 columns, an
+  explicit width is not clamped, and either is halved in a window
+  narrower than twice it.
+- **Scope** is what a pane shows, by the viewer's row, the one
+  following picks: `all`, every row; `session`, the viewer's worktree,
+  every agent of it whatever session each runs in and every task at
+  its root, in the tree its line or the task standing for it with its
+  children under its repository, and with no worktree the viewer's
+  line alone; `project`, every line under the viewer's worktree's
+  repository. A pane in a session that is no row's shows the empty
+  state under `session` and `project`. `F` switches the pane to
+  `session` and, pressed again, back to the scope the pane had before,
+  whatever set it; on `session` already it goes to `all`. `F` acts on
+  that pane alone and is not kept. The footer names a scope in force:
+  `[session]`; a strip names it at its right end. `f` sets the folds of
+  the lines the scope and the filter leave, not a repository line
+  shared with the panes on `all`: folded, that line is a closed fold
+  shown, and `f` opens it here alone, with the lines under it. The dashboard
+  starts at `all`, whatever the file says: a scope the CLI set for the
+  panes would empty a popup opened from an unrelated shell. `laatmux
+  sidebar on --session` puts panes in the current session's windows
+  only: the hooks stay global, since a hook on the session would
+  shadow the user's global hooks of that name there, and `on
+  --session` names the session in the server option
+  `@laatmux_sidebar_sessions`, which `attach` reads for the windows the
+  hooks report; a plain `on` clears the option, so every session gets
+  panes again, and `off` unsets it. `on` with `jump_keys` off unbinds
+  the jump keys an earlier `on` bound.
+- **Control from the CLI:** `laatmux sidebar next | prev | jump N |
+  view agents|tree | scope all|session|project [-t window] [-c
+  client] [--all]` act on the sidebar pane in the window the command
+  runs for, `-t` a window or the current one on the default server (a
+  shell nested on the laatmux server has no current window there, and
+  the command does nothing), or on every pane with `--all`, which
+  `view` and `scope` take. Each pane listens on a unix
+  socket under `$LAATMUX_HOME/sidebar/`, named by the server's pid and
+  the pane id, and writes the path to the pane option
+  `@laatmux_sidebar_socket`, which the CLI reads. The command is one
+  line to the socket, handled as a navigation event, not as typed keys:
+  it moves the selection or switches the view whether the pane is
+  filtering or not, and is ignored while an overlay or a question is
+  open. `jump N` is the digit key, switching the client `-c` names
+  with `switch-client -c`. For `view` and `scope` the CLI writes the
+  new default to `sidebar.json` once, whether or not a pane answered;
+  the panes only apply it. A window with no sidebar pane, a leftover
+  socket or a refused connection makes the command exit quietly, since
+  a binding's error flashes in the status line; `sidebar reap` removes
+  a socket whose pane is gone or that refuses. With
+  `sidebar.jump_keys: true`, `on` binds `M-1`..`M-9` in tmux's root
+  table to `sidebar jump N -t '#{window_id}' -c '#{client_name}'`, the
+  `{jump_key}` token shows them in the sidebar panes, not in the
+  dashboard, and `off` unbinds them; by default
+  they are unbound, since bound there they take the keys from every
+  pane.
+- **`sidebar.json`** under the state directory keeps two kinds of
+  thing. The view and layout last chosen by a key or the CLI and the
+  scope last set by the CLI are *start defaults*: a pane reads them
+  when it starts, over the config's (`sidebar.scope` among them), and
+  `F` is never written; a change in one pane never moves another, and
+  `--all` is how to change every pane. The folds the user toggled, the
+  stale fold among them, are *shared*: every pane and the dashboard
+  read them again when the file's mtime changes, checked every second,
+  keeping the selection on its row, and a fold carried across a task's
+  handoff is written under the node that took the children. Panes
+  write the file read-modify-write under a lock file and replace it by
+  rename, and each writes only the folds it set since it last wrote,
+  so two panes toggling folds at once lose neither and a fold taken
+  from another pane is never written back over that pane's later
+  change. The dashboard keeps its own view and layout defaults in the
+  same file, under `dashboard_view` and `dashboard_layout`: it opens
+  in a wide popup where compact suits, `--layout` wins over the stored
+  one, and neither `sidebar.view` nor the CLI touches them; a fold
+  carried at a handoff is written only where the file has none, since
+  every running pane carries the same value and one ahead may have
+  changed it; a value the file held last time is not applied again, so
+  a fold a pane opened to reveal a selection, its own and not written,
+  stays open when an unrelated write comes round; and each pane
+  refreshes its folds' sightings once an hour, so a node in sight for
+  a day is not dropped by a write elsewhere. A fold is kept by node id
+  with the time its node was last seen, and one not seen for a day is
+  dropped. The strip's view and layout are its own, never written. The
+  dashboard takes the view and, without `--layout`, the layout from the
+  file.
 - **`dashboard`** is the same view filling whatever it runs in, compact
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:
@@ -926,11 +1022,13 @@ is switched to.
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
 
-Config: `sidebar: {width: 35, layout: tiles, view: agents, sort:
-priority, dim_stale: true, collapse_stale: true, stale_after: 1h}`;
-width is at least 10, layout `tiles` or `compact`, view `agents` or
-`tree`, sort `priority`, `recency` or `window`,
-stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
+Config: `sidebar: {position: left, width: 40, height: 3, horizontal:
+{item_width: 24}, layout: tiles, view: agents, scope: all, sort:
+priority, dim_stale: true, collapse_stale: true, stale_after: 1h,
+jump_keys: false}`; position `left` or `top`, width at least 10
+columns or `1%` to `100%` (unset or 0: 10%, clamped to 25..50), layout `tiles` or `compact`, view `agents`
+or `tree`, scope `all`, `session` or `project`, sort `priority`,
+`recency` or `window`, stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
 {claude: {icon: CC, color: "#d97757"}}` for the `{agent_icon}` token,
 and `theme: {mode: auto|dark|light, custom: {accent: "#b48ead"}}` with

@@ -32,6 +32,12 @@ import (
 // sidebarTag is the pane option that marks a sidebar pane.
 const sidebarTag = "@laatmux_sidebar"
 
+// sessionsTag is the server option naming the sessions `on --session`
+// limited the sidebar to, space-separated session ids; empty is every
+// session. The hooks stay global and attach reads it: a hook set on the
+// session itself would shadow the user's global hooks there.
+const sessionsTag = "@laatmux_sidebar_sessions"
+
 // sidebarHooks are the server hooks on, each at an index laatmux owns,
 // so off removes exactly what on set and the user's hooks at other
 // indexes stay. The commands run in the background so tmux does not
@@ -41,8 +47,8 @@ const sidebarTag = "@laatmux_sidebar"
 // empty there on tmux 3.6. window-resized expands window_id for the
 // resized window too.
 var sidebarHooks = []struct{ hook, cmd string }{
-	{"after-new-window[9101]", "sidebar attach '#{window_id}'"},
-	{"after-new-session[9102]", "sidebar attach '#{window_id}'"},
+	{"after-new-window[9101]", "sidebar attach '#{window_id}' '#{session_id}'"},
+	{"after-new-session[9102]", "sidebar attach '#{window_id}' '#{session_id}'"},
 	{"pane-exited[9103]", "sidebar reap"},
 	{"after-kill-pane[9104]", "sidebar reap"},
 	{"window-resized[9105]", "sidebar fit '#{window_id}'"},
@@ -54,20 +60,32 @@ var sidebarHooks = []struct{ hook, cmd string }{
 }
 
 func cmdSidebar(ctx context.Context, args []string) error {
-	usage := errors.New("usage: laatmux sidebar [toggle|on|off]\n       laatmux sidebar pane | attach <window> | fit <window> | reap | seen")
+	usage := errors.New("usage: laatmux sidebar [toggle|on [--session]|off]\n       laatmux sidebar next | prev | jump N | view agents|tree | scope all|session|project [-t window] [-c client] [--all]\n       laatmux sidebar pane | attach <window> | fit <window> | reap | seen")
 	sub := "toggle"
 	if len(args) > 0 {
 		sub = args[0]
 		args = args[1:]
 	}
+	switch sub {
+	case "next", "prev", "jump", "view", "scope":
+		return sidebarControl(ctx, sub, args)
+	}
+	session := false
+	if sub == "on" && len(args) == 1 && args[0] == "--session" {
+		session, args = true, nil
+	}
 	if sub != "attach" && sub != "fit" && len(args) > 0 {
 		return usage
+	}
+	if sub == "attach" && len(args) == 2 {
+		// The window and its session, from the hooks.
+		return sidebarAttach(ctx, args[0], args[1])
 	}
 	// The config is read only where its width and layout are needed, so
 	// off and reap still clean up while the file is broken.
 	switch sub {
 	case "toggle", "on", "off":
-		return sidebarSwitch(ctx, sub)
+		return sidebarSwitch(ctx, sub, session)
 	case "pane":
 		cfg, err := config.Load()
 		if err != nil {
@@ -78,7 +96,7 @@ func cmdSidebar(ctx context.Context, args []string) error {
 		if len(args) != 1 {
 			return usage
 		}
-		return sidebarAttach(ctx, args[0])
+		return sidebarAttach(ctx, args[0], "")
 	case "fit":
 		if len(args) != 1 {
 			return usage
@@ -100,8 +118,12 @@ func cmdSidebar(ctx context.Context, args []string) error {
 }
 
 // sidebarSwitch turns the sidebar on or off. Toggle reads the hooks:
-// present means on.
-func sidebarSwitch(ctx context.Context, sub string) error {
+// present means on. With session, on puts panes in the current
+// session's windows only and names the session in the sessions option,
+// which attach reads for the windows the global hooks report, so other
+// sessions get none; a plain on clears the option, so every session
+// gets panes again.
+func sidebarSwitch(ctx context.Context, sub string, session bool) error {
 	unlock, err := sidebarLock()
 	if err != nil {
 		return err
@@ -119,25 +141,7 @@ func sidebarSwitch(ctx context.Context, sub string) error {
 		}
 	}
 	if sub == "off" {
-		for _, h := range sidebarHooks {
-			if _, err := workspace.Server.Run(ctx, "set-hook", "-gu", h.hook); err != nil {
-				if tmux.NoServer(err) {
-					// Nothing to turn off; hooks die with the server.
-					return nil
-				}
-				return err
-			}
-		}
-		panes, err := sidebarPanes(ctx)
-		if err != nil {
-			return err
-		}
-		for _, p := range panes {
-			if p.sidebar {
-				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
-			}
-		}
-		return nil
+		return sidebarOff(ctx)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -150,10 +154,25 @@ func sidebarSwitch(ctx context.Context, sub string) error {
 	if err != nil {
 		return err
 	}
+	target, err := scopeSidebar(ctx, session)
+	if err != nil {
+		return err
+	}
 	if err := setSidebarHooks(ctx, exe); err != nil {
 		return err
 	}
-	out, err := workspace.Server.Run(ctx, "list-windows", "-a", "-F", "#{window_id}")
+	if cfg.Sidebar.JumpKeys {
+		if err := bindJumpKeys(ctx, exe); err != nil {
+			return err
+		}
+	} else {
+		unbindJumpKeys(ctx)
+	}
+	list := []string{"list-windows", "-a", "-F", "#{window_id}"}
+	if session {
+		list = []string{"list-windows", "-t", target, "-F", "#{window_id}"}
+	}
+	out, err := workspace.Server.Run(ctx, list...)
 	if err != nil {
 		if tmux.NoServer(err) {
 			return nil
@@ -168,7 +187,133 @@ func sidebarSwitch(ctx context.Context, sub string) error {
 	return nil
 }
 
-// setSidebarHooks sets the hooks, each running exe in the background.
+// sidebarOff unsets the hooks, the jump keys and the sessions option,
+// and kills every tagged pane.
+func sidebarOff(ctx context.Context) error {
+	for _, h := range sidebarHooks {
+		if _, err := workspace.Server.Run(ctx, "set-hook", "-gu", h.hook); err != nil {
+			if tmux.NoServer(err) {
+				// Nothing to turn off; hooks die with the server.
+				return nil
+			}
+			return err
+		}
+	}
+	unbindJumpKeys(ctx)
+	_, _ = workspace.Server.Run(ctx, "set-option", "-su", sessionsTag)
+	panes, err := sidebarPanes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range panes {
+		if p.sidebar {
+			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
+		}
+	}
+	return nil
+}
+
+// scopeSidebar sets the sessions option for on: with session, the
+// current session added to it, and the panes a plain on put in other
+// sessions killed, since those sessions get none now; without, the
+// option cleared, so every session gets panes. It returns the current
+// session's id with session.
+func scopeSidebar(ctx context.Context, session bool) (string, error) {
+	if !session {
+		if _, err := workspace.Server.Run(ctx, "set-option", "-su", sessionsTag); err != nil && !tmux.NoServer(err) {
+			return "", err
+		}
+		return "", nil
+	}
+	if os.Getenv("TMUX") != "" && !workspace.Inside(ctx) {
+		// The default server would name another session for a shell
+		// nested on the laatmux server, and kill the panes elsewhere.
+		return "", errors.New("sidebar on --session: run it in a session of the default tmux server")
+	}
+	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
+	if err != nil {
+		return "", err
+	}
+	target := strings.TrimSpace(string(out))
+	sessions, _ := sidebarSessions(ctx)
+	if !contains(sessions, target) {
+		sessions = append(sessions, target)
+	}
+	if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
+		return "", err
+	}
+	if out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", "#{session_id}"+tmux.Sep+"#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); err == nil {
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f := strings.Split(l, tmux.Sep); len(f) == 3 && f[2] != "" && !contains(sessions, f[0]) {
+				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[1])
+			}
+		}
+	}
+	return target, nil
+}
+
+// sidebarSessions is the sessions option's ids, none for every session.
+func sidebarSessions(ctx context.Context) ([]string, error) {
+	out, err := workspace.Server.Run(ctx, "show-options", "-sv", sessionsTag)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// jumpKeyCmd is the command a jump key runs: the window and the client
+// the key's own, so any number of clients attached tell apart.
+func jumpKeyCmd(exe string, n int) string {
+	return fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + fmt.Sprintf(" sidebar jump %d -t '#{window_id}' -c '#{client_name}'", n)}))
+}
+
+// bindJumpKeys binds M-1..M-9 in tmux's root table to the sidebar's
+// jump; jump_keys off leaves them unbound.
+func bindJumpKeys(ctx context.Context, exe string) error {
+	for n := 1; n <= 9; n++ {
+		if _, err := workspace.Server.Run(ctx, "bind-key", "-n", fmt.Sprintf("M-%d", n), jumpKeyCmd(exe, n)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unbindJumpKeys takes laatmux's jump bindings off: M-1..M-9 in the
+// root table bound to a sidebar jump of that number, leaving a key
+// bound to anything else alone.
+func unbindJumpKeys(ctx context.Context) {
+	out, err := workspace.Server.Run(ctx, "list-keys", "-T", "root")
+	if err != nil {
+		return
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		f := strings.Fields(l)
+		// bind-key -T root M-1 run-shell -b "... sidebar jump 1 -t ...".
+		if len(f) < 5 || f[0] != "bind-key" || f[1] != "-T" || f[2] != "root" {
+			continue
+		}
+		key := f[3]
+		if len(key) != 3 || !strings.HasPrefix(key, "M-") || key[2] < '1' || key[2] > '9' {
+			continue
+		}
+		if f[4] == "run-shell" && strings.Contains(l, " sidebar jump "+key[2:]+" -t ") {
+			_, _ = workspace.Server.Run(ctx, "unbind-key", "-n", key)
+		}
+	}
+}
+
+// setSidebarHooks sets the hooks, each running exe in the background,
+// global all: a hook on a session would shadow the user's global hooks
+// of that name there.
 func setSidebarHooks(ctx context.Context, exe string) error {
 	for _, h := range sidebarHooks {
 		cmd := fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + " " + h.cmd}))
@@ -181,8 +326,10 @@ func setSidebarHooks(ctx context.Context, exe string) error {
 
 // sidebarAttach adds a pane to one window, from a hook. Under the lock
 // it reads the hooks and does nothing when they are gone: an attach that
-// was queued behind off must not put a pane back.
-func sidebarAttach(ctx context.Context, window string) error {
+// was queued behind off must not put a pane back. With the sidebar on
+// for some sessions, a window in another gets none; a hook from an
+// older build names no session, and its window gets a pane as before.
+func sidebarAttach(ctx context.Context, window, session string) error {
 	unlock, err := sidebarLock()
 	if err != nil {
 		return err
@@ -192,6 +339,9 @@ func sidebarAttach(ctx context.Context, window string) error {
 	if err != nil || !on {
 		return err
 	}
+	if sessions, err := sidebarSessions(ctx); err == nil && len(sessions) > 0 && session != "" && !contains(sessions, session) {
+		return nil
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -199,9 +349,10 @@ func sidebarAttach(ctx context.Context, window string) error {
 	return sidebarAdd(ctx, cfg, window)
 }
 
-// sidebarAdd splits a sidebar pane off the left edge of the window, full
-// height, at sidebarWidth's width, the configured one or half a narrow
-// window, unless the window has one. The split
+// sidebarAdd splits a sidebar pane off the window as sidebarSplit says,
+// the left edge at sidebarWidth's width, the configured one or half a
+// narrow window, or the top edge at the strip's height, unless the
+// window has one. The split
 // is detached so focus stays where it was, and the new pane is tagged
 // by the id split-window printed, not as the window's active pane: an
 // after-split-window hook of the user's runs between the two commands
@@ -234,9 +385,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	if err != nil {
 		return err
 	}
-	out, err = workspace.Server.Run(ctx,
-		"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth)), "-t", window,
-		"-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))
+	out, err = workspace.Server.Run(ctx, append(sidebarSplit(cfg, windowWidth), "-t", window, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))...)
 	if err != nil {
 		return err
 	}
@@ -281,21 +430,34 @@ func sidebarReap(ctx context.Context) error {
 			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
 		}
 	}
+	reapSockets(ctx)
 	return nil
 }
 
 // sidebarWidth is the sidebar's width in a window of the given width:
-// the configured width, or half the window when that is narrower, so
-// neither pane is squeezed to a column. 0 is a window not known, and
-// gets the configured width.
+// the configured columns or percentage, 10% clamped to 25..50 unset,
+// or half the window when that is narrower, so neither pane is
+// squeezed to a column. 0 is a window not known, and gets the
+// configured width.
 func sidebarWidth(cfg config.Config, windowWidth int) int {
 	if windowWidth <= 0 {
-		return cfg.Sidebar.Columns()
+		return cfg.Sidebar.Columns(0)
 	}
-	return min(cfg.Sidebar.Columns(), max(windowWidth/2, 1))
+	return min(cfg.Sidebar.Columns(windowWidth), max(windowWidth/2, 1))
 }
 
-// sidebarFit puts the window's sidebar pane back to its width. tmux
+// sidebarSplit is the split-window that adds the pane: off the left
+// edge, full height, at the width; or, with position top, off the top
+// edge, full width, at the height.
+func sidebarSplit(cfg config.Config, windowWidth int) []string {
+	if cfg.Sidebar.Top() {
+		return []string{"split-window", "-d", "-v", "-b", "-f", "-l", strconv.Itoa(cfg.Sidebar.Lines())}
+	}
+	return []string{"split-window", "-d", "-h", "-b", "-f", "-l", strconv.Itoa(sidebarWidth(cfg, windowWidth))}
+}
+
+// sidebarFit puts the window's sidebar pane back to its width, or a
+// strip on top to its height. tmux
 // shares a window's change of width out among its panes: a session made
 // detached is 80 columns wide, its sidebar split off at the width, and
 // a client switching to it widens the sidebar by a share of the extra
@@ -319,7 +481,11 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 		return err
 	}
 	defer unlock()
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{pane_width}", "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"}, tmux.Sep))
+	size := "#{pane_width}"
+	if cfg.Sidebar.Top() {
+		size = "#{pane_height}"
+	}
+	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", size, "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"}, tmux.Sep))
 	if err != nil {
 		// Best effort, on every resize: a window killed while fit
 		// waited on the lock, or no server, is nothing to fit, and an
@@ -340,11 +506,14 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 			sidebar, have = f[0], f[3]
 		}
 	}
-	want := strconv.Itoa(sidebarWidth(cfg, windowWidth))
+	want, axis := strconv.Itoa(sidebarWidth(cfg, windowWidth)), "-x"
+	if cfg.Sidebar.Top() {
+		want, axis = strconv.Itoa(cfg.Sidebar.Lines()), "-y"
+	}
 	if sidebar == "" || have == want {
 		return nil
 	}
-	args := []string{"resize-pane", "-t", sidebar, "-x", want}
+	args := []string{"resize-pane", "-t", sidebar, axis, want}
 	if zoomed != "" {
 		args = append(args, ";", "resize-pane", "-Z", "-t", zoomed)
 	}
@@ -430,6 +599,19 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, LocalHost: localHostName(cfg), Hint: "tab view  s/h/l fold  f all  v layout  / filter  z settle  p/x task  q quit"}
-	return runView(ctx, cfg, c, m, false, false)
+	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, LocalHost: localHostName(cfg), AskQuit: true,
+		ItemWidth: cfg.Sidebar.ItemWidth(),
+		Hint:      "tab view  s/h/l fold  f all  F scope  v layout  / filter  z settle  p/x task  ? help  q quit",
+		HelpTitle: "laatmux sidebar", Help: []string{
+			"p            deliver a task's prompt",
+			"x X          dismiss a task, remove its worktree",
+			"q Ctrl-C     quit the sidebar, after a question",
+		}}
+	if cfg.Sidebar.Top() {
+		// The strip: the agent view alone, chips along the top, no tab
+		// line; the layout and view are not the stored defaults'.
+		m.Layout, m.View, m.Tabs = view.Strip, view.ViewAgents, false
+		return runView(ctx, cfg, c, m, viewOptions{listen: true, fixedLayout: true, fixedView: true})
+	}
+	return runView(ctx, cfg, c, m, viewOptions{listen: true})
 }

@@ -786,7 +786,7 @@ alike unless the row says otherwise.
 | `F` | — | scope to the viewer's session, and back |
 | `?` | — | help overlay listing the keys |
 | `o` `O` | — | open the PR, its checks (dashboard) |
-| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n", while filtering too |
+| `q`, `Ctrl-c` | quit | quit the dashboard; in the sidebar, ask "Quit sidebar? y/n"; while filtering `q` is a letter and `Ctrl-c` asks |
 | `a` `x` `X` `p` | dashboard actions | unchanged, on the rows below |
 
 Fold rows and repository lines are selectable, since `Enter` acts on
@@ -828,7 +828,8 @@ Five settlements differ from the plan in #52:
   `sidebar.jump_keys: true` has `on` bind them to `run-shell "laatmux
   sidebar jump N -t '#{window_id}' -c '#{client_name}'"`, so the window
   and the client are the key's own with any number of clients
-  attached, and the `{jump_key}` token then shows them; by default they
+  attached, and the `{jump_key}` token then shows them in the sidebar
+  panes, where the keys land, not in the dashboard; by default they
   are unbound and the token is empty.
 
 ## Placement, scope and controls
@@ -843,18 +844,27 @@ Five settlements differ from the plan in #52:
   is not clamped. `sidebar.height` applies to `top`. `sidebar fit` keeps
   its job of restoring the width after a resize.
 - **Scope:** `laatmux sidebar on --session` puts sidebar panes in the
-  current session's windows only, and its hooks for new windows are set
-  on that session with `set-hook -t`, not globally, so other sessions
-  get none. This reverses the rule against a per-session scope, and is
-  #52's meaning.
+  current session's windows only, so other sessions get none. This
+  reverses the rule against a per-session scope, and is #52's meaning.
+  The hooks stay global, since a hook set on the session would shadow
+  the user's global hooks of that name there: `on --session` names the
+  session in the server option `@laatmux_sidebar_sessions`, the hooks
+  pass the window's session, and `attach` adds no pane to a window in
+  a session not named; a plain `on` clears the option, `off` unsets
+  it. The current session is the default server's: from a shell nested
+  on the laatmux server `on --session` refuses, since the default
+  server would take the other server's pane id for one of its own, or
+  fall back to its latest session, and kill the panes elsewhere.
 - **`F`** switches the pane's scope to `session`, and pressed again back
   to the scope the pane had before, whatever set it; a pane already on
   `session` goes to `all`. It acts on that pane only and is not
   persisted. `F` and the scope are one setting.
 - **CLI:** `laatmux sidebar next | prev | jump N | view agents|tree |
   scope all|session|project` act on one sidebar pane: the one in the
-  window the command runs for, `-t` a window or the current one, or on
-  every pane with `--all`, which only `view` and `scope` take. Each
+  window the command runs for, `-t` a window or the current one on the
+  default server (from a shell nested on the laatmux server there is
+  none, and the command does nothing), or on every pane with `--all`,
+  which only `view` and `scope` take. Each
   sidebar pane listens on a unix socket of its own under the state
   directory, named by the tmux server's pid and the pane id, since pane
   ids restart after a server restart; it writes the path to the pane
@@ -862,8 +872,9 @@ Five settlements differ from the plan in #52:
   tagged pane rather than building it. A pane unlinks a leftover socket
   of its name before it listens and removes its socket on exit, and
   `sidebar reap` removes a socket whose server pid is the default
-  server's and whose pane is gone, or one that refuses a connection; it
-  leaves the sockets of other servers, which it cannot list, alone. The command is
+  server's and whose pane is gone, or one that refuses a connection; a
+  socket of another server, which it cannot list, goes only when it
+  refuses. The command is
   one message to the socket, handled as a navigation event, not as
   typed keys: it moves the selection or switches the view whether the
   pane is filtering or not, and is ignored while an overlay or a
@@ -871,8 +882,9 @@ Five settlements differ from the plan in #52:
   or the worktree lines in the tree, in the list as drawn, after the
   scope, the filter and the folds, skipping fold rows and repository
   lines, and switches the client the
-  command names with `-c`, or the one it ran from, with `switch-client
-  -c`. For `view` and `scope` the CLI writes the new default to
+  command names with `-c`, or the one it ran from when that is the
+  default server's, with `switch-client -c`; a shell nested on the
+  laatmux server names none, and the pane switches a client of its own. For `view` and `scope` the CLI writes the new default to
   `sidebar.json` once, whether or not a pane answered; the panes only
   apply the change. Nothing is replayed. A window with no sidebar pane,
   or a socket that refuses the connection, makes the command exit
@@ -899,7 +911,9 @@ Five settlements differ from the plan in #52:
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The
   dashboard's `F` uses the same rules through the client the popup
-  opened on. #52 called it `filter none|all|…`; `none` was the same as
+  opened on, and starts at `all` whatever the file says, since a scope
+  the CLI set for the panes would empty a popup opened from an
+  unrelated shell. #52 called it `filter none|all|…`; `none` was the same as
   `all`, and the word `filter` is the view's `/` text filter, which
   stays the pane's own and is not persisted, as is `F`.
 - **Persistence:** `sidebar.json` under the state directory holds two
@@ -922,6 +936,21 @@ Five settlements differ from the plan in #52:
   its node was last seen, and one not seen for a day is dropped. At
   start a pane takes the file's values and the config's for what the
   file lacks; the config is the default, the file the last choice.
+  The view tells its host of a setting changed, the view, layout,
+  scope or a fold, once after the key or command that changed it; the
+  host writes the view after `Tab`, the layout after `v` and the
+  folds set here then, and the file's folds reach the view as a
+  command on its own goroutine when the poll sees the mtime move; a
+  value the file held the last time is not applied again, so a fold a
+  pane opened to reveal a selection stays open; a fold carried at a
+  handoff is written only where the file has none, and the value
+  carried is the user's, the file's as last seen, not a reveal over
+  it; a fold the file dropped is forgotten by the panes too, unless
+  set there since; each pane refreshes its folds' sightings once an
+  hour. Under a scope, a folded repository line is a closed fold
+  shown: `f` opens it as a reveal, not written, and the lines under it
+  with it. The dashboard's keys are `dashboard_view` and
+  `dashboard_layout`.
 - **Other states:** both views show `⠋ Loading` before the first
   snapshot; the empty states are each view's own.
 
@@ -986,12 +1015,13 @@ the defaults.
   the next, through the fill's padding, and leaves a token's own
   colours alone; a background gives way to the selection's band.
 - **Config:** `sidebar.templates.{compact, tiles, top, tree.{repo,
-  worktree, agent, pane, run}}`. An unknown token is shown in the view
+  worktree, agent, pane, run}}`; `top`, like `tiles`, is a list of
+  lines, three by default. An unknown token is shown in the view
   as `template error: unknown token … at column N in tiles[0]` instead
   of failing the pane. With `Titles` the compact layout draws the
   tiles' third line under each row. The stale fold row, the `other
   sessions` header and the session lines under it are fixed, not
-  templates; `top` is parsed now and drawn by step 8.
+  templates.
 
 ## The dashboard
 
@@ -1050,7 +1080,7 @@ theme: {mode: auto, custom: {accent: "#b48ead"}}
 sidebar:
   view: agents            # agents | tree
   position: left          # left | top
-  width: 10%              # columns or N%
+  # width: 40             # columns or N%; unset: 10%, clamped to 25..50
   height: 3               # top only
   layout: tiles           # tiles | compact
   horizontal: {item_width: 24}
@@ -1168,19 +1198,24 @@ view and folds step 6 keeps in memory.
   managed session, in another window, and on this machine's default
   server, against a fake daemon with and without `select`, and into an
   existing workspace session left on a shell window.
-- **Sidebar control:** two panes, a `Tab` in one, `sidebar view` to the
-  other, `--all`, and a pane started after; `next` while filtering and
-  while a question is open; `jump N` with two clients on one window; a
-  leftover socket; a window with no sidebar; `F` from `all`, from
-  `session`, and after a `scope` from the CLI; the dashboard with and
-  without `--layout`.
+- **Sidebar control:** a pane's socket found by the window and by
+  `--all`, each command reaching the pane, `view` and `scope` written
+  whether or not a pane answers; `next` while filtering and while a
+  question is open; `jump N` with its client, switched by the pane's
+  jump once; a leftover socket reaped and a live one kept; a window
+  with no sidebar and a socket refusing; a pane starting from the
+  file's view, layout and scope unless fixed, writing the view, the
+  layout and the folds and never the scope, and another pane's write
+  reaching it through the poll; `F` from `all`, from `session`, and
+  after a `scope` from the CLI; the dashboard with and without
+  `--layout`.
 - **Scopes:** `session` with the viewer's worktree's agents in two
   managed sessions, with a task at the viewer's worktree's root whose
-  prompt was not delivered, with a failed task at that root, with two
-  tasks at that root and the owner handing over first, the viewer in a
-  task's session before the listing, a session with no worktree, an orphaned session under its
-  repository, a session with no row, and `project` with a pending task
-  and an orphaned session.
+  prompt was not delivered, with a failed task at that root, the viewer
+  in a task's session before the listing, a session with no worktree,
+  an orphaned session under its repository, a session with no row, and
+  `project` with a pending task and an orphaned session; `f` under
+  `session` with the repository line open and folded.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.

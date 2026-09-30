@@ -381,6 +381,12 @@ func Switch(ctx context.Context, name string) error {
 	return err
 }
 
+// SwitchClient makes the session current for the named client.
+func SwitchClient(ctx context.Context, client, name string) error {
+	_, err := Server.Run(ctx, "switch-client", "-c", client, "-t", "="+name)
+	return err
+}
+
 // AttachHint is what to run to attach to the session from outside tmux.
 // The default server is selected explicitly, so the command does not
 // follow an inherited TMUX that names another server.
