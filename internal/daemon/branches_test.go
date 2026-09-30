@@ -547,4 +547,15 @@ func TestBranchesHostErrorsKept(t *testing.T) {
 	if last != "gh is not logged in to ghe.example.com" {
 		t.Errorf("after github.com answered: %q", last)
 	}
+	// The enterprise host's last worktree goes: its failure goes with
+	// it at the next round, which asks nothing of it.
+	d.fetchNow(t)
+	_, _, msgs = drainBranches(s)
+	cleared := false
+	for _, m := range msgs {
+		cleared = cleared || m.GitHubOK
+	}
+	if !cleared {
+		t.Errorf("a host no branch is on kept its failure: %+v", msgs)
+	}
 }

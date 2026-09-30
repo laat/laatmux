@@ -290,6 +290,14 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		hosts = append(hosts, h)
 	}
 	sort.Strings(hosts)
+	// A host no branch is on any more has no failure to say.
+	d.mu.Lock()
+	for h := range d.hostErrs {
+		if _, asked := byHost[h]; !asked {
+			delete(d.hostErrs, h)
+		}
+	}
+	d.mu.Unlock()
 	// Every host's status first, each within its share of the round,
 	// so a slow host starves no other; the failing checks' names after.
 	type answer struct {
