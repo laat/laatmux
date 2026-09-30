@@ -71,11 +71,9 @@ func jumpPane(ctx context.Context, cfg config.Config, line *rows.Row, r rows.Row
 		}
 		return "", nil
 	}
-	name, spec := paneSpec(cfg, h, line, r, p)
-	if spec != nil {
-		if name, _, err = workspace.Ensure(ctx, *spec); err != nil {
-			return "", err
-		}
+	name, _, err := workspace.Ensure(ctx, paneSpec(cfg, h, line, r, p))
+	if err != nil {
+		return "", err
 	}
 	if err := switchTo(ctx, name); err != nil {
 		return "", err
@@ -105,32 +103,34 @@ const selectTimeout = 5 * time.Second
 // workspace session of the line whose home the session is, or whose
 // agent laatmux made at the root is in it with the home lost, or the
 // task's before the host lists the worktree, as those lines' own jumps
-// attach it; by name alone, the one a task's jump made; or the plain
-// attachment to the pane's managed session. A pane of one worktree in
-// another's session so goes to the other's workspace session, and a
-// plain attachment never takes a workspace session's name.
-func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) (string, *workspace.Spec) {
+// attach it; or the plain attachment to the pane's managed session. A
+// pane of one worktree in another's session so goes to the other's
+// workspace session, and a plain attachment never takes a workspace
+// session's name.
+func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) workspace.Spec {
 	switch {
-	case line != nil && line.Worktree != nil:
+	case line != nil && line.Worktree != nil && line.Worktree.Session != "":
+		return worktreeSpec(cfg, h, *line.Worktree)
+	case line != nil && line.Worktree != nil && line.Pending == nil:
+		// The home lost: the session named after the worktree, as the
+		// line's jump names it.
 		w := *line.Worktree
+		w.Session = p.session
 		spec := worktreeSpec(cfg, h, w)
-		if w.Session == "" {
-			// The home lost: the session named after the worktree, as
-			// the line's jump names it.
-			w.Session = p.session
-			spec = worktreeSpec(cfg, h, w)
-			spec.Name = worktreeSessionName(h, w)
-		}
-		return "", &spec
+		spec.Name = worktreeSessionName(h, w)
+		return spec
 	case line != nil && line.Pending != nil:
+		// The task's, as its own jump attaches it, with the worktree's
+		// record when the host lists one without a home.
 		pd := line.Pending
-		w := protocol.Worktree{ID: pd.WorktreeID(), EnvironmentID: pd.EnvironmentID, Root: pd.Root, Repo: pd.Repo, Branch: pd.Branch, Source: pd.Source, Session: pd.Session}
-		spec := worktreeSpec(cfg, h, w)
-		return "", &spec
-	case r.Worktree == nil && r.Local != nil && r.Local.Workspace():
-		return r.Local.Name, nil
+		w := protocol.Worktree{ID: pd.WorktreeID(), EnvironmentID: pd.EnvironmentID, Root: pd.Root, Repo: pd.Repo, Branch: pd.Branch, Source: pd.Source}
+		if line.Worktree != nil {
+			w = *line.Worktree
+		}
+		w.Session = pd.Session
+		return worktreeSpec(cfg, h, w)
 	}
-	return "", &workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
+	return workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
 }
 
 // selectRemote asks the host's daemon to make the pane current on its

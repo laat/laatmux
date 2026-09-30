@@ -565,12 +565,11 @@ func (r Row) Home() string {
 		return ""
 	case r.Worktree != nil && r.Worktree.Session != "":
 		return r.Worktree.Session
-	case r.Worktree != nil:
-		if r.Agent != nil && Server(*r.Agent) == tmux.LaatmuxServer.Label() {
-			return r.Agent.Session
-		}
-		return ""
+	case r.Worktree != nil && r.Agent != nil && Server(*r.Agent) == tmux.LaatmuxServer.Label():
+		return r.Agent.Session
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
+		// A task's session, before the host lists the worktree or
+		// while it lists one without a home.
 		return r.Pending.Session
 	}
 	return ""

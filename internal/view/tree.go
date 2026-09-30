@@ -45,8 +45,10 @@ func (m *Model) SetTree(nodes []rows.Row) {
 	owners := map[string]string{}
 	for i := range m.Tree {
 		n := &m.Tree[i]
-		if n.Depth == 1 && n.Worktree != nil && n.Children > 0 {
-			owners[n.Worktree.ID] = n.ID()
+		if n.Depth == 1 && n.Children > 0 {
+			if id := worktreeOf(n); id != "" {
+				owners[id] = n.ID()
+			}
 		}
 	}
 	m.Tree = nodes
@@ -85,7 +87,7 @@ func (m *Model) SetTree(nodes []rows.Row) {
 func (m *Model) successor(worktreeID string) string {
 	standing := ""
 	for _, n := range m.Tree {
-		if n.Depth != 1 || n.Worktree == nil || n.Worktree.ID != worktreeID {
+		if n.Depth != 1 || worktreeOf(&n) != worktreeID {
 			continue
 		}
 		if n.Kind == rows.KindWorktree {
@@ -96,6 +98,24 @@ func (m *Model) successor(worktreeID string) string {
 		}
 	}
 	return standing
+}
+
+// worktreeOf is the worktree a depth-1 line is or stands for: the
+// record's id, or the one a task's add makes, before the host lists it.
+func worktreeOf(n *rows.Row) string {
+	if n.Worktree != nil {
+		return n.Worktree.ID
+	}
+	return n.Alias()
+}
+
+// OwnerLine is the depth-1 line holding a worktree's children: its
+// line, or the task standing for it; nil for none.
+func (m *Model) OwnerLine(worktreeID string) *rows.Row {
+	if i := m.indexOf(m.successor(worktreeID)); i >= 0 {
+		return &m.Tree[i]
+	}
+	return nil
 }
 
 // closed reports whether a foldable node is folded, deciding a worktree

@@ -194,6 +194,10 @@ func TestPaneJumpRouting(t *testing.T) {
 	home := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: wt}
 	lostLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &lost, Agent: &protocol.Agent{ID: "venv/laatmux/%4", Session: "laatmux/x-2", Managed: true, Cwd: "/r/x"}}
 	task := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Pending: &protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "z", Root: "/r/z", Session: "laatmux/z", Taken: true}}
+	// A task standing for a worktree listed without a home, before the
+	// add's agent is identified: the task's session is the home.
+	listed := &protocol.Worktree{ID: "venv/worktree//r/z", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "z", Root: "/r/z"}
+	owner := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending}
 	otherLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: other}
 	for _, c := range []struct {
 		line    *rows.Row
@@ -207,16 +211,12 @@ func TestPaneJumpRouting(t *testing.T) {
 		{lostLine, rows.Row{Kind: rows.KindAgent, Worktree: &lost, Agent: a}, paneTarget{"laatmux", "laatmux/x-2", "%1"}, "vm/laatmux/x", "laatmux/x-2", "venv//r/x"},
 		{task, rows.Row{Kind: rows.KindAgent, Agent: a}, paneTarget{"laatmux", "laatmux/z", "%1"}, "vm/laatmux/z", "laatmux/z", "venv//r/z"},
 		{otherLine, rows.Row{Kind: rows.KindAgent, Worktree: wt, Agent: a}, paneTarget{"laatmux", "laatmux/y", "%1"}, "vm/laatmux/y", "laatmux/y", "venv//r/y"},
-		{nil, rows.Row{Kind: rows.KindAgent, Local: &workspace.Local{Name: "vm/laatmux/x", Key: "venv//r/x"}, Agent: a}, paneTarget{"laatmux", "laatmux/x", "%1"}, "vm/laatmux/x", "", ""},
+		{owner, rows.Row{Kind: rows.KindPane, Pane: p}, paneTarget{"laatmux", "laatmux/z", "%2"}, "vm/laatmux/z", "laatmux/z", "venv//r/z"},
 		{nil, rows.Row{Kind: rows.KindAgent, Worktree: &lost, Agent: a}, paneTarget{"laatmux", "scratch", "%1"}, "vm/scratch", "scratch", ""},
 	} {
-		name, spec := paneSpec(cfg, h, c.line, c.row, c.target)
-		if spec != nil {
-			if spec.Managed != c.managed || spec.Name != c.name || spec.Key != c.key {
-				t.Errorf("%v in %s: spec %+v", c.row.Kind, c.target.session, spec)
-			}
-		} else if name != c.name || c.managed != "" {
-			t.Errorf("%v in %s: name %q", c.row.Kind, c.target.session, name)
+		spec := paneSpec(cfg, h, c.line, c.row, c.target)
+		if spec.Managed != c.managed || spec.Name != c.name || spec.Key != c.key {
+			t.Errorf("%v in %s: spec %+v", c.row.Kind, c.target.session, spec)
 		}
 	}
 	// The line a pane's session routes by, from the tree.
@@ -228,6 +228,10 @@ func TestPaneJumpRouting(t *testing.T) {
 		{"vm", "laatmux/x", home.Worktree.ID}, {"vm", "laatmux/x-2", lostLine.Worktree.ID}, {"vm", "laatmux/z", "add-1"},
 		{"vm", "laatmux/y", other.ID}, {"vm", "scratch", ""}, {"mac", "laatmux/x", "menv/worktree//r/x"}, {"vm", "", ""},
 	} {
+		if c.session == "laatmux/z" {
+			m.Tree[3] = *owner
+			c.want = "add-1"
+		}
 		got := ""
 		if l := m.LineFor(c.host, c.session); l != nil {
 			got = l.ID()

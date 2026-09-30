@@ -92,3 +92,83 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 		t.Fatalf("untagged pane moved: %q", cmd)
 	}
 }
+
+// The two tmux steps of a pane's jump: the host's select makes a pane
+// in another window of the managed session current, and the workspace
+// session's attach pane is found and made current again after the user
+// left the session on a shell window.
+func TestPaneJumpSteps(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	for _, s := range []tmux.Server{tmux.LaatmuxServer, tmux.DefaultServer} {
+		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Run(ctx, "kill-server") })
+	}
+	managed := tmux.LaatmuxServer
+	if _, err := managed.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managed.Run(ctx, "new-window", "-d", "-t", "=m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	panes := func(s tmux.Server, session string) map[string]string {
+		t.Helper()
+		out, err := s.Run(ctx, "list-panes", "-s", "-t", "="+session, "-F", "#{pane_id} #{window_active}#{pane_active}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]string{}
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			f := strings.Fields(l)
+			m[f[0]] = f[1]
+		}
+		return m
+	}
+	var back string
+	for id, active := range panes(managed, "m1") {
+		if active != "11" {
+			back = id
+		}
+	}
+	if back == "" {
+		t.Fatal("no pane in the background window")
+	}
+	if err := managed.SelectPane(ctx, back); err != nil {
+		t.Fatal(err)
+	}
+	if got := panes(managed, "m1")[back]; got != "11" {
+		t.Fatalf("the background pane after select: active %q", got)
+	}
+	if err := managed.SelectPane(ctx, "%999"); err == nil {
+		t.Error("a pane gone selected without error")
+	}
+	// The workspace session, its attach pane, and a shell window the
+	// user opened and left current.
+	spec := Spec{Host: client.Host{Name: "mac"}, Managed: "m1", Name: "mac/w", Key: "env//w", Branch: "w"}
+	if _, created, err := Ensure(ctx, spec); err != nil || !created {
+		t.Fatalf("ensure: %v %v", created, err)
+	}
+	attach := AttachPane(ctx, "mac/w")
+	if attach == "" {
+		t.Fatal("no attach pane")
+	}
+	if _, err := Server.Run(ctx, "new-window", "-t", "=mac/w", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	if got := panes(Server, "mac/w")[attach]; got == "11" {
+		t.Fatal("the shell window did not take the focus")
+	}
+	if err := Server.SelectPane(ctx, attach); err != nil {
+		t.Fatal(err)
+	}
+	if got := panes(Server, "mac/w")[attach]; got != "11" {
+		t.Fatalf("the attach pane after select: active %q", got)
+	}
+	if AttachPane(ctx, "no/such") != "" {
+		t.Error("an attach pane for a session that is not there")
+	}
+}

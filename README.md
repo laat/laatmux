@@ -542,8 +542,11 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   repository per line, its worktrees with their host under it, and
   under each its agents with mark, state (`done` and `stale` among
   them), name, age and title, its other panes and its runs. A worktree
-  shows `no agent` when its session has no identified agent and `no
-  session` when it has none, a settled one says `settled`, and a local
+  with nothing under it shows `no agent` when its session has no
+  identified agent and `no session` when it has none; on a host that
+  attributes panes the session's shell is a pane under the line, so
+  those notes are for older hosts and worktrees with no pane at all. A
+  settled worktree says `settled`, and a local
   workspace session whose worktree is gone from a connected host is
   marked `worktree gone`, from which `rm` still works; a host whose
   snapshot has not arrived, or whose daemon does not publish worktrees,

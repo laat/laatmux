@@ -149,8 +149,13 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 		return d.exitOnJump, true
 	}
 	if r.Kind == rows.KindRun {
-		// A run's line: the worktree's session, which holds it.
-		r.Kind, r.Run = rows.KindWorktree, nil
+		// A run's line: the worktree's session, as its line's jump
+		// reaches it, through the root agent with the home lost.
+		if l := m.OwnerLine(r.Worktree.ID); l != nil {
+			r = *l
+		} else {
+			r.Kind, r.Run = rows.KindWorktree, nil
+		}
 	}
 	if err := jump(r); err != nil {
 		m.Message = err.Error()

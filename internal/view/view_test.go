@@ -1676,11 +1676,16 @@ func TestTreePinned(t *testing.T) {
 	// Walking up to the top: the selection shown on every step, no row
 	// under the more line, never "0 more", and a repository line at the
 	// top of the window has no pin over it.
-	walk := func(m *Model) {
+	walk := func(m *Model, key Key) {
 		t.Helper()
 		for step := 0; ; step++ {
 			out := m.Render()
 			text := Debug(out)
+			// Stable: the render after a key is the one the next tick
+			// draws.
+			if again := Debug(m.Render()); again != text {
+				t.Errorf("step %d: the next render differs:\n%s\nthen:\n%s", step, text, again)
+			}
 			if m.Selection() == nil || !strings.Contains(text, "\nS") {
 				t.Errorf("step %d: the selection is not shown:\n%s", step, text)
 			}
@@ -1695,16 +1700,29 @@ func TestTreePinned(t *testing.T) {
 			if m.scroll > 0 && strings.Contains(out[1].Spans[0].Text, "laatmux") && out[1].Spans[0].Bold && out[2].Spans[0].Bold {
 				t.Errorf("step %d: a repository pinned over itself:\n%s", step, text)
 			}
-			if m.Selected == 0 {
+			if m.Selected == 0 && key.Kind == KeyUp || m.Selected == len(m.Visible())-1 && key.Kind == KeyDown {
 				break
 			}
-			m.Handle(Key{Kind: KeyUp})
+			m.Handle(key)
 		}
 	}
 	for _, h := range []int{7, 8, 9} {
 		m.Height = h
 		m.Handle(Key{Rune: 'G'})
-		walk(m)
+		walk(m, Key{Kind: KeyUp})
+		m.Handle(Key{Rune: 'g'})
+		walk(m, Key{Kind: KeyDown})
+	}
+	// Moving down to where the more line is needed pins the repository
+	// in the same render.
+	m.Height = 8
+	m.Handle(Key{Rune: 'g'})
+	m.Render()
+	for i := 0; i < 5; i++ {
+		m.Handle(Key{Kind: KeyDown})
+	}
+	if out := m.Render(); m.scroll == 0 || !out[1].Spans[0].Bold || m.hitIDs[0] != rows.RepoNode("git@github.com:laat/anki-llm") && m.hitIDs[0] != rows.RepoNode("git@github.com:laat/laatmux.git") {
+		t.Errorf("scroll %d without a pin:\n%s", m.scroll, Debug(out))
 	}
 	// Rows in other sessions have no repository pinned over them.
 	for i := 2; i <= 6; i++ {
@@ -1718,7 +1736,7 @@ func TestTreePinned(t *testing.T) {
 	if strings.Contains(text, "laatmux") {
 		t.Errorf("a repository pinned over other sessions:\n%s", text)
 	}
-	walk(m)
+	walk(m, Key{Kind: KeyUp})
 }
 
 // A task handing over while another stands for its worktree: the
@@ -1789,6 +1807,7 @@ func TestHandoffStanding(t *testing.T) {
 	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
 		t.Fatal("h did not fold the owner")
 	}
+	in.Pendings = append([]protocol.Pending(nil), in.Pendings...)
 	in.Pendings[0].Done, in.Pendings[0].OK, in.Pendings[0].Error = true, false, "failed at agent: boom"
 	set(m)
 	if owner := m.successor("venv/worktree//r/new-one"); owner != "venv/worktree//r/new-one" {
@@ -1799,6 +1818,31 @@ func TestHandoffStanding(t *testing.T) {
 	}
 	if _, ok := m.folds["add-1"]; ok {
 		t.Error("the failed task's fold was not consumed")
+	}
+	// Two tasks at one root before the listing: the newest holds the
+	// add's agent; opened by the user, then failing, it passes the fold
+	// to the older, with no handoff and no worktree record.
+	in = treeInput(now)
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
+	m = &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	set(m)
+	m.Render()
+	if m.successor("venv/worktree//r/new-one") != "add-2" || m.Tree[m.indexOf("add-2")].Children != 1 {
+		t.Fatalf("the newest loose task does not hold the agent: %q", m.successor("venv/worktree//r/new-one"))
+	}
+	m.Select("add-2")
+	m.Handle(Key{Rune: 'l'})
+	// A fresh record: the tree's rows point into the input's.
+	in.Pendings = append([]protocol.Pending(nil), in.Pendings...)
+	in.Pendings[1].Done, in.Pendings[1].OK, in.Pendings[1].Error = true, false, "failed at agent: boom"
+	set(m)
+	if m.successor("venv/worktree//r/new-one") != "add-1" {
+		t.Fatalf("the older task does not take the agent: %q", m.successor("venv/worktree//r/new-one"))
+	}
+	if m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Errorf("the older task did not take the failed owner's open fold: folds %v toggled %v", m.folds, m.toggled)
 	}
 }
 

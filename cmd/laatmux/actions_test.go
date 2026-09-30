@@ -337,6 +337,74 @@ func TestRmFor(t *testing.T) {
 	}
 }
 
+// In the tree, x on a repository line, the stale fold, a pane or a run
+// says what x removes; from a worktree line or an agent under it the
+// question counts the agents the tree joins to the worktree, the jump
+// agent or not.
+func TestRmTreeRows(t *testing.T) {
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	src := "git@github.com:laat/proj.git"
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "codex", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "elsewhere", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/spike", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/task", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "task", Root: "/w/proj/task", Session: "proj/task"},
+			{ID: "venv/worktree//w/proj/spike", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "spike", Root: "/w/proj/spike", Session: "proj/spike"},
+		},
+		Panes: []protocol.Pane{{ID: "venv/pane/laatmux/%7", EnvironmentID: "venv", Session: "proj/task", PaneID: "%7", Command: "zsh", WorktreeID: "venv/worktree//w/proj/task"}},
+		Runs:  []protocol.Run{{ID: "venv/run/r1", EnvironmentID: "venv", Root: "/w/proj/task", WorktreeID: "venv/worktree//w/proj/task", Cmd: []string{"make"}}},
+	}
+	m := &view.Model{Width: 80, Height: 30, View: view.ViewTree}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	m.Handle(view.Key{Rune: 'f'}) // every fold open
+	x := func(id string) {
+		t.Helper()
+		m.Message, m.Confirm = "", ""
+		if !m.Select(id) {
+			t.Fatalf("%s is not visible", id)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	}
+	for _, id := range []string{rows.RepoNode(src), "venv/pane/laatmux/%7", "venv/run/r1"} {
+		x(id)
+		if m.Confirm != "" || !strings.Contains(m.Message, "x removes worktrees") {
+			t.Errorf("%s: confirm=%q message=%q", id, m.Confirm, m.Message)
+		}
+	}
+	// The worktree line, whose one child agent in another session is
+	// not its jump agent, and the agent's own row.
+	for _, id := range []string{"venv/worktree//w/proj/spike", "venv/laatmux/%3"} {
+		x(id)
+		if m.Confirm != "remove proj/spike on vm (/w/proj/spike) with its agent? y/n" {
+			t.Errorf("%s: confirm=%q message=%q", id, m.Confirm, m.Message)
+		}
+		m.Handle(view.Key{Rune: 'n'})
+	}
+	x("venv/laatmux/%2")
+	if m.Confirm != "remove proj/task on vm (/w/proj/task) with its 2 agents? y/n" {
+		t.Errorf("two agents: confirm=%q message=%q", m.Confirm, m.Message)
+	}
+	m.Handle(view.Key{Rune: 'n'})
+	// The agent view's stale fold.
+	m.View = view.ViewAgents
+	in.Agents[2].ActivityAt = time.Time{}
+	in.Now, in.StaleAfter, in.CollapseStale = time.Now(), time.Hour, true
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
+	m.Render()
+	x(rows.NodeStale)
+	if m.Confirm != "" || !strings.Contains(m.Message, "x removes worktrees") {
+		t.Errorf("the stale fold: confirm=%q message=%q", m.Confirm, m.Message)
+	}
+}
+
 // A confirmed rm runs under a log overlay; a refusal without force
 // carries the hint to use X and stays until a key; then the list
 // returns with the message.
@@ -1021,6 +1089,17 @@ func TestClickJumpRefocuses(t *testing.T) {
 		t.Fatal("a failed jump on the selected row left the selection following")
 	}
 	jumpErr = nil
+	// A run's jump is its worktree line's: through the line's root
+	// agent when the home is lost, as the line itself jumps.
+	lost := protocol.Worktree{ID: "venv/worktree//w/lost", EnvironmentID: "venv", Repo: "proj", Branch: "lost", Root: "/w/lost"}
+	root := protocol.Agent{ID: "venv/laatmux/%7", EnvironmentID: "venv", Session: "proj/lost-2", Managed: true, Cwd: "/w/lost", PaneID: "%7"}
+	m.Tree = append(m.Tree, rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/lost", Worktree: &lost, Agent: &root, Children: 1},
+		rows.Row{Kind: rows.KindRun, Depth: 2, Host: "vm", Node: "venv/run/r9", Name: "make", Worktree: &lost, Run: &protocol.Run{ID: "venv/run/r9"}})
+	jumped = nil
+	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: &m.Tree[len(m.Tree)-1]})
+	if len(jumped) != 1 || jumped[0] != lost.ID {
+		t.Fatalf("a run's jump: %v", jumped)
+	}
 	// A click on a task still running jumps nowhere and keeps the focus.
 	running := rows.Row{Name: "proj/new", Pending: &protocol.Pending{ID: "add-1"}}
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: &running, Mouse: true})

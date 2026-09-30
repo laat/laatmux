@@ -501,18 +501,6 @@ func (m *Model) Render() []Line {
 			m.scroll = 0
 		}
 	}
-	scrollTo()
-	// In the tree, the repository line of the node at the top stays
-	// pinned above the window while the list scrolls past it, and the
-	// window is a line shorter for it.
-	reserved := false
-	if m.View == ViewTree && body >= 4 {
-		if l, _ := m.pinned(items, ids); l != nil {
-			reserved = true
-			window = body - 1
-			scrollTo()
-		}
-	}
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
 	rowsFrom := func(i int) int {
@@ -524,17 +512,41 @@ func (m *Model) Render() []Line {
 		}
 		return n
 	}
-	more := 0
-	if window > 1 && rowsFrom(m.scroll+window) > 0 {
-		// Only rows count: a group's header or a divider left below is
-		// no reason to give up a line.
-		full := window
-		window--
+	// Two lines the window gives up when needed: in the tree, the
+	// repository line of the node at the top, pinned above the window
+	// while the list scrolls past it; and "↓ N more" at the bottom for
+	// rows left below. Only rows count for the latter: a group's header
+	// or a divider left below is no reason to give up a line. Each
+	// reservation moves the scroll, which can call for the other: a few
+	// passes settle it.
+	reserved, tail := false, false
+	for pass := 0; pass < 4; pass++ {
 		scrollTo()
+		pin := false
+		if m.View == ViewTree && body >= 4 {
+			l, _ := m.pinned(items, ids)
+			pin = l != nil
+		}
+		w := body
+		if pin {
+			w--
+		}
+		below := w > 1 && rowsFrom(m.scroll+w) > 0
+		if below {
+			w--
+		}
+		if pin == reserved && below == tail && w == window {
+			break
+		}
+		reserved, tail, window = pin, below, w
+	}
+	more := 0
+	if tail {
 		more = rowsFrom(m.scroll + window)
 		if more == 0 {
-			window = full
-			scrollTo()
+			// The shorter window moved the last row into view.
+			tail = false
+			window++
 		}
 	}
 	m.hitPrevIDs, m.hitPrevTop, m.hitPrevAt = m.hitIDs, m.hitTop, m.hitAt
@@ -559,7 +571,7 @@ func (m *Model) Render() []Line {
 	}
 	for i := shift; i < body; i++ {
 		switch j := m.scroll + i - shift; {
-		case i-shift == window:
+		case tail && i-shift == window:
 			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
 		case j < len(lines):
 			out = append(out, lines[j])
