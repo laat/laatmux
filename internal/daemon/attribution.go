@@ -231,7 +231,9 @@ func (d *Daemon) runRecordID(id string) string { return d.cfg.EnvironmentID + "/
 // worktree. Called with d.mu held.
 func (d *Daemon) publishPaneLocked(key string, st *paneState, now time.Time) {
 	wid := d.worktreeOfLocked(st.path)
-	if wid == "" {
+	if wid == "" || st.pane.Own {
+		// Outside every worktree, or laatmux's own: a sidebar pane, or
+		// the attach pane of a workspace session.
 		d.dropPaneLocked(key)
 		return
 	}

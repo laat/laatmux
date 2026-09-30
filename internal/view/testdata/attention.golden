@@ -23,12 +23,12 @@ S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?
 .D.|⟨border:▌⟩    no session
 .D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›
 .D.|⟨border:▌⟩    no agent
-...|‹⟨header:stale⟩›
+...|‹⟨header:▾ 2 stale⟩›
 .D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ old proj ‹@vm›                                                                       2h
 .D.|⟨dimmed:▌⟩    long idle
-...|‹⟨header:orphaned⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ vm/proj/gone ‹@vm›
 .D.|⟨border:▌⟩    no worktree
+...|
 ...|
 ...|
 .D.|

@@ -159,6 +159,10 @@ type Pane struct {
 	// to it reach the mode, not the program, while a capture still
 	// shows the program's screen.
 	InMode bool
+	// Own is a pane laatmux made for itself, a sidebar pane or a
+	// workspace session's attach pane, by its @laatmux_sidebar or
+	// @laatmux_attach_pane tag: not a pane of the user's.
+	Own bool
 }
 
 // Sep separates fields in list-panes output. tmux 3.5 strips control
@@ -171,7 +175,7 @@ var paneFormat = strings.Join([]string{
 	"#{session_name}", "#{window_index}", "#{window_name}", "#{pane_id}", "#{pane_tty}",
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
-	"#{pid}", "#{pane_in_mode}",
+	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}",
 }, Sep)
 
 // ListPanes returns every pane on the server in one call. A server
@@ -208,6 +212,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.Managed = f[13] != ""
 		p.ServerPID, _ = strconv.Atoi(f[14])
 		p.InMode = len(f) > 15 && f[15] == "1"
+		p.Own = len(f) > 17 && (f[16] != "" || f[17] != "")
 		panes = append(panes, p)
 	}
 	return panes, nil
@@ -418,6 +423,16 @@ func Submitted(err error) bool {
 }
 
 // SendKeys presses tmux key names in the pane, Down or Enter say.
+// SelectPane makes a pane and its window the server's current ones, so
+// a client attached to its session shows it.
+func (s Server) SelectPane(ctx context.Context, paneID string) error {
+	if _, err := s.Run(ctx, "select-window", "-t", paneID); err != nil {
+		return err
+	}
+	_, err := s.Run(ctx, "select-pane", "-t", paneID)
+	return err
+}
+
 func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	_, err := s.Run(ctx, append([]string{"send-keys", "-t", paneID}, keys...)...)
 	return err

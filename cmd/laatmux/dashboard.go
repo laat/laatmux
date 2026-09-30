@@ -47,8 +47,10 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  p prompt  z settle  S shell  o/O PR, checks  v layout  / filter  f folded  q quit"}
+	// The dashboard starts in the agent view; its stored default is
+	// step 8's.
+	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
+		Hint: "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  v layout  / filter  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 
@@ -218,7 +220,9 @@ func (m *merged) fill(v *view.Model, current string) {
 	for id, h := range m.handoffs {
 		v.Handoffs[id] = h.to
 	}
-	v.SetRows(rows.Build(m.input(m.localsLocked(), current)))
+	in := m.input(m.localsLocked(), current)
+	v.SetRows(rows.Agents(in))
+	v.SetTree(rows.Tree(in))
 	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {

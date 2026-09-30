@@ -139,6 +139,21 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	if jump == nil {
 		jump = func(r rows.Row) error { return jumpRow(d.ctx, d.cfg, r) }
 	}
+	if p, ok := paneOf(r); ok && d.jumper == nil {
+		// A tile, or an agent or a pane in the tree: to the pane, the
+		// session reached whatever the pane's fate.
+		msg, err := jumpPane(d.ctx, d.cfg, r, p)
+		if err != nil {
+			m.Message = err.Error()
+			return false, false
+		}
+		m.Message = msg
+		return d.exitOnJump, true
+	}
+	if r.Kind == rows.KindRun {
+		// A run's line: the worktree's session, which holds it.
+		r.Kind, r.Run = rows.KindWorktree, nil
+	}
 	if err := jump(r); err != nil {
 		m.Message = err.Error()
 		return false, false
@@ -290,11 +305,23 @@ func (d *dash) startAdd(m *view.Model) {
 		m.Message = "last.json: " + err.Error()
 		return
 	}
+	// The repository and host of the selected row's worktree, from a
+	// tile or any tree line under one, with the branch when the worktree
+	// has no session yet, so an agent can be started in it; a
+	// repository line names its repository.
 	preRepo, preHost, branch := "", "", ""
-	if r := m.Selection(); r != nil && r.Worktree != nil && r.Worktree.Session == "" && !r.Orphaned {
-		preRepo, preHost, branch = localRepoArg(d.cfg, *r.Worktree), r.Host, r.Worktree.Branch
-	} else if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-		preRepo = repo.Name
+	switch r := m.Selection(); {
+	case r != nil && r.Worktree != nil && !r.Orphaned:
+		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
+		if r.Worktree.Session == "" {
+			branch = r.Worktree.Branch
+		}
+	case r != nil && r.Kind == rows.KindRepo:
+		preRepo = r.Name
+	default:
+		if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
+			preRepo = repo.Name
+		}
 	}
 	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.hostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
@@ -583,7 +610,18 @@ func (d *dash) askRm(m *view.Model, force bool) {
 	if force {
 		verb = "force-remove"
 	}
-	m.Ask(fmt.Sprintf("%s %s on %s (%s)? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root), "rm")
+	with := ""
+	if r.Worktree != nil {
+		// From an agent's tile or line: the worktree goes, and every
+		// agent in it with it.
+		switch n := d.st.agentsIn(r.Worktree.ID); {
+		case n == 1 && r.Agent != nil:
+			with = " with its agent"
+		case n > 1:
+			with = fmt.Sprintf(" with its %d agents", n)
+		}
+	}
+	m.Ask(fmt.Sprintf("%s %s on %s (%s)%s? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root, with), "rm")
 }
 
 // Dismissable is a pending task that x drops: one that needs the user,
@@ -724,6 +762,8 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	}
 	rm := command.Rm{Host: h}
 	switch {
+	case r.Kind == rows.KindPane, r.Kind == rows.KindRun:
+		return command.Rm{}, errors.New(r.Name + ": a pane or a run; x removes worktrees, from their line or an agent's")
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
 		if repo, ok := recordRepo(d.cfg, r.Worktree.Source); ok {

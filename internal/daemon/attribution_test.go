@@ -580,3 +580,27 @@ func TestEvictResolved(t *testing.T) {
 		t.Fatalf("all fresh: %d entries left, want %d", n, maxResolved-1)
 	}
 }
+
+// laatmux's own panes, a sidebar pane and a workspace session's attach
+// pane, are no pane records, whatever worktree they sit in; one that
+// loses the tag becomes one.
+func TestAttributionOwnPanes(t *testing.T) {
+	f := newAttrFixture(t)
+	f.list(f.foo)
+	f.def.set(func() {
+		f.def.panes = []tmux.Pane{
+			{Session: "work", ID: "%3", TTY: "/dev/s1", CurrentCommand: "laatmux", PID: 30, CurrentPath: f.foo, Own: true},
+			{Session: "work", ID: "%4", TTY: "/dev/s2", CurrentCommand: "ssh", PID: 31, CurrentPath: f.foo, Own: true},
+			{Session: "work", ID: "%5", TTY: "/dev/s3", CurrentCommand: "zsh", PID: 32, CurrentPath: f.foo},
+		}
+	})
+	var ids []string
+	for _, m := range f.poll(t) {
+		if m.Pane != nil {
+			ids = append(ids, m.Pane.PaneID)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "%5" {
+		t.Fatalf("pane records %v, want the shell alone", ids)
+	}
+}

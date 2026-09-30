@@ -23,7 +23,7 @@ S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?
 .D.|⟨border:▌⟩    no session
 .D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj ‹@vm›
 .D.|⟨border:▌⟩    no agent
-...|‹⟨header:stale 1  orphaned 1  (f shows)⟩›
+...|‹⟨header:▸ 2 stale⟩›
 ...|
 ...|
 ...|

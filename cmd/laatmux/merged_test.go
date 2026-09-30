@@ -36,7 +36,7 @@ func TestApplyMerged(t *testing.T) {
 		t.Errorf("locals = %+v", locals)
 	}
 	out := m.render(locals)
-	for _, want := range []string{"mac  connected  v2", "vm  connecting", "settled", "proj/x"} {
+	for _, want := range []string{"mac  connected  v2", "vm  connecting", "settled", "x (mac)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render lacks %q:\n%s", want, out)
 		}
@@ -168,7 +168,7 @@ func TestMergedPendingRows(t *testing.T) {
 		Handoffs: []protocol.Handoff{{ID: "add-0", ReplacedBy: "venv/worktree//w/proj/old"}},
 	})
 	out := m.render(m.locals())
-	if !strings.Contains(out, "! prompt not delivered") || !strings.Contains(out, "proj/fix") || !strings.Contains(out, "not ready") || strings.Contains(out, "no agent") {
+	if !strings.Contains(out, "! prompt not delivered") || !strings.Contains(out, "fix (vm)") || !strings.Contains(out, "not ready") || strings.Contains(out, "no agent") {
 		t.Fatalf("render:\n%s", out)
 	}
 	v := &view.Model{}

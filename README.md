@@ -538,16 +538,17 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   is how a worktree detached in place is still reached. The local
   session's name follows the managed session's. `--server default` still
   switches to an observed session on this machine's tmux.
-- **`ls`** joins each host's worktrees with its agents by the managed
-  session the record names. A worktree shows `no agent` when its session
-  has no identified agent and `no session` when it has none; a managed
-  agent with no worktree says so; observed agents name their server.
-  Stale agents are listed under `stale` and settled workspaces under
-  `settled`, a done agent says `done`, and a local workspace
-  session whose worktree is gone from a connected host under `orphaned`, from
-  which `rm` still works; a host whose snapshot has not arrived, or whose
-  daemon does not publish worktrees, says nothing about its workspaces.
-  The rows are the same the sidebar and the dashboard show, see below.
+- **`ls`** prints the tree the sidebar's tree view shows, see below: a
+  repository per line, its worktrees with their host under it, and
+  under each its agents with mark, state (`done` and `stale` among
+  them), name, age and title, its other panes and its runs. A worktree
+  shows `no agent` when its session has no identified agent and `no
+  session` when it has none, a settled one says `settled`, and a local
+  workspace session whose worktree is gone from a connected host is
+  marked `worktree gone`, from which `rm` still works; a host whose
+  snapshot has not arrived, or whose daemon does not publish worktrees,
+  says nothing about its workspaces. Agents in no worktree, observed
+  ones naming their server, are under `other sessions`.
   `ls`, `watch`, `jump`, `path` and `rm` read the local daemon's merged
   stream when it has one, see below; against an older daemon each dials
   the hosts itself as before, and `watch` then re-reads the local
@@ -631,15 +632,45 @@ describe` strings, equal or not, never ordered.
 
 ## Sidebar and dashboard
 
-The listing, the sidebar and the dashboard show the same rows, built in
-`internal/rows`: each host's worktrees joined with its agents by the
-managed session the record names, then managed agents with no worktree,
-then observed agents on other servers, then local workspace sessions
-whose worktree is gone from a host that is connected, listed and
-publishes worktrees. Local sessions are joined in by key, or by the
-attach tag for a `new` session's attachment, so a row knows its local
-session, whether it is settled, and whether it is the one the viewer is
-in. An idle agent that went from working to idle since a tmux client of
+The sidebar and the dashboard have two views over one join, built in
+`internal/rows` (milestone five, step 6), with a tab line above the
+list that `Tab` or a click switches:
+
+- **Agents**, the default: the relay's tasks first, then one tile per
+  agent in sort order. The primary label is the worktree's branch, the
+  secondary the repository and host; an agent in no worktree is
+  labelled by its session, and agents that share a label are numbered
+  `(1)`, `(2)` in the tree's order. Shells, runs and worktrees without
+  an agent are not here. Stale agents and those of settled workspaces,
+  unless blocked or done or the viewer's own, fold into `▸ N stale` at
+  the end, a row of its own that `Enter` or `s` opens.
+- **Tree**: one node per repository, by this machine's label for the
+  source, else the host's; its worktrees under it by branch, the host in
+  parentheses, with the git stats and the PR on the line; under each
+  its agents by start time, its other panes (`$ zsh`) and its runs (`▶
+  make test 0:42`), from the pane and run records the client now keeps.
+  A pending task sits where its worktree will be, holding the worktree's
+  children while it stands for it, the newest of several owning them.
+  An orphaned session sits under its repository by its source tag,
+  marked `worktree gone`, else in `other sessions`, the last group,
+  with agents in no worktree. Repositories and worktrees fold: a
+  worktree's fold is decided the first time it is shown holding a
+  child, open when an agent in it is blocked, working or done, and
+  stays as the user leaves it; a folded line shows its most pressing
+  agent's icon. The repository line of the node at the top stays pinned
+  while the list scrolls. Empty, the views say `No agents running` and
+  `No worktrees`.
+
+`laatmux ls` prints the tree. The selection follows a switch: an agent
+to its tile or node, a worktree line or what is under it to the
+worktree's first agent, a repository line to its first worktree's, a
+task to itself, opening the folds over the target; a target the view
+has none of leaves the selection on no row. A following selection keeps
+following: the viewer's worktree line in the tree, the first tile among
+its agents in the agent view. Local sessions are joined in by key, or by
+the attach tag for a `new` session's attachment, so a row knows its
+local session, whether it is settled, and whether it is the one the
+viewer is in. An idle agent that went from working to idle since a tmux client of
 this machine last showed it is *done*; one idle for longer than
 `sidebar.stale_after`, an hour by default, is *stale* (milestone five,
 step 3). A done or blocked agent is never stale. A row is dim when it
@@ -704,14 +735,35 @@ both `highlight_row_bg` and `text` in `theme.custom`, the selection is
 a band in `highlight_row_bg` with the text in `text`. With `NO_COLOR` set,
 the attributes alone. `theme.custom` sets palette colours. Before the first snapshot the list
 says `Loading`, an empty one says so, and rows below the window are
-counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows move, `g` `G` first and last,
-`Enter` jumps, `1`..`9` jump to the nth row of the selection's group,
+counted on its last line, `↓ N more`. Keys in both: `j` `k` and arrows
+move, `g` `G` first and last, `Tab` switches the view, `Enter` jumps,
+on a repository line or the stale fold folds, `1`..`9` jump to the nth
+tile of the agent view or the nth worktree line of the tree, `s` folds
+and unfolds the selected line, `h` and `Left` fold it or go from a
+child to its line, `l` and `Right` unfold, `f` opens every fold when
+any is closed, else closes every one (the stale fold in the agent view),
 `v` toggles the layout, `/` filters by name or host and `Esc` clears,
-`f` shows and hides the stale, settled and orphaned groups, `z` settles
-or unsettles the selected workspace, `q` quits. A click
-jumps to the row under it; the wheel moves the selection. Hosts that
+`z` settles or unsettles the selected workspace, `q` quits. A click
+jumps to the row under it, on a fold mark or a repository line folds;
+the wheel moves the selection. Hosts that
 are not connected and listed, and a local daemon that is down, are
 lines above the list.
+
+A jump from a tile, or from an agent or a pane in the tree, goes to the
+pane, routed by the pane's server and session: a pane in a managed
+session through the workspace session, or the plain attachment to
+another managed session, then the host daemon's `select` command
+(capability `select`), which runs `select-window` and `select-pane` on
+its managed server, and the workspace session's attach pane made current
+here; a pane on this machine's default server by `switch-client` and
+the same selection locally; a pane on a remote host's default server is
+refused as `jump` refuses it. A run's line jumps to its worktree's
+session. `x` and `X` on a tile or an agent remove the agent's worktree,
+the question saying how many agents go with it, and do nothing on a
+pane or a run; `a` preselects the repository and host of the selected
+row's worktree. The host daemon leaves laatmux's own panes, the sidebar
+panes and the attach panes of workspace sessions, out of its pane
+records by their tags.
 
 Jump from the view is `jump`'s logic in-process against the merged
 records: a workspace row switches to its local session, creating it from
@@ -867,9 +919,10 @@ is switched to.
   per window is the case the capability exists for. `watch` stays the
   plain scrolling list for a terminal that is not a tmux pane.
 
-Config: `sidebar: {width: 35, layout: tiles, sort: priority, dim_stale:
-true, collapse_stale: true, stale_after: 1h}`; width is at least 10,
-layout `tiles` or `compact`, sort `priority`, `recency` or `window`,
+Config: `sidebar: {width: 35, layout: tiles, view: agents, sort:
+priority, dim_stale: true, collapse_stale: true, stale_after: 1h}`;
+width is at least 10, layout `tiles` or `compact`, view `agents` or
+`tree`, sort `priority`, `recency` or `window`,
 stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
 `status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
 {claude: {icon: CC, color: "#d97757"}}` for the agent token milestone

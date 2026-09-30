@@ -137,10 +137,10 @@ func TestAddFlowDefaults(t *testing.T) {
 	}
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
-	selectRow(t, m, "proj/task") // a row with a session pre-fills nothing
+	selectRow(t, m, "proj/task") // a row with a session pre-fills its repository and host, not the branch
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
-	if f.Chips[0].Label() != "laatmux" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "codex" || f.Branch() != "" {
+	if f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" || f.Branch() != "" {
 		t.Fatalf("preselected %q %q %q branch %q", f.Chips[0].Label(), f.Chips[1].Label(), f.Chips[2].Label(), f.Branch())
 	}
 	f.Handle(view.Key{Kind: view.KeyEsc})

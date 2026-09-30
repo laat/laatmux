@@ -426,6 +426,10 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, Follow: true, LocalHost: localHostName(cfg), Hint: "v layout  / filter  f all  z settle  p/x task  q quit"}
+	vw, err := view.ParseView(cfg.Sidebar.View)
+	if err != nil {
+		return err
+	}
+	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, LocalHost: localHostName(cfg), Hint: "tab view  s/h/l fold  f all  v layout  / filter  z settle  p/x task  q quit"}
 	return runView(ctx, cfg, c, m, false, false)
 }

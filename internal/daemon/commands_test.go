@@ -36,6 +36,7 @@ type fakeServer struct {
 	pasteHold chan struct{} // when set, Paste blocks until it closes
 	newErr    error
 	buffers   []string
+	selected  []string   // panes SelectPane was asked for
 	cmds      [][]string // the Cmd of every NewSession
 	server    int        // ServerPID of the panes made, 5 by default
 	screen    []string   // what Capture shows in every pane
@@ -67,6 +68,13 @@ func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	return append([]string(nil), f.screen...), nil
 }
 func (f *fakeServer) EnsureConfigured(context.Context) error { return nil }
+func (f *fakeServer) SelectPane(_ context.Context, pane string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selected = append(f.selected, pane)
+	return nil
+}
+
 func (f *fakeServer) SendKeys(_ context.Context, pane string, keys ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -860,5 +868,39 @@ func TestRmUnlistedRepository(t *testing.T) {
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r4", Repo: remote, Branch: "task"})
 	if res, _ := result(t, pc, "r4"); res.OK || !strings.Contains(res.Error, "no checkout of it here") {
 		t.Fatalf("rm with no checkout and no root: %+v", res)
+	}
+}
+
+// The select command makes a pane current on the managed server and
+// answers; a daemon without one refuses, and so does an empty pane id.
+func TestSelectCommand(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := &fakeServer{}
+	d := New(Config{EnvironmentID: "env", Targets: []Target{{Label: "laatmux", Tmux: srv, Managed: true}}})
+	if !protocol.Has(d.capabilities(), protocol.CapSelect) {
+		t.Fatal("no select capability")
+	}
+	server, cl := net.Pipe()
+	go d.HandleConn(ctx, server, func() { server.Close() })
+	pc := protocol.NewConn(cl)
+	if _, err := pc.Read(); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeSelect, ID: "s1", PaneID: "%7"})
+	res := next(t, cl, pc)
+	srv.mu.Lock()
+	selected := append([]string(nil), srv.selected...)
+	srv.mu.Unlock()
+	if !res.OK || res.ID != "s1" || len(selected) != 1 || selected[0] != "%7" {
+		t.Errorf("select: %+v, selected %v", res, selected)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeSelect, ID: "s2"})
+	if res := next(t, cl, pc); res.OK || res.Error == "" {
+		t.Errorf("select without a pane: %+v", res)
+	}
+	unmanaged := New(Config{EnvironmentID: "env", Targets: []Target{{Label: "default", Tmux: srv}}})
+	if protocol.Has(unmanaged.capabilities(), protocol.CapSelect) {
+		t.Error("select advertised without a managed server")
 	}
 }

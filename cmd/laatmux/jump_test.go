@@ -155,3 +155,33 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 		t.Fatalf("detached: %+v %v", s4, err)
 	}
 }
+
+// A pane jump: a tile, an agent node and a pane node name their pane; a
+// worktree line, a task and a run do not. A pane on a remote host's
+// default server is refused as jump refuses it.
+func TestPaneJumpRouting(t *testing.T) {
+	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/x", PaneID: "%1"}
+	p := &protocol.Pane{ID: "venv/pane/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/x", PaneID: "%2"}
+	for _, c := range []struct {
+		row  rows.Row
+		want string
+	}{
+		{rows.Row{Kind: rows.KindTile, Agent: a}, "%1"},
+		{rows.Row{Kind: rows.KindAgent, Agent: a}, "%1"},
+		{rows.Row{Kind: rows.KindPane, Pane: p}, "%2"},
+		{rows.Row{Kind: rows.KindWorktree, Agent: a}, ""},
+		{rows.Row{Kind: rows.KindTile, Agent: a, Pending: &protocol.Pending{ID: "t"}}, ""},
+		{rows.Row{Kind: rows.KindRun, Run: &protocol.Run{ID: "r"}}, ""},
+	} {
+		pt, ok := paneOf(c.row)
+		if got := pt.paneID; got != c.want || ok != (c.want != "") {
+			t.Errorf("%v: %q ok %v", c.row.Kind, got, ok)
+		}
+	}
+	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	remote := &protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", PaneID: "%3"}
+	_, err := jumpPane(context.Background(), cfg, rows.Row{Kind: rows.KindTile, Host: "vm", Name: "notes", Agent: remote}, paneTarget{"default", "notes", "%3"})
+	if err == nil || !strings.Contains(err.Error(), "only observes") {
+		t.Errorf("a remote default server: %v", err)
+	}
+}
