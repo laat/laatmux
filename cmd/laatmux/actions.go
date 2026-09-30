@@ -764,6 +764,8 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	switch {
 	case r.Kind == rows.KindPane, r.Kind == rows.KindRun:
 		return command.Rm{}, errors.New(r.Name + ": a pane or a run; x removes worktrees, from their line or an agent's")
+	case r.Kind == rows.KindRepo, r.Kind == rows.KindGroup, r.Kind == rows.KindFold:
+		return command.Rm{}, errors.New(r.Name + ": x removes worktrees, from their line or an agent's")
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
 		if repo, ok := recordRepo(d.cfg, r.Worktree.Source); ok {

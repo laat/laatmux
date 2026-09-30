@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
@@ -67,23 +68,9 @@ func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) 
 		}
 		return "", nil
 	}
-	// The workspace session when the pane is in the worktree's home
-	// session, or the one a task's jump made before the host listed
-	// the worktree; the plain attachment to its managed session
-	// otherwise.
-	var name string
-	switch {
-	case r.Worktree == nil && r.Local != nil && r.Local.Workspace():
-		name = r.Local.Name
-	default:
-		var spec workspace.Spec
-		if r.Worktree != nil && r.Worktree.Session == p.session {
-			spec = worktreeSpec(cfg, h, *r.Worktree)
-		} else {
-			spec = workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
-		}
-		var err error
-		if name, _, err = workspace.Ensure(ctx, spec); err != nil {
+	name, spec := paneSpec(cfg, h, r, p)
+	if spec != nil {
+		if name, _, err = workspace.Ensure(ctx, *spec); err != nil {
 			return "", err
 		}
 	}
@@ -93,10 +80,41 @@ func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) 
 	if attach := workspace.AttachPane(ctx, name); attach != "" {
 		_ = workspace.Server.SelectPane(ctx, attach)
 	}
-	if err := selectRemote(ctx, h.Host, p.paneID); err != nil {
+	if r.HostDown {
+		// A host the merged stream has as down is not dialled: the
+		// session is reached, the pane left as it is.
+		return h.Name + " is down; pane " + p.paneID + " not selected", nil
+	}
+	sctx, cancel := context.WithTimeout(ctx, selectTimeout)
+	defer cancel()
+	if err := selectRemote(sctx, h.Host, p.paneID); err != nil {
 		return "pane " + p.paneID + ": " + err.Error(), nil
 	}
 	return "", nil
+}
+
+// selectTimeout bounds the select round trip, which runs on the view's
+// own goroutine: a host that stops answering holds the view no longer.
+const selectTimeout = 5 * time.Second
+
+// paneSpec is the local session a managed pane's jump attaches: by name
+// alone, the one a task's jump made before the host listed the
+// worktree; by spec, the worktree's own workspace session when the pane
+// is in its home session or, with the home lost, in the session its
+// agent is in, as the worktree line's jump attaches it; or the plain
+// attachment to the pane's managed session.
+func paneSpec(cfg config.Config, h config.Host, r rows.Row, p paneTarget) (string, *workspace.Spec) {
+	switch {
+	case r.Worktree == nil && r.Local != nil && r.Local.Workspace():
+		return r.Local.Name, nil
+	case r.Worktree != nil && (r.Worktree.Session == p.session || r.Worktree.Session == ""):
+		w := *r.Worktree
+		w.Session = p.session
+		spec := worktreeSpec(cfg, h, w)
+		spec.Name = worktreeSessionName(h, w)
+		return "", &spec
+	}
+	return "", &workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
 }
 
 // selectRemote asks the host's daemon to make the pane current on its

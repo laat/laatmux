@@ -134,6 +134,15 @@ agents-config (2) *
 	if got := outline(rs.Main); got != want || len(rs.Stale) != 0 {
 		t.Errorf("agents:\n%s\nwant:\n%s\nstale %d", got, want, len(rs.Stale))
 	}
+	// A task's tile and its worktree's agent, the moment both are
+	// listed, are not numbered as a pair.
+	in := treeInput(now)
+	in.Pendings = append(in.Pendings, protocol.Pending{ID: "add-2", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "auto-layout", Root: "/r/auto-layout", Session: "laatmux/auto-layout", Taken: true, SubmittedAt: now})
+	for _, r := range Agents(in).Main {
+		if r.Suffix != "" && (r.Pending != nil || r.Name == "auto-layout") {
+			t.Errorf("%s numbered %q beside its task", r.Name, r.Suffix)
+		}
+	}
 }
 
 // Tree contents the note lists: an older host's agents placed by

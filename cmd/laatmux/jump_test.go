@@ -179,6 +179,33 @@ func TestPaneJumpRouting(t *testing.T) {
 		}
 	}
 	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	// The session a pane's jump attaches: the worktree's workspace
+	// session from its home, from its agent's session when the home is
+	// lost, a task's from its record, and a plain one otherwise.
+	h := cfg.Hosts[0]
+	wt := &protocol.Worktree{ID: "venv/worktree//r/x", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/r/x", Session: "laatmux/x"}
+	lost := *wt
+	lost.Session = ""
+	for _, c := range []struct {
+		row     rows.Row
+		target  paneTarget
+		name    string
+		managed string
+	}{
+		{rows.Row{Kind: rows.KindPane, Worktree: wt, Pane: p}, paneTarget{"laatmux", "laatmux/x", "%2"}, "vm/laatmux/x", "laatmux/x"},
+		{rows.Row{Kind: rows.KindAgent, Worktree: &lost, Agent: a}, paneTarget{"laatmux", "laatmux/x-2", "%1"}, "vm/laatmux/x", "laatmux/x-2"},
+		{rows.Row{Kind: rows.KindAgent, Worktree: wt, Agent: a}, paneTarget{"laatmux", "elsewhere", "%1"}, "vm/elsewhere", "elsewhere"},
+		{rows.Row{Kind: rows.KindAgent, Local: &workspace.Local{Name: "vm/laatmux/x", Key: "venv//r/x"}, Agent: a}, paneTarget{"laatmux", "laatmux/x", "%1"}, "vm/laatmux/x", ""},
+	} {
+		name, spec := paneSpec(cfg, h, c.row, c.target)
+		if spec != nil {
+			if spec.Managed != c.managed || spec.Name != c.name {
+				t.Errorf("%v in %s: spec %+v", c.row.Kind, c.target.session, spec)
+			}
+		} else if name != c.name || c.managed != "" {
+			t.Errorf("%v in %s: name %q", c.row.Kind, c.target.session, name)
+		}
+	}
 	remote := &protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", PaneID: "%3"}
 	_, err := jumpPane(context.Background(), cfg, rows.Row{Kind: rows.KindTile, Host: "vm", Name: "notes", Agent: remote}, paneTarget{"default", "notes", "%3"})
 	if err == nil || !strings.Contains(err.Error(), "only observes") {

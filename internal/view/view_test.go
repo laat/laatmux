@@ -1630,4 +1630,82 @@ func TestTreeEdges(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
 		t.Errorf("f opening every fold moved the selection: %+v", r)
 	}
+	// A click on the tab shown does nothing; on the other, a switch.
+	m.Tabs = true
+	m.Render()
+	m.Handle(Key{Kind: KeyMouse, X: 12, Y: 1})
+	if m.View != ViewTree {
+		t.Error("a click on the shown tab switched")
+	}
+	m.Handle(Key{Kind: KeyMouse, X: 4, Y: 1})
+	if m.View != ViewAgents {
+		t.Error("a click on the other tab did not switch")
+	}
+	m.Handle(Key{Kind: KeyMouse, X: 9, Y: 1})
+	if m.View != ViewAgents {
+		t.Error("a click between the tabs switched")
+	}
+}
+
+// The pinned repository line takes a line of its own above the window,
+// so the last row is still shown when the list is scrolled to its end.
+func TestTreePinned(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 8}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	vis := m.Visible()
+	m.Handle(Key{Rune: 'G'})
+	out := m.Render()
+	last := vis[len(vis)-1].Row
+	if r := m.Selection(); r == nil || r.ID() != last.ID() {
+		t.Fatalf("G selected %+v", r)
+	}
+	text := Debug(out)
+	if !strings.Contains(text, last.Name) {
+		t.Errorf("the last row is not shown:\n%s", text)
+	}
+	if !strings.Contains(out[1].Spans[0].Text, "laatmux") || !out[1].Spans[0].Bold {
+		t.Errorf("no pinned repository line:\n%s", text)
+	}
+	if got := m.hitIDs[0]; got != rows.RepoNode("git@github.com:laat/laatmux.git") {
+		t.Errorf("the pinned line is %q in the hit map", got)
+	}
+	// One row up from the end still shows the selection under the pin.
+	m.Handle(Key{Kind: KeyUp})
+	text = Debug(m.Render())
+	if r := m.Selection(); r == nil || !strings.Contains(text, r.Name) {
+		t.Errorf("the selection is not shown:\n%s", text)
+	}
+}
+
+// A switch to the agent view whose target is a stale tile opens the
+// stale fold and lands on it.
+func TestSwitchToStale(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	// auto-layout's agent, no longer done and two hours idle.
+	in.Attention = nil
+	for i := range in.Agents {
+		if in.Agents[i].ID == "venv/laatmux/%8" {
+			in.Agents[i].ActivityAt = now.Add(-2 * time.Hour)
+		}
+	}
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	if len(m.Rows.Stale) != 1 {
+		t.Fatalf("stale tiles: %d", len(m.Rows.Stale))
+	}
+	m.Handle(Key{Rune: 'f'}) // every fold open
+	if !m.Select("venv/laatmux/%8") {
+		t.Fatal("the stale agent is not visible in the tree")
+	}
+	m.Handle(Key{Kind: KeyTab})
+	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%8" || !m.ShowHidden {
+		t.Errorf("switch to a stale tile: %+v shown %v", r, m.ShowHidden)
+	}
 }

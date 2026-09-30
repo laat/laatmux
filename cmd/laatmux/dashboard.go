@@ -292,6 +292,15 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	return switchTo(ctx, name)
 }
 
+// worktreeSessionName is the workspace session name for a worktree: by
+// branch, or by the root's base name when detached.
+func worktreeSessionName(h config.Host, w protocol.Worktree) string {
+	if w.Branch != "" {
+		return workspace.SessionName(h.Name, w.Repo, w.Branch)
+	}
+	return h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
+}
+
 // rowSpec is where a row's jump goes: the workspace session to make or
 // find, or the session on this machine's default server to switch to.
 func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec, session string, err error) {
@@ -313,11 +322,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		w := *r.Worktree
 		w.Session = r.Agent.Session
 		spec := worktreeSpec(cfg, h, w)
-		if w.Branch != "" {
-			spec.Name = workspace.SessionName(h.Name, w.Repo, w.Branch)
-		} else {
-			spec.Name = h.Name + "/" + w.Repo + "@" + tmux.EncodeBranch(filepath.Base(w.Root))
-		}
+		spec.Name = worktreeSessionName(h, w)
 		return spec, "", nil
 	case r.Agent != nil:
 		// An agent's row, or a worktree's without a home session whose

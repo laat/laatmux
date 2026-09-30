@@ -1031,7 +1031,11 @@ func (m *Model) Handle(k Key) Action {
 			return Action{}
 		}
 		if m.Tabs && k.Y == 1 {
-			m.Switch()
+			// A click on the other tab switches; on the one shown, or
+			// beside them, nothing.
+			if v := tabAt(k.X); v != "" && v != m.View {
+				m.Switch()
+			}
 			return Action{}
 		}
 		if i := m.hitRow(k.Y, k.At); i >= 0 {

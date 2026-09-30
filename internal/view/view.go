@@ -481,7 +481,16 @@ func (m *Model) Render() []Line {
 	// possible; a separator after the selected tile may fall off. With
 	// rows below the window its last line is the count of them, so the
 	// window is a line shorter.
+	// In the tree, the repository line of the node at the top stays
+	// pinned above the window while the list scrolls past it, and the
+	// window is a line shorter for it.
 	window := body
+	pinAt := func() int {
+		if m.View != ViewTree || m.scroll <= 0 || body < 4 {
+			return -1
+		}
+		return m.scroll
+	}
 	scrollTo := func() {
 		if selStart >= 0 {
 			if selStart < m.scroll {
@@ -503,6 +512,10 @@ func (m *Model) Render() []Line {
 		}
 	}
 	scrollTo()
+	if pinAt() >= 0 {
+		window = body - 1
+		scrollTo()
+	}
 	// rowsFrom counts the rows that begin at or after line i, a
 	// partly shown row not among them, with a collapsed group's.
 	rowsFrom := func(i int) int {
@@ -515,14 +528,15 @@ func (m *Model) Render() []Line {
 		return n
 	}
 	more := 0
-	if body > 1 && rowsFrom(m.scroll+body) > 0 {
+	if window > 1 && rowsFrom(m.scroll+window) > 0 {
 		// Only rows count: a group's header or a divider left below is
 		// no reason to give up a line.
-		window = body - 1
+		full := window
+		window--
 		scrollTo()
 		more = rowsFrom(m.scroll + window)
 		if more == 0 {
-			window = body
+			window = full
 			scrollTo()
 		}
 	}
@@ -533,20 +547,20 @@ func (m *Model) Render() []Line {
 		m.hitTop++
 	}
 	m.hitAt = m.Now
-	// In the tree, the repository line of the node at the top stays
-	// pinned while the list scrolls past it.
-	pinned, pinnedID := m.pinned(items, ids)
-	if pinned != nil && selStart == m.scroll {
-		// The pinned line would cover the selection: one line back.
-		m.scroll--
+	var pinned *Line
+	pinnedID := ""
+	if pinAt() >= 0 {
 		pinned, pinnedID = m.pinned(items, ids)
 	}
-	for i := 0; i < body; i++ {
-		switch j := m.scroll + i; {
-		case i == 0 && pinned != nil:
-			out = append(out, *pinned)
-			m.hitIDs[i] = pinnedID
-		case i == window:
+	shift := 0
+	if pinned != nil {
+		out = append(out, *pinned)
+		m.hitIDs[0] = pinnedID
+		shift = 1
+	}
+	for i := shift; i < body; i++ {
+		switch j := m.scroll + i - shift; {
+		case i-shift == window:
 			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
 		case j < len(lines):
 			out = append(out, lines[j])

@@ -94,9 +94,18 @@ func (m *Model) closed(r *rows.Row) bool {
 	case rows.KindFold:
 		return !m.ShowHidden
 	}
-	c := r.Worst == nil || r.Worst.Rank() > 2
+	c := r.Worst == nil || !wants(r.Worst)
 	m.setFold(id, c)
 	return c
+}
+
+// wants is an agent that is blocked, working or done, whatever its
+// workspace: what opens a line's first fold.
+func wants(r *rows.Row) bool {
+	if r.Agent == nil || r.Agent.Liveness == protocol.Gone {
+		return false
+	}
+	return r.Done || r.Agent.Activity == protocol.Blocked || r.Agent.Activity == protocol.Working
 }
 
 func (m *Model) setFold(id string, closed bool) {
@@ -158,6 +167,11 @@ func (m *Model) treeItems() []Item {
 		}
 		hideBelow = -1
 		if !shown[i] {
+			continue
+		}
+		if r.Kind == rows.KindGroup {
+			// Other sessions: a header, not a row.
+			out = append(out, Item{Header: r.Name, Group: GroupMain, Index: -1})
 			continue
 		}
 		out = append(out, Item{Row: r, Group: GroupMain, Index: n})
@@ -355,6 +369,18 @@ func (m *Model) parentOf() int {
 	return -1
 }
 
+// tabAt is the view a click at column x on the tab line names, "" for
+// neither: " Agents │ Tree ".
+func tabAt(x int) View {
+	switch {
+	case x >= 2 && x <= 7:
+		return ViewAgents
+	case x >= 11 && x <= 14:
+		return ViewTree
+	}
+	return ""
+}
+
 // tabs is the line above the list naming the views, the shown one bold.
 func (m *Model) tabs() Line {
 	var spans []Span
@@ -481,8 +507,7 @@ func (m *Model) treeLine(r rows.Row) []Line {
 // at the top of the window, when that node is not a repository line
 // itself. nil otherwise.
 func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
-	if m.View != ViewTree || m.scroll <= 0 || m.scroll >= len(ids) || m.Height < 6 {
-		// A short pane has no line to give a pinned repository.
+	if m.scroll >= len(ids) {
 		return nil, ""
 	}
 	top := ids[m.scroll]

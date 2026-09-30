@@ -331,8 +331,10 @@ func Tree(in Input) []Row {
 			// children; the others follow as lines of their own.
 			owner := &tasks[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
+			j.finish(owner)
 			for _, k := range idx[1:] {
 				tasks[k].Worktree, tasks[k].Local, tasks[k].Depth = w, line.Local, 1
+				j.finish(&tasks[k])
 			}
 			group := append([]Row{*owner}, children...)
 			for _, k := range idx[1:] {
@@ -576,14 +578,14 @@ func Agents(in Input) Rows {
 	// Tiles that share a primary label, in the tree's order.
 	count := map[string]int{}
 	for i := range rows {
-		if rows[i].Agent != nil {
+		if rows[i].Agent != nil && rows[i].Pending == nil {
 			p, _ := rows[i].Labels()
 			count[p]++
 		}
 	}
 	seen := map[string]int{}
 	for i := range rows {
-		if rows[i].Agent == nil {
+		if rows[i].Agent == nil || rows[i].Pending != nil {
 			continue
 		}
 		p, _ := rows[i].Labels()
