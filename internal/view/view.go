@@ -757,11 +757,7 @@ func spansWidth(spans []Span) int {
 // empty third line keeps its place, so tiles keep their height.
 func (m *Model) tile(r rows.Row) []Line {
 	const indent = "    "
-	room := m.Width - 1 - len(indent)
-	third := []Span{m.stripe(r)}
-	if room > 0 {
-		third = append(third, Span{Text: indent + fit(m.third(r), room)})
-	}
+	third := m.titleLine(r, indent)
 	return []Line{
 		{Dim: r.Dim, Spans: m.head(r)},
 		{Dim: r.Dim, Spans: clip(m.second(r, indent), m.Width)},
@@ -815,12 +811,114 @@ func (m *Model) compact(r rows.Row) []Line {
 	}
 	lines := []Line{{Dim: r.Dim, Spans: line}}
 	if m.Titles {
-		const indent = "    "
-		if room := w - 1 - len(indent); room > 0 {
-			lines = append(lines, Line{Dim: r.Dim, Spans: []Span{m.stripe(r), {Text: indent + fit(m.third(r), room)}}})
-		}
+		lines = append(lines, Line{Dim: r.Dim, Spans: clip(m.titleLine(r, "    "), w)})
 	}
 	return lines
+}
+
+// titleLine is a row's third line: the stripe, the pane title or what
+// the row is instead, and the branch's PR and checks against the right
+// edge, as much of them as the room past a few cells of title takes.
+func (m *Model) titleLine(r rows.Row, indent string) []Span {
+	room := m.Width - 1 - len(indent)
+	out := []Span{m.stripe(r)}
+	if room <= 0 {
+		return out
+	}
+	pr := m.prSpans(r, room-1-min(room/3, 12))
+	n := spansWidth(pr)
+	if n > 0 {
+		room -= n + 1
+	}
+	title := fit(m.third(r), room)
+	out = append(out, Span{Text: indent + title})
+	if n > 0 {
+		out = append(out, Span{Text: strings.Repeat(" ", max(room-width(title), 0)+1)})
+		out = append(out, pr...)
+	}
+	return out
+}
+
+// prSpans is the branch's PR and checks in at most w cells: #N, green
+// when open, purple when merged, red when closed, dim when a draft;
+// then the checks, ✓ in green, × 3/5 in red, or a spinner and 3/5 in
+// purple; a stale answer dim with ? after. On main or master the PR is
+// left out, and the checks unless they fail. When narrow the counts go
+// first, then the PR.
+func (m *Model) prSpans(r rows.Row, w int) []Span {
+	b := r.Branch
+	if b == nil || w <= 0 {
+		return nil
+	}
+	mainline := r.Worktree != nil && (r.Worktree.Branch == "main" || r.Worktree.Branch == "master")
+	var pr []Span
+	if b.PR != nil && !mainline {
+		// Without colours the states still differ: open bold, merged
+		// plain, closed and draft faint.
+		sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
+		switch {
+		case b.PR.Draft:
+			sp.Dim = true
+		case b.PR.State == "open":
+			sp.Fg, sp.Bold = palette.Success, true
+		case b.PR.State == "merged":
+			sp.Fg = palette.Accent
+		default:
+			sp.Fg, sp.Dim = palette.Danger, true
+		}
+		pr = []Span{sp}
+	}
+	var mark, counts []Span
+	if c := b.Checks; c != nil && (!mainline || c.State == protocol.ChecksFailure) {
+		ratio := fmt.Sprintf("%d/%d", c.Passed, c.Total)
+		ascii := m.Icons.Set == IconsASCII
+		switch c.State {
+		case protocol.ChecksSuccess:
+			mark = []Span{{Text: map[bool]string{false: "✓", true: "ok"}[ascii], Fg: palette.Success}}
+		case protocol.ChecksFailure:
+			mark = []Span{{Text: map[bool]string{false: "×", true: "x"}[ascii], Fg: palette.Danger}}
+			counts = []Span{{Text: " " + ratio, Fg: palette.Danger}}
+		case protocol.ChecksPending:
+			// The spinner spins on a live row with a fresh answer; a
+			// stale or dim one stands still.
+			spinning := !b.Stale && !r.Dim && !ascii
+			text := string([]rune(spinnerFrames[0])[0])
+			switch {
+			case ascii:
+				text = "*"
+			case spinning:
+				text = string([]rune(frame(m.Now))[0])
+			}
+			mark = []Span{{Text: text, Fg: palette.Accent, spin: spinning}}
+			counts = []Span{{Text: " " + ratio, Fg: palette.Accent}}
+		}
+	}
+	join := func(parts ...[]Span) []Span {
+		var out []Span
+		for _, p := range parts {
+			if len(p) == 0 {
+				continue
+			}
+			if len(out) > 0 {
+				out = append(out, Span{Text: " "})
+			}
+			out = append(out, p...)
+		}
+		if len(out) > 0 && b.Stale {
+			out = append(out, Span{Text: "?"})
+			for i := range out {
+				out[i].Dim, out[i].Fg = true, ""
+			}
+		}
+		return out
+	}
+	checks := append(append([]Span{}, mark...), counts...)
+	for _, try := range [][]Span{join(pr, checks), join(pr, mark), join(mark)} {
+		if len(try) > 0 && spansWidth(try) <= w {
+			return try
+		}
+	}
+	return nil
 }
 
 // clip cuts spans to w cells, keeping each span's attributes.

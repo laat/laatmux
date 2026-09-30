@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
+	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
@@ -120,6 +121,10 @@ func cmdServe(ctx context.Context, args []string) error {
 		// machine's tmux clients show.
 		Attention: filepath.Join(home.Dir(), "attention.json"),
 		Clients:   listClients,
+		// PR and check state through gh, kept across restarts.
+		GitHub:      github.GH,
+		Branches:    filepath.Join(home.Dir(), "branches.json"),
+		GitHubHosts: cfg.GitHubHosts,
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.

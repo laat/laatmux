@@ -48,7 +48,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		return err
 	}
 	m := &view.Model{Layout: layout, Titles: true, Follow: true, LocalHost: localHostName(cfg),
-		Hint: "enter jump  a add  x rm  p prompt  z settle  S shell  v layout  / filter  f folded  q quit"}
+		Hint: "enter jump  a add  x rm  p prompt  z settle  S shell  o/O PR, checks  v layout  / filter  f folded  q quit"}
 	return runView(ctx, cfg, c, m, true, true)
 }
 

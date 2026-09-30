@@ -575,37 +575,68 @@ A pushed branch is the same on every host, and `gh` is logged in on the
 laptop, so the laptop's merging daemon fetches PR and check state for
 every worktree in the merged stream, keyed by source and branch.
 
+- **The hosts.** github.com, and the GitHub Enterprise hosts the config
+  lists in `github_hosts`. A source on any other host is never asked
+  about: gh would send it the token it keeps for that host.
 - **The query.** `gh api graphql` calls per GitHub host, each for at
   most 32 branches, with the owner, repository and branch names passed
   as GraphQL variables, never put into the query text. For each branch
-  it asks for the PRs on that head ref whose head repository is the
-  source's own repository, since a fork's PR can have a head branch of
-  the same name, and takes an open one first, else the newest merged or
-  closed, with its last commit's oid and `statusCheckRollup`. A branch
-  with no PR gets its own ref's commit and rollup. When `origin` is
-  itself a fork, the PR lives on the upstream repository and is not
-  found: the row shows the branch's own checks and no PR. That is a
-  limit of this milestone. The rollup's
-  contexts are paginated, so the counts come from the connection's
-  aggregates, `checkRunCountsByState` and `statusContextCountsByState`,
-  which count every context whatever the page. The name of the first
-  failing check is a second, small query, only for rollups that fail,
-  paging until one is found.
+  it asks for the PRs on that head ref, the open ones apart, so newer
+  closed ones do not hide one, and the five newest of any state, and
+  keeps those that are not cross-repository, since a fork's PR can have
+  a head branch of the same name. An open one is taken first, else the newest merged or
+  closed, while the branch is where that PR left it or is gone; a
+  branch that moved on, `main` after an old PR from it say, has no PR.
+  The PR's last commit gives the oid and `statusCheckRollup`; a branch
+  with no PR gets its own ref's. When `origin` is itself a fork, the PR
+  lives on the upstream repository and is not found: the row shows the
+  branch's own checks and no PR. That is a limit of this milestone. The
+  rollup's contexts are paginated, so the counts come from the
+  connection's aggregates, `checkRunCountsByState` and
+  `statusContextCountsByState`, which count every context whatever the
+  page. The name of the first failing check is a second, small query,
+  only for rollups that fail, paging until one is found, and kept by
+  the rollup's id and counts for five minutes, since a rerun on the same commit can
+  move the failure to another check; the key is the rollup and every
+  count by state. When forks' PRs of the same name fill a connection's
+  page, the next pages are asked for, up to five, with the number and
+  the fork mark alone, and the repository's own PR, once found, in full:
+  the open ones while the branch is there, any when no own one is in
+  sight, since a closed one counts once the branch is gone or while it
+  is at that PR's last commit; not on the repository's default branch,
+  `main` or `master`, whose forks' PRs are many and whose own PR, on
+  `main` or `master`, the views never show; and, once the pages held none of the repository's own,
+  not again for an hour, whether the branch is on GitHub or not, since
+  on a crowded name, `patch-1` say, they never change; a PR found ends
+  that.
+  A query of 32 branches costs about seven of GitHub's rate-limit
+  points; a light page or a PR by number one each.
 - **When.** Every 30 s while a merged subscriber is there, and at once
-  when the set of branches changes.
+  when the set of branches changes. A round runs beside the loop that
+  ages the answers, bounded to two minutes: every host's status first,
+  each host within its share of what is left, then the failing checks'
+  names, so a slow host starves no other.
 - **The cache.** The last answer per branch is kept under the state
-  directory with the laptop time it was fetched, so a restarted sidebar
-  has it at once. An answer older than five minutes is stale: the view
-  draws it dim with `?` after the checks. A failed query, whole or for
-  one chunk, keeps the last answers of the branches it covered and
-  marks them stale; a branch the answer says has no ref drops its
-  entry, and an entry whose branch has had no worktree in the merged
-  stream for a day is dropped.
+  directory with the laptop's wall-clock time it was fetched, so a
+  restarted sidebar has it at once, stale when it is old, and a laptop
+  that slept ages its answers by the sleep. An answer older than five
+  minutes is stale: the view draws it dim with `?` after the checks. A
+  failed query, whole, for one chunk, or with an error under one
+  branch, keeps the last answers of the branches it covered and marks
+  them stale; a branch the answer says has no ref, and no PR of its
+  own, drops its entry, while one deleted after its PR merged keeps the
+  PR, with that PR's last commit's checks. An entry whose branch has had
+  no worktree in the merged stream for a day is dropped, once every host
+  has listed successfully since the daemon started.
 - **Non-GitHub sources and a missing or logged-out `gh`** show nothing.
   The reason is the daemon's own, not a host's: it travels in the merged
   stream as `github_error` in the snapshot and in an upsert, as
   `sessions_error` does, and `laatmux hosts` prints it on a `github:`
-  line after the hosts, never in a host's connectivity.
+  line after the hosts, never in a host's connectivity. A trusted
+  enterprise host that is logged out is named in it too, each host's
+  failure kept until that host answers or no worktree is on it; with no error
+  from the daemon, `hosts` asks github.com itself with the smallest
+  query, through the same code, so it tells the same failures apart.
 - **The record,** from a merging daemon with the capability `branches`.
   `branch` is a string in the envelope already (the branch of an add or
   rm), so the record has a key of its own, `branch_status`:

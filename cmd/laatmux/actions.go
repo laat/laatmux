@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -100,6 +102,8 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 			d.settle(m)
 		case 'S':
 			return d.shell(m)
+		case 'o', 'O':
+			d.openBranch(m, a.Key.Rune == 'O')
 		}
 	case view.ActionConfirm:
 		switch m.ConfirmTag {
@@ -778,6 +782,53 @@ func forceHint(err error, force bool) error {
 		return err
 	}
 	return fmt.Errorf("%w  (X force-removes)", err)
+}
+
+// openBranch opens the selected row's PR in the browser, or with checks
+// its checks page, which for a branch with no PR is its commit's.
+func (d *dash) openBranch(m *view.Model, checks bool) {
+	r := m.Selection()
+	if r == nil {
+		return
+	}
+	b := r.Branch
+	url := ""
+	switch {
+	case b == nil:
+		m.Message = r.Name + ": no PR or checks known"
+		return
+	case checks:
+		url = b.ChecksURL
+	case b.PR != nil:
+		url = b.PR.URL
+	default:
+		m.Message = r.Name + ": no PR; O opens the branch's checks"
+		return
+	}
+	if url == "" {
+		m.Message = r.Name + ": no checks page known"
+		return
+	}
+	if err := openURL(url); err != nil {
+		m.Message = "open " + url + ": " + err.Error()
+		return
+	}
+	m.Message = "opening " + url
+}
+
+// openURL opens a URL in this machine's browser, without waiting for the
+// browser: the view goes on meanwhile.
+var openURL = func(url string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	cmd := exec.Command(name, url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 // settle toggles the settled tag on the selected row's workspace

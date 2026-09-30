@@ -51,3 +51,35 @@ func TestMergedAttention(t *testing.T) {
 		t.Errorf("stale defaults: %+v", in)
 	}
 }
+
+// The merged stream's branch records and GitHub error: a snapshot sets
+// them, an upsert changes one, a remove drops one, github_ok clears the
+// error.
+func TestMergedBranches(t *testing.T) {
+	m := newMerged()
+	a, b := protocol.BranchKey{Source: "s", Branch: "a"}, protocol.BranchKey{Source: "s", Branch: "b"}
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, BranchStatuses: []protocol.BranchStatus{{BranchKey: a}}, GitHubError: "gh is not installed"})
+	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &protocol.BranchStatus{BranchKey: b}})
+	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &a})
+	if _, ok := m.branches[b]; !ok || len(m.branches) != 1 || m.githubErr == "" {
+		t.Errorf("%+v %q", m.branches, m.githubErr)
+	}
+	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
+	if m.githubErr != "" {
+		t.Error("github_ok did not clear")
+	}
+}
+
+// The github line trusts only an answer with a viewer: a body with data
+// null and errors, which gh returns with exit 0, is the error.
+func TestViewerStatus(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"data":{"viewer":{"login":"laat"}}}`:                           "ok",
+		`{"data":null,"errors":[{"message":"API rate limit exceeded"}]}`: "gh api graphql: API rate limit exceeded",
+		`{"data":{"viewer":null}}`:                                       "gh api graphql: no viewer",
+	} {
+		if got := viewerStatus([]byte(body)); got != want {
+			t.Errorf("%s: %q, want %q", body, got, want)
+		}
+	}
+}

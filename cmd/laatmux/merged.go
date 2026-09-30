@@ -207,7 +207,24 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		for _, a := range msg.Attentions {
 			m.attentions[a.AgentID] = a
 		}
+		m.branches = map[protocol.BranchKey]protocol.BranchStatus{}
+		for _, b := range msg.BranchStatuses {
+			m.branches[b.BranchKey] = b
+		}
+		m.githubErr = msg.GitHubError
 	case protocol.TypeUpsert:
+		if b := msg.BranchStatus; b != nil {
+			if m.branches == nil {
+				m.branches = map[protocol.BranchKey]protocol.BranchStatus{}
+			}
+			m.branches[b.BranchKey] = *b
+		}
+		if msg.GitHubError != "" {
+			m.githubErr = msg.GitHubError
+		}
+		if msg.GitHubOK {
+			m.githubErr = ""
+		}
 		if a := msg.Attention; a != nil {
 			if m.attentions == nil {
 				m.attentions = map[string]protocol.Attention{}
@@ -246,6 +263,9 @@ func (m *merged) applyMerged(msg protocol.Message) {
 	case protocol.TypeRemove:
 		if msg.AttentionID != "" {
 			delete(m.attentions, msg.AttentionID)
+		}
+		if k := msg.BranchStatusKey; k != nil {
+			delete(m.branches, *k)
 		}
 		if msg.PendingID != "" {
 			delete(m.pendings, msg.PendingID)

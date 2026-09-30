@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -55,6 +56,9 @@ type Input struct {
 	// Attention is the merging daemon's attention records by agent id:
 	// an idle agent whose finish is after the user's last visit is done.
 	Attention map[string]protocol.Attention
+	// Branches are the merging daemon's PR and check records, by source
+	// key and branch: a worktree row shows its branch's.
+	Branches map[protocol.BranchKey]protocol.BranchStatus
 	// Now is the time stale is measured at; StaleAfter how long an agent
 	// is idle before it is stale, 0 for never. DimStale draws a stale row
 	// dim, CollapseStale folds it into the Stale group. Sort is the order
@@ -102,8 +106,11 @@ type Row struct {
 	// Done is an idle agent that went from working to idle since the
 	// user last saw it; Stale an idle agent idle for longer than the
 	// stale time. A done agent is never stale.
-	Done     bool
-	Stale    bool
+	Done  bool
+	Stale bool
+	// Branch is the PR and checks of the row's branch, nil when the
+	// daemon has none.
+	Branch   *protocol.BranchStatus
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
 	// Dim is no identified agent, an agent that is gone, a host that is
@@ -593,6 +600,11 @@ func Build(in Input) Rows {
 		h, known := hosts[r.Host]
 		r.HostDown = !known || !h.Connected
 		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current
+		if w := r.Worktree; w != nil && w.Branch != "" && w.Source != "" {
+			if b, ok := in.Branches[protocol.BranchKey{Source: config.SourceKey(w.Source), Branch: w.Branch}]; ok {
+				r.Branch = &b
+			}
+		}
 		if a := r.Agent; a != nil && r.Pending == nil && a.Liveness != protocol.Gone && a.Activity == protocol.Idle {
 			r.Done = in.Attention[a.ID].Done()
 			r.Stale = !r.Done && in.StaleAfter > 0 && in.Now.Sub(a.ActivityAt) > in.StaleAfter

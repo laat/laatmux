@@ -20,6 +20,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/detect"
+	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
@@ -133,6 +134,17 @@ type Config struct {
 	// seen. See attention.go.
 	Attention string
 	Clients   func(ctx context.Context) ([]ClientView, error)
+
+	// GitHub runs the GraphQL queries for the PR and check state, gh by
+	// default in serve; Branches is the file the answers are kept in.
+	// With Hosts, both are the branches capability; nil or "" means
+	// none. See branches.go.
+	GitHub   github.Runner
+	Branches string
+	// GitHubHosts are the GitHub Enterprise hosts the config trusts
+	// beside github.com: a source on any other host is never asked
+	// about, so gh never sends a token to it.
+	GitHubHosts []string
 }
 
 // Daemon holds the derived state for every watched tmux server.
@@ -186,12 +198,23 @@ type Daemon struct {
 	// logged; see gitstatus.go.
 	gits       map[string]*gitEntry
 	lastGitErr string
-	ctx        context.Context // Run's context, for goroutines that outlive a connection
-	generation int64
-	revision   uint64
-	listing    protocol.Listing
-	listErr    string
-	pollMu     sync.Mutex
+	// The branch records, by key, nil without the branches capability;
+	// why GitHub cannot be read; the file's last error. See
+	// branches.go.
+	branches        map[string]*branchEntry
+	githubErr       string
+	lastBranchesErr string
+	branchesListed  bool                 // every host has listed once since start
+	branchErrs      map[string]bool      // per-branch errors of the last round, logged
+	roundErrs       map[string]bool      // and of the round under way
+	hostErrs        map[string]string    // gh's failure by host, what githubErr is joined from
+	pagedNone       map[string]time.Time // when a branch's forks' pages held none of its own
+	ctx             context.Context      // Run's context, for goroutines that outlive a connection
+	generation      int64
+	revision        uint64
+	listing         protocol.Listing
+	listErr         string
+	pollMu          sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
 	runs     map[string]map[*runJob]struct{}
@@ -372,6 +395,14 @@ func New(cfg Config) *Daemon {
 		}
 		d.attn = a
 	}
+	if cfg.GitHub != nil && cfg.Branches != "" && cfg.Hosts != nil {
+		b, err := openBranches(cfg.Branches)
+		if err != nil {
+			cfg.Logger.Printf("branches: %v; starting over", err)
+			b = map[string]*branchEntry{}
+		}
+		d.branches = b
+	}
 	if cfg.Pending != "" && cfg.Hosts != nil {
 		r, err := openRelay(cfg.Pending, cfg.Logger)
 		if err != nil {
@@ -410,6 +441,9 @@ func (d *Daemon) capabilities() []string {
 	}
 	if d.attn != nil {
 		caps = append(caps, protocol.CapAttention)
+	}
+	if d.branches != nil {
+		caps = append(caps, protocol.CapBranches)
 	}
 	if d.cfg.Shutdown != nil {
 		caps = append(caps, protocol.CapShutdown)
@@ -461,6 +495,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if d.cfg.Clients != nil {
 			go d.runSeen(ctx)
 		}
+	}
+	if d.branches != nil {
+		go d.runBranches(ctx)
 	}
 	t := time.NewTicker(d.cfg.Interval)
 	defer t.Stop()

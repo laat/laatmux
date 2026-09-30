@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -795,5 +796,21 @@ func TestCurrentNotFolded(t *testing.T) {
 	rs = Build(in)
 	if len(rs.Main) != 2 || rs.Main[0].Name != "other" || !rs.Main[1].Current {
 		t.Errorf("settled own row sorts: %+v", rs.Main)
+	}
+}
+
+// A worktree row takes its branch's PR record by the source key, so the
+// ssh and https forms of one repository find the same record.
+func TestBranchAttached(t *testing.T) {
+	in := Input{
+		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "r", Source: "https://github.com/o/r.git", Branch: "a", Root: "/w/a"}},
+		Branches: map[protocol.BranchKey]protocol.BranchStatus{
+			{Source: config.SourceKey("git@github.com:o/r.git"), Branch: "a"}: {PR: &protocol.PullRequest{Number: 3}},
+		},
+	}
+	rs := Build(in)
+	if len(rs.Main) != 1 || rs.Main[0].Branch == nil || rs.Main[0].Branch.PR.Number != 3 {
+		t.Errorf("%+v", rs.Main)
 	}
 }

@@ -56,6 +56,10 @@ type merged struct {
 	// id; sidebar is the config's row order and stale settings.
 	attentions map[string]protocol.Attention
 	sidebar    config.Sidebar
+	// branches are the merging daemon's PR and check records, by
+	// source key and branch; githubErr why it cannot read GitHub.
+	branches  map[protocol.BranchKey]protocol.BranchStatus
+	githubErr string
 }
 
 // configure takes what the rows need from the config: this machine's
@@ -253,7 +257,7 @@ func (m *merged) follow(ctx context.Context, h client.Host) {
 // sessions and the viewer's session. Called with m.mu held.
 func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	after, dim, collapse := m.sidebar.Stale()
-	in := rows.Input{Locals: locals, Current: current, Attention: m.attentions, Now: time.Now(),
+	in := rows.Input{Locals: locals, Current: current, Attention: m.attentions, Branches: m.branches, Now: time.Now(),
 		StaleAfter: after, DimStale: dim, CollapseStale: collapse, Sort: m.sidebar.Sort}
 	for name, st := range m.hosts {
 		// A merging daemon older than attribution forwards agent records
