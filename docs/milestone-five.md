@@ -975,8 +975,13 @@ the defaults.
     `{agent_label}`, `{elapsed}` (a run's running time on its line);
   - git: `{git_stats}`, `{git_committed}`, `{git_uncommitted}`,
     `{git_ahead}` (`↑N`), `{git_behind}` (`↓N`), `{git_dirty}`,
-    `{git_conflict}`, `{git_rebase}`, `{git_branch}` (the base);
-  - PR: `{pr_number}`, `{pr_checks}`;
+    `{git_conflict}`, `{git_rebase}`, `{git_branch}` (the base),
+    `{git_sync}` (step 9: `→base` off `main` and `master`, `origin/`
+    taken off, the conflict mark, `↑A ↓B`; shrinks base first, then
+    `↓B`, then `↑A`, never to nothing);
+  - PR: `{pr_number}`, `{pr_checks}`, `{pr_state}` (step 9: the state
+    icon), `{pr_detail}` (step 9: the pending time or the failing
+    check's name);
   - position: `{idx}`, `{jump_key}`;
   - tree lines: `{indent}` on every line; `{repo_count}` on a
     repository line; `{fold}` (`▾ `, `▸ `, or two spaces; on a
@@ -1034,6 +1039,21 @@ the two views included. On top of that:
   the first failing check;
 - `o` opens the selected row's PR in the laptop's browser, `O` its
   checks.
+
+The columns are tokens, `{git_sync}`, `{pr_state}` and `{pr_detail}`,
+so a sidebar wide enough can have them too. What differs is the
+defaults: the dashboard's second tile line and its compact line put
+`{git_sync}` before `{git_stats}`, its third tile line reads
+`{pr_state} {pr_number} {pr_checks} {pr_detail}`, and its worktree
+line has both before `{worst_status}`; the sidebar's defaults stay as
+step 7 left them, since at 25 to 50 columns the engine would only
+drop the new fields again. A line the config sets applies to both
+hosts. `{git_sync}` shrinks before it is dropped, the base first, then
+`↓B`, then `↑A`, so the conflict mark is the last to go; `{pr_detail}`
+is a label, cut like the title. The pending time is the laptop's
+`pending_since` against the laptop's clock, so it never runs
+backwards across hosts; a stale answer leaves the columns dim and
+plain, and the `?` stays on the number and the checks.
 
 ## Protocol
 
@@ -1141,7 +1161,9 @@ Each step is one issue and one PR, reviewed as the others were.
    socket, `scope`, `jump_keys`, `?`, the quit question, and
    `sidebar.json` with its defaults, its shared folds, its lock and the
    folds' last-seen times.
-9. **Dashboard columns.** The git and PR columns and the failing check.
+9. **Dashboard columns.** The git and PR columns and the failing check:
+   the `{git_sync}`, `{pr_state}` and `{pr_detail}` tokens, and the
+   dashboard's own default templates.
 
 Steps 2, 3 and 4 are independent of each other after this note, but for
 step 2's rename, which step 3 needs first. Step 6 comes after step 3,
@@ -1219,6 +1241,12 @@ view and folds step 6 keeps in memory.
 - **Old envelope:** each new record decoded by the envelope before its
   step.
 - **Templates:** a parser table with unknown tokens, styles and `{fill}`.
+- **Columns:** `{git_sync}` with the base off main and on it, each
+  shrink step, nothing to say, stale; `{pr_state}` per set and state,
+  a draft, stale, no PR; `{pr_detail}` failing, cut, pending under
+  and over an hour, stale, since never, on success, on `main`; the
+  dashboard's defaults against the sidebar's, a configured line in
+  both, and the dashboard's compact lines rendered.
 - **Detection:** `claude-interrupted` in `TestRealFixtures`, added with
   this note.
 

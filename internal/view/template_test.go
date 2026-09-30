@@ -63,7 +63,7 @@ func tokenRow(now time.Time) rows.Row {
 		Git: &protocol.GitStatus{Base: "origin/main", Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true, Ahead: 2, Behind: 1, Conflict: &yes, Rebasing: true}}
 	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "laatmux/fix-ls", Window: 2, PaneID: "%1", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "✳ Permission to run pnpm test"}
 	return rows.Row{Kind: rows.KindTile, Host: "vm", Name: "laatmux/fix-ls", Node: a.ID, Worktree: w, Agent: a, Suffix: "(2)", Children: 1,
-		Branch: &protocol.BranchStatus{PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5}}}
+		Branch: &protocol.BranchStatus{PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}}}
 }
 
 // Every token on the tile row, and what the tree-only ones give there.
@@ -77,8 +77,8 @@ func TestTokens(t *testing.T) {
 		{"session", "laatmux/fix-ls"}, {"window", "laatmux/fix-ls:2"}, {"window_index", "2"}, {"pane_title", "Permission to run pnpm test"}, {"pane_suffix", "(2)"},
 		{"status_icon", "💬"}, {"status_label", "waiting"}, {"agent_icon", "CL"}, {"agent_label", "claude"}, {"elapsed", "2:00"}, {"stripe", "▌"},
 		{"git_stats", "R +46 -11 ✎ +28 -3"}, {"git_committed", "+46 -11"}, {"git_uncommitted", "✎ +28 -3"}, {"git_ahead", "↑2"}, {"git_behind", "↓1"},
-		{"git_dirty", "✎"}, {"git_conflict", "!"}, {"git_rebase", "R"}, {"git_branch", "origin/main"},
-		{"pr_number", "#52"}, {"pr_checks", "× 3/5"}, {"idx", "2"}, {"jump_key", "M-2"},
+		{"git_dirty", "✎"}, {"git_conflict", "!"}, {"git_rebase", "R"}, {"git_branch", "origin/main"}, {"git_sync", "! ↑2 ↓1"},
+		{"pr_number", "#52"}, {"pr_checks", "× 3/5"}, {"pr_state", "●"}, {"pr_detail", "test (macos-latest)"}, {"idx", "2"}, {"jump_key", "M-2"},
 		{"repo_count", ""}, {"fold", ""}, {"worst_status", ""}, {"child_count", ""}, {"command", ""}, {"indent", ""},
 	} {
 		c := c
@@ -549,4 +549,163 @@ func mustParse(t *testing.T, src string) Compiled {
 		t.Fatal(err)
 	}
 	return Compiled{Template: tm}
+}
+
+// The dashboard's columns: {git_sync} is →base off main or master, the
+// conflict mark and ↑A ↓B, shrinking base first, then ↓B, then ↑A, and
+// never to nothing; {pr_state} is the PR's state as the set's icon;
+// {pr_detail} the pending time or the first failing check's name; the
+// dashboard's defaults carry them and the sidebar's do not, and a
+// configured template applies to both.
+func TestColumns(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	m := &Model{Now: now, LocalHost: "mac", Width: 80}
+	r := tokenRow(now)
+	render := func(src string, w int) string {
+		t.Helper()
+		return Debug([]Line{{Spans: m.line(mustParse(t, src), r, w)}})
+	}
+	plain := func(src string, w int) string {
+		t.Helper()
+		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}}), "\n")
+	}
+	// The base off main, its origin/ taken off; the conflict mark red.
+	r.Worktree.Git.Base = "origin/feature"
+	if got := render("{git_sync}", 40); got != "...|→feature «⟨danger:!⟩» ↑2 ↓1\n" {
+		t.Errorf("git_sync: %q", got)
+	}
+	for _, c := range []struct {
+		w    int
+		want string
+	}{{40, "→feature ! ↑2 ↓1"}, {15, "! ↑2 ↓1"}, {6, "! ↑2"}, {3, "!"}, {1, "!"}} {
+		if got := plain("{fill}{git_sync}", c.w); strings.TrimSpace(got) != c.want {
+			t.Errorf("git_sync at %d: %q, want %q", c.w, got, c.want)
+		}
+	}
+	// On main, in sync and without a conflict: nothing; behind alone
+	// is the smallest form then.
+	r.Worktree.Git.Base, r.Worktree.Git.Conflict, r.Worktree.Git.Ahead = "origin/main", nil, 0
+	if got := plain("{git_sync}", 40); got != "↓1" {
+		t.Errorf("git_sync behind alone: %q", got)
+	}
+	if got := plain("{fill}{git_sync}", 1); got != "" {
+		t.Errorf("git_sync with no room for its smallest form: %q", got)
+	}
+	r.Worktree.Git.Behind = 0
+	if got := plain("a {git_sync} b", 40); got != "a b" {
+		t.Errorf("git_sync with nothing to say: %q", got)
+	}
+	r.Worktree.Git.Base = "master"
+	if got := plain("{git_sync}", 40); got != "" {
+		t.Errorf("git_sync on master: %q", got)
+	}
+	// Stale: dim and plain.
+	r.Worktree.Git.Base, r.Worktree.Git.Stale = "topic", true
+	if got := render("{git_sync}", 40); got != "...|‹→topic›\n" {
+		t.Errorf("git_sync stale: %q", got)
+	}
+	r.Worktree.Git.Stale = false
+	// The PR's state per set, and dim when stale or a draft.
+	for _, c := range []struct {
+		set, state string
+		draft      bool
+		want       string
+	}{
+		{IconsEmoji, "open", false, "...|«⟨success:●⟩»\n"}, {IconsEmoji, "open", true, "...|‹◌›\n"},
+		{IconsEmoji, "merged", false, "...|⟨accent:◆⟩\n"}, {IconsEmoji, "closed", false, "...|‹⟨danger:⊘⟩›\n"},
+		{IconsASCII, "open", false, "...|«⟨success:o⟩»\n"}, {IconsASCII, "merged", false, "...|⟨accent:m⟩\n"},
+		{IconsNerdFont, "closed", false, "...|‹⟨danger:\uf4dc⟩›\n"}, {"", "open", true, "...|‹◌›\n"},
+	} {
+		m.Icons.Set = c.set
+		r.Branch.PR.State, r.Branch.PR.Draft = c.state, c.draft
+		if got := render("{pr_state}", 40); got != c.want {
+			t.Errorf("pr_state %s %s draft=%v: %q", c.set, c.state, c.draft, got)
+		}
+	}
+	m.Icons.Set = ""
+	r.Branch.PR.State, r.Branch.PR.Draft = "open", false
+	r.Branch.Stale = true
+	if got := render("{pr_state}", 40); got != "...|‹●›\n" {
+		t.Errorf("pr_state stale: %q", got)
+	}
+	r.Branch.Stale = false
+	r.Branch.PR = nil
+	if got := plain("{pr_state}", 40); got != "" {
+		t.Errorf("pr_state without a PR: %q", got)
+	}
+	r.Branch.PR = &protocol.PullRequest{Number: 52, State: "open"}
+	// The detail: the failing name red, cut as a label when narrow;
+	// pending, the time since the checks were first seen pending,
+	// ticking under an hour; stale dim; nothing else.
+	if got := render("{pr_detail}", 40); got != "...|⟨danger:test (macos-latest)⟩\n" {
+		t.Errorf("pr_detail failing: %q", got)
+	}
+	if got := plain("{host} {pr_detail}", 12); got != "vm test (ma…" {
+		t.Errorf("pr_detail cut: %q", got)
+	}
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksPending, Passed: 1, Total: 5, PendingSince: now.Add(-4*time.Minute - 12*time.Second)}
+	sp := m.line(mustParse(t, "{pr_detail}"), r, 40)
+	if len(sp) != 1 || sp[0].Text != "4:12" || sp[0].Fg != palette.Accent || !sp[0].tick {
+		t.Errorf("pr_detail pending: %+v", sp)
+	}
+	r.Branch.Checks.PendingSince = now.Add(-3 * time.Hour)
+	sp = m.line(mustParse(t, "{pr_detail}"), r, 40)
+	if len(sp) != 1 || sp[0].Text != "3h" || sp[0].tick {
+		t.Errorf("pr_detail pending for hours: %+v", sp)
+	}
+	r.Branch.Stale = true
+	if got := render("{pr_detail}", 40); got != "...|‹3h›\n" {
+		t.Errorf("pr_detail stale: %q", got)
+	}
+	r.Branch.Stale = false
+	r.Branch.Checks.PendingSince = time.Time{}
+	if got := plain("{pr_detail}", 40); got != "" {
+		t.Errorf("pr_detail pending since never: %q", got)
+	}
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}
+	if got := plain("{pr_detail}", 40); got != "" {
+		t.Errorf("pr_detail on success: %q", got)
+	}
+	// On main: the failing name, never the pending time.
+	r.Worktree.Branch = "main"
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksPending, PendingSince: now.Add(-time.Minute)}
+	if got := plain("{pr_detail}", 40); got != "" {
+		t.Errorf("pr_detail pending on main: %q", got)
+	}
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Failing: "lint"}
+	if got := plain("{pr_state} {pr_detail}", 40); got != "lint" {
+		t.Errorf("pr_detail failing on main: %q", got)
+	}
+	r.Worktree.Branch = "fix-ls"
+	// The dashboard's defaults carry the columns, the sidebar's do not;
+	// a configured line is the same in both.
+	dash := CompileTemplatesOver(DashboardDefaults, nil, "", nil, "", "", "", "", "")
+	side := DefaultTemplates()
+	for _, c := range []struct {
+		name       string
+		dash, side Template
+	}{{"tiles[1]", dash.Tiles[1].Template, side.Tiles[1].Template}, {"tiles[2]", dash.Tiles[2].Template, side.Tiles[2].Template}, {"compact", dash.Compact.Template, side.Compact.Template}, {"tree.worktree", dash.Tree.Worktree.Template, side.Tree.Worktree.Template}} {
+		if c.dash.src == c.side.src || !strings.Contains(c.dash.src, "{git_sync}") && !strings.Contains(c.dash.src, "{pr_state}") || strings.Contains(c.side.src, "_sync") || strings.Contains(c.side.src, "pr_state") {
+			t.Errorf("%s: dashboard %q, sidebar %q", c.name, c.dash.src, c.side.src)
+		}
+	}
+	for _, c := range []Compiled{dash.Tiles[0], dash.Tiles[1], dash.Tiles[2], dash.Compact, dash.Tree.Worktree} {
+		if c.Err != "" {
+			t.Errorf("a dashboard default does not parse: %s", c.Err)
+		}
+	}
+	own := CompileTemplatesOver(DashboardDefaults, []string{"{primary}"}, "{host}", nil, "", "{repo}", "", "", "")
+	if own.Tiles[0].src != "{primary}" || len(own.Tiles) != 1 || own.Compact.src != "{host}" || own.Tree.Worktree.src != "{repo}" || own.Tree.Run.src != DefaultRun {
+		t.Errorf("configured lines over the dashboard's defaults: %+v", own)
+	}
+	m.SetTemplates(dash)
+	m.Layout, m.Titles, m.Width = Compact, true, 100
+	r.Worktree.Git.Base, r.Worktree.Git.Ahead, r.Worktree.Git.Behind = "origin/feature", 2, 1
+	yes := true
+	r.Worktree.Git.Conflict = &yes
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
+	lines := m.compact(r)
+	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                →feature ! ↑2 ↓1  R +46 -11 ✎ +28 -3 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n" {
+		t.Errorf("the dashboard's compact lines:\n%s", got)
+	}
 }

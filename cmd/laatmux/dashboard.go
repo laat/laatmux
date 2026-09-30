@@ -110,7 +110,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	defer t.Close()
 	t.Theme, m.Icons = look(cfg, t)
 	m.Machine, _ = os.Hostname()
-	m.SetTemplates(templates(cfg))
+	m.SetTemplates(templates(cfg, o.actions))
 	m.AgentIcons = agentIcons(cfg)
 	m.JumpKeys = jumpKeysShown(cfg, o)
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}

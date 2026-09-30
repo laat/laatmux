@@ -8,6 +8,7 @@ package view
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -749,6 +750,55 @@ func gitSpans(r rows.Row, w int) []Span {
 		return out
 	}
 	for _, try := range [][]Span{join(rebase, committed, uncommitted), join(rebase, uncommitted), rebase} {
+		if len(try) > 0 && spansWidth(try) <= w {
+			if g.Stale {
+				for i := range try {
+					try[i].Dim, try[i].Bold, try[i].Fg = true, false, ""
+				}
+			}
+			return try
+		}
+	}
+	return nil
+}
+
+// gitSync is how the branch stands against its base, in at most w
+// cells: →base when the base is not main or master, its origin/ taken
+// off; the conflict mark ! in red; ↑A and ↓B. When the line is too
+// narrow the base goes first, then ↓B, then ↑A. A refresh that timed
+// out leaves them dim; nil when there is nothing to say.
+func gitSync(r rows.Row, w int) []Span {
+	if r.Worktree == nil || r.Worktree.Git == nil || w <= 0 {
+		return nil
+	}
+	g := r.Worktree.Git
+	var base, conflict, ahead, behind []Span
+	if short := strings.TrimPrefix(g.Base, "origin/"); short != "" && short != "main" && short != "master" {
+		base = []Span{{Text: "→" + short}}
+	}
+	if g.Conflict != nil && *g.Conflict {
+		conflict = []Span{{Text: "!", Fg: palette.Danger, Bold: true}}
+	}
+	if g.Ahead > 0 {
+		ahead = []Span{{Text: "↑" + strconv.Itoa(g.Ahead)}}
+	}
+	if g.Behind > 0 {
+		behind = []Span{{Text: "↓" + strconv.Itoa(g.Behind)}}
+	}
+	join := func(parts ...[]Span) []Span {
+		var out []Span
+		for _, p := range parts {
+			if len(p) == 0 {
+				continue
+			}
+			if len(out) > 0 {
+				out = append(out, Span{Text: " "})
+			}
+			out = append(out, p...)
+		}
+		return out
+	}
+	for _, try := range [][]Span{join(base, conflict, ahead, behind), join(conflict, ahead, behind), join(conflict, ahead), conflict} {
 		if len(try) > 0 && spansWidth(try) <= w {
 			if g.Stale {
 				for i := range try {

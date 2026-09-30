@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/laat/laatmux/internal/config"
@@ -82,5 +83,25 @@ func TestLookColorFgBg(t *testing.T) {
 		if _, ok := colorFgBg(bad); ok {
 			t.Errorf("%q read", bad)
 		}
+	}
+}
+
+// The templates: the dashboard's defaults carry the git and PR
+// columns, the sidebar's do not, and a configured line is the same in
+// both.
+func TestTemplatesPerHost(t *testing.T) {
+	var cfg config.Config
+	side, dash := templates(cfg, false), templates(cfg, true)
+	if side.Tiles[2].Source() == dash.Tiles[2].Source() || !strings.Contains(dash.Tiles[2].Source(), "{pr_state}") || strings.Contains(side.Tiles[2].Source(), "{pr_state}") {
+		t.Errorf("tile 3: sidebar %q, dashboard %q", side.Tiles[2].Source(), dash.Tiles[2].Source())
+	}
+	if !strings.Contains(dash.Tree.Worktree.Source(), "{git_sync}") || strings.Contains(side.Tree.Worktree.Source(), "{git_sync}") {
+		t.Errorf("worktree: sidebar %q, dashboard %q", side.Tree.Worktree.Source(), dash.Tree.Worktree.Source())
+	}
+	cfg.Sidebar.Templates.Tiles = []string{"{primary}", "{host}", "{pr_number}"}
+	cfg.Sidebar.Templates.Tree.Worktree = "{repo}"
+	side, dash = templates(cfg, false), templates(cfg, true)
+	if side.Tiles[2].Source() != "{pr_number}" || dash.Tiles[2].Source() != "{pr_number}" || dash.Tree.Worktree.Source() != "{repo}" {
+		t.Errorf("configured lines: sidebar %q, dashboard %q %q", side.Tiles[2].Source(), dash.Tiles[2].Source(), dash.Tree.Worktree.Source())
 	}
 }
