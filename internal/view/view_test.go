@@ -1559,3 +1559,75 @@ func TestFollowTree(t *testing.T) {
 		t.Errorf("agent view follows %+v", r)
 	}
 }
+
+// Review round 1: a task's first fold is by its agent's status; a task
+// that handed over passes its fold to the node holding the children,
+// and in the agent view the selection to the worktree's first tile;
+// following survives a switch with the viewer's line folded away; f
+// keeps the selection on its row.
+func TestTreeEdges(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	src := "git@github.com:laat/laatmux.git"
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
+	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	m.Render()
+	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
+		t.Error("a task with an idle agent started open")
+	}
+	m.Select("add-1")
+	m.Handle(Key{Rune: 'l'}) // the user's own fold: open
+	// The host lists the worktree; the task hands over.
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
+	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
+	in.Pendings = nil
+	m.Handoffs = map[string]string{"add-1": "venv/worktree//r/new-one"}
+	m.SetRows(rows.Agents(in))
+	m.SetTree(rows.Tree(in))
+	if m.closed(&m.Tree[m.indexOf("venv/worktree//r/new-one")]) {
+		t.Error("the worktree line did not take the task's fold")
+	}
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/new-one" {
+		t.Errorf("selection after the handoff: %+v", r)
+	}
+	// In the agent view the handoff lands on the worktree's first tile.
+	m.Handle(Key{Kind: KeyTab})
+	m.Handle(Key{Kind: KeyTab})
+	m.Select("add-1")
+	m.View = ViewAgents
+	m.anchor = "add-1"
+	m.SetRows(rows.Agents(in))
+	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
+		t.Errorf("handoff in the agent view: %+v", r)
+	}
+	// Following: every fold closed (all are open, so one f closes
+	// them), a switch away and back.
+	m.View, m.Follow = ViewTree, true
+	m.Selection()
+	m.Handle(Key{Rune: 'f'})
+	if len(m.Visible()) > 6 {
+		t.Fatalf("not folded: %d", len(m.Visible()))
+	}
+	m.Handle(Key{Kind: KeyTab})
+	m.Handle(Key{Kind: KeyTab})
+	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" || !m.Follow {
+		t.Errorf("following after a switch with folds closed: %+v", r)
+	}
+	// f keeps a user's selection on its row, or on the line over it.
+	m.Handle(Key{Rune: 'f'}) // every fold open again
+	if !m.Select("venv/laatmux/%2") {
+		t.Fatal("the child is not visible")
+	}
+	m.Handle(Key{Rune: 'f'}) // closes every fold: the child is hidden
+	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
+		t.Errorf("f with the selection on a child: %+v", r)
+	}
+	m.Handle(Key{Rune: 'f'})
+	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
+		t.Errorf("f opening every fold moved the selection: %+v", r)
+	}
+}

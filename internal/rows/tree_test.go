@@ -197,3 +197,48 @@ func TestTreeContents(t *testing.T) {
 		t.Errorf("tree:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// Review round 1: a worktree line's agent is the one its jump goes
+// through, and the most pressing one is kept apart for the icon; the
+// viewer in an attachment to another managed session holding the
+// worktree's agent has that worktree's line and that agent's tile;
+// agents come in one order whatever the map they came from.
+func TestTreeJumpAgentAndViewer(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/proj.git"
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+		},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a"}},
+		Locals:    []workspace.Local{{Name: "vm/other", Attach: "vm/other", Host: "vm"}},
+		Current:   "vm/other",
+		Now:       now,
+	}
+	for i := 0; i < 2; i++ {
+		nodes := Tree(in)
+		var line Row
+		for _, n := range nodes {
+			if n.Kind == KindWorktree {
+				line = n
+			}
+		}
+		// No home session: the jump agent is the one laatmux made at
+		// the root, %1, while the blocked visitor %2 is the worst.
+		if line.Agent == nil || line.Agent.ID != "venv/laatmux/%1" || line.Worst == nil || line.Worst.Agent.ID != "venv/laatmux/%2" || !line.Current {
+			t.Errorf("line: agent %+v worst %+v current %v", line.Agent, line.Worst, line.Current)
+		}
+		if nodes[2].Agent.ID != "venv/laatmux/%1" || nodes[3].Agent.ID != "venv/laatmux/%2" {
+			t.Errorf("children out of order: %s %s", nodes[2].Agent.ID, nodes[3].Agent.ID)
+		}
+		// Both are the viewer's worktree's agents: both current, the
+		// blocked visitor first in sort order, so following lands on it.
+		tiles := Agents(in).Main
+		if len(tiles) != 2 || !tiles[0].Current || tiles[0].Agent.ID != "venv/laatmux/%2" || !tiles[1].Current {
+			t.Errorf("tiles: %+v", tiles)
+		}
+		in.Agents[0], in.Agents[1] = in.Agents[1], in.Agents[0]
+	}
+}

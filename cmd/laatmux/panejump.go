@@ -68,16 +68,24 @@ func jumpPane(ctx context.Context, cfg config.Config, r rows.Row, p paneTarget) 
 		return "", nil
 	}
 	// The workspace session when the pane is in the worktree's home
-	// session; the plain attachment to its managed session otherwise.
-	var spec workspace.Spec
-	if r.Worktree != nil && r.Worktree.Session == p.session {
-		spec = worktreeSpec(cfg, h, *r.Worktree)
-	} else {
-		spec = workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
-	}
-	name, _, err := workspace.Ensure(ctx, spec)
-	if err != nil {
-		return "", err
+	// session, or the one a task's jump made before the host listed
+	// the worktree; the plain attachment to its managed session
+	// otherwise.
+	var name string
+	switch {
+	case r.Worktree == nil && r.Local != nil && r.Local.Workspace():
+		name = r.Local.Name
+	default:
+		var spec workspace.Spec
+		if r.Worktree != nil && r.Worktree.Session == p.session {
+			spec = worktreeSpec(cfg, h, *r.Worktree)
+		} else {
+			spec = workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
+		}
+		var err error
+		if name, _, err = workspace.Ensure(ctx, spec); err != nil {
+			return "", err
+		}
 	}
 	if err := switchTo(ctx, name); err != nil {
 		return "", err

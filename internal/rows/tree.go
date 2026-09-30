@@ -173,6 +173,20 @@ func (j *join) worktreeAgents(w *protocol.Worktree) []*protocol.Agent {
 // sessions where they belong, and other sessions last. Depth is the
 // node's level, Children how many nodes are under a foldable one.
 func Tree(in Input) []Row {
+	// The agents in one order whatever the map they came from: by
+	// host, session, start and id, which the tree's children and the
+	// tiles' suffixes count on. A copy: the caller's slice is its own.
+	in.Agents = append([]protocol.Agent(nil), in.Agents...)
+	sort.SliceStable(in.Agents, func(a, b int) bool {
+		x, y := &in.Agents[a], &in.Agents[b]
+		if x.EnvironmentID != y.EnvironmentID {
+			return x.EnvironmentID < y.EnvironmentID
+		}
+		if x.Session != y.Session {
+			return x.Session < y.Session
+		}
+		return before(x, y)
+	})
 	j := newJoin(in)
 	type repo struct {
 		key, name string
@@ -239,9 +253,18 @@ func Tree(in Input) []Row {
 		var children []Row
 		for _, a := range agents {
 			used[a] = true
-			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a, Local: j.byKey[key]}
+			// The agent's own local session: the workspace session for
+			// one in the home session, else the attachment to its
+			// session, or its session on this machine's default server.
+			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
+			if Server(*a) == tmux.LaatmuxServer.Label() && a.Session == w.Session {
+				c.Local = j.byKey[key]
+			}
 			if c.Local == nil {
 				c.Local = j.agentLocal(host, a)
+			}
+			if c.Local == nil {
+				c.Local = j.byKey[key]
 			}
 			children = append(children, c)
 		}
@@ -278,31 +301,36 @@ func Tree(in Input) []Row {
 		children = append(children, runs...)
 		// The worktree's own session: the home session's workspace
 		// session, or the one its agent on this machine's default server
-		// stands for.
-		if w.Session == "" && len(agents) > 0 {
-			if a := rowAgent(agents, w); a != nil && Server(*a) == tmux.DefaultServer.Label() {
-				line.Local = j.agentLocal(host, a)
-			}
+		// stands for. The line's agent is the one its jump goes through,
+		// as the mixed row's was; the most pressing is kept apart, for
+		// the folded line's icon.
+		line.Agent = rowAgent(agents, w)
+		if w.Session == "" && line.Agent != nil && Server(*line.Agent) == tmux.DefaultServer.Label() {
+			line.Local = j.agentLocal(host, line.Agent)
 		}
 		if line.Local == nil {
 			line.Local = j.byKey[key]
 		}
 		line.Settled = line.Local != nil && line.Local.Settled
-		// The most pressing agent, for the folded line's icon.
-		line.Agent = pressing(children, j)
 		for k := range children {
 			c := &children[k]
 			c.Settled, c.Depth = line.Settled, 2
 			j.finish(c)
 		}
+		line.Worst = pressing(children)
 		line.Children, line.Depth = len(children), 1
 		j.finish(&line)
+		if line.Agent != nil {
+			// The line's own status is its jump agent's; the icon is
+			// the worst's.
+			line.Dim = line.Dim && (line.Worst == nil || line.Worst.Dim)
+		}
 		rp := repoOf(w.Source, w.Repo)
 		if idx := standing[w.ID]; len(idx) > 0 {
 			// The newest standing task takes the line's place and its
 			// children; the others follow as lines of their own.
 			owner := &tasks[idx[0]]
-			owner.Worktree, owner.Agent, owner.Local, owner.Children, owner.Depth = w, line.Agent, line.Local, len(children), 1
+			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
 			for _, k := range idx[1:] {
 				tasks[k].Worktree, tasks[k].Local, tasks[k].Depth = w, line.Local, 1
 			}
@@ -353,7 +381,10 @@ func Tree(in Input) []Row {
 				}
 			}
 		}
-		t.Agent = pressing(children, j)
+		if len(children) > 0 {
+			t.Agent = children[0].Agent
+		}
+		t.Worst = pressing(children)
 		t.Children, t.Depth = len(children), 1
 		j.finish(t)
 		rp := repoOf(p.Source, p.Repo)
@@ -445,36 +476,48 @@ func Tree(in Input) []Row {
 		out = append(out, Row{Kind: KindGroup, Node: NodeOther, Name: "other sessions", Children: len(others)})
 		out = append(out, others...)
 	}
+	line := -1
 	for i := range out {
 		r := &out[i]
-		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current && r.Kind != KindAgent && r.Kind != KindPane && r.Kind != KindRun
-		if r.Kind == KindAgent && r.Depth == 1 && r.Local != nil && r.Local.Name == in.Current {
-			// A session line in other sessions is the viewer's own.
-			r.Current = true
+		mine := in.Current != "" && r.Local != nil && r.Local.Name == in.Current
+		switch {
+		case r.Depth <= 1:
+			line = -1
+			if r.Depth == 1 && (r.Kind == KindWorktree || r.Kind == KindTask) {
+				line = i
+			}
+			// A line of its own, an orphaned session or a session in
+			// other sessions, is the viewer's when its session is.
+			r.Current = mine
+		case mine && line >= 0:
+			// The viewer sits with one of the line's agents, through
+			// the workspace session or an attachment: the line is the
+			// viewer's, as following wants it.
+			out[line].Current = true
 		}
 	}
 	return out
 }
 
-// pressing is the most pressing of a worktree's agents, in the note's
-// precedence: blocked, done, working, idle, stale; nil without agents.
-func pressing(children []Row, j *join) *protocol.Agent {
+// pressing is the most pressing of a line's agent children, finished,
+// in the note's precedence: blocked, done, working, idle, stale; nil
+// without agents.
+func pressing(children []Row) *Row {
 	var best *Row
 	for i := range children {
-		c := children[i]
+		c := &children[i]
 		if c.Agent == nil {
 			continue
 		}
-		j.finish(&c)
 		if best == nil || c.Rank() < best.Rank() {
-			cc := c
-			best = &cc
+			best = c
 		}
 	}
 	if best == nil {
 		return nil
 	}
-	return best.Agent
+	cc := *best
+	return &cc
 }
 
 // Agents is the agent view: the tasks first, the newest first, then one
@@ -487,13 +530,16 @@ func Agents(in Input) Rows {
 	var rows []Row
 	viewer := map[string]bool{} // worktree ids and session names the viewer is in
 	for _, n := range tree {
-		if n.Current && n.Local != nil {
-			if n.Worktree != nil {
-				viewer["w:"+n.Worktree.ID] = true
-			}
-			if n.Pending != nil {
-				viewer["t:"+n.Pending.ID] = true
-			}
+		if !n.Current {
+			continue
+		}
+		if n.Worktree != nil {
+			viewer["w:"+n.Worktree.ID] = true
+		}
+		if n.Pending != nil {
+			viewer["t:"+n.Pending.ID] = true
+		}
+		if n.Local != nil {
 			viewer["s:"+n.Local.Name] = true
 		}
 	}

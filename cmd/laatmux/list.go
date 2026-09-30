@@ -66,19 +66,6 @@ type merged struct {
 	runs  map[string]protocol.Run
 }
 
-// agentsIn counts the agents attributed to a worktree.
-func (m *merged) agentsIn(worktreeID string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, a := range m.agents {
-		if a.WorktreeID == worktreeID {
-			n++
-		}
-	}
-	return n
-}
-
 // configure takes what the rows need from the config: this machine's
 // repository names, the sort order and the stale settings.
 func (m *merged) configure(cfg config.Config) {
@@ -191,8 +178,13 @@ func (m *merged) apply(host string, msg protocol.Message) {
 			if h == host {
 				delete(m.agents, id)
 				delete(m.worktrees, id)
+				delete(m.panes, id)
+				delete(m.runs, id)
 				delete(m.byHost, id)
 			}
+		}
+		if m.panes == nil {
+			m.panes, m.runs = map[string]protocol.Pane{}, map[string]protocol.Run{}
 		}
 		for _, a := range msg.Agents {
 			m.agents[a.ID] = a
@@ -201,6 +193,14 @@ func (m *merged) apply(host string, msg protocol.Message) {
 		for _, w := range msg.Worktrees {
 			m.worktrees[w.ID] = w
 			m.byHost[w.ID] = host
+		}
+		for _, p := range msg.Panes {
+			m.panes[p.ID] = p
+			m.byHost[p.ID] = host
+		}
+		for _, r := range msg.Runs {
+			m.runs[r.ID] = r
+			m.byHost[r.ID] = host
 		}
 	case protocol.TypeUpsert:
 		if msg.Agent != nil {
@@ -211,6 +211,20 @@ func (m *merged) apply(host string, msg protocol.Message) {
 			m.worktrees[msg.Worktree.ID] = *msg.Worktree
 			m.byHost[msg.Worktree.ID] = host
 		}
+		if msg.Pane != nil {
+			if m.panes == nil {
+				m.panes = map[string]protocol.Pane{}
+			}
+			m.panes[msg.Pane.ID] = *msg.Pane
+			m.byHost[msg.Pane.ID] = host
+		}
+		if msg.Run != nil {
+			if m.runs == nil {
+				m.runs = map[string]protocol.Run{}
+			}
+			m.runs[msg.Run.ID] = *msg.Run
+			m.byHost[msg.Run.ID] = host
+		}
 	case protocol.TypeRemove:
 		if msg.AgentID != "" {
 			delete(m.agents, msg.AgentID)
@@ -219,6 +233,14 @@ func (m *merged) apply(host string, msg protocol.Message) {
 		if msg.WorktreeID != "" {
 			delete(m.worktrees, msg.WorktreeID)
 			delete(m.byHost, msg.WorktreeID)
+		}
+		if msg.PaneRecordID != "" {
+			delete(m.panes, msg.PaneRecordID)
+			delete(m.byHost, msg.PaneRecordID)
+		}
+		if msg.RunID != "" {
+			delete(m.runs, msg.RunID)
+			delete(m.byHost, msg.RunID)
 		}
 	}
 	m.mu.Unlock()

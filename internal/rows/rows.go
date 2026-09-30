@@ -126,6 +126,10 @@ type Row struct {
 	Run      *protocol.Run
 	Children int
 	Suffix   string
+	// Worst is the most pressing agent's row under a worktree or task
+	// line, for the folded line's icon; the line's own Agent is the one
+	// its jump goes through.
+	Worst    *Row
 	Current  bool // the viewer's own session
 	HostDown bool // the host is not connected
 	// Dim is no identified agent, an agent that is gone, a host that is

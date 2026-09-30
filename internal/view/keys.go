@@ -1065,7 +1065,16 @@ func (m *Model) Handle(k Key) Action {
 		case '/':
 			m.Filtering = true
 		case 'f':
+			// The selection stays on its row, or, folded away, on the
+			// line over it.
+			id := ""
+			if r := m.Selection(); r != nil && !m.Follow {
+				id = r.ID()
+			}
 			m.foldAll()
+			if id != "" && !m.Select(id) {
+				m.selectAncestor(id)
+			}
 			m.Selection()
 		case 'h':
 			m.foldKey(false)

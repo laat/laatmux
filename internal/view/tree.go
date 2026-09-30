@@ -41,13 +41,39 @@ func ParseView(s string) (View, error) {
 func (m *Model) SetTree(nodes []rows.Row) {
 	m.Tree = nodes
 	for task, to := range m.Handoffs {
-		if closed, ok := m.folds[task]; ok && !m.toggled[to] {
-			if _, has := m.folds[to]; !has {
-				m.setFold(to, closed)
-			}
+		closed, ok := m.folds[task]
+		if !ok {
+			continue
 		}
+		// The node holding the worktree's children now: its line, or
+		// the task standing for it.
+		succ := m.successor(to)
+		if succ == "" || succ == task || m.toggled[succ] {
+			continue
+		}
+		m.setFold(succ, closed)
+		delete(m.folds, task)
 	}
 	m.reselect()
+}
+
+// successor is the id of the node holding a worktree's children: the
+// worktree's line, else the task line standing for it; "" when neither
+// is in the tree.
+func (m *Model) successor(worktreeID string) string {
+	standing := ""
+	for _, n := range m.Tree {
+		if n.Depth != 1 || n.Worktree == nil || n.Worktree.ID != worktreeID {
+			continue
+		}
+		if n.Kind == rows.KindWorktree {
+			return n.ID()
+		}
+		if n.Children > 0 || standing == "" {
+			standing = n.ID()
+		}
+	}
+	return standing
 }
 
 // closed reports whether a foldable node is folded, deciding a worktree
@@ -68,7 +94,7 @@ func (m *Model) closed(r *rows.Row) bool {
 	case rows.KindFold:
 		return !m.ShowHidden
 	}
-	c := r.Agent == nil || r.Rank() > 2
+	c := r.Worst == nil || r.Worst.Rank() > 2
 	m.setFold(id, c)
 	return c
 }
@@ -191,6 +217,10 @@ func (m *Model) Switch() {
 		m.View = ViewTree
 	}
 	if m.Follow {
+		// The followed row in the new view, unfolded if a fold hides it.
+		if id := m.followedID(); id != "" {
+			m.reveal(id)
+		}
 		m.Selection()
 		return
 	}
@@ -201,6 +231,28 @@ func (m *Model) Switch() {
 	m.reveal(target)
 	m.anchor, m.alias, m.lost = target, "", false
 	m.reselect()
+}
+
+// followedID is the id of the viewer's own row in the current view,
+// whether or not a fold hides it: the first tile that is the viewer's
+// in the agent view, the viewer's line in the tree.
+func (m *Model) followedID() string {
+	if m.View == ViewTree {
+		for _, n := range m.Tree {
+			if n.Current {
+				return n.ID()
+			}
+		}
+		return ""
+	}
+	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale, m.Rows.Settled} {
+		for _, r := range rs {
+			if r.Current {
+				return r.ID()
+			}
+		}
+	}
+	return ""
 }
 
 // crossID is the id of the node the row resolves to in the other view.
@@ -372,10 +424,10 @@ func (m *Model) treeLine(r rows.Row) []Line {
 				right = append(right, pr...)
 			}
 		}
-		if r.Foldable() && m.closed(&r) && r.Agent != nil {
+		if r.Foldable() && m.closed(&r) && r.Worst != nil {
 			// The most pressing agent inside, so a blocked or done one
 			// is not missed.
-			icon := m.iconSpan(r)
+			icon := m.iconSpan(*r.Worst)
 			if strings.TrimSpace(icon.Text) != "" {
 				right = append(right, Span{Text: "  "}, icon)
 			}
@@ -429,7 +481,8 @@ func (m *Model) treeLine(r rows.Row) []Line {
 // at the top of the window, when that node is not a repository line
 // itself. nil otherwise.
 func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
-	if m.View != ViewTree || m.scroll <= 0 || m.scroll >= len(ids) {
+	if m.View != ViewTree || m.scroll <= 0 || m.scroll >= len(ids) || m.Height < 6 {
+		// A short pane has no line to give a pinned repository.
 		return nil, ""
 	}
 	top := ids[m.scroll]
@@ -461,4 +514,38 @@ func afterSep(spans []Span) []Span {
 		}
 	}
 	return nil
+}
+
+// AgentsUnder counts the agents the tree has under a worktree's line, or
+// the task line standing for it.
+func (m *Model) AgentsUnder(worktreeID string) int {
+	n := 0
+	under := false
+	for _, r := range m.Tree {
+		switch {
+		case r.Depth <= 1:
+			under = r.Depth == 1 && r.Worktree != nil && r.Worktree.ID == worktreeID
+		case under && r.Kind == rows.KindAgent:
+			n++
+		}
+	}
+	return n
+}
+
+// selectAncestor puts the selection on the nearest visible line over the
+// node with the id, when a fold hid the node.
+func (m *Model) selectAncestor(id string) {
+	i := m.indexOf(id)
+	if i < 0 {
+		return
+	}
+	depth := m.Tree[i].Depth
+	for j := i - 1; j >= 0; j-- {
+		if n := &m.Tree[j]; n.Depth < depth {
+			if m.Select(n.ID()) {
+				return
+			}
+			depth = n.Depth
+		}
+	}
 }

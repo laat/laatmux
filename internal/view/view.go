@@ -168,11 +168,28 @@ func (m *Model) reselect() {
 	standing := func(want string) func(r *rows.Row) bool {
 		return func(r *rows.Row) bool { return want != "" && r.Alias() == want }
 	}
+	// The agent view has no worktree rows: a task that handed over to
+	// its worktree is followed to the worktree's first tile there,
+	// out of the stale fold when it is in it.
+	tileIn := func(want string) func(r *rows.Row) bool {
+		return func(r *rows.Row) bool {
+			return want != "" && r.Kind == rows.KindTile && r.Worktree != nil && r.Worktree.ID == want
+		}
+	}
+	if m.View != ViewTree && handed != "" && !m.ShowHidden {
+		for _, r := range m.Rows.Stale {
+			if tileIn(handed)(&r) {
+				m.ShowHidden = true
+				vis = m.Visible()
+			}
+		}
+	}
 	switch {
 	case find(id(anchor)):
 	case find(id(alias)):
 	case find(standing(anchor)):
 	case find(id(handed)):
+	case find(tileIn(handed)):
 	case find(standing(alias)):
 	case find(standing(handed)):
 	default:

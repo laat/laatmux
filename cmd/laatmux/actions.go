@@ -613,8 +613,8 @@ func (d *dash) askRm(m *view.Model, force bool) {
 	with := ""
 	if r.Worktree != nil {
 		// From an agent's tile or line: the worktree goes, and every
-		// agent in it with it.
-		switch n := d.st.agentsIn(r.Worktree.ID); {
+		// agent in it with it, counted as the tree joins them.
+		switch n := m.AgentsUnder(r.Worktree.ID); {
 		case n == 1 && r.Agent != nil:
 			with = " with its agent"
 		case n > 1:
