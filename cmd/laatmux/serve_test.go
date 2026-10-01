@@ -49,8 +49,9 @@ func (s *served) wait(t *testing.T) error {
 
 // serveFixture seeds a bare repository with one commit, a config with
 // one local host named box and the repository as proj, adds a worktree
-// task from the store, points the state, config and tmux directories
-// under base so the daemon polls a laatmux server that is not there and
+// task from the store, points the state and config directories under
+// base and the tmux socket directory at a short path of its own under
+// /tmp, so the daemon polls a laatmux server that is not there and
 // never starts one, then starts cmdServe on a loopback port and waits
 // for its hello.
 func serveFixture(t *testing.T) *served {
@@ -84,8 +85,9 @@ func serveFixture(t *testing.T) *served {
 	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
 	cfg := fmt.Sprintf("hosts:\n  - name: box\n    repos: %s\n    worktrees: %s\nrepos:\n  - source: %s\n    name: proj\n", dirs.Repos, dirs.Worktrees, remote)
 	os.WriteFile(filepath.Join(base, "config.yaml"), []byte(cfg), 0o644)
-	// State, config and the tmux socket directory all under base: the
-	// daemon polls a laatmux server that is not there and never starts one.
+	// State and config under base; the tmux socket directory below is
+	// one of this fixture's own too, so the daemon polls a laatmux
+	// server that is not there and never starts one.
 	t.Setenv("LAATMUX_HOME", filepath.Join(base, "home"))
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(base, "config.yaml"))
 	// A short socket directory: a unix socket path has about a hundred
