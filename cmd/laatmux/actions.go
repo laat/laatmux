@@ -265,7 +265,7 @@ func (d *dash) startAdd(m *view.Model) {
 		// host's label when this machine has none, which another local
 		// repository could share, so a source this machine does not
 		// know preselects nothing. A repository known by a label alone
-		// goes by it, as a worktree without a source does.
+		// goes by it.
 		if r.ID() == rows.LabelRepoNode(r.Name) {
 			preRepo = r.Name
 		}
@@ -589,9 +589,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	switch {
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
-		if repo, ok := recordRepo(d.cfg, r.Worktree.Source); ok {
-			rm.Repo = repo
-		} else if repo, ok := d.cfg.RepoByName(r.Worktree.Repo); ok && r.Worktree.Source == "" {
+		if repo, ok := d.cfg.RepoBySource(r.Worktree.Source); ok {
 			rm.Repo = repo
 		}
 		if rm.Repo.Source == "" {
@@ -599,7 +597,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 		}
 	case r.Orphaned:
 		rm.Environment, rm.Root = workspace.SplitKey(r.Local.Key)
-		if repo, ok := recordRepo(d.cfg, r.Local.Source); ok && r.Local.Branch != "" {
+		if repo, ok := d.cfg.RepoBySource(r.Local.Source); ok && r.Local.Branch != "" {
 			rm.Repo, rm.Branch = repo, r.Local.Branch
 		}
 	default:

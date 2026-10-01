@@ -81,19 +81,18 @@ var SenderLifetime = 7 * 24 * time.Hour
 var ErrSubmissionExpired = errors.New("outcome unknown: the submission is older than seven days and is not sent again")
 
 // stream sends a command with progress to the host and returns its
-// result. When the transport fails mid-way it dials again and, against a
-// daemon with follow, follows the id from the last numbered progress it
-// saw; the daemon replays from there and the filter drops anything at or
-// below the mark. Against an older daemon the command is resent and the
-// replay filtered by position. A follow the daemon does not know the id
-// of is answered as the kind of command decides: add and rm resend the
-// command as a new execution, since every step of theirs is skipped by
-// inspection; run reports the outcome unknown, since the process may be
-// running still. A follow answered interrupted, by a daemon whose
-// journal knows the add and that died in it, resends the add under its
-// id and the daemon resumes it. Every capability in needCaps must be in
-// the daemon's hello, on every connection. The hello of the connection
-// that delivered the result is returned with it.
+// result. When the transport fails mid-way it dials again and follows
+// the id from the last numbered progress it saw; the daemon replays from
+// there and the filter drops anything at or below the mark. A follow the
+// daemon does not know the id of is answered as the kind of command
+// decides: add and rm resend the command as a new execution, since every
+// step of theirs is skipped by inspection; run reports the outcome
+// unknown, since the process may be running still. A follow answered
+// interrupted, by a daemon whose journal knows the add and that died in
+// it, resends the add under its id and the daemon resumes it. Follow and
+// every capability in needCaps must be in the daemon's hello, on every
+// connection. The hello of the connection that delivered the result is
+// returned with it.
 //
 // This is the client's send path, and the sender lifetime is enforced
 // here: a message with SubmittedAt is neither sent nor resent past it.
@@ -118,7 +117,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			}
 			continue
 		}
-		for _, cap := range needCaps {
+		for _, cap := range append([]string{protocol.CapFollow}, needCaps...) {
 			if !protocol.Has(c.Hello.Capabilities, cap) {
 				c.Close()
 				return hello, res, notSent(ever, fmt.Errorf("%s: daemon %s does not support %s", h.Name, c.Hello.Version, cap))
@@ -129,7 +128,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			return hello, res, notSent(ever, fmt.Errorf("%s: answers as environment %s, not %s the request was resolved for", h.Name, c.Hello.EnvironmentID, o.environment))
 		}
 		hello = c.Hello
-		follow := sent && protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
+		follow := sent
 		req := m
 		if follow {
 			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark, Attempt: o.attempt}
@@ -139,8 +138,6 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			c.Close()
 			return hello, res, notSent(ever, ErrSubmissionExpired)
 		}
-		f.numbered = protocol.Has(c.Hello.Capabilities, protocol.CapFollow)
-		f.reset()
 		sent, ever = true, true
 		res, err = exchange(ctx, c, req, o.cancel, f.pass)
 		c.Close()
@@ -157,7 +154,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 			} else {
 				r.Note(fmt.Sprintf("%s: daemon no longer knows %s %s; sending it again", h.Name, m.Type, m.ID))
 			}
-			f.mark, f.seen, sent = 0, 0, false
+			f.mark, sent = 0, false
 			attempt--
 			continue
 		}
@@ -270,38 +267,18 @@ func pause(ctx context.Context) error {
 }
 
 // progressFilter passes each progress message on once across
-// reconnects. Numbered progress, from a daemon with follow, passes when
-// its n is past the mark; unnumbered progress, from an older daemon that
-// replays a command's stream from the start, is counted per connection
-// and passes past the count seen. Both counters advance on every message
-// passed, so a redial that lands on the other kind of daemon still
-// filters.
+// reconnects: one passes when its n is past the mark, which a follow's
+// replay from the mark may still overlap.
 type progressFilter struct {
-	numbered bool   // the current connection numbers its progress
-	mark     uint64 // highest n passed
-	seen     int    // messages passed in all
-	n        int    // messages received on this connection
-	fn       func(protocol.Message)
+	mark uint64 // highest n passed
+	fn   func(protocol.Message)
 }
 
-func (f *progressFilter) reset() { f.n = 0 }
-
 func (f *progressFilter) pass(p protocol.Message) {
-	f.n++
-	if f.numbered {
-		if p.N <= f.mark {
-			return
-		}
-		f.mark = p.N
-	} else {
-		if f.n <= f.seen {
-			return
-		}
-		if p.N > f.mark {
-			f.mark = p.N
-		}
+	if p.N <= f.mark {
+		return
 	}
-	f.seen++
+	f.mark = p.N
 	if f.fn != nil {
 		f.fn(p)
 	}

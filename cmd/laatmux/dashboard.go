@@ -418,7 +418,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		if r.Worktree.Session == "" {
 			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))
 		}
-		return worktreeSpec(cfg, h, *r.Worktree), "", nil
+		return worktreeSpec(h, *r.Worktree), "", nil
 	case r.Worktree != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
 		// A worktree whose own session lost the home, a split in it gone
 		// elsewhere say: the row's agent is the one laatmux made at the
@@ -430,7 +430,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		// hand could make another worktree's too.
 		w := *r.Worktree
 		w.Session = r.Agent.Session
-		spec := worktreeSpec(cfg, h, w)
+		spec := worktreeSpec(h, w)
 		spec.Name = worktreeSessionName(h, w)
 		return spec, "", nil
 	case r.Agent != nil:

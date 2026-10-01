@@ -404,6 +404,7 @@
   "generated": true,
   "submitted_at": "2026-10-01T12:00:00Z",
   "attempt": 1,
+  "next_attempt": 1,
   "listing": {
     "generation": 1,
     "revision": 1

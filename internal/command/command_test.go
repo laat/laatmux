@@ -17,30 +17,15 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
-// Progress replayed after a reconnect is passed on once: by position
-// from a daemon that replays from the start, by number from one that
-// replays from the mark, and a redial that lands on the other kind
-// still filters.
+// Progress replayed after a reconnect is passed on once, by number: a
+// follow's replay from the mark may overlap what was seen.
 func TestStreamDedupe(t *testing.T) {
 	var got []string
 	f := &progressFilter{fn: func(p protocol.Message) { got = append(got, p.Detail) }}
-	for _, d := range []string{"a", "b"} {
-		f.pass(protocol.Message{Detail: d})
-	}
-	f.reset() // reconnect: the daemon replays from the start
-	for _, d := range []string{"a", "b", "c"} {
-		f.pass(protocol.Message{Detail: d})
-	}
-	if strings.Join(got, "") != "abc" {
-		t.Fatalf("positional: got %v", got)
-	}
-
-	got = nil
-	f = &progressFilter{numbered: true, fn: func(p protocol.Message) { got = append(got, p.Detail) }}
 	for i, d := range []string{"a", "b"} {
 		f.pass(protocol.Message{N: uint64(i + 1), Detail: d})
 	}
-	f.reset() // reconnect: follow after 2, but a slow replay overlaps
+	// Reconnect: follow after 2, but a slow replay overlaps.
 	for i, d := range []string{"b", "c", "d"} {
 		f.pass(protocol.Message{N: uint64(i + 2), Detail: d})
 	}
@@ -52,16 +37,6 @@ func TestStreamDedupe(t *testing.T) {
 	f.pass(protocol.Message{N: 10, Detail: "e"})
 	if strings.Join(got, "") != "abcd5 lines droppede" || f.mark != 10 {
 		t.Fatalf("gap: got %v mark %d", got, f.mark)
-	}
-	// The next connection is an older daemon: it replays everything
-	// unnumbered, and only what is past the count seen passes.
-	f.numbered = false
-	f.reset()
-	for _, d := range []string{"a", "b", "c", "d", "5 lines dropped", "e", "f"} {
-		f.pass(protocol.Message{Detail: d})
-	}
-	if strings.Join(got, "") != "abcd5 lines droppedef" {
-		t.Fatalf("downgrade: got %v", got)
 	}
 }
 
@@ -253,6 +228,19 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	if got := f.commands(); len(got) != 2 || got[1].Type != protocol.TypeFollow {
 		t.Fatalf("reconnect did not follow: %+v", got)
 	}
+
+	// Follow is held the same way: a reconnect that lands on a daemon
+	// without it is refused rather than sent the command again, and the
+	// command was sent, so it is no NotSent.
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps}, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapRm}})
+	_, _, err = stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true})
+	var ns *NotSent
+	if err == nil || !strings.Contains(err.Error(), "does not support follow") || errors.As(err, &ns) {
+		t.Fatalf("reconnect without follow: %v", err)
+	}
+	if got := f.commands(); len(got) != 1 || got[0].Type != protocol.TypeRm {
+		t.Fatalf("after the reconnect without follow: %+v", got)
+	}
 }
 
 // A follow answered interrupted, by a daemon whose journal knows the
@@ -326,6 +314,14 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 	}
 	if got := f.commands(); len(got) != 0 {
 		t.Fatalf("sent without task: %+v", got)
+	}
+	// Every command with progress needs follow, asked for or not.
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapAdd, protocol.CapTask}})
+	if _, _, err := stream(context.Background(), host, add.Needs(), add.Request("a5"), Discard{}, streamOpts{restart: true}); err == nil || !strings.Contains(err.Error(), "does not support follow") || !errors.As(err, &ns) {
+		t.Fatalf("needs follow: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent without follow: %+v", got)
 	}
 	// A host that cannot be dialled is the same refusal before the send.
 	t.Setenv("LAATMUX_HOME", t.TempDir())

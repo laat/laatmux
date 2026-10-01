@@ -146,7 +146,7 @@ func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p pa
 	// not where the agent went, and then the session named after the
 	// worktree, as the line's jump names it.
 	w.Session = p.session
-	spec := worktreeSpec(cfg, h, w)
+	spec := worktreeSpec(h, w)
 	if home != p.session {
 		spec.Name = worktreeSessionName(h, w)
 	}

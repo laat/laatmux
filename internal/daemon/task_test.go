@@ -490,7 +490,7 @@ func TestPromptMessage(t *testing.T) {
 		t.Fatalf("repeat: %+v pastes %d", res, len(ft.pastes))
 	}
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 3, Prompt: "do it"})
-	if res, _ := result(t, pc, "c1"); res.OK || !strings.Contains(res.Error, "not the next") {
+	if res, _ := result(t, pc, "c1"); res.OK || !strings.Contains(res.Error, "not the next") || res.NextAttempt != 2 {
 		t.Fatalf("attempt 3: %+v", res)
 	}
 	pc.Write(protocol.Message{Type: protocol.TypeFollow, ID: "c1", Attempt: 1})

@@ -85,7 +85,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		if w.Session == "" {
 			return errors.New(addHint(cfg, h, w))
 		}
-		spec = worktreeSpec(cfg, h, w)
+		spec = worktreeSpec(h, w)
 	} else {
 		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
@@ -104,11 +104,10 @@ func cmdJump(ctx context.Context, args []string) error {
 // is reached by its session name. The managed session is <repo>/<encoded
 // branch> as it was when add made it; the local name follows it rather
 // than the record's branch, which is empty for a worktree detached
-// since. The source is the identity and comes from the record. A daemon
-// from before records carried it leaves it to this machine's config, by
-// the host's label, and empty when the labels differ; Ensure then keeps
-// whatever the session already knows.
-func worktreeSpec(cfg config.Config, h config.Host, w protocol.Worktree) workspace.Spec {
+// since. The source is the identity and comes from the record; a record
+// without one leaves it empty, and Ensure keeps whatever the session
+// already knows.
+func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 	spec := workspace.Spec{
 		Host:    h.Host,
 		Managed: w.Session,
@@ -117,29 +116,25 @@ func worktreeSpec(cfg config.Config, h config.Host, w protocol.Worktree) workspa
 		Branch:  w.Branch,
 		Source:  w.Source,
 	}
-	if spec.Source == "" {
-		if r, ok := cfg.RepoByName(w.Repo); ok {
-			spec.Source = r.Source
-		}
-	}
 	return spec
 }
 
 // addHint says a worktree has no managed session and how to start one.
 // The hint's --repo is resolved against this machine's config, so it
-// names the source as this machine knows it, not by the host's label.
+// names the source as this machine knows it, not by the host's label;
+// a record without a source leaves it to the reader.
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, localRepoArg(cfg, w), h.Name)
+	repo := localRepoArg(cfg, w)
+	if repo == "" {
+		repo = "<repo>"
+	}
+	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, repo, h.Name)
 }
 
 // localRepoArg is what --repo takes for the record's repository on this
 // machine: its label here when the source is known, else the source
-// itself, which --repo also accepts, else the host's label from a daemon
-// that sends no source.
+// itself, which --repo also accepts.
 func localRepoArg(cfg config.Config, w protocol.Worktree) string {
-	if w.Source == "" {
-		return w.Repo
-	}
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		return r.Name
 	}
@@ -196,7 +191,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
 	}
 	if local, ok := cfg.RepoByName(label); ok && branch != "" {
-		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && sameRepo(w, local) }); ok || err != nil {
+		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && config.SameSource(w.Source, local.Source) }); ok || err != nil {
 			return w, ok, err
 		}
 	}
