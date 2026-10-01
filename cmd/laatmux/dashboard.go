@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
@@ -254,15 +255,20 @@ func taskAction(m *view.Model, a view.Action) bool {
 }
 
 // dialMergedOrExplain connects to the local daemon's merged stream,
-// starting the daemon when it is not running. A daemon that cannot be
-// started is the error; one without the capability is an older build
-// still running, and the error says how to replace it. Every client of
-// the stream, ls and watch among them, refuses rather than dial the
-// hosts itself.
+// starting the daemon when it is not running. A dial that fails with a
+// daemon recorded is one that did not answer, a wedged one or one of
+// another protocol, and the error says to stop it, by pid if need be;
+// with none recorded the daemon did not start, and the error points at
+// its log. One without the capability is an older build still running,
+// and the error says how to replace it. Every client of the stream, ls
+// and watch among them, refuses rather than dial the hosts itself.
 func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	c, err := client.Dial(ctx, client.Host{Name: "local"})
 	if err != nil {
-		return nil, fmt.Errorf("local daemon: %w (start it with: laatmux serve)", err)
+		if rt, rerr := home.ReadRuntime(); rerr == nil {
+			return nil, fmt.Errorf("local daemon (pid %d) did not answer: %w; stop it with: laatmux stop, or kill %d", rt.PID, err, rt.PID)
+		}
+		return nil, fmt.Errorf("local daemon did not start: %w; its log is %s, or run laatmux serve to see why", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
 		c.Close()

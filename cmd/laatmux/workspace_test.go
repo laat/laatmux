@@ -207,9 +207,9 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// A host that drops keeps its identity in the merged stream's status
-// upsert, so its cached records stay attributed to it and show as its
-// with the host down.
+// A host down whose status upsert keeps its environment id, as the
+// daemon's does: its cached records stay attributed to it and the tree
+// marks them host down, and the host line says why.
 func TestHostDownKeepsIdentity(t *testing.T) {
 	m := newMerged()
 	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
@@ -326,5 +326,38 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 		if w, ok, err := matchWorktree(ws, same, "proj/topic"); err != nil || !ok || w.Root != "/r/a" {
 			t.Errorf("local name equal to a host label: %+v %v %v", w, ok, err)
 		}
+	}
+}
+
+// ls and watch read the merged stream only: with the local daemon
+// unable to start, here because the state directory is a file so the
+// dial's start fails before anything runs, both fail at once with the
+// daemon's error and where to look, and watch draws nothing. Before,
+// ls listed the hosts as down and watch redrew that until stopped.
+func TestLsWatchNeedTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("hosts:\n  - name: box\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", filepath.Join(file, "home"))
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TMUX", "")
+	start := time.Now()
+	err := cmdLs(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "local daemon did not start") || !strings.Contains(err.Error(), "daemon.log") {
+		t.Fatalf("ls without a daemon: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = cmdWatch(ctx, nil)
+	if err == nil || !strings.Contains(err.Error(), "local daemon did not start") || ctx.Err() != nil {
+		t.Fatalf("watch without a daemon: %v (context %v)", err, ctx.Err())
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("ls and watch took %s to refuse", time.Since(start))
 	}
 }

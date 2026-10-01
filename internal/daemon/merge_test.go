@@ -383,9 +383,11 @@ func TestMergedHostDownAndBack(t *testing.T) {
 			t.Errorf("record removed on drop: %+v", m)
 		}
 	}
-	// The drop says a dial is coming, so a client waits for it.
-	if st := *msgs[len(msgs)-1].HostStatus; !st.Reconnecting || st.Error != "disconnected" {
-		t.Errorf("drop not marked reconnecting: %+v", st)
+	// The drop says a dial is coming, so a client waits for it, and
+	// keeps the host's identity, so the clients keep its cached records
+	// attributed to it.
+	if st := *msgs[len(msgs)-1].HostStatus; !st.Reconnecting || st.Error != "disconnected" || st.EnvironmentID != "renv" || st.Version != "remote" || !protocol.Has(st.Capabilities, protocol.CapStatus) {
+		t.Errorf("drop not marked reconnecting with the identity kept: %+v", st)
 	}
 	// Cached records are in the next snapshot, with the host down.
 	c2, pc2, snap := f.subscribe(t, ctx)

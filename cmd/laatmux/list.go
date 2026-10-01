@@ -15,10 +15,9 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
-// merged is the client's view of every host's stream: fed from the local
-// daemon's merged stream when it has one, else merged here from a
-// connection per host. Host connectivity is a separate axis from agent
-// state and lives here, not in the records.
+// merged is the client's view of every host's stream, fed from the
+// local daemon's merged stream. Host connectivity is a separate axis
+// from agent state and lives here, not in the records.
 type merged struct {
 	mu        sync.Mutex
 	agents    map[string]protocol.Agent    // by agent id
@@ -26,8 +25,8 @@ type merged struct {
 	hosts     map[string]hostState         // by host name
 	byHost    map[string]string            // agent or worktree id -> host name
 	// sessions are the local workspace sessions as the merged stream
-	// publishes them; nil on the direct path, where the client lists
-	// them itself. sessionsErr is the daemon's listing failure, if any.
+	// publishes them, nil before the first snapshot. sessionsErr is the
+	// daemon's listing failure, if any.
 	sessions    map[string]protocol.Session
 	sessionsErr string
 	// pendings are the relay's background adds, by id, and handoffs the
@@ -90,8 +89,7 @@ type hostState struct {
 	Connected bool
 	Error     string
 	// Reconnecting is that the error is a dropped connection the daemon
-	// is dialling again, from the merged stream; the direct path has no
-	// such state, its own backoff is in watch.
+	// is dialling again.
 	Reconnecting bool
 	Version      string
 	EnvID        string

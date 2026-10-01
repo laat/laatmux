@@ -557,11 +557,12 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   snapshot has not arrived, or whose daemon does not publish worktrees,
   says nothing about its workspaces. Agents in no worktree, observed
   ones naming their server, are under `other sessions`.
-  `ls`, `watch`, `jump`, `path` and `rm` read the local daemon's merged
-  stream, see below. `ls` and `watch` start the daemon when it is not
-  running, and fail when it cannot be started or is an older build
-  without the stream, saying so; `jump`, `path` and `rm` dial the host
-  themselves when the daemon's config lacks it.
+  `ls`, `watch`, `jump`, `path`, `rm` and `run` read the local daemon's
+  merged stream, see below, each starting the daemon when it is not
+  running. `ls` and `watch` fail when it cannot be started or is an
+  older build without the stream, saying so; `jump`, `path`, `rm` and
+  `run` then dial the host themselves, as they do for a host the
+  daemon's config lacks.
 - **`shell`** runs inside a workspace session and opens a window at the
   worktree root: started there for a local host, `ssh -t` with `cd` and
   the single-quoted root then `exec "$SHELL" -l` for a remote one. The
@@ -1271,8 +1272,7 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   first merged subscriber and dropped 60 seconds after the last leaves,
   so a laptop with no sidebar open holds no ssh channels; each remote
   daemon sees one subscriber per laptop whatever the laptop shows. A host
-  that is down is redialled with the backoff `watch` used, 1 s doubling
-  to 30 s.
+  that is down is redialled with a backoff of 1 s doubling to 30 s.
 - **Local sessions** are listed by the daemon while it has a merged
   subscriber, once a second against the default server, and published as
   `{name, key, host, source, branch, attach, settled}`, so a settle
@@ -1328,10 +1328,12 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   missing binary, end the wait at once as before. The header line says
   `DOWN disconnected (reconnecting)` meanwhile.
 - **Older daemons.** A local daemon without `merged` is an older build
-  still running; every client of the stream refuses it and says to
-  stop it with `laatmux stop`, after which the next client starts the
-  current build. Plain `subscribe` still means this host's own records,
-  which is what a remote daemon serves to the merging one.
+  still running: `ls`, `watch`, the sidebar, the dashboard and compose
+  refuse it and say to stop it with `laatmux stop`, after which the next
+  client starts the current build; `jump`, `path`, `rm` and `run` dial
+  the host directly; `tasks` refuses. Plain `subscribe` still means this
+  host's own records, which is what a remote daemon serves to the
+  merging one.
 
 ## Model
 
