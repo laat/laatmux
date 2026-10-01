@@ -558,9 +558,10 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   says nothing about its workspaces. Agents in no worktree, observed
   ones naming their server, are under `other sessions`.
   `ls`, `watch`, `jump`, `path` and `rm` read the local daemon's merged
-  stream when it has one, see below; against an older daemon each dials
-  the hosts itself as before, and `watch` then re-reads the local
-  sessions on each redraw.
+  stream, see below. `ls` and `watch` start the daemon when it is not
+  running, and fail when it cannot be started or is an older build
+  without the stream, saying so; `jump`, `path` and `rm` dial the host
+  themselves when the daemon's config lacks it.
 - **`shell`** runs inside a workspace session and opens a window at the
   worktree root: started there for a local host, `ssh -t` with `cd` and
   the single-quoted root then `exec "$SHELL" -l` for a remote one. The
@@ -1327,9 +1328,10 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   missing binary, end the wait at once as before. The header line says
   `DOWN disconnected (reconnecting)` meanwhile.
 - **Older daemons.** A local daemon without `merged` is an older build
-  still running; `ls`, `watch`, `jump`, `path` and `rm` fall back to
-  dialling each host. Plain `subscribe` still means this host's own
-  records, which is what a remote daemon serves to the merging one.
+  still running; every client of the stream refuses it and says to
+  stop it with `laatmux stop`, after which the next client starts the
+  current build. Plain `subscribe` still means this host's own records,
+  which is what a remote daemon serves to the merging one.
 
 ## Model
 

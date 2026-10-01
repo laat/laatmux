@@ -92,6 +92,10 @@ func TestSnapshotFallsBackToDirect(t *testing.T) {
 	if _, ok := dialMerged(context.Background()); ok {
 		t.Fatal("dialMerged accepted a daemon without the capability")
 	}
+	// ls and watch refuse such a daemon and say how to replace it.
+	if _, err := dialMergedOrExplain(context.Background()); err == nil || !strings.Contains(err.Error(), "older build") || !strings.Contains(err.Error(), "laatmux stop") {
+		t.Fatalf("an older daemon explained as: %v", err)
+	}
 	hello, snap, err := snapshot(context.Background(), client.Host{Name: "mac"}, protocol.CapWorktrees)
 	if err != nil || hello.EnvironmentID != "lenv" || len(snap.Worktrees) != 1 {
 		t.Fatalf("direct snapshot = %+v %+v %v", hello, snap, err)
