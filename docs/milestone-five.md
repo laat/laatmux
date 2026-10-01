@@ -1035,8 +1035,8 @@ the defaults.
 The dashboard renders with the same code, so it gets all of the above,
 the two views included. On top of that:
 
-- a git column with `→base` when the base is not `main` or `master`, the
-  conflict mark, `↑A` and `↓B`;
+- a git column with `→base` when the base is not `main`, `master` or
+  the branch itself, the conflict mark, `↑A` and `↓B`;
 - the PR state icon, the elapsed time of pending checks, and the name of
   the first failing check;
 - `o` opens the selected row's PR in the laptop's browser, `O` its

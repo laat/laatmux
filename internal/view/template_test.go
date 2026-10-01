@@ -610,20 +610,28 @@ func TestColumns(t *testing.T) {
 		t.Errorf("git_sync stale with a conflict: %q", got)
 	}
 	r.Worktree.Git.Conflict, r.Worktree.Git.Stale = nil, false
-	// A long base is cut to twelve cells; the row's own branch as the
-	// base is left out; the smallest form stays until the field goes.
+	// A long base is cut to twelve cells with the arrow, one of twelve
+	// whole; a base alone is cut to the room; the row's own branch as
+	// the base is left out; the smallest form stays until the field
+	// goes.
 	r.Worktree.Git.Base, r.Worktree.Git.Ahead = "origin/feature/JIRA-1234-add-the-thing", 2
-	if got := plain("{git_sync}", 40); got != "→feature/JIR… ↑2" {
+	if got := plain("{git_sync}", 40); got != "→feature/JI… ↑2" {
 		t.Errorf("git_sync with a long base: %q", got)
 	}
+	r.Worktree.Git.Base = "origin/abcdefghijk"
+	if got := plain("{git_sync}", 40); got != "→abcdefghijk ↑2" {
+		t.Errorf("git_sync with a base of twelve cells: %q", got)
+	}
+	r.Worktree.Git.Ahead = 0
+	if got := plain("{fill}{git_sync}", 8); got != "→abcdef…" {
+		t.Errorf("git_sync with a base alone cut to the room: %q", got)
+	}
+	r.Worktree.Git.Ahead = 2
 	r.Worktree.Git.Base = "origin/fix-ls"
 	if got := plain("{git_sync}", 40); got != "↑2" {
 		t.Errorf("git_sync with the branch as its own base: %q", got)
 	}
 	r.Worktree.Git.Base, r.Worktree.Git.Behind = "origin/main", 1
-	if got := plain("{fill}{git_sync} {elapsed}", 5); got != " 2:00" && got != "↑2 ↓1" {
-		t.Errorf("git_sync's smallest form beside a field: %q", got)
-	}
 	if got := plain("{fill}{git_sync} {elapsed}", 5); got != "↑2 ↓1" {
 		t.Errorf("git_sync never to nothing: %q", got)
 	}
@@ -756,17 +764,19 @@ func TestColumns(t *testing.T) {
 	// The worktree line with a long base, at widths going down: the
 	// base is at most twelve cells from the start, so the counts and
 	// the name it outlives, by the engine's order, cost little; then
-	// the base is cut further and the stats shrink. A narrower line
-	// never shows more.
+	// the base is cut further and the stats shrink. At these widths
+	// the base gives way before the stats; at some others the regrow
+	// after a stats shrink hands the base more room than the width
+	// above had, which is the engine's greedy order, not the token's.
 	r.Worktree.Git.Base, r.Worktree.Git.Rebasing = "origin/feature/JIRA-1234-add-the-thing", false
 	r.Kind, r.Depth = rows.KindWorktree, 1
 	for _, c := range []struct {
 		w    int
 		want string
 	}{
-		{110, "  ▸ fix-ls (vm)                       +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{90, "  ▸ fix-ls (vm)   +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{80, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JIR… ! ↑2 ↓1  ● #52 × test (macos-la…"},
+		{110, "  ▸ fix-ls (vm)                        +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{90, "  ▸ fix-ls (vm)    +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{80, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos…"},
 		{70, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
 	} {
 		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w)}}), "\n"); got != c.want {
@@ -774,4 +784,10 @@ func TestColumns(t *testing.T) {
 		}
 	}
 	r.Kind, r.Depth = rows.KindTile, 0
+	// The second tile line: the sync after the stats, the first to
+	// shrink.
+	r.Worktree.Git.Base = "origin/feature"
+	if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tiles[1], r, 50)}}), "\n"); got != "▌    laatmux @vm +46 -11 ✎ +28 -3  →featu… ! ↑2 ↓1" {
+		t.Errorf("the dashboard's second tile line: %q", got)
+	}
 }

@@ -764,7 +764,8 @@ func gitSpans(r rows.Row, w int) []Span {
 
 // gitSync is how the branch stands against its base, in at most w
 // cells: →base when the base is not main, master or the branch itself,
-// its origin/ taken off and at most gitBaseWidth cells, cut with …; the
+// its origin/ taken off, the whole at most gitBaseWidth cells, cut
+// with …; the
 // conflict mark ! in red; ↑A and ↓B. When the line is too narrow the
 // base is cut further, to four cells at the least, then goes, then ↓B,
 // then ↑A. A refresh that timed out leaves them dim; nil when there is
@@ -776,8 +777,8 @@ func gitSync(r rows.Row, w int) []Span {
 	g := r.Worktree.Git
 	var base, conflict, ahead, behind []Span
 	if short := strings.TrimPrefix(g.Base, "origin/"); short != "" && short != "main" && short != "master" && short != r.Worktree.Branch {
-		if width(short) > gitBaseWidth {
-			short = fit(short, gitBaseWidth-1) + "…"
+		if width(short) > gitBaseWidth-1 {
+			short = fit(short, gitBaseWidth-2) + "…"
 		}
 		base = []Span{{Text: "→" + short}}
 	}
@@ -828,9 +829,9 @@ func gitSync(r rows.Row, w int) []Span {
 	return nil
 }
 
-// gitBaseWidth is the most cells →base takes before it is cut: a base
-// is a branch name, which can be long, and says less than the stats
-// and the checks beside it.
+// gitBaseWidth is the most cells →base takes, the arrow counted,
+// before it is cut: a base is a branch name, which can be long, and
+// says less than the stats and the checks beside it.
 const gitBaseWidth = 12
 
 // gitRebase is the rebase mark R, nil when not rebasing.
