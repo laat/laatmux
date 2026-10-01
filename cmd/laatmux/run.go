@@ -76,10 +76,6 @@ func cmdRun(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, run.Host.Name)
 		}
-		if w.Source != "" {
-			// As the host has it, for an older host.
-			repo.Source = w.Source
-		}
 		run.Repo, run.Branch, run.Root = repo, branch, w.Root
 	} else {
 		if *hostFlag != "" {
@@ -98,7 +94,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		}
 		run.Host = h
 		_, run.Root = workspace.SplitKey(cur.Key)
-		if repo, ok := recordRepo(cfg, cur.Source); ok {
+		if repo, ok := cfg.RepoBySource(cur.Source); ok {
 			run.Repo, run.Branch = repo, cur.Branch
 		}
 	}

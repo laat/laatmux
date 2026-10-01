@@ -867,6 +867,9 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 			}
 		}
 		if next := len(e.Attempts) + 1; m.Attempt != next {
+			// The number the sender should use is in the result, not
+			// only in the words.
+			res.NextAttempt = next
 			return fmt.Errorf("attempt %d is not the next; the journal has %d", m.Attempt, len(e.Attempts))
 		}
 		// The attempt is on disk before anything is done for it, or

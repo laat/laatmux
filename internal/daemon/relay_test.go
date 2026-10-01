@@ -994,8 +994,8 @@ func TestRelayLaptopRestartDuringAdd(t *testing.T) {
 	}
 }
 
-// Attempt numbers that drifted from the host's are put back from its
-// answer, and the next p delivers.
+// Attempt numbers that drifted from the host's are put back from the
+// next number its answer carries, and the next p delivers.
 func TestRelayAttemptNumberResync(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
@@ -1008,18 +1008,14 @@ func TestRelayAttemptNumberResync(t *testing.T) {
 	if res.OK || !strings.Contains(res.Error, "the journal has 0") {
 		t.Fatalf("drifted p %+v", res)
 	}
+	// Put back to what the host has, from the next number its result
+	// carried, not one down from the drifted number.
 	if p := readPending(t, f.dir, "n1"); p.Attempt != 0 || p.AttemptError == "" {
 		t.Fatalf("file %+v", p)
 	}
 	f.ft.set(func() { f.ft.screen = idleScreen })
 	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "n1"}); !res.OK || res.Attempt != 1 || res.Prompt != protocol.DeliveryDelivered {
 		t.Fatalf("resynced p %+v", res)
-	}
-	if n, ok := journalHas("attempt 4 is not the next; the journal has 2"); !ok || n != 2 {
-		t.Fatalf("journalHas %d %v", n, ok)
-	}
-	if _, ok := journalHas("removed"); ok {
-		t.Fatal("journalHas on another message")
 	}
 }
 

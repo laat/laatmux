@@ -93,8 +93,8 @@ func TestMatchWorktree(t *testing.T) {
 	}
 }
 
-// path and rm find a record by source, whatever the host calls it, and by
-// label only for a record from a daemon that carries no source.
+// path and rm find a record by source, whatever the host calls it; a
+// label alone, on a record without a source, matches nothing.
 func TestFindWorktreeBySource(t *testing.T) {
 	mine := config.Repo{Source: "git@x:o/proj.git", Name: "mine"}
 	other := config.Repo{Source: "git@x:o/other.git", Name: "proj"}
@@ -108,12 +108,9 @@ func TestFindWorktreeBySource(t *testing.T) {
 	if w, ok, _ := findWorktree(ws, other, "fix"); !ok || w.Root != "/r/other" {
 		t.Errorf("a colliding label did not win over the source: %+v %v", w, ok)
 	}
-	old := []protocol.Worktree{{Repo: "mine", Branch: "fix", Root: "/r/old"}}
-	if w, ok, _ := findWorktree(old, mine, "fix"); !ok || w.Root != "/r/old" {
-		t.Errorf("older record by label: %+v %v", w, ok)
-	}
-	if _, ok, _ := findWorktree(old, other, "fix"); ok {
-		t.Error("older record matched a different label")
+	sourceless := []protocol.Worktree{{Repo: "mine", Branch: "fix", Root: "/r/old"}}
+	if w, ok, _ := findWorktree(sourceless, mine, "fix"); ok {
+		t.Errorf("a record without a source matched by label: %+v", w)
 	}
 	// Two clones of one repository, each with the branch, in either
 	// order: an error naming both roots, not the first.
@@ -253,7 +250,6 @@ func TestLocalRepoArg(t *testing.T) {
 	}{
 		{protocol.Worktree{Repo: "proj", Source: "git@x:o/proj.git"}, "mine"},
 		{protocol.Worktree{Repo: "proj", Source: "git@x:o/unknown.git"}, "git@x:o/unknown.git"},
-		{protocol.Worktree{Repo: "proj"}, "proj"},
 	}
 	for _, c := range cases {
 		if got := localRepoArg(cfg, c.w); got != c.want {

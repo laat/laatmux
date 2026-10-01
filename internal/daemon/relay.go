@@ -1395,10 +1395,10 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 			// The host refused the attempt and recorded nothing: the
 			// refusal is kept apart from the add's own outcome, and the
 			// number goes back to what the host has, which its answer
-			// says when the numbers had drifted.
+			// carries when the numbers had drifted.
 			p.AttemptError = res.Error
-			if n, ok := journalHas(res.Error); ok {
-				p.Attempt = n
+			if res.NextAttempt > 0 {
+				p.Attempt = res.NextAttempt - 1
 			} else if p.Attempt > 0 {
 				p.Attempt--
 			}
@@ -1407,18 +1407,4 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait boo
 	}
 	p, _ := d.relay.get(id)
 	return p, false
-}
-
-// journalHas reads the attempt count from the host's answer to a number
-// out of order, "attempt N is not the next; the journal has M".
-func journalHas(msg string) (int, bool) {
-	i := strings.LastIndex(msg, "the journal has ")
-	if i < 0 {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(msg[i+len("the journal has "):]))
-	if err != nil {
-		return 0, false
-	}
-	return n, true
 }

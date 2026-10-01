@@ -51,9 +51,8 @@ const (
 	CapRm        = "rm"        // the rm command
 	// CapFollow is numbered progress and the follow message: a client
 	// that lost its connection follows a command by id from the last n
-	// it saw, rather than resending the command. Without it a resend
-	// attaches to a running command and replays a finished one, and the
-	// progress is unnumbered.
+	// it saw, rather than resending the command. Every command with
+	// progress needs it.
 	CapFollow = "follow"
 	// CapRun is the run command, with cancel. A daemon with run has
 	// follow.
@@ -708,7 +707,11 @@ type Message struct {
 	Generated   bool      `json:"generated,omitempty"`
 	SubmittedAt time.Time `json:"submitted_at,omitzero"`
 	Attempt     int       `json:"attempt,omitempty"`
-	Listing     *Listing  `json:"listing,omitempty"`
+	// NextAttempt is the number the host's journal expects next, on a
+	// result refusing a prompt attempt out of order; 0 otherwise. The
+	// relay takes its number from it rather than from the error text.
+	NextAttempt int      `json:"next_attempt,omitempty"`
+	Listing     *Listing `json:"listing,omitempty"`
 	// ListingError, with Listing on a snapshot or an upsert of the
 	// stamp alone, is why the last listing failed; the stamp is then
 	// the last successful listing's.

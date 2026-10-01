@@ -352,10 +352,8 @@ truth; labels only place new things.
   process is never stalled by a reader, as a slow subscriber of the
   status stream is dropped rather than throttling the daemon. Each line
   is charged its bytes plus 64 for the message around it, so a stream
-  of empty lines is bounded too.
-  Without the capability the client's older path holds: the same id
-  resent attaches to a running command and replays a finished one from
-  the start, filtered by position.
+  of empty lines is bounded too. Every command with progress needs the
+  capability: a client refuses a daemon without it before sending.
 - **Retry and serialization**: commands run under the daemon's context
   and outlive the connection that sent them. Ids are kept for five
   minutes. `add` is serialized per repository, the forms of one source
@@ -436,10 +434,12 @@ truth; labels only place new things.
   replaced` otherwise), and for an entry without a target adopts the
   managed session in the root when it is the only one and its pane has
   a verified agent (`not delivered: no agent to deliver to` otherwise).
-  `follow` with `attempt` reattaches to one in flight or answers from
-  the record; an attempt the journal never saw is `unknown attempt`,
-  on which the client resends; an id the journal no longer holds is
-  `recovery expired`. `laatmux add -p` in the foreground prints the
+  An attempt out of order is refused with `next_attempt`, the number
+  the journal expects, on the result; the relay takes its number from
+  that rather than from the words. `follow` with `attempt` reattaches
+  to one in flight or answers from the record; an attempt the journal
+  never saw is `unknown attempt`, on which the client resends; an id
+  the journal no longer holds is `recovery expired`. `laatmux add -p` in the foreground prints the
   delivery state as its last line and exits 0 when the add succeeded,
   whatever the delivery.
   Listings are stamped: the daemon counts observations owed in a
@@ -490,8 +490,7 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   their flags, else `last.json`, else for the agent `default_agent`, else
   the only candidate, else an error naming the candidates. The
   command id is chosen once per invocation; a transport failure mid-way
-  dials again and follows the id from the last numbered progress seen,
-  or against an older daemon resends it and prints the replay once.
+  dials again and follows the id from the last numbered progress seen.
   Progress prints one line per step. On success `last.json` is updated
   and the workspace session is created, or found by key; inside the
   default tmux server the client switches to it, elsewhere it prints how
@@ -521,8 +520,7 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
 - **`path <repo>/<branch>`** prints the root from the host's records.
   Records are matched by source, since the host's label for a source may
-  differ from this machine's; a record from a daemon without the source
-  is matched by label. `rm` finds its record the same way.
+  differ from this machine's. `rm` finds its record the same way.
 - **`jump <host>/<repo>/<branch>`** switches to the workspace session,
   creating it from the record when missing, respawning a dead attach pane,
   and opening a new attach window when the pane is gone altogether. An

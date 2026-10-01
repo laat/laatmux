@@ -379,7 +379,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 // returns the root with the error, so the CLI prints the removal before
 // the error and the dashboard says what was removed.
 func TestRmPartialSuccess(t *testing.T) {
-	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRm}, func(pc *protocol.Conn, m protocol.Message) bool {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}, func(pc *protocol.Conn, m protocol.Message) bool {
 		if m.Type == protocol.TypeRm {
 			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/task"})
 		}
@@ -403,7 +403,7 @@ func TestRmPartialSuccess(t *testing.T) {
 // CLI prints the ready line before the error and the dashboard says
 // what exists.
 func TestAddPartialSuccess(t *testing.T) {
-	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapAdd}, func(pc *protocol.Conn, m protocol.Message) bool {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow}, func(pc *protocol.Conn, m protocol.Message) bool {
 		if m.Type == protocol.TypeAdd {
 			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/x", Session: "proj/x"})
 		}

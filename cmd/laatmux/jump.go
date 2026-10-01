@@ -117,11 +117,6 @@ func worktreeSpec(cfg config.Config, h config.Host, w protocol.Worktree) workspa
 		Branch:  w.Branch,
 		Source:  w.Source,
 	}
-	if spec.Source == "" {
-		if r, ok := cfg.RepoByName(w.Repo); ok {
-			spec.Source = r.Source
-		}
-	}
 	return spec
 }
 
@@ -134,12 +129,8 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 
 // localRepoArg is what --repo takes for the record's repository on this
 // machine: its label here when the source is known, else the source
-// itself, which --repo also accepts, else the host's label from a daemon
-// that sends no source.
+// itself, which --repo also accepts.
 func localRepoArg(cfg config.Config, w protocol.Worktree) string {
-	if w.Source == "" {
-		return w.Repo
-	}
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		return r.Name
 	}
@@ -196,7 +187,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
 	}
 	if local, ok := cfg.RepoByName(label); ok && branch != "" {
-		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && sameRepo(w, local) }); ok || err != nil {
+		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && config.SameSource(w.Source, local.Source) }); ok || err != nil {
 			return w, ok, err
 		}
 	}
