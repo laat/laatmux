@@ -89,7 +89,7 @@ func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
 		}
 		return w, parent, true
 	}
-	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale, m.Rows.Settled, m.Rows.Orphaned} {
+	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale} {
 		for i := range rs {
 			if r := &rs[i]; r.Current {
 				return m.tileWorktree(r), m.tileRepo(r), true

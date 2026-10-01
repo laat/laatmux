@@ -488,7 +488,7 @@ func (m *Model) followedID() string {
 		}
 		return ""
 	}
-	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale, m.Rows.Settled} {
+	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale} {
 		for _, r := range rs {
 			if r.Current {
 				return r.ID()

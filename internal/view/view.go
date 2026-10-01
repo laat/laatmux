@@ -244,8 +244,6 @@ type Group int
 const (
 	GroupMain Group = iota
 	GroupStale
-	GroupSettled
-	GroupOrphaned
 )
 
 // Item is one entry of the list as drawn: a row, or a group header.
@@ -285,9 +283,8 @@ func (m *Model) Items() []Item {
 	}
 	add(m.Rows.Main, GroupMain)
 	// The stale fold holds the stale agents and those of settled
-	// workspaces; the settled and orphaned groups of the old mixed list
-	// fold with them.
-	stale := m.count(m.Rows.Stale) + m.count(m.Rows.Settled) + m.count(m.Rows.Orphaned)
+	// workspaces.
+	stale := m.count(m.Rows.Stale)
 	if stale == 0 {
 		return out
 	}
@@ -300,8 +297,6 @@ func (m *Model) Items() []Item {
 	n++
 	if m.ShowHidden {
 		add(m.Rows.Stale, GroupStale)
-		add(m.Rows.Settled, GroupStale)
-		add(m.Rows.Orphaned, GroupStale)
 	}
 	return out
 }
@@ -457,8 +452,8 @@ func (m *Model) Render() []Line {
 	}
 	var lines []Line
 	var ids []string
-	// starts is where each row begins, and what it counts for below
-	// the window: a row one, a collapsed group's header its rows.
+	// starts is where each row begins, for the count of rows below the
+	// window: a row one, the stale fold one as well.
 	type start struct{ line, count int }
 	var starts []start
 	selStart, selEnd := -1, -1
@@ -466,11 +461,8 @@ func (m *Model) Render() []Line {
 	items := m.Items()
 	numbered := 0 // the rows the digits count, for {idx}
 	for _, it := range items {
-		switch {
-		case it.Row != nil:
+		if it.Row != nil {
 			starts = append(starts, start{len(lines), 1})
-		case it.Hidden > 0:
-			starts = append(starts, start{len(lines), it.Hidden})
 		}
 		var ls []Line
 		if it.Row == nil {
