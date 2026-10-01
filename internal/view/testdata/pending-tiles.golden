@@ -6,7 +6,7 @@ S..|‹⟨border:─────────────────────
 ...|⟨accent:▌⟩    proj @‹vm›
 ...|⟨accent:▌⟩    prompt not delivered: the pane was…
 ...|‹⟨border:────────────────────────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ a
-.D.|⟨border:▌⟩    proj @‹vm›
-.D.|⟨border:▌⟩    no session
+...|⟨accent:▌⟩ ⟨accent:💬⟩ a                              5:00
+...|⟨accent:▌⟩    proj @‹vm›
+...|⟨accent:▌⟩    Allow?
 .D.|

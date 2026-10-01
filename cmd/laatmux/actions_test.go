@@ -47,9 +47,13 @@ repos:
 	return cfg
 }
 
+// dashModel is the dashboard's model filled as fill fills it, the tree
+// then the agent view, which it shows: proj/task's agent is its one
+// tile; the worktrees with no agent, proj/spike and x/y, and the
+// orphaned session vm/proj/gone are the tree's lines.
 func dashModel(cfg config.Config) *view.Model {
 	m := &view.Model{Width: 80, Height: 20}
-	m.SetRows(rows.Build(rows.Input{
+	in := rows.Input{
 		Hosts: []rows.Host{
 			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true},
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true},
@@ -66,10 +70,19 @@ func dashModel(cfg config.Config) *view.Model {
 			{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "task"},
 			{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "gone"},
 		},
-	}))
+	}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
 	m.ShowHidden = true
 	m.Render()
 	return m
+}
+
+// treeView shows the model's tree, where the worktrees with no agent and
+// the orphaned sessions are.
+func treeView(m *view.Model) {
+	m.View = view.ViewTree
+	m.Render()
 }
 
 func selectRow(t *testing.T, m *view.Model, name string) *rows.Row {
@@ -84,15 +97,29 @@ func selectRow(t *testing.T, m *view.Model, name string) *rows.Row {
 	return nil
 }
 
+// visibleRow is the first visible row with the name, left unselected.
+func visibleRow(t *testing.T, m *view.Model, name string) *rows.Row {
+	t.Helper()
+	for _, it := range m.Visible() {
+		if it.Row.Name == name {
+			return it.Row
+		}
+	}
+	t.Fatalf("no row %q", name)
+	return nil
+}
+
 // a on a worktree row without a session opens the form pre-filled with
 // the record's repository and host, and its branch explicit; Enter on
 // a chip opens the picker inside the form, and Esc anywhere returns to
-// the list with nothing done.
+// the list with nothing done. The worktree, with no agent, is a line
+// in the tree.
 func TestAddFlowPrefilled(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
+	treeView(m)
 	selectRow(t, m, "proj/spike")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	f, ok := m.Overlay.(*view.Form)
@@ -251,7 +278,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if err != nil || l.Host != "vm" || l.Name != "oldvm/proj/task" {
 		t.Errorf("renamed host: localFor = %+v, %v", l, err)
 	}
-	rs := rows.Build(rows.Input{
+	rs := rows.Agents(rows.Input{
 		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
 		Agents: []protocol.Agent{{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/task", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive}},
 		Locals: []workspace.Local{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
@@ -399,7 +426,10 @@ func TestAddPartialSuccess(t *testing.T) {
 // x asks about the selected worktree, naming it and its root, with the
 // request built from the record: by source and branch when this
 // machine knows the repository, by root alone when it does not, and
-// from an orphaned session's tags and key; X asks with force.
+// from an orphaned session's tags and key; X asks with force. The
+// worktree with an agent is asked about from the agent's tile, with
+// the agent the tree joins to it named; the one with no agent and the
+// orphaned session from their lines in the tree.
 func TestRmFor(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
@@ -411,11 +441,12 @@ func TestRmFor(t *testing.T) {
 	if d.rm.Host.Name != want.Host.Name || d.rm.Repo.Source != want.Repo.Source || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
 		t.Errorf("rm = %+v", d.rm)
 	}
-	if m.Confirm != "remove proj/task on vm (/w/proj/task)? y/n" || m.ConfirmTag != "rm" {
+	if m.Confirm != "remove proj/task on vm (/w/proj/task) with its agent? y/n" || m.ConfirmTag != "rm" {
 		t.Errorf("confirm = %q tag %q", m.Confirm, m.ConfirmTag)
 	}
 	m.Handle(view.Key{Rune: 'n'})
 
+	treeView(m)
 	selectRow(t, m, "x/y")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'X'}})
 	if d.rm.Repo.Source != "" || d.rm.Branch != "" || d.rm.Root != "/w/x/y" || !d.rm.Force || d.rm.Host.Name != "mac" {
@@ -434,10 +465,13 @@ func TestRmFor(t *testing.T) {
 	m.Handle(view.Key{Rune: 'n'})
 
 	// An agent with no worktree is not rm's.
-	m.SetRows(rows.Build(rows.Input{
+	scratch := rows.Input{
 		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}},
 		Agents: []protocol.Agent{{ID: "menv/laatmux/%9", EnvironmentID: "menv", Session: "scratch", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true}},
-	}))
+	}
+	m.View = view.ViewAgents
+	m.SetTree(rows.Tree(scratch))
+	m.SetRows(rows.Agents(scratch))
 	m.Render()
 	selectRow(t, m, "scratch")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
@@ -920,7 +954,7 @@ func TestPendingKeys(t *testing.T) {
 		Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", SubmittedAt: now}
 	running := protocol.Pending{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "new", Taken: true, Reachable: true, Stage: protocol.StageFetch, SubmittedAt: now.Add(time.Minute)}
 	m := &view.Model{Width: 80, Height: 20}
-	m.SetRows(rows.Build(rows.Input{
+	m.SetRows(rows.Agents(rows.Input{
 		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Pendings: []protocol.Pending{stuck, running},
 	}))
@@ -1025,14 +1059,17 @@ func TestPendingTarget(t *testing.T) {
 }
 
 // The sidebar takes a task's p and x and what follows from them, and
-// nothing else of the dashboard's.
+// nothing else of the dashboard's. The worktree, with no agent, is a
+// line in the tree.
 func TestTaskAction(t *testing.T) {
 	m := &view.Model{Width: 80, Height: 20}
-	m.SetRows(rows.Build(rows.Input{
+	in := rows.Input{
 		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Pendings:  []protocol.Pending{{ID: "add-1", Host: "vm", Repo: "proj", Branch: "fix", SubmittedAt: time.Now()}},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}},
-	}))
+	}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in))
 	m.Handle(view.Key{Rune: 'g'})
 	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: view.Key{Rune: r}} }
 	for _, r := range []rune{'p', 'x', 'X'} {
@@ -1045,7 +1082,10 @@ func TestTaskAction(t *testing.T) {
 			t.Errorf("%c taken on a task's row", r)
 		}
 	}
-	m.Handle(view.Key{Rune: 'j'}) // the worktree row
+	treeView(m)
+	if !m.Select("venv/worktree//w/a") { // the worktree row
+		t.Fatal("no worktree line")
+	}
 	if taskAction(m, other('x')) {
 		t.Error("x taken on a worktree row")
 	}
@@ -1113,7 +1153,7 @@ func TestPendingOffers(t *testing.T) {
 	m := &view.Model{Width: 100, Height: 20}
 	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
 	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
-	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
 	m.Handle(view.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
@@ -1131,7 +1171,7 @@ func TestPendingOffers(t *testing.T) {
 	gone := listed
 	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
 	// A gone task whose prompt was delivered has nothing kept to show.
-	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
 	m.Handle(view.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
@@ -1140,14 +1180,14 @@ func TestPendingOffers(t *testing.T) {
 	// p on a task whose host is removed, and x on a running task whose
 	// replacement only the view has seen, say why not.
 	stuck := protocol.Pending{ID: "add-9", Host: "old", Repo: "proj", Branch: "d", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
-	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
 	m.Handle(view.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "host removed; x dismisses the task") {
 		t.Errorf("p on a removed host: %q", m.Message)
 	}
 	moving := protocol.Pending{ID: "add-8", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "e", Sent: true, Taken: true, SubmittedAt: time.Now()}
-	m.SetRows(rows.Build(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
 	m.Handle(view.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {
@@ -1164,12 +1204,14 @@ func TestPendingOffers(t *testing.T) {
 
 // In the sidebar a click that jumps gives the focus back to the pane
 // that had it; a key that jumps does not touch it, nor does a click in
-// the dashboard's popup, which the jump closes.
+// the dashboard's popup, which the jump closes. In the tree, whose
+// worktree lines are rows to click, proj/task's and x/y's.
 func TestClickJumpRefocuses(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	m := dashModel(cfg)
-	row := m.Selection()
+	treeView(m)
+	row := selectRow(t, m, "proj/task")
 	refocused := 0
 	var jumped []string
 	jumpErr := error(nil)
@@ -1183,16 +1225,15 @@ func TestClickJumpRefocuses(t *testing.T) {
 	// and selects the row clicked, ending the following.
 	jumpErr = errors.New("no session")
 	m.Follow = true
-	other := m.Visible()[1].Row
+	other := visibleRow(t, m, "x/y")
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: other, Mouse: true})
 	if refocused != 1 || m.Message != "no session" || m.Follow || m.Selection() == nil || m.Selection().ID() != other.ID() {
 		t.Fatalf("refused: refocused %d message %q follow %v selected %+v", refocused, m.Message, m.Follow, m.Selection())
 	}
 	// A failed jump on the row already selected, while following, still
 	// makes it the user's.
+	first := selectRow(t, m, "proj/task")
 	m.Follow = true
-	m.Selected = 0
-	first := m.Visible()[0].Row
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: first, Mouse: true})
 	if m.Follow {
 		t.Fatal("a failed jump on the selected row left the selection following")
@@ -1227,23 +1268,25 @@ func TestClickJumpRefocuses(t *testing.T) {
 }
 
 // A digit that jumps nowhere selects the row it counted, as a click
-// does, and moves no focus; Enter leaves following as it was.
+// does, and moves no focus; Enter leaves following as it was. In the
+// tree, whose worktree lines are rows to jump to, proj/task's and x/y's.
 func TestJumpNowhereSelects(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	m := dashModel(cfg)
+	treeView(m)
 	m.Follow = true
 	refocused := 0
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ },
 		jumper: func(rows.Row) error { return errors.New("no session") }}
-	target := m.Visible()[1].Row
+	target := visibleRow(t, m, "x/y")
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: target})
 	if refocused != 0 || m.Follow || m.Selection() == nil || m.Selection().ID() != target.ID() {
 		t.Fatalf("digit: refocused %d follow %v selected %+v", refocused, m.Follow, m.Selection())
 	}
 	// Enter that jumps nowhere was on the selection already: following
-	// goes on. The first row is the viewer's own here.
-	m.Visible()[0].Row.Current = true
+	// goes on. The proj/task line is the viewer's own here.
+	visibleRow(t, m, "proj/task").Current = true
 	m.Follow = true
 	before := m.Selection().ID()
 	a := m.Handle(view.Key{Kind: view.KeyEnter})

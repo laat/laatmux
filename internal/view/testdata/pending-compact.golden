@@ -2,8 +2,8 @@ S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ sidebar-follow proj @‹vm›              
 S..|⟨info:▌⟩    adding: clone: cloning git@github.com:laat/proj.git                
 ...|⟨accent:▌⟩ ⟨accent:💬⟩ fix-ls proj @‹vm›                                                1:00
 ...|⟨accent:▌⟩    prompt not delivered: the pane was not ready within a minute
-.D.|⟨border:▌⟩ ⟨border:  ⟩ a proj @‹vm›
-.D.|⟨border:▌⟩    no session
+...|⟨accent:▌⟩ ⟨accent:💬⟩ a proj @‹vm›                                                     5:00
+...|⟨accent:▌⟩    Allow?
 ...|
 ...|
 ...|

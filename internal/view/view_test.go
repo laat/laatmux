@@ -23,7 +23,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // gone agent, a worktree without a session, one without an agent, a
 // managed agent with no worktree, observed agents on the local and a
 // remote default server, a host down, a settled and an orphaned workspace.
-func fixture(now time.Time) rows.Rows { return rows.Build(fixtureInput(now)) }
+// It is the agent view as the dashboard builds it: the two worktrees with
+// no agent and the orphaned workspace are tree lines, not tiles, and the
+// settled workspace's agent is in the stale fold.
+func fixture(now time.Time) rows.Rows { return rows.Agents(fixtureInput(now)) }
 
 func fixtureInput(now time.Time) rows.Input {
 	return rows.Input{
@@ -202,8 +205,9 @@ func TestHandle(t *testing.T) {
 		t.Errorf("esc did not clear the filter: %q", m.Filter)
 	}
 	m.Handle(Key{Rune: 'f'})
-	if len(m.Visible()) != n+2 {
-		t.Errorf("f showed %d rows, want %d", len(m.Visible()), n+2)
+	// The stale fold holds one tile: the settled workspace's agent.
+	if len(m.Visible()) != n+1 {
+		t.Errorf("f showed %d rows, want %d", len(m.Visible()), n+1)
 	}
 	// The digits count the numbered rows whatever the fold: 1 is the
 	// first tile from anywhere.
@@ -410,8 +414,8 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Build(rows.Input{}))
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(rows.Input{}))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got.Name != "proj/task" || m.Selected != 1 {
 		t.Errorf("after reorder: selected %q at %d, want proj/task at 1", got.Name, m.Selected)
 	}
@@ -428,7 +432,7 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 			break
 		}
 	}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	// The row is gone: the selection is on none, not on the row that
 	// took its index, so Enter jumps nowhere.
 	if got := m.Selection(); got != nil || m.Selected != -1 {
@@ -496,7 +500,7 @@ func TestFollowSelection(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
 	in := fixtureInput(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Current || m.Selected != 2 {
 		t.Fatalf("initial: %+v at %d", got, m.Selected)
 	}
@@ -509,7 +513,7 @@ func TestFollowSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || m.Selected != 1 {
 		t.Fatalf("after reorder: %+v at %d", got, m.Selected)
 	}
@@ -525,7 +529,7 @@ func TestFollowSelection(t *testing.T) {
 	// No row is the viewer's session: nothing selected, nothing drawn
 	// selected, Enter does nothing; a digit counts the main group.
 	in.Current = ""
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got != nil || m.Selected != -1 {
 		t.Fatalf("no current row: %+v at %d", got, m.Selected)
 	}
@@ -546,7 +550,7 @@ func TestFollowSelection(t *testing.T) {
 	// reorder keeps it on the row it was on, not on the viewer's.
 	m.Follow = true
 	in.Current = "mac/proj/task"
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if m.Selected != 1 {
 		t.Fatalf("following again: %d", m.Selected)
 	}
@@ -560,13 +564,13 @@ func TestFollowSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got == nil || got.Name != taken.Name {
 		t.Fatalf("user's selection moved: %+v, was %s", got, taken.Name)
 	}
 	// Without Follow the model is as it was: the first row selected.
 	m = model(now)
-	m.SetRows(rows.Build(fixtureInput(now)))
+	m.SetRows(rows.Agents(fixtureInput(now)))
 	if m.Selected != 0 {
 		t.Fatalf("without follow: %d", m.Selected)
 	}
@@ -583,7 +587,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
 	in := fixtureInput(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	// Filter to rows that are not the viewer's: rows remain, none is
 	// selected, and Enter has nothing to act on.
 	m.Handle(Key{Rune: '/'})
@@ -611,7 +615,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 			in.Locals[i].Settled = true
 		}
 	}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Settled || !m.Follow {
 		t.Fatalf("settled: %+v follow=%v", got, m.Follow)
 	}
@@ -628,7 +632,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m = model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	if m.Selected != 0 {
 		t.Fatalf("current first: %d", m.Selected)
 	}
@@ -645,7 +649,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	}
 	m = model(now)
 	m.Follow = true
-	m.SetRows(rows.Build(rows.Input{}))
+	m.SetRows(rows.Agents(rows.Input{}))
 	m.Handle(Key{Rune: 'j'})
 	m.Handle(Key{Rune: 'G'})
 	if got := m.Selection(); got != nil || !m.Follow {
@@ -662,7 +666,7 @@ func TestSpinner(t *testing.T) {
 	m := model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	in := fixtureInput(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Render()
 	if !m.Spinning() {
 		t.Fatal("working rows and no spinning")
@@ -704,7 +708,7 @@ func TestSpinner(t *testing.T) {
 			in.Agents[i].Liveness = protocol.Gone
 		}
 	}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Render()
 	if m.Spinning() {
 		t.Fatal("gone agents spin")
@@ -735,7 +739,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 6 // header lines, a few body lines, footer
-	m.SetRows(rows.Build(fixtureInput(now)))
+	m.SetRows(rows.Agents(fixtureInput(now)))
 	m.Render()
 	if !m.Spinning() {
 		t.Fatal("working rows at the top and no spinning")
@@ -750,10 +754,10 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	if !m.Spinning() {
 		t.Fatal("scrolled back and not spinning")
 	}
-	m.Filter = "spike"
-	m.Render()
-	if m.Spinning() {
-		t.Fatal("working rows filtered out and still spinning")
+	// The idle scratch tile left, the working ones filtered out.
+	m.Filter = "scratch"
+	if m.Render(); len(m.Visible()) != 1 || m.Spinning() {
+		t.Fatalf("working rows filtered out: %d rows, spinning=%v", len(m.Visible()), m.Spinning())
 	}
 	m.Filter = ""
 	m.Overlay = NewPrompt("branch", "", nil)
@@ -782,7 +786,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	// keeps is cut off by the height, and does not count.
 	m = model(now)
 	m.Layout, m.Width = Compact, 80
-	m.SetRows(rows.Build(fixtureInput(now)))
+	m.SetRows(rows.Agents(fixtureInput(now)))
 	m.Filter = "proj/task" // the one row is the live working one
 	m.Header = []HeaderLine{{Text: "one"}, {Text: "two"}}
 	m.Height = 4 // headers, the body line, footer: the icon is drawn
@@ -799,7 +803,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		for _, w := range []int{12, 6, 3, 2} {
 			m = model(now)
 			m.Layout, m.Width, m.Height = layout, w, 30
-			m.SetRows(rows.Build(fixtureInput(now)))
+			m.SetRows(rows.Agents(fixtureInput(now)))
 			lines := m.Render()
 			if out := Debug(lines); !strings.Contains(out, "⟨") {
 				t.Errorf("layout %v width %d: no colour:\n%s", layout, w, out)
@@ -812,7 +816,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		}
 		m = model(now)
 		m.Layout, m.Width, m.Height = layout, 1, 30
-		m.SetRows(rows.Build(fixtureInput(now)))
+		m.SetRows(rows.Agents(fixtureInput(now)))
 		m.Render() // one cell: the stripe alone, no panic
 	}
 }
@@ -852,9 +856,13 @@ func TestNewlineIsEnter(t *testing.T) {
 
 // The anchor pair: a task selected before its root is known stays
 // selected when the root arrives, when its worktree row takes over, and
-// through the reorder; a task the view never saw hand over finds its
-// worktree row through the handoffs; past them the selection is on
-// none rather than on the row that took the index.
+// when another task stands for it again; a task the view never saw hand
+// over finds its worktree row through the handoffs; past them the
+// selection is on none rather than on the row that took the index. The
+// worktree row is the tree's line: the agent view has none, and follows
+// a handoff to the worktree's first agent's tile instead (TestTreeEdges,
+// TestHandoffStanding). The model is filled as the dashboard fills it,
+// the tree then the agent view.
 func TestAnchorFollowsTask(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	hosts := []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
@@ -862,61 +870,64 @@ func TestAnchorFollowsTask(t *testing.T) {
 	task := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Taken: true, Reachable: true, Stage: protocol.StageClone, SubmittedAt: now}
 	wt := protocol.Worktree{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"}
 	agent := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
-	build := func(ps []protocol.Pending, ws []protocol.Worktree, as []protocol.Agent) rows.Rows {
-		return rows.Build(rows.Input{Hosts: hosts, Pendings: ps, Worktrees: ws, Agents: as})
+	set := func(m *Model, ps []protocol.Pending, ws []protocol.Worktree, as []protocol.Agent) {
+		in := rows.Input{Hosts: hosts, Pendings: ps, Worktrees: ws, Agents: as}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
 	}
-	m := &Model{Width: 60, Height: 20, Now: now}
-	m.SetRows(build([]protocol.Pending{task}, []protocol.Worktree{other}, nil))
-	m.Handle(Key{Rune: 'g'}) // the task, first
+	m := &Model{Width: 60, Height: 20, Now: now, View: ViewTree}
+	set(m, []protocol.Pending{task}, []protocol.Worktree{other}, nil)
+	if !m.Select("add-1") {
+		t.Fatal("no task line")
+	}
 	if r := m.Selection(); r == nil || r.ID() != "add-1" {
 		t.Fatalf("selected %+v", r)
 	}
 	// The root arrives: same id, now with its alias.
 	task.Stage, task.Root = protocol.StageAgent, "/r/task"
-	m.SetRows(build([]protocol.Pending{task}, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	set(m, []protocol.Pending{task}, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
 	if r := m.Selection(); r == nil || r.ID() != "add-1" || m.alias != wt.ID {
 		t.Fatalf("with the root: %+v alias %q", r, m.alias)
 	}
-	// Handed over: the worktree row, found by the alias, which sorts
-	// first now its agent works.
-	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	// Handed over: the worktree row, found by the alias.
+	set(m, nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
 	if r := m.Selection(); r == nil || r.ID() != wt.ID {
 		t.Fatalf("after the handover: %+v", r)
 	}
 	// A task for the same worktree again: the task that stands for it.
 	again := task
 	again.ID = "add-2"
-	m.SetRows(build([]protocol.Pending{again}, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	set(m, []protocol.Pending{again}, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
 	if r := m.Selection(); r == nil || r.ID() != "add-2" {
 		t.Fatalf("a task standing for the worktree again: %+v", r)
 	}
 
 	// A view that selected a task during clone and missed every step
 	// until the worktree row: the handoffs name it.
-	m = &Model{Width: 60, Height: 20, Now: now}
+	m = &Model{Width: 60, Height: 20, Now: now, View: ViewTree}
 	early := protocol.Pending{ID: "add-3", Host: "vm", Repo: "proj", Branch: "task", Taken: true, Reachable: true, Stage: protocol.StageClone, SubmittedAt: now}
-	m.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
-	m.Handle(Key{Rune: 'g'})
+	set(m, []protocol.Pending{early}, []protocol.Worktree{other}, nil)
+	m.Select("add-3")
 	if r := m.Selection(); r == nil || r.ID() != "add-3" || m.alias != "" {
 		t.Fatalf("selected %+v alias %q", r, m.alias)
 	}
 	m.Handoffs = map[string]string{"add-3": wt.ID}
-	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	set(m, nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
 	if r := m.Selection(); r == nil || r.ID() != wt.ID {
 		t.Fatalf("through the handoffs: %+v", r)
 	}
 	// Without them the selection is on none, not on the other row.
-	m = &Model{Width: 60, Height: 20, Now: now}
-	m.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
-	m.Handle(Key{Rune: 'g'})
+	m = &Model{Width: 60, Height: 20, Now: now, View: ViewTree}
+	set(m, []protocol.Pending{early}, []protocol.Worktree{other}, nil)
+	m.Select("add-3")
 	m.Selection()
-	m.SetRows(build(nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent}))
+	set(m, nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
 	if r := m.Selection(); r != nil {
 		t.Fatalf("an unknown handoff left the selection on %q", r.ID())
 	}
 	// A following view goes back to the viewer's own row meanwhile.
 	f := &Model{Width: 60, Height: 20, Now: now, Follow: true}
-	f.SetRows(build([]protocol.Pending{early}, []protocol.Worktree{other}, nil))
+	set(f, []protocol.Pending{early}, []protocol.Worktree{other}, nil)
 	if f.Selection() != nil {
 		t.Fatal("a following view selected a row that is not the viewer's")
 	}
@@ -924,19 +935,23 @@ func TestAnchorFollowsTask(t *testing.T) {
 
 // Pending rows as drawn: the spinner and the state while the add runs,
 // "!" and dim with the reason once it needs the user, first in the
-// main group, in tiles and in compact with titles.
+// main group, ahead of a blocked agent's tile, in tiles and in compact
+// with titles.
 func TestRenderPending(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	in := rows.Input{
 		Hosts:     []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
-		Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a"}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a", Session: "proj/a"}},
+		// The agent view draws a worktree by its agents: a's, blocked,
+		// the most pressing an agent can be, still sorts after the tasks.
+		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-5 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Allow?"}},
 		Pendings: []protocol.Pending{
 			{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "sidebar-follow", Taken: true, Reachable: true, Stage: protocol.StageClone, Detail: "cloning git@github.com:laat/proj.git", SubmittedAt: now},
 			{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix-ls", Root: "/r/fix-ls", Session: "proj/fix-ls", Taken: true, Reachable: true,
 				Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready within a minute", SubmittedAt: now.Add(-time.Minute)},
 		},
 	}
-	m := &Model{Rows: rows.Build(in), LocalHost: "mac", Now: now, Width: 40, Height: 12}
+	m := &Model{Rows: rows.Agents(in), LocalHost: "mac", Now: now, Width: 40, Height: 12}
 	golden(t, "pending-tiles", Debug(m.Render()))
 	m.Layout, m.Titles, m.Width = Compact, true, 72
 	golden(t, "pending-compact", Debug(m.Render()))
@@ -948,47 +963,52 @@ func TestRenderPending(t *testing.T) {
 // A task that hands over while another task for the same root stands
 // for the worktree row: the selection goes to the task standing for
 // it. A selection found again after it was lost is a plain one again.
+// The model is filled as the dashboard fills it, the tree then the
+// agent view.
 func TestAnchorStandIn(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	hosts := []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
 	wt := protocol.Worktree{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b"}
 	stuck := protocol.Pending{ID: "add-a", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now.Add(-time.Hour)}
 	next := protocol.Pending{ID: "add-b", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: now}
-	build := func(ps ...protocol.Pending) rows.Rows {
-		return rows.Build(rows.Input{Hosts: hosts, Pendings: ps, Worktrees: []protocol.Worktree{wt}})
+	set := func(m *Model, ps ...protocol.Pending) {
+		in := rows.Input{Hosts: hosts, Pendings: ps, Worktrees: []protocol.Worktree{wt}}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in))
 	}
 	m := &Model{Width: 60, Height: 20, Now: now}
-	m.SetRows(build(stuck, next))
+	set(m, stuck, next)
 	m.Handle(Key{Rune: 'g'})
 	if r := m.Selection(); r == nil || r.ID() != "add-b" {
 		t.Fatalf("selected %+v", r)
 	}
 	m.Handoffs = map[string]string{"add-b": wt.ID}
-	m.SetRows(build(stuck))
+	set(m, stuck)
 	if r := m.Selection(); r == nil || r.ID() != "add-a" {
 		t.Fatalf("after add-b handed over: %+v", r)
 	}
 	// Beside a task that failed or was gone at the root, which stands
-	// for nothing, the hand-over lands on the worktree row itself.
+	// for nothing, the hand-over lands on the worktree row itself: the
+	// tree's line, the worktree having no agent and so no tile.
 	for _, bad := range []protocol.Pending{
 		{ID: "add-f", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, Stage: protocol.StageAgent, Error: "failed at agent: x", SubmittedAt: now.Add(-time.Hour)},
 		{ID: "add-g", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, Gone: true, SubmittedAt: now.Add(-time.Hour)},
 	} {
-		f := &Model{Width: 60, Height: 20, Now: now, Handoffs: map[string]string{"add-b": wt.ID}}
-		f.SetRows(build(bad, next))
-		f.Handle(Key{Rune: 'g'})
+		f := &Model{Width: 60, Height: 20, Now: now, View: ViewTree, Handoffs: map[string]string{"add-b": wt.ID}}
+		set(f, bad, next)
+		f.Select("add-b")
 		if r := f.Selection(); r == nil || r.ID() != "add-b" {
 			t.Fatalf("%s: selected %+v", bad.ID, r)
 		}
-		f.SetRows(build(bad))
+		set(f, bad)
 		if r := f.Selection(); r == nil || r.ID() != wt.ID {
 			t.Fatalf("%s: after add-b handed over: %+v", bad.ID, r)
 		}
 	}
 	// Lost, then found again: a filter that hides every row and is
 	// cleared puts the selection on the first row, as for any other.
-	m.SetRows(build())
-	m.SetRows(build(stuck))
+	set(m)
+	set(m, stuck)
 	if r := m.Selection(); r == nil || r.ID() != "add-a" || m.lost {
 		t.Fatalf("found again: %+v lost %v", r, m.lost)
 	}
@@ -1008,7 +1028,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	in := fixtureInput(now)
 	in.Current = "mac/proj/task"
 	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: now, Follow: true}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	own := m.Selected
 	m.Render()
 	// The first body line is the first row; the own row is elsewhere.
@@ -1039,7 +1059,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	for i := range in2.Agents {
 		in2.Agents[i].Activity = protocol.Idle
 	}
-	m.SetRows(rows.Build(in2))
+	m.SetRows(rows.Agents(in2))
 	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
 		t.Fatalf("after a reorder: jumped to %+v, drawn was %q", a.Row, drawn)
 	}
@@ -1069,7 +1089,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 			in2.Locals[i].Settled = true
 		}
 	}
-	m.SetRows(rows.Build(in2))
+	m.SetRows(rows.Agents(in2))
 	if i := m.hitRow(sy, time.Time{}); i != -1 {
 		t.Fatalf("a row collapsed since resolved to %d", i)
 	}
@@ -1085,7 +1105,7 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 	t0 := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(t0)
 	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: t0}
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Render()
 	y := 1 + len(m.Header)
 	seen := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
@@ -1095,7 +1115,7 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 		in.Agents[i].Activity = protocol.Idle
 	}
 	in.Agents[len(in.Agents)-1].Activity = protocol.Blocked
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Now = t0.Add(2 * time.Second)
 	m.Render()
 	if now := m.Visible()[m.hitRow(y, time.Time{})].Row.ID(); now == seen {
@@ -1269,7 +1289,7 @@ func TestRenderAttention(t *testing.T) {
 	}
 	in.Now, in.StaleAfter, in.DimStale, in.CollapseStale = now, time.Hour, true, true
 	m := model(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Layout, m.Titles, m.Width, m.Height = Compact, true, 90, 34
 	m.ShowHidden = true
 	golden(t, "attention", Debug(m.Render()))
@@ -1280,7 +1300,9 @@ func TestRenderAttention(t *testing.T) {
 // The diff stats on the tile's second line and before the time in the
 // compact line: the rebase mark, the committed diff, ✎ and the
 // uncommitted one; a narrow line drops the committed part, then all but
-// the rebase mark; a stale object is dim.
+// the rebase mark; a stale object is dim. The stale object and the mark
+// alone are on dead's and down's worktrees, which have agents and so
+// tiles; spike and shell have neither.
 func TestRenderGit(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(now)
@@ -1289,9 +1311,9 @@ func TestRenderGit(t *testing.T) {
 		"venv/worktree//r/fix-ls": {Base: "origin/main", Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true, Ahead: 2},
 		"menv/worktree//w/task":   {Base: "origin/main", Committed: [2]int{318, 87}, Rebasing: true, Conflict: &yes},
 		"venv/worktree//r/other":  {Base: "origin/main", Uncommitted: [2]int{4, 1}, UncommittedPartial: true, Dirty: true},
-		"menv/worktree//w/spike":  {Base: "origin/main", Committed: [2]int{153, 41}, Stale: true},
+		"venv/worktree//r/dead":   {Base: "origin/main", Committed: [2]int{153, 41}, Stale: true},
 		// Dirty with no lines, a mode change say: the mark alone.
-		"venv/worktree//r/shell": {Base: "origin/main", Dirty: true},
+		"benv/worktree//r/down": {Base: "origin/main", Dirty: true},
 	}
 	for i := range in.Worktrees {
 		if g, ok := stats[in.Worktrees[i].ID]; ok {
@@ -1299,7 +1321,7 @@ func TestRenderGit(t *testing.T) {
 		}
 	}
 	m := model(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Layout, m.Width, m.Height = Tiles, 45, 40
 	golden(t, "git-tiles", Debug(m.Render()))
 	m.Width = 26
@@ -1311,7 +1333,8 @@ func TestRenderGit(t *testing.T) {
 // The PR and checks on the third line: the PR number coloured by state,
 // ✓, × with the counts, a spinner with the counts; a draft dim; a stale
 // answer dim with ?; on main only failing checks; narrow, the counts go
-// first.
+// first. The worktree on main is down's, which has an agent and so a
+// tile; spike, on main before, has none.
 func TestRenderPR(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(now)
@@ -1329,13 +1352,13 @@ func TestRenderPR(t *testing.T) {
 		key("dead"):   {PR: &protocol.PullRequest{Number: 7, State: "closed"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess}, Stale: true},
 	}
 	for i := range in.Worktrees {
-		if in.Worktrees[i].Branch == "spike" {
+		if in.Worktrees[i].Branch == "down" {
 			in.Worktrees[i].Branch = "main"
 			in.Branches[key("main")] = protocol.BranchStatus{PR: &protocol.PullRequest{Number: 1, State: "merged"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 2, Total: 3}}
 		}
 	}
 	m := model(now)
-	m.SetRows(rows.Build(in))
+	m.SetRows(rows.Agents(in))
 	m.Layout, m.Width, m.Height = Tiles, 48, 44
 	golden(t, "pr-tiles", Debug(m.Render()))
 	m.Width = 22
