@@ -194,7 +194,7 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"proj/w", "proj/other"} {
+	for _, name := range []string{"proj/w", "proj/live", "proj/other"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
@@ -242,9 +242,34 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Error("still found as a plain attachment")
 	}
 	// The pane tagged with the target and respawned on it.
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/w", "-F", "#{@laatmux_attach_pane} #{@laatmux_attach_target} #{pane_dead} #{pane_start_command}")
-	if f := strings.Fields(strings.TrimSpace(string(out))); err != nil || len(f) < 4 || f[0] != "1" || f[1] != "proj/w" || f[2] != "0" || !strings.Contains(strings.TrimSpace(string(out)), "proj/w") {
-		t.Fatalf("the attach pane after adopt: %q %v", out, err)
+	pane := func(session string) (tag, target, dead, cmd string) {
+		t.Helper()
+		out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+session, "-F", strings.Join([]string{"#{@laatmux_attach_pane}", "#{@laatmux_attach_target}", "#{pane_dead}", "#{pane_start_command}"}, tmux.Sep))
+		f := strings.SplitN(strings.TrimSpace(string(out)), tmux.Sep, 4)
+		if err != nil || len(f) != 4 {
+			t.Fatalf("the attach pane of %s: %q %v", session, out, err)
+		}
+		return f[0], f[1], f[2], f[3]
+	}
+	// tmux quotes the start command it prints.
+	if tag, target, dead, cmd := pane("mac/proj/w"); tag != "1" || target != "proj/w" || dead != "0" || strings.Trim(cmd, "\"") != AttachCommand(host, "proj/w") {
+		t.Fatalf("the attach pane after adopt: %q %q %q %q", tag, target, dead, cmd)
+	}
+	// A live pane without its target: tagged by the adoption itself,
+	// not respawned.
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live"}); err != nil || !created {
+		t.Fatalf("the live attachment: %v %v", created, err)
+	}
+	if _, err := Server.Run(ctx, "set-option", "-p", "-u", "-t", "=mac/proj/live:", "@laatmux_attach_target"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live", Key: "env//r/live", Branch: "live"}); err != nil || created || name != "mac/proj/live" {
+		t.Fatalf("adopt with a live pane: %q %v %v", name, created, err)
+	}
+	after, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
+	if tag, target, dead, _ := pane("mac/proj/live"); tag != "1" || target != "proj/live" || dead != "0" || string(before) != string(after) {
+		t.Fatalf("the live pane after adopt: %q %q %q, pid %q then %q", tag, target, dead, before, after)
 	}
 	// Found by key the next time, nothing created.
 	if name, created, err := Ensure(ctx, keyed); err != nil || created || name != "mac/proj/w" {
