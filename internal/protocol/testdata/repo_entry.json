@@ -1,0 +1,10 @@
+{
+  "source": "source",
+  "name": "name",
+  "copy": [
+    "x"
+  ],
+  "setup": [
+    "x"
+  ]
+}

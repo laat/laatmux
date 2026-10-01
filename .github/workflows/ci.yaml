@@ -29,6 +29,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The tmux tests skip without it; the end-to-end test needs it
+      # for the daemon's first poll to complete.
+      - name: tmux
+        if: runner.os == 'macOS'
+        run: brew install tmux
+
       - name: gofmt
         run: |
           out=$(gofmt -l .)

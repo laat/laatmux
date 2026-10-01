@@ -1,0 +1,29 @@
+{
+  "id": "id",
+  "environment_id": "environment_id",
+  "repo": "repo",
+  "source": "source",
+  "branch": "branch",
+  "root": "root",
+  "session": "session",
+  "git": {
+    "base": "base",
+    "committed": [
+      1,
+      1
+    ],
+    "uncommitted": [
+      1,
+      1
+    ],
+    "uncommitted_partial": true,
+    "ahead": 1,
+    "behind": 1,
+    "dirty": true,
+    "conflict": true,
+    "rebasing": true,
+    "stale": true,
+    "changed_at": "2026-10-01T12:00:00Z"
+  },
+  "updated_at": "2026-10-01T12:00:00Z"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "name",
+  "ssh": "ssh",
+  "environment_id": "environment_id",
+  "connected": true,
+  "listed": true,
+  "error": "error",
+  "reconnecting": true,
+  "version": "version",
+  "capabilities": [
+    "x"
+  ],
+  "since": "2026-10-01T12:00:00Z"
+}

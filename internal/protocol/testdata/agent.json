@@ -1,0 +1,26 @@
+{
+  "id": "id",
+  "environment_id": "environment_id",
+  "server": "server",
+  "session": "session",
+  "window": 1,
+  "pane_id": "pane_id",
+  "tty": "tty",
+  "cwd": "cwd",
+  "title": "title",
+  "agent": "agent",
+  "activity": "activity",
+  "liveness": "liveness",
+  "identity": {
+    "pid": 1,
+    "start_unix": 1,
+    "comm": "comm",
+    "leader_pid": 1
+  },
+  "rule": "rule",
+  "reason": "reason",
+  "managed": true,
+  "worktree_id": "worktree_id",
+  "activity_at": "2026-10-01T12:00:00Z",
+  "updated_at": "2026-10-01T12:00:00Z"
+}

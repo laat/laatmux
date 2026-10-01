@@ -1,0 +1,425 @@
+{
+  "type": "type",
+  "protocol": 1,
+  "client": "client",
+  "environment_id": "environment_id",
+  "version": "version",
+  "host": "host",
+  "capabilities": [
+    "x"
+  ],
+  "pid": 1,
+  "merged": true,
+  "seq": 1,
+  "agents": [
+    {
+      "id": "id",
+      "environment_id": "environment_id",
+      "server": "server",
+      "session": "session",
+      "window": 1,
+      "pane_id": "pane_id",
+      "tty": "tty",
+      "cwd": "cwd",
+      "title": "title",
+      "agent": "agent",
+      "activity": "activity",
+      "liveness": "liveness",
+      "identity": {
+        "pid": 1,
+        "start_unix": 1,
+        "comm": "comm",
+        "leader_pid": 1
+      },
+      "rule": "rule",
+      "reason": "reason",
+      "managed": true,
+      "worktree_id": "worktree_id",
+      "activity_at": "2026-10-01T12:00:00Z",
+      "updated_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "agent": {
+    "id": "id",
+    "environment_id": "environment_id",
+    "server": "server",
+    "session": "session",
+    "window": 1,
+    "pane_id": "pane_id",
+    "tty": "tty",
+    "cwd": "cwd",
+    "title": "title",
+    "agent": "agent",
+    "activity": "activity",
+    "liveness": "liveness",
+    "identity": {
+      "pid": 1,
+      "start_unix": 1,
+      "comm": "comm",
+      "leader_pid": 1
+    },
+    "rule": "rule",
+    "reason": "reason",
+    "managed": true,
+    "worktree_id": "worktree_id",
+    "activity_at": "2026-10-01T12:00:00Z",
+    "updated_at": "2026-10-01T12:00:00Z"
+  },
+  "agent_id": "agent_id",
+  "worktrees": [
+    {
+      "id": "id",
+      "environment_id": "environment_id",
+      "repo": "repo",
+      "source": "source",
+      "branch": "branch",
+      "root": "root",
+      "session": "session",
+      "git": {
+        "base": "base",
+        "committed": [
+          1,
+          1
+        ],
+        "uncommitted": [
+          1,
+          1
+        ],
+        "uncommitted_partial": true,
+        "ahead": 1,
+        "behind": 1,
+        "dirty": true,
+        "conflict": true,
+        "rebasing": true,
+        "stale": true,
+        "changed_at": "2026-10-01T12:00:00Z"
+      },
+      "updated_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "worktree": {
+    "id": "id",
+    "environment_id": "environment_id",
+    "repo": "repo",
+    "source": "source",
+    "branch": "branch",
+    "root": "root",
+    "session": "session",
+    "git": {
+      "base": "base",
+      "committed": [
+        1,
+        1
+      ],
+      "uncommitted": [
+        1,
+        1
+      ],
+      "uncommitted_partial": true,
+      "ahead": 1,
+      "behind": 1,
+      "dirty": true,
+      "conflict": true,
+      "rebasing": true,
+      "stale": true,
+      "changed_at": "2026-10-01T12:00:00Z"
+    },
+    "updated_at": "2026-10-01T12:00:00Z"
+  },
+  "worktree_id": "worktree_id",
+  "panes": [
+    {
+      "id": "id",
+      "environment_id": "environment_id",
+      "server": "server",
+      "session": "session",
+      "window": 1,
+      "pane_id": "pane_id",
+      "command": "command",
+      "pid": 1,
+      "cwd": "cwd",
+      "worktree_id": "worktree_id",
+      "updated_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "pane": {
+    "id": "id",
+    "environment_id": "environment_id",
+    "server": "server",
+    "session": "session",
+    "window": 1,
+    "pane_id": "pane_id",
+    "command": "command",
+    "pid": 1,
+    "cwd": "cwd",
+    "worktree_id": "worktree_id",
+    "updated_at": "2026-10-01T12:00:00Z"
+  },
+  "pane_record_id": "pane_record_id",
+  "runs": [
+    {
+      "id": "id",
+      "environment_id": "environment_id",
+      "root": "root",
+      "worktree_id": "worktree_id",
+      "cmd": [
+        "x"
+      ],
+      "started_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "run": {
+    "id": "id",
+    "environment_id": "environment_id",
+    "root": "root",
+    "worktree_id": "worktree_id",
+    "cmd": [
+      "x"
+    ],
+    "started_at": "2026-10-01T12:00:00Z"
+  },
+  "run_id": "run_id",
+  "attentions": [
+    {
+      "agent_id": "agent_id",
+      "finished_at": "2026-10-01T12:00:00Z",
+      "seen_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "attention": {
+    "agent_id": "agent_id",
+    "finished_at": "2026-10-01T12:00:00Z",
+    "seen_at": "2026-10-01T12:00:00Z"
+  },
+  "attention_id": "attention_id",
+  "branch_statuses": [
+    {
+      "source": "source",
+      "branch": "branch",
+      "fetched_at": "2026-10-01T12:00:00Z",
+      "stale": true,
+      "head_oid": "head_oid",
+      "checks_url": "checks_url",
+      "pr": {
+        "number": 1,
+        "state": "state",
+        "draft": true,
+        "url": "url"
+      },
+      "checks": {
+        "state": "state",
+        "passed": 1,
+        "total": 1,
+        "failing": "failing",
+        "pending_since": "2026-10-01T12:00:00Z"
+      }
+    }
+  ],
+  "branch_status": {
+    "source": "source",
+    "branch": "branch",
+    "fetched_at": "2026-10-01T12:00:00Z",
+    "stale": true,
+    "head_oid": "head_oid",
+    "checks_url": "checks_url",
+    "pr": {
+      "number": 1,
+      "state": "state",
+      "draft": true,
+      "url": "url"
+    },
+    "checks": {
+      "state": "state",
+      "passed": 1,
+      "total": 1,
+      "failing": "failing",
+      "pending_since": "2026-10-01T12:00:00Z"
+    }
+  },
+  "branch_status_key": {
+    "source": "source",
+    "branch": "branch"
+  },
+  "github_error": "github_error",
+  "github_ok": true,
+  "pendings": [
+    {
+      "id": "id",
+      "host": "host",
+      "environment_id": "environment_id",
+      "source": "source",
+      "repo": "repo",
+      "branch": "branch",
+      "generated": true,
+      "agent": "agent",
+      "cmd": [
+        "x"
+      ],
+      "submitted_at": "2026-10-01T12:00:00Z",
+      "taken": true,
+      "sent": true,
+      "reachable": true,
+      "unreachable": "unreachable",
+      "mismatch": "mismatch",
+      "stage": "stage",
+      "state": "state",
+      "detail": "detail",
+      "root": "root",
+      "session": "session",
+      "done": true,
+      "ok": true,
+      "error": "error",
+      "prompt": "prompt",
+      "attempt": 1,
+      "attempt_open": true,
+      "attempt_error": "attempt_error",
+      "listed": true,
+      "listing_error": "listing_error",
+      "gone": true,
+      "updated_at": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "pending": {
+    "id": "id",
+    "host": "host",
+    "environment_id": "environment_id",
+    "source": "source",
+    "repo": "repo",
+    "branch": "branch",
+    "generated": true,
+    "agent": "agent",
+    "cmd": [
+      "x"
+    ],
+    "submitted_at": "2026-10-01T12:00:00Z",
+    "taken": true,
+    "sent": true,
+    "reachable": true,
+    "unreachable": "unreachable",
+    "mismatch": "mismatch",
+    "stage": "stage",
+    "state": "state",
+    "detail": "detail",
+    "root": "root",
+    "session": "session",
+    "done": true,
+    "ok": true,
+    "error": "error",
+    "prompt": "prompt",
+    "attempt": 1,
+    "attempt_open": true,
+    "attempt_error": "attempt_error",
+    "listed": true,
+    "listing_error": "listing_error",
+    "gone": true,
+    "updated_at": "2026-10-01T12:00:00Z"
+  },
+  "pending_id": "pending_id",
+  "replaced_by": "replaced_by",
+  "handoffs": [
+    {
+      "id": "id",
+      "replaced_by": "replaced_by"
+    }
+  ],
+  "relay": "relay",
+  "hosts": [
+    {
+      "name": "name",
+      "ssh": "ssh",
+      "environment_id": "environment_id",
+      "connected": true,
+      "listed": true,
+      "error": "error",
+      "reconnecting": true,
+      "version": "version",
+      "capabilities": [
+        "x"
+      ],
+      "since": "2026-10-01T12:00:00Z"
+    }
+  ],
+  "host_status": {
+    "name": "name",
+    "ssh": "ssh",
+    "environment_id": "environment_id",
+    "connected": true,
+    "listed": true,
+    "error": "error",
+    "reconnecting": true,
+    "version": "version",
+    "capabilities": [
+      "x"
+    ],
+    "since": "2026-10-01T12:00:00Z"
+  },
+  "host_name": "host_name",
+  "sessions": [
+    {
+      "name": "name",
+      "key": "key",
+      "host": "host",
+      "source": "source",
+      "branch": "branch",
+      "attach": "attach",
+      "settled": true
+    }
+  ],
+  "local_session": {
+    "name": "name",
+    "key": "key",
+    "host": "host",
+    "source": "source",
+    "branch": "branch",
+    "attach": "attach",
+    "settled": true
+  },
+  "local_session_name": "local_session_name",
+  "sessions_error": "sessions_error",
+  "sessions_listed": true,
+  "id": "id",
+  "name": "name",
+  "cwd": "cwd",
+  "cmd": [
+    "x"
+  ],
+  "ok": true,
+  "error": "error",
+  "session": "session",
+  "pane_id": "pane_id",
+  "repo": "repo",
+  "branch": "branch",
+  "repo_entry": {
+    "source": "source",
+    "name": "name",
+    "copy": [
+      "x"
+    ],
+    "setup": [
+      "x"
+    ]
+  },
+  "agent_name": "agent_name",
+  "prompt": "prompt",
+  "generated": true,
+  "submitted_at": "2026-10-01T12:00:00Z",
+  "attempt": 1,
+  "listing": {
+    "generation": 1,
+    "revision": 1
+  },
+  "listing_error": "listing_error",
+  "removed_in": {
+    "generation": 1,
+    "revision": 1
+  },
+  "root": "root",
+  "force": true,
+  "stage": "stage",
+  "state": "state",
+  "detail": "detail",
+  "n": 1,
+  "after": 1,
+  "fd": 1,
+  "exit": 1
+}
