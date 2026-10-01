@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -359,5 +361,23 @@ func TestLsWatchNeedTheDaemon(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Errorf("ls and watch took %s to refuse", time.Since(start))
+	}
+	// A runtime record naming a live pid, this test's own, at an address
+	// nothing answers on: a daemon that did not answer, to be stopped
+	// through laatmux stop, which checks the pid is the daemon's; no
+	// kill is suggested, since a record a crash left may name a pid
+	// since reused. The log made a directory keeps the dial's start from
+	// running anything.
+	home2 := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home2, "daemon.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", home2)
+	if err := home.WriteRuntime(home.Runtime{Address: "tcp:127.0.0.1:1", PID: os.Getpid(), Version: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	err = cmdLs(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("local daemon (pid %d) did not answer", os.Getpid())) || !strings.Contains(err.Error(), "laatmux stop") || strings.Contains(err.Error(), "kill") {
+		t.Fatalf("ls with a daemon recorded that does not answer: %v", err)
 	}
 }
