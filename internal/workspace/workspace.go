@@ -219,18 +219,23 @@ type Spec struct {
 // or by its attach tag for a plain attachment, whatever its name; its
 // host, source and branch tags are refreshed, since it may predate a
 // rename, and a dead attach pane in it is respawned. A session with the
-// intended name that is not it is a name in use. The name of the session,
-// existing or new, and whether it was created are returned.
+// intended name that is not it is a name in use, but for a plain
+// attachment to the managed session a keyed spec names, which it
+// adopts as the workspace: an older build's jump from the agent's row
+// made such a session, named as the workspace would be, before the
+// worktree had its home session back. The name of the session, existing
+// or new, and whether it was created are returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	locals, err := List(ctx)
 	if err != nil {
 		return "", false, err
 	}
-	attach := ""
-	if s.Key == "" {
-		attach = s.Host.Name + "/" + s.Managed
+	attach := s.Host.Name + "/" + s.Managed
+	find := attach
+	if s.Key != "" {
+		find = ""
 	}
-	if l, ok := Find(locals, s.Key, attach); ok {
+	if l, ok := Find(locals, s.Key, find); ok {
 		if _, err := Server.Run(ctx, tagArgs(l.Name, s)...); err != nil {
 			return "", false, err
 		}
@@ -241,6 +246,8 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		case l.Workspace():
 			_, root := SplitKey(l.Key)
 			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", s.Name, root, l.Host)
+		case l.Attach == attach && s.Key != "":
+			return l.Name, false, adopt(ctx, l.Name, s)
 		case l.Attach != "":
 			return "", false, fmt.Errorf("local session %s is attached to %s; name in use", s.Name, l.Attach)
 		default:
@@ -267,6 +274,32 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		return "", false, err
 	}
 	return s.Name, true, nil
+}
+
+// adopt makes a plain attachment the workspace a keyed spec names: the
+// key set and the attach tag unset in one sequence, so the session is
+// never observable as both or neither, then the identity tags, and its
+// attach pane's target tagged where an older build left it untagged,
+// as a session made by Ensure carries it.
+func adopt(ctx context.Context, name string, s Spec) error {
+	args := []string{"set-option", "-t", name, "@laatmux_workspace", s.Key,
+		";", "set-option", "-u", "-t", name, "@laatmux_attach", ";"}
+	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
+		return err
+	}
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) == 3 && f[1] != "" && f[2] == "" {
+			if _, err := Server.Run(ctx, "set-option", "-p", "-t", f[0], "@laatmux_attach_target", s.Managed); err != nil {
+				return err
+			}
+		}
+	}
+	return ensureAttach(ctx, name, s)
 }
 
 // placeholder is what a new attach pane runs until it is tagged: a
