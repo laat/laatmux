@@ -112,8 +112,10 @@ func TestWireConstants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v; run with -update", err)
 	}
-	if string(want) != got {
-		t.Errorf("the constants differ from their golden (a changed wire value? run with -update to accept):\n%s", diffSets(string(want), got))
+	// Compared as sets, as the JSON goldens are compared decoded: a
+	// golden merged by hand in another order is the same golden.
+	if d := diffSets(string(want), got); d != "" {
+		t.Errorf("the constants differ from their golden (a changed wire value? run with -update to accept):\n%s", d)
 	}
 }
 
@@ -234,8 +236,9 @@ func zeroLeaves(path string, v any) []string {
 }
 
 // diffSets is the lines only in want, marked -, and only in got,
-// marked +: both are sorted and unique, so an added or removed line
-// shows alone, not as the rest of the file shifted.
+// marked +, in the lines' own order so a changed value's pair sits
+// together: an added or removed line shows alone, not as the rest of
+// the file shifted.
 func diffSets(want, got string) string {
 	w, g := map[string]bool{}, map[string]bool{}
 	for _, l := range strings.Split(strings.TrimSpace(want), "\n") {
@@ -255,7 +258,7 @@ func diffSets(want, got string) string {
 			out = append(out, "+ "+l)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i][2:] < out[j][2:] || out[i][2:] == out[j][2:] && out[i] < out[j] })
 	return strings.Join(out, "\n")
 }
 
