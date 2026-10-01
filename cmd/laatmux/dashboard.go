@@ -123,7 +123,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds)
-	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
+	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump}
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.
@@ -270,9 +270,13 @@ func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, and laatmux serve run by hand shows it, or names the pid of one holding the lock", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
-	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
+	// The merged stream and the relay came in the same milestone, and a
+	// current build has both or neither: a daemon with the stream and
+	// not the relay is one that could not open its pending directory,
+	// which the current build does not run.
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) || !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
 		c.Close()
-		return nil, fmt.Errorf("local daemon %s has no merged stream, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
+		return nil, fmt.Errorf("local daemon %s has no merged stream or no relay, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
 	}
 	return c, nil
 }

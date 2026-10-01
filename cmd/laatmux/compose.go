@@ -9,7 +9,6 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
-	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -42,7 +41,6 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	relay := protocol.Has(c.Hello.Capabilities, protocol.CapRelay)
 	// The merged stream is followed while the form is up, so the note
 	// about a host's daemon reflects the hello that arrives after the
 	// snapshot on a cold daemon.
@@ -80,7 +78,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	}
 	t.Theme, _ = look(cfg, t)
 	m := &view.Model{Layout: view.Compact, Overlay: form}
-	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, relay: relay, add: f}
+	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, add: f}
 	c2 := &composer{d: d, f: f}
 	err = view.Run(ctx, t, m, view.Host{
 		Changed: st.change,

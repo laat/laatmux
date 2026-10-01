@@ -1217,3 +1217,24 @@ func TestRelayRepoEntry(t *testing.T) {
 		t.Fatalf("record %+v", p)
 	}
 }
+
+// A merging daemon whose pending directory cannot be made does not run
+// without its relay: Run ends at once with the error, so serve exits
+// with it, and no capability is advertised meanwhile.
+func TestRelayDirectoryFatal(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}}}
+	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending")})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := d.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "pending:") || !strings.Contains(err.Error(), "not a directory") || ctx.Err() != nil {
+		t.Fatalf("Run with no pending directory: %v (context %v)", err, ctx.Err())
+	}
+	if protocol.Has(d.capabilities(), protocol.CapRelay) {
+		t.Error("the relay capability advertised without a relay")
+	}
+}

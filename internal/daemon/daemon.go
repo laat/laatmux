@@ -191,8 +191,11 @@ type Daemon struct {
 	// stamp and error of the last listing, and the lock the poll and
 	// its publication run under.
 	journal *journal
-	relay   *relay     // nil without the relay capability
-	attn    *attention // nil without the attention capability
+	relay   *relay // nil without the relay capability
+	// fatal is what New could not do without, the relay's directory
+	// say; Run ends with it at once.
+	fatal error
+	attn  *attention // nil without the attention capability
 	// The last errors of the attention file and the clients listing,
 	// logged once per change.
 	lastAttnErr    string
@@ -409,7 +412,10 @@ func New(cfg Config) *Daemon {
 	if cfg.Pending != "" && cfg.Hosts != nil {
 		r, err := openRelay(cfg.Pending, cfg.Logger)
 		if err != nil {
-			cfg.Logger.Printf("pending: %v; relay capability disabled", err)
+			// A merging daemon without its relay would run with the
+			// add path gone: Run ends at once with the error instead,
+			// and serve exits with it.
+			d.fatal = fmt.Errorf("pending: %w", err)
 		} else {
 			d.relay = r
 		}
@@ -466,6 +472,9 @@ func (d *Daemon) runCtx() context.Context {
 
 // Run polls until ctx is done.
 func (d *Daemon) Run(ctx context.Context) error {
+	if d.fatal != nil {
+		return d.fatal
+	}
 	d.mu.Lock()
 	d.ctx = ctx
 	d.mu.Unlock()

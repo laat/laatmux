@@ -948,19 +948,15 @@ is switched to.
   never comes is ended by `Esc` or `Ctrl-C` pressed alone after that
   and left for a second, the key spent on ending it. On a worktree row
   without a session the chips and the branch
-  are pre-filled from the record, the branch explicit. A submit with
-  the local daemon's `relay` hands the add to it and closes the popup
-  on `accepted`; the task is a row in the views from then on, and in
-  `laatmux tasks`; a refusal keeps the form up with the
-  error. Without it
-  the add runs in the foreground with its progress in place of the
-  list and jumps on success, a failure staying until a key; a prompt
-  that did not reach the agent, or may not have, or was refused before
-  the host, comes up first in a scrollable notice with its text, kept
-  as well in a file under `undelivered/` in the state directory, and
-  the jump follows the notice; `Ctrl-C` while the add runs puts up a
-  notice naming the same kept file, the add itself may or may not have
-  been sent, and its dismissal ends the view. The footer
+  are pre-filled from the record, the branch explicit. A submit hands
+  the add to the local daemon's relay and closes the popup on
+  `accepted`; the task is a row in the views from then on, and in
+  `laatmux tasks`; a refusal keeps the form up with the error, and an
+  answer lost after the daemon may hold the task ends the view with
+  the id, so nothing is submitted twice. The relay is the only path: a
+  daemon that cannot open its pending directory exits with the error
+  rather than run without it, and the clients refuse a daemon without
+  the relay as they refuse one without the merged stream. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use
