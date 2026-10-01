@@ -276,17 +276,17 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	return s.Name, true, nil
 }
 
-// adopt makes a plain attachment the workspace a keyed spec names: the
-// key set and the attach tag unset in one sequence, so the session is
-// never observable as both or neither, then the identity tags, and its
-// attach pane's target tagged where an older build left it untagged,
-// as a session made by Ensure carries it.
+// adopt makes a plain attachment the workspace a keyed spec names: its
+// attach pane's target tagged first where an older build left it
+// untagged, as a session made by Ensure carries it, which is safe while
+// the session is still plain since the pane attaches to the spec's
+// managed session; then the key set and the attach tag unset in one
+// sequence, so the session is never observable as both or neither,
+// with the identity tags. An adopt cut short before the flip is met by
+// name again and redone whole; one cut short after it is a workspace
+// with its pane tagged, as Ensure then finds it by key. Last, the
+// attach pane is respawned or made as for a reuse.
 func adopt(ctx context.Context, name string, s Spec) error {
-	args := []string{"set-option", "-t", name, "@laatmux_workspace", s.Key,
-		";", "set-option", "-u", "-t", name, "@laatmux_attach", ";"}
-	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
-		return err
-	}
 	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
 	if err != nil {
 		return err
@@ -298,6 +298,11 @@ func adopt(ctx context.Context, name string, s Spec) error {
 				return err
 			}
 		}
+	}
+	args := []string{"set-option", "-t", name, "@laatmux_workspace", s.Key,
+		";", "set-option", "-u", "-t", name, "@laatmux_attach", ";"}
+	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
+		return err
 	}
 	return ensureAttach(ctx, name, s)
 }

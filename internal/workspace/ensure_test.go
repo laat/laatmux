@@ -203,8 +203,26 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/w", Name: "mac/proj/w"}); err != nil || !created {
 		t.Fatalf("the plain attachment: %v %v", created, err)
 	}
-	// An older build left the attach pane without its target.
+	// An older build left the attach pane without its target, and the
+	// managed session went away and came back since, so the pane is
+	// dead.
 	if _, err := Server.Run(ctx, "set-option", "-p", "-u", "-t", "=mac/proj/w:", "@laatmux_attach_target"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmux.LaatmuxServer.Run(ctx, "kill-session", "-t", "=proj/w"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/w", "-F", "#{pane_dead}")
+		if strings.TrimSpace(string(out)) == "1" {
+			break
+		}
+		if i > 200 {
+			t.Fatal("attach pane still alive with its session gone")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "proj/w", "sleep", "600"); err != nil {
 		t.Fatal(err)
 	}
 	keyed := Spec{Host: host, Managed: "proj/w", Name: "mac/proj/w", Key: "env//r/w", Source: "git@github.com:laat/proj.git", Branch: "w"}
@@ -223,8 +241,9 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	if _, ok := Find(locals, "", "mac/proj/w"); ok {
 		t.Error("still found as a plain attachment")
 	}
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/w", "-F", "#{@laatmux_attach_pane} #{@laatmux_attach_target} #{pane_dead}")
-	if err != nil || strings.TrimSpace(string(out)) != "1 proj/w 0" {
+	// The pane tagged with the target and respawned on it.
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/w", "-F", "#{@laatmux_attach_pane} #{@laatmux_attach_target} #{pane_dead} #{pane_start_command}")
+	if f := strings.Fields(strings.TrimSpace(string(out))); err != nil || len(f) < 4 || f[0] != "1" || f[1] != "proj/w" || f[2] != "0" || !strings.Contains(strings.TrimSpace(string(out)), "proj/w") {
 		t.Fatalf("the attach pane after adopt: %q %v", out, err)
 	}
 	// Found by key the next time, nothing created.
