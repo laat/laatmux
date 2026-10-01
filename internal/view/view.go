@@ -238,26 +238,14 @@ type HeaderLine struct {
 	Down bool
 }
 
-// Group is which group a row is in.
-type Group int
-
-const (
-	GroupMain Group = iota
-	GroupStale
-	GroupSettled
-	GroupOrphaned
-)
-
-// Item is one entry of the list as drawn: a row, or a group header.
+// Item is one entry of the list as drawn: a row, or a header in the
+// tree.
 type Item struct {
 	Row    *rows.Row
 	Header string
-	Group  Group
 	// Index is the item's position among the selectable rows, -1 for
 	// a header.
 	Index int
-	// Hidden is how many rows a collapsed group's header stands for.
-	Hidden int
 }
 
 // Items is the list as drawn. In the tree view the nodes the filter and
@@ -270,38 +258,28 @@ func (m *Model) Items() []Item {
 	}
 	var out []Item
 	n := 0
-	add := func(rs []rows.Row, g Group) int {
-		added := 0
+	add := func(rs []rows.Row) {
 		for i := range rs {
 			r := &rs[i]
 			if !m.matches(r) || !m.inScope(r) {
 				continue
 			}
-			out = append(out, Item{Row: r, Group: g, Index: n})
+			out = append(out, Item{Row: r, Index: n})
 			n++
-			added++
 		}
-		return added
 	}
-	add(m.Rows.Main, GroupMain)
+	add(m.Rows.Main)
 	// The stale fold holds the stale agents and those of settled
-	// workspaces; the settled and orphaned groups of the old mixed list
-	// fold with them.
-	stale := m.count(m.Rows.Stale) + m.count(m.Rows.Settled) + m.count(m.Rows.Orphaned)
+	// workspaces.
+	stale := m.count(m.Rows.Stale)
 	if stale == 0 {
 		return out
 	}
 	m.stale = rows.Row{Kind: rows.KindFold, Node: rows.NodeStale, Name: fmt.Sprintf("%d stale", stale), Children: stale}
-	hidden := 0
-	if !m.ShowHidden {
-		hidden = stale
-	}
-	out = append(out, Item{Row: &m.stale, Group: GroupStale, Index: n, Hidden: hidden})
+	out = append(out, Item{Row: &m.stale, Index: n})
 	n++
 	if m.ShowHidden {
-		add(m.Rows.Stale, GroupStale)
-		add(m.Rows.Settled, GroupStale)
-		add(m.Rows.Orphaned, GroupStale)
+		add(m.Rows.Stale)
 	}
 	return out
 }
@@ -457,20 +435,16 @@ func (m *Model) Render() []Line {
 	}
 	var lines []Line
 	var ids []string
-	// starts is where each row begins, and what it counts for below
-	// the window: a row one, a collapsed group's header its rows.
-	type start struct{ line, count int }
-	var starts []start
+	// starts is the line each row begins on, for the count of rows
+	// below the window; the stale fold is a row.
+	var starts []int
 	selStart, selEnd := -1, -1
 	m.Selection()
 	items := m.Items()
 	numbered := 0 // the rows the digits count, for {idx}
 	for _, it := range items {
-		switch {
-		case it.Row != nil:
-			starts = append(starts, start{len(lines), 1})
-		case it.Hidden > 0:
-			starts = append(starts, start{len(lines), it.Hidden})
+		if it.Row != nil {
+			starts = append(starts, len(lines))
 		}
 		var ls []Line
 		if it.Row == nil {
@@ -521,12 +495,12 @@ func (m *Model) Render() []Line {
 		lines, ids = []Line{{Spans: []Span{{Text: fit("No agents running", m.Width)}}, Dim: true}}, []string{""}
 	}
 	// rowsFrom counts the rows that begin at or after line i, a
-	// partly shown row not among them, with a collapsed group's.
+	// partly shown row not among them.
 	rowsFrom := func(i int) int {
 		n := 0
 		for _, st := range starts {
-			if st.line >= i {
-				n += st.count
+			if st >= i {
+				n++
 			}
 		}
 		return n

@@ -896,10 +896,12 @@ var openURL = func(url string) error {
 }
 
 // settle toggles the settled tag on the selected row's workspace
-// session. The merged stream carries the change back within a second
-// and the row moves to or from the settled group, but for the viewer's
-// own, which stays unfolded, sorted with the stale rows, to be
-// unsettled.
+// session. The merged stream carries the change back within a second:
+// in the agent view the workspace's tiles move into or out of the
+// stale fold, but for a blocked or done one and the viewer's own,
+// which stay in place, sorted with the stale rows, to be unsettled; in
+// the tree the line stays where it is, dim with the stale icon unless
+// an agent there wants the user.
 func (d *dash) settle(m *view.Model) {
 	r := m.Selection()
 	if r == nil {

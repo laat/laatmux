@@ -330,19 +330,6 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	return in
 }
 
-// orphaned lists local workspace sessions whose workspace no longer exists on
-// its host: the worktree was removed by hand or from another machine. A
-// host that is down, whose snapshot has not arrived, or whose daemon does
-// not publish worktrees cannot say, so its sessions are not orphaned. Called
-// with m.mu held.
-func (m *merged) orphaned(locals []workspace.Local) []workspace.Local {
-	var out []workspace.Local
-	for _, r := range rows.Build(m.input(locals, "")).Orphaned {
-		out = append(out, *r.Local)
-	}
-	return out
-}
-
 func (m *merged) render(locals []workspace.Local) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

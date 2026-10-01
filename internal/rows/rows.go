@@ -1,21 +1,23 @@
 // Package rows builds the rows the listing, the sidebar and the dashboard
-// show: the relay's pending tasks first, then each host's worktrees
-// joined with its agents, by the worktree the host attributed each agent
-// to or, from a host without attribution, by the managed session the
-// worktree record names, then agents with no worktree, then observed agents on other
-// servers, then the local sessions whose worktree is gone. The three
-// views draw the same rows; this is the one place the join is made.
+// show, from one join of the hosts' records: each host's worktrees with
+// its agents, by the worktree the host attributed each agent to or, from
+// a host without attribution, by the managed session the worktree record
+// names; the relay's pending tasks where their worktrees will be; agents
+// with no worktree and observed agents on other servers under other
+// sessions; and the local sessions whose worktree is gone. Tree is the
+// join, rooted at repositories; Agents is the agent view's tiles drawn
+// from it. This file holds the row type, what a row says, the choice
+// of a line's agent and the order of agents the join uses, and the
+// tiles' sort order.
 package rows
 
 import (
 	"fmt"
 	"math"
 	"path"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -65,8 +67,8 @@ type Input struct {
 	Branches map[protocol.BranchKey]protocol.BranchStatus
 	// Now is the time stale is measured at; StaleAfter how long an agent
 	// is idle before it is stale, 0 for never. DimStale draws a stale row
-	// dim, CollapseStale folds it into the Stale group. Sort is the order
-	// of the main group: priority, the default, recency or window.
+	// dim, CollapseStale folds it into the Stale group. Sort is the
+	// tiles' order: priority, the default, recency or window.
 	Now           time.Time
 	StaleAfter    time.Duration
 	DimStale      bool
@@ -74,19 +76,17 @@ type Input struct {
 	Sort          string
 }
 
-// Sort orders of the main group.
+// Sort orders of the tiles.
 const (
 	SortPriority = "priority"
 	SortRecency  = "recency"
 	SortWindow   = "window"
 )
 
-// Row is one entry: a pending task, a worktree with or without its
-// agent, an agent with no worktree, or a local session whose worktree
-// is gone.
+// Row is one tile of the agent view or one node of the tree: see Kind.
 type Row struct {
 	Host string // configured host name; "" when no host record claims the record
-	Name string // <repo>/<branch>, the agent's session, or the orphaned session's name
+	Name string // <repo>/<branch>, the agent's session, a task's or the orphaned session's name, or the node's label
 	// Pending is the relay's record of a background add. Its row stands
 	// for the worktree row with the same environment and root until the
 	// record hands over, so it carries that row's worktree, agent and
@@ -138,22 +138,12 @@ type Row struct {
 	Dim bool
 }
 
-// Rows are the groups in display order: the stale rows fold with the
-// settled ones, in the view's collapsed group.
+// Rows are the agent view's tiles in display order: the main group and
+// the stale fold, which holds the stale agents and those of settled
+// workspaces.
 type Rows struct {
-	Main     []Row
-	Stale    []Row
-	Settled  []Row
-	Orphaned []Row
-}
-
-// All is every row in display order: main, stale, settled, orphaned.
-func (r Rows) All() []Row {
-	out := make([]Row, 0, len(r.Main)+len(r.Stale)+len(r.Settled)+len(r.Orphaned))
-	out = append(out, r.Main...)
-	out = append(out, r.Stale...)
-	out = append(out, r.Settled...)
-	return append(out, r.Orphaned...)
+	Main  []Row
+	Stale []Row
 }
 
 // Pressing is an agent that wants the user: blocked, or done. It is never
@@ -407,262 +397,6 @@ func Server(a protocol.Agent) string {
 	return a.Server
 }
 
-// Build makes the rows. Records are attributed to hosts through the
-// environment id in the host records; the first host by name wins when
-// two share one.
-func Build(in Input) Rows {
-	hosts := map[string]Host{}
-	byEnv := map[string]string{}
-	names := make([]string, 0, len(in.Hosts))
-	for _, h := range in.Hosts {
-		hosts[h.Name] = h
-		names = append(names, h.Name)
-	}
-	sort.Strings(names)
-	for i := len(names) - 1; i >= 0; i-- {
-		if h := hosts[names[i]]; h.EnvironmentID != "" {
-			byEnv[h.EnvironmentID] = h.Name
-		}
-	}
-	byKey := map[string]*workspace.Local{}
-	byAttach := map[string]*workspace.Local{}
-	byName := map[string]*workspace.Local{}
-	for i := range in.Locals {
-		l := &in.Locals[i]
-		byName[l.Name] = l
-		if l.Workspace() {
-			byKey[l.Key] = l
-		} else if l.Attach != "" {
-			byAttach[l.Attach] = l
-		}
-	}
-	// The join is by environment id and managed session, never by host
-	// name: two hosts that are down, or that no host record claims,
-	// would otherwise share the empty name and pair the wrong agent.
-	bySession := map[string]*protocol.Agent{} // environment id + managed session -> agent
-	for i := range in.Agents {
-		a := &in.Agents[i]
-		if Server(*a) == tmux.LaatmuxServer.Label() {
-			bySession[a.EnvironmentID+"\x00"+a.Session] = a
-		}
-	}
-	// From a host with attribution the agents come to a worktree by
-	// the worktree id the host gave them, from any session and server.
-	attributes := func(env string) bool {
-		h, ok := hosts[byEnv[env]]
-		return ok && h.Attribution
-	}
-	byWorktree := map[string][]*protocol.Agent{}
-	for i := range in.Agents {
-		if a := &in.Agents[i]; a.WorktreeID != "" && attributes(a.EnvironmentID) {
-			byWorktree[a.WorktreeID] = append(byWorktree[a.WorktreeID], a)
-		}
-	}
-	// agentLocal is the local session an agent's row stands for: the
-	// plain attachment to its managed session, or the observed session
-	// itself on this machine's own default server, whatever tags it
-	// carries.
-	agentLocal := func(host string, a *protocol.Agent) *workspace.Local {
-		switch {
-		case Server(*a) == tmux.LaatmuxServer.Label():
-			return byAttach[host+"/"+a.Session]
-		case hosts[host].Local && Server(*a) == tmux.DefaultServer.Label():
-			if l := byName[a.Session]; l != nil {
-				return l
-			}
-			return &workspace.Local{Name: a.Session}
-		}
-		return nil
-	}
-	used := map[*protocol.Agent]bool{}
-	var rows []Row
-	seenKey := map[string]bool{}
-	// A pending task stands for the worktree row at its root until it
-	// hands over: the two are joined by environment and root, never by
-	// name, and the worktree row is not drawn while any task for it
-	// stands, two tasks for one explicit branch included. A task that
-	// can no longer become that row does not stand for it: see stands.
-	var pendings []Row
-	byAlias := map[string][]int{}
-	for i := range in.Pendings {
-		p := &in.Pendings[i]
-		h, configured := hosts[p.Host]
-		r := Row{Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
-			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
-		if alias := r.Alias(); alias != "" {
-			byAlias[alias] = append(byAlias[alias], len(pendings))
-		}
-		pendings = append(pendings, r)
-	}
-	for i := range in.Worktrees {
-		w := &in.Worktrees[i]
-		host := byEnv[w.EnvironmentID]
-		r := Row{Host: host, Worktree: w}
-		if w.Branch == "" {
-			r.Name = w.Repo + " (detached) " + w.Root
-		} else {
-			r.Name = w.Repo + "/" + w.Branch
-		}
-		switch {
-		case attributes(w.EnvironmentID):
-			if a := rowAgent(byWorktree[w.ID], w); a != nil {
-				r.Agent, used[a] = a, true
-			}
-		case w.Session != "":
-			if a := bySession[w.EnvironmentID+"\x00"+w.Session]; a != nil {
-				r.Agent, used[a] = a, true
-			}
-		}
-		key := workspace.Key(w.EnvironmentID, w.Root)
-		seenKey[key] = true
-		if w.Session == "" && r.Agent != nil && Server(*r.Agent) == tmux.DefaultServer.Label() {
-			// With no home session and its agent on this machine's
-			// default server the row is jumped to by switching to the
-			// agent's session, and stands for it, whatever workspace
-			// session is left. One whose agent is in a managed session
-			// is attached to through the worktree's own workspace
-			// session, and one on a remote host's default server cannot
-			// be jumped to, and keeps the workspace session.
-			r.Local = agentLocal(host, r.Agent)
-		}
-		if r.Local == nil {
-			r.Local = byKey[key]
-		}
-		// Settled as the session the row stands for is: settling is that
-		// session's.
-		r.Settled = r.Local != nil && r.Local.Settled
-		if idx := byAlias[w.ID]; len(idx) > 0 {
-			for _, j := range idx {
-				pendings[j].Worktree, pendings[j].Agent, pendings[j].Local = r.Worktree, r.Agent, r.Local
-			}
-			continue
-		}
-		rows = append(rows, r)
-	}
-	// The host lists the agent in the task's session before the
-	// worktree that has it, and a jump makes the local session before
-	// the listing too; the task takes both by what the host reported,
-	// so the agent is not a row of its own meanwhile, the session not a
-	// orphaned one, and the viewer's own row is followed.
-	for i := range pendings {
-		p := pendings[i].Pending
-		if p.EnvironmentID != "" && p.Root != "" && !p.Gone && !(p.Done && !p.OK) {
-			// A session at the root of an add that may still make the
-			// worktree is not orphaned, whether or not the task stands for
-			// it: a host renamed mid-add has not listed it yet.
-			seenKey[workspace.Key(p.EnvironmentID, p.Root)] = true
-		}
-		if !pendings[i].stands() {
-			continue
-		}
-		if p.EnvironmentID != "" && p.Root != "" {
-			if l := byKey[workspace.Key(p.EnvironmentID, p.Root)]; l != nil && pendings[i].Local == nil {
-				pendings[i].Local = l
-			}
-		}
-		if pendings[i].Agent != nil || p.EnvironmentID == "" || p.Session == "" {
-			continue
-		}
-		// The session name alone could be a later session's that took
-		// the name: the agent's pane must start at the task's root, as
-		// the host's own join of a pane to a worktree has it.
-		if a := bySession[p.EnvironmentID+"\x00"+p.Session]; a != nil && !used[a] && p.Root != "" && a.Cwd == p.Root {
-			pendings[i].Agent, used[a] = a, true
-			for j := range pendings {
-				if q := pendings[j].Pending; j != i && pendings[j].Agent == nil && pendings[j].stands() && q.EnvironmentID == p.EnvironmentID && q.Session == p.Session && q.Root == p.Root {
-					pendings[j].Agent = a
-				}
-			}
-		}
-	}
-	rows = append(rows, pendings...)
-	// Every managed agent not shown on a worktree or task row has a row
-	// of its own, a second one in a session included.
-	for i := range in.Agents {
-		a := &in.Agents[i]
-		if Server(*a) != tmux.LaatmuxServer.Label() || used[a] {
-			continue
-		}
-		host := byEnv[a.EnvironmentID]
-		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
-	}
-	for i := range in.Agents {
-		a := &in.Agents[i]
-		if Server(*a) == tmux.LaatmuxServer.Label() || used[a] {
-			continue
-		}
-		host := byEnv[a.EnvironmentID]
-		rows = append(rows, Row{Host: host, Name: a.Session, Agent: a, Local: agentLocal(host, a)})
-	}
-	// Orphaned: a local workspace session whose worktree is gone from a
-	// host that can say so. A host that is down, whose snapshot has not
-	// arrived, or whose daemon does not publish worktrees cannot, so its
-	// sessions are not orphaned.
-	up := map[string]bool{} // environment id
-	for _, h := range in.Hosts {
-		if h.Connected && h.Listed && h.Worktrees && h.EnvironmentID != "" {
-			up[h.EnvironmentID] = true
-		}
-	}
-	for i := range in.Locals {
-		l := &in.Locals[i]
-		if !l.Workspace() || seenKey[l.Key] {
-			continue
-		}
-		if env, _ := workspace.SplitKey(l.Key); up[env] {
-			// The host is the one that answers for the environment id
-			// now, not the name the session was tagged with, which a
-			// renamed host leaves behind.
-			rows = append(rows, Row{Host: byEnv[env], Name: l.Name, Local: l, Orphaned: true, Settled: l.Settled})
-		}
-	}
-	for i := range rows {
-		r := &rows[i]
-		h, known := hosts[r.Host]
-		r.HostDown = !known || !h.Connected
-		r.Current = in.Current != "" && r.Local != nil && r.Local.Name == in.Current
-		if w := r.Worktree; w != nil && w.Branch != "" && w.Source != "" {
-			if b, ok := in.Branches[protocol.BranchKey{Source: config.SourceKey(w.Source), Branch: w.Branch}]; ok {
-				r.Branch = &b
-			}
-		}
-		if a := r.Agent; a != nil && r.Pending == nil && a.Liveness != protocol.Gone && a.Activity == protocol.Idle {
-			r.Done = in.Attention[a.ID].Done()
-			r.Stale = !r.Done && in.StaleAfter > 0 && in.Now.Sub(a.ActivityAt) > in.StaleAfter
-		}
-		r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned ||
-			r.Settled && !r.Pressing() || r.Stale && in.DimStale
-		if r.Pending != nil {
-			// Never dim: a task that runs is under way, and one that
-			// needs the user wants them, which its waiting icon says;
-			// never settled away from the main group.
-			r.Dim, r.Settled = false, false
-		}
-	}
-	sort.SliceStable(rows, func(i, j int) bool { return less(rows[i], rows[j], in.Sort) })
-	var out Rows
-	for _, r := range rows {
-		switch {
-		case r.Orphaned:
-			out.Orphaned = append(out.Orphaned, r)
-		case r.Current:
-			// The viewer's own row stays in sight, settled or stale, so
-			// the pane always shows the session it sits in, and z there
-			// can unsettle it.
-			out.Main = append(out.Main, r)
-		case r.Settled && !r.Pressing():
-			// A settled workspace's agent that wants the user stays in
-			// place with its own icon.
-			out.Settled = append(out.Settled, r)
-		case r.Stale && in.CollapseStale:
-			out.Stale = append(out.Stale, r)
-		default:
-			out.Main = append(out.Main, r)
-		}
-	}
-	return out
-}
-
 // rowAgent is the agent a worktree row shows of the agents attributed
 // to it, the row being jumped to through it. With a home session it is
 // an agent there or none. Without one it is the agent laatmux made at
@@ -717,19 +451,12 @@ func started(a *protocol.Agent) int64 {
 	return a.Identity.StartUnix
 }
 
-// less is the sort order. Pending tasks come first in every order, the
-// newest first, since a task is what the user just asked for; orphaned
-// rows sort by name alone, as ls lists them. The rest, by priority: rank,
-// then most recent activity first; by recency: most recent activity
-// first, rows without an agent last; by window: the session, then the
-// window. Ties go by host, then name.
+// less is the tiles' sort order. Pending tasks come first in every
+// order, the newest first, since a task is what the user just asked
+// for. The rest, every one an agent's tile: by priority, rank, then
+// most recent activity first; by recency, most recent activity first;
+// by window, the session, then the window. Ties go by host, then name.
 func less(a, b Row, order string) bool {
-	if a.Orphaned || b.Orphaned {
-		if a.Orphaned != b.Orphaned {
-			return !a.Orphaned
-		}
-		return a.Name < b.Name
-	}
 	if (a.Pending != nil) != (b.Pending != nil) {
 		return a.Pending != nil
 	}
@@ -741,9 +468,7 @@ func less(a, b Row, order string) bool {
 	}
 	switch order {
 	case SortRecency:
-		if (a.Agent != nil) != (b.Agent != nil) {
-			return a.Agent != nil
-		}
+		// Activity alone, below.
 	case SortWindow:
 		if sa, sb := a.session(), b.session(); sa != sb {
 			return sa < sb
@@ -765,20 +490,14 @@ func less(a, b Row, order string) bool {
 	return a.Name < b.Name
 }
 
-// session is what a row sorts by first in window order: its host and its
-// agent's session, else its host and its name.
+// session is what a tile sorts by first in window order: its host and
+// its agent's session.
 func (r Row) session() string {
-	if r.Agent != nil {
-		return r.Host + "\x00" + r.Agent.Session
-	}
-	return r.Host + "\x00" + r.Name
+	return r.Host + "\x00" + r.Agent.Session
 }
 
-// window is the agent's window index, -1 without an agent.
+// window is the agent's window index.
 func (r Row) window() int {
-	if r.Agent == nil {
-		return -1
-	}
 	return r.Agent.Window
 }
 

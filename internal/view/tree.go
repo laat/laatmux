@@ -398,11 +398,11 @@ func (m *Model) treeItems() []Item {
 				}
 			}
 			if under {
-				out = append(out, Item{Header: r.Name, Group: GroupMain, Index: -1})
+				out = append(out, Item{Header: r.Name, Index: -1})
 			}
 			continue
 		}
-		out = append(out, Item{Row: r, Group: GroupMain, Index: n})
+		out = append(out, Item{Row: r, Index: n})
 		n++
 		if r.Foldable() && m.closed(r) {
 			hideBelow = r.Depth
@@ -488,11 +488,10 @@ func (m *Model) followedID() string {
 		}
 		return ""
 	}
-	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale, m.Rows.Settled} {
-		for _, r := range rs {
-			if r.Current {
-				return r.ID()
-			}
+	// The viewer's tile is in the main group whatever its state.
+	for _, r := range m.Rows.Main {
+		if r.Current {
+			return r.ID()
 		}
 	}
 	return ""

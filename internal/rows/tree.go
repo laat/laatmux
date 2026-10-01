@@ -315,9 +315,8 @@ func Tree(in Input) []Row {
 		children = append(children, runs...)
 		// The worktree's own session: the home session's workspace
 		// session, or the one its agent on this machine's default server
-		// stands for. The line's agent is the one its jump goes through,
-		// as the mixed row's was; the most pressing is kept apart, for
-		// the folded line's icon.
+		// stands for. The line's agent is the one its jump goes through;
+		// the most pressing is kept apart, for the folded line's icon.
 		line.Agent = rowAgent(agents, w)
 		if w.Session == "" && line.Agent != nil && Server(*line.Agent) == tmux.DefaultServer.Label() {
 			line.Local = j.agentLocal(host, line.Agent)
