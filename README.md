@@ -532,7 +532,12 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   it has the next jump make a tagged one. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
-  `@laatmux_attach`. The repository in the target is read as this
+  `@laatmux_attach`. When that session later becomes a worktree's home,
+  `new work --cwd <root>` say, or an older build left one named as the
+  worktree's workspace would be, the worktree's jump adopts it as the
+  workspace, keyed and tagged, rather than refuse its name as in use;
+  an attachment to another managed session is still a name in use. The
+  repository in the target is read as this
   machine's label first, then the host's, and the target after the host
   may also be the managed session's name, with the branch encoded, which
   is how a worktree detached in place is still reached. The local
