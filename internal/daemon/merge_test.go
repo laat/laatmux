@@ -399,10 +399,14 @@ func TestMergedHostDownAndBack(t *testing.T) {
 		t.Errorf("cached records missing while down: %+v", snap.Agents)
 	}
 	// The retry fails with ssh's message in the record, and the
-	// reconnect is over: the host is down for a client to stop on.
-	until(t, c2, pc2, hostStatus("vm", func(st protocol.HostStatus) bool {
+	// reconnect is over: the host is down for a client to stop on, its
+	// identity kept so the clients keep its cached records its own.
+	msgs = until(t, c2, pc2, hostStatus("vm", func(st protocol.HostStatus) bool {
 		return st.Error == "ssh: connect to host vm port 22: Connection refused" && !st.Reconnecting
 	}))
+	if st := *msgs[len(msgs)-1].HostStatus; st.EnvironmentID != "renv" || st.Version != "remote" || !protocol.Has(st.Capabilities, protocol.CapStatus) {
+		t.Errorf("the failed redial dropped the host's identity: %+v", st)
+	}
 
 	// Back: the remote has changed meanwhile; the snapshot replaces its
 	// records, removing what is gone, then marks it listed.
@@ -499,8 +503,8 @@ func TestMergedIdleDrop(t *testing.T) {
 	c2, pc2, snap := f.subscribe(t, ctx)
 	defer c2.Close()
 	h, _ := findHost(snap.Hosts, "vm")
-	if h.Connected || h.Listed || h.Error != "" {
-		t.Errorf("host record after idle = %+v, want neither connected nor failed", h)
+	if h.Connected || h.Listed || h.Error != "" || h.EnvironmentID != "renv" {
+		t.Errorf("host record after idle = %+v, want neither connected nor failed, its identity kept", h)
 	}
 	if len(snap.Agents) != 2 {
 		t.Errorf("cached records missing after idle: %+v", snap.Agents)
