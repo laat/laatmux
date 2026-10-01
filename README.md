@@ -1058,6 +1058,13 @@ sidebar:
       run: "{indent}▶ {command}{fill}{elapsed}"
 ```
 
+The dashboard's defaults differ where it has the room a sidebar
+seldom has: `{git_stats}  {git_sync}` on the second tile line and in
+`compact`, `{pr_state} {pr_number} {pr_checks} {pr_detail}` on the
+third, and both on the tree's worktree line before `{worst_status}`.
+A line the config sets applies to the sidebar and the dashboard
+alike; only the lines it leaves differ.
+
 - **Tokens.** Labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`,
   `{host}` (dim for every host but this machine, `?` when no host
   claims the record, with `/server` on a tile or an agent line for an
@@ -1073,7 +1080,20 @@ sidebar:
   `{git_stats}` (the whole `R +46 -11 ✎ +28 -3`), `{git_committed}`,
   `{git_uncommitted}`, `{git_ahead}` (`↑2`), `{git_behind}` (`↓1`),
   `{git_dirty}` (`✎`), `{git_conflict}` (`!`), `{git_rebase}` (`R`),
-  `{git_branch}` (the base). PR: `{pr_number}`, `{pr_checks}`.
+  `{git_branch}` (the base), `{git_sync}` (how the branch stands
+  against its base: `→base` when the base is not `main`, `master` or
+  the branch itself, its `origin/` taken off and at most twelve cells,
+  the conflict mark `!`, `↑2 ↓1`; when narrow the base is cut, then
+  goes, then `↓`, then `↑`, and the mark stays). PR: `{pr_number}`,
+  `{pr_checks}`, `{pr_state}` (the PR's state as an icon: `●` open in
+  green, `◌` a draft dim, `◆` merged in purple, `⊘` closed in red, a
+  draft closed as one being closed; `o` `d` `m` `c` in ascii, octicons
+  in nerdfont), `{pr_detail}` (pending checks: the time since this
+  machine first saw them pending, in purple, ticking under an hour,
+  shown whole or dropped; failing: the first failing check's name in
+  red, cut like a label; else nothing; on `main` and `master` only the
+  failing name). A stale answer leaves them dim and plain, the pending
+  time then as of the last answer.
   Position: `{idx}` (the row's number, as the digits count),
   `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
   (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
@@ -1091,14 +1111,15 @@ sidebar:
 - **Overflow.** A line wider than the pane gives way in this order:
   the flexible tokens, the labels and the pane title on either side,
   are cut with `…` down to a third of the width (at most twelve
-  cells), the rightmost first; `{git_stats}` and `{pr_checks}` shrink
-  themselves, never to nothing; the fields on the right are dropped,
+  cells), the rightmost first; `{git_stats}`, `{git_sync}` and
+  `{pr_checks}` shrink themselves, the rightmost first, never to
+  nothing; the fields on the right are dropped,
   the widest first and a folded line's icon last; the flexible tokens
   are cut further; the tokens on the left are dropped, the last first;
   then the line is clipped. A dropped token takes its separator, the
   literal before it (else the one after) up to a bracket, and a
   bracket pair around it alone, `({host})`, goes with it. What dropping leaves over
-  goes back to the cut labels, then to the shrunk stats and checks. A
+  goes back to the cut labels, then to the shrunk stats, sync and checks. A
   stale branch's `?` sits on `{pr_checks}` when they are drawn, else on
   `{pr_number}`: a number drawn on a stale row always has it, and of a
   one-digit number and the marked check, equally wide, the number goes
@@ -1279,7 +1300,10 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   not. The views show `#N` and the checks at the
   right of a tile's third line: `✓`, `× 3/5` or a spinner and `3/5`,
   dim with `?` when stale; on `main` and `master` only failing checks.
-  The dashboard's `o` opens the PR and `O` its checks.
+  The dashboard adds the PR's state icon before the number and, after
+  the checks, the time they have been pending or the first failing
+  check's name, and `→base ! ↑A ↓B` after the git stats. Its `o`
+  opens the PR and `O` its checks.
 - **Attention**, capability `attention`: the daemon's done-and-seen
   state as `attention` records, `{agent_id, finished_at, seen_at}`, in
   the snapshot as `attentions` and removed by `attention_id`, keys an

@@ -24,12 +24,17 @@ func look(cfg config.Config, t *view.Term) (palette.Theme, view.Icons) {
 	return lookWith(cfg, func() (bool, bool) { return t.Background(backgroundWait) })
 }
 
-// templates compiles the config's line templates, the defaults for what
-// it leaves out; a template that does not parse draws its error in the
-// view rather than failing the pane.
-func templates(cfg config.Config) view.Templates {
+// templates compiles the config's line templates, the host's defaults
+// for what it leaves out: the dashboard's carry the git and PR columns
+// a sidebar has no room for. A template that does not parse draws its
+// error in the view rather than failing the pane.
+func templates(cfg config.Config, dashboard bool) view.Templates {
 	t := cfg.Sidebar.Templates
-	return view.CompileTemplates(t.Tiles, t.Compact, t.Top, t.Tree.Repo, t.Tree.Worktree, t.Tree.Agent, t.Tree.Pane, t.Tree.Run)
+	def := view.SidebarDefaults
+	if dashboard {
+		def = view.DashboardDefaults
+	}
+	return view.CompileTemplatesOver(def, t.Tiles, t.Compact, t.Top, t.Tree.Repo, t.Tree.Worktree, t.Tree.Agent, t.Tree.Pane, t.Tree.Run)
 }
 
 // agentIcons is the config's agent icons as the view keeps them.

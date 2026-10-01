@@ -71,6 +71,12 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
 }
 
+// templatesFor is the host's templates: the dashboard's defaults for
+// the dashboard, the sidebar's for a pane.
+func templatesFor(cfg config.Config, o viewOptions) view.Templates {
+	return templates(cfg, o.actions)
+}
+
 // jumpKeysShown is whether the {jump_key} labels are drawn: the keys
 // reach a sidebar pane over its socket, and a popup gets the keys
 // itself and drops them, while a window's binding goes to the window's
@@ -110,7 +116,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	defer t.Close()
 	t.Theme, m.Icons = look(cfg, t)
 	m.Machine, _ = os.Hostname()
-	m.SetTemplates(templates(cfg))
+	m.SetTemplates(templatesFor(cfg, o))
 	m.AgentIcons = agentIcons(cfg)
 	m.JumpKeys = jumpKeysShown(cfg, o)
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}

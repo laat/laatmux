@@ -19,7 +19,7 @@ import (
 // A line wider than the pane gives way in this order: the flexible
 // tokens, the labels and the pane title on either side, are cut with …
 // down to a floor of a third of the width, at most twelve cells, the
-// rightmost first; `{git_stats}` and `{pr_checks}` shrink themselves,
+// rightmost first; `{git_stats}`, `{git_sync}` and `{pr_checks}` shrink themselves,
 // never to nothing; fields on the right are dropped, the widest first
 // and a folded line's `{worst_status}` icon last; the flexible tokens
 // are cut further; then tokens on the left are dropped, the last
@@ -66,13 +66,16 @@ type Template struct {
 // empty, or spaces alone.
 func (t Template) Blank() bool { return strings.TrimSpace(t.src) == "" }
 
+// Source is the template's text as written.
+func (t Template) Source() string { return t.src }
+
 // tokenKind says how a token gives way on a line too narrow.
 type tokenKind int
 
 const (
 	tokenPlain  tokenKind = iota
 	tokenFlex             // a label or the title: cut with …
-	tokenShrink           // the git stats or the checks: shrink themselves
+	tokenShrink           // the git stats, the sync or the checks: shrink themselves
 )
 
 // tokens is the table of token names.
@@ -82,8 +85,8 @@ var tokens = map[string]tokenKind{
 	"status_icon": tokenPlain, "status_label": tokenPlain, "agent_icon": tokenPlain, "agent_label": tokenPlain, "elapsed": tokenPlain,
 	"stripe":    tokenPlain,
 	"git_stats": tokenShrink, "git_committed": tokenPlain, "git_uncommitted": tokenPlain, "git_ahead": tokenPlain, "git_behind": tokenPlain,
-	"git_dirty": tokenPlain, "git_conflict": tokenPlain, "git_rebase": tokenPlain, "git_branch": tokenFlex,
-	"pr_number": tokenPlain, "pr_checks": tokenShrink,
+	"git_dirty": tokenPlain, "git_conflict": tokenPlain, "git_rebase": tokenPlain, "git_branch": tokenFlex, "git_sync": tokenShrink,
+	"pr_number": tokenPlain, "pr_checks": tokenShrink, "pr_state": tokenPlain, "pr_detail": tokenFlex,
 	"idx": tokenPlain, "jump_key": tokenPlain,
 	"repo_count": tokenPlain, "fold": tokenPlain, "worst_status": tokenPlain, "child_count": tokenPlain,
 	"command": tokenFlex, "indent": tokenPlain,
@@ -248,57 +251,88 @@ func Compile(name, src, def string) Compiled {
 }
 
 // The default templates: the tiles, the compact line, the top layout's
-// item, and the tree's lines.
+// item, and the tree's lines. The dashboard's have the git and PR
+// columns the sidebar's leave out: `{git_sync}` after the stats, where
+// it is the first to shrink, and `{pr_state}` and `{pr_detail}` around
+// the number and the checks; a popup has the width, a sidebar seldom.
 const (
-	DefaultTile1    = "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}"
-	DefaultTile2    = "{stripe}    {secondary} @{host}{fill}{git_stats}"
-	DefaultTile3    = "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
-	DefaultCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
-	DefaultTop1     = "{status_icon} {primary} {pane_suffix}"
-	DefaultTop2     = "{secondary} @{host}"
-	DefaultTop3     = "{pane_title}"
-	DefaultRepo     = "#[fg=header,bold]{fold}{repo}"
-	DefaultWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
-	DefaultAgent    = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
-	DefaultPane     = "{indent}$ {command}"
-	DefaultRun      = "{indent}▶ {command}{fill}{elapsed}"
+	DefaultTile1        = "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}"
+	DefaultTile2        = "{stripe}    {secondary} @{host}{fill}{git_stats}"
+	DefaultTile3        = "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
+	DefaultCompact      = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
+	DefaultTop1         = "{status_icon} {primary} {pane_suffix}"
+	DefaultTop2         = "{secondary} @{host}"
+	DefaultTop3         = "{pane_title}"
+	DefaultRepo         = "#[fg=header,bold]{fold}{repo}"
+	DefaultWorktree     = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
+	DefaultAgent        = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
+	DefaultPane         = "{indent}$ {command}"
+	DefaultRun          = "{indent}▶ {command}{fill}{elapsed}"
+	DefaultDashTile2    = "{stripe}    {secondary} @{host}{fill}{git_stats}  {git_sync}"
+	DefaultDashTile3    = "{stripe}    {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
+	DefaultDashCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {elapsed}"
+	DefaultDashWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
 )
 
 // DefaultTiles are the tile's three lines; DefaultTops the strip's
-// chip's, drawn as far as its height allows.
+// chip's, drawn as far as its height allows; DefaultDashTiles the
+// dashboard's tile.
 var (
-	DefaultTiles = []string{DefaultTile1, DefaultTile2, DefaultTile3}
-	DefaultTops  = []string{DefaultTop1, DefaultTop2, DefaultTop3}
+	DefaultTiles     = []string{DefaultTile1, DefaultTile2, DefaultTile3}
+	DefaultTops      = []string{DefaultTop1, DefaultTop2, DefaultTop3}
+	DefaultDashTiles = []string{DefaultTile1, DefaultDashTile2, DefaultDashTile3}
 )
 
-// DefaultTemplates is the set with nothing configured.
+// Defaults is a host's set of default templates, the sidebar's or the
+// dashboard's, taken where the config sets none.
+type Defaults struct {
+	Tiles                            []string
+	Compact                          string
+	Tops                             []string
+	Repo, Worktree, Agent, Pane, Run string
+}
+
+// SidebarDefaults and DashboardDefaults are the two hosts' sets.
+var (
+	SidebarDefaults   = Defaults{Tiles: DefaultTiles, Compact: DefaultCompact, Tops: DefaultTops, Repo: DefaultRepo, Worktree: DefaultWorktree, Agent: DefaultAgent, Pane: DefaultPane, Run: DefaultRun}
+	DashboardDefaults = Defaults{Tiles: DefaultDashTiles, Compact: DefaultDashCompact, Tops: DefaultTops, Repo: DefaultRepo, Worktree: DefaultDashWorktree, Agent: DefaultAgent, Pane: DefaultPane, Run: DefaultRun}
+)
+
+// DefaultTemplates is the sidebar's set with nothing configured.
 func DefaultTemplates() Templates {
 	return CompileTemplates(nil, "", nil, "", "", "", "", "")
 }
 
-// CompileTemplates compiles the config's templates, the defaults where
-// it sets none: a nil tiles or top list is the default three, an empty
-// line in it a line removed.
+// CompileTemplates compiles the config's templates over the sidebar's
+// defaults where it sets none: a nil tiles or top list is the default
+// three, an empty line in it a line removed.
 func CompileTemplates(tiles []string, compact string, top []string, repo, worktree, agent, pane, run string) Templates {
+	return CompileTemplatesOver(SidebarDefaults, tiles, compact, top, repo, worktree, agent, pane, run)
+}
+
+// CompileTemplatesOver is CompileTemplates over the defaults given, the
+// dashboard's for the dashboard: a template the config sets applies to
+// both hosts, and only the lines it leaves differ.
+func CompileTemplatesOver(def Defaults, tiles []string, compact string, top []string, repo, worktree, agent, pane, run string) Templates {
 	var t Templates
 	if tiles == nil {
-		tiles = DefaultTiles
+		tiles = def.Tiles
 	}
 	for i, src := range tiles {
 		t.Tiles = append(t.Tiles, Compile("tiles["+strconv.Itoa(i)+"]", src, ""))
 	}
-	t.Compact = Compile("compact", compact, DefaultCompact)
+	t.Compact = Compile("compact", compact, def.Compact)
 	if top == nil {
-		top = DefaultTops
+		top = def.Tops
 	}
 	for i, src := range top {
 		t.Top = append(t.Top, Compile("top["+strconv.Itoa(i)+"]", src, ""))
 	}
-	t.Tree.Repo = Compile("tree.repo", repo, DefaultRepo)
-	t.Tree.Worktree = Compile("tree.worktree", worktree, DefaultWorktree)
-	t.Tree.Agent = Compile("tree.agent", agent, DefaultAgent)
-	t.Tree.Pane = Compile("tree.pane", pane, DefaultPane)
-	t.Tree.Run = Compile("tree.run", run, DefaultRun)
+	t.Tree.Repo = Compile("tree.repo", repo, def.Repo)
+	t.Tree.Worktree = Compile("tree.worktree", worktree, def.Worktree)
+	t.Tree.Agent = Compile("tree.agent", agent, def.Agent)
+	t.Tree.Pane = Compile("tree.pane", pane, def.Pane)
+	t.Tree.Run = Compile("tree.run", run, def.Run)
 	return t
 }
 
@@ -952,6 +986,22 @@ func (m *Model) token(name string, r rows.Row) item {
 			return text(g.Base)
 		}
 		return it
+	case "git_sync":
+		it.spans = gitSync(r, 1<<20)
+		if len(it.spans) > 0 {
+			// Never to nothing, as the stats.
+			least := gitSync(r, 1)
+			for w := 2; least == nil && w <= spansWidth(it.spans); w++ {
+				least = gitSync(r, w)
+			}
+			it.shrink = func(w int) []Span {
+				if s := gitSync(r, max(w, 1)); s != nil {
+					return s
+				}
+				return least
+			}
+		}
+		return it
 	case "pr_number":
 		it.spans = m.prNumber(r)
 		return it
@@ -959,6 +1009,14 @@ func (m *Model) token(name string, r rows.Row) item {
 		it.spans = m.prChecks(r, 1<<20)
 		if len(it.spans) > 0 {
 			it.shrink = func(w int) []Span { return m.prChecks(r, max(w, 1)) }
+		}
+		return it
+	case "pr_state":
+		it.spans = m.prState(r)
+		return it
+	case "pr_detail":
+		if sp, kind := m.prDetail(r); sp.Text != "" {
+			it.spans, it.kind = []Span{sp}, kind
 		}
 		return it
 	case "idx":
@@ -1062,7 +1120,8 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	// plain, closed and draft faint.
 	sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
 	switch {
-	case b.PR.Draft:
+	case b.PR.Draft && b.PR.State == "open":
+		// A draft closed as one keeps its flag; closed is what counts.
 		sp.Dim = true
 	case b.PR.State == "open":
 		sp.Fg, sp.Bold = palette.Success, true
@@ -1081,6 +1140,81 @@ func (m *Model) prNumber(r rows.Row) []Span {
 		out = append(out, Span{Text: "?", Dim: true})
 	}
 	return out
+}
+
+// prState is the PR's state as an icon: open in green, a draft dim,
+// merged in purple, closed in red; the set's glyphs, dim and plain when
+// stale; nothing without a PR or on main or master.
+func (m *Model) prState(r rows.Row) []Span {
+	b := r.Branch
+	if b == nil || b.PR == nil || mainline(r) {
+		return nil
+	}
+	set := prIcons[m.Icons.Set]
+	if set == nil {
+		set = prIcons[IconsEmoji]
+	}
+	var sp Span
+	switch {
+	case b.PR.Draft && b.PR.State == "open":
+		sp = Span{Text: set[prDraft], Dim: true}
+	case b.PR.State == "open":
+		sp = Span{Text: set[prOpen], Fg: palette.Success, Bold: true}
+	case b.PR.State == "merged":
+		sp = Span{Text: set[prMerged], Fg: palette.Accent}
+	default:
+		sp = Span{Text: set[prClosed], Fg: palette.Danger, Dim: true}
+	}
+	if b.Stale {
+		sp.Dim, sp.Fg, sp.Bold = true, "", false
+	}
+	return []Span{sp}
+}
+
+// The PR state icons by set: open, draft, merged, closed.
+const (
+	prOpen = iota
+	prDraft
+	prMerged
+	prClosed
+)
+
+var prIcons = map[string][]string{
+	IconsEmoji:    {"●", "◌", "◆", "⊘"},
+	IconsNerdFont: {"\uf407", "\uf4dd", "\uf419", "\uf4dc"},
+	IconsASCII:    {"o", "d", "m", "c"},
+}
+
+// prDetail is what the checks are doing: pending, how long since this
+// machine first saw the head's checks pending, in purple and ticking
+// under an hour; failing, the first failing check's name in red; else
+// nothing. Dim and plain when stale, the time then as of the last
+// answer, standing still as the spinner does; on main or master only
+// the failing name, as the checks. The time is plain, shown whole or
+// dropped, the name a label, cut.
+func (m *Model) prDetail(r rows.Row) (sp Span, kind tokenKind) {
+	b := r.Branch
+	if b == nil || b.Checks == nil {
+		return Span{}, tokenFlex
+	}
+	ch := b.Checks
+	switch {
+	case ch.State == protocol.ChecksFailure && ch.Failing != "":
+		sp, kind = Span{Text: ch.Failing, Fg: palette.Danger}, tokenFlex
+	case ch.State == protocol.ChecksPending && !ch.PendingSince.IsZero() && !mainline(r):
+		at := m.Now
+		if b.Stale {
+			at = b.FetchedAt
+		}
+		d := at.Sub(ch.PendingSince)
+		sp, kind = Span{Text: elapsed(d), Fg: palette.Accent, tick: d < time.Hour && !b.Stale}, tokenPlain
+	default:
+		return Span{}, tokenFlex
+	}
+	if b.Stale {
+		sp.Dim, sp.Fg = true, ""
+	}
+	return sp, kind
 }
 
 // mainline is a worktree on main or master, whose PR is left out and
