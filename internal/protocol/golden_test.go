@@ -27,7 +27,8 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // this one fails, and a tag renamed on purpose is a golden rewritten
 // with -update and a protocol note. A Go field renamed with its tag
 // kept, or two fields swapped, changes nothing on the wire and nothing
-// here: a string's value is its key, a number's is one.
+// here: a string's value is its key, a number's is one, and the golden
+// is compared as decoded JSON, so the keys' order does not count.
 func TestWireGolden(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -53,7 +54,7 @@ func TestWireGolden(t *testing.T) {
 		for _, z := range zeroLeaves(c.name, decoded) {
 			t.Errorf("%s: a zero on the wire, which omitempty would hide", z)
 		}
-		golden(t, c.name, string(b)+"\n")
+		golden(t, c.name, string(b)+"\n", decoded)
 	}
 }
 
@@ -235,7 +236,9 @@ func diffLines(want, got string) string {
 	return b.String()
 }
 
-func golden(t *testing.T, name, got string) {
+// golden compares the decoded value with the golden file's, decoded
+// too, and names the paths that differ.
+func golden(t *testing.T, name, got string, decoded any) {
 	t.Helper()
 	p := filepath.Join("testdata", name+".json")
 	if *update {
@@ -247,7 +250,64 @@ func golden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatalf("%v; run with -update", err)
 	}
-	if string(want) != got {
-		t.Errorf("%s differs from its golden (a renamed key? run with -update to accept):\n%s", name, diffLines(string(want), got))
+	var wantv any
+	if err := json.Unmarshal(want, &wantv); err != nil {
+		t.Fatalf("%s: %v", p, err)
+	}
+	if diffs := diffJSON(name, wantv, decoded); len(diffs) > 0 {
+		t.Errorf("%s differs from its golden (a renamed key? run with -update to accept):\n%s", name, strings.Join(diffs, "\n"))
+	}
+}
+
+// diffJSON is the paths at which two decoded JSON values differ, keys
+// in any order.
+func diffJSON(path string, want, got any) []string {
+	switch w := want.(type) {
+	case map[string]any:
+		g, ok := got.(map[string]any)
+		if !ok {
+			return []string{fmt.Sprintf("%s: want an object, got %v", path, got)}
+		}
+		var out []string
+		keys := map[string]bool{}
+		for k := range w {
+			keys[k] = true
+		}
+		for k := range g {
+			keys[k] = true
+		}
+		sorted := make([]string, 0, len(keys))
+		for k := range keys {
+			sorted = append(sorted, k)
+		}
+		sort.Strings(sorted)
+		for _, k := range sorted {
+			wv, inW := w[k]
+			gv, inG := g[k]
+			switch {
+			case !inW:
+				out = append(out, fmt.Sprintf("%s.%s: not in the golden", path, k))
+			case !inG:
+				out = append(out, fmt.Sprintf("%s.%s: in the golden, not on the wire", path, k))
+			default:
+				out = append(out, diffJSON(path+"."+k, wv, gv)...)
+			}
+		}
+		return out
+	case []any:
+		g, ok := got.([]any)
+		if !ok || len(g) != len(w) {
+			return []string{fmt.Sprintf("%s: want %v, got %v", path, want, got)}
+		}
+		var out []string
+		for i := range w {
+			out = append(out, diffJSON(fmt.Sprintf("%s[%d]", path, i), w[i], g[i])...)
+		}
+		return out
+	default:
+		if !reflect.DeepEqual(want, got) {
+			return []string{fmt.Sprintf("%s: want %v, got %v", path, want, got)}
+		}
+		return nil
 	}
 }

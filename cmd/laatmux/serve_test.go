@@ -108,8 +108,13 @@ func serveFixture(t *testing.T) *served {
 	done := make(chan error, 1)
 	go func() { done <- cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}) }()
 	s := &served{added: added, done: done, cancel: cancel}
-	// Registered after the Setenvs, so it runs before they are undone.
-	t.Cleanup(func() { s.wait(t) })
+	// Registered after the Setenvs, so it runs before they are undone;
+	// a serve that does not return would outlive them.
+	t.Cleanup(func() {
+		if err := s.wait(t); err != nil {
+			t.Errorf("serve at the end: %v", err)
+		}
+	})
 	var c *client.Conn
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		nc, err := client.DialLocal(ctx, false)
@@ -185,14 +190,22 @@ func TestServeToRender(t *testing.T) {
 		// local host is never listed and ls waits its timeout out.
 		t.Skip("tmux not installed")
 	}
-	// A tmux that answers after half a second: the daemon's first poll
-	// is still out when the client subscribes, as it is for ls against
-	// a daemon it just started, and the host is listed by an upsert
-	// after the snapshot.
+	// A tmux whose list-panes, the daemon's poll, waits for a gate the
+	// test opens once it has seen the snapshot with the host unlisted:
+	// the daemon is still on its first poll when the client subscribes,
+	// as it is for ls against a daemon it just started, and the host is
+	// listed by an upsert after the snapshot. The other commands, the
+	// sessions listing the snapshot needs among them, run at once.
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte("#!/bin/sh\nsleep 0.5\nexec "+real+" \"$@\"\n"), 0o755); err != nil {
+	gate := filepath.Join(bin, "gate")
+	t.Setenv("LAATMUX_TEST_TMUX", real)
+	t.Setenv("LAATMUX_TEST_GATE", gate)
+	shim := "#!/bin/sh\nif [ \"$3\" = list-panes ]; then while [ ! -e \"$LAATMUX_TEST_GATE\" ]; do sleep 0.02; done; fi\nexec \"$LAATMUX_TEST_TMUX\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	open := func() { os.WriteFile(gate, nil, 0o644) }
+	t.Cleanup(open)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	s := serveFixture(t)
 	ctx := context.Background()
@@ -216,13 +229,22 @@ func TestServeToRender(t *testing.T) {
 	}
 	m := newMerged()
 	m.configure(cfg)
-	asked := 0
-	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool { asked++; return len(m.pending()) == 0 })
+	unlisted := 0
+	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool {
+		if len(m.pending()) == 0 {
+			return true
+		}
+		// The snapshot, with the host still unlisted: let the poll
+		// through.
+		unlisted++
+		open()
+		return false
+	})
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("read merged: %v %v", pending, err)
 	}
-	if asked < 2 {
-		t.Errorf("the host was listed in the snapshot already: the wait was not exercised (%d)", asked)
+	if unlisted == 0 {
+		t.Error("the host was listed in the snapshot already: the wait was not exercised")
 	}
 	// ls's listing: the host line, the repository and its worktree.
 	listing := m.render(m.locals())
