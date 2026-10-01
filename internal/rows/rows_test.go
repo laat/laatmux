@@ -801,7 +801,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	}
 	// The agent's tile stands for the plain attachment to its session,
 	// not the workspace session the line has: only an agent in the home
-	// session takes that. Build's row, which the agent view drew before
+	// session takes that. Build's row, in the dashboard's one list before
 	// the two views, had the workspace session; whether the tile should
 	// is #85.
 	if rs := Agents(first); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a-old" {
