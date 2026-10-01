@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -32,10 +29,6 @@ type dash struct {
 	cfg        config.Config
 	st         *merged
 	exitOnJump bool
-	// relay is the local daemon's relay capability: with it a submit
-	// hands the add to the daemon and ends the view; without it the
-	// add runs in the foreground with its log, as before.
-	relay bool
 	// submit hands an add to the local daemon; a test replaces it, as
 	// it does dismiss and deliver, a pending task's x and p.
 	submit  func(command.Add) (string, error)
@@ -49,36 +42,19 @@ type dash struct {
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
 	run *running
-	// recover is the notice to show once the log has ended, delivered
-	// or not: a prompt that did not reach the agent, with its text;
-	// recovered is the message the notice covers, put back after it.
-	recover   *view.Notice
-	recovered string
-	// last is what the foreground add left, for compose to jump to.
-	last command.Added
-	// switcher replaces the tmux switch, for tests, jumper a row's jump,
-	// and refocus the return of focus after a click in the sidebar.
-	switcher func(session string) error
-	jumper   func(r rows.Row) error
+	// jumper replaces a row's jump, for tests, and refocus is the return
+	// of focus after a click in the sidebar.
+	jumper func(r rows.Row) error
 	// client is the tmux client the next jump switches, from a sidebar
 	// command with -c; "" is the view's own.
 	client  string
 	refocus func()
-	// quitting is that the notice up is the last thing shown: its
-	// dismissal ends the view.
-	quitting bool
 }
 
 // running is a command under way: its log, and what to do when it ends.
 type running struct {
 	log  *view.Log
 	done func(m *view.Model) (exit bool)
-	// prompt is the prompt of an add under way, kept in a file should
-	// the wait for it be quit, since the view ends with nothing shown;
-	// quit is set then, so the add, should it end before the view does,
-	// keeps no second copy.
-	prompt string
-	quit   *atomic.Bool
 }
 
 // act handles a dashboard key, a confirm answer or an overlay ending.
@@ -183,15 +159,6 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		return d.submitForm(m, f, o)
 	case *view.Log:
 		if o.Quit {
-			if d.run != nil && d.run.prompt != "" {
-				// The view ends with the add's outcome unknown, so the
-				// prompt is kept and said to be, in a notice that ends
-				// the view when dismissed: a message would never be
-				// drawn.
-				d.run.quit.Store(true)
-				m.Overlay, d.run, d.quitting = quitNotice(d.run.prompt), nil, true
-				return false
-			}
 			return true
 		}
 		m.Overlay = nil
@@ -203,43 +170,13 @@ func (d *dash) overlayDone(m *view.Model) bool {
 		if err := o.Err(); err != nil {
 			// The error was on screen until the key; the list returns
 			// with the message repeating it, since a refusal is worth
-			// keeping in sight. A prompt to recover comes up over it.
+			// keeping in sight.
 			m.Message = err.Error()
-			if d.recover != nil {
-				m.Overlay, d.recover, d.recovered = d.recover, nil, m.Message
-			}
 			return false
 		}
 		return run.done(m)
-	case *view.Notice:
-		// The key that dismissed it cleared the message it covered. The
-		// jump the notice held off is made now, when there is a session.
-		m.Overlay = nil
-		if d.quitting {
-			return true
-		}
-		m.Message, d.recovered = d.recovered, ""
-		if d.last.Session != "" && m.Message == "" {
-			session := d.last.Session
-			d.last.Session = ""
-			if err := d.jumpTo(session); err != nil {
-				m.Message = err.Error()
-				return false
-			}
-			return d.exitOnJump
-		}
-		return false
 	}
 	return false
-}
-
-// jumpTo switches the client to the session, through switcher when a
-// test set one.
-func (d *dash) jumpTo(session string) error {
-	if d.switcher != nil {
-		return d.switcher(session)
-	}
-	return switchTo(d.ctx, session)
 }
 
 // start runs a command in the background with its progress in a log
@@ -439,176 +376,38 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	return form
 }
 
-// submitForm runs what the form asked for: with the relay, the add is
-// handed to the local daemon and the view ends once it is accepted; a
-// refusal, a host whose daemon does not support tasks say, keeps the
-// form up with the error, its text intact, while an error after the
-// daemon may hold the task ends the view with the id, so nothing is
-// submitted twice. Without the relay, the add runs in the foreground
-// with its log, and the new workspace session is jumped to.
+// submitForm hands the add the form asked for to the local daemon's
+// relay, and the view ends once it is accepted; a refusal, a host whose
+// daemon does not support tasks say, keeps the form up with the error,
+// its text intact, while an error after the daemon may hold the task
+// drops the form and keeps the view with the id in the message, so
+// nothing is submitted twice.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 	add := command.Add{
 		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
 		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
 	}
-	if d.relay {
-		submit := d.submit
-		if submit == nil {
-			submit = func(a command.Add) (string, error) { return a.Submit(d.ctx) }
-		}
-		id, err := submit(add)
-		switch {
-		case err != nil && id == "":
-			o.Reopen(err.Error())
-			m.Overlay = o
-			return false
-		case err != nil:
-			// The daemon may hold the task: the form goes, so nothing
-			// is submitted twice, and the view stays with the message,
-			// which a popup closing would take with it.
-			d.add = nil
-			m.Message = "submitted " + id + "; " + err.Error() + "; laatmux tasks says whether the daemon holds it"
-			return false
-		}
+	submit := d.submit
+	if submit == nil {
+		submit = func(a command.Add) (string, error) { return a.Submit(d.ctx) }
+	}
+	id, err := submit(add)
+	switch {
+	case err != nil && id == "":
+		o.Reopen(err.Error())
+		m.Overlay = o
+		return false
+	case err != nil:
+		// The daemon may hold the task: the form goes, so nothing is
+		// submitted twice, and the view stays with the message, which
+		// a popup closing would take with it.
 		d.add = nil
-		m.Message = "accepted " + id
-		return true
+		m.Message = "submitted " + id + "; " + err.Error() + "; laatmux tasks says whether the daemon holds it"
+		return false
 	}
 	d.add = nil
-	d.runAdd(m, add)
-	return false
-}
-
-// runAdd runs the add in the foreground with its log; on success the
-// new workspace session is jumped to.
-func (d *dash) runAdd(m *view.Model, add command.Add) {
-	var res command.Added
-	quit := new(atomic.Bool)
-	defer func() {
-		if d.run != nil {
-			d.run.prompt, d.run.quit = add.Prompt, quit
-		}
-	}()
-	d.start(m, add.Describe(), func(r command.Reporter) error {
-		var err error
-		res, err = add.Run(d.ctx, r)
-		d.last = res
-		// A prompt that did not reach the agent, or may not have, is
-		// shown with its text whatever else happened, and kept in a
-		// file, since the foreground path keeps none of it otherwise.
-		if d.recover = undelivered(add, res); d.recover != nil && !quit.Load() {
-			if path, err := keepPrompt(command.ID("prompt"), add.Prompt); err == nil {
-				// The path on a line of its own, to be copied.
-				d.recover.Lines = append([]string{"kept in", path, ""}, d.recover.Lines...)
-				d.recover.Verbatim += 3
-			} else {
-				d.recover.Lines = append([]string{"not kept in a file: " + err.Error(), ""}, d.recover.Lines...)
-				d.recover.Verbatim += 2
-			}
-		}
-		if err != nil && res.Done {
-			// The host's side is done; what failed is local, and the
-			// message must say the worktree and agent exist.
-			return fmt.Errorf("%s/%s ready on %s (%s); local session: %w", add.Repo.Name, res.Branch, add.Host.Name, res.Root, err)
-		}
-		return err
-	}, func(m *view.Model) bool {
-		// The delivery state is what the user reads: the notice stays
-		// until dismissed; a jump would leave it behind.
-		if d.recover != nil {
-			m.Overlay, d.recover = d.recover, nil
-			return false
-		}
-		if err := switchTo(d.ctx, res.Session); err != nil {
-			m.Message = err.Error()
-			return false
-		}
-		return d.exitOnJump
-	})
-}
-
-// undelivered is the notice a foreground add whose prompt did not
-// reach the agent, or may not have, leaves up until dismissed: the
-// state, the reason, the session when there is one, and the prompt
-// itself, wrapped and scrollable, to be copied into the agent, since
-// the foreground path keeps no file of it. nil when there is nothing
-// to recover: no prompt, or one delivered.
-func undelivered(add command.Add, res command.Added) *view.Notice {
-	if add.Prompt == "" || res.Prompt == protocol.DeliveryDelivered || res.Prompt == protocol.DeliveryNone {
-		return nil
-	}
-	var lines []string
-	switch {
-	case res.Prompt == "" && !res.Sent:
-		// Refused before any daemon had it.
-		lines = []string{"the add was refused before it reached the host; the prompt was not sent", ""}
-	case res.Prompt == "" && !res.Answered:
-		// No result came: the host may have taken the add and the
-		// agent may have the prompt.
-		lines = []string{"outcome unknown: no result came from the host; the agent may have the prompt", ""}
-	case res.Prompt == "" && res.Stage != "" && res.Stage != protocol.StageAgent:
-		// A failure before the agent stage: the prompt was never sent.
-		lines = []string{"the add failed at " + res.Stage + ", before the prompt was sent", ""}
-	case res.Prompt == "":
-		lines = []string{"the add failed; whether the prompt was sent is unknown", ""}
-	case res.Reason != "":
-		lines = []string{"prompt " + res.Prompt + ": " + res.Reason, ""}
-	default:
-		lines = []string{"prompt " + res.Prompt, ""}
-	}
-	sure := res.Prompt == protocol.DeliveryNotDelivered
-	switch {
-	case res.Managed != "" && sure:
-		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+" without it. The prompt was:")
-	case res.Managed != "":
-		lines = append(lines, "session "+res.Managed+" is running in "+res.Root+"; whether it has the prompt is unknown. The prompt was:")
-	case res.Root != "" && sure:
-		lines = append(lines, "the worktree "+res.Root+" is there without an agent. The prompt was:")
-	case res.Root != "":
-		lines = append(lines, "the worktree "+res.Root+" is there. The prompt was:")
-	default:
-		lines = append(lines, "The prompt was:")
-	}
-	lines = append(lines, "")
-	lines = append(lines, strings.Split(add.Prompt, "\n")...)
-	n := view.NewNotice(add.Describe(), lines, "enter or esc returns")
-	n.Verbatim = len(lines) - strings.Count(add.Prompt, "\n") - 1
-	return n
-}
-
-// quitNotice is what a Ctrl-C on a foreground add leaves: the add may
-// run on or may never have been sent, since the view's end cancels
-// it, so the prompt is kept in a file and named, or shown when it
-// could not be.
-func quitNotice(prompt string) *view.Notice {
-	lines := []string{"the add may run on, or may never have been sent; laatmux ls says which", ""}
-	verbatim := 0
-	if path, err := keepPrompt(command.ID("prompt"), prompt); err == nil {
-		lines = append(lines, "the prompt is kept in", path)
-	} else {
-		lines = append(lines, "the prompt could not be kept in a file: "+err.Error(), "", "The prompt was:", "")
-		verbatim = len(lines)
-		lines = append(lines, strings.Split(prompt, "\n")...)
-	}
-	n := view.NewNotice("add interrupted", lines, "enter or esc quits")
-	n.Verbatim, n.Final = verbatim, true
-	return n
-}
-
-// keepPrompt writes an undelivered prompt to a file of its own under
-// the state directory, readable by the user alone, and returns the
-// path: the notice is copied from by hand, lossily, and the popup that
-// shows it closes. The file is the user's to delete.
-func keepPrompt(id, prompt string) (string, error) {
-	dir := filepath.Join(home.Dir(), "undelivered")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, id+".txt")
-	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+	m.Message = "accepted " + id
+	return true
 }
 
 // askRm puts the confirm line up for the selected workspace: a worktree

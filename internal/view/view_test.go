@@ -823,7 +823,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 }
 
 // A newline is Enter outside the form's prompt: on the list, in the
-// filter, a picker, a line prompt and a notice.
+// filter, a picker and a line prompt.
 func TestNewlineIsEnter(t *testing.T) {
 	m := &Model{Width: 80, Height: 24}
 	m.Filtering = true
@@ -840,11 +840,6 @@ func TestNewlineIsEnter(t *testing.T) {
 	pr.Handle(Key{Kind: KeyNewline})
 	if !pr.Done() || pr.Cancelled {
 		t.Fatalf("prompt: done %v cancelled %v", pr.Done(), pr.Cancelled)
-	}
-	n := NewNotice("t", []string{"l"}, "")
-	n.Handle(Key{Kind: KeyNewline})
-	if !n.Done() {
-		t.Fatal("notice not dismissed by a newline")
 	}
 	f := NewForm("t", chips(), "")
 	f.Handle(Key{Kind: KeyShiftTab})

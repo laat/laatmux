@@ -92,11 +92,6 @@ func cmdServe(ctx context.Context, args []string) error {
 		agents[name] = a.Cmd
 	}
 	rt := home.Runtime{Address: network + ":" + ln.Addr().String(), PID: os.Getpid(), Version: version, EnvironmentID: envID, StartedAt: time.Now()}
-	if err := home.WriteRuntime(rt); err != nil {
-		return err
-	}
-	defer home.RemoveRuntime(os.Getpid())
-
 	logger := log.New(os.Stderr, "laatmux ", log.LstdFlags)
 	labels := make([]string, len(watched))
 	for i, s := range watched {
@@ -147,6 +142,16 @@ func cmdServe(ctx context.Context, args []string) error {
 			return workspace.Records(locals), nil
 		},
 	})
+	// A daemon New could not finish, its pending directory unopenable
+	// say, ends here, before it is announced: the runtime file is not
+	// written and no client is served a hello without the relay.
+	if err := d.Err(); err != nil {
+		return err
+	}
+	if err := home.WriteRuntime(rt); err != nil {
+		return err
+	}
+	defer home.RemoveRuntime(os.Getpid())
 	errc := make(chan error, 2)
 	go func() { errc <- d.Run(ctx) }()
 	go func() { errc <- d.Serve(ctx, ln) }()

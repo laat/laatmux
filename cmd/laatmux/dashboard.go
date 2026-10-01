@@ -54,6 +54,9 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := needRelay(c); err != nil {
+		return err
+	}
 	// The dashboard starts in the view and, without --layout, the layout
 	// last chosen, from sidebar.json.
 	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
@@ -123,7 +126,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds)
-	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, relay: protocol.Has(c.Hello.Capabilities, protocol.CapRelay)}
+	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump}
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.
@@ -275,6 +278,19 @@ func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 		return nil, fmt.Errorf("local daemon %s has no merged stream, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
 	}
 	return c, nil
+}
+
+// needRelay is the add form's requirement on the daemon it submits to:
+// a daemon with the merged stream and no relay is an older build that
+// ran on without its pending directory, which the current build does
+// not; the dashboard, compose and tasks refuse it, where ls, watch and
+// the sidebar, which submit nothing, take the stream alone.
+func needRelay(c *client.Conn) error {
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		c.Close()
+		return fmt.Errorf("local daemon %s has no relay, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
+	}
+	return nil
 }
 
 // hostCaps is a host's cached daemon capabilities from the merged

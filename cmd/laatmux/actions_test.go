@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -672,11 +671,12 @@ func TestBuildForm(t *testing.T) {
 
 // A submit through the relay: a refusal puts the form back up with the
 // error and the text intact; an error after the daemon may hold the
-// task ends the view with the id; acceptance ends it with the id.
+// task drops the form and keeps the view with the id in the message;
+// acceptance ends it with the id.
 func TestSubmitFormOutcomes(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
@@ -714,92 +714,14 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	}
 }
 
-// The notice a foreground add leaves when its prompt did not reach the
-// agent: the state and reason, the session, and the prompt's lines to
-// copy, wrapped, scrollable, until dismissed; nothing when the prompt
-// was delivered or there was none; shown whatever else went wrong.
-func TestUndelivered(t *testing.T) {
-	add := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "one\ntwo " + strings.Repeat("long ", 30)}
-	res := command.Added{Done: true, Root: "/r/b", Managed: "proj/b", Prompt: protocol.DeliveryNotDelivered, Reason: "session existed"}
-	n := undelivered(add, res)
-	if n == nil || n.Done() {
-		t.Fatal("no notice, or done before a key")
-	}
-	text := view.Text(n.Render(40, 8))
-	for _, want := range []string{"proj/b", "one", "prompt not delivered: session existed"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("missing %q in\n%s", want, text)
-		}
-	}
-	for _, l := range strings.Split(text, "\n") {
-		if len([]rune(l)) > 40 {
-			t.Fatalf("line wider than the screen: %q", l)
-		}
-	}
-	// The long line is wrapped and reachable by scrolling; a stray key
-	// does not dismiss.
-	n.Handle(view.Key{Rune: 'x'})
-	for range 20 {
-		n.Handle(view.Key{Kind: view.KeyDown})
-	}
-	if n.Done() || !strings.Contains(view.Text(n.Render(40, 8)), "long long") {
-		t.Fatalf("scrolled:\n%s", view.Text(n.Render(40, 8)))
-	}
-	n.Handle(view.Key{Kind: view.KeyEnter})
-	if !n.Done() {
-		t.Fatal("enter did not end it")
-	}
-	// A launch that failed with the delivery unknown, no session: the
-	// text says the agent may have it, never that it does not.
-	failed := command.Added{Done: false, Sent: true, Answered: true, Stage: protocol.StageAgent, Root: "/r/b", Prompt: protocol.DeliveryUnknown, Reason: "new-session failed after the session may have been made"}
-	if n := undelivered(add, failed); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "prompt unknown") || strings.Contains(view.Text(n.Render(80, 12)), "without") {
-		t.Fatalf("unknown delivery on a failed add:\n%s", view.Text(n.Render(80, 12)))
-	}
-	// A failure before the agent stage is positively before the send;
-	// no result at all is unknown.
-	early := command.Added{Sent: true, Answered: true, Stage: protocol.StageFetch}
-	if n := undelivered(add, early); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "failed at fetch, before the prompt was sent") {
-		t.Fatalf("early failure:\n%s", view.Text(n.Render(80, 12)))
-	}
-	lost := command.Added{Sent: true}
-	if n := undelivered(add, lost); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "outcome unknown") || strings.Contains(view.Text(n.Render(80, 12)), "not sent") {
-		t.Fatalf("lost result:\n%s", view.Text(n.Render(80, 12)))
-	}
-	// Refused before any daemon had it: a host down, or one without
-	// the capability.
-	refused := command.Added{}
-	if n := undelivered(add, refused); n == nil || !strings.Contains(view.Text(n.Render(80, 12)), "the prompt was not sent") || strings.Contains(view.Text(n.Render(80, 12)), "may have") {
-		t.Fatalf("refused:\n%s", view.Text(n.Render(80, 12)))
-	}
-	// The prompt is kept in a file of the user's own.
-	t.Setenv("LAATMUX_HOME", t.TempDir())
-	path, err := keepPrompt("id", "p\tq\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	st, _ := os.Stat(path)
-	if err != nil || string(b) != "p\tq\n" || st.Mode().Perm() != 0o600 {
-		t.Fatalf("kept %q %v %v", b, err, st.Mode())
-	}
-	// The prompt's whitespace is kept.
-	tabs := command.Add{Repo: config.Repo{Name: "proj"}, Host: config.Host{Host: client.Host{Name: "vm"}}, Branch: "b", Prompt: "run:\n\tmake  all"}
-	if text := view.Text(undelivered(tabs, res).Render(80, 12)); !strings.Contains(text, "    make  all") {
-		t.Fatalf("whitespace:\n%s", text)
-	}
-	if undelivered(add, command.Added{Done: true, Prompt: protocol.DeliveryDelivered}) != nil || undelivered(command.Add{}, res) != nil {
-		t.Fatal("a notice with nothing to recover")
-	}
-}
-
 // compose's host: a refusal puts the form back, an answer the daemon
-// may have taken waits in an ended log and then ends the view, and
-// the notice of an undelivered prompt ends the view when dismissed.
+// may have taken waits in an ended log and then ends the view, Esc on
+// the form and Ctrl-C on a log end it.
 func TestComposeAct(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true, add: f}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), add: f}
 	c := &composer{d: d, f: f}
 	var last home.Last
 	form := buildForm(cfg, f, last, "proj", "", "", nil)
@@ -827,122 +749,19 @@ func TestComposeAct(t *testing.T) {
 	if !c.act(m, m.Poll()) || !strings.Contains(c.outcome, "submitted add-1") {
 		t.Fatalf("after the key: outcome %q", c.outcome)
 	}
-	// The notice, as the foreground path leaves it: dismissed, the
-	// view ends.
-	m = &view.Model{Overlay: view.NewNotice("t", []string{"the prompt"}, ""), Width: 80, Height: 24}
-	m.Overlay.Handle(view.Key{Kind: view.KeyEsc})
-	if !c.act(m, m.Poll()) {
-		t.Fatal("the notice's dismissal did not end the view")
-	}
 	fresh := buildForm(cfg, f, last, "proj", "", "", nil)
 	fresh.Handle(view.Key{Kind: view.KeyEsc})
 	m = &view.Model{Overlay: fresh}
 	if !c.act(m, m.Poll()) {
 		t.Fatal("esc on the form did not end the view")
 	}
-	// Ctrl-C on a foreground add's log: the quit notice, then the end.
+	// Ctrl-C on a log ends the view.
 	log = view.NewLog("t")
-	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: new(atomic.Bool)}
+	d.run = &running{log: log, done: func(*view.Model) bool { return true }}
 	m = &view.Model{Overlay: log, Width: 80, Height: 24}
 	m.Handle(view.Key{Kind: view.KeyCtrlC})
-	if c.act(m, m.Poll()) {
-		t.Fatal("Ctrl-C on the log ended compose before the notice")
-	}
-	if _, ok := m.Overlay.(*view.Notice); !ok {
-		t.Fatalf("no quit notice in compose: %v", m.Overlay)
-	}
-	m.Handle(view.Key{Kind: view.KeyEnter})
 	if !c.act(m, m.Poll()) {
-		t.Fatal("the quit notice's dismissal did not end compose")
-	}
-}
-
-// The dashboard: a failed log with a prompt to recover puts the notice
-// over the message and gives the message back when it is dismissed.
-func TestNoticeRestoresMessage(t *testing.T) {
-	t.Setenv("LAATMUX_HOME", t.TempDir())
-	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
-	m := dashModel(cfg)
-	log := view.NewLog("t")
-	d.run = &running{log: log, done: func(*view.Model) bool { return true }}
-	d.recover = view.NewNotice("t", []string{"the prompt"}, "")
-	m.Overlay = log
-	log.End(errors.New("local session: boom"))
-	log.Handle(view.Key{Rune: 'x'})
-	if d.act(m, m.Poll()) {
-		t.Fatal("ended the view")
-	}
-	n, ok := m.Overlay.(*view.Notice)
-	if !ok {
-		t.Fatalf("no notice: %v", m.Overlay)
-	}
-	m.Handle(view.Key{Kind: view.KeyEnter}) // clears the message as it dismisses
-	if !n.Done() || m.Message != "" {
-		t.Fatalf("dismissed: done %v message %q", n.Done(), m.Message)
-	}
-	d.act(m, m.Poll())
-	if m.Overlay != nil || m.Message != "local session: boom" {
-		t.Fatalf("after the notice: overlay %v message %q", m.Overlay, m.Message)
-	}
-	// With a session and no error, the notice's dismissal jumps.
-	jumped := ""
-	d.switcher = func(s string) error { jumped = s; return nil }
-	d.last = command.Added{Session: "mac/proj/b"}
-	d.recovered, m.Message = "", ""
-	m.Overlay = view.NewNotice("t", []string{"the prompt"}, "")
-	m.Handle(view.Key{Kind: view.KeyEnter})
-	if d.act(m, m.Poll()) || jumped != "mac/proj/b" || d.last.Session != "" {
-		t.Fatalf("after the notice with a session: jumped %q", jumped)
-	}
-	// Ctrl-C on the log of an add keeps the prompt in a file and says
-	// so in a notice, whose dismissal ends the view.
-	log = view.NewLog("t")
-	quit := new(atomic.Bool)
-	d.run = &running{log: log, done: func(*view.Model) bool { return true }, prompt: "the prompt", quit: quit}
-	m.Overlay = log
-	log.Handle(view.Key{Kind: view.KeyCtrlC})
-	if d.act(m, m.Poll()) {
-		t.Fatal("quit ended the view before the notice")
-	}
-	if !quit.Load() {
-		t.Fatal("the add was not told it was quit")
-	}
-	n, ok = m.Overlay.(*view.Notice)
-	if !ok {
-		t.Fatalf("no notice on quit: %v", m.Overlay)
-	}
-	text := view.Text(n.Render(100, 12))
-	if !strings.Contains(text, "may run on") || !strings.Contains(text, "kept in") {
-		t.Fatalf("quit notice:\n%s", text)
-	}
-	path := ""
-	for _, l := range n.Lines {
-		if strings.HasSuffix(l, ".txt") {
-			path = l
-		}
-	}
-	if b, err := os.ReadFile(path); err != nil || string(b) != "the prompt" {
-		t.Fatalf("kept %q %v", b, err)
-	}
-	// A second Ctrl-C does not close it before it is read.
-	m.Handle(view.Key{Kind: view.KeyCtrlC})
-	if n.Done() {
-		t.Fatal("Ctrl-C dismissed the quit notice")
-	}
-	m.Handle(view.Key{Kind: view.KeyEsc})
-	if !d.act(m, m.Poll()) {
-		t.Fatal("dismissing the quit notice did not end the view")
-	}
-	// A state directory that cannot hold the file: the prompt is shown.
-	bad := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(bad, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("LAATMUX_HOME", bad)
-	qn := quitNotice("line one\n\tline two")
-	if text := view.Text(qn.Render(100, 14)); !strings.Contains(text, "could not be kept") || !strings.Contains(text, "    line two") {
-		t.Fatalf("fallback:\n%s", text)
+		t.Fatal("Ctrl-C on the log did not end compose")
 	}
 }
 
@@ -962,7 +781,7 @@ func TestPendingKeys(t *testing.T) {
 		Pendings: []protocol.Pending{stuck, running},
 	}))
 	var dismissed, delivered string
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true,
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(),
 		dismiss: func(id string) error { dismissed = id; return nil },
 		deliver: func(id string) (string, string, error) { delivered = id; return protocol.DeliveryDelivered, "", nil }}
 	finish := func() {
@@ -1152,7 +971,7 @@ func TestPendingOffers(t *testing.T) {
 	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), relay: true}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := &view.Model{Width: 100, Height: 20}
 	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
 	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
