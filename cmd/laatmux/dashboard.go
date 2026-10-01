@@ -255,24 +255,20 @@ func taskAction(m *view.Model, a view.Action) bool {
 }
 
 // dialMergedOrExplain connects to the local daemon's merged stream,
-// starting the daemon when it is not running. A dial that fails while
-// the pid the runtime record names holds the startup lock is a daemon
-// that did not answer, a wedged one or one of another protocol, and the
-// error says to stop it; a record a crash left may name a pid since
-// reused, which holds no lock, so that pid is neither named nor to be
-// killed. Otherwise the daemon did not start, and the error points at
-// its log. One without the capability is an older build still running,
-// and the error says how to replace it. Every client of the stream, ls
-// and watch among them, refuses rather than dial the hosts itself.
+// starting the daemon when it is not running. A dial that fails is a
+// daemon that did not answer, a wedged one or one of another protocol,
+// or one that did not start, and the error says what to do for each:
+// the dial's own reason tells them apart, and nothing here probes the
+// runtime record or the startup lock, since a record a crash left may
+// name a pid since reused and a probe of the lock would cost a serve
+// still starting its lock. One without the capability is an older
+// build still running, and the error says how to replace it. Every
+// client of the stream, ls and watch among them, refuses rather than
+// dial the hosts itself.
 func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	c, err := client.Dial(ctx, client.Host{Name: "local"})
 	if err != nil {
-		if rt, rerr := home.ReadRuntime(); rerr == nil {
-			if holder, herr := home.Holder(); herr == nil && holder == rt.PID {
-				return nil, fmt.Errorf("local daemon (pid %d) did not answer: %w; stop it with: laatmux stop", rt.PID, err)
-			}
-		}
-		return nil, fmt.Errorf("local daemon did not start: %w; its log is %s, or run laatmux serve to see why", err, filepath.Join(home.Dir(), "daemon.log"))
+		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, or run laatmux serve to see", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
 		c.Close()

@@ -334,8 +334,8 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 // ls and watch read the merged stream only: with the local daemon
 // unable to start, here because the state directory is a file so the
 // dial's start fails before anything runs, both fail at once with the
-// daemon's error and where to look, and watch draws nothing. Before,
-// ls listed the hosts as down and watch redrew that until stopped.
+// dial's reason and what to do, and watch draws nothing. Before, ls
+// listed the hosts as down and watch redrew that until stopped.
 func TestLsWatchNeedTheDaemon(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "file")
@@ -350,45 +350,33 @@ func TestLsWatchNeedTheDaemon(t *testing.T) {
 	t.Setenv("TMUX", "")
 	start := time.Now()
 	err := cmdLs(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "local daemon did not start") || !strings.Contains(err.Error(), "daemon.log") {
+	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "laatmux stop") || !strings.Contains(err.Error(), "daemon.log") {
 		t.Fatalf("ls without a daemon: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	err = cmdWatch(ctx, nil)
-	if err == nil || !strings.Contains(err.Error(), "local daemon did not start") || ctx.Err() != nil {
+	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || ctx.Err() != nil {
 		t.Fatalf("watch without a daemon: %v (context %v)", err, ctx.Err())
 	}
 	if time.Since(start) > time.Second {
 		t.Errorf("ls and watch took %s to refuse", time.Since(start))
 	}
-	// A runtime record naming a live pid, this test's own, at an address
-	// nothing answers on. The log made a directory keeps the dial's
-	// start from running anything. Without the startup lock the pid is
-	// a record a crash left, since reused: the daemon did not start,
-	// and the error points at the log, naming no pid. Holding the lock,
-	// as a daemon does, it is one that did not answer, to be stopped
-	// through laatmux stop, which checks the pid is the daemon's; no
-	// kill is suggested.
+	// A runtime record naming a live pid, this test's own, at a socket
+	// nothing answers on, as a crash leaves one when the pid is reused.
+	// The log made a directory keeps the dial's start from running
+	// anything. The pid is not named, and no kill suggested: a record
+	// is no proof of a daemon.
 	home2 := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home2, "daemon.log"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_HOME", home2)
-	if err := home.WriteRuntime(home.Runtime{Address: "tcp:127.0.0.1:1", PID: os.Getpid(), Version: "x"}); err != nil {
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(dir, "none.sock"), PID: os.Getpid(), Version: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	err = cmdLs(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "local daemon did not start") || strings.Contains(err.Error(), "pid") {
+	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || strings.Contains(err.Error(), fmt.Sprint(os.Getpid())) || strings.Contains(err.Error(), "kill") {
 		t.Fatalf("ls with a stale record naming a live pid: %v", err)
-	}
-	lock, err := home.TryLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Release()
-	err = cmdLs(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("local daemon (pid %d) did not answer", os.Getpid())) || !strings.Contains(err.Error(), "laatmux stop") || strings.Contains(err.Error(), "kill") {
-		t.Fatalf("ls with a daemon recorded that does not answer: %v", err)
 	}
 }
