@@ -14,13 +14,28 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
-// serve's own shutdown, the context ending as a signal ends it, stops
-// the runs the way cancel does and returns once they are gone, whichever
-// of its goroutines noticed first.
-func TestServeShutdownCancelsRuns(t *testing.T) {
+// served is a daemon serving a seeded repository with one worktree:
+// what the serve tests start.
+type served struct {
+	remote string         // the bare repository
+	added  worktree.Added // the worktree task, added before the daemon started
+	done   chan error     // serve's return
+	cancel context.CancelFunc
+	conn   *client.Conn // a connection with the hello read
+}
+
+// serveFixture seeds a bare repository with one commit, a config with
+// one local host named box and the repository as proj, adds a worktree
+// task from the store, points the state, config and tmux directories
+// under base so the daemon polls a laatmux server that is not there and
+// never starts one, then starts cmdServe on a loopback port and waits
+// for its hello.
+func serveFixture(t *testing.T) *served {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -54,8 +69,15 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 	// daemon polls a laatmux server that is not there and never starts one.
 	t.Setenv("LAATMUX_HOME", filepath.Join(base, "home"))
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(base, "config.yaml"))
-	t.Setenv("TMUX_TMPDIR", filepath.Join(base, "tmux"))
-	os.MkdirAll(filepath.Join(base, "tmux"), 0o700)
+	// A short socket directory: a unix socket path has about a hundred
+	// bytes, and under a macOS TempDir tmux's "File name too long" is
+	// not the absence the daemon's first poll waits out.
+	tmuxDir, err := os.MkdirTemp("/tmp", "lmxs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmuxDir) })
+	t.Setenv("TMUX_TMPDIR", tmuxDir)
 	store := worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}})
 	repo, _ := store.Repo(remote)
 	added, err := store.Add(context.Background(), repo, "task", nil)
@@ -64,9 +86,9 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	served := make(chan error, 1)
-	go func() { served <- cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}) }()
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}) }()
 	var c *client.Conn
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		nc, err := client.DialLocal(ctx, false)
@@ -82,7 +104,16 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	defer c.Close()
+	t.Cleanup(func() { c.Close() })
+	return &served{remote: remote, added: added, done: done, cancel: cancel, conn: c}
+}
+
+// serve's own shutdown, the context ending as a signal ends it, stops
+// the runs the way cancel does and returns once they are gone, whichever
+// of its goroutines noticed first.
+func TestServeShutdownCancelsRuns(t *testing.T) {
+	s := serveFixture(t)
+	c, added, cancel, served := s.conn, s.added, s.cancel, s.done
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRun) {
 		t.Fatalf("caps %v", c.Hello.Capabilities)
 	}
@@ -120,5 +151,63 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+// The whole client path against a real daemon: serve, the merged
+// stream read as ls reads it, ls's listing, then the merged state
+// filled into a view and both views rendered. The worktree the fixture
+// added shows in the listing and the tree, the agent view has no tile
+// for it, and the host is connected and listed. No view, merged state
+// and daemon were tested together before this.
+func TestServeToRender(t *testing.T) {
+	s := serveFixture(t)
+	ctx := context.Background()
+	c, ok := dialMerged(ctx)
+	if !ok {
+		t.Fatal("the local daemon does not merge")
+	}
+	defer c.Close()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newMerged()
+	m.configure(cfg)
+	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool { return len(m.pending()) == 0 })
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("read merged: %v %v", pending, err)
+	}
+	// ls's listing: the host line, the repository and its worktree.
+	listing := m.render(m.locals())
+	for _, want := range []string{"box  connected", "proj", "task (box)"} {
+		if !strings.Contains(listing, want) {
+			t.Errorf("ls lacks %q:\n%s", want, listing)
+		}
+	}
+	if strings.Contains(listing, "DOWN") || strings.Contains(listing, "not listed") {
+		t.Errorf("ls shows a failure:\n%s", listing)
+	}
+	// The dashboard's fill and both views.
+	v := &view.Model{Width: 100, Height: 30, LocalHost: "box", View: view.ViewTree, Layout: view.Compact, Titles: true}
+	m.fill(v, "")
+	if v.Loading || len(v.Header) != 0 {
+		t.Fatalf("after fill: loading %v header %v", v.Loading, v.Header)
+	}
+	tree := view.Text(v.Render())
+	if !strings.Contains(tree, "proj") || !strings.Contains(tree, "task (box)") {
+		t.Errorf("the tree view:\n%s", tree)
+	}
+	// A worktree with no agent is a tree line, not a tile.
+	v.View = view.ViewAgents
+	if agents := view.Text(v.Render()); !strings.HasPrefix(agents, "No agents running") {
+		t.Errorf("the agent view:\n%s", agents)
+	}
+	// The worktree the store added is the one the stream carries.
+	m.mu.Lock()
+	n := len(m.worktrees)
+	m.mu.Unlock()
+	if n != 1 || s.added.Root == "" {
+		t.Errorf("worktrees in the merged state: %d", n)
 	}
 }

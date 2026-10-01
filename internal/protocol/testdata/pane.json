@@ -1,0 +1,13 @@
+{
+  "id": "ID",
+  "environment_id": "EnvironmentID",
+  "server": "Server",
+  "session": "Session",
+  "window": 5,
+  "pane_id": "PaneID",
+  "command": "Command",
+  "pid": 8,
+  "cwd": "Cwd",
+  "worktree_id": "WorktreeID",
+  "updated_at": "2026-10-01T12:00:00Z"
+}

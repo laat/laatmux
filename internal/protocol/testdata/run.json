@@ -1,0 +1,10 @@
+{
+  "id": "ID",
+  "environment_id": "EnvironmentID",
+  "root": "Root",
+  "worktree_id": "WorktreeID",
+  "cmd": [
+    "x"
+  ],
+  "started_at": "2026-10-01T12:00:00Z"
+}

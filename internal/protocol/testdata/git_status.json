@@ -1,0 +1,19 @@
+{
+  "base": "Base",
+  "committed": [
+    1,
+    1
+  ],
+  "uncommitted": [
+    1,
+    1
+  ],
+  "uncommitted_partial": true,
+  "ahead": 5,
+  "behind": 6,
+  "dirty": true,
+  "conflict": true,
+  "rebasing": true,
+  "stale": true,
+  "changed_at": "2026-10-01T12:00:00Z"
+}

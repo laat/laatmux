@@ -1,0 +1,21 @@
+{
+  "source": "Source",
+  "branch": "Branch",
+  "fetched_at": "2026-10-01T12:00:00Z",
+  "stale": true,
+  "head_oid": "HeadOID",
+  "checks_url": "ChecksURL",
+  "pr": {
+    "number": 1,
+    "state": "State",
+    "draft": true,
+    "url": "URL"
+  },
+  "checks": {
+    "state": "State",
+    "passed": 2,
+    "total": 3,
+    "failing": "Failing",
+    "pending_since": "2026-10-01T12:00:00Z"
+  }
+}

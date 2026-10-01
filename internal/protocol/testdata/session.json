@@ -1,0 +1,9 @@
+{
+  "name": "Name",
+  "key": "Key",
+  "host": "Host",
+  "source": "Source",
+  "branch": "Branch",
+  "attach": "Attach",
+  "settled": true
+}
