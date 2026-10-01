@@ -46,13 +46,13 @@ func TestJoin(t *testing.T) {
 			{Name: "old", EnvironmentID: "oenv", Connected: true, Listed: true},
 		},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Title: "fixing"},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Managed: true},
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
-			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Session: "proj/dead", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Gone, Managed: true},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Title: "fixing"},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Server: "laatmux", Session: "proj/dead", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Gone, Managed: true},
 			{ID: "menv/default/%4", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive},
 			{ID: "venv/default/%6", EnvironmentID: "venv", Server: "default", Session: "remote-notes", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive},
-			{ID: "benv/laatmux/%7", EnvironmentID: "benv", Session: "proj/down", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "benv/laatmux/%7", EnvironmentID: "benv", Server: "laatmux", Session: "proj/down", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//r/fix", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/r/fix", Session: "proj/fix"},
@@ -212,8 +212,8 @@ func TestJoinByEnvironment(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "a", EnvironmentID: "aenv", Error: "down"}, {Name: "b", EnvironmentID: "benv", Error: "down"}},
 		Agents: []protocol.Agent{
-			{ID: "aenv/laatmux/%1", EnvironmentID: "aenv", Session: "proj/x", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
-			{ID: "benv/laatmux/%1", EnvironmentID: "benv", Session: "proj/x", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "aenv/laatmux/%1", EnvironmentID: "aenv", Server: "laatmux", Session: "proj/x", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "benv/laatmux/%1", EnvironmentID: "benv", Server: "laatmux", Session: "proj/x", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "aenv/worktree//r/x", EnvironmentID: "aenv", Repo: "proj", Branch: "x", Root: "/r/x", Session: "proj/x"},
@@ -276,8 +276,8 @@ func TestPending(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Cwd: "/r/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Cwd: "/r/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"},
@@ -460,7 +460,7 @@ func TestPendingThatCannotStand(t *testing.T) {
 	} {
 		nodes := nodesByID(Tree(Input{
 			Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
-			Agents:    []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/b", Cwd: "/r/b", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+			Agents:    []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b", Cwd: "/r/b", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
 			Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/r/b", Session: "proj/b"}},
 			Pendings:  []protocol.Pending{p},
 		}))
@@ -481,7 +481,7 @@ func TestPendingOnRenamedHost(t *testing.T) {
 	now := time.Now()
 	lines := treeLines(Tree(Input{
 		Hosts:     []Host{{Name: "new", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
-		Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+		Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Server: "laatmux", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
 		Worktrees: []protocol.Worktree{{ID: "env/worktree//r", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b"}},
 		Pendings:  []protocol.Pending{{ID: "add-1", Host: "old", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now}},
 	}))
@@ -514,7 +514,7 @@ func TestPendingOnRenamedHost(t *testing.T) {
 		p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Mismatch: mismatch, SubmittedAt: now}
 		lines = treeLines(Tree(Input{
 			Hosts:     []Host{{Name: "vm", EnvironmentID: "other", Connected: true, Listed: true, Worktrees: true}, {Name: "old-vm", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
-			Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
+			Agents:    []protocol.Agent{{ID: "env/laatmux/%1", EnvironmentID: "env", Server: "laatmux", Session: "proj/b", Cwd: "/r", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}},
 			Worktrees: []protocol.Worktree{{ID: "env/worktree//r", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Session: "proj/b"}},
 			Pendings:  []protocol.Pending{p},
 		}))
@@ -558,17 +558,17 @@ func TestJoinByWorktreeID(t *testing.T) {
 			// managed session, which the line holds too.
 			{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 1, StartUnix: 200}},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Managed: true, Cwd: "/w/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Managed: true, Cwd: "/w/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now.Add(-time.Hour), WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 2, StartUnix: 100}},
-			{ID: "venv/laatmux/%8", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/a/sub", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
+			{ID: "venv/laatmux/%8", EnvironmentID: "venv", Server: "laatmux", Session: "scratch", Managed: true, Cwd: "/w/a/sub", Activity: protocol.Blocked, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 8, StartUnix: 50}},
 			// /w/b: the home session's idle agent is jumped through over a
 			// working one elsewhere, which the line holds too.
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
 			{ID: "venv/default/%4", EnvironmentID: "venv", Server: "default", Session: "side", Activity: protocol.Working, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/b"},
 			// /w/c names a session whose agent is not attributed to it:
 			// with attribution the name is not the link.
-			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Session: "proj/c", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now},
+			{ID: "venv/laatmux/%5", EnvironmentID: "venv", Server: "laatmux", Session: "proj/c", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now},
 			// /w/e has a home session with no agent in it: an agent
 			// elsewhere is not jumped through; the line jumps to the home.
 			{ID: "venv/default/%7", EnvironmentID: "venv", Server: "default", Session: "other", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/e"},
@@ -577,7 +577,7 @@ func TestJoinByWorktreeID(t *testing.T) {
 			{ID: "venv//tmp/sock/%9", EnvironmentID: "venv", Server: "/tmp/sock", Session: "obs", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a",
 				Identity: &protocol.Identity{PID: 9, StartUnix: 10}},
 			// A host without attribution: by session, the field ignored.
-			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
+			{ID: "oenv/laatmux/%6", EnvironmentID: "oenv", Server: "laatmux", Session: "proj/d", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "oenv/worktree//w/x"},
 		},
 		Worktrees: []protocol.Worktree{wt("venv", "/w/a", ""), wt("venv", "/w/b", "proj/b"), wt("venv", "/w/c", "proj/c"), wt("oenv", "/w/d", "proj/d"), wt("venv", "/w/e", "proj/e")},
 	}
@@ -691,8 +691,8 @@ func TestJoinByWorktreeID(t *testing.T) {
 // first.
 func TestTwoAgentsOneSession(t *testing.T) {
 	now := time.Now()
-	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
-	b := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
+	b := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Activity: protocol.Idle, Liveness: protocol.Alive, ActivityAt: now, WorktreeID: "venv/worktree//w/a"}
 	for _, attribution := range []bool{true, false} {
 		for _, agents := range [][]protocol.Agent{{a, b}, {b, a}} {
 			in := Input{
@@ -793,7 +793,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
 	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	locals := []workspace.Local{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
-	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
+	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
 	first := Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}
 	got := treeLines(Tree(first))
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
@@ -890,7 +890,7 @@ func TestLabels(t *testing.T) {
 func TestPrecedence(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	agent := func(pane, session string, act protocol.Activity, ago time.Duration) protocol.Agent {
-		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Session: session, Agent: "claude", Activity: act,
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: act,
 			ActivityAt: now.Add(-ago), Liveness: protocol.Alive, Managed: true}
 	}
 	in := Input{
@@ -971,7 +971,7 @@ func TestPrecedence(t *testing.T) {
 func TestSortOrders(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	agent := func(pane, session string, window int, act protocol.Activity, ago time.Duration) protocol.Agent {
-		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Session: session, Window: window, Agent: "claude",
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: session, Window: window, Agent: "claude",
 			Activity: act, ActivityAt: now.Add(-ago), Liveness: protocol.Alive, Managed: true}
 	}
 	in := Input{
@@ -1017,7 +1017,7 @@ func TestCurrentNotFolded(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	in := Input{
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
-		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "s", Agent: "claude", Activity: protocol.Idle,
+		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "s", Agent: "claude", Activity: protocol.Idle,
 			ActivityAt: now.Add(-5 * time.Hour), Liveness: protocol.Alive, Managed: true}},
 		Locals:  []workspace.Local{{Name: "vm/s", Attach: "vm/s", Host: "vm"}},
 		Current: "vm/s",
@@ -1040,7 +1040,7 @@ func TestCurrentNotFolded(t *testing.T) {
 	}
 	// It sorts with the stale ones, below an idle agent, though working.
 	in.Agents[0].Activity = protocol.Working
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "claude",
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "other", Agent: "claude",
 		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true})
 	rs = Agents(in)
 	if len(rs.Main) != 2 || rs.Main[0].Name != "other" || !rs.Main[1].Current {

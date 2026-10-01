@@ -388,15 +388,6 @@ func (r Row) AgentName() string {
 	return r.Agent.Agent
 }
 
-// Server is the agent's tmux server label. Daemons from before servers
-// were carried in records only ever watched the managed server.
-func Server(a protocol.Agent) string {
-	if a.Server == "" {
-		return tmux.LaatmuxServer.Label()
-	}
-	return a.Server
-}
-
 // rowAgent is the agent a worktree row shows of the agents attributed
 // to it, the row being jumped to through it. With a home session it is
 // an agent there or none. Without one it is the agent laatmux made at
@@ -413,13 +404,13 @@ func Server(a protocol.Agent) string {
 func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {
-		managed := Server(*a) == tmux.LaatmuxServer.Label()
+		managed := a.Server == tmux.LaatmuxServer.Label()
 		switch {
 		case w.Session != "" && (!managed || a.Session != w.Session):
 			continue
 		case w.Session == "" && managed && !(a.Managed && a.Cwd == w.Root):
 			continue
-		case w.Session == "" && !managed && Server(*a) != tmux.DefaultServer.Label():
+		case w.Session == "" && !managed && a.Server != tmux.DefaultServer.Label():
 			// Another observed server's sessions are not jumped to.
 			continue
 		}

@@ -36,15 +36,15 @@ func fixtureInput(now time.Time) rows.Input {
 			{Name: "box", EnvironmentID: "benv", Error: "ssh: connect to host box port 22: No route to host"},
 		},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "laatmux/fix-ls", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Permission to run pnpm test in packages/api?"},
-			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Session: "proj/task", Agent: "codex", Activity: protocol.Working, ActivityAt: now.Add(-8 * time.Second), Liveness: protocol.Alive, Managed: true, Title: "Editing src/api.ts"},
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/other", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Managed: true, Title: "✳ Done. 日本語のタイトル that is long enough to be trimmed at the edge"},
-			{ID: "venv/laatmux/%4", EnvironmentID: "venv", Session: "proj/dead", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-3 * time.Hour), Liveness: protocol.Gone, Managed: true},
-			{ID: "menv/laatmux/%5", EnvironmentID: "menv", Session: "scratch", Agent: "", Activity: protocol.Idle, ActivityAt: now.Add(-40 * time.Second), Liveness: protocol.Alive, Managed: true, Title: "zsh"},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/fix-ls", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Permission to run pnpm test in packages/api?"},
+			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "proj/task", Agent: "codex", Activity: protocol.Working, ActivityAt: now.Add(-8 * time.Second), Liveness: protocol.Alive, Managed: true, Title: "Editing src/api.ts"},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/other", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Managed: true, Title: "✳ Done. 日本語のタイトル that is long enough to be trimmed at the edge"},
+			{ID: "venv/laatmux/%4", EnvironmentID: "venv", Server: "laatmux", Session: "proj/dead", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-3 * time.Hour), Liveness: protocol.Gone, Managed: true},
+			{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", Agent: "", Activity: protocol.Idle, ActivityAt: now.Add(-40 * time.Second), Liveness: protocol.Alive, Managed: true, Title: "zsh"},
 			{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-5 * time.Minute), Liveness: protocol.Alive, Title: "notes"},
 			{ID: "venv/default/%7", EnvironmentID: "venv", Server: "default", Session: "remote-notes", Agent: "codex", Activity: protocol.Working, ActivityAt: now.Add(-time.Second), Liveness: protocol.Alive, Title: "remote"},
-			{ID: "benv/laatmux/%8", EnvironmentID: "benv", Session: "proj/down", Agent: "claude", Activity: protocol.Working, ActivityAt: now.Add(-10 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "last seen"},
-			{ID: "menv/laatmux/%9", EnvironmentID: "menv", Session: "proj/done", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-26 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "finished"},
+			{ID: "benv/laatmux/%8", EnvironmentID: "benv", Server: "laatmux", Session: "proj/down", Agent: "claude", Activity: protocol.Working, ActivityAt: now.Add(-10 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "last seen"},
+			{ID: "menv/laatmux/%9", EnvironmentID: "menv", Server: "laatmux", Session: "proj/done", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-26 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "finished"},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//r/fix-ls", EnvironmentID: "venv", Repo: "laatmux", Branch: "fix-ls", Root: "/r/fix-ls", Session: "laatmux/fix-ls"},
@@ -865,7 +865,7 @@ func TestAnchorFollowsTask(t *testing.T) {
 	other := protocol.Worktree{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a"}
 	task := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Taken: true, Reachable: true, Stage: protocol.StageClone, SubmittedAt: now}
 	wt := protocol.Worktree{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"}
-	agent := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
+	agent := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
 	set := func(m *Model, ps []protocol.Pending, ws []protocol.Worktree, as []protocol.Agent) {
 		in := rows.Input{Hosts: hosts, Pendings: ps, Worktrees: ws, Agents: as}
 		m.SetTree(rows.Tree(in))
@@ -940,7 +940,7 @@ func TestRenderPending(t *testing.T) {
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a", Session: "proj/a"}},
 		// The agent view draws a worktree by its agents: a's, blocked,
 		// the most pressing an agent can be, still sorts after the tasks.
-		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-5 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Allow?"}},
+		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-5 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Allow?"}},
 		Pendings: []protocol.Pending{
 			{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "sidebar-follow", Taken: true, Reachable: true, Stage: protocol.StageClone, Detail: "cloning git@github.com:laat/proj.git", SubmittedAt: now},
 			{ID: "add-2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix-ls", Root: "/r/fix-ls", Session: "proj/fix-ls", Taken: true, Reachable: true,
@@ -1280,8 +1280,8 @@ func TestRenderAttention(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(now)
 	in.Agents = append(in.Agents,
-		protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Session: "proj/old", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-2 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "long idle"},
-		protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Session: "proj/asks", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-3 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "Allow?"})
+		protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Server: "laatmux", Session: "proj/old", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-2 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "long idle"},
+		protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Server: "laatmux", Session: "proj/asks", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-3 * time.Hour), Liveness: protocol.Alive, Managed: true, Title: "Allow?"})
 	in.Worktrees = append(in.Worktrees,
 		protocol.Worktree{ID: "venv/worktree//r/old", EnvironmentID: "venv", Repo: "proj", Branch: "old", Root: "/r/old", Session: "proj/old"},
 		protocol.Worktree{ID: "venv/worktree//r/asks", EnvironmentID: "venv", Repo: "proj", Branch: "asks", Root: "/r/asks", Session: "proj/asks"})
@@ -1381,7 +1381,7 @@ func TestRenderPR(t *testing.T) {
 func treeInput(now time.Time) rows.Input {
 	src := "git@github.com:laat/laatmux.git"
 	agent := func(id, env, session, name string, act protocol.Activity, start int64, wt, title string) protocol.Agent {
-		return protocol.Agent{ID: id, EnvironmentID: env, Session: session, Agent: name, Activity: act, ActivityAt: now.Add(-time.Minute),
+		return protocol.Agent{ID: id, Server: "laatmux", EnvironmentID: env, Session: session, Agent: name, Activity: act, ActivityAt: now.Add(-time.Minute),
 			Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 1, StartUnix: start}, WorktreeID: wt, Title: title}
 	}
 	return rows.Input{
@@ -1599,7 +1599,7 @@ func TestTreeEdges(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	in := treeInput(now)
 	src := "git@github.com:laat/laatmux.git"
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
 		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
@@ -1840,7 +1840,7 @@ func TestTreePinnedEnd(t *testing.T) {
 			in.Worktrees = append(in.Worktrees, w)
 			for k := 0; k < agents; k++ {
 				n++
-				in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%" + strconv.Itoa(n), EnvironmentID: "venv", Session: w.Session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: w.ID, Identity: &protocol.Identity{PID: n, StartUnix: int64(n)}})
+				in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%" + strconv.Itoa(n), EnvironmentID: "venv", Server: "laatmux", Session: w.Session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: w.ID, Identity: &protocol.Identity{PID: n, StartUnix: int64(n)}})
 			}
 		}
 	}
@@ -1873,7 +1873,7 @@ func TestHandoffStanding(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	src := "git@github.com:laat/laatmux.git"
 	in := treeInput(now)
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
 		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	task := func(id string, at time.Time) protocol.Pending {
 		return protocol.Pending{ID: id, Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: at}
@@ -1948,7 +1948,7 @@ func TestHandoffStanding(t *testing.T) {
 	// add's agent; opened by the user, then failing, it passes the fold
 	// to the older, with no handoff and no worktree record.
 	in = treeInput(now)
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle,
 		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
 	m = &Model{Now: now, View: ViewTree, Width: 60, Height: 30}

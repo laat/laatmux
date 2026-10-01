@@ -249,7 +249,7 @@ func renderTree(b *strings.Builder, nodes []rows.Row, now time.Time) {
 func where(n rows.Row) string {
 	s := n.Host
 	if a := n.Agent; a != nil && n.Kind == rows.KindAgent {
-		if srv := rows.Server(*a); srv != tmux.LaatmuxServer.Label() {
+		if srv := a.Server; srv != tmux.LaatmuxServer.Label() {
 			s += "/" + srv
 		}
 	}

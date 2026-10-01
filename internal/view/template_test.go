@@ -61,7 +61,7 @@ func tokenRow(now time.Time) rows.Row {
 	yes := true
 	w := &protocol.Worktree{ID: "venv/worktree//r/fix-ls", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "fix-ls", Root: "/r/fix-ls", Session: "laatmux/fix-ls",
 		Git: &protocol.GitStatus{Base: "origin/main", Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true, Ahead: 2, Behind: 1, Conflict: &yes, Rebasing: true}}
-	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "laatmux/fix-ls", Window: 2, PaneID: "%1", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "✳ Permission to run pnpm test"}
+	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/fix-ls", Window: 2, PaneID: "%1", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "✳ Permission to run pnpm test"}
 	return rows.Row{Kind: rows.KindTile, Host: "vm", Name: "laatmux/fix-ls", Node: a.ID, Worktree: w, Agent: a, Suffix: "(2)", Children: 1,
 		Branch: &protocol.BranchStatus{PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}}}
 }

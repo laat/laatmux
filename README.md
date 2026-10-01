@@ -123,8 +123,7 @@ any of the forms and fetches through that checkout's own origin, so each
 machine keeps the transport it can use. Two forms of one repository in
 the same `repos` list are rejected as a duplicate, so a config that
 listed both must drop one before the daemon starts again.
-`laatmux serve --tmux-servers laatmux,default` overrides the file;
-`--tmux-socket` is the older spelling of the same flag.
+`laatmux serve --tmux-servers laatmux,default` overrides the file.
 
 An agent's `cmd` may carry `{prompt}` as one argument: `add -p` replaces
 it with the prompt, as one argument however many lines it has, and an add

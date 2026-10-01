@@ -17,7 +17,7 @@ import (
 func treeInput(now time.Time) Input {
 	src := "git@github.com:laat/laatmux.git"
 	agent := func(id, env, session, name string, act protocol.Activity, start int64, wt string) protocol.Agent {
-		return protocol.Agent{ID: id, EnvironmentID: env, Session: session, Agent: name, Activity: act, ActivityAt: now.Add(-time.Minute),
+		return protocol.Agent{ID: id, Server: "laatmux", EnvironmentID: env, Session: session, Agent: name, Activity: act, ActivityAt: now.Add(-time.Minute),
 			Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 1, StartUnix: start}, WorktreeID: wt, Title: name + " title"}
 	}
 	return Input{
@@ -31,7 +31,7 @@ func treeInput(now time.Time) Input {
 			agent("menv/laatmux/%3", "menv", "proj/batch", "claude", protocol.Working, 30, "menv/worktree//w/batch"),
 			withCwd(agent("venv/laatmux/%4", "venv", "laatmux/new-one", "claude", protocol.Working, 40, ""), "/r/new-one"),
 			{ID: "venv/default/%5", EnvironmentID: "venv", Server: "default", Session: "scratch", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive},
-			{ID: "menv/laatmux/%6", EnvironmentID: "menv", Session: "new", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "new", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//r/agents-config", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "agents-config", Root: "/r/agents-config", Session: "laatmux/agents-config"},
@@ -160,10 +160,10 @@ func TestTreeContents(t *testing.T) {
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
 		},
 		Agents: []protocol.Agent{
-			{ID: "oenv/laatmux/%1", EnvironmentID: "oenv", Session: "proj/a", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
-			{ID: "oenv/laatmux/%2", EnvironmentID: "oenv", Session: "proj/other", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/b", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/b", Cwd: "/w/b"},
-			{ID: "venv/laatmux/%4", EnvironmentID: "venv", Session: "proj/c", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/w/c"},
+			{ID: "oenv/laatmux/%1", EnvironmentID: "oenv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "oenv/laatmux/%2", EnvironmentID: "oenv", Server: "laatmux", Session: "proj/other", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/b", Cwd: "/w/b"},
+			{ID: "venv/laatmux/%4", EnvironmentID: "venv", Server: "laatmux", Session: "proj/c", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/w/c"},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "oenv/worktree//w/a", EnvironmentID: "oenv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a", Session: "proj/a"},
@@ -238,9 +238,9 @@ func TestPressing(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Gone, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Gone, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
 		},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a", Session: "proj/a"}},
 		Locals:    []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm", Settled: true}},
@@ -270,8 +270,8 @@ func TestTreeJumpAgentAndViewer(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "other", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
 		},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a"}},
 		Locals:    []workspace.Local{{Name: "vm/other", Attach: "vm/other", Host: "vm"}},

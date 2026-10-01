@@ -123,7 +123,7 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	h := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
 	cfg := config.Config{Hosts: []config.Host{h}}
 	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Source: "git@example.com:o/proj.git"}
-	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/a", WorktreeID: w.ID}
+	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", WorktreeID: w.ID}
 	spec, session, err := rowSpec(cfg, h, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
 	if err != nil || session != "" || spec.Key != "venv//w/a" || spec.Managed != "proj/a" || spec.Name != "vm/proj/a" || spec.Branch != "a" {
 		t.Fatalf("spec %+v session %q err %v", spec, session, err)
@@ -139,7 +139,7 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	w.Session = ""
 	w2 := protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Branch: "b", Root: "/w/b"}
 	a.Session = "shared"
-	a2 := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "shared", WorktreeID: w2.ID}
+	a2 := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "shared", WorktreeID: w2.ID}
 	s1, _, err1 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w, Agent: &a})
 	s2, _, err2 := rowSpec(cfg, h, rows.Row{Host: "vm", Worktree: &w2, Agent: &a2})
 	if err1 != nil || err2 != nil || s1.Name == s2.Name || s1.Key == s2.Key || s1.Managed != "shared" || s2.Managed != "shared" {
@@ -162,7 +162,7 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 // worktree line, a task and a run do not. A pane on a remote host's
 // default server is refused as jump refuses it.
 func TestPaneJumpRouting(t *testing.T) {
-	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/x", PaneID: "%1"}
+	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/x", PaneID: "%1"}
 	p := &protocol.Pane{ID: "venv/pane/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/x", PaneID: "%2"}
 	for _, c := range []struct {
 		row  rows.Row
@@ -192,13 +192,13 @@ func TestPaneJumpRouting(t *testing.T) {
 	lost := *wt
 	lost.Session = ""
 	home := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: wt}
-	lostLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &lost, Agent: &protocol.Agent{ID: "venv/laatmux/%4", Session: "laatmux/x-2", Managed: true, Cwd: "/r/x"}}
+	lostLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &lost, Agent: &protocol.Agent{ID: "venv/laatmux/%4", Server: "laatmux", Session: "laatmux/x-2", Managed: true, Cwd: "/r/x"}}
 	task := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Pending: &protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "z", Root: "/r/z", Session: "laatmux/z", Taken: true}}
 	// A task standing for a worktree listed without a home, before the
 	// add's agent is identified: the task's session is the home.
 	listed := &protocol.Worktree{ID: "venv/worktree//r/z", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "z", Root: "/r/z"}
 	owner := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending}
-	moved := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending, Agent: &protocol.Agent{ID: "venv/laatmux/%5", Session: "laatmux/z-2", Managed: true, Cwd: "/r/z"}}
+	moved := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending, Agent: &protocol.Agent{ID: "venv/laatmux/%5", Server: "laatmux", Session: "laatmux/z-2", Managed: true, Cwd: "/r/z"}}
 	otherLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: other}
 	for _, c := range []struct {
 		line    *rows.Row
@@ -230,7 +230,7 @@ func TestPaneJumpRouting(t *testing.T) {
 	foo.Pending = &protocol.Pending{}
 	*foo.Pending = *task.Pending
 	foo.Pending.Session = "laatmux/foo"
-	foo.Agent = &protocol.Agent{ID: "venv/laatmux/%5", Session: "laatmux/foo", Managed: true, Cwd: "/r/z"}
+	foo.Agent = &protocol.Agent{ID: "venv/laatmux/%5", Server: "laatmux", Session: "laatmux/foo", Managed: true, Cwd: "/r/z"}
 	loose := *task
 	loose.Pending = foo.Pending
 	renamed := *owner

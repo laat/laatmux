@@ -21,7 +21,7 @@ func TestApplyMerged(t *testing.T) {
 			{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Version: "v2", Capabilities: []string{"status", "worktrees", "merged"}},
 			{Name: "vm", SSH: "vm"},
 		},
-		Agents:    []protocol.Agent{{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/x", Agent: "claude", Activity: protocol.Working}},
+		Agents:    []protocol.Agent{{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/x", Agent: "claude", Activity: protocol.Working}},
 		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/proj/x", EnvironmentID: "menv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
 		Sessions:  []protocol.Session{{Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac", Settled: true}},
 	})

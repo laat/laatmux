@@ -58,7 +58,7 @@ func dashModel(cfg config.Config) *view.Model {
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true},
 		},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//w/proj/task", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "task", Root: "/w/proj/task", Session: "proj/task"},
@@ -306,7 +306,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	w := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
 	lost := w
 	lost.Session = ""
-	root := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "proj/z-2", Managed: true, Cwd: "/w/proj/z"}
+	root := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z-2", Managed: true, Cwd: "/w/proj/z"}
 	deflt := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes"}
 	task := rows.Row{Kind: rows.KindTask, Host: "vm", Name: "proj/z", Worktree: &lost, Agent: &root, Pending: &protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: "proj/z", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
 	target, err := pendingTarget(task)
@@ -334,7 +334,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	// S on a second agent's node, a tile, a pane or a run goes by the
 	// line: the root agent's session, not the second agent's.
 	line := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/z", Worktree: &lost, Agent: &root, Children: 2}
-	second := protocol.Agent{ID: "venv/laatmux/%4", EnvironmentID: "venv", Session: "scratch", Managed: true, Cwd: "/w/proj/z/sub", WorktreeID: lost.ID}
+	second := protocol.Agent{ID: "venv/laatmux/%4", EnvironmentID: "venv", Server: "laatmux", Session: "scratch", Managed: true, Cwd: "/w/proj/z/sub", WorktreeID: lost.ID}
 	tm := &view.Model{Tree: []rows.Row{{Kind: rows.KindRepo, Node: "repo/x"}, line,
 		{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second},
 		{Kind: rows.KindPane, Depth: 2, Host: "vm", Node: "venv/pane/%8", Worktree: &lost, Pane: &protocol.Pane{PaneID: "%8", Session: "scratch"}}}}
@@ -355,7 +355,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	}
 	// The add's agent before the host lists the worktree, as a node
 	// under its task and as a tile: the task's session.
-	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "proj/y", Managed: true, Cwd: "/w/proj/y"}
+	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "proj/y", Managed: true, Cwd: "/w/proj/y"}
 	taskLine := rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Name: "proj/y", Agent: &add, Children: 1, Pending: &protocol.Pending{ID: "add-y", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNone}}
 	tm.Tree = append(tm.Tree, taskLine, rows.Row{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add})
 	for _, r := range []rows.Row{tm.Tree[len(tm.Tree)-1], {Kind: rows.KindTile, Host: "vm", Node: add.ID, Name: "proj/y", Agent: &add}} {
@@ -469,7 +469,7 @@ func TestRmFor(t *testing.T) {
 	// An agent with no worktree is not rm's.
 	scratch := rows.Input{
 		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}},
-		Agents: []protocol.Agent{{ID: "menv/laatmux/%9", EnvironmentID: "menv", Session: "scratch", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true}},
+		Agents: []protocol.Agent{{ID: "menv/laatmux/%9", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true}},
 	}
 	m.View = view.ViewAgents
 	m.SetTree(rows.Tree(scratch))
@@ -493,9 +493,9 @@ func TestRmTreeRows(t *testing.T) {
 	in := rows.Input{
 		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
 		Agents: []protocol.Agent{
-			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
-			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Session: "other", Agent: "codex", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
-			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Session: "elsewhere", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/spike", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
+			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
+			{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "other", Agent: "codex", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/task", Identity: &protocol.Identity{PID: 2, StartUnix: 2}},
+			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "elsewhere", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/proj/spike", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
 		},
 		Worktrees: []protocol.Worktree{
 			{ID: "venv/worktree//w/proj/task", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "task", Root: "/w/proj/task", Session: "proj/task"},
@@ -1064,7 +1064,7 @@ func TestClickJumpRefocuses(t *testing.T) {
 	// A run's jump is its worktree line's: through the line's root
 	// agent when the home is lost, as the line itself jumps.
 	lost := protocol.Worktree{ID: "venv/worktree//w/lost", EnvironmentID: "venv", Repo: "proj", Branch: "lost", Root: "/w/lost"}
-	root := protocol.Agent{ID: "venv/laatmux/%7", EnvironmentID: "venv", Session: "proj/lost-2", Managed: true, Cwd: "/w/lost", PaneID: "%7"}
+	root := protocol.Agent{ID: "venv/laatmux/%7", EnvironmentID: "venv", Server: "laatmux", Session: "proj/lost-2", Managed: true, Cwd: "/w/lost", PaneID: "%7"}
 	m.Tree = append(m.Tree, rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: lost.ID, Name: "proj/lost", Worktree: &lost, Agent: &root, Children: 1},
 		rows.Row{Kind: rows.KindRun, Depth: 2, Host: "vm", Node: "venv/run/r9", Name: "make", Worktree: &lost, Run: &protocol.Run{ID: "venv/run/r9"}})
 	jumped = nil

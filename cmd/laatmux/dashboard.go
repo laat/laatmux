@@ -419,7 +419,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))
 		}
 		return worktreeSpec(h, *r.Worktree), "", nil
-	case r.Worktree != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
+	case r.Worktree != nil && r.Agent.Server == tmux.LaatmuxServer.Label():
 		// A worktree whose own session lost the home, a split in it gone
 		// elsewhere say: the row's agent is the one laatmux made at the
 		// root, and the worktree's workspace session attaches to that
@@ -436,7 +436,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 	case r.Agent != nil:
 		// An agent's row, or a worktree's without a home session whose
 		// agent is on a default server.
-		how, err := jumpMode(h.Host, tmux.Parse(rows.Server(*r.Agent)), r.Agent.Session)
+		how, err := jumpMode(h.Host, tmux.Parse(r.Agent.Server), r.Agent.Session)
 		if err != nil {
 			return spec, "", err
 		}
@@ -469,7 +469,7 @@ func pendingTarget(r rows.Row) (rows.Row, error) {
 		// same name is not this task's.
 		return r, errors.New(r.Name + ": host replaced: " + r.Detail())
 	case r.Worktree != nil && r.Worktree.Session != "":
-	case r.Worktree != nil && r.Agent != nil && rows.Server(*r.Agent) == tmux.LaatmuxServer.Label():
+	case r.Worktree != nil && r.Agent != nil && r.Agent.Server == tmux.LaatmuxServer.Label():
 		// Listed without a home, with the agent laatmux made at the
 		// root in a managed session: the jump goes through that agent,
 		// as the worktree line's does, wherever the agent went.

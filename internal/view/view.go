@@ -644,7 +644,7 @@ func (m *Model) where(r rows.Row) Span {
 	}
 	s := "@" + host
 	if r.Agent != nil {
-		if srv := rows.Server(*r.Agent); srv != tmux.LaatmuxServer.Label() {
+		if srv := r.Agent.Server; srv != tmux.LaatmuxServer.Label() {
 			s += "/" + srv
 		}
 	}
