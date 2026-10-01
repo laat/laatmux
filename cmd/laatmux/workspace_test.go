@@ -363,10 +363,14 @@ func TestLsWatchNeedTheDaemon(t *testing.T) {
 		t.Errorf("ls and watch took %s to refuse", time.Since(start))
 	}
 	// A runtime record naming a live pid, this test's own, at a socket
-	// nothing answers on, as a crash leaves one when the pid is reused.
-	// The log made a directory keeps the dial's start from running
-	// anything. The pid is not named, and no kill suggested: a record
-	// is no proof of a daemon.
+	// nothing answers on, as a crash leaves one when the pid is reused,
+	// and then with the pid holding the startup lock, as a daemon that
+	// does not answer does. The log made a directory keeps the dial's
+	// start from running anything. Neither names the pid nor suggests
+	// a kill: a record is no proof of a daemon, and the lock is not
+	// probed, since a probe of it when free costs a serve still
+	// starting its own. The path is taken out of the message before
+	// the pid is looked for, its random part being digits too.
 	home2 := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home2, "daemon.log"), 0o700); err != nil {
 		t.Fatal(err)
@@ -375,8 +379,22 @@ func TestLsWatchNeedTheDaemon(t *testing.T) {
 	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(dir, "none.sock"), PID: os.Getpid(), Version: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	err = cmdLs(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || strings.Contains(err.Error(), fmt.Sprint(os.Getpid())) || strings.Contains(err.Error(), "kill") {
-		t.Fatalf("ls with a stale record naming a live pid: %v", err)
+	noPID := func(what string) {
+		t.Helper()
+		err := cmdLs(context.Background(), nil)
+		if err == nil {
+			t.Fatalf("ls %s: no error", what)
+		}
+		msg := strings.ReplaceAll(err.Error(), dir, "")
+		if !strings.Contains(msg, "local daemon: ") || strings.Contains(msg, fmt.Sprint(os.Getpid())) || strings.Contains(msg, "kill") {
+			t.Fatalf("ls %s: %v", what, err)
+		}
 	}
+	noPID("with a stale record naming a live pid")
+	lock, err := home.TryLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	noPID("with the recorded pid holding the lock")
 }
