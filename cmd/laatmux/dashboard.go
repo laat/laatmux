@@ -54,6 +54,9 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := needRelay(c); err != nil {
+		return err
+	}
 	// The dashboard starts in the view and, without --layout, the layout
 	// last chosen, from sidebar.json.
 	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
@@ -270,15 +273,24 @@ func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, and laatmux serve run by hand shows it, or names the pid of one holding the lock", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
-	// The merged stream and the relay came in the same milestone, and a
-	// current build has both or neither: a daemon with the stream and
-	// not the relay is one that could not open its pending directory,
-	// which the current build does not run.
-	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) || !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
 		c.Close()
-		return nil, fmt.Errorf("local daemon %s has no merged stream or no relay, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
+		return nil, fmt.Errorf("local daemon %s has no merged stream, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
 	}
 	return c, nil
+}
+
+// needRelay is the add form's requirement on the daemon it submits to:
+// a daemon with the merged stream and no relay is an older build that
+// ran on without its pending directory, which the current build does
+// not; the dashboard and compose refuse it, where ls, watch and the
+// sidebar, which submit nothing, take the stream alone.
+func needRelay(c *client.Conn) error {
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
+		c.Close()
+		return fmt.Errorf("local daemon %s has no relay, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
+	}
+	return nil
 }
 
 // hostCaps is a host's cached daemon capabilities from the merged

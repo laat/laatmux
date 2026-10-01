@@ -671,7 +671,8 @@ func TestBuildForm(t *testing.T) {
 
 // A submit through the relay: a refusal puts the form back up with the
 // error and the text intact; an error after the daemon may hold the
-// task ends the view with the id; acceptance ends it with the id.
+// task drops the form and keeps the view with the id in the message;
+// acceptance ends it with the id.
 func TestSubmitFormOutcomes(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -714,8 +715,8 @@ func TestSubmitFormOutcomes(t *testing.T) {
 }
 
 // compose's host: a refusal puts the form back, an answer the daemon
-// may have taken waits in an ended log and then ends the view, and a
-// notice ends the view when dismissed.
+// may have taken waits in an ended log and then ends the view, Esc on
+// the form and Ctrl-C on a log end it.
 func TestComposeAct(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -747,12 +748,6 @@ func TestComposeAct(t *testing.T) {
 	log.Handle(view.Key{Rune: 'x'})
 	if !c.act(m, m.Poll()) || !strings.Contains(c.outcome, "submitted add-1") {
 		t.Fatalf("after the key: outcome %q", c.outcome)
-	}
-	// A notice, the outcome say: dismissed, the view ends.
-	m = &view.Model{Overlay: view.NewNotice("t", []string{"the outcome"}, ""), Width: 80, Height: 24}
-	m.Overlay.Handle(view.Key{Kind: view.KeyEsc})
-	if !c.act(m, m.Poll()) {
-		t.Fatal("the notice's dismissal did not end the view")
 	}
 	fresh := buildForm(cfg, f, last, "proj", "", "", nil)
 	fresh.Handle(view.Key{Kind: view.KeyEsc})

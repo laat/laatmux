@@ -471,6 +471,10 @@ func (d *Daemon) runCtx() context.Context {
 }
 
 // Run polls until ctx is done.
+// Err is what New could not do, the relay's directory say: serve
+// checks it before announcing the daemon, and Run returns it at once.
+func (d *Daemon) Err() error { return d.fatal }
+
 func (d *Daemon) Run(ctx context.Context) error {
 	if d.fatal != nil {
 		return d.fatal

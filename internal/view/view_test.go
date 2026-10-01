@@ -841,11 +841,6 @@ func TestNewlineIsEnter(t *testing.T) {
 	if !pr.Done() || pr.Cancelled {
 		t.Fatalf("prompt: done %v cancelled %v", pr.Done(), pr.Cancelled)
 	}
-	n := NewNotice("t", []string{"l"}, "")
-	n.Handle(Key{Kind: KeyNewline})
-	if !n.Done() {
-		t.Fatal("notice not dismissed by a newline")
-	}
 	f := NewForm("t", chips(), "")
 	f.Handle(Key{Kind: KeyShiftTab})
 	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip

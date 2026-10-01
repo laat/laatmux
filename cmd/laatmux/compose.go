@@ -25,10 +25,8 @@ func ended(msg string) *view.Log {
 // display-popup -E -d '#{pane_current_path}' 'laatmux compose': the
 // dashboard's model without the list, exiting on submit or cancel. The
 // repository defaults to the directory the popup was opened from, as
-// the dashboard's a does. With the local daemon's relay the submit
-// hands the add to it and the popup closes on accepted; without it the
-// add runs in the foreground with its log, then the new session is
-// jumped to.
+// the dashboard's a does. The submit hands the add to the local
+// daemon's relay and the popup closes on accepted.
 func cmdCompose(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux compose")
@@ -39,6 +37,9 @@ func cmdCompose(ctx context.Context, args []string) error {
 	}
 	c, err := dialMergedOrExplain(ctx)
 	if err != nil {
+		return err
+	}
+	if err := needRelay(c); err != nil {
 		return err
 	}
 	// The merged stream is followed while the form is up, so the note
@@ -103,14 +104,9 @@ type composer struct {
 }
 
 // act handles an overlay ending. The form's submit either ends the
-// view on accepted, puts the form back up on a refusal, runs the add
-// in the foreground with its log, or leaves a message an answer the
-// daemon may have taken carries, shown in an ended log until a key
-// since the popup closes with the process. The log's end goes through
-// the dashboard's handling, which may put up the notice of a prompt
-// that did not reach the agent; when that is dismissed the view ends,
-// jumping first to the session the add made when there is one, as the
-// foreground add does, so the prompt can be pasted into the agent.
+// view on accepted, puts the form back up on a refusal, or leaves a
+// message an answer the daemon may have taken carries, shown in an
+// ended log until a key since the popup closes with the process.
 func (c *composer) act(m *view.Model, a view.Action) bool {
 	if a.Kind != view.ActionOverlay {
 		return false
@@ -138,14 +134,6 @@ func (c *composer) act(m *view.Model, a view.Action) bool {
 			c.outcome = m.Message
 		}
 		return done || m.Overlay == nil
-	case *view.Notice:
-		// The dashboard's handling jumps when there is a session and no
-		// error to show; the outcome is what it left.
-		d.overlayDone(m)
-		if m.Message != "" {
-			c.outcome = m.Message
-		}
-		return true
 	}
 	return false
 }

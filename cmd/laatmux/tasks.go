@@ -63,13 +63,13 @@ func listTasks(ctx context.Context) error {
 	if _, err := config.Load(); err != nil {
 		return err
 	}
-	c, ok := dialMerged(ctx)
-	if !ok {
-		return errors.New("the local daemon has no merged stream")
+	c, err := dialMergedOrExplain(ctx)
+	if err != nil {
+		return err
 	}
 	defer c.Close()
-	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
-		return fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
+	if err := needRelay(c); err != nil {
+		return err
 	}
 	m := newMerged()
 	if _, err := m.readMerged(ctx, c, 5*time.Second, func(*merged) bool { return true }); err != nil {

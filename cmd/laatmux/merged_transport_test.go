@@ -207,6 +207,13 @@ func TestReadMergedTimesOutWithoutSnapshot(t *testing.T) {
 		t.Fatal("dialMerged failed")
 	}
 	defer c.Close()
+	// The stream alone is what ls, watch and the sidebar take; the add
+	// form refuses a daemon without the relay, an older build.
+	if c2, err := dialMergedOrExplain(context.Background()); err != nil {
+		t.Fatalf("the stream alone refused: %v", err)
+	} else if err := needRelay(c2); err == nil || !strings.Contains(err.Error(), "no relay") || !strings.Contains(err.Error(), "laatmux stop") {
+		t.Fatalf("a daemon without the relay taken by the form: %v", err)
+	}
 	m := newMerged()
 	_, err := m.readMerged(context.Background(), c, 200*time.Millisecond, func(*merged) bool { return false })
 	if err == nil || !strings.Contains(err.Error(), "no snapshot after") {

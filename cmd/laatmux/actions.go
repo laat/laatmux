@@ -42,10 +42,9 @@ type dash struct {
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
 	run *running
-	// switcher replaces the tmux switch, for tests, jumper a row's jump,
-	// and refocus the return of focus after a click in the sidebar.
-	switcher func(session string) error
-	jumper   func(r rows.Row) error
+	// jumper replaces a row's jump, for tests, and refocus is the return
+	// of focus after a click in the sidebar.
+	jumper func(r rows.Row) error
 	// client is the tmux client the next jump switches, from a sidebar
 	// command with -c; "" is the view's own.
 	client  string
@@ -176,20 +175,8 @@ func (d *dash) overlayDone(m *view.Model) bool {
 			return false
 		}
 		return run.done(m)
-	case *view.Notice:
-		m.Overlay = nil
-		return false
 	}
 	return false
-}
-
-// jumpTo switches the client to the session, through switcher when a
-// test set one.
-func (d *dash) jumpTo(session string) error {
-	if d.switcher != nil {
-		return d.switcher(session)
-	}
-	return switchTo(d.ctx, session)
 }
 
 // start runs a command in the background with its progress in a log
@@ -393,7 +380,8 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 // relay, and the view ends once it is accepted; a refusal, a host whose
 // daemon does not support tasks say, keeps the form up with the error,
 // its text intact, while an error after the daemon may hold the task
-// ends the view with the id, so nothing is submitted twice.
+// drops the form and keeps the view with the id in the message, so
+// nothing is submitted twice.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 	add := command.Add{
 		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],

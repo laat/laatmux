@@ -519,21 +519,6 @@ func TestLogIgnoresPaste(t *testing.T) {
 	}
 }
 
-// A notice's verbatim lines keep their spaces and show tabs as
-// indents, wrapped only where the width runs out; its prose lines
-// wrap at spaces.
-func TestNoticeVerbatim(t *testing.T) {
-	n := NewNotice("t", []string{"a prose line that wraps at a space when long", "", "\tkeep  two spaces and a very long line that runs past the width"}, "")
-	n.Verbatim = 2
-	text := Text(n.Render(30, 10))
-	if !strings.Contains(text, "    keep  two spaces and a ver") || !strings.Contains(text, "y long line that runs past the") {
-		t.Fatalf("verbatim:\n%s", text)
-	}
-	if !strings.Contains(text, "a prose line that wraps at a") {
-		t.Fatalf("prose:\n%s", text)
-	}
-}
-
 // Raw bytes through the decoder into a form: an Alt chord is not the
 // Esc that cancels, and the Esc that ends a paste with a lost end
 // marker is spent on that, so the prompt survives both.
@@ -663,16 +648,11 @@ func TestNarrowTab(t *testing.T) {
 			t.Fatalf("width %d: cursor lost\n%s", w, text)
 		}
 	}
-	for _, line := range hardWrap("\tx", 2) {
-		if len([]rune(line)) > 2 {
-			t.Fatalf("hardWrap past the width: %q", line)
-		}
-	}
 }
 
-// A symbol with VS16 takes two cells in the prompt's wrap, the branch
-// line's tail and a notice's wrap, as it does in fit: nothing is cut
-// that the wrap thought fit, and nothing is wider than asked.
+// A symbol with VS16 takes two cells in the prompt's wrap and the
+// branch line's tail, as it does in fit: nothing is cut that the wrap
+// thought fit, and nothing is wider than asked.
 func TestWrapVS16(t *testing.T) {
 	f := &Form{prompt: []rune("12345678⚠️x"), focus: fieldPrompt}
 	f.cursor = len(f.prompt)
@@ -682,11 +662,6 @@ func TestWrapVS16(t *testing.T) {
 	}
 	if got := tail("abcdefgh⚠️x", 4); width(got) > 4 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
-	}
-	for _, line := range hardWrap("abc⚠️⚠️", 4) {
-		if width(line) > 4 {
-			t.Errorf("hardWrap: %q is %d cells", line, width(line))
-		}
 	}
 }
 
