@@ -89,11 +89,10 @@ func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
 		}
 		return w, parent, true
 	}
-	for _, rs := range [][]rows.Row{m.Rows.Main, m.Rows.Stale} {
-		for i := range rs {
-			if r := &rs[i]; r.Current {
-				return m.tileWorktree(r), m.tileRepo(r), true
-			}
+	// The viewer's tile is in the main group whatever its state.
+	for i := range m.Rows.Main {
+		if r := &m.Rows.Main[i]; r.Current {
+			return m.tileWorktree(r), m.tileRepo(r), true
 		}
 	}
 	return "", "", false

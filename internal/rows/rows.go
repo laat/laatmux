@@ -6,7 +6,9 @@
 // with no worktree and observed agents on other servers under other
 // sessions; and the local sessions whose worktree is gone. Tree is the
 // join, rooted at repositories; Agents is the agent view's tiles drawn
-// from it. This file holds what the rows are and what they say.
+// from it. This file holds the row type, what a row says, the choice
+// of a line's agent and the order of agents the join uses, and the
+// tiles' sort order.
 package rows
 
 import (
@@ -65,8 +67,8 @@ type Input struct {
 	Branches map[protocol.BranchKey]protocol.BranchStatus
 	// Now is the time stale is measured at; StaleAfter how long an agent
 	// is idle before it is stale, 0 for never. DimStale draws a stale row
-	// dim, CollapseStale folds it into the Stale group. Sort is the order
-	// of the main group: priority, the default, recency or window.
+	// dim, CollapseStale folds it into the Stale group. Sort is the
+	// tiles' order: priority, the default, recency or window.
 	Now           time.Time
 	StaleAfter    time.Duration
 	DimStale      bool
@@ -74,19 +76,17 @@ type Input struct {
 	Sort          string
 }
 
-// Sort orders of the main group.
+// Sort orders of the tiles.
 const (
 	SortPriority = "priority"
 	SortRecency  = "recency"
 	SortWindow   = "window"
 )
 
-// Row is one entry: a pending task, a worktree with or without its
-// agent, an agent with no worktree, or a local session whose worktree
-// is gone.
+// Row is one tile of the agent view or one node of the tree: see Kind.
 type Row struct {
 	Host string // configured host name; "" when no host record claims the record
-	Name string // <repo>/<branch>, the agent's session, or the orphaned session's name
+	Name string // <repo>/<branch>, the agent's session, a task's or the orphaned session's name, or the node's label
 	// Pending is the relay's record of a background add. Its row stands
 	// for the worktree row with the same environment and root until the
 	// record hands over, so it carries that row's worktree, agent and
@@ -453,9 +453,9 @@ func started(a *protocol.Agent) int64 {
 
 // less is the tiles' sort order. Pending tasks come first in every
 // order, the newest first, since a task is what the user just asked
-// for. The rest, by priority: rank, then most recent activity first; by
-// recency: most recent activity first, rows without an agent last; by
-// window: the session, then the window. Ties go by host, then name.
+// for. The rest, every one an agent's tile: by priority, rank, then
+// most recent activity first; by recency, most recent activity first;
+// by window, the session, then the window. Ties go by host, then name.
 func less(a, b Row, order string) bool {
 	if (a.Pending != nil) != (b.Pending != nil) {
 		return a.Pending != nil
@@ -468,9 +468,7 @@ func less(a, b Row, order string) bool {
 	}
 	switch order {
 	case SortRecency:
-		if (a.Agent != nil) != (b.Agent != nil) {
-			return a.Agent != nil
-		}
+		// Activity alone, below.
 	case SortWindow:
 		if sa, sb := a.session(), b.session(); sa != sb {
 			return sa < sb
@@ -492,20 +490,14 @@ func less(a, b Row, order string) bool {
 	return a.Name < b.Name
 }
 
-// session is what a row sorts by first in window order: its host and its
-// agent's session, else its host and its name.
+// session is what a tile sorts by first in window order: its host and
+// its agent's session.
 func (r Row) session() string {
-	if r.Agent != nil {
-		return r.Host + "\x00" + r.Agent.Session
-	}
-	return r.Host + "\x00" + r.Name
+	return r.Host + "\x00" + r.Agent.Session
 }
 
-// window is the agent's window index, -1 without an agent.
+// window is the agent's window index.
 func (r Row) window() int {
-	if r.Agent == nil {
-		return -1
-	}
 	return r.Agent.Window
 }
 
