@@ -205,20 +205,23 @@ func TestAddFlowDefaults(t *testing.T) {
 		f.Handle(view.Key{Kind: view.KeyEsc})
 		d.act(m, m.Poll())
 	}
-	m.View = view.ViewAgents
 
 	// No last-used agent for the repository: the configured default is
-	// preselected; without one, the first agent.
+	// preselected; without one, the first agent. On laatmux's own line,
+	// the repository whose last entry has the host and no agent.
 	if err := home.UpdateLast(func(l *home.Last) { l.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm"}) }); err != nil {
 		t.Fatal(err)
+	}
+	if !m.Select(rows.RepoNode("git@github.com:laat/laatmux.git")) {
+		t.Fatal("no laatmux line")
 	}
 	for _, c := range []struct{ def, want string }{{"codex", "codex"}, {"", "claude"}} {
 		cfg.DefaultAgentName = c.def
 		d.cfg = cfg
 		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
 		f := m.Overlay.(*view.Form)
-		if f.Chips[2].Label() != c.want {
-			t.Fatalf("default_agent %q: agent preselected %q", c.def, f.Chips[2].Label())
+		if f.Chips[0].Label() != "laatmux" || f.Chips[2].Label() != c.want {
+			t.Fatalf("default_agent %q: preselected %q, agent %q", c.def, f.Chips[0].Label(), f.Chips[2].Label())
 		}
 		f.Handle(view.Key{Kind: view.KeyEsc})
 		d.act(m, m.Poll())

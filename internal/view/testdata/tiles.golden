@@ -29,12 +29,5 @@ S..|‹⟨border:─────────────────────
 ...|‹⟨border:───────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ dead                        3h
 .D.|⟨border:▌⟩    proj @‹vm›
-.D.|⟨border:▌⟩    claude gone
-...|‹⟨border:───────────────────────────────────⟩›
-...|‹⟨header:▸ 1 stale⟩›
-...|
-...|
-...|
-...|
-...|
+.D.|↓ 1 more
 .D.|v layout  / filter  f all  q quit

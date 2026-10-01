@@ -94,13 +94,14 @@ func model(now time.Time) *Model {
 // The tile layout at the sidebar's default width: each tile is the
 // stripe and the icon in the status colour, the primary label and the
 // time since the status changed; the secondary label and the host tag,
-// dim for every host but the local one; and the cleaned title, or what
-// a row without an agent is instead; the current row's label is bold in
-// its own colour; rows below the window are counted.
+// dim for every host but the local one; and the cleaned title; the
+// current row's label is bold in its own colour; a tile cut by the
+// window's edge is drawn as far as it goes, and the rows below the
+// window are counted, dim.
 func TestRenderTiles(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
-	m.Layout, m.Width, m.Height = Tiles, 35, 40
+	m.Layout, m.Width, m.Height = Tiles, 35, 33
 	m.Hint = "v layout  / filter  f all  q quit"
 	golden(t, "tiles", Debug(m.Render()))
 }
@@ -1004,6 +1005,16 @@ func TestAnchorStandIn(t *testing.T) {
 		if r := f.Selection(); r == nil || r.ID() != wt.ID {
 			t.Fatalf("%s: after add-b handed over: %+v", bad.ID, r)
 		}
+	}
+	// Gone before the stream carries its handoff: the task standing for
+	// the same worktree, found by the alias alone.
+	u := &Model{Width: 60, Height: 20, Now: now}
+	set(u, stuck, next)
+	u.Handle(Key{Rune: 'g'})
+	u.Selection()
+	set(u, stuck)
+	if r := u.Selection(); r == nil || r.ID() != "add-a" {
+		t.Fatalf("add-b gone with no handoff recorded: %+v", r)
 	}
 	// Lost, then found again: a filter that hides every row and is
 	// cleared puts the selection on the first row, as for any other.
