@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,11 +22,29 @@ import (
 // served is a daemon serving a seeded repository with one worktree:
 // what the serve tests start.
 type served struct {
-	remote string         // the bare repository
 	added  worktree.Added // the worktree task, added before the daemon started
-	done   chan error     // serve's return
+	done   chan error     // serve's return, read once by wait
 	cancel context.CancelFunc
 	conn   *client.Conn // a connection with the hello read
+	once   sync.Once
+	err    error
+}
+
+// wait ends serve and returns what it returned, once; the fixture's
+// cleanup calls it before the environment and the directories go, since
+// serve's own exit removes its runtime file by the environment as it is
+// then, and a later fixture in the same process shares the pid.
+func (s *served) wait(t *testing.T) error {
+	t.Helper()
+	s.once.Do(func() {
+		s.cancel()
+		select {
+		case s.err = <-s.done:
+		case <-time.After(15 * time.Second):
+			s.err = fmt.Errorf("serve did not return")
+		}
+	})
+	return s.err
 }
 
 // serveFixture seeds a bare repository with one commit, a config with
@@ -86,9 +105,11 @@ func serveFixture(t *testing.T) *served {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}) }()
+	s := &served{added: added, done: done, cancel: cancel}
+	// Registered after the Setenvs, so it runs before they are undone.
+	t.Cleanup(func() { s.wait(t) })
 	var c *client.Conn
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		nc, err := client.DialLocal(ctx, false)
@@ -105,7 +126,8 @@ func serveFixture(t *testing.T) *served {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Cleanup(func() { c.Close() })
-	return &served{remote: remote, added: added, done: done, cancel: cancel, conn: c}
+	s.conn = c
+	return s
 }
 
 // serve's own shutdown, the context ending as a signal ends it, stops
@@ -113,7 +135,7 @@ func serveFixture(t *testing.T) *served {
 // of its goroutines noticed first.
 func TestServeShutdownCancelsRuns(t *testing.T) {
 	s := serveFixture(t)
-	c, added, cancel, served := s.conn, s.added, s.cancel, s.done
+	c, added := s.conn, s.added
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRun) {
 		t.Fatalf("caps %v", c.Hello.Capabilities)
 	}
@@ -128,14 +150,8 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 			break
 		}
 	}
-	cancel()
-	select {
-	case err := <-served:
-		if err != nil {
-			t.Fatalf("serve: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("serve did not return")
+	if err := s.wait(t); err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 	if out, _ := exec.Command("pgrep", "-f", token).Output(); len(strings.TrimSpace(string(out))) > 0 {
 		t.Fatalf("run survived the shutdown: pids %s", out)
@@ -155,28 +171,58 @@ func TestServeShutdownCancelsRuns(t *testing.T) {
 }
 
 // The whole client path against a real daemon: serve, the merged
-// stream read as ls reads it, ls's listing, then the merged state
-// filled into a view and both views rendered. The worktree the fixture
-// added shows in the listing and the tree, the agent view has no tile
-// for it, and the host is connected and listed. No view, merged state
-// and daemon were tested together before this.
+// stream read as ls reads it against a daemon still on its first poll,
+// so the snapshot comes before the host is listed and the wait is
+// real, ls's listing, then the merged state filled into a view and
+// both views rendered. The worktree the fixture added shows in the
+// listing and the tree, the agent view has no tile for it, and the
+// host is connected and listed. No view, merged state and daemon were
+// tested together before this.
 func TestServeToRender(t *testing.T) {
+	real, err := exec.LookPath("tmux")
+	if err != nil {
+		// Without tmux the daemon's first poll never completes, so the
+		// local host is never listed and ls waits its timeout out.
+		t.Skip("tmux not installed")
+	}
+	// A tmux that answers after half a second: the daemon's first poll
+	// is still out when the client subscribes, as it is for ls against
+	// a daemon it just started, and the host is listed by an upsert
+	// after the snapshot.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte("#!/bin/sh\nsleep 0.5\nexec "+real+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	s := serveFixture(t)
 	ctx := context.Background()
-	c, ok := dialMerged(ctx)
-	if !ok {
-		t.Fatal("the local daemon does not merge")
+	// Dialled without the auto-start: a daemon gone by now would have
+	// the dial run the test binary as serve.
+	nc, err := client.DialLocal(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.Connect(ctx, client.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
+		t.Fatal("the local daemon does not merge")
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := newMerged()
 	m.configure(cfg)
-	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool { return len(m.pending()) == 0 })
+	asked := 0
+	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool { asked++; return len(m.pending()) == 0 })
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("read merged: %v %v", pending, err)
+	}
+	if asked < 2 {
+		t.Errorf("the host was listed in the snapshot already: the wait was not exercised (%d)", asked)
 	}
 	// ls's listing: the host line, the repository and its worktree.
 	listing := m.render(m.locals())
@@ -185,8 +231,10 @@ func TestServeToRender(t *testing.T) {
 			t.Errorf("ls lacks %q:\n%s", want, listing)
 		}
 	}
-	if strings.Contains(listing, "DOWN") || strings.Contains(listing, "not listed") {
-		t.Errorf("ls shows a failure:\n%s", listing)
+	for _, bad := range []string{"DOWN", "not listed", "snapshot pending"} {
+		if strings.Contains(listing, bad) {
+			t.Errorf("ls shows %q:\n%s", bad, listing)
+		}
 	}
 	// The dashboard's fill and both views.
 	v := &view.Model{Width: 100, Height: 30, LocalHost: "box", View: view.ViewTree, Layout: view.Compact, Titles: true}
@@ -205,9 +253,12 @@ func TestServeToRender(t *testing.T) {
 	}
 	// The worktree the store added is the one the stream carries.
 	m.mu.Lock()
-	n := len(m.worktrees)
+	var roots, branches []string
+	for _, w := range m.worktrees {
+		roots, branches = append(roots, w.Root), append(branches, w.Branch)
+	}
 	m.mu.Unlock()
-	if n != 1 || s.added.Root == "" {
-		t.Errorf("worktrees in the merged state: %d", n)
+	if len(roots) != 1 || roots[0] != s.added.Root || branches[0] != "task" {
+		t.Errorf("worktrees in the merged state: %v %v, want %s task", roots, branches, s.added.Root)
 	}
 }

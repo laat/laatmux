@@ -3,9 +3,17 @@ package protocol
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,7 +25,9 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // key, marshalled and compared with a golden file. Both ends of every
 // other test share the struct, so a renamed JSON tag would pass them;
 // this one fails, and a tag renamed on purpose is a golden rewritten
-// with -update and a protocol note.
+// with -update and a protocol note. A Go field renamed with its tag
+// kept, or two fields swapped, changes nothing on the wire and nothing
+// here: a string's value is its key, a number's is one.
 func TestWireGolden(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -30,84 +40,199 @@ func TestWireGolden(t *testing.T) {
 		{"host_status", &HostStatus{}}, {"session", &Session{}}, {"repo_entry", &RepoEntry{}},
 		{"listing", &Listing{}}, {"identity", &Identity{}},
 	} {
-		fill(reflect.ValueOf(c.v).Elem(), 0)
+		fill(t, c.name, reflect.ValueOf(c.v).Elem(), nil)
 		b, err := json.MarshalIndent(c.v, "", "  ")
 		if err != nil {
 			t.Fatal(err)
+		}
+		var decoded any
+		if err := json.Unmarshal(b, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		// The claim above, checked: no leaf is a zero.
+		for _, z := range zeroLeaves(c.name, decoded) {
+			t.Errorf("%s: a zero on the wire, which omitempty would hide", z)
 		}
 		golden(t, c.name, string(b)+"\n")
 	}
 }
 
-// fill sets every field of a struct to a value that is not its zero,
-// named after the field where it can be, so the golden reads as a key
-// list: strings get their field name, numbers their index from one,
-// bools true, times a fixed instant, slices one element, pointers a
-// filled struct, maps one entry. Nested structs stop three levels down.
-func fill(v reflect.Value, depth int) {
-	if depth > 3 {
-		return
+// The wire values, pinned: every exported constant of the package, the
+// message types, capabilities, states, stages, error strings, delivery
+// and activity values and the version, as one sorted line each. Both
+// ends share the Go name, so a changed value passes every other test
+// while a laptop and a host on different builds disagree.
+func TestWireConstants(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var files []*ast.File
+	for _, f := range pkgs["protocol"].Files {
+		files = append(files, f)
+	}
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	pkg, err := conf.Check("protocol", fset, files, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, name := range pkg.Scope().Names() {
+		if c, ok := pkg.Scope().Lookup(name).(*types.Const); ok && c.Exported() {
+			lines = append(lines, name+" = "+c.Val().ExactString())
+		}
+	}
+	sort.Strings(lines)
+	got := strings.Join(lines, "\n") + "\n"
+	p := filepath.Join("testdata", "constants.txt")
+	if *update {
+		if err := os.WriteFile(p, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("%v; run with -update", err)
+	}
+	if string(want) != got {
+		t.Errorf("the constants differ from their golden (a changed wire value? run with -update to accept):\n%s", diffLines(string(want), got))
+	}
+}
+
+// fill sets every field of a struct to a value that is not its zero,
+// named for the wire where it can be, so the golden reads as a key
+// list: strings get their JSON key, numbers one, bools true, times a
+// fixed instant, slices one element, pointers a filled struct, maps one
+// entry. Recursion stops at a struct type already on the path, which no
+// record has today. A kind it cannot fill fails the test by its path,
+// so a field of a new kind cannot slip in with its key unpinned.
+func fill(t *testing.T, path string, v reflect.Value, onPath []reflect.Type) {
+	t.Helper()
 	switch v.Kind() {
 	case reflect.Struct:
 		if v.Type() == reflect.TypeOf(time.Time{}) {
 			v.Set(reflect.ValueOf(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)))
 			return
 		}
+		for _, seen := range onPath {
+			if seen == v.Type() {
+				return
+			}
+		}
+		onPath = append(onPath, v.Type())
 		for i := 0; i < v.NumField(); i++ {
 			f := v.Field(i)
+			sf := v.Type().Field(i)
+			name := path + "." + sf.Name
 			if !f.CanSet() {
+				t.Fatalf("%s: unexported, not on the wire", name)
+			}
+			if f.Kind() == reflect.String {
+				key := strings.Split(sf.Tag.Get("json"), ",")[0]
+				if key == "" {
+					key = sf.Name
+				}
+				f.SetString(key)
 				continue
 			}
-			switch f.Kind() {
-			case reflect.String:
-				f.SetString(v.Type().Field(i).Name)
-			case reflect.Int, reflect.Int64:
-				f.SetInt(int64(i + 1))
-			case reflect.Uint64:
-				f.SetUint(uint64(i + 1))
-			case reflect.Bool:
-				f.SetBool(true)
-			default:
-				fill(f, depth+1)
-			}
+			fill(t, name, f, onPath)
 		}
 	case reflect.Ptr:
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
-		fill(v.Elem(), depth)
+		fill(t, path, v.Elem(), onPath)
 	case reflect.Slice:
 		e := reflect.New(v.Type().Elem()).Elem()
-		if e.Kind() == reflect.String {
-			e.SetString("x")
-		} else {
-			fill(e, depth+1)
-		}
+		fill(t, path+"[]", e, onPath)
 		v.Set(reflect.Append(reflect.MakeSlice(v.Type(), 0, 1), e))
 	case reflect.Array:
 		for i := 0; i < v.Len(); i++ {
-			fill(v.Index(i), depth+1)
+			fill(t, path+"[]", v.Index(i), onPath)
 		}
 	case reflect.Map:
 		m := reflect.MakeMap(v.Type())
 		k := reflect.New(v.Type().Key()).Elem()
-		if k.Kind() == reflect.String {
-			k.SetString("k")
-		}
+		fill(t, path+"{key}", k, onPath)
 		e := reflect.New(v.Type().Elem()).Elem()
-		fill(e, depth+1)
+		fill(t, path+"{}", e, onPath)
 		m.SetMapIndex(k, e)
 		v.Set(m)
-	case reflect.Int, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		v.SetInt(1)
-	case reflect.Uint64:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		v.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		v.SetFloat(1.5)
 	case reflect.Bool:
 		v.SetBool(true)
 	case reflect.String:
 		v.SetString("x")
+	default:
+		t.Fatalf("%s: a %s, which fill cannot set; teach it the kind", path, v.Kind())
 	}
+}
+
+// zeroLeaves is the paths of the zero values in a decoded JSON value:
+// "", 0, false, null, an empty array or object, or the zero time.
+func zeroLeaves(path string, v any) []string {
+	var out []string
+	switch x := v.(type) {
+	case map[string]any:
+		if len(x) == 0 {
+			return []string{path + " = {}"}
+		}
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, zeroLeaves(path+"."+k, x[k])...)
+		}
+	case []any:
+		if len(x) == 0 {
+			return []string{path + " = []"}
+		}
+		for i, e := range x {
+			out = append(out, zeroLeaves(fmt.Sprintf("%s[%d]", path, i), e)...)
+		}
+	case string:
+		if x == "" || x == "0001-01-01T00:00:00Z" {
+			out = append(out, fmt.Sprintf("%s = %q", path, x))
+		}
+	case float64:
+		if x == 0 {
+			out = append(out, path+" = 0")
+		}
+	case bool:
+		if !x {
+			out = append(out, path+" = false")
+		}
+	case nil:
+		out = append(out, path+" = null")
+	}
+	return out
+}
+
+// diffLines is the lines in want and got that differ, each marked.
+func diffLines(want, got string) string {
+	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
+	var b strings.Builder
+	for i := 0; i < len(w) || i < len(g); i++ {
+		var wl, gl string
+		if i < len(w) {
+			wl = w[i]
+		}
+		if i < len(g) {
+			gl = g[i]
+		}
+		if wl != gl {
+			fmt.Fprintf(&b, "%d: want %q\n%d: got  %q\n", i+1, wl, i+1, gl)
+		}
+	}
+	return b.String()
 }
 
 func golden(t *testing.T, name, got string) {
@@ -123,6 +248,6 @@ func golden(t *testing.T, name, got string) {
 		t.Fatalf("%v; run with -update", err)
 	}
 	if string(want) != got {
-		t.Errorf("%s differs from its golden (a renamed key? run with -update to accept):\n%s", name, got)
+		t.Errorf("%s differs from its golden (a renamed key? run with -update to accept):\n%s", name, diffLines(string(want), got))
 	}
 }

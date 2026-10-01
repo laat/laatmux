@@ -1,13 +1,13 @@
 {
-  "id": "ID",
-  "environment_id": "EnvironmentID",
-  "repo": "Repo",
-  "source": "Source",
-  "branch": "Branch",
-  "root": "Root",
-  "session": "Session",
+  "id": "id",
+  "environment_id": "environment_id",
+  "repo": "repo",
+  "source": "source",
+  "branch": "branch",
+  "root": "root",
+  "session": "session",
   "git": {
-    "base": "Base",
+    "base": "base",
     "committed": [
       1,
       1
@@ -17,8 +17,8 @@
       1
     ],
     "uncommitted_partial": true,
-    "ahead": 5,
-    "behind": 6,
+    "ahead": 1,
+    "behind": 1,
     "dirty": true,
     "conflict": true,
     "rebasing": true,

@@ -1,6 +1,6 @@
 {
-  "source": "Source",
-  "name": "Name",
+  "source": "source",
+  "name": "name",
   "copy": [
     "x"
   ],

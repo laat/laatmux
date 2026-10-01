@@ -1,5 +1,5 @@
 {
-  "base": "Base",
+  "base": "base",
   "committed": [
     1,
     1
@@ -9,8 +9,8 @@
     1
   ],
   "uncommitted_partial": true,
-  "ahead": 5,
-  "behind": 6,
+  "ahead": 1,
+  "behind": 1,
   "dirty": true,
   "conflict": true,
   "rebasing": true,

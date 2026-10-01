@@ -1,12 +1,12 @@
 {
-  "name": "Name",
-  "ssh": "SSH",
-  "environment_id": "EnvironmentID",
+  "name": "name",
+  "ssh": "ssh",
+  "environment_id": "environment_id",
   "connected": true,
   "listed": true,
-  "error": "Error",
+  "error": "error",
   "reconnecting": true,
-  "version": "Version",
+  "version": "version",
   "capabilities": [
     "x"
   ],

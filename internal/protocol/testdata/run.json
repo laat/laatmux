@@ -1,8 +1,8 @@
 {
-  "id": "ID",
-  "environment_id": "EnvironmentID",
-  "root": "Root",
-  "worktree_id": "WorktreeID",
+  "id": "id",
+  "environment_id": "environment_id",
+  "root": "root",
+  "worktree_id": "worktree_id",
   "cmd": [
     "x"
   ],

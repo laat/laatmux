@@ -1,13 +1,13 @@
 {
-  "id": "ID",
-  "environment_id": "EnvironmentID",
-  "server": "Server",
-  "session": "Session",
-  "window": 5,
-  "pane_id": "PaneID",
-  "command": "Command",
-  "pid": 8,
-  "cwd": "Cwd",
-  "worktree_id": "WorktreeID",
+  "id": "id",
+  "environment_id": "environment_id",
+  "server": "server",
+  "session": "session",
+  "window": 1,
+  "pane_id": "pane_id",
+  "command": "command",
+  "pid": 1,
+  "cwd": "cwd",
+  "worktree_id": "worktree_id",
   "updated_at": "2026-10-01T12:00:00Z"
 }

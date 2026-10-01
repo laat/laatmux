@@ -1,122 +1,123 @@
 {
-  "type": "Type",
-  "protocol": 2,
-  "client": "Client",
-  "environment_id": "EnvironmentID",
-  "version": "Version",
-  "host": "Host",
+  "type": "type",
+  "protocol": 1,
+  "client": "client",
+  "environment_id": "environment_id",
+  "version": "version",
+  "host": "host",
   "capabilities": [
     "x"
   ],
-  "pid": 8,
+  "pid": 1,
   "merged": true,
-  "seq": 10,
+  "seq": 1,
   "agents": [
     {
-      "id": "ID",
-      "environment_id": "EnvironmentID",
-      "server": "Server",
-      "session": "Session",
-      "window": 5,
-      "pane_id": "PaneID",
-      "tty": "TTY",
-      "cwd": "Cwd",
-      "title": "Title",
-      "agent": "Agent",
-      "activity": "Activity",
-      "liveness": "Liveness",
+      "id": "id",
+      "environment_id": "environment_id",
+      "server": "server",
+      "session": "session",
+      "window": 1,
+      "pane_id": "pane_id",
+      "tty": "tty",
+      "cwd": "cwd",
+      "title": "title",
+      "agent": "agent",
+      "activity": "activity",
+      "liveness": "liveness",
       "identity": {
         "pid": 1,
-        "start_unix": 2,
-        "comm": "Comm",
-        "leader_pid": 4
+        "start_unix": 1,
+        "comm": "comm",
+        "leader_pid": 1
       },
-      "rule": "Rule",
-      "reason": "Reason",
+      "rule": "rule",
+      "reason": "reason",
       "managed": true,
-      "worktree_id": "WorktreeID",
+      "worktree_id": "worktree_id",
       "activity_at": "2026-10-01T12:00:00Z",
       "updated_at": "2026-10-01T12:00:00Z"
     }
   ],
   "agent": {
-    "id": "ID",
-    "environment_id": "EnvironmentID",
-    "server": "Server",
-    "session": "Session",
-    "window": 5,
-    "pane_id": "PaneID",
-    "tty": "TTY",
-    "cwd": "Cwd",
-    "title": "Title",
-    "agent": "Agent",
-    "activity": "Activity",
-    "liveness": "Liveness",
+    "id": "id",
+    "environment_id": "environment_id",
+    "server": "server",
+    "session": "session",
+    "window": 1,
+    "pane_id": "pane_id",
+    "tty": "tty",
+    "cwd": "cwd",
+    "title": "title",
+    "agent": "agent",
+    "activity": "activity",
+    "liveness": "liveness",
     "identity": {
       "pid": 1,
-      "start_unix": 2,
-      "comm": "Comm",
-      "leader_pid": 4
+      "start_unix": 1,
+      "comm": "comm",
+      "leader_pid": 1
     },
-    "rule": "Rule",
-    "reason": "Reason",
+    "rule": "rule",
+    "reason": "reason",
     "managed": true,
-    "worktree_id": "WorktreeID",
+    "worktree_id": "worktree_id",
     "activity_at": "2026-10-01T12:00:00Z",
     "updated_at": "2026-10-01T12:00:00Z"
   },
-  "agent_id": "AgentID",
+  "agent_id": "agent_id",
   "worktrees": [
     {
-      "id": "ID",
-      "environment_id": "EnvironmentID",
-      "repo": "Repo",
-      "source": "Source",
-      "branch": "Branch",
-      "root": "Root",
-      "session": "Session",
+      "id": "id",
+      "environment_id": "environment_id",
+      "repo": "repo",
+      "source": "source",
+      "branch": "branch",
+      "root": "root",
+      "session": "session",
       "git": {
-        "base": "Base",
+        "base": "base",
         "committed": [
-          0,
-          0
+          1,
+          1
         ],
         "uncommitted": [
-          0,
-          0
+          1,
+          1
         ],
         "uncommitted_partial": true,
-        "ahead": 5,
-        "behind": 6,
+        "ahead": 1,
+        "behind": 1,
         "dirty": true,
+        "conflict": true,
         "rebasing": true,
         "stale": true,
-        "changed_at": "0001-01-01T00:00:00Z"
+        "changed_at": "2026-10-01T12:00:00Z"
       },
       "updated_at": "2026-10-01T12:00:00Z"
     }
   ],
   "worktree": {
-    "id": "ID",
-    "environment_id": "EnvironmentID",
-    "repo": "Repo",
-    "source": "Source",
-    "branch": "Branch",
-    "root": "Root",
-    "session": "Session",
+    "id": "id",
+    "environment_id": "environment_id",
+    "repo": "repo",
+    "source": "source",
+    "branch": "branch",
+    "root": "root",
+    "session": "session",
     "git": {
-      "base": "Base",
+      "base": "base",
       "committed": [
-        0,
-        0
+        1,
+        1
       ],
       "uncommitted": [
-        0,
-        0
+        1,
+        1
       ],
       "uncommitted_partial": true,
-      "ahead": 5,
-      "behind": 6,
+      "ahead": 1,
+      "behind": 1,
       "dirty": true,
       "conflict": true,
       "rebasing": true,
@@ -125,42 +126,42 @@
     },
     "updated_at": "2026-10-01T12:00:00Z"
   },
-  "worktree_id": "WorktreeID",
+  "worktree_id": "worktree_id",
   "panes": [
     {
-      "id": "ID",
-      "environment_id": "EnvironmentID",
-      "server": "Server",
-      "session": "Session",
-      "window": 5,
-      "pane_id": "PaneID",
-      "command": "Command",
-      "pid": 8,
-      "cwd": "Cwd",
-      "worktree_id": "WorktreeID",
+      "id": "id",
+      "environment_id": "environment_id",
+      "server": "server",
+      "session": "session",
+      "window": 1,
+      "pane_id": "pane_id",
+      "command": "command",
+      "pid": 1,
+      "cwd": "cwd",
+      "worktree_id": "worktree_id",
       "updated_at": "2026-10-01T12:00:00Z"
     }
   ],
   "pane": {
-    "id": "ID",
-    "environment_id": "EnvironmentID",
-    "server": "Server",
-    "session": "Session",
-    "window": 5,
-    "pane_id": "PaneID",
-    "command": "Command",
-    "pid": 8,
-    "cwd": "Cwd",
-    "worktree_id": "WorktreeID",
+    "id": "id",
+    "environment_id": "environment_id",
+    "server": "server",
+    "session": "session",
+    "window": 1,
+    "pane_id": "pane_id",
+    "command": "command",
+    "pid": 1,
+    "cwd": "cwd",
+    "worktree_id": "worktree_id",
     "updated_at": "2026-10-01T12:00:00Z"
   },
-  "pane_record_id": "PaneRecordID",
+  "pane_record_id": "pane_record_id",
   "runs": [
     {
-      "id": "ID",
-      "environment_id": "EnvironmentID",
-      "root": "Root",
-      "worktree_id": "WorktreeID",
+      "id": "id",
+      "environment_id": "environment_id",
+      "root": "root",
+      "worktree_id": "worktree_id",
       "cmd": [
         "x"
       ],
@@ -168,88 +169,89 @@
     }
   ],
   "run": {
-    "id": "ID",
-    "environment_id": "EnvironmentID",
-    "root": "Root",
-    "worktree_id": "WorktreeID",
+    "id": "id",
+    "environment_id": "environment_id",
+    "root": "root",
+    "worktree_id": "worktree_id",
     "cmd": [
       "x"
     ],
     "started_at": "2026-10-01T12:00:00Z"
   },
-  "run_id": "RunID",
+  "run_id": "run_id",
   "attentions": [
     {
-      "agent_id": "AgentID",
+      "agent_id": "agent_id",
       "finished_at": "2026-10-01T12:00:00Z",
       "seen_at": "2026-10-01T12:00:00Z"
     }
   ],
   "attention": {
-    "agent_id": "AgentID",
+    "agent_id": "agent_id",
     "finished_at": "2026-10-01T12:00:00Z",
     "seen_at": "2026-10-01T12:00:00Z"
   },
-  "attention_id": "AttentionID",
+  "attention_id": "attention_id",
   "branch_statuses": [
     {
-      "source": "Source",
-      "branch": "Branch",
+      "source": "source",
+      "branch": "branch",
       "fetched_at": "2026-10-01T12:00:00Z",
       "stale": true,
-      "head_oid": "HeadOID",
-      "checks_url": "ChecksURL",
+      "head_oid": "head_oid",
+      "checks_url": "checks_url",
       "pr": {
         "number": 1,
-        "state": "State",
+        "state": "state",
         "draft": true,
-        "url": "URL"
+        "url": "url"
       },
       "checks": {
-        "state": "State",
-        "passed": 2,
-        "total": 3,
-        "failing": "Failing"
+        "state": "state",
+        "passed": 1,
+        "total": 1,
+        "failing": "failing",
+        "pending_since": "2026-10-01T12:00:00Z"
       }
     }
   ],
   "branch_status": {
-    "source": "Source",
-    "branch": "Branch",
+    "source": "source",
+    "branch": "branch",
     "fetched_at": "2026-10-01T12:00:00Z",
     "stale": true,
-    "head_oid": "HeadOID",
-    "checks_url": "ChecksURL",
+    "head_oid": "head_oid",
+    "checks_url": "checks_url",
     "pr": {
       "number": 1,
-      "state": "State",
+      "state": "state",
       "draft": true,
-      "url": "URL"
+      "url": "url"
     },
     "checks": {
-      "state": "State",
-      "passed": 2,
-      "total": 3,
-      "failing": "Failing",
+      "state": "state",
+      "passed": 1,
+      "total": 1,
+      "failing": "failing",
       "pending_since": "2026-10-01T12:00:00Z"
     }
   },
   "branch_status_key": {
-    "source": "Source",
-    "branch": "Branch"
+    "source": "source",
+    "branch": "branch"
   },
-  "github_error": "GitHubError",
+  "github_error": "github_error",
   "github_ok": true,
   "pendings": [
     {
-      "id": "ID",
-      "host": "Host",
-      "environment_id": "EnvironmentID",
-      "source": "Source",
-      "repo": "Repo",
-      "branch": "Branch",
+      "id": "id",
+      "host": "host",
+      "environment_id": "environment_id",
+      "source": "source",
+      "repo": "repo",
+      "branch": "branch",
       "generated": true,
-      "agent": "Agent",
+      "agent": "agent",
       "cmd": [
         "x"
       ],
@@ -257,35 +259,35 @@
       "taken": true,
       "sent": true,
       "reachable": true,
-      "unreachable": "Unreachable",
-      "mismatch": "Mismatch",
-      "stage": "Stage",
-      "state": "State",
-      "detail": "Detail",
-      "root": "Root",
-      "session": "Session",
+      "unreachable": "unreachable",
+      "mismatch": "mismatch",
+      "stage": "stage",
+      "state": "state",
+      "detail": "detail",
+      "root": "root",
+      "session": "session",
       "done": true,
       "ok": true,
-      "error": "Error",
-      "prompt": "Prompt",
-      "attempt": 25,
+      "error": "error",
+      "prompt": "prompt",
+      "attempt": 1,
       "attempt_open": true,
-      "attempt_error": "AttemptError",
+      "attempt_error": "attempt_error",
       "listed": true,
-      "listing_error": "ListingError",
+      "listing_error": "listing_error",
       "gone": true,
       "updated_at": "2026-10-01T12:00:00Z"
     }
   ],
   "pending": {
-    "id": "ID",
-    "host": "Host",
-    "environment_id": "EnvironmentID",
-    "source": "Source",
-    "repo": "Repo",
-    "branch": "Branch",
+    "id": "id",
+    "host": "host",
+    "environment_id": "environment_id",
+    "source": "source",
+    "repo": "repo",
+    "branch": "branch",
     "generated": true,
-    "agent": "Agent",
+    "agent": "agent",
     "cmd": [
       "x"
     ],
@@ -293,44 +295,44 @@
     "taken": true,
     "sent": true,
     "reachable": true,
-    "unreachable": "Unreachable",
-    "mismatch": "Mismatch",
-    "stage": "Stage",
-    "state": "State",
-    "detail": "Detail",
-    "root": "Root",
-    "session": "Session",
+    "unreachable": "unreachable",
+    "mismatch": "mismatch",
+    "stage": "stage",
+    "state": "state",
+    "detail": "detail",
+    "root": "root",
+    "session": "session",
     "done": true,
     "ok": true,
-    "error": "Error",
-    "prompt": "Prompt",
-    "attempt": 25,
+    "error": "error",
+    "prompt": "prompt",
+    "attempt": 1,
     "attempt_open": true,
-    "attempt_error": "AttemptError",
+    "attempt_error": "attempt_error",
     "listed": true,
-    "listing_error": "ListingError",
+    "listing_error": "listing_error",
     "gone": true,
     "updated_at": "2026-10-01T12:00:00Z"
   },
-  "pending_id": "PendingID",
-  "replaced_by": "ReplacedBy",
+  "pending_id": "pending_id",
+  "replaced_by": "replaced_by",
   "handoffs": [
     {
-      "id": "ID",
-      "replaced_by": "ReplacedBy"
+      "id": "id",
+      "replaced_by": "replaced_by"
     }
   ],
-  "relay": "Relay",
+  "relay": "relay",
   "hosts": [
     {
-      "name": "Name",
-      "ssh": "SSH",
-      "environment_id": "EnvironmentID",
+      "name": "name",
+      "ssh": "ssh",
+      "environment_id": "environment_id",
       "connected": true,
       "listed": true,
-      "error": "Error",
+      "error": "error",
       "reconnecting": true,
-      "version": "Version",
+      "version": "version",
       "capabilities": [
         "x"
       ],
@@ -338,58 +340,58 @@
     }
   ],
   "host_status": {
-    "name": "Name",
-    "ssh": "SSH",
-    "environment_id": "EnvironmentID",
+    "name": "name",
+    "ssh": "ssh",
+    "environment_id": "environment_id",
     "connected": true,
     "listed": true,
-    "error": "Error",
+    "error": "error",
     "reconnecting": true,
-    "version": "Version",
+    "version": "version",
     "capabilities": [
       "x"
     ],
     "since": "2026-10-01T12:00:00Z"
   },
-  "host_name": "HostName",
+  "host_name": "host_name",
   "sessions": [
     {
-      "name": "Name",
-      "key": "Key",
-      "host": "Host",
-      "source": "Source",
-      "branch": "Branch",
-      "attach": "Attach",
+      "name": "name",
+      "key": "key",
+      "host": "host",
+      "source": "source",
+      "branch": "branch",
+      "attach": "attach",
       "settled": true
     }
   ],
   "local_session": {
-    "name": "Name",
-    "key": "Key",
-    "host": "Host",
-    "source": "Source",
-    "branch": "Branch",
-    "attach": "Attach",
+    "name": "name",
+    "key": "key",
+    "host": "host",
+    "source": "source",
+    "branch": "branch",
+    "attach": "attach",
     "settled": true
   },
-  "local_session_name": "LocalSessionName",
-  "sessions_error": "SessionsError",
+  "local_session_name": "local_session_name",
+  "sessions_error": "sessions_error",
   "sessions_listed": true,
-  "id": "ID",
-  "name": "Name",
-  "cwd": "Cwd",
+  "id": "id",
+  "name": "name",
+  "cwd": "cwd",
   "cmd": [
     "x"
   ],
   "ok": true,
-  "error": "Error",
-  "session": "Session",
-  "pane_id": "PaneID",
-  "repo": "Repo",
-  "branch": "Branch",
+  "error": "error",
+  "session": "session",
+  "pane_id": "pane_id",
+  "repo": "repo",
+  "branch": "branch",
   "repo_entry": {
-    "source": "Source",
-    "name": "Name",
+    "source": "source",
+    "name": "name",
     "copy": [
       "x"
     ],
@@ -397,27 +399,27 @@
       "x"
     ]
   },
-  "agent_name": "AgentName",
-  "prompt": "Prompt",
+  "agent_name": "agent_name",
+  "prompt": "prompt",
   "generated": true,
   "submitted_at": "2026-10-01T12:00:00Z",
-  "attempt": 60,
+  "attempt": 1,
   "listing": {
     "generation": 1,
-    "revision": 2
+    "revision": 1
   },
-  "listing_error": "ListingError",
+  "listing_error": "listing_error",
   "removed_in": {
     "generation": 1,
-    "revision": 2
+    "revision": 1
   },
-  "root": "Root",
+  "root": "root",
   "force": true,
-  "stage": "Stage",
-  "state": "State",
-  "detail": "Detail",
-  "n": 69,
-  "after": 70,
-  "fd": 71,
-  "exit": 72
+  "stage": "stage",
+  "state": "state",
+  "detail": "detail",
+  "n": 1,
+  "after": 1,
+  "fd": 1,
+  "exit": 1
 }

@@ -1,21 +1,21 @@
 {
-  "source": "Source",
-  "branch": "Branch",
+  "source": "source",
+  "branch": "branch",
   "fetched_at": "2026-10-01T12:00:00Z",
   "stale": true,
-  "head_oid": "HeadOID",
-  "checks_url": "ChecksURL",
+  "head_oid": "head_oid",
+  "checks_url": "checks_url",
   "pr": {
     "number": 1,
-    "state": "State",
+    "state": "state",
     "draft": true,
-    "url": "URL"
+    "url": "url"
   },
   "checks": {
-    "state": "State",
-    "passed": 2,
-    "total": 3,
-    "failing": "Failing",
+    "state": "state",
+    "passed": 1,
+    "total": 1,
+    "failing": "failing",
     "pending_since": "2026-10-01T12:00:00Z"
   }
 }
