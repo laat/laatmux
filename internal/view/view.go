@@ -765,11 +765,10 @@ func gitSpans(r rows.Row, w int) []Span {
 // gitSync is how the branch stands against its base, in at most w
 // cells: →base when the base is not main, master or the branch itself,
 // its origin/ taken off, the whole at most gitBaseWidth cells, cut
-// with …; the
-// conflict mark ! in red; ↑A and ↓B. When the line is too narrow the
-// base is cut further, to four cells at the least, then goes, then ↓B,
-// then ↑A. A refresh that timed out leaves them dim; nil when there is
-// nothing to say.
+// with …; the conflict mark ! in red; ↑A and ↓B. When the line is too
+// narrow the base is cut further, to four cells at the least, then
+// goes, then ↓B, then ↑A. A refresh that timed out leaves them dim;
+// nil when there is nothing to say.
 func gitSync(r rows.Row, w int) []Span {
 	if r.Worktree == nil || r.Worktree.Git == nil || w <= 0 {
 		return nil
