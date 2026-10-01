@@ -268,7 +268,7 @@ func taskAction(m *view.Model, a view.Action) bool {
 func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	c, err := client.Dial(ctx, client.Host{Name: "local"})
 	if err != nil {
-		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, or run laatmux serve to see", err, filepath.Join(home.Dir(), "daemon.log"))
+		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, and laatmux serve run by hand shows it, or names the pid of one holding the lock", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
 		c.Close()
