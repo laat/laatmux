@@ -734,6 +734,32 @@ func TestTwoAgentsOneSession(t *testing.T) {
 			}
 		}
 	}
+	// Without a worktree the tree's own sort is what orders them: the
+	// other-sessions lines, the tiles' suffixes, and which of the two a
+	// loose task at their root adopts, the first in that order and it
+	// alone, in either record order.
+	a.Cwd, b.Cwd = "/w/a", "/w/a"
+	p := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Session: "proj/a", Taken: true, SubmittedAt: now}
+	hosts := []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
+	for _, agents := range [][]protocol.Agent{{a, b}, {b, a}} {
+		var held, tiles []string
+		for _, n := range Tree(Input{Hosts: hosts, Agents: agents}) {
+			if n.Agent != nil {
+				held = append(held, n.Agent.ID)
+			}
+		}
+		for _, r := range Agents(Input{Hosts: hosts, Agents: agents}).Main {
+			tiles = append(tiles, r.Agent.ID+" "+r.Suffix)
+		}
+		if got := strings.Join(held, " ") + " | " + strings.Join(tiles, ", "); got != a.ID+" "+b.ID+" | "+a.ID+" (1), "+b.ID+" (2)" {
+			t.Errorf("no worktree, %s first: %s", agents[0].ID, got)
+		}
+		for _, n := range Tree(Input{Hosts: hosts, Agents: agents, Pendings: []protocol.Pending{p}}) {
+			if n.ID() == "add-1" && (n.Agent == nil || n.Agent.ID != a.ID || n.Children != 1) {
+				t.Errorf("task, %s first: adopted %+v, %d children", agents[0].ID, n.Agent, n.Children)
+			}
+		}
+	}
 }
 
 // A worktree line with no home session whose agent is on this machine's
@@ -768,9 +794,18 @@ func TestHomelessLineLocal(t *testing.T) {
 	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	locals := []workspace.Local{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
 	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
-	got := treeLines(Tree(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}))
+	first := Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}
+	got := treeLines(Tree(first))
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
 		t.Fatalf("managed agent: %+v", got)
+	}
+	// The agent's tile stands for the plain attachment to its session,
+	// not the workspace session the line has: only an agent in the home
+	// session takes that. Build's row, which the agent view drew before
+	// the two views, had the workspace session; whether the tile should
+	// is #85.
+	if rs := Agents(first); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a-old" {
+		t.Fatalf("managed agent's tile: %+v", rs)
 	}
 	// With no workspace session yet, the plain attachment to the same
 	// managed session is not the line's either. Build left the viewer in
@@ -813,10 +848,16 @@ func TestHomelessLineLocal(t *testing.T) {
 	remote := []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
 	rw := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	ra := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: rw.ID}
-	got = treeLines(Tree(Input{Hosts: remote, Agents: []protocol.Agent{ra}, Worktrees: []protocol.Worktree{rw},
-		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"}))
+	remoteIn := Input{Hosts: remote, Agents: []protocol.Agent{ra}, Worktrees: []protocol.Worktree{rw},
+		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"}
+	got = treeLines(Tree(remoteIn))
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "vm/proj/a" || !got[0].Current {
 		t.Fatalf("remote default-server agent: %+v", got)
+	}
+	// Its tile too, through the child's fallback to the line's session.
+	rs = Agents(remoteIn)
+	if len(rs.Main) != 1 || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "vm/proj/a" || !rs.Main[0].Current {
+		t.Fatalf("remote default-server agent's tile: %+v", rs)
 	}
 }
 
