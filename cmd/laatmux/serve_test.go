@@ -200,7 +200,10 @@ func TestServeToRender(t *testing.T) {
 	gate := filepath.Join(bin, "gate")
 	t.Setenv("LAATMUX_TEST_TMUX", real)
 	t.Setenv("LAATMUX_TEST_GATE", gate)
-	shim := "#!/bin/sh\nif [ \"$3\" = list-panes ]; then while [ ! -e \"$LAATMUX_TEST_GATE\" ]; do sleep 0.02; done; fi\nexec \"$LAATMUX_TEST_TMUX\" \"$@\"\n"
+	// The command is matched anywhere in argv, whatever flags precede
+	// it; a shim whose test binary died, by a panic before the gate
+	// opened, exits rather than loop as an orphan.
+	shim := "#!/bin/sh\ncase \" $* \" in *\" list-panes \"*) while [ ! -e \"$LAATMUX_TEST_GATE\" ]; do kill -0 $PPID 2>/dev/null || exit 1; sleep 0.02; done;; esac\nexec \"$LAATMUX_TEST_TMUX\" \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}

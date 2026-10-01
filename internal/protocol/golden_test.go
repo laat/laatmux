@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -28,7 +30,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // with -update and a protocol note. A Go field renamed with its tag
 // kept, or two fields swapped, changes nothing on the wire and nothing
 // here: a string's value is its key, a number's is one, and the golden
-// is compared as decoded JSON, so the keys' order does not count.
+// is compared as decoded JSON, so the keys' order does not count. Out
+// of reach by the same token: two fields of one type swapping tags,
+// since a value made from the key moves with it, and omitempty added
+// or dropped, which a Go peer decodes the same.
 func TestWireGolden(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -64,13 +69,24 @@ func TestWireGolden(t *testing.T) {
 // ends share the Go name, so a changed value passes every other test
 // while a laptop and a host on different builds disagree.
 func TestWireConstants(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	// A -trimpath test binary has no GOROOT for the importer; go env
+	// has it.
+	if build.Default.GOROOT == "" {
+		if out, err := exec.Command("go", "env", "GOROOT").Output(); err == nil {
+			build.Default.GOROOT = strings.TrimSpace(string(out))
+		}
+	}
+	bp, err := build.ImportDir(".", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
 	var files []*ast.File
-	for _, f := range pkgs["protocol"].Files {
+	for _, name := range bp.GoFiles {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 		files = append(files, f)
 	}
 	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
@@ -97,7 +113,7 @@ func TestWireConstants(t *testing.T) {
 		t.Fatalf("%v; run with -update", err)
 	}
 	if string(want) != got {
-		t.Errorf("the constants differ from their golden (a changed wire value? run with -update to accept):\n%s", diffLines(string(want), got))
+		t.Errorf("the constants differ from their golden (a changed wire value? run with -update to accept):\n%s", diffSets(string(want), got))
 	}
 }
 
@@ -217,23 +233,30 @@ func zeroLeaves(path string, v any) []string {
 	return out
 }
 
-// diffLines is the lines in want and got that differ, each marked.
-func diffLines(want, got string) string {
-	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
-	var b strings.Builder
-	for i := 0; i < len(w) || i < len(g); i++ {
-		var wl, gl string
-		if i < len(w) {
-			wl = w[i]
-		}
-		if i < len(g) {
-			gl = g[i]
-		}
-		if wl != gl {
-			fmt.Fprintf(&b, "%d: want %q\n%d: got  %q\n", i+1, wl, i+1, gl)
+// diffSets is the lines only in want, marked -, and only in got,
+// marked +: both are sorted and unique, so an added or removed line
+// shows alone, not as the rest of the file shifted.
+func diffSets(want, got string) string {
+	w, g := map[string]bool{}, map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(want), "\n") {
+		w[l] = true
+	}
+	for _, l := range strings.Split(strings.TrimSpace(got), "\n") {
+		g[l] = true
+	}
+	var out []string
+	for l := range w {
+		if !g[l] {
+			out = append(out, "- "+l)
 		}
 	}
-	return b.String()
+	for l := range g {
+		if !w[l] {
+			out = append(out, "+ "+l)
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\n")
 }
 
 // golden compares the decoded value with the golden file's, decoded
