@@ -29,12 +29,5 @@ S..|‹⟨border:─────────────────────
 ...|‹⟨border:───────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ dead                        3h
 .D.|⟨border:▌⟩    proj @‹vm›
-.D.|⟨border:▌⟩    claude gone
-...|‹⟨border:───────────────────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ spike
-.D.|⟨border:▌⟩    proj @mac
-.D.|⟨border:▌⟩    no session
-...|‹⟨border:───────────────────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ shell
 .D.|↓ 1 more
 .D.|v layout  / filter  f all  q quit

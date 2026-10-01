@@ -672,7 +672,11 @@ func TestStrip(t *testing.T) {
 			n++
 		}
 	}
-	if i, ok := m.nth(n); !ok || !strings.Contains(first, strconv.Itoa(n)+" "+string([]rune(m.Visible()[i].Row.Name)[:4])) {
+	// The chip is known by its {primary}: the last tile is the settled
+	// worktree's agent, whose label is its branch, not its session name.
+	if i, ok := m.nth(n); !ok {
+		t.Errorf("no number %d:\n%s", n, text)
+	} else if p, _ := m.Visible()[i].Row.Labels(); !strings.Contains(first, strconv.Itoa(n)+" "+string([]rune(p)[:4])) {
 		t.Errorf("the last number %d not on its chip:\n%s", n, text)
 	}
 	out = m.Render()

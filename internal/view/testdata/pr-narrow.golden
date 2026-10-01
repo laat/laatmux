@@ -11,9 +11,9 @@ S..|‹⟨border:─────────────────────
 ...|⟨info:▌⟩    proj @mac
 ...|⟨info:▌⟩    Editin… ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:──────────────────────⟩›
-.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ down        10:00
-.D.|⟨info:▌⟩    proj @‹box›
-.D.|⟨info:▌⟩    last seen
+.D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ proj        10:00
+.D.|⟨info:▌⟩    main @‹box›
+.D.|⟨info:▌⟩    last seen   ⟨danger:×⟩⟨danger: 2/3⟩
 ...|‹⟨border:──────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch      0:40
 ...|⟨border:▌⟩    @mac
@@ -31,14 +31,14 @@ S..|‹⟨border:─────────────────────
 .D.|⟨border:▌⟩    proj @‹vm›
 .D.|⟨border:▌⟩    claude gone ‹#7› ‹✓›‹?›
 ...|‹⟨border:──────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ proj
-.D.|⟨border:▌⟩    main @mac
-.D.|⟨border:▌⟩    no session  ⟨danger:×⟩⟨danger: 2/3⟩
-...|‹⟨border:──────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ shell
-.D.|⟨border:▌⟩    proj @‹vm›
-.D.|⟨border:▌⟩    no agent
-...|‹⟨border:──────────────────────⟩›
-...|‹⟨header:▸ 2 stale⟩›
+...|‹⟨header:▸ 1 stale⟩›
+...|
+...|
+...|
+...|
+...|
+...|
+...|
+...|
 ...|
 .D.|

@@ -354,13 +354,13 @@ func TestChromeEdges(t *testing.T) {
 	}
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(now)
-	m := &Model{Rows: rows.Build(in), Now: now, Layout: Tiles, Width: 35, Height: 4}
+	m := &Model{Rows: rows.Agents(in), Now: now, Layout: Tiles, Width: 35, Height: 4}
 	m.Selected = 0
 	if txt := Text(m.Render()); !strings.Contains(txt, "fix-ls") {
 		t.Errorf("short pane lost the selected tile's head:\n%s", txt)
 	}
 	// Two tiles and the collapsed group below: nothing more to count.
-	two := rows.Rows{Main: m.Rows.Main[:2], Settled: m.Rows.Settled}
+	two := rows.Rows{Main: m.Rows.Main[:2], Stale: m.Rows.Stale}
 	m = &Model{Rows: two, Now: now, Layout: Tiles, Width: 35, Height: 10, Selected: 1}
 	txt := Text(m.Render())
 	if strings.Contains(txt, "more") || !strings.Contains(txt, "stale") {

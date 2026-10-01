@@ -19,15 +19,15 @@ S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?
 ...|⟨border:▌⟩    Done. 日本語のタイトル that is long enough to be trimmed at the edge
 .D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj @‹vm›                                                                      3h
 .D.|⟨border:▌⟩    claude gone
-.D.|⟨border:▌⟩ ⟨border:  ⟩ spike proj @mac
-.D.|⟨border:▌⟩    no session
-.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj @‹vm›
-.D.|⟨border:▌⟩    no agent
-...|‹⟨header:▾ 2 stale⟩›
+...|‹⟨header:▾ 1 stale⟩›
 .D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ old proj @‹vm›                                                                       2h
 .D.|⟨dimmed:▌⟩    long idle
-.D.|⟨border:▌⟩ ⟨border:  ⟩ vm/proj/gone @‹vm›
-.D.|⟨border:▌⟩    no worktree
+...|
+...|
+...|
+...|
+...|
+...|
 ...|
 ...|
 ...|

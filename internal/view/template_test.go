@@ -421,11 +421,21 @@ func TestTemplateOverflow(t *testing.T) {
 	}
 }
 
-// A blank tile line is no line; the compact layout draws the third tile
-// line under a row with Titles; the tree's templates come from the
-// config; an error in one is drawn in its place.
+// {elapsed} on a tree line is its agent's time, and nothing on a line
+// with neither agent nor task; a blank tile line is no line; the
+// compact layout draws the third tile line under a row with Titles;
+// the tree's templates come from the config; an error in one is drawn
+// in its place.
 func TestConfiguredTemplates(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	// {elapsed} on a tree line: the agent's time, and nothing on a line
+	// with no agent and no task.
+	tm := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
+	tm.SetTree(rows.Tree(treeInput(now)))
+	tm.SetTemplates(CompileTemplates(nil, "", nil, "", "{indent}{fold}{branch}|{elapsed}|", "", "", ""))
+	if out := Text(tm.Render()); !strings.Contains(out, "fix-sidebar||") || !strings.Contains(out, "auto-layout|1:00|") {
+		t.Errorf("{elapsed} on tree lines:\n%s", out)
+	}
 	m := model(now)
 	m.Layout, m.Width, m.Height = Tiles, 40, 12
 	m.SetTemplates(CompileTemplates([]string{"{status_icon} {primary}", "", "{secondary}"}, "", nil, "", "", "", "", ""))

@@ -5,8 +5,8 @@ S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?            
 ...|⟨info:▌⟩    remote
 ...|⟨info:▌⟩ ⟨info:* ⟩ «⟨current_worktree_fg:task⟩» proj @mac                                                                   0:08
 ...|⟨info:▌⟩    Editing src/api.ts                                                          ‹#49› ⟨danger:x⟩⟨danger: 3/5⟩
-.D.|⟨info:▌⟩ ⟨info:* ⟩ down proj @‹box›                                                                  10:00
-.D.|⟨info:▌⟩    last seen
+.D.|⟨info:▌⟩ ⟨info:* ⟩ proj main @‹box›                                                                  10:00
+.D.|⟨info:▌⟩    last seen                                                                       ⟨danger:x⟩⟨danger: 2/3⟩
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch @mac                                                                     0:40
 ...|⟨border:▌⟩
 ...|⟨border:▌⟩ ⟨border:  ⟩ notes @mac/default                                                               5:00
@@ -15,11 +15,11 @@ S..|⟨accent:▌⟩    Permission to run pnpm test in packages/api?            
 ...|⟨border:▌⟩    Done. 日本語のタイトル that is long enough to be trimmed at the edge        ⟨accent:#12⟩ ⟨accent:*⟩⟨accent: 1/4⟩
 .D.|⟨border:▌⟩ ⟨border:  ⟩ dead proj @‹vm›                                                                      3h
 .D.|⟨border:▌⟩    claude gone                                                                    ‹#7› ‹ok›‹?›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ proj main @mac
-.D.|⟨border:▌⟩    no session                                                                      ⟨danger:x⟩⟨danger: 2/3⟩
-.D.|⟨border:▌⟩ ⟨border:  ⟩ shell proj @‹vm›
-.D.|⟨border:▌⟩    no agent
-...|‹⟨header:▸ 2 stale⟩›
+...|‹⟨header:▸ 1 stale⟩›
+...|
+...|
+...|
+...|
 ...|
 ...|
 ...|
