@@ -283,8 +283,8 @@ func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 // needRelay is the add form's requirement on the daemon it submits to:
 // a daemon with the merged stream and no relay is an older build that
 // ran on without its pending directory, which the current build does
-// not; the dashboard and compose refuse it, where ls, watch and the
-// sidebar, which submit nothing, take the stream alone.
+// not; the dashboard, compose and tasks refuse it, where ls, watch and
+// the sidebar, which submit nothing, take the stream alone.
 func needRelay(c *client.Conn) error {
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
 		c.Close()

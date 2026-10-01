@@ -957,9 +957,9 @@ is switched to.
   exit), so nothing is submitted twice. The relay is the only path: a
   daemon that cannot open its pending directory exits with the error
   before announcing itself rather than run without it, and the form's
-  hosts, the dashboard and `compose`, refuse a daemon without the
-  relay, an older build, as every client refuses one without the
-  merged stream. The footer
+  hosts, the dashboard and `compose`, and `tasks` refuse a daemon
+  without the relay, an older build, as every client refuses one
+  without the merged stream. The footer
   says `tasks not supported by <host>'s daemon` for a host whose cached
   capabilities lack `task`. `x` confirms then removes
   the worktree; a refusal that asks for force carries the hint to use

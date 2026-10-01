@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -213,6 +214,27 @@ func TestReadMergedTimesOutWithoutSnapshot(t *testing.T) {
 		t.Fatalf("the stream alone refused: %v", err)
 	} else if err := needRelay(c2); err == nil || !strings.Contains(err.Error(), "no relay") || !strings.Contains(err.Error(), "laatmux stop") {
 		t.Fatalf("a daemon without the relay taken by the form: %v", err)
+	}
+	// Each of the form's hosts and tasks refuses it before it needs a
+	// terminal or a repository; with the relay, tasks goes on.
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	for name, run := range map[string]func() error{
+		"tasks":     func() error { return listTasks(context.Background()) },
+		"dashboard": func() error { return cmdDashboard(context.Background(), nil) },
+		"compose":   func() error { return cmdCompose(context.Background(), nil) },
+	} {
+		if err := run(); err == nil || !strings.Contains(err.Error(), "no relay") {
+			t.Errorf("%s on a daemon without the relay: %v", name, err)
+		}
+	}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapRelay}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1})
+		}
+		return true
+	})
+	if err := listTasks(context.Background()); err != nil {
+		t.Fatalf("tasks on a daemon with the relay: %v", err)
 	}
 	m := newMerged()
 	_, err := m.readMerged(context.Background(), c, 200*time.Millisecond, func(*merged) bool { return false })

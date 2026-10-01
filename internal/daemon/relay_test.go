@@ -1219,8 +1219,8 @@ func TestRelayRepoEntry(t *testing.T) {
 }
 
 // A merging daemon whose pending directory cannot be made does not run
-// without its relay: Run ends at once with the error, so serve exits
-// with it, and no capability is advertised meanwhile.
+// without its relay: Err carries the error, Run ends at once with it,
+// and the relay capability is not in the list.
 func TestRelayDirectoryFatal(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
@@ -1230,6 +1230,9 @@ func TestRelayDirectoryFatal(t *testing.T) {
 	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending")})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := d.Err(); err == nil || !strings.Contains(err.Error(), "pending:") {
+		t.Fatalf("Err with no pending directory: %v", err)
+	}
 	err := d.Run(ctx)
 	if err == nil || !strings.Contains(err.Error(), "pending:") || !strings.Contains(err.Error(), "not a directory") || ctx.Err() != nil {
 		t.Fatalf("Run with no pending directory: %v (context %v)", err, ctx.Err())

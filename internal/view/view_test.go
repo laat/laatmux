@@ -823,7 +823,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 }
 
 // A newline is Enter outside the form's prompt: on the list, in the
-// filter, a picker, a line prompt and a notice.
+// filter, a picker and a line prompt.
 func TestNewlineIsEnter(t *testing.T) {
 	m := &Model{Width: 80, Height: 24}
 	m.Filtering = true

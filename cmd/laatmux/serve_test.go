@@ -291,9 +291,11 @@ func TestServeToRender(t *testing.T) {
 }
 
 // serve with a pending directory that cannot be made, a file in its
-// place: it ends with the error before announcing itself, so no
-// runtime file is written and no client is served a hello without the
-// relay.
+// place: it ends with the error before announcing itself, so the
+// runtime file is never written and no client is served a hello
+// without the relay. A runtime file naming another live process stands
+// in for the check: serve removes only a file naming its own pid, so
+// the file survives only if serve never wrote one.
 func TestServeNeedsPendingDirectory(t *testing.T) {
 	base := t.TempDir()
 	if err := os.WriteFile(filepath.Join(base, "config.yaml"), []byte("hosts:\n  - name: box\n"), 0o644); err != nil {
@@ -309,13 +311,17 @@ func TestServeNeedsPendingDirectory(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", home)
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(base, "config.yaml"))
 	t.Setenv("TMUX_TMPDIR", base)
+	other := fmt.Sprintf(`{"address":"tcp:127.0.0.1:1","pid":%d,"version":"other"}`, os.Getppid())
+	if err := os.WriteFile(filepath.Join(home, "runtime.json"), []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err := cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"})
 	if err == nil || !strings.Contains(err.Error(), "pending:") || ctx.Err() != nil {
 		t.Fatalf("serve without a pending directory: %v (context %v)", err, ctx.Err())
 	}
-	if _, err := os.Stat(filepath.Join(home, "runtime.json")); err == nil {
-		t.Error("the runtime file written by a daemon that did not run")
+	if b, err := os.ReadFile(filepath.Join(home, "runtime.json")); err != nil || string(b) != other {
+		t.Errorf("the runtime file touched by a daemon that did not run: %q %v", b, err)
 	}
 }

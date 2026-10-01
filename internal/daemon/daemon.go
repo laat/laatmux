@@ -193,7 +193,7 @@ type Daemon struct {
 	journal *journal
 	relay   *relay // nil without the relay capability
 	// fatal is what New could not do without, the relay's directory
-	// say; Run ends with it at once.
+	// say: Err, and Run ends with it at once.
 	fatal error
 	attn  *attention // nil without the attention capability
 	// The last errors of the attention file and the clients listing,
@@ -413,8 +413,8 @@ func New(cfg Config) *Daemon {
 		r, err := openRelay(cfg.Pending, cfg.Logger)
 		if err != nil {
 			// A merging daemon without its relay would run with the
-			// add path gone: Run ends at once with the error instead,
-			// and serve exits with it.
+			// add path gone: Err carries the error, serve ends with it
+			// before announcing the daemon, and Run ends with it too.
 			d.fatal = fmt.Errorf("pending: %w", err)
 		} else {
 			d.relay = r
@@ -470,11 +470,11 @@ func (d *Daemon) runCtx() context.Context {
 	return d.ctx
 }
 
-// Run polls until ctx is done.
 // Err is what New could not do, the relay's directory say: serve
 // checks it before announcing the daemon, and Run returns it at once.
 func (d *Daemon) Err() error { return d.fatal }
 
+// Run polls until ctx is done.
 func (d *Daemon) Run(ctx context.Context) error {
 	if d.fatal != nil {
 		return d.fatal
