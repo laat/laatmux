@@ -254,22 +254,25 @@ func taskAction(m *view.Model, a view.Action) bool {
 	return false
 }
 
-// dialMergedOrExplain connects to the local daemon's merged stream. A
-// daemon without the capability is an older build still running; the
-// sidebar and the dashboard exist for the merged stream, so they refuse
-// with what to do rather than dialling every host from every window.
+// dialMergedOrExplain connects to the local daemon's merged stream,
+// starting the daemon when it is not running. A dial that fails is a
+// daemon that did not answer, a wedged one or one of another protocol,
+// or one that did not start, and the error says what to do for each:
+// the dial's own reason tells them apart, and nothing here probes the
+// runtime record or the startup lock, since a record a crash left may
+// name a pid since reused and a probe of the lock would cost a serve
+// still starting its lock. One without the capability is an older
+// build still running, and the error says how to replace it. Every
+// client of the stream, ls and watch among them, refuses rather than
+// dial the hosts itself.
 func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
 	c, err := client.Dial(ctx, client.Host{Name: "local"})
 	if err != nil {
-		return nil, fmt.Errorf("local daemon: %w", err)
+		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, and laatmux serve run by hand shows it, or names the pid of one holding the lock", err, filepath.Join(home.Dir(), "daemon.log"))
 	}
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapMerged) {
 		c.Close()
-		how := "stop it and the next client starts the current build"
-		if rt, err := home.ReadRuntime(); err == nil {
-			how = fmt.Sprintf("stop it with: kill %d; the next client starts the current build", rt.PID)
-		}
-		return nil, fmt.Errorf("local daemon %s has no merged stream (an older build, or no hosts in the config); %s", c.Hello.Version, how)
+		return nil, fmt.Errorf("local daemon %s has no merged stream, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version)
 	}
 	return c, nil
 }

@@ -19,8 +19,11 @@ import (
 // rather than an ssh channel per host. See internal/daemon/merge.go.
 
 // dialMerged connects to the local daemon when it has the merged
-// capability. False means dial each host directly: the daemon could not
-// be reached, or is an older build without the capability.
+// capability. False is a daemon that could not be reached or started,
+// or an older build without the capability: a command with a host of
+// its own then dials that host itself, tasks refuses, hosts leaves its
+// github line out, and the stream's clients explain through
+// dialMergedOrExplain.
 func dialMerged(ctx context.Context) (*client.Conn, bool) {
 	c, err := client.Dial(ctx, client.Host{Name: "local"})
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -128,14 +130,22 @@ func TestFindWorktreeBySource(t *testing.T) {
 
 // ls pairs a worktree with the agent in its managed session, lists a
 // worktree without an agent and an agent without a worktree on their own,
-// moves settled workspaces to their section, and reports a local session
-// whose workspace is gone from a connected host as orphaned.
+// marks settled workspaces, and reports a local session whose workspace
+// is gone from a connected host as orphaned; from the merged stream, as
+// ls reads it.
 func TestRender(t *testing.T) {
 	m := newMerged()
-	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1", Worktrees: true})
-	m.setHost("box", hostState{Error: "unreachable"})
 	now := time.Now()
-	m.apply("vm", protocol.Message{Type: protocol.TypeSnapshot,
+	hosts := []protocol.HostStatus{
+		{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}},
+		{Name: "box", Error: "unreachable"},
+		// A connected host whose snapshot has not arrived yet, or whose
+		// daemon publishes no worktrees, says nothing about its
+		// workspaces.
+		{Name: "slow", Connected: true, Version: "v", EnvironmentID: "env3", Capabilities: []string{protocol.CapWorktrees}},
+		{Name: "old", Connected: true, Listed: true, Version: "v", EnvironmentID: "env4"},
+	}
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Hosts: hosts,
 		Agents: []protocol.Agent{
 			{ID: "env1/laatmux/%1", EnvironmentID: "env1", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
 			{ID: "env1/laatmux/%2", EnvironmentID: "env1", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
@@ -156,11 +166,6 @@ func TestRender(t *testing.T) {
 		{Name: "slow/proj/y", Key: "env3//r/y", Host: "slow"},
 		{Name: "old/proj/z", Key: "env4//r/z", Host: "old"},
 	}
-	// A connected host whose snapshot has not arrived yet, or whose
-	// daemon publishes no worktrees, says nothing about its workspaces.
-	m.setHost("slow", hostState{Connected: true, Version: "v", EnvID: "env3", Worktrees: true})
-	m.setHost("old", hostState{Connected: true, Version: "v", EnvID: "env4"})
-	m.apply("old", protocol.Message{Type: protocol.TypeSnapshot})
 	out := m.render(locals)
 	if strings.Contains(out, "slow/proj/y") || strings.Contains(out, "old/proj/z") {
 		t.Errorf("workspace listed as orphaned without evidence:\n%s", out)
@@ -204,14 +209,15 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// On the direct path a host that drops keeps its identity, so its cached
-// records stay attributed to it and show as its with the host down.
-func TestSetHostErrKeepsIdentity(t *testing.T) {
+// A host down whose status upsert keeps its environment id, as the
+// daemon's does: its cached records stay attributed to it and the tree
+// marks them host down, and the host line says why.
+func TestHostDownKeepsIdentity(t *testing.T) {
 	m := newMerged()
-	m.setHost("vm", hostState{Connected: true, Version: "v", EnvID: "env1", Worktrees: true})
-	m.apply("vm", protocol.Message{Type: protocol.TypeSnapshot,
+	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:     []protocol.HostStatus{{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}},
 		Worktrees: []protocol.Worktree{{ID: "env1/worktree//r/x", EnvironmentID: "env1", Repo: "proj", Branch: "x", Root: "/r/x"}}})
-	m.setHostErr("vm", false, "disconnected")
+	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "vm", Error: "disconnected", Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}})
 	out := m.render(nil)
 	if !strings.Contains(out, "vm  DOWN  disconnected") || !strings.Contains(out, "x (vm, host down)") {
 		t.Errorf("records lost their host:\n%s", out)
@@ -323,4 +329,72 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 			t.Errorf("local name equal to a host label: %+v %v %v", w, ok, err)
 		}
 	}
+}
+
+// ls and watch read the merged stream only: with the local daemon
+// unable to start, here because the state directory is a file so the
+// dial's start fails before anything runs, both fail at once with the
+// dial's reason and what to do, and watch draws nothing. Before, ls
+// listed the hosts as down and watch redrew that until stopped.
+func TestLsWatchNeedTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("hosts:\n  - name: box\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", filepath.Join(file, "home"))
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TMUX", "")
+	start := time.Now()
+	err := cmdLs(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || !strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "laatmux stop") || !strings.Contains(err.Error(), "daemon.log") {
+		t.Fatalf("ls without a daemon: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = cmdWatch(ctx, nil)
+	if err == nil || !strings.Contains(err.Error(), "local daemon: ") || ctx.Err() != nil {
+		t.Fatalf("watch without a daemon: %v (context %v)", err, ctx.Err())
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("ls and watch took %s to refuse", time.Since(start))
+	}
+	// A runtime record naming a live pid, this test's own, at a socket
+	// nothing answers on, as a crash leaves one when the pid is reused,
+	// and then with the pid holding the startup lock, as a daemon that
+	// does not answer does. The log made a directory keeps the dial's
+	// start from running anything. Neither names the pid nor suggests
+	// a kill: a record is no proof of a daemon, and the lock is not
+	// probed, since a probe of it when free costs a serve still
+	// starting its own. The path is taken out of the message before
+	// the pid is looked for, its random part being digits too.
+	home2 := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home2, "daemon.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", home2)
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(dir, "none.sock"), PID: os.Getpid(), Version: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	noPID := func(what string) {
+		t.Helper()
+		err := cmdLs(context.Background(), nil)
+		if err == nil {
+			t.Fatalf("ls %s: no error", what)
+		}
+		msg := strings.ReplaceAll(err.Error(), dir, "")
+		if !strings.Contains(msg, "local daemon: ") || strings.Contains(msg, fmt.Sprint(os.Getpid())) || strings.Contains(msg, "kill") {
+			t.Fatalf("ls %s: %v", what, err)
+		}
+	}
+	noPID("with a stale record naming a live pid")
+	lock, err := home.TryLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	noPID("with the recorded pid holding the lock")
 }

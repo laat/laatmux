@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -16,10 +15,9 @@ import (
 	"github.com/laat/laatmux/internal/workspace"
 )
 
-// merged is the client's view of every host's stream: fed from the local
-// daemon's merged stream when it has one, else merged here from a
-// connection per host. Host connectivity is a separate axis from agent
-// state and lives here, not in the records.
+// merged is the client's view of every host's stream, fed from the
+// local daemon's merged stream. Host connectivity is a separate axis
+// from agent state and lives here, not in the records.
 type merged struct {
 	mu        sync.Mutex
 	agents    map[string]protocol.Agent    // by agent id
@@ -27,8 +25,8 @@ type merged struct {
 	hosts     map[string]hostState         // by host name
 	byHost    map[string]string            // agent or worktree id -> host name
 	// sessions are the local workspace sessions as the merged stream
-	// publishes them; nil on the direct path, where the client lists
-	// them itself. sessionsErr is the daemon's listing failure, if any.
+	// publishes them, nil before the first snapshot. sessionsErr is the
+	// daemon's listing failure, if any.
 	sessions    map[string]protocol.Session
 	sessionsErr string
 	// pendings are the relay's background adds, by id, and handoffs the
@@ -91,8 +89,7 @@ type hostState struct {
 	Connected bool
 	Error     string
 	// Reconnecting is that the error is a dropped connection the daemon
-	// is dialling again, from the merged stream; the direct path has no
-	// such state, its own backoff is in watch.
+	// is dialling again.
 	Reconnecting bool
 	Version      string
 	EnvID        string
@@ -142,153 +139,6 @@ func (m *merged) notify() {
 	select {
 	case m.change <- struct{}{}:
 	default:
-	}
-}
-
-func (m *merged) setHost(name string, st hostState) {
-	m.mu.Lock()
-	st.Since = time.Now()
-	m.hosts[name] = st
-	m.mu.Unlock()
-	m.notify()
-}
-
-// setHostErr marks the host down with the error, keeping what is known
-// of its identity: the environment id, version and capabilities from the
-// last hello, so its cached records stay attributed to it while it is
-// down, as the host record in the merged stream does.
-func (m *merged) setHostErr(name string, local bool, msg string) {
-	m.mu.Lock()
-	st := m.hosts[name]
-	st.Local, st.Connected, st.Listed, st.Error, st.Reconnecting, st.Since = local, false, false, msg, false, time.Now()
-	m.hosts[name] = st
-	m.mu.Unlock()
-	m.notify()
-}
-
-func (m *merged) apply(host string, msg protocol.Message) {
-	m.mu.Lock()
-	switch msg.Type {
-	case protocol.TypeSnapshot:
-		if st, ok := m.hosts[host]; ok {
-			st.Listed = true
-			m.hosts[host] = st
-		}
-		for id, h := range m.byHost {
-			if h == host {
-				delete(m.agents, id)
-				delete(m.worktrees, id)
-				delete(m.panes, id)
-				delete(m.runs, id)
-				delete(m.byHost, id)
-			}
-		}
-		if m.panes == nil {
-			m.panes, m.runs = map[string]protocol.Pane{}, map[string]protocol.Run{}
-		}
-		for _, a := range msg.Agents {
-			m.agents[a.ID] = a
-			m.byHost[a.ID] = host
-		}
-		for _, w := range msg.Worktrees {
-			m.worktrees[w.ID] = w
-			m.byHost[w.ID] = host
-		}
-		for _, p := range msg.Panes {
-			m.panes[p.ID] = p
-			m.byHost[p.ID] = host
-		}
-		for _, r := range msg.Runs {
-			m.runs[r.ID] = r
-			m.byHost[r.ID] = host
-		}
-	case protocol.TypeUpsert:
-		if msg.Agent != nil {
-			m.agents[msg.Agent.ID] = *msg.Agent
-			m.byHost[msg.Agent.ID] = host
-		}
-		if msg.Worktree != nil {
-			m.worktrees[msg.Worktree.ID] = *msg.Worktree
-			m.byHost[msg.Worktree.ID] = host
-		}
-		if msg.Pane != nil {
-			if m.panes == nil {
-				m.panes = map[string]protocol.Pane{}
-			}
-			m.panes[msg.Pane.ID] = *msg.Pane
-			m.byHost[msg.Pane.ID] = host
-		}
-		if msg.Run != nil {
-			if m.runs == nil {
-				m.runs = map[string]protocol.Run{}
-			}
-			m.runs[msg.Run.ID] = *msg.Run
-			m.byHost[msg.Run.ID] = host
-		}
-	case protocol.TypeRemove:
-		if msg.AgentID != "" {
-			delete(m.agents, msg.AgentID)
-			delete(m.byHost, msg.AgentID)
-		}
-		if msg.WorktreeID != "" {
-			delete(m.worktrees, msg.WorktreeID)
-			delete(m.byHost, msg.WorktreeID)
-		}
-		if msg.PaneRecordID != "" {
-			delete(m.panes, msg.PaneRecordID)
-			delete(m.byHost, msg.PaneRecordID)
-		}
-		if msg.RunID != "" {
-			delete(m.runs, msg.RunID)
-			delete(m.byHost, msg.RunID)
-		}
-	}
-	m.mu.Unlock()
-	m.notify()
-}
-
-// follow keeps one host subscribed, reconnecting with backoff. Cached
-// agents stay visible while disconnected; the host row says so.
-func (m *merged) follow(ctx context.Context, h client.Host) {
-	backoff := time.Second
-	for ctx.Err() == nil {
-		c, err := client.Dial(ctx, h)
-		switch {
-		case err != nil:
-			m.setHostErr(h.Name, h.Local(), err.Error())
-		case !protocol.Has(c.Hello.Capabilities, protocol.CapStatus):
-			c.Close()
-			m.setHostErr(h.Name, h.Local(), "daemon "+c.Hello.Version+" has no status capability")
-		default:
-			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees),
-				Attribution: protocol.Has(c.Hello.Capabilities, protocol.CapAttribution)})
-			backoff = time.Second
-			stop := c.CloseOnDone(ctx)
-			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe}); err == nil {
-				for {
-					msg, err := c.Read()
-					if err != nil {
-						break
-					}
-					m.apply(h.Name, msg)
-				}
-			}
-			stop()
-			c.Close()
-			// Closing reaps ssh, so its stderr is complete and says
-			// why, where the protocol only saw EOF.
-			msg := "disconnected"
-			if d := c.Diag(); d != "" {
-				msg += ": " + d
-			}
-			m.setHostErr(h.Name, h.Local(), msg)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		backoff = min(backoff*2, followBackoffMax)
 	}
 }
 
@@ -462,52 +312,20 @@ func cmdLs(ctx context.Context, args []string) error {
 	}
 	m := newMerged()
 	m.configure(cfg)
-	// The local daemon merges the hosts' streams when it can; a daemon
-	// without the capability is an older build still running, and each
-	// host is dialled from here as before.
-	if c, ok := dialMerged(ctx); ok {
-		defer c.Close()
-		pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool { return len(m.pending()) == 0 })
-		if err != nil {
-			return err
-		}
-		m.timedOut(pending, snapshotTimeout)
-		fmt.Print(m.render(m.locals()))
-		return nil
-	}
-	var wg sync.WaitGroup
-	for _, h := range cfg.Hosts {
-		wg.Add(1)
-		go func(h config.Host) {
-			defer wg.Done()
-			c, err := client.Dial(ctx, h.Host)
-			if err != nil {
-				m.setHost(h.Name, hostState{Local: h.Local(), Error: err.Error()})
-				return
-			}
-			defer c.Close()
-			if !protocol.Has(c.Hello.Capabilities, protocol.CapStatus) {
-				m.setHost(h.Name, hostState{Local: h.Local(), Error: "daemon " + c.Hello.Version + " has no status capability"})
-				return
-			}
-			m.setHost(h.Name, hostState{Local: h.Local(), Connected: true, Version: c.Hello.Version, EnvID: c.Hello.EnvironmentID, Worktrees: protocol.Has(c.Hello.Capabilities, protocol.CapWorktrees),
-				Attribution: protocol.Has(c.Hello.Capabilities, protocol.CapAttribution)})
-			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			snap, err := c.Snapshot(sctx)
-			if err != nil {
-				m.setHostErr(h.Name, h.Local(), err.Error())
-				return
-			}
-			m.apply(h.Name, snap)
-		}(h)
-	}
-	wg.Wait()
-	locals, err := workspace.List(ctx)
+	// The local daemon merges the hosts' streams; the dial starts it
+	// when it is not running, and a daemon that cannot be started, or
+	// one of an older build without the stream, is the error.
+	c, err := dialMergedOrExplain(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Print(m.render(locals))
+	defer c.Close()
+	pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool { return len(m.pending()) == 0 })
+	if err != nil {
+		return err
+	}
+	m.timedOut(pending, snapshotTimeout)
+	fmt.Print(m.render(m.locals()))
 	return nil
 }
 
@@ -518,26 +336,17 @@ func cmdWatch(ctx context.Context, args []string) error {
 	}
 	m := newMerged()
 	m.configure(cfg)
-	direct := true
-	if c, ok := dialMerged(ctx); ok {
-		direct = false
-		go m.followMerged(ctx, c)
-	} else {
-		for _, h := range cfg.Hosts {
-			go m.follow(ctx, h.Host)
-		}
+	c, err := dialMergedOrExplain(ctx)
+	if err != nil {
+		return err
 	}
+	go m.followMerged(ctx, c)
 	t := time.NewTicker(5 * time.Second) // refresh relative times
 	defer t.Stop()
 	for {
-		// Settled and orphaned come from the local sessions: from the merged
-		// stream, or on the direct path read on each redraw so a settle
-		// from another pane shows on the next change.
-		locals := m.locals()
-		if direct {
-			locals, _ = workspace.List(ctx)
-		}
-		fmt.Print("\033[H\033[2J" + m.render(locals))
+		// The local sessions, settled and orphaned among them, come
+		// with the merged stream.
+		fmt.Print("\033[H\033[2J" + m.render(m.locals()))
 		select {
 		case <-ctx.Done():
 			return nil
