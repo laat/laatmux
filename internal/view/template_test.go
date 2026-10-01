@@ -421,9 +421,11 @@ func TestTemplateOverflow(t *testing.T) {
 	}
 }
 
-// A blank tile line is no line; the compact layout draws the third tile
-// line under a row with Titles; the tree's templates come from the
-// config; an error in one is drawn in its place.
+// {elapsed} on a tree line is its agent's time, and nothing on a line
+// with neither agent nor task; a blank tile line is no line; the
+// compact layout draws the third tile line under a row with Titles;
+// the tree's templates come from the config; an error in one is drawn
+// in its place.
 func TestConfiguredTemplates(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	// {elapsed} on a tree line: the agent's time, and nothing on a line
