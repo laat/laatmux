@@ -439,9 +439,9 @@ truth; labels only place new things.
   that rather than from the words. `follow` with `attempt` reattaches
   to one in flight or answers from the record; an attempt the journal
   never saw is `unknown attempt`, on which the client resends; an id
-  the journal no longer holds is `recovery expired`. `laatmux add -p` in the foreground prints the
-  delivery state as its last line and exits 0 when the add succeeded,
-  whatever the delivery.
+  the journal no longer holds is `recovery expired`. `laatmux add -p`
+  in the foreground prints the delivery state as its last line and
+  exits 0 when the add succeeded, whatever the delivery.
   Listings are stamped: the daemon counts observations owed in a
   `revision`, stepped at the end of every add that succeeded and by
   every `rm` that removed a worktree; a poll reads it before it asks

@@ -228,6 +228,19 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	if got := f.commands(); len(got) != 2 || got[1].Type != protocol.TypeFollow {
 		t.Fatalf("reconnect did not follow: %+v", got)
 	}
+
+	// Follow is held the same way: a reconnect that lands on a daemon
+	// without it is refused rather than sent the command again, and the
+	// command was sent, so it is no NotSent.
+	f = startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps}, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapRm}})
+	_, _, err = stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true})
+	var ns *NotSent
+	if err == nil || !strings.Contains(err.Error(), "does not support follow") || errors.As(err, &ns) {
+		t.Fatalf("reconnect without follow: %v", err)
+	}
+	if got := f.commands(); len(got) != 1 || got[0].Type != protocol.TypeRm {
+		t.Fatalf("after the reconnect without follow: %+v", got)
+	}
 }
 
 // A follow answered interrupted, by a daemon whose journal knows the

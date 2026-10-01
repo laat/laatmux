@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
@@ -250,11 +251,18 @@ func TestLocalRepoArg(t *testing.T) {
 	}{
 		{protocol.Worktree{Repo: "proj", Source: "git@x:o/proj.git"}, "mine"},
 		{protocol.Worktree{Repo: "proj", Source: "git@x:o/unknown.git"}, "git@x:o/unknown.git"},
+		{protocol.Worktree{Repo: "proj"}, ""},
 	}
 	for _, c := range cases {
 		if got := localRepoArg(cfg, c.w); got != c.want {
 			t.Errorf("localRepoArg(%+v) = %q, want %q", c.w, got, c.want)
 		}
+	}
+	// The hint for a record without a source leaves --repo to the reader
+	// rather than print it empty.
+	h := config.Host{Host: client.Host{Name: "vm"}}
+	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; start one with: laatmux add fix --repo <repo> --host vm"; got != want {
+		t.Errorf("addHint = %q, want %q", got, want)
 	}
 }
 
