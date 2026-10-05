@@ -19,21 +19,13 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
-// Host is one environment the client talks to.
-type Host struct {
-	Name string // label shown in the sidebar
-	SSH  string // ssh alias; "" means this machine
-	Bin  string // remote laatmux binary, default "laatmux"
-}
-
-func (h Host) Local() bool { return h.SSH == "" }
-
 // Conn is an open, hello-completed connection to one daemon.
 type Conn struct {
-	Host  Host
+	Host  peer.Host
 	Hello protocol.Message
 	pc    *protocol.Conn
 	close func()
@@ -87,7 +79,7 @@ func (c *Conn) wrap(err error) error {
 }
 
 // Dial connects and completes the hello exchange.
-func Dial(ctx context.Context, h Host) (*Conn, error) {
+func Dial(ctx context.Context, h peer.Host) (*Conn, error) {
 	var (
 		r     io.Reader
 		w     io.Writer
@@ -155,7 +147,7 @@ func shellQuote(s string) string {
 // carry the protocol, close tears the transport down. It is what Dial does
 // once a connection is up, exposed so a daemon under test can be dialled
 // over a pipe.
-func Connect(ctx context.Context, h Host, r io.Reader, w io.Writer, close func()) (*Conn, error) {
+func Connect(ctx context.Context, h peer.Host, r io.Reader, w io.Writer, close func()) (*Conn, error) {
 	return completeHello(ctx, &Conn{Host: h, pc: protocol.NewConnRW(r, w), close: close})
 }
 

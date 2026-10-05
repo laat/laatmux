@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
@@ -269,7 +270,7 @@ func taskAction(m *view.Model, a view.Action) bool {
 // client of the stream, ls and watch among them, refuses rather than
 // dial the hosts itself.
 func dialMergedOrExplain(ctx context.Context) (*client.Conn, error) {
-	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
 		return nil, fmt.Errorf("local daemon: %w; one running that does not answer is stopped with: laatmux stop; one that did not start says why in %s, and laatmux serve run by hand shows it, or names the pid of one holding the lock", err, filepath.Join(home.Dir(), "daemon.log"))
 	}

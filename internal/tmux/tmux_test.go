@@ -191,3 +191,17 @@ func TestServerLabelsAreTheProtocolConstants(t *testing.T) {
 		t.Fatal("the labels do not parse back to the servers")
 	}
 }
+
+func TestServersDefaultAndParsed(t *testing.T) {
+	got, err := ParseServers(nil)
+	if err != nil || len(got) != 1 || got[0] != LaatmuxServer {
+		t.Fatalf("default = %v, %v", got, err)
+	}
+	got, err = ParseServers([]string{"laatmux", "default"})
+	if err != nil || len(got) != 2 || got[0] != LaatmuxServer || got[1] != DefaultServer {
+		t.Fatalf("parsed = %v, %v", got, err)
+	}
+	if _, err := ParseServers([]string{"default", ""}); err == nil {
+		t.Fatal("duplicate default accepted")
+	}
+}

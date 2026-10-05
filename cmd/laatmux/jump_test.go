@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
@@ -31,7 +31,7 @@ func fakeSSH(t *testing.T, script string) {
 }
 
 func TestCheckSessionDistinguishesFailures(t *testing.T) {
-	h := client.Host{Name: "vm", SSH: "vm"}
+	h := peer.Host{Name: "vm", SSH: "vm"}
 	cases := []struct {
 		name, script, want string
 	}{
@@ -59,7 +59,7 @@ func TestCheckSessionTimesOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := checkSession(ctx, client.Host{Name: "vm", SSH: "vm"}, "x")
+	err := checkSession(ctx, peer.Host{Name: "vm", SSH: "vm"}, "x")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("got %v", err)
 	}
@@ -73,10 +73,10 @@ func TestCheckSessionTimesOut(t *testing.T) {
 // server is switched to; a remote default server or any other server is
 // refused as unmanaged.
 func TestJumpMode(t *testing.T) {
-	mac := client.Host{Name: "mac"}
-	vm := client.Host{Name: "vm", SSH: "vm"}
+	mac := peer.Host{Name: "mac"}
+	vm := peer.Host{Name: "vm", SSH: "vm"}
 	cases := []struct {
-		h    client.Host
+		h    peer.Host
 		srv  string
 		want jumpKind
 		err  string
@@ -103,7 +103,7 @@ func TestJumpMode(t *testing.T) {
 // jumped to through the agent, not answered with the add hint: here an
 // agent on a remote host's default server, which jump refuses as such.
 func TestJumpRowWorktreeThroughAgent(t *testing.T) {
-	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "vm", SSH: "vm"}}}}
 	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	a := protocol.Agent{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", WorktreeID: w.ID}
 	err := jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
@@ -120,7 +120,7 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // session attaches through the worktree's own workspace session, keyed
 // by the worktree, so it never collides with the name that session has.
 func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
-	h := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
+	h := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
 	cfg := config.Config{Hosts: []config.Host{h}}
 	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a", Source: "git@example.com:o/proj.git"}
 	a := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", WorktreeID: w.ID}
@@ -180,7 +180,7 @@ func TestPaneJumpRouting(t *testing.T) {
 			t.Errorf("%v: %q ok %v", c.row.Kind, got, ok)
 		}
 	}
-	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "vm", SSH: "vm"}}}}
+	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "vm", SSH: "vm"}}}}
 	// The session a pane's jump attaches, by the pane's session: the
 	// worktree's workspace session from its home; from its root agent's
 	// session when the home is lost; a task's before the listing; a
@@ -305,7 +305,7 @@ func TestSelectRemote(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: m.PaneID != "%gone", Error: "pane %gone: no such pane"})
 		return true
 	}
-	local := client.Host{Name: "mac"}
+	local := peer.Host{Name: "mac"}
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapSelect}, serve)
 	ctx := context.Background()
 	if err := selectRemote(ctx, local, "%1"); err != nil {

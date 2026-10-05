@@ -44,16 +44,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/palette"
-	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/peer"
 	"gopkg.in/yaml.v3"
 )
 
 // Host is one configured environment: how to reach it and where it keeps
 // checkouts and worktrees.
 type Host struct {
-	client.Host `yaml:",inline"`
+	peer.Host `yaml:",inline"`
 	// Repos is the directory of main checkouts on the host; a checkout is
 	// <Repos>/<name>. Worktrees is the directory of worktrees; a worktree
 	// is <Worktrees>/<name>/<branch>. Both are as written in the file, so
@@ -341,25 +340,6 @@ func (s Sidebar) ItemWidth() int {
 // Top reports whether the sidebar is a strip along the top.
 func (s Sidebar) Top() bool { return s.Position == "top" }
 
-// ParseServers turns server specs into servers, rejecting duplicates. An
-// empty list is the managed laatmux server alone.
-func ParseServers(specs []string) ([]tmux.Server, error) {
-	if len(specs) == 0 {
-		return []tmux.Server{tmux.LaatmuxServer}, nil
-	}
-	seen := map[string]bool{}
-	out := make([]tmux.Server, 0, len(specs))
-	for _, v := range specs {
-		s := tmux.Parse(v)
-		if seen[s.Label()] {
-			return nil, fmt.Errorf("tmux_servers: %s listed twice", s.Label())
-		}
-		seen[s.Label()] = true
-		out = append(out, s)
-	}
-	return out, nil
-}
-
 // Path is the config file location. LAATMUX_CONFIG overrides.
 func Path() string {
 	if v := os.Getenv("LAATMUX_CONFIG"); v != "" {
@@ -395,7 +375,7 @@ func Parse(b []byte) (Config, error) {
 		return c, err
 	}
 	if len(c.Hosts) == 0 {
-		c.Hosts = []Host{{Host: client.Host{Name: localName()}}}
+		c.Hosts = []Host{{Host: peer.Host{Name: localName()}}}
 	}
 	if err := c.validateHosts(); err != nil {
 		return c, err
@@ -619,7 +599,7 @@ func (c Config) Find(name string) (Host, bool) {
 		}
 	}
 	if name == "" {
-		return Host{Host: client.Host{Name: localName()}}, true
+		return Host{Host: peer.Host{Name: localName()}}, true
 	}
 	return Host{}, false
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -100,7 +101,7 @@ var errMoved = errors.New("the daemon that answered is not the one the runtime r
 // daemon's is errMoved; a hello without a pid, from a daemon before the
 // field, is taken as the record's when the record still stands.
 func stopDaemon(ctx context.Context, nc net.Conn, rt home.Runtime) error {
-	c, err := client.Connect(ctx, client.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
 	if err != nil {
 		return err
 	}

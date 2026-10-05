@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -47,7 +47,7 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spec := Spec{Host: client.Host{Name: "mac"}, Managed: "s1", Name: "mac/w", Key: "env//w", Branch: "w"}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "s1", Name: "mac/w", Key: "env//w", Branch: "w"}
 	target := func() (string, string) {
 		t.Helper()
 		out, err := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/w", "-F", "#{@laatmux_attach_target} #{pane_start_command}")
@@ -158,7 +158,7 @@ func TestPaneJumpSteps(t *testing.T) {
 	}
 	// The workspace session, its attach pane, and a shell window the
 	// user opened and left current.
-	spec := Spec{Host: client.Host{Name: "mac"}, Managed: "m1", Name: "mac/w", Key: "env//w", Branch: "w"}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/w", Key: "env//w", Branch: "w"}
 	if _, created, err := Ensure(ctx, spec); err != nil || !created {
 		t.Fatalf("ensure: %v %v", created, err)
 	}
@@ -199,7 +199,7 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	host := client.Host{Name: "mac"}
+	host := peer.Host{Name: "mac"}
 	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/w", Name: "mac/proj/w"}); err != nil || !created {
 		t.Fatalf("the plain attachment: %v %v", created, err)
 	}

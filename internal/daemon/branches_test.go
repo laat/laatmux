@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/github"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 )
@@ -60,7 +60,7 @@ const ghSource = "git@github.com:o/r.git"
 // worktrees of the branches given, and a merged subscriber.
 func branchDaemon(t *testing.T, dir string, gh *fakeGH, branches ...string) (*Daemon, *subscriber) {
 	t.Helper()
-	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}}}
 	d := New(Config{EnvironmentID: "menv", Hosts: hosts.get, GitHub: gh.run, Branches: filepath.Join(dir, "branches.json")})
 	s := &subscriber{ch: make(chan protocol.Message, 256), merged: true}
 	d.mu.Lock()
@@ -454,7 +454,7 @@ func TestBranchesSlowHostLast(t *testing.T) {
 // A host with no worktrees to list, a daemon without the capability,
 // does not hold the forgetting for the others.
 func TestBranchesListedWithoutWorktrees(t *testing.T) {
-	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}, {Name: "old", SSH: "old"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}, {Name: "old", SSH: "old"}}}
 	d := New(Config{EnvironmentID: "menv", Hosts: hosts.get, GitHub: (&fakeGH{}).run, Branches: filepath.Join(t.TempDir(), "b.json")})
 	d.mu.Lock()
 	defer d.mu.Unlock()

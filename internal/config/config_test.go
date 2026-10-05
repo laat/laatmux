@@ -1,29 +1,14 @@
 package config
 
 import (
-	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/tmux"
+	"gopkg.in/yaml.v3"
 )
-
-func TestServersDefaultAndParsed(t *testing.T) {
-	got, err := ParseServers(nil)
-	if err != nil || len(got) != 1 || got[0] != tmux.LaatmuxServer {
-		t.Fatalf("default = %v, %v", got, err)
-	}
-	got, err = ParseServers([]string{"laatmux", "default"})
-	if err != nil || len(got) != 2 || got[0] != tmux.LaatmuxServer || got[1] != tmux.DefaultServer {
-		t.Fatalf("parsed = %v, %v", got, err)
-	}
-	if _, err := ParseServers([]string{"default", ""}); err == nil {
-		t.Fatal("duplicate default accepted")
-	}
-}
 
 func TestLoadReadsTmuxServers(t *testing.T) {
 	dir := t.TempDir()
@@ -37,9 +22,8 @@ func TestLoadReadsTmuxServers(t *testing.T) {
 	if len(c.Hosts) != 2 || c.Hosts[1].SSH != "box" {
 		t.Fatalf("hosts: %+v", c.Hosts)
 	}
-	srv, err := ParseServers(c.TmuxServers)
-	if err != nil || len(srv) != 2 || srv[1].Label() != "default" {
-		t.Fatalf("servers: %v %v", srv, err)
+	if len(c.TmuxServers) != 2 || c.TmuxServers[1] != "default" {
+		t.Fatalf("servers: %v", c.TmuxServers)
 	}
 }
 

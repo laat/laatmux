@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -20,7 +20,7 @@ import (
 // alone; not a workspace, or a key without a root, is refused.
 func TestRmCurrent(t *testing.T) {
 	cfg := config.Config{
-		Hosts: []config.Host{{Host: client.Host{Name: "mac"}}, {Host: client.Host{Name: "vm", SSH: "vm"}}},
+		Hosts: []config.Host{{Host: peer.Host{Name: "mac"}}, {Host: peer.Host{Name: "vm", SSH: "vm"}}},
 		Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}},
 	}
 	mac, vm := cfg.Hosts[0], cfg.Hosts[1]

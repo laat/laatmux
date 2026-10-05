@@ -21,6 +21,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/detect"
 	"github.com/laat/laatmux/internal/github"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
@@ -116,8 +117,8 @@ type Config struct {
 	// to a remote host, client.Dial by default. Sessions lists this
 	// machine's local workspace sessions; nil means none. The durations
 	// default to the constants in merge.go.
-	Hosts           func() ([]client.Host, error)
-	Dial            func(ctx context.Context, h client.Host) (*client.Conn, error)
+	Hosts           func() ([]peer.Host, error)
+	Dial            func(ctx context.Context, h peer.Host) (*client.Conn, error)
 	Sessions        func(ctx context.Context) ([]protocol.Session, error)
 	MergedIdle      time.Duration
 	SessionInterval time.Duration

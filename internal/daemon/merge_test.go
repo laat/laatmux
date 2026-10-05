@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -55,7 +56,7 @@ func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
 	return r
 }
 
-func (r *fakeRemote) dial(ctx context.Context, h client.Host) (*client.Conn, error) {
+func (r *fakeRemote) dial(ctx context.Context, h peer.Host) (*client.Conn, error) {
 	r.mu.Lock()
 	r.dials++
 	down := r.down
@@ -105,7 +106,7 @@ func discovered(d *Daemon) {
 // hostsList is a host set a test changes between subscriptions.
 type hostsList struct {
 	mu    sync.Mutex
-	hosts []client.Host
+	hosts []peer.Host
 	err   error
 	// flip, when positive, answers that many reads with no hosts and
 	// then the list again: a host gone and back between two reads.
@@ -119,17 +120,17 @@ func (h *hostsList) setFlip(n int) {
 	h.mu.Unlock()
 }
 
-func (h *hostsList) get() ([]client.Host, error) {
+func (h *hostsList) get() ([]peer.Host, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.flip > 0 {
 		h.flip--
 		return nil, h.err
 	}
-	return append([]client.Host(nil), h.hosts...), h.err
+	return append([]peer.Host(nil), h.hosts...), h.err
 }
 
-func (h *hostsList) set(hosts ...client.Host) {
+func (h *hostsList) set(hosts ...peer.Host) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.hosts = hosts
@@ -158,7 +159,7 @@ func newUndiscoveredFixture(t *testing.T, ctx context.Context, sessions func(con
 	rd.mu.Unlock()
 	discovered(rd)
 	remote := newFakeRemote(t, ctx, rd)
-	hosts := &hostsList{hosts: []client.Host{{Name: "here"}, {Name: "vm", SSH: "vm"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "here"}, {Name: "vm", SSH: "vm"}}}
 	ld := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Dial: remote.dial, Sessions: sessions,
 		MergedIdle: 100 * time.Millisecond, SessionInterval: 10 * time.Millisecond, ReconnectMin: 10 * time.Millisecond})
 	ld.mu.Lock()
@@ -446,7 +447,7 @@ func TestMergedHostsFollowConfig(t *testing.T) {
 	defer c.Close()
 	until(t, c, pc, hostStatus("vm", listed))
 
-	f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "box", SSH: "box"})
+	f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "box", SSH: "box"})
 	c2, pc2, snap := f.subscribe(t, ctx)
 	defer c2.Close()
 	if _, ok := findHost(snap.Hosts, "vm"); ok {
@@ -619,16 +620,16 @@ func TestMergedConcurrentSubscriptions(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			if i%2 == 0 {
-				f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"})
+				f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "vm", SSH: "vm"})
 			} else {
-				f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"}, client.Host{Name: "box", SSH: "box"})
+				f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "vm", SSH: "vm"}, peer.Host{Name: "box", SSH: "box"})
 			}
 			c, _, _ := f.subscribe(t, ctx)
 			c.Close()
 		}(i)
 	}
 	wg.Wait()
-	f.hosts.set(client.Host{Name: "here"}, client.Host{Name: "vm", SSH: "vm"})
+	f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "vm", SSH: "vm"})
 	c, _, snap := f.subscribe(t, ctx)
 	defer c.Close()
 	if len(snap.Hosts) != 2 {
@@ -712,7 +713,7 @@ func TestMergedPaneAndRunRecords(t *testing.T) {
 	if m := next(t, c, pc); m.Type != protocol.TypeRemove || m.RunID != "renv/run/r1" {
 		t.Fatalf("run remove %+v", m)
 	}
-	f.hosts.set(client.Host{Name: "here"})
+	f.hosts.set(peer.Host{Name: "here"})
 	c3, _, _ := f.subscribe(t, ctx)
 	c3.Close()
 	got := until(t, c, pc, func(m protocol.Message) bool { return m.PaneRecordID == "renv/pane/default/%3" })

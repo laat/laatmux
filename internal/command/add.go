@@ -10,6 +10,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -183,7 +184,7 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 	if id == "" {
 		id = ID("add")
 	}
-	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
 		return "", err
 	}
@@ -202,7 +203,7 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 			return "", err
 		}
 		c.Close()
-		c, err = client.Dial(ctx, client.Host{Name: "local"})
+		c, err = client.Dial(ctx, peer.Host{Name: "local"})
 		if err != nil {
 			return id, fmt.Errorf("%s: the answer was lost and the daemon could not be reached again; laatmux tasks says whether it holds %s", err, id)
 		}
@@ -225,7 +226,7 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 // Dismiss drops a pending record that needs the user from this
 // machine's daemon.
 func Dismiss(ctx context.Context, id string) error {
-	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
 		return err
 	}
@@ -248,7 +249,7 @@ func DismissAt(ctx context.Context, environmentID, root string, removed *protoco
 	if err != nil {
 		return nil
 	}
-	c, err := client.Connect(ctx, client.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
 	if err != nil {
 		return err
 	}
@@ -266,7 +267,7 @@ func DismissAt(ctx context.Context, environmentID, root string, removed *protoco
 // record's prompt now, as its next attempt, and returns the delivery
 // state with its reason.
 func DeliverPending(ctx context.Context, id string) (state, reason string, err error) {
-	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
 		return "", "", err
 	}

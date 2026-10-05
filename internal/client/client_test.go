@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestRequestHonoursCancel(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
-	c := &Conn{Host: Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	c := &Conn{Host: peer.Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		protocol.NewConn(server).Read() // accept the request, never answer
@@ -51,7 +52,7 @@ func TestProcessTransportCancelAndCloseRace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := &Conn{Host: Host{Name: "cat"}, pc: protocol.NewConnRW(r, w), close: closeFn}
+			c := &Conn{Host: peer.Host{Name: "cat"}, pc: protocol.NewConnRW(r, w), close: closeFn}
 			defer c.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
@@ -78,7 +79,7 @@ func TestProtocolMismatchRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Conn{Host: Host{Name: "p"}, pc: protocol.NewConnRW(r, w), close: closeFn}
+	c := &Conn{Host: peer.Host{Name: "p"}, pc: protocol.NewConnRW(r, w), close: closeFn}
 	defer c.Close()
 	_, err = completeHello(context.Background(), c)
 	if err == nil || !strings.Contains(err.Error(), "protocol 99") {
@@ -91,7 +92,7 @@ func TestProtocolMismatchRefused(t *testing.T) {
 func TestErrorsCarrySSHDiagnostic(t *testing.T) {
 	server, client := net.Pipe()
 	diag := &tailBuffer{}
-	c := &Conn{Host: Host{Name: "vm"}, pc: protocol.NewConn(client), close: func() { client.Close() }, diag: diag}
+	c := &Conn{Host: peer.Host{Name: "vm"}, pc: protocol.NewConn(client), close: func() { client.Close() }, diag: diag}
 	diag.Write([]byte("Connection closed by remote host\n"))
 	server.Close()
 	_, err := c.Read()
@@ -101,7 +102,7 @@ func TestErrorsCarrySSHDiagnostic(t *testing.T) {
 	if !errors.Is(err, io.EOF) {
 		t.Errorf("err = %v, want io.EOF underneath", err)
 	}
-	plain := &Conn{Host: Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	plain := &Conn{Host: peer.Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
 	if _, err := plain.Read(); err == nil || err != io.EOF {
 		t.Errorf("local err = %v, want bare io.EOF", err)
 	}
@@ -136,7 +137,7 @@ func TestRemoteBin(t *testing.T) {
 func TestExchangeAndRefused(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
-	c := &Conn{Host: Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	c := &Conn{Host: peer.Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
 	go func() {
 		sc := protocol.NewConn(server)
 		req, _ := sc.Read()
@@ -182,7 +183,7 @@ func TestExchangeAndRefused(t *testing.T) {
 	// is in the error.
 	server2, client2 := net.Pipe()
 	diag := &tailBuffer{}
-	c2 := &Conn{Host: Host{Name: "vm"}, pc: protocol.NewConn(client2), close: func() { client2.Close() }, diag: diag}
+	c2 := &Conn{Host: peer.Host{Name: "vm"}, pc: protocol.NewConn(client2), close: func() { client2.Close() }, diag: diag}
 	diag.Write([]byte("Connection closed by remote host\n"))
 	go func() {
 		protocol.NewConn(server2).Read()

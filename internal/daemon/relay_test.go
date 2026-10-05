@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
@@ -60,7 +61,7 @@ func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 	})
 	go host.Run(ctx)
 	fr := newFakeRemote(t, ctx, host)
-	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}}}
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Dial: fr.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, SessionInterval: 20 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
@@ -487,7 +488,7 @@ func TestRelayLifetimeAndHostRemoved(t *testing.T) {
 		t.Fatal("accepted for a host not in the config")
 	}
 	// Accepted while the host was configured, then the host leaves.
-	f.hosts.set(client.Host{Name: "vm", SSH: "vm"})
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
 	f.remote.mu.Lock()
 	f.remote.down = errors.New("down")
 	f.remote.mu.Unlock()
@@ -496,7 +497,7 @@ func TestRelayLifetimeAndHostRemoved(t *testing.T) {
 	}
 	f.hosts.set()
 	p = f.awaitRecord(t, "h1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "host removed") })
-	f.hosts.set(client.Host{Name: "vm", SSH: "vm"})
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
 	f.remote.mu.Lock()
 	f.remote.down = nil
 	f.remote.mu.Unlock()
@@ -645,7 +646,7 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	bareRemote := newFakeRemote(t, f.ctx, bare)
 	var mu sync.Mutex
 	current := bareRemote
-	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+	dial := func(ctx context.Context, h peer.Host) (*client.Conn, error) {
 		mu.Lock()
 		r := current
 		mu.Unlock()
@@ -757,7 +758,7 @@ func TestRelayEnvironmentMismatchWaits(t *testing.T) {
 	otherRemote := newFakeRemote(t, f.ctx, other)
 	var mu sync.Mutex
 	current := otherRemote
-	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+	dial := func(ctx context.Context, h peer.Host) (*client.Conn, error) {
 		mu.Lock()
 		r := current
 		mu.Unlock()
@@ -772,7 +773,7 @@ func TestRelayEnvironmentMismatchWaits(t *testing.T) {
 	f.setLocal(local)
 	// Pinned at accept to the host row's environment.
 	f.local.mu.Lock()
-	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "vm"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "henv", Capabilities: []string{protocol.CapTask}}, agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
+	f.local.mhosts["vm"] = &mergedHost{host: peer.Host{Name: "vm", SSH: "vm"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "henv", Capabilities: []string{protocol.CapTask}}, agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{}}
 	f.local.mu.Unlock()
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "m1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "moved", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
@@ -1091,7 +1092,7 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	f.remote.mu.Lock()
 	f.remote.down = nil
 	f.remote.mu.Unlock()
-	f.hosts.set(client.Host{Name: "vm", SSH: "vm"})
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "back", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
 	}
@@ -1116,7 +1117,7 @@ func TestRelayMismatchDismissable(t *testing.T) {
 	otherRemote := newFakeRemote(t, f.ctx, other)
 	var mu sync.Mutex
 	current := f.remote
-	dial := func(ctx context.Context, h client.Host) (*client.Conn, error) {
+	dial := func(ctx context.Context, h peer.Host) (*client.Conn, error) {
 		mu.Lock()
 		r := current
 		mu.Unlock()
@@ -1222,7 +1223,7 @@ func TestRelayDirectoryFatal(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hosts := &hostsList{hosts: []client.Host{{Name: "vm", SSH: "vm"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}}}
 	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending")})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

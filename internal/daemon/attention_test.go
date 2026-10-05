@@ -9,16 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
 // attnDaemon is a merging daemon with attention, this machine mac and a
 // remote host vm, the file under dir.
-func attnDaemon(t *testing.T, dir string, hosts ...client.Host) *Daemon {
+func attnDaemon(t *testing.T, dir string, hosts ...peer.Host) *Daemon {
 	t.Helper()
 	if len(hosts) == 0 {
-		hosts = []client.Host{{Name: "mac"}, {Name: "vm", SSH: "vm"}}
+		hosts = []peer.Host{{Name: "mac"}, {Name: "vm", SSH: "vm"}}
 	}
 	list := &hostsList{hosts: hosts}
 	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: list.get, Attention: filepath.Join(dir, "attention.json")})
@@ -130,7 +130,7 @@ func TestAttentionLocalRename(t *testing.T) {
 	a.Activity, a.ActivityAt = protocol.Idle, t0.Add(time.Second)
 	publish(d, "laatmux/%1", a)
 	d.mu.Lock()
-	d.reconcileHostsLocked([]client.Host{{Name: "laptop"}, {Name: "vm", SSH: "vm"}})
+	d.reconcileHostsLocked([]peer.Host{{Name: "laptop"}, {Name: "vm", SSH: "vm"}})
 	d.mu.Unlock()
 	if !done(d, a.ID) {
 		t.Fatal("the rename forgot the local agent")
@@ -150,7 +150,7 @@ func TestAttentionLocalRename(t *testing.T) {
 	publish(d, "laatmux/%1", a)
 	a.Activity, a.ActivityAt = protocol.Idle, t0.Add(3*time.Second)
 	publish(d, "laatmux/%1", a)
-	list := &hostsList{hosts: []client.Host{{Name: "laptop"}}}
+	list := &hostsList{hosts: []peer.Host{{Name: "laptop"}}}
 	d = New(Config{EnvironmentID: "menv", Host: "laptop", Hosts: list.get, Attention: d.attn.path})
 	publish(d, "laatmux/%1", a)
 	if !done(d, a.ID) {
@@ -324,7 +324,7 @@ func TestAttentionForget(t *testing.T) {
 		t.Error("kept after a snapshot without it")
 	}
 	d.mu.Lock()
-	d.reconcileHostsLocked([]client.Host{{Name: "mac"}})
+	d.reconcileHostsLocked([]peer.Host{{Name: "mac"}})
 	d.mu.Unlock()
 	if _, ok := attnOf(d, "venv/laatmux/%3"); ok {
 		t.Error("kept after the host left the config")
@@ -346,7 +346,7 @@ func TestAttentionStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var listings atomic.Int32
-	hosts := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
 	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
 		Clients: func(context.Context) ([]ClientView, error) { listings.Add(1); return nil, nil }})
 	if !protocol.Has(d.capabilities(), protocol.CapAttention) {
@@ -391,7 +391,7 @@ func TestAttentionSeenLoop(t *testing.T) {
 	var views atomic.Value
 	views.Store([]ClientView{attachTo("mac", "s")})
 	var listings atomic.Int32
-	hosts := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
 	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
 		Clients: func(context.Context) ([]ClientView, error) { listings.Add(1); return views.Load().([]ClientView), nil }})
 	go d.runSeen(ctx)
@@ -451,7 +451,7 @@ func TestAttentionForgetAtStart(t *testing.T) {
 	publish(d, "laatmux/%2", protocol.Agent{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "b", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 2}})
 	fromVM(d, remoteAgent("%3", "c", protocol.Working, t0))
 
-	list := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	list := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
 	d = New(Config{EnvironmentID: "menv", Host: "mac", Hosts: list.get, Attention: filepath.Join(dir, "attention.json"), Targets: []Target{}})
 	d.mu.Lock()
 	d.agents["laatmux/%1"] = protocol.Agent{ID: "menv/laatmux/%1"}
@@ -502,7 +502,7 @@ func TestAttentionListingBeforeFinish(t *testing.T) {
 	defer cancel()
 	started, release := make(chan struct{}, 4), make(chan struct{})
 	var calls atomic.Int32
-	hosts := &hostsList{hosts: []client.Host{{Name: "mac"}}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
 	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
 		Clients: func(ctx context.Context) ([]ClientView, error) {
 			if calls.Add(1) == 1 {

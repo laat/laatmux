@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -17,8 +17,8 @@ import (
 func TestSplitArgs(t *testing.T) {
 	plain := protocol.Session{Name: "notes"}
 	ws := protocol.Session{Name: "vm/proj/x", Key: "env//home/u/wt/proj/x", Host: "vm"}
-	local := config.Host{Host: client.Host{Name: "mac"}}
-	remote := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
+	local := config.Host{Host: peer.Host{Name: "mac"}}
+	remote := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
 	cases := []struct {
 		name string
 		dir  string

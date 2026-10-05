@@ -48,6 +48,26 @@ func Parse(v string) Server {
 	}
 }
 
+// ParseServers turns the specs a config's tmux_servers or a --tmux-servers
+// flag lists into servers, rejecting duplicates. An empty list is the
+// managed laatmux server alone.
+func ParseServers(specs []string) ([]Server, error) {
+	if len(specs) == 0 {
+		return []Server{LaatmuxServer}, nil
+	}
+	seen := map[string]bool{}
+	out := make([]Server, 0, len(specs))
+	for _, v := range specs {
+		s := Parse(v)
+		if seen[s.Label()] {
+			return nil, fmt.Errorf("tmux_servers: %s listed twice", s.Label())
+		}
+		seen[s.Label()] = true
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // Label names the server in agent ids and listings: the -S path or the -L
 // name. Parse(s.Label()) == s for any server Parse returns. The zero Server
 // is labelled "current", since it is whatever TMUX points at.

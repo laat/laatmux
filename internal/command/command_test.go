@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -63,7 +63,7 @@ func TestFailed(t *testing.T) {
 // session's tags, or from an untagged session by name, and never from
 // a session tagged for another workspace or on another environment.
 func TestRootOf(t *testing.T) {
-	h := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
+	h := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
 	repo := config.Repo{Source: "git@x:o/proj.git", Name: "proj"}
 	cases := []struct {
 		name   string
@@ -84,7 +84,7 @@ func TestRootOf(t *testing.T) {
 }
 
 func TestDescribe(t *testing.T) {
-	a := Add{Host: config.Host{Host: client.Host{Name: "vm"}}, Repo: config.Repo{Name: "proj"}, Branch: "x", Agent: "claude"}
+	a := Add{Host: config.Host{Host: peer.Host{Name: "vm"}}, Repo: config.Repo{Name: "proj"}, Branch: "x", Agent: "claude"}
 	if got := a.Describe(); got != "add proj/x on vm with claude" {
 		t.Error(got)
 	}
@@ -192,7 +192,7 @@ func (f *fakeDaemon) commands() []protocol.Message {
 func TestStreamHoldsEnvironment(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}
 	req := protocol.Message{Type: protocol.TypeRm, ID: "r1", Root: "/r/x"}
-	host := client.Host{Name: "local"}
+	host := peer.Host{Name: "local"}
 
 	f := startFake(t, 0, protocol.Message{EnvironmentID: "other", Capabilities: caps})
 	_, _, err := stream(context.Background(), host, []string{protocol.CapRm}, req, Discard{}, streamOpts{restart: true, environment: "env"})
@@ -241,7 +241,7 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 // seven days ago is outcome unknown without a connection.
 func TestStreamResendsOnInterrupted(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapTask}
-	host := client.Host{Name: "local"}
+	host := peer.Host{Name: "local"}
 	f := startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
 	f.answer = func(m protocol.Message) protocol.Message {
 		if m.Type == protocol.TypeFollow {
@@ -336,7 +336,7 @@ func (n noter) Note(s string)           { n.fn(s) }
 // the caller with the error, and no local session is made.
 func TestAddKeepsHostOutcomeOnError(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapTask}
-	host := client.Host{Name: "local"}
+	host := peer.Host{Name: "local"}
 	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
 	f.answer = func(m protocol.Message) protocol.Message {
 		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Stage: protocol.StageAgent, Error: "tmux: set-option failed", Root: "/r/x", Branch: "x", Prompt: protocol.DeliveryUnknown}
@@ -358,7 +358,7 @@ func TestAddKeepsHostOutcomeOnError(t *testing.T) {
 func TestSubmit(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapMerged, protocol.CapRelay}
 	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
-	add := Add{Host: config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "task", Generated: true, Prompt: "p", Agent: "claude"}
+	add := Add{Host: config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "task", Generated: true, Prompt: "p", Agent: "claude"}
 	id, err := add.Submit(context.Background())
 	if err != nil || !strings.HasPrefix(id, "add-") {
 		t.Fatalf("%s %v", id, err)
@@ -452,7 +452,7 @@ func TestAddRequestCarriesEntry(t *testing.T) {
 // does not know yet, and the command would run uncancelled.
 func TestCancelFollowsTheCommand(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapRun, protocol.CapFollow}
-	host := client.Host{Name: "local"}
+	host := peer.Host{Name: "local"}
 	cancel := make(chan struct{})
 	close(cancel)
 	// Many sends: the wrong order is a race, seen in a fraction of them.
