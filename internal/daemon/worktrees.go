@@ -60,11 +60,9 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		roots = resolveRoots(paths)
 	}
 	if err != nil {
-		if msg := err.Error(); msg != d.lastListErr {
-			d.cfg.Logger.Printf("worktrees: %v", err)
-			d.lastListErr = msg
+		if d.logOnce(&d.lastListErr, "worktrees: %v", err) {
 			d.mu.Lock()
-			d.listErr = msg
+			d.listErr = d.lastListErr
 			d.publishListingLocked()
 			d.mu.Unlock()
 		}

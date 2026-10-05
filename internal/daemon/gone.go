@@ -163,7 +163,7 @@ func (d *Daemon) checkGone(ctx context.Context, id string) {
 			}
 			return
 		}
-		if !d.relayBackoff(ctx, &wait) {
+		if !d.pause(ctx, &wait) {
 			return
 		}
 	}
