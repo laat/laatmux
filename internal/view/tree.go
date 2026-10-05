@@ -32,7 +32,6 @@ func ParseView(s string) (View, error) {
 	return "", fmt.Errorf("view %q is not agents or tree", s)
 }
 
-// SetTree replaces the tree's nodes, keeping the selection on the node
 // Set is the model's rows after a refresh, in the order they depend on:
 // the handoffs first, which the anchor lookup consults; the tree, whose
 // order the agent view's selection follows across a handoff; then the
@@ -43,6 +42,7 @@ func (m *Model) Set(tree []rows.Row, tiles rows.Rows, handoffs map[string]string
 	m.SetRows(tiles)
 }
 
+// SetTree replaces the tree's nodes, keeping the selection on the node
 // it was on, as SetRows does for the rows. A task that handed over
 // passes its fold to the node that takes its children, unless the user
 // has set that node's own.
@@ -660,7 +660,7 @@ func (m *Model) tabs() Line {
 
 // treeLine draws one node of the tree, or the agent view's stale fold,
 // numbered idx among the nodes the digits count. The other-sessions
-// group is not drawn here: Visible makes it a header item.
+// group is not drawn here: treeItems makes it a header item.
 func (m *Model) treeLine(r rows.Row, idx int) []Line {
 	w := m.Width
 	t := m.templates().Tree

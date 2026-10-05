@@ -1,10 +1,11 @@
 // Package view is the list view the sidebar pane and the dashboard popup
 // share: rows with a selection, a header of host problems and a footer,
 // drawn into a tmux pane's worth of terminal. The renderer is a function
-// from the model to lines, keeping only what the next frame or the next
-// click needs (the scroll, the click map, the spinner flags), so the
-// layouts are tested against golden strings without a terminal; the
-// terminal and its keys are internal/term, the loop run.go.
+// from the model to lines, keeping what the next frame, click or refresh
+// needs: the scroll, the click map and the spinner flags, the selection
+// settled, a new line's first fold. The layouts are tested against
+// golden strings without a terminal; the terminal and its keys are
+// internal/term, the loop run.go.
 package view
 
 import (

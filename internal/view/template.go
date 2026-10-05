@@ -345,10 +345,9 @@ type item struct {
 func (it item) width() int { return spansWidth(it.spans) }
 
 // line draws one template for a row in w cells: the evaluated parts
-// fitted to the width by the rules above. A template that did not parse
-// draws its error.
-// line draws one template for a row in w cells; idx is the row's
-// number among the rows the digits count, 0 for one they do not.
+// fitted to the width by the rules above. idx is the row's number among
+// the rows the digits count, 0 for one they do not. A template that did
+// not parse draws its error.
 func (m *Model) line(t Compiled, r rows.Row, w int, idx int) []Span {
 	if t.Err != "" {
 		return clip([]Span{{Text: t.Err, Fg: palette.Danger}}, w)
