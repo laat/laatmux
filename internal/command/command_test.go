@@ -95,14 +95,6 @@ func TestDescribe(t *testing.T) {
 	if got := (Rm{Root: "/r/x"}).Describe(); got != "/r/x" {
 		t.Error(got)
 	}
-	r := Run{Host: config.Host{Host: client.Host{Name: "vm"}}, Repo: config.Repo{Name: "proj"}, Branch: "x", Root: "/r/x", Cmd: []string{"go", "test"}}
-	if got := r.Describe(); got != "run go test in proj/x on vm" {
-		t.Error(got)
-	}
-	r.Repo = config.Repo{}
-	if got := r.Describe(); got != "run go test in /r/x on vm" {
-		t.Error(got)
-	}
 }
 
 // A cancelled run is told apart from other refusals.
@@ -333,40 +325,6 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 	}
 }
 
-// Deliver sends the prompt message under the add's id with the attempt
-// number, follows it with the number after a drop, and resends it when
-// the follow is answered unknown attempt.
-func TestDeliver(t *testing.T) {
-	caps := []string{protocol.CapStatus, protocol.CapFollow, protocol.CapTask}
-	host := client.Host{Name: "local"}
-	f := startFake(t, 1, protocol.Message{EnvironmentID: "env", Capabilities: caps})
-	f.answer = func(m protocol.Message) protocol.Message {
-		if m.Type == protocol.TypeFollow {
-			return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, Error: protocol.ErrUnknownAttempt}
-		}
-		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "session replaced"}
-	}
-	d := Deliver{Host: config.Host{Host: host}, ID: "a1", Attempt: 2, Prompt: "p", Environment: "env"}
-	state, reason, err := d.Run(context.Background(), Discard{})
-	if err != nil || state != protocol.DeliveryNotDelivered || reason != "session replaced" {
-		t.Fatalf("%s %s %v", state, reason, err)
-	}
-	got := f.commands()
-	if len(got) != 3 || got[0].Type != protocol.TypePrompt || got[0].Attempt != 2 || got[0].Prompt != "p" || got[1].Type != protocol.TypeFollow || got[1].Attempt != 2 || got[2].Type != protocol.TypePrompt {
-		t.Fatalf("commands %+v", got)
-	}
-	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
-	f.answer = func(m protocol.Message) protocol.Message {
-		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt, Error: protocol.ErrRecoveryExpired}
-	}
-	if _, _, err := d.Run(context.Background(), Discard{}); err == nil || !strings.Contains(err.Error(), protocol.ErrRecoveryExpired) {
-		t.Fatalf("refusal: %v", err)
-	}
-	if _, _, err := (Deliver{}).Run(context.Background(), Discard{}); err == nil {
-		t.Fatal("empty deliver accepted")
-	}
-}
-
 // noter is a Reporter that keeps the notes.
 type noter struct{ fn func(string) }
 
@@ -391,9 +349,6 @@ func TestAddKeepsHostOutcomeOnError(t *testing.T) {
 	var se *StageError
 	if !errors.As(err, &se) || se.Stage != protocol.StageAgent {
 		t.Fatalf("error %v", err)
-	}
-	if out.Complete() || (Added{Done: true}).Complete() != true || (Added{Done: true, Prompt: protocol.DeliveryUnknown}).Complete() {
-		t.Fatal("Complete")
 	}
 }
 

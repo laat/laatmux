@@ -150,3 +150,29 @@ func TestListPanesEmptyServer(t *testing.T) {
 		t.Fatalf("empty server: %v %v", panes, err)
 	}
 }
+
+// DecodeBranch reverses EncodeBranch, for the round trip. Sequences EncodeBranch never emits
+// are left as they are.
+func DecodeBranch(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '%' && i+2 < len(name) {
+			switch name[i+1 : i+3] {
+			case "25":
+				b.WriteByte('%')
+				i += 2
+				continue
+			case "2e":
+				b.WriteByte('.')
+				i += 2
+				continue
+			case "3a":
+				b.WriteByte(':')
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(name[i])
+	}
+	return b.String()
+}

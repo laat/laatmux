@@ -761,7 +761,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		t.Fatalf("working rows filtered out: %d rows, spinning=%v", len(m.Visible()), m.Spinning())
 	}
 	m.Filter = ""
-	m.Overlay = NewPrompt("branch", "", nil)
+	m.Overlay = NewLog("add")
 	m.Render()
 	if m.Spinning() {
 		t.Fatal("an overlay up and still spinning")
@@ -835,11 +835,6 @@ func TestNewlineIsEnter(t *testing.T) {
 	p.Handle(Key{Kind: KeyNewline})
 	if !p.Done() || p.Chosen != 0 {
 		t.Fatalf("picker: done %v chosen %d", p.Done(), p.Chosen)
-	}
-	pr := NewPrompt("t", "x", nil)
-	pr.Handle(Key{Kind: KeyNewline})
-	if !pr.Done() || pr.Cancelled {
-		t.Fatalf("prompt: done %v cancelled %v", pr.Done(), pr.Cancelled)
 	}
 	f := NewForm("t", chips(), "")
 	f.Handle(Key{Kind: KeyShiftTab})

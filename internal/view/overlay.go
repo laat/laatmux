@@ -193,68 +193,6 @@ func (p *Picker) Render(w, h int) []Line {
 	return out[:h]
 }
 
-// Prompt is a one-line text entry: Enter accepts when Validate, if set,
-// takes the text, else its error shows until the next key; Esc cancels.
-type Prompt struct {
-	Title    string
-	Hint     string
-	Text     string
-	Validate func(string) error
-	Error    string
-	// Cancelled is set when Esc ended the prompt.
-	Cancelled bool
-	done      bool
-}
-
-// NewPrompt makes a prompt with the text pre-filled.
-func NewPrompt(title, text string, validate func(string) error) *Prompt {
-	return &Prompt{Title: title, Text: text, Validate: validate, Hint: "enter ok  esc back"}
-}
-
-func (p *Prompt) Done() bool { return p.done }
-
-func (p *Prompt) Handle(k Key) {
-	if p.done {
-		return
-	}
-	p.Error = ""
-	switch k.Kind {
-	case KeyEsc, KeyCtrlC:
-		p.Cancelled, p.done = true, true
-	case KeyEnter, KeyNewline:
-		if p.Validate != nil {
-			if err := p.Validate(p.Text); err != nil {
-				p.Error = err.Error()
-				return
-			}
-		}
-		p.done = true
-	case KeyBackspace:
-		if r := []rune(p.Text); len(r) > 0 {
-			p.Text = string(r[:len(r)-1])
-		}
-	case KeyRune:
-		p.Text += string(k.Rune)
-	case KeyPaste:
-		p.Text += pasteLine(k.Text)
-	}
-}
-
-func (p *Prompt) Render(w, h int) []Line {
-	if w <= 0 || h <= 0 {
-		return nil
-	}
-	out := []Line{{Spans: []Span{{Text: fit(p.Title, w)}}, Bold: true}, plain(fit("> "+p.Text+"_", w))}
-	if p.Error != "" {
-		out = append(out, Line{Spans: []Span{{Text: fit(p.Error, w)}}, Bold: true})
-	}
-	for len(out) < h-1 {
-		out = append(out, plain(""))
-	}
-	out = append(out, Line{Spans: []Span{{Text: fit(p.Hint, w)}}, Dim: true})
-	return out[:h]
-}
-
 // Log is a running command's progress: lines appended from another
 // goroutine as they arrive, then the outcome. A command that succeeds
 // is done at once; one that fails stays on screen, its error in the

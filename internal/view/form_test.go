@@ -91,11 +91,6 @@ func TestPasteIntoFilters(t *testing.T) {
 	if p.Filter != "pro j" || p.Done() {
 		t.Fatalf("picker filter %q done %v", p.Filter, p.Done())
 	}
-	pr := NewPrompt("t", "", nil)
-	pr.Handle(Key{Kind: KeyPaste, Text: "a\tb"})
-	if pr.Text != "a b" || pr.Done() {
-		t.Fatalf("prompt text %q", pr.Text)
-	}
 	var m Model
 	m.Filtering = true
 	m.Handle(Key{Kind: KeyPaste, Text: "x\ny"})

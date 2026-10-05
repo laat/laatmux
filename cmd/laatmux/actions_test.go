@@ -802,7 +802,8 @@ func TestPendingKeys(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != "add-2" {
 		t.Fatalf("selected %+v", r)
 	}
-	if a := m.Handle(view.Key{Kind: view.KeyEnter}); a.Kind != view.ActionJump || d.jump(m, *m.Selection()) || m.Message != "" {
+	a := m.Handle(view.Key{Kind: view.KeyEnter})
+	if exit, jumped := d.jumpRow(m, *m.Selection()); a.Kind != view.ActionJump || exit || jumped || m.Message != "" {
 		t.Fatalf("enter on a running task: %+v message %q", a, m.Message)
 	}
 	d.act(m, key('x'))

@@ -194,13 +194,6 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 // from the left.
 func (d *Daemon) worktreeID(root string) string { return d.cfg.EnvironmentID + "/worktree/" + root }
 
-// Worktrees returns the current worktree records.
-func (d *Daemon) Worktrees() []protocol.Worktree {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.worktreesLocked()
-}
-
 func (d *Daemon) worktreesLocked() []protocol.Worktree {
 	out := make([]protocol.Worktree, 0, len(d.worktrees))
 	for _, w := range d.worktrees {

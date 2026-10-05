@@ -297,7 +297,7 @@ func TestAddThenRm(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.pollWorktrees(ctx)
-	wts := d.Worktrees()
+	wts := d.worktreeRecords()
 	if len(wts) != 1 || wts[0].Root != root || wts[0].Branch != "fix/v1.2" || wts[0].Repo != "proj" || wts[0].Session != "proj/fix/v1%2e2" || wts[0].ID != "env/worktree/"+root {
 		t.Fatalf("worktrees %+v", wts)
 	}
@@ -343,7 +343,7 @@ func TestAddThenRm(t *testing.T) {
 	}
 	d.poll(ctx)
 	d.pollWorktrees(ctx)
-	if wts := d.Worktrees(); len(wts) != 0 {
+	if wts := d.worktreeRecords(); len(wts) != 0 {
 		t.Fatalf("worktrees after rm %+v", wts)
 	}
 	// A repeat rm is a no-op and ok.
@@ -662,7 +662,7 @@ func TestRmPrunableWorktree(t *testing.T) {
 		t.Fatalf("panes %+v killed %v", ft.panes, ft.killed)
 	}
 	d.pollWorktrees(context.Background())
-	if wts := d.Worktrees(); len(wts) != 0 {
+	if wts := d.worktreeRecords(); len(wts) != 0 {
 		t.Fatalf("worktrees %+v", wts)
 	}
 }
@@ -767,7 +767,7 @@ func TestAddFromRepoEntry(t *testing.T) {
 		t.Fatal("not cloned under the entry's name")
 	}
 	d.pollWorktrees(ctx)
-	if wts := d.Worktrees(); len(wts) != 1 || wts[0].Root != root || wts[0].Repo != "sent" || wts[0].Source != remote {
+	if wts := d.worktreeRecords(); len(wts) != 1 || wts[0].Root != root || wts[0].Repo != "sent" || wts[0].Source != remote {
 		t.Fatalf("worktrees %+v", wts)
 	}
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root, Force: true})

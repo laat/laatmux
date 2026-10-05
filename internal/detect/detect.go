@@ -45,20 +45,6 @@ func Detect(in Input) Result {
 	return evaluate(lm, in).result()
 }
 
-// Agents lists the available manifest ids, sorted.
-func Agents() []string {
-	seen := map[string]bool{}
-	var ids []string
-	for _, lm := range manifests {
-		if !seen[lm.ID] {
-			seen[lm.ID] = true
-			ids = append(ids, lm.ID)
-		}
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 // Explain reports, for debugging, which regions were extracted (first and
 // last lines) and which rules matched.
 func Explain(in Input) string {

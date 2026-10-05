@@ -75,36 +75,6 @@ func TestPickerHandle(t *testing.T) {
 	}
 }
 
-// A prompt edits its text, refuses Enter while the validator does and
-// shows why, and cancels on Esc.
-func TestPrompt(t *testing.T) {
-	p := NewPrompt("branch", "fix", func(s string) error {
-		if strings.HasSuffix(s, "-") {
-			return errors.New("must not end with -")
-		}
-		return nil
-	})
-	p.Handle(Key{Rune: '-'})
-	p.Handle(Key{Kind: KeyEnter})
-	if p.Done() || p.Error != "must not end with -" {
-		t.Errorf("invalid: done=%v error=%q", p.Done(), p.Error)
-	}
-	golden(t, "prompt", Debug(p.Render(40, 5)))
-	p.Handle(Key{Kind: KeyBackspace})
-	if p.Error != "" {
-		t.Error("error stayed after a key")
-	}
-	p.Handle(Key{Kind: KeyEnter})
-	if !p.Done() || p.Text != "fix" {
-		t.Errorf("valid: done=%v text=%q", p.Done(), p.Text)
-	}
-	p = NewPrompt("branch", "", nil)
-	p.Handle(Key{Kind: KeyEsc})
-	if !p.Done() || !p.Cancelled {
-		t.Error("esc did not cancel")
-	}
-}
-
 // A log shows its last lines and is done at once when the command
 // succeeds; a failure stays until a key; Ctrl-C while running quits.
 func TestLog(t *testing.T) {

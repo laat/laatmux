@@ -3,8 +3,6 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -56,16 +54,6 @@ func (r Run) Run(ctx context.Context, rep Reporter) (Ran, error) {
 		return Ran{}, failed("run", res, err)
 	}
 	return Ran{Exit: res.Exit}, nil
-}
-
-// Describe is the one line that says what the run is: "run <cmd> in
-// <repo>/<branch> on <host>".
-func (r Run) Describe() string {
-	where := r.Root
-	if r.Repo.Name != "" && r.Branch != "" {
-		where = r.Repo.Name + "/" + r.Branch
-	}
-	return fmt.Sprintf("run %s in %s on %s", strings.Join(r.Cmd, " "), where, r.Host.Name)
 }
 
 // Cancelled reports whether the error is a run the daemon stopped on

@@ -66,12 +66,6 @@ type Added struct {
 	Stage    string
 }
 
-// Complete reports whether nothing about the add needs the user: it
-// succeeded and its prompt is delivered, or there was none.
-func (a Added) Complete() bool {
-	return a.Done && (a.Prompt == protocol.DeliveryDelivered || a.Prompt == protocol.DeliveryNone || a.Prompt == "")
-}
-
 // Run sends the add to the host, following its progress through r,
 // then records the host and agent as the repository's last used and
 // makes sure the local workspace session exists. A failed stage is a
@@ -154,34 +148,6 @@ func (a Add) Needs() []string {
 		return []string{protocol.CapAdd, protocol.CapTask}
 	}
 	return []string{protocol.CapAdd}
-}
-
-// Deliver is one delivery attempt of a pending prompt to the agent an
-// add started on the host: the prompt message under the add's id with
-// the attempt number, which the host's journal serializes and answers
-// from the record when it has seen the number before.
-type Deliver struct {
-	Host    config.Host
-	ID      string // the add's command id
-	Attempt int    // from 1, one more than the last the host has
-	Prompt  string
-	// Environment, when set, is the environment id the host must
-	// answer as.
-	Environment string
-}
-
-// Run sends the attempt and returns the delivery state with its
-// reason. A refusal, recovery expired say, is an error.
-func (p Deliver) Run(ctx context.Context, r Reporter) (state, reason string, err error) {
-	if p.Host.Name == "" || p.ID == "" || p.Attempt < 1 || p.Prompt == "" {
-		return "", "", errors.New("deliver needs a host, an id, an attempt number and the prompt")
-	}
-	req := protocol.Message{Type: protocol.TypePrompt, ID: p.ID, Attempt: p.Attempt, Prompt: p.Prompt}
-	_, res, err := stream(ctx, p.Host.Host, []string{protocol.CapTask}, req, r, streamOpts{restart: true, environment: p.Environment, attempt: p.Attempt})
-	if err != nil {
-		return "", "", failed("prompt", res, err)
-	}
-	return res.Prompt, res.Error, nil
 }
 
 // Describe is the one line that says what the add is: "add

@@ -815,17 +815,6 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// Snapshot returns the current state.
-func (d *Daemon) Snapshot() (uint64, []protocol.Agent) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]protocol.Agent, 0, len(d.agents))
-	for _, a := range d.agents {
-		out = append(out, a)
-	}
-	return d.seq, out
-}
-
 // broadcastLocked sends one of this host's own changes to its plain
 // subscribers, and into the merged stream when this machine is one of the
 // configured hosts.

@@ -131,7 +131,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 		follow := sent
 		req := m
 		if follow {
-			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark, Attempt: o.attempt}
+			req = protocol.Message{Type: protocol.TypeFollow, ID: m.ID, After: f.mark}
 		} else if !m.SubmittedAt.IsZero() && time.Since(m.SubmittedAt) > SenderLifetime {
 			// The lifetime bounds sends and resends of the command; a
 			// follow executes nothing and is asked at any age.
@@ -141,7 +141,7 @@ func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Me
 		sent, ever = true, true
 		res, err = exchange(ctx, c, req, o.cancel, f.pass)
 		c.Close()
-		unknown := res.Error == protocol.ErrUnknownCommand || res.Error == protocol.ErrInterrupted || (o.attempt > 0 && res.Error == protocol.ErrUnknownAttempt)
+		unknown := res.Error == protocol.ErrUnknownCommand || res.Error == protocol.ErrInterrupted
 		if follow && res.Type == protocol.TypeResult && !res.OK && unknown {
 			if !o.restart {
 				return hello, res, ErrOutcomeUnknown
@@ -201,9 +201,6 @@ type streamOpts struct {
 	// answer as, on every connection; another is a refusal before the
 	// command is sent.
 	environment string
-	// attempt, on a prompt message, is the attempt number a follow
-	// carries; a follow answered unknown attempt resends the message.
-	attempt int
 }
 
 // ErrOutcomeUnknown is a run whose daemon no longer knows the id after a
