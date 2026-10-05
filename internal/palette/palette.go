@@ -6,6 +6,7 @@ package palette
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -29,14 +30,7 @@ const (
 var Names = []string{Info, Accent, Success, Warning, Danger, Dimmed, Text, Border, Header, HighlightRowBg, CurrentWorktreeFg}
 
 // Known reports whether name is a palette name.
-func Known(name string) bool {
-	for _, n := range Names {
-		if n == name {
-			return true
-		}
-	}
-	return false
-}
+func Known(name string) bool { return slices.Contains(Names, name) }
 
 // Color is a colour a terminal can show: 24-bit, or one of the 256
 // indexed colours.

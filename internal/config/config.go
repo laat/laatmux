@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -453,7 +454,7 @@ func Parse(b []byte) (Config, error) {
 	default:
 		return c, fmt.Errorf("sidebar: scope %q is not all, session or project", c.Sidebar.Scope)
 	}
-	if c.Sidebar.Sort != "" && !contains(SortOrders, c.Sidebar.Sort) {
+	if c.Sidebar.Sort != "" && !slices.Contains(SortOrders, c.Sidebar.Sort) {
 		return c, fmt.Errorf("sidebar: sort %q is not one of %s", c.Sidebar.Sort, strings.Join(SortOrders, ", "))
 	}
 	if c.Sidebar.StaleAfter != "" {
@@ -470,11 +471,11 @@ func Parse(b []byte) (Config, error) {
 // validateLook checks the icons and the theme, so a view never starts on
 // a config it cannot draw with.
 func (c *Config) validateLook() error {
-	if c.Icons != "" && !contains(IconSets, c.Icons) {
+	if c.Icons != "" && !slices.Contains(IconSets, c.Icons) {
 		return fmt.Errorf("icons: %q is not one of %s", c.Icons, strings.Join(IconSets, ", "))
 	}
 	for k := range c.StatusIcons {
-		if !contains(IconStatuses, k) {
+		if !slices.Contains(IconStatuses, k) {
 			return fmt.Errorf("status_icons: %q is not one of %s", k, strings.Join(IconStatuses, ", "))
 		}
 	}
@@ -492,15 +493,6 @@ func (c *Config) validateLook() error {
 		return err
 	}
 	return nil
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Config) validateHosts() error {

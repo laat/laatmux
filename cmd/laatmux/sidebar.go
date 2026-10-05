@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -236,7 +237,7 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 	}
 	target := strings.TrimSpace(string(out))
 	sessions, _ := sidebarSessions(ctx)
-	if !contains(sessions, target) {
+	if !slices.Contains(sessions, target) {
 		sessions = append(sessions, target)
 	}
 	if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
@@ -244,7 +245,7 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 	}
 	if out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", "#{session_id}"+tmux.Sep+"#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); err == nil {
 		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if f := strings.Split(l, tmux.Sep); len(f) == 3 && f[2] != "" && !contains(sessions, f[0]) {
+			if f := strings.Split(l, tmux.Sep); len(f) == 3 && f[2] != "" && !slices.Contains(sessions, f[0]) {
 				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[1])
 			}
 		}
@@ -259,15 +260,6 @@ func sidebarSessions(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return strings.Fields(string(out)), nil
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // jumpKeyCmd is the command a jump key runs: the window and the client
@@ -339,7 +331,7 @@ func sidebarAttach(ctx context.Context, window, session string) error {
 	if err != nil || !on {
 		return err
 	}
-	if sessions, err := sidebarSessions(ctx); err == nil && len(sessions) > 0 && session != "" && !contains(sessions, session) {
+	if sessions, err := sidebarSessions(ctx); err == nil && len(sessions) > 0 && session != "" && !slices.Contains(sessions, session) {
 		return nil
 	}
 	cfg, err := config.Load()

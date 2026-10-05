@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -170,12 +171,7 @@ type prConnection struct {
 
 // own reports whether a connection holds a PR of the repository's own.
 func (c prConnection) own() bool {
-	for _, n := range c.Nodes {
-		if !n.CrossRepository {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.Nodes, func(n prNode) bool { return !n.CrossRepository })
 }
 
 type repoAnswer struct {

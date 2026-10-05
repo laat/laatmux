@@ -233,7 +233,7 @@ func TestOwnPRPastForks(t *testing.T) {
 			`]},"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[` + forks + `]}}}}`, nil
 	}}
 	rs, err := Fetch(context.Background(), f.run, "github.com", []Branch{{Owner: "o", Repo: "r", Branch: "b"}})
-	if err != nil || rs[0].PR == nil || rs[0].PR.Number != 3 {
+	if err != nil || rs[0].PR == nil || rs[0].PR.Number != 3 || rs[0].PagedNone {
 		t.Errorf("%+v %v", rs[0], err)
 	}
 	if !strings.Contains(f.queries[2], "pullRequest(number: 3)") || strings.Contains(f.queries[1], "commits") {

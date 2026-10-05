@@ -197,3 +197,16 @@ func TestExplainListsUnsupportedRegions(t *testing.T) {
 		}
 	}
 }
+
+// A response block marker after the last › prompt makes that prompt
+// stale; one before it does not.
+func TestCodexStalePrompt(t *testing.T) {
+	for _, m := range []string{"•", "■", "✗", "✓"} {
+		if _, ok := currentCodexPromptIndex([]string{"› hi", "", m + " answer"}); ok {
+			t.Errorf("%s after the prompt left it current", m)
+		}
+	}
+	if i, ok := currentCodexPromptIndex([]string{"• before", "› hi", "", "  text"}); !ok || i != 1 {
+		t.Errorf("got %d %v, want the prompt at 1", i, ok)
+	}
+}

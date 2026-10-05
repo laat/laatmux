@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -169,12 +170,7 @@ func codexPromptLine(line string) bool {
 }
 
 func codexBlockMarkerLine(line string) bool {
-	for _, p := range []string{"•", "■", "✗", "✓"} {
-		if strings.HasPrefix(line, p) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{"•", "■", "✗", "✓"}, func(p string) bool { return strings.HasPrefix(line, p) })
 }
 
 func lastCodexPromptIndex(lines []string) (int, bool) {
