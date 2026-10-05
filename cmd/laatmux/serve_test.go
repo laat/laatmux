@@ -325,3 +325,19 @@ func TestServeNeedsPendingDirectory(t *testing.T) {
 		t.Errorf("the runtime file touched by a daemon that did not run: %q %v", b, err)
 	}
 }
+
+// serve has no --tmux-socket, the older spelling of --tmux-servers;
+// explain's flag of that name is not serve's. The state and config are
+// the test's own and the context is done, so a serve that took the flag
+// would return at once rather than serve the user's state directory.
+func TestServeHasNoTmuxSocket(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("LAATMUX_HOME", filepath.Join(base, "home"))
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(base, "config.yaml"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0", "--tmux-socket", "laatmux"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -tmux-socket") {
+		t.Fatalf("serve --tmux-socket: %v", err)
+	}
+}

@@ -154,7 +154,7 @@ func (d *Daemon) flushAttentionLocked() {
 // jumped to, so it would never be seen.
 func tracked(a protocol.Agent, local bool) bool {
 	switch server := a.Server; {
-	case server == "" || server == tmux.LaatmuxServer.Label():
+	case server == tmux.LaatmuxServer.Label():
 		return true
 	case local && server == tmux.DefaultServer.Label():
 		return true
@@ -350,7 +350,7 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 	if !ok {
 		return false
 	}
-	managed := a.Server == "" || a.Server == tmux.LaatmuxServer.Label()
+	managed := a.Server == tmux.LaatmuxServer.Label()
 	agentHost := e.Host
 	if mh := d.localHostLocked(); e.Local && mh != nil {
 		// This machine by the name the config gives it now, which

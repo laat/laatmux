@@ -1154,8 +1154,7 @@ only to managed sessions.
   polls the default one rather than following the inherited `TMUX`.
 - Agent ids are `<environment_id>/<server>/<pane_id>` and records carry the
   server, so `%1` on two servers cannot collide. Clients treat the id as
-  opaque; a daemon from before this change sends no server, which clients read
-  as `laatmux`.
+  opaque.
 - Only panes with an identified agent instance, alive or gone, are published.
   Shells and other tools' panes never appear on any server, and their title
   churn produces no traffic.
