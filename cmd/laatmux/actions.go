@@ -764,7 +764,7 @@ func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 		if l := m.OwnerLine(row.Worktree.ID); l != nil {
 			row = *l
 		}
-	} else if row.Pending == nil && row.Agent != nil && rows.Server(*row.Agent) == tmux.LaatmuxServer.Label() {
+	} else if row.Pending == nil && row.Agent != nil && row.Agent.Server == tmux.LaatmuxServer.Label() {
 		// The add's agent before the host lists the worktree: the
 		// task line holding it, as the pane jump routes it. Only on
 		// the managed server: an observed session of the same name

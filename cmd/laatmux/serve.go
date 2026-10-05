@@ -25,11 +25,8 @@ func cmdServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listen := fs.String("listen", "unix:"+home.DefaultSocket(), "unix:<path> or tcp:<host:port>")
 	// The servers to watch come from the config file by default. The flag
-	// overrides it with a comma-separated list; --tmux-socket is the older
-	// spelling and takes the same value.
-	var servers string
-	fs.StringVar(&servers, "tmux-servers", "", `comma-separated tmux servers to watch (a -L name, "default", or a -S path); default from config, else laatmux`)
-	fs.StringVar(&servers, "tmux-socket", "", "alias of --tmux-servers")
+	// overrides it with a comma-separated list.
+	servers := fs.String("tmux-servers", "", `comma-separated tmux servers to watch (a -L name, "default", or a -S path); default from config, else laatmux`)
 	interval := fs.Duration("interval", daemon.DefaultInterval, "poll interval")
 	lines := fs.Int("capture-lines", daemon.DefaultCapture, "screen lines captured per pane")
 	if err := fs.Parse(args); err != nil {
@@ -40,9 +37,9 @@ func cmdServe(ctx context.Context, args []string) error {
 		return err
 	}
 	specs := cfg.TmuxServers
-	if servers != "" {
+	if *servers != "" {
 		specs = nil
-		for _, v := range strings.Split(servers, ",") {
+		for _, v := range strings.Split(*servers, ",") {
 			specs = append(specs, strings.TrimSpace(v))
 		}
 	}

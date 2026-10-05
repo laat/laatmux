@@ -36,7 +36,7 @@ func paneOf(r rows.Row) (paneTarget, bool) {
 	case r.Pending != nil:
 		return paneTarget{}, false
 	case r.Agent != nil && (r.Kind == rows.KindTile || r.Kind == rows.KindAgent):
-		return paneTarget{rows.Server(*r.Agent), r.Agent.Session, r.Agent.PaneID}, true
+		return paneTarget{r.Agent.Server, r.Agent.Session, r.Agent.PaneID}, true
 	case r.Pane != nil && r.Kind == rows.KindPane:
 		return paneTarget{r.Pane.Server, r.Pane.Session, r.Pane.PaneID}, true
 	}

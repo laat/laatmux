@@ -132,7 +132,7 @@ func TestMergedSnapshotWaitsForHost(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 2, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: []string{"status", "worktrees", "rm"}}})
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 3, Worktree: &protocol.Worktree{ID: "venv/worktree//r/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/r/y"}})
-		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, Agent: &protocol.Agent{ID: "lenv/default/%3", EnvironmentID: "lenv"}})
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, Agent: &protocol.Agent{ID: "lenv/default/%3", Server: "default", EnvironmentID: "lenv"}})
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees", "rm"}}})
 		return true
 	})

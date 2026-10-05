@@ -145,9 +145,9 @@ func TestRender(t *testing.T) {
 	}
 	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Hosts: hosts,
 		Agents: []protocol.Agent{
-			{ID: "env1/laatmux/%1", EnvironmentID: "env1", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
-			{ID: "env1/laatmux/%2", EnvironmentID: "env1", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
-			{ID: "env1/laatmux/%3", EnvironmentID: "env1", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Managed: true},
+			{ID: "env1/laatmux/%1", EnvironmentID: "env1", Server: "laatmux", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
+			{ID: "env1/laatmux/%2", EnvironmentID: "env1", Server: "laatmux", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
+			{ID: "env1/laatmux/%3", EnvironmentID: "env1", Server: "laatmux", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Managed: true},
 			{ID: "env1/default/%4", EnvironmentID: "env1", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now},
 		},
 		Worktrees: []protocol.Worktree{

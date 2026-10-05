@@ -33,7 +33,7 @@ func attnDaemon(t *testing.T, dir string, hosts ...client.Host) *Daemon {
 
 // remoteAgent is vm's agent in a managed session, started at pid 100.
 func remoteAgent(pane, session string, act protocol.Activity, at time.Time) protocol.Agent {
-	return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Session: session, PaneID: pane, Agent: "claude",
+	return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: session, PaneID: pane, Agent: "claude",
 		Activity: act, ActivityAt: at, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 100, StartUnix: 1}}
 }
 
@@ -124,7 +124,7 @@ func TestAttentionFinishAndSeen(t *testing.T) {
 func TestAttentionLocalRename(t *testing.T) {
 	d := attnDaemon(t, t.TempDir())
 	t0 := time.Now()
-	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "proj/x", PaneID: "%1", Agent: "claude",
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/x", PaneID: "%1", Agent: "claude",
 		Activity: protocol.Working, ActivityAt: t0, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 1}}
 	publish(d, "laatmux/%1", a)
 	a.Activity, a.ActivityAt = protocol.Idle, t0.Add(time.Second)
@@ -191,8 +191,8 @@ func TestAttentionTransitions(t *testing.T) {
 }
 
 // Agents that can never be seen are not tracked: one on a remote host's
-// default server, one on another observed server. This machine's default
-// server is, through the agent's own pane.
+// default server, one on another observed server, one naming no server.
+// This machine's default server is, through the agent's own pane.
 func TestAttentionTracked(t *testing.T) {
 	d := attnDaemon(t, t.TempDir())
 	t0 := time.Now()
@@ -203,6 +203,14 @@ func TestAttentionTracked(t *testing.T) {
 	fromVM(d, a)
 	if _, ok := attnOf(d, a.ID); ok {
 		t.Error("remote default server tracked")
+	}
+	// A record naming no server is on none that can be seen: it is not
+	// read as the managed server.
+	a = remoteAgent("%6", "notes", protocol.Working, t0)
+	a.Server, a.ID = "", "venv//%6"
+	fromVM(d, a)
+	if _, ok := attnOf(d, a.ID); ok {
+		t.Error("serverless record tracked")
 	}
 
 	local := protocol.Agent{ID: "menv/default/%4", EnvironmentID: "menv", Server: "default", Session: "notes", PaneID: "%4",
@@ -346,7 +354,7 @@ func TestAttentionStream(t *testing.T) {
 	}
 	discovered(d)
 	go d.runSeen(ctx)
-	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
 	publish(d, "laatmux/%1", a)
 	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
 	publish(d, "laatmux/%1", a)
@@ -397,7 +405,7 @@ func TestAttentionSeenLoop(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
 	publish(d, "laatmux/%1", a)
 	time.Sleep(2 * seenInterval)
 	if n := listings.Load(); n != 0 {
@@ -439,8 +447,8 @@ func TestAttentionForgetAtStart(t *testing.T) {
 	dir := t.TempDir()
 	d := attnDaemon(t, dir)
 	t0 := time.Now()
-	publish(d, "laatmux/%1", protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "a", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 1}})
-	publish(d, "laatmux/%2", protocol.Agent{ID: "menv/laatmux/%2", EnvironmentID: "menv", Session: "b", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 2}})
+	publish(d, "laatmux/%1", protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "a", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 1}})
+	publish(d, "laatmux/%2", protocol.Agent{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "b", Activity: protocol.Working, ActivityAt: t0, Identity: &protocol.Identity{PID: 2}})
 	fromVM(d, remoteAgent("%3", "c", protocol.Working, t0))
 
 	list := &hostsList{hosts: []client.Host{{Name: "mac"}}}
@@ -507,7 +515,7 @@ func TestAttentionListingBeforeFinish(t *testing.T) {
 			}
 			return []ClientView{attachTo("mac", "elsewhere")}, nil
 		}})
-	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
 	publish(d, "laatmux/%1", a)
 	go d.runSeen(ctx)
 	d.Poke()

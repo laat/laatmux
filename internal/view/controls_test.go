@@ -40,7 +40,7 @@ func TestScopes(t *testing.T) {
 	// A second agent of the viewer's worktree in another managed
 	// session, a task at its root that needs the user, and a task at
 	// another root.
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Session: "elsewhere", Agent: "codex", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//r/agents-config", Identity: &protocol.Identity{PID: 11, StartUnix: 40}})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Server: "laatmux", Session: "elsewhere", Agent: "codex", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//r/agents-config", Identity: &protocol.Identity{PID: 11, StartUnix: 40}})
 	in.Pendings = []protocol.Pending{
 		{ID: "add-ac", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "agents-config", Root: "/r/agents-config", Session: "laatmux/agents-config", Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now},
 		{ID: "add-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now},
@@ -158,7 +158,7 @@ func TestScopes(t *testing.T) {
 	}
 	// A viewer in a task's session before the listing: the task line
 	// with the add's agent.
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
 	in.Current = "vm/laatmux/new-one"
 	m.Scope = ScopeSession
@@ -175,7 +175,7 @@ func TestScopes(t *testing.T) {
 	// no row's: the empty state.
 	in.Current = "mac/scratch"
 	in.Locals = append(in.Locals, workspace.Local{Name: "mac/scratch", Attach: "mac/scratch", Host: "mac"})
-	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%12", EnvironmentID: "menv", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 12, StartUnix: 12}})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%12", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 12, StartUnix: 12}})
 	set()
 	if got := ids(m); got != "menv/laatmux/%12" {
 		t.Errorf("a session with no worktree:\n%s", got)
@@ -214,7 +214,7 @@ func TestScopes(t *testing.T) {
 		t.Errorf("a failed task at the root:\n%s", got)
 	}
 	in = treeInput(now)
-	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Pendings = []protocol.Pending{{ID: "add-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
 	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
 	in.Current = "vm/laatmux/new-one"
@@ -522,7 +522,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	// this pane made over it; the reveal stays on screen.
 	src := "git@github.com:laat/laatmux.git"
 	hin := treeInput(now)
-	hin.Agents = append(hin.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	hin.Agents = append(hin.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	hin.Pendings = []protocol.Pending{{ID: "add-h", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
 	h := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
 	h.SetTree(rows.Tree(hin))

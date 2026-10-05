@@ -116,9 +116,9 @@ func (j *join) up(env string) bool {
 // this machine's default server.
 func (j *join) agentLocal(host string, a *protocol.Agent) *workspace.Local {
 	switch {
-	case Server(*a) == tmux.LaatmuxServer.Label():
+	case a.Server == tmux.LaatmuxServer.Label():
 		return j.byAttach[host+"/"+a.Session]
-	case j.hosts[host].Local && Server(*a) == tmux.DefaultServer.Label():
+	case j.hosts[host].Local && a.Server == tmux.DefaultServer.Label():
 		if l := j.byName[a.Session]; l != nil {
 			return l
 		}
@@ -164,7 +164,7 @@ func (j *join) worktreeAgents(w *protocol.Worktree) []*protocol.Agent {
 			if a.WorktreeID == w.ID {
 				out = append(out, a)
 			}
-		case w.Session != "" && Server(*a) == tmux.LaatmuxServer.Label() && a.Session == w.Session:
+		case w.Session != "" && a.Server == tmux.LaatmuxServer.Label() && a.Session == w.Session:
 			out = append(out, a)
 		}
 	}
@@ -271,7 +271,7 @@ func Tree(in Input) []Row {
 			// one in the home session, else the attachment to its
 			// session, or its session on this machine's default server.
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
-			if Server(*a) == tmux.LaatmuxServer.Label() && a.Session == w.Session {
+			if a.Server == tmux.LaatmuxServer.Label() && a.Session == w.Session {
 				c.Local = j.byKey[key]
 			}
 			if c.Local == nil {
@@ -318,7 +318,7 @@ func Tree(in Input) []Row {
 		// stands for. The line's agent is the one its jump goes through;
 		// the most pressing is kept apart, for the folded line's icon.
 		line.Agent = rowAgent(agents, w)
-		if w.Session == "" && line.Agent != nil && Server(*line.Agent) == tmux.DefaultServer.Label() {
+		if w.Session == "" && line.Agent != nil && line.Agent.Server == tmux.DefaultServer.Label() {
 			line.Local = j.agentLocal(host, line.Agent)
 		}
 		if line.Local == nil {
@@ -387,7 +387,7 @@ func Tree(in Input) []Row {
 		if t.stands() && p.EnvironmentID != "" && p.Session != "" && p.Root != "" {
 			for k := range in.Agents {
 				a := &in.Agents[k]
-				if !used[a] && a.EnvironmentID == p.EnvironmentID && Server(*a) == tmux.LaatmuxServer.Label() && a.Session == p.Session && a.Cwd == p.Root {
+				if !used[a] && a.EnvironmentID == p.EnvironmentID && a.Server == tmux.LaatmuxServer.Label() && a.Session == p.Session && a.Cwd == p.Root {
 					used[a] = true
 					// The task's workspace session, or the attachment
 					// to the add's session the viewer may be in.
@@ -482,7 +482,7 @@ func Tree(in Input) []Row {
 	for pass := 0; pass < 2; pass++ {
 		for i := range in.Agents {
 			a := &in.Agents[i]
-			managed := Server(*a) == tmux.LaatmuxServer.Label()
+			managed := a.Server == tmux.LaatmuxServer.Label()
 			if used[a] || managed != (pass == 0) {
 				continue
 			}
@@ -575,7 +575,7 @@ func (r Row) Home() string {
 		return ""
 	case r.Worktree != nil && r.Worktree.Session != "":
 		return r.Worktree.Session
-	case r.Worktree != nil && r.Agent != nil && Server(*r.Agent) == tmux.LaatmuxServer.Label():
+	case r.Worktree != nil && r.Agent != nil && r.Agent.Server == tmux.LaatmuxServer.Label():
 		return r.Agent.Session
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
 		// A task's session, before the host lists the worktree or

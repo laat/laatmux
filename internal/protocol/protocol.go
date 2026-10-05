@@ -361,7 +361,7 @@ type Identity struct {
 type Agent struct {
 	ID            string    `json:"id"` // "<environment_id>/<server>/<pane_id>"; opaque to clients
 	EnvironmentID string    `json:"environment_id"`
-	Server        string    `json:"server,omitempty"` // tmux server label: "laatmux", "default", or a socket path; "" from older daemons means "laatmux"
+	Server        string    `json:"server,omitempty"` // tmux server label: "laatmux", "default", or a socket path
 	Session       string    `json:"session"`
 	Window        int       `json:"window"`
 	PaneID        string    `json:"pane_id"`
