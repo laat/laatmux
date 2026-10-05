@@ -696,7 +696,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			}
 		}
 		d.setPending(id, false, func(p *pendingFile) { p.Reachable, p.Unreachable = true, "" })
-		res, err := d.relayExchange(ctx, c, req, func(m protocol.Message) {
+		res, err := c.Exchange(ctx, req, func(m protocol.Message) {
 			if m.N <= after && m.N != 0 {
 				return
 			}
@@ -814,35 +814,6 @@ var (
 	handoffRecheck  = 3 * time.Second
 	handoffPatience = time.Minute
 )
-
-// relayExchange sends one request on the connection and reads until its
-// result, passing progress to onProgress.
-func (d *Daemon) relayExchange(ctx context.Context, c *client.Conn, req protocol.Message, onProgress func(protocol.Message)) (protocol.Message, error) {
-	defer c.CloseOnDone(ctx)()
-	if err := c.Write(req); err != nil {
-		return protocol.Message{}, err
-	}
-	for {
-		m, err := c.Read()
-		if err != nil {
-			if ctx.Err() != nil {
-				return protocol.Message{}, ctx.Err()
-			}
-			return protocol.Message{}, err
-		}
-		if m.ID != req.ID {
-			continue
-		}
-		switch m.Type {
-		case protocol.TypeProgress:
-			onProgress(m)
-		case protocol.TypeError:
-			return m, nil
-		case protocol.TypeResult:
-			return m, nil
-		}
-	}
-}
 
 // retire waits for the host's listing to reflect a successful add, on
 // the relay's own connection: plain snapshots and the listing stamps
@@ -1341,7 +1312,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 			req = protocol.Message{Type: protocol.TypeFollow, ID: id, Attempt: p.Attempt}
 		}
 		sent = true
-		res, err := d.relayExchange(ctx, c, req, func(protocol.Message) {})
+		res, err := c.Exchange(ctx, req, nil)
 		c.Close()
 		if err != nil {
 			d.unreachable(id, fmt.Errorf("connection lost: %v", err))
