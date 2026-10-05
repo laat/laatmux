@@ -39,7 +39,7 @@ func (m *Model) itemWidth() int {
 // selection in view, the count of chips past the edge in the last
 // column, and the footer when it has something to say.
 func (m *Model) renderStrip() []Line {
-	m.Selection()
+	m.commit()
 	vis := m.Visible()
 	iw, sep := m.itemWidth(), width(stripSep)
 	height := m.Height

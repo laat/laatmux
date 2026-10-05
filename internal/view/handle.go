@@ -35,6 +35,32 @@ const (
 	ActionSettings
 )
 
+// mode is what the model is doing, which decides whose key the next one
+// is: an overlay's while one is up, the confirm line's while one is
+// asked, the filter's while one is typed, else the list's. The modes
+// stack in that order: an overlay opened over a confirm line keeps the
+// line for after it.
+type mode int
+
+const (
+	modeList mode = iota
+	modeFilter
+	modeConfirm
+	modeOverlay
+)
+
+func (m *Model) mode() mode {
+	switch {
+	case m.Overlay != nil:
+		return modeOverlay
+	case m.Confirm != "":
+		return modeConfirm
+	case m.Filtering:
+		return modeFilter
+	}
+	return modeList
+}
+
 // Handle applies one key to the model and says what the host should
 // do. The message line clears on any key. With an overlay up the key
 // is the overlay's, and its finishing is the action. A confirm line
@@ -44,7 +70,8 @@ func (m *Model) Handle(k term.Key) Action {
 	if k.Kind < 0 {
 		return Action{}
 	}
-	if m.Overlay != nil {
+	switch m.mode() {
+	case modeOverlay:
 		m.Overlay.Handle(k)
 		if h, ok := m.Overlay.(*Help); ok && h.Done() {
 			// The help is the model's own: closed here.
@@ -52,8 +79,7 @@ func (m *Model) Handle(k term.Key) Action {
 			return Action{}
 		}
 		return m.Poll()
-	}
-	if m.Confirm != "" {
+	case modeConfirm:
 		m.Confirm = ""
 		if k.Kind == term.KeyRune && (k.Rune == 'y' || k.Rune == 'Y') {
 			if m.ConfirmTag == "quit" {
@@ -64,8 +90,7 @@ func (m *Model) Handle(k term.Key) Action {
 		}
 		m.ConfirmTag = ""
 		return Action{}
-	}
-	if m.Filtering {
+	case modeFilter:
 		switch k.Kind {
 		case term.KeyEsc:
 			m.Filter, m.Filtering = "", false
@@ -80,7 +105,7 @@ func (m *Model) Handle(k term.Key) Action {
 		case term.KeyCtrlC:
 			return m.quit()
 		}
-		m.Selection()
+		m.commit()
 		return Action{}
 	}
 	if m.Layout == Strip {
@@ -99,7 +124,7 @@ func (m *Model) Handle(k term.Key) Action {
 		return m.jump()
 	case term.KeyEsc:
 		m.Filter = ""
-		m.Selection()
+		m.commit()
 	case term.KeyCtrlC:
 		return m.quit()
 	case term.KeyTab:
@@ -163,7 +188,7 @@ func (m *Model) Handle(k term.Key) Action {
 			if id != "" && !m.Select(id) {
 				m.selectAncestor(id)
 			}
-			m.Selection()
+			m.commit()
 		case 'h':
 			m.foldKey(false)
 		case 'l':
@@ -171,11 +196,11 @@ func (m *Model) Handle(k term.Key) Action {
 		case 's':
 			if r := m.Selection(); r != nil {
 				m.toggleFold(r)
-				m.Selection()
+				m.commit()
 			}
 		case 'F':
 			m.ToggleScope()
-			m.Selection()
+			m.commit()
 		case 'q':
 			return m.quit()
 		case '?':
@@ -230,7 +255,7 @@ func (m *Model) moveTo(i int) {
 		m.Follow = false
 	}
 	m.Selected, m.lost = target, false
-	m.Selection()
+	m.commit()
 }
 
 func (m *Model) jump() Action {
@@ -242,7 +267,7 @@ func (m *Model) jump() Action {
 		// Enter folds a repository line and the stale fold; a worktree
 		// line jumps, its fold being h, l and s.
 		m.toggleFold(r)
-		m.Selection()
+		m.commit()
 		return Action{}
 	}
 	return Action{Kind: ActionJump}
@@ -265,7 +290,7 @@ func (m *Model) foldKey(open bool) {
 			m.moveTo(p)
 		}
 	}
-	m.Selection()
+	m.commit()
 }
 
 // Select puts the selection on the visible row with the id, as a key

@@ -103,7 +103,7 @@ func (m *Model) Command(c Command) Action {
 		// before cleared with it.
 		if s, err := ParseScope(c.Arg); err == nil {
 			m.Scope, m.prevScope = s, ""
-			m.Selection()
+			m.commit()
 		}
 	}
 	return Action{}
