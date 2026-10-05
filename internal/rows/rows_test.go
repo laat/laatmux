@@ -747,7 +747,8 @@ func TestTwoAgentsOneSession(t *testing.T) {
 				held = append(held, n.Agent.ID)
 			}
 		}
-		for _, r := range Agents(Input{Hosts: hosts, Agents: agents}, Tree(Input{Hosts: hosts, Agents: agents})).Main {
+		in := Input{Hosts: hosts, Agents: agents}
+		for _, r := range Agents(in, Tree(in)).Main {
 			tiles = append(tiles, r.Agent.ID+" "+r.Suffix)
 		}
 		if got := strings.Join(held, " ") + " | " + strings.Join(tiles, ", "); got != a.ID+" "+b.ID+" | "+a.ID+" (1), "+b.ID+" (2)" {

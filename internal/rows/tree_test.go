@@ -348,17 +348,32 @@ func TestTreeJumpAgentAndViewer(t *testing.T) {
 
 // A repository known by an orphaned session's source tag alone, no
 // worktree naming it, is named by the source's last element: the forge
-// path's for a forge form, the source's own otherwise, without .git.
+// path's for a forge form (the trailing slash and .git gone with it),
+// the source's own otherwise, without .git; a .git left after the
+// forge's own strip goes too.
 func TestRepoNamedBySourceAlone(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}},
 		Locals: []protocol.Session{
-			{Name: "mac/one/x", Key: "menv//w/one/x", Host: "mac", Source: "git@GitHub.com:Laat/One.git"},
+			{Name: "mac/one/x", Key: "menv//w/one/x", Host: "mac", Source: "https://GitHub.com/Laat/One.git/"},
 			{Name: "mac/two/y", Key: "menv//w/two/y", Host: "mac", Source: "alice@box:projects/two.git"},
+			{Name: "mac/three/z", Key: "menv//w/three/z", Host: "mac", Source: "git@github.com:o/three.git.git"},
 		},
 	}
-	want := "One\n  mac/one/x\ntwo\n  mac/two/y\n"
+	want := "One\n  mac/one/x\nthree\n  mac/three/z\ntwo\n  mac/two/y\n"
 	if got := outline(Tree(in)); got != want {
 		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Tasks are newest first by submission, the instant compared whatever
+// its zone, and by id for two submitted in one instant.
+func TestNewer(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	a := &protocol.Pending{ID: "add-1", SubmittedAt: t0}
+	b := &protocol.Pending{ID: "add-2", SubmittedAt: t0.In(time.FixedZone("x", 3600))}
+	c := &protocol.Pending{ID: "add-0", SubmittedAt: t0.Add(time.Second)}
+	if !newer(a, b) || newer(b, a) || newer(a, a) || !newer(c, a) || newer(a, c) {
+		t.Fatal("newer: wrong order")
 	}
 }

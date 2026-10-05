@@ -420,14 +420,15 @@ func Tree(in Input) []Row {
 		}
 	}
 	// A repository named by a source tag alone: its label from the
-	// worktrees is missing; the source's last element stands in.
+	// worktrees is missing; the source's last element stands in, a
+	// forge source's path's, without .git.
 	for _, rp := range repos {
 		if rp.name == "" {
-			if _, p, ok := source.Forge(rp.source); ok {
-				rp.name = path.Base(p)
-			} else {
-				rp.name = path.Base(strings.TrimSuffix(rp.source, ".git"))
+			p := rp.source
+			if _, fp, ok := source.Forge(rp.source); ok {
+				p = fp
 			}
+			rp.name = path.Base(strings.TrimSuffix(p, ".git"))
 		}
 	}
 
