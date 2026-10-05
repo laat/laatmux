@@ -1142,3 +1142,30 @@ func TestStopWaitsForPaste(t *testing.T) {
 		t.Fatalf("after stop: %+v", res)
 	}
 }
+
+// A temporary a write left behind when its daemon died is swept when
+// the journal opens, and the record it was for is unchanged.
+func TestJournalSweepsTemporaries(t *testing.T) {
+	dir := t.TempDir()
+	j, err := openJournal(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.create(entry{ID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, FileName("a")+".tmp.12345")
+	if err := os.WriteFile(stale, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j, err = openJournal(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("temporary not swept: %v", err)
+	}
+	if _, ok := j.get("a"); !ok {
+		t.Fatal("the entry was lost with its temporary")
+	}
+}

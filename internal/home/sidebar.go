@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 )
@@ -128,15 +127,7 @@ func UpdateSidebar(now time.Time, fn func(*Sidebar)) error {
 	if err != nil {
 		return err
 	}
-	tmp := SidebarPath() + ".tmp." + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, SidebarPath()); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return WriteAtomic(SidebarPath(), append(b, '\n'))
 }
 
 // SetFolds writes a pane's toggled folds into the file, each seen now,

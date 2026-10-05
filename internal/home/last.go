@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"syscall"
 )
 
@@ -81,13 +80,5 @@ func UpdateLast(fn func(*Last)) error {
 	if err != nil {
 		return err
 	}
-	tmp := lastPath() + ".tmp." + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, lastPath()); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return WriteAtomic(lastPath(), append(b, '\n'))
 }

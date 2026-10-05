@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
@@ -132,10 +133,7 @@ func (d *Daemon) flushAttentionLocked() {
 	b, err := json.Marshal(attnFile{Entries: a.entries})
 	if err == nil {
 		if err = os.MkdirAll(filepath.Dir(a.path), 0o700); err == nil {
-			tmp := a.path + ".tmp"
-			if err = os.WriteFile(tmp, b, 0o600); err == nil {
-				err = os.Rename(tmp, a.path)
-			}
+			err = home.WriteAtomic(a.path, b)
 		}
 	}
 	if err != nil {

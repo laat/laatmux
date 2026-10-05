@@ -13,6 +13,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/github"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -97,10 +98,7 @@ func (d *Daemon) saveBranchesLocked() {
 	}{d.branches})
 	if err == nil {
 		if err = os.MkdirAll(filepath.Dir(d.cfg.Branches), 0o700); err == nil {
-			tmp := d.cfg.Branches + ".tmp"
-			if err = os.WriteFile(tmp, b, 0o600); err == nil {
-				err = os.Rename(tmp, d.cfg.Branches)
-			}
+			err = home.WriteAtomic(d.cfg.Branches, b)
 		}
 	}
 	if err != nil {
