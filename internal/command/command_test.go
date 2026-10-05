@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -443,5 +444,37 @@ func TestAddRequestCarriesEntry(t *testing.T) {
 	}
 	if len(add.Repo.Copy) != 1 {
 		t.Fatalf("the config's list was changed: %v", add.Repo.Copy)
+	}
+}
+
+// A cancel already asked for when the command is sent, Ctrl-C while
+// the connection is dialled say, reaches the daemon after the command, never
+// before it: a cancel ahead of its command would name an id the daemon
+// does not know yet, and the command would run uncancelled.
+func TestCancelFollowsTheCommand(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapRun, protocol.CapFollow}
+	host := client.Host{Name: "local"}
+	cancel := make(chan struct{})
+	close(cancel)
+	// Many sends: the wrong order is a race, seen in a fraction of them.
+	for i := 0; i < 50; i++ {
+		f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+		f.answer = func(m protocol.Message) protocol.Message {
+			if m.Type == protocol.TypeCancel {
+				return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrCancelled}
+			}
+			// The run runs until its cancel: no answer to the command.
+			return protocol.Message{Type: protocol.TypeProgress, ID: m.ID, N: 1, Detail: "running"}
+		}
+		req := protocol.Message{Type: protocol.TypeRun, ID: fmt.Sprintf("run-%d", i), Root: "/r/x", Cmd: []string{"sleep"}}
+		_, res, err := stream(context.Background(), host, []string{protocol.CapRun}, req, Discard{}, streamOpts{cancel: cancel})
+		if err == nil || res.Error != protocol.ErrCancelled {
+			t.Fatalf("run %d: %+v %v", i, res, err)
+		}
+		got := f.commands()
+		if len(got) != 2 || got[0].Type != protocol.TypeRun || got[1].Type != protocol.TypeCancel {
+			t.Fatalf("run %d: commands %+v", i, got)
+		}
+		f.listener.Close()
 	}
 }

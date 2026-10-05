@@ -127,3 +127,67 @@ func TestRemoteBin(t *testing.T) {
 		}
 	}
 }
+
+// Exchange passes the request's progress on, passes over other ids,
+// and returns a refusal as the message it was, which Refused turns
+// into the error Request gives; the transport's diagnostic reaches
+// Request's error as it does any read's.
+func TestExchangeAndRefused(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	c := &Conn{Host: Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	go func() {
+		sc := protocol.NewConn(server)
+		req, _ := sc.Read()
+		sc.Write(protocol.Message{Type: protocol.TypeProgress, ID: "other", Detail: "not ours"})
+		sc.Write(protocol.Message{Type: protocol.TypeProgress, ID: req.ID, N: 1, Detail: "one"})
+		sc.Write(protocol.Message{Type: protocol.TypeResult, ID: "other", OK: true})
+		sc.Write(protocol.Message{Type: protocol.TypeResult, ID: req.ID, OK: false, Error: "refused", Stage: "worktree"})
+	}()
+	var progress []string
+	res, err := c.Exchange(context.Background(), protocol.Message{Type: protocol.TypeAdd, ID: "r1"}, func(m protocol.Message) { progress = append(progress, m.Detail) })
+	if err != nil || res.Type != protocol.TypeResult || res.OK || res.Error != "refused" || res.Stage != "worktree" {
+		t.Fatalf("exchange: %+v %v", res, err)
+	}
+	if strings.Join(progress, ",") != "one" {
+		t.Fatalf("progress %v", progress)
+	}
+	if res, err := Refused(res, nil); err == nil || err.Error() != "refused" || res.Stage != "worktree" {
+		t.Fatalf("refused: %+v %v", res, err)
+	}
+	if _, err := Refused(protocol.Message{Type: protocol.TypeError, Error: "bad request"}, nil); err == nil || err.Error() != "bad request" {
+		t.Fatalf("error message: %v", err)
+	}
+	if res, err := Refused(protocol.Message{Type: protocol.TypeResult, OK: true, Root: "/r"}, nil); err != nil || res.Root != "/r" {
+		t.Fatalf("ok: %+v %v", res, err)
+	}
+	if _, err := Refused(protocol.Message{}, io.EOF); err != io.EOF {
+		t.Fatalf("transport: %v", err)
+	}
+	// An error message is a value too, and progress for the id with no
+	// callback is passed over.
+	go func() {
+		sc := protocol.NewConn(server)
+		req, _ := sc.Read()
+		sc.Write(protocol.Message{Type: protocol.TypeProgress, ID: req.ID, N: 1, Detail: "one"})
+		sc.Write(protocol.Message{Type: protocol.TypeError, ID: req.ID, Error: "bad request"})
+	}()
+	res, err = c.Exchange(context.Background(), protocol.Message{Type: protocol.TypeAdd, ID: "r2"}, nil)
+	if err != nil || res.Type != protocol.TypeError || res.Error != "bad request" {
+		t.Fatalf("error message: %+v %v", res, err)
+	}
+
+	// Request on a connection the other side closes: the diagnostic
+	// is in the error.
+	server2, client2 := net.Pipe()
+	diag := &tailBuffer{}
+	c2 := &Conn{Host: Host{Name: "vm"}, pc: protocol.NewConn(client2), close: func() { client2.Close() }, diag: diag}
+	diag.Write([]byte("Connection closed by remote host\n"))
+	go func() {
+		protocol.NewConn(server2).Read()
+		server2.Close()
+	}()
+	if _, err := c2.Request(context.Background(), protocol.Message{Type: protocol.TypeAdd}); err == nil || !strings.Contains(err.Error(), "ssh: Connection closed by remote host") {
+		t.Fatalf("request err = %v", err)
+	}
+}

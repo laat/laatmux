@@ -270,35 +270,69 @@ func (c *Conn) CloseOnDone(ctx context.Context) (stop func()) {
 	return func() { close(done) }
 }
 
-// Request sends a command and waits for its result. Use on a connection that
-// is not subscribed, so nothing interleaves. Cancelling ctx closes the
-// connection and returns.
-func (c *Conn) Request(ctx context.Context, m protocol.Message) (protocol.Message, error) {
-	if m.ID == "" {
-		m.ID = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
-	}
+// Exchange sends one request and reads until its result or error
+// message, which it returns as a value, refusals included: only the
+// transport fails as an error. Progress with the request's id goes to
+// onProgress when set; messages with other ids are passed over. Use on
+// a connection that is not subscribed, so nothing interleaves.
+// Cancelling ctx closes the connection and returns.
+func (c *Conn) Exchange(ctx context.Context, req protocol.Message, onProgress func(protocol.Message)) (protocol.Message, error) {
 	defer c.CloseOnDone(ctx)()
-	if err := c.pc.Write(m); err != nil {
+	if err := c.Write(req); err != nil {
 		return protocol.Message{}, err
 	}
+	return c.Await(ctx, req.ID, onProgress)
+}
+
+// Await is Exchange's read half: it reads until the result or error
+// message with the id, for a request written already, so a caller can
+// write more on the connection, a cancel say, after the request and
+// before the answer. The caller closes the connection when ctx ends,
+// with CloseOnDone as Exchange does; Await returns ctx's error then.
+func (c *Conn) Await(ctx context.Context, id string, onProgress func(protocol.Message)) (protocol.Message, error) {
 	for {
-		r, err := c.pc.Read()
+		m, err := c.Read()
 		if err != nil {
 			if ctx.Err() != nil {
 				return protocol.Message{}, ctx.Err()
 			}
 			return protocol.Message{}, err
 		}
-		if (r.Type == protocol.TypeResult || r.Type == protocol.TypeError) && r.ID == m.ID {
-			if r.Type == protocol.TypeError {
-				return r, errors.New(r.Error)
+		if m.ID != id {
+			continue
+		}
+		switch m.Type {
+		case protocol.TypeProgress:
+			if onProgress != nil {
+				onProgress(m)
 			}
-			if !r.OK {
-				return r, errors.New(r.Error)
-			}
-			return r, nil
+		case protocol.TypeError, protocol.TypeResult:
+			return m, nil
 		}
 	}
+}
+
+// Refused turns a refusal into an error: an error message, or a result
+// that is not ok, carries its text; a transport failure is passed
+// through.
+func Refused(res protocol.Message, err error) (protocol.Message, error) {
+	if err != nil {
+		return res, err
+	}
+	if res.Type == protocol.TypeError || !res.OK {
+		return res, errors.New(res.Error)
+	}
+	return res, nil
+}
+
+// Request sends a command and waits for its result; a refusal is an
+// error. Use on a connection that is not subscribed, so nothing
+// interleaves. Cancelling ctx closes the connection and returns.
+func (c *Conn) Request(ctx context.Context, m protocol.Message) (protocol.Message, error) {
+	if m.ID == "" {
+		m.ID = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	}
+	return Refused(c.Exchange(ctx, m, nil))
 }
 
 // Snapshot subscribes and returns the first snapshot. Cancelling ctx closes

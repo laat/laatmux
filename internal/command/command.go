@@ -209,9 +209,11 @@ type streamOpts struct {
 var ErrOutcomeUnknown = errors.New("outcome unknown: the daemon no longer knows the run; it may be running still, finished, or never started")
 
 // exchange sends one request on the connection and reads until its
-// result, passing progress to onProgress. A cancel that arrives is sent
-// after the request, never before it, so it cannot reach the daemon
-// ahead of the command it stops. Cancelling ctx closes the connection.
+// result, passing progress to onProgress; a refusal is an error. A
+// cancel that arrives is sent after the request, never before it, so
+// it cannot reach the daemon ahead of the command it stops: the sender
+// starts once the request is written. Cancelling ctx closes the
+// connection.
 func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel <-chan struct{}, onProgress func(protocol.Message)) (protocol.Message, error) {
 	defer c.CloseOnDone(ctx)()
 	if err := c.Write(req); err != nil {
@@ -228,29 +230,7 @@ func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel 
 			}
 		}()
 	}
-	for {
-		m, err := c.Read()
-		if err != nil {
-			if ctx.Err() != nil {
-				return protocol.Message{}, ctx.Err()
-			}
-			return protocol.Message{}, err
-		}
-		if m.ID != req.ID {
-			continue
-		}
-		switch m.Type {
-		case protocol.TypeProgress:
-			onProgress(m)
-		case protocol.TypeError:
-			return m, errors.New(m.Error)
-		case protocol.TypeResult:
-			if !m.OK {
-				return m, errors.New(m.Error)
-			}
-			return m, nil
-		}
-	}
+	return client.Refused(c.Await(ctx, req.ID, onProgress))
 }
 
 // pause waits a second between attempts, or returns when ctx ends.
