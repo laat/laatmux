@@ -150,14 +150,8 @@ func (r *relay) get(id string) (pendingFile, bool) {
 	return *p, true
 }
 
-// create writes a new record; an id the relay has is not written again.
-func (r *relay) create(p pendingFile) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.createLocked(p)
-}
-
-// createLocked is create with r.mu held.
+// createLocked writes a new record, with r.mu held; an id the relay
+// has is not written again.
 func (r *relay) createLocked(p pendingFile) (bool, error) {
 	if _, ok := r.recs[p.ID]; ok {
 		return false, nil

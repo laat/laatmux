@@ -129,15 +129,12 @@ func (d *Decoder) clock() time.Time {
 	return time.Now()
 }
 
-// Feed adds input and returns the keys complete so far. Pending reports
-// whether bytes are held back; the caller flushes them after a short
-// wait, since a bare escape looks like the start of a sequence.
-func (d *Decoder) Feed(b []byte) []Key { return d.FeedAt(b, time.Time{}) }
-
-// FeedAt is Feed for bytes read at the time given: each click it gives
-// has At set to when its first byte was read, the held bytes' time for
-// a click they begin and this read's for one begun in it, whatever the
-// held bytes turned out to be.
+// FeedAt adds input read at the time given and returns the keys
+// complete so far; bytes that may start a sequence are held back, and
+// the caller flushes them after Wait, since a bare escape looks like
+// the start of one. Each click it gives has At set to when its first
+// byte was read, the held bytes' time for a click they begin and this
+// read's for one begun in it, whatever the held bytes turned out to be.
 func (d *Decoder) FeedAt(b []byte, at time.Time) []Key {
 	if d.osc {
 		b = d.swallowOSC(b)
@@ -406,10 +403,6 @@ func pasteText(b []byte) string {
 	return out.String()
 }
 
-// Pending reports whether Feed held bytes back. A paste under way holds
-// its text until its end marker arrives, so it is pending until then.
-func (d *Decoder) Pending() bool { return len(d.pending) > 0 || d.pasting }
-
 // Wait is how long until a Flush has something to do: the escape wait
 // for held bytes, what is left of the grace for a paste or for a held
 // escape and bracket, and nothing at all when nothing is held, a
@@ -609,14 +602,6 @@ func oscScan(b []byte) (kind, n int, body bool) {
 		}
 	}
 	return oscMore, 0, true
-}
-
-// Parse reads one complete chunk of input as keys, flushing what is
-// incomplete.
-func Parse(b []byte) []Key {
-	var d Decoder
-	keys := d.Feed(b)
-	return append(keys, d.Flush()...)
 }
 
 // parse splits b into keys. With flush false, bytes that may be the

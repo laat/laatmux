@@ -340,11 +340,6 @@ func (s Sidebar) ItemWidth() int {
 // Top reports whether the sidebar is a strip along the top.
 func (s Sidebar) Top() bool { return s.Position == "top" }
 
-// Servers resolves TmuxServers, or the default when it is empty.
-func (c Config) Servers() ([]tmux.Server, error) {
-	return ParseServers(c.TmuxServers)
-}
-
 // ParseServers turns server specs into servers, rejecting duplicates. An
 // empty list is the managed laatmux server alone.
 func ParseServers(specs []string) ([]tmux.Server, error) {

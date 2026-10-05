@@ -98,13 +98,6 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 	return false
 }
 
-// jump is the jump command's logic on a row; jumpAction is the view's
-// way to it, with the focus handled.
-func (d *dash) jump(m *view.Model, r rows.Row) bool {
-	exit, _ := d.jumpRow(m, r)
-	return exit
-}
-
 // jumpRow runs the jump and says whether it happened: jumped is false
 // for a task still running and for a jump refused, whose message is in
 // the footer; exit is that the view ends.

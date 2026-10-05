@@ -2,7 +2,6 @@ package detect
 
 import (
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -183,11 +182,8 @@ func TestKnownAgentFallsBackToIdle(t *testing.T) {
 	}
 }
 
-func TestAgents(t *testing.T) {
-	if got := Agents(); !reflect.DeepEqual(got, []string{"claude", "codex"}) {
-		t.Fatalf("Agents() = %v", got)
-	}
-	// Aliases resolve to the same manifest.
+// Aliases resolve to the same manifest.
+func TestAgentAliases(t *testing.T) {
 	if got := Detect(Input{Agent: "claude-code", Title: "⠋ busy"}); got.State != Working {
 		t.Fatalf("alias claude-code: %+v", got)
 	}

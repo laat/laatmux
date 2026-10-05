@@ -555,7 +555,7 @@ func ShellJoin(argv []string) string { return shellJoin(argv) }
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
 // tmux rejects "." and ":" in session names, so "%" becomes "%25", "."
 // becomes "%2e" and ":" becomes "%3a"; nothing else changes. Distinct
-// branches give distinct names and DecodeBranch is exact.
+// branches give distinct names and the encoding is exact.
 func EncodeBranch(branch string) string {
 	var b strings.Builder
 	for i := 0; i < len(branch); i++ {
@@ -569,32 +569,6 @@ func EncodeBranch(branch string) string {
 		default:
 			b.WriteByte(c)
 		}
-	}
-	return b.String()
-}
-
-// DecodeBranch reverses EncodeBranch. Sequences EncodeBranch never emits
-// are left as they are.
-func DecodeBranch(name string) string {
-	var b strings.Builder
-	for i := 0; i < len(name); i++ {
-		if name[i] == '%' && i+2 < len(name) {
-			switch name[i+1 : i+3] {
-			case "25":
-				b.WriteByte('%')
-				i += 2
-				continue
-			case "2e":
-				b.WriteByte('.')
-				i += 2
-				continue
-			case "3a":
-				b.WriteByte(':')
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(name[i])
 	}
 	return b.String()
 }

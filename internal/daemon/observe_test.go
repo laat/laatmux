@@ -100,7 +100,7 @@ func run(t *testing.T, fp *fakeProcs, ft *fakeTmux, polls int) []protocol.Agent 
 			t.Fatal(err)
 		}
 	}
-	_, agents := d.Snapshot()
+	_, agents := d.agentRecords()
 	return agents
 }
 
@@ -137,7 +137,7 @@ func TestUnidentifiedPaneIsSilent(t *testing.T) {
 	d := New(Config{EnvironmentID: "env", Targets: unmanaged(ft), Procs: fp})
 	d.poll(context.Background())
 	d.poll(context.Background())
-	if _, ag := d.Snapshot(); len(ag) != 0 {
+	if _, ag := d.agentRecords(); len(ag) != 0 {
 		t.Fatalf("shell published: %+v", ag)
 	}
 	if len(d.panes) != 1 {
@@ -169,7 +169,7 @@ func TestTwoServers(t *testing.T) {
 	if m.configured != 1 || u.configured != 0 {
 		t.Fatalf("configured managed=%d unmanaged=%d", m.configured, u.configured)
 	}
-	_, ag := d.Snapshot()
+	_, ag := d.agentRecords()
 	if len(ag) != 2 {
 		t.Fatalf("agents = %d: %+v", len(ag), ag)
 	}
@@ -199,7 +199,7 @@ func TestTwoServers(t *testing.T) {
 	default:
 		t.Fatal("no remove for the vanished server")
 	}
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if len(ag) != 1 || ag[0].ID != "env/laatmux/%1" {
 		t.Fatalf("after removal: %+v", ag)
 	}
@@ -208,7 +208,7 @@ func TestTwoServers(t *testing.T) {
 	if err := d.poll(context.Background()); err == nil {
 		t.Fatal("hard error swallowed")
 	}
-	if _, ag = d.Snapshot(); len(ag) != 1 {
+	if _, ag = d.agentRecords(); len(ag) != 1 {
 		t.Fatalf("managed server not polled past the failing one: %+v", ag)
 	}
 }
@@ -231,12 +231,12 @@ func TestObserveTentativeReplacedByVerified(t *testing.T) {
 	}}
 	d := New(Config{EnvironmentID: "env", Targets: managed(&fakeTmux{pane: pane, screen: idleScr}), Procs: fp})
 	d.poll(context.Background())
-	_, ag := d.Snapshot()
+	_, ag := d.agentRecords()
 	if ag[0].Identity == nil || ag[0].Identity.PID != 100 {
 		t.Fatalf("tentative not used: %+v", ag[0])
 	}
 	d.poll(context.Background())
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Identity.PID != 101 {
 		t.Fatalf("verified child did not replace tentative: %+v", ag[0])
 	}
@@ -257,7 +257,7 @@ func TestObserveExitUnderSurvivingWrapper(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		d.poll(context.Background())
 	}
-	_, ag := d.Snapshot()
+	_, ag := d.agentRecords()
 	a := ag[0]
 	if a.Liveness != protocol.Gone || a.Identity == nil || a.Identity.PID != 101 || a.Agent != "claude" {
 		t.Fatalf("got %+v", a)
@@ -278,15 +278,15 @@ func TestObserveTransientReadError(t *testing.T) {
 	ft := &fakeTmux{pane: pane, screen: idleScr}
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
-	_, ag := d.Snapshot()
+	_, ag := d.agentRecords()
 	first := ag[0]
 	d.poll(context.Background())
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Liveness != protocol.Alive {
 		t.Fatalf("read error marked agent gone: %+v", ag[0])
 	}
 	d.poll(context.Background())
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Liveness != protocol.Alive || ag[0].Identity.PID != first.Identity.PID || !ag[0].ActivityAt.Equal(first.ActivityAt) {
 		t.Fatalf("instance reset after transient error: %+v vs %+v", ag[0], first)
 	}
@@ -300,7 +300,7 @@ func TestObserveTransientReadError(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		d.poll(context.Background())
 	}
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Liveness != protocol.Alive || ag[0].Identity.PID != 101 {
 		t.Fatalf("reappeared instance not restored: %+v", ag[0])
 	}
@@ -312,7 +312,7 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	ft := &fakeTmux{pane: pane, screen: blkScr}
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
-	_, ag := d.Snapshot()
+	_, ag := d.agentRecords()
 	if ag[0].Activity != protocol.Blocked {
 		t.Fatalf("setup: %+v", ag[0])
 	}
@@ -320,14 +320,14 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		d.poll(context.Background())
 	}
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Activity != protocol.Blocked {
 		t.Fatalf("capture failure changed activity: %+v", ag[0])
 	}
 	ft.captureErr = nil
 	ft.screen = idleScr
 	d.poll(context.Background())
-	_, ag = d.Snapshot()
+	_, ag = d.agentRecords()
 	if ag[0].Activity != protocol.Idle {
 		t.Fatalf("recovery: %+v", ag[0])
 	}

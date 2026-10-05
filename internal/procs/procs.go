@@ -137,7 +137,7 @@ func Find(tty string) (Identity, bool, error) {
 	if err != nil {
 		return Identity{}, false, err
 	}
-	id, ok := find(procs)
+	id, ok := FindIn(procs)
 	return id, ok, nil
 }
 
@@ -147,10 +147,11 @@ func Exists(tty string, id Identity) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return exists(procs, id), nil
+	return ExistsIn(procs, id), nil
 }
 
-func exists(procs []Proc, id Identity) bool {
+// ExistsIn is Exists on a listed process table.
+func ExistsIn(procs []Proc, id Identity) bool {
 	for _, p := range procs {
 		if p.PID == id.PID && p.Start.Equal(id.Start) {
 			return true
@@ -159,12 +160,13 @@ func exists(procs []Proc, id Identity) bool {
 	return false
 }
 
-// find picks the agent process. A process whose own program is a known
-// agent, directly or as an interpreter's script, is a verified candidate.
-// A process carrying only an env hint is a tentative candidate. Verified
-// beats tentative; among equals the deepest process in the tree wins, so a
-// wrapper never beats the agent it started.
-func find(procs []Proc) (Identity, bool) {
+// FindIn is Find on a listed process table: it picks the agent process.
+// A process whose own program is a known agent, directly or as an
+// interpreter's script, is a verified candidate. A process carrying only
+// an env hint is a tentative candidate. Verified beats tentative; among
+// equals the deepest process in the tree wins, so a wrapper never beats
+// the agent it started.
+func FindIn(procs []Proc) (Identity, bool) {
 	if len(procs) == 0 {
 		return Identity{}, false
 	}
@@ -259,8 +261,3 @@ func classify(p Proc) (agent string, score int) {
 	}
 	return "", 0
 }
-
-// FindIn and ExistsIn run the identification logic on a supplied process
-// table. They exist for tests of callers; production code uses Find/Exists.
-func FindIn(procs []Proc) (Identity, bool)    { return find(procs) }
-func ExistsIn(procs []Proc, id Identity) bool { return exists(procs, id) }

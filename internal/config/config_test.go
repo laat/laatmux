@@ -12,11 +12,11 @@ import (
 )
 
 func TestServersDefaultAndParsed(t *testing.T) {
-	got, err := (Config{}).Servers()
+	got, err := ParseServers(nil)
 	if err != nil || len(got) != 1 || got[0] != tmux.LaatmuxServer {
 		t.Fatalf("default = %v, %v", got, err)
 	}
-	got, err = (Config{TmuxServers: []string{"laatmux", "default"}}).Servers()
+	got, err = ParseServers([]string{"laatmux", "default"})
 	if err != nil || len(got) != 2 || got[0] != tmux.LaatmuxServer || got[1] != tmux.DefaultServer {
 		t.Fatalf("parsed = %v, %v", got, err)
 	}
@@ -37,7 +37,7 @@ func TestLoadReadsTmuxServers(t *testing.T) {
 	if len(c.Hosts) != 2 || c.Hosts[1].SSH != "box" {
 		t.Fatalf("hosts: %+v", c.Hosts)
 	}
-	srv, err := c.Servers()
+	srv, err := ParseServers(c.TmuxServers)
 	if err != nil || len(srv) != 2 || srv[1].Label() != "default" {
 		t.Fatalf("servers: %v %v", srv, err)
 	}
