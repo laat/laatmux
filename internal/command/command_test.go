@@ -447,8 +447,8 @@ func TestAddRequestCarriesEntry(t *testing.T) {
 	}
 }
 
-// A cancel already asked for when the command is sent, Ctrl-C during
-// a reconnect pause say, reaches the daemon after the command, never
+// A cancel already asked for when the command is sent, Ctrl-C while
+// the connection is dialled say, reaches the daemon after the command, never
 // before it: a cancel ahead of its command would name an id the daemon
 // does not know yet, and the command would run uncancelled.
 func TestCancelFollowsTheCommand(t *testing.T) {
