@@ -277,6 +277,7 @@ func (c *Conn) CloseOnDone(ctx context.Context) (stop func()) {
 // a connection that is not subscribed, so nothing interleaves.
 // Cancelling ctx closes the connection and returns.
 func (c *Conn) Exchange(ctx context.Context, req protocol.Message, onProgress func(protocol.Message)) (protocol.Message, error) {
+	defer c.CloseOnDone(ctx)()
 	if err := c.Write(req); err != nil {
 		return protocol.Message{}, err
 	}
@@ -286,9 +287,9 @@ func (c *Conn) Exchange(ctx context.Context, req protocol.Message, onProgress fu
 // Await is Exchange's read half: it reads until the result or error
 // message with the id, for a request written already, so a caller can
 // write more on the connection, a cancel say, after the request and
-// before the answer.
+// before the answer. The caller closes the connection when ctx ends,
+// with CloseOnDone as Exchange does; Await returns ctx's error then.
 func (c *Conn) Await(ctx context.Context, id string, onProgress func(protocol.Message)) (protocol.Message, error) {
-	defer c.CloseOnDone(ctx)()
 	for {
 		m, err := c.Read()
 		if err != nil {

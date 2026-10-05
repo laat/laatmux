@@ -215,6 +215,7 @@ var ErrOutcomeUnknown = errors.New("outcome unknown: the daemon no longer knows 
 // starts once the request is written. Cancelling ctx closes the
 // connection.
 func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel <-chan struct{}, onProgress func(protocol.Message)) (protocol.Message, error) {
+	defer c.CloseOnDone(ctx)()
 	if err := c.Write(req); err != nil {
 		return protocol.Message{}, err
 	}
