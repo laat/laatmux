@@ -98,8 +98,8 @@ func TestEncodeBranch(t *testing.T) {
 		if got != want {
 			t.Errorf("EncodeBranch(%q) = %q, want %q", in, got, want)
 		}
-		if back := DecodeBranch(got); back != in {
-			t.Errorf("DecodeBranch(%q) = %q, want %q", got, back, in)
+		if back := decodeBranch(got); back != in {
+			t.Errorf("decodeBranch(%q) = %q, want %q", got, back, in)
 		}
 		if strings.ContainsAny(got, ".:") {
 			t.Errorf("EncodeBranch(%q) = %q contains a character tmux rejects", in, got)
@@ -151,9 +151,9 @@ func TestListPanesEmptyServer(t *testing.T) {
 	}
 }
 
-// DecodeBranch reverses EncodeBranch, for the round trip. Sequences EncodeBranch never emits
-// are left as they are.
-func DecodeBranch(name string) string {
+// decodeBranch reverses EncodeBranch, for the round trip. Sequences
+// EncodeBranch never emits are left as they are.
+func decodeBranch(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); i++ {
 		if name[i] == '%' && i+2 < len(name) {

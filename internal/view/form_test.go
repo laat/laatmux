@@ -84,7 +84,8 @@ func TestFormRenderStateless(t *testing.T) {
 	}
 }
 
-// A paste goes into a picker's filter and a prompt's text as one line.
+// A paste goes into a picker's filter and the model's as one line,
+// its newlines and tabs spaces.
 func TestPasteIntoFilters(t *testing.T) {
 	p := NewPicker("t", choices(), 0)
 	p.Handle(Key{Kind: KeyPaste, Text: "pro\nj"})
@@ -93,8 +94,8 @@ func TestPasteIntoFilters(t *testing.T) {
 	}
 	var m Model
 	m.Filtering = true
-	m.Handle(Key{Kind: KeyPaste, Text: "x\ny"})
-	if m.Filter != "x y" {
+	m.Handle(Key{Kind: KeyPaste, Text: "x\ny\tz"})
+	if m.Filter != "x y z" {
 		t.Fatalf("model filter %q", m.Filter)
 	}
 }
