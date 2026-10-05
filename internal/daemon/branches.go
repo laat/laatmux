@@ -147,12 +147,7 @@ func (d *Daemon) githubHost(host string) bool {
 	if strings.EqualFold(host, "github.com") {
 		return true
 	}
-	for _, h := range d.cfg.GitHubHosts {
-		if strings.EqualFold(h, host) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(d.cfg.GitHubHosts, func(h string) bool { return strings.EqualFold(h, host) })
 }
 
 // hostsListedLocked reports whether every configured host has a listing

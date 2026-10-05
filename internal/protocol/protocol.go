@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"slices"
 	"sync"
 	"time"
 )
@@ -804,11 +805,4 @@ func (c *Conn) Write(m Message) error {
 }
 
 // Has reports whether the capability set includes cap.
-func Has(caps []string, cap string) bool {
-	for _, c := range caps {
-		if c == cap {
-			return true
-		}
-	}
-	return false
-}
+func Has(caps []string, cap string) bool { return slices.Contains(caps, cap) }

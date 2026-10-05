@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -302,12 +303,7 @@ func (r *addRun) run(ctx context.Context) error {
 		}
 		names = append(names, j.reserved(repo.Source, m.ID)...)
 		name, err := worktree.Allocate(branch, func(c string) bool {
-			for _, n := range names {
-				if worktree.RefConflict(n, c) {
-					return true
-				}
-			}
-			return false
+			return slices.ContainsFunc(names, func(n string) bool { return worktree.RefConflict(n, c) })
 		})
 		if err != nil {
 			return stageErr(stage, err)
