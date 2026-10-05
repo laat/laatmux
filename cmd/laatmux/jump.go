@@ -113,7 +113,7 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 		Host:    h.Host,
 		Managed: w.Session,
 		Name:    h.Name + "/" + w.Session,
-		Key:     workspace.Key(w.EnvironmentID, w.Root),
+		Key:     protocol.SessionKey(w.EnvironmentID, w.Root),
 		Branch:  w.Branch,
 		Source:  w.Source,
 	}

@@ -37,16 +37,6 @@ import (
 // Server is the tmux server local sessions live on: the user's default one.
 var Server = tmux.DefaultServer
 
-// Key is the workspace key: <environment_id>/<root>. The environment id
-// is hex, so the key parses from the left.
-func Key(environmentID, root string) string { return environmentID + "/" + root }
-
-// SplitKey returns the environment id and root of a key.
-func SplitKey(key string) (environmentID, root string) {
-	environmentID, root, _ = strings.Cut(key, "/")
-	return environmentID, root
-}
-
 // SessionName is the local session name for a workspace:
 // <host>/<repo>/<encoded branch>. The host is part of the name because the
 // same repository and branch may be checked out on two hosts at once.
@@ -54,30 +44,14 @@ func SessionName(host, repo, branch string) string {
 	return host + "/" + tmux.SessionName(repo, branch)
 }
 
-// Local is one session in the default tmux server, with the laatmux tags
-// it carries: Key is @laatmux_workspace, Host @laatmux_host, Source
-// @laatmux_repo (the repository source, "" when unknown), Branch
-// @laatmux_branch, Attach @laatmux_attach for a plain attachment, Settled
-// @laatmux_settled. A session with neither Key nor Attach is not
-// laatmux's. It is the protocol's session record under another name, so
-// the daemon publishes what List reads with a conversion and no copying.
-type Local protocol.Session
-
-// Workspace reports whether the session is a workspace session.
-func (l Local) Workspace() bool { return l.Key != "" }
-
-// Laatmux reports whether the session is laatmux's at all: a workspace
-// or a plain attachment.
-func (l Local) Laatmux() bool { return l.Key != "" || l.Attach != "" }
-
-// Records converts laatmux's sessions among locals to protocol records,
-// which is what the merging daemon publishes. Sessions that are not
-// laatmux's are left out.
-func Records(locals []Local) []protocol.Session {
+// Records is laatmux's sessions among the ones listed, a workspace or a
+// plain attachment each, which is what the merging daemon publishes; a
+// session with neither tag is not laatmux's and is left out.
+func Records(sessions []protocol.Session) []protocol.Session {
 	var out []protocol.Session
-	for _, l := range locals {
-		if l.Laatmux() {
-			out = append(out, protocol.Session(l))
+	for _, s := range sessions {
+		if s.Laatmux() {
+			out = append(out, s)
 		}
 	}
 	return out
@@ -90,7 +64,7 @@ var sessionFormat = strings.Join([]string{
 
 // List returns every session on the default server. No server running is
 // an empty list.
-func List(ctx context.Context) ([]Local, error) {
+func List(ctx context.Context) ([]protocol.Session, error) {
 	out, err := Server.Run(ctx, "list-sessions", "-F", sessionFormat)
 	if err != nil {
 		if tmux.NoServer(err) {
@@ -101,14 +75,14 @@ func List(ctx context.Context) ([]Local, error) {
 	return parseSessions(string(out)), nil
 }
 
-func parseSessions(out string) []Local {
-	var locals []Local
+func parseSessions(out string) []protocol.Session {
+	var locals []protocol.Session
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		f := strings.Split(line, tmux.Sep)
 		if len(f) < 7 || f[0] == "" {
 			continue
 		}
-		locals = append(locals, Local{Name: f[0], Key: f[1], Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
+		locals = append(locals, protocol.Session{Name: f[0], Key: f[1], Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
 	}
 	return locals
 }
@@ -117,9 +91,9 @@ func parseSessions(out string) []Local {
 // when TMUX_PANE is set, as it is for a process in a pane, else the
 // session TMUX names, which is what a run-shell job from a key binding
 // gets. Not inside tmux is an error saying so.
-func Current(ctx context.Context) (Local, error) {
+func Current(ctx context.Context) (protocol.Session, error) {
 	if os.Getenv("TMUX") == "" {
-		return Local{}, errors.New("not inside tmux")
+		return protocol.Session{}, errors.New("not inside tmux")
 	}
 	// The lookup is on the server TMUX names, which may not be the
 	// default one; the zero server follows TMUX.
@@ -129,11 +103,11 @@ func Current(ctx context.Context) (Local, error) {
 	}
 	out, err := (tmux.Server{}).Run(ctx, append(args, sessionFormat)...)
 	if err != nil {
-		return Local{}, err
+		return protocol.Session{}, err
 	}
 	locals := parseSessions(string(out))
 	if len(locals) != 1 {
-		return Local{}, errors.New("cannot find the current tmux session")
+		return protocol.Session{}, errors.New("cannot find the current tmux session")
 	}
 	return locals[0], nil
 }
@@ -142,37 +116,37 @@ func Current(ctx context.Context) (Local, error) {
 // current directory. The lookup is on the server TMUX names, as Current's
 // is, since a pane id is per server; split runs from a binding on the
 // user's server.
-func PaneSession(ctx context.Context, paneID string) (Local, string, error) {
+func PaneSession(ctx context.Context, paneID string) (protocol.Session, string, error) {
 	out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "-t", paneID, sessionFormat+tmux.Sep+"#{pane_current_path}")
 	if err != nil {
-		return Local{}, "", err
+		return protocol.Session{}, "", err
 	}
 	line := strings.TrimRight(string(out), "\n")
 	f := strings.Split(line, tmux.Sep)
 	if len(f) != 8 {
-		return Local{}, "", errors.New("cannot find the session of pane " + paneID)
+		return protocol.Session{}, "", errors.New("cannot find the session of pane " + paneID)
 	}
 	locals := parseSessions(strings.Join(f[:7], tmux.Sep) + "\n")
 	if len(locals) != 1 {
-		return Local{}, "", errors.New("cannot find the session of pane " + paneID)
+		return protocol.Session{}, "", errors.New("cannot find the session of pane " + paneID)
 	}
 	return locals[0], f[7], nil
 }
 
 // FindWorktree returns the workspace session for a branch of a repository
 // on the host with the environment id, by its tags.
-func FindWorktree(locals []Local, environmentID, src, branch string) (Local, bool) {
+func FindWorktree(locals []protocol.Session, environmentID, src, branch string) (protocol.Session, bool) {
 	for _, l := range locals {
-		if env, _ := SplitKey(l.Key); l.Workspace() && env == environmentID && source.Same(l.Source, src) && l.Branch == branch && src != "" {
+		if env, _ := protocol.SplitSessionKey(l.Key); l.Workspace() && env == environmentID && source.Same(l.Source, src) && l.Branch == branch && src != "" {
 			return l, true
 		}
 	}
-	return Local{}, false
+	return protocol.Session{}, false
 }
 
 // Find returns the session with the key, or the plain attachment with the
 // tag, whichever is given.
-func Find(locals []Local, key, attach string) (Local, bool) {
+func Find(locals []protocol.Session, key, attach string) (protocol.Session, bool) {
 	for _, l := range locals {
 		if key != "" && l.Key == key {
 			return l, true
@@ -181,17 +155,17 @@ func Find(locals []Local, key, attach string) (Local, bool) {
 			return l, true
 		}
 	}
-	return Local{}, false
+	return protocol.Session{}, false
 }
 
 // ByName returns the session with exactly this name.
-func ByName(locals []Local, name string) (Local, bool) {
+func ByName(locals []protocol.Session, name string) (protocol.Session, bool) {
 	for _, l := range locals {
 		if l.Name == name {
 			return l, true
 		}
 	}
-	return Local{}, false
+	return protocol.Session{}, false
 }
 
 // Spec describes the local session for a managed session on a host.
@@ -236,7 +210,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	if l, ok := ByName(locals, s.Name); ok {
 		switch {
 		case l.Workspace():
-			_, root := SplitKey(l.Key)
+			_, root := protocol.SplitSessionKey(l.Key)
 			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", s.Name, root, l.Host)
 		case l.Attach == attach && s.Key != "":
 			return l.Name, false, adopt(ctx, l.Name, s)

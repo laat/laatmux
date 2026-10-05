@@ -75,7 +75,7 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	if err != nil {
 		return out, err
 	}
-	key := workspace.Key(hello.EnvironmentID, out.Root)
+	key := protocol.SessionKey(hello.EnvironmentID, out.Root)
 	for _, l := range locals {
 		if l.Key == key {
 			if err := workspace.Kill(ctx, l.Name); err != nil {
@@ -103,7 +103,7 @@ func (m Rm) Describe() string {
 // name another source or branch mean the name has moved on to another
 // workspace, and its root must not be sent with this one's identity.
 // "" when there is no such session on this host.
-func RootOf(locals []workspace.Local, environmentID string, h config.Host, repo config.Repo, branch string) string {
+func RootOf(locals []protocol.Session, environmentID string, h config.Host, repo config.Repo, branch string) string {
 	l, ok := workspace.FindWorktree(locals, environmentID, repo.Source, branch)
 	if !ok {
 		l, ok = workspace.ByName(locals, workspace.SessionName(h.Name, repo.Name, branch))
@@ -112,7 +112,7 @@ func RootOf(locals []workspace.Local, environmentID string, h config.Host, repo 
 	if !ok || !l.Workspace() {
 		return ""
 	}
-	if env, root := workspace.SplitKey(l.Key); env == environmentID {
+	if env, root := protocol.SplitSessionKey(l.Key); env == environmentID {
 		return root
 	}
 	return ""

@@ -7,7 +7,6 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // nodesByID is the tree's nodes, or the agent view's tiles, by id.
@@ -63,7 +62,7 @@ func TestJoin(t *testing.T) {
 			{ID: "venv/worktree//r/det", EnvironmentID: "venv", Repo: "proj", Branch: "", Root: "/r/det"},
 			{ID: "benv/worktree//r/down", EnvironmentID: "benv", Repo: "proj", Branch: "down", Root: "/r/down", Session: "proj/down"},
 		},
-		Locals: []workspace.Local{
+		Locals: []protocol.Session{
 			{Name: "vm/proj/fix", Key: "venv//r/fix", Host: "vm"},
 			{Name: "vm/proj/old", Key: "venv//r/old", Host: "vm", Settled: true},
 			{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm"},
@@ -170,7 +169,7 @@ other sessions
 	var renamed []Row
 	for _, n := range Tree(Input{
 		Hosts:  []Host{{Name: "box", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
-		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm"}},
+		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm"}},
 	}) {
 		if n.Orphaned {
 			renamed = append(renamed, n)
@@ -283,7 +282,7 @@ func TestPending(t *testing.T) {
 			{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"},
 			{ID: "venv/worktree//r/other", EnvironmentID: "venv", Repo: "proj", Branch: "other", Root: "/r/other", Session: "proj/other"},
 		},
-		Locals: []workspace.Local{{Name: "vm/proj/task", Key: "venv//r/task", Host: "vm", Settled: true}},
+		Locals: []protocol.Session{{Name: "vm/proj/task", Key: "venv//r/task", Host: "vm", Settled: true}},
 		Pendings: []protocol.Pending{
 			{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task", Taken: true, Reachable: true,
 				Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: now.Add(-time.Minute)},
@@ -500,7 +499,7 @@ func TestPendingOnRenamedHost(t *testing.T) {
 	// while the renamed host has not listed the worktree yet.
 	for _, n := range Tree(Input{
 		Hosts:    []Host{{Name: "new", EnvironmentID: "env", Connected: true, Listed: true, Worktrees: true}},
-		Locals:   []workspace.Local{{Name: "old/proj/b", Key: "env//r", Host: "old"}},
+		Locals:   []protocol.Session{{Name: "old/proj/b", Key: "env//r", Host: "old"}},
 		Pendings: []protocol.Pending{{ID: "add-2", Host: "old", EnvironmentID: "env", Repo: "proj", Branch: "b", Root: "/r", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}},
 	}) {
 		if n.Orphaned {
@@ -771,7 +770,7 @@ func TestWorktreeLineTakesAgentSession(t *testing.T) {
 		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Activity: protocol.Idle,
 			Liveness: protocol.Alive, WorktreeID: "menv/worktree//w/a"}},
 		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}},
-		Locals:    []workspace.Local{{Name: "notes"}},
+		Locals:    []protocol.Session{{Name: "notes"}},
 		Current:   "notes",
 	}
 	lines := treeLines(Tree(in))
@@ -792,7 +791,7 @@ func TestWorktreeLineTakesAgentSession(t *testing.T) {
 func TestHomelessLineLocal(t *testing.T) {
 	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
 	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
-	locals := []workspace.Local{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
+	locals := []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/a-old", Attach: "mac/proj/a", Host: "mac"}, {Name: "notes"}}
 	managed := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/a", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID}
 	first := Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "mac/proj/a"}
 	got := treeLines(Tree(first))
@@ -849,7 +848,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	rw := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	ra := protocol.Agent{ID: "venv/default/%3", EnvironmentID: "venv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: rw.ID}
 	remoteIn := Input{Hosts: remote, Agents: []protocol.Agent{ra}, Worktrees: []protocol.Worktree{rw},
-		Locals: []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"}
+		Locals: []protocol.Session{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm"}}, Current: "vm/proj/a"}
 	got = treeLines(Tree(remoteIn))
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "vm/proj/a" || !got[0].Current {
 		t.Fatalf("remote default-server agent: %+v", got)
@@ -955,7 +954,7 @@ func TestPrecedence(t *testing.T) {
 		root := "/w/" + s
 		in.Agents[i].WorktreeID = "venv/worktree/" + root
 		in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "proj", Branch: s, Root: root, Session: s})
-		in.Locals = append(in.Locals, workspace.Local{Name: "vm/proj/" + s, Key: workspace.Key("venv", root), Host: "vm", Settled: true})
+		in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/" + s, Key: protocol.SessionKey("venv", root), Host: "vm", Settled: true})
 	}
 	rs = Agents(in)
 	if got, want := names(rs.Main), "a b+done"; got != want {
@@ -1019,7 +1018,7 @@ func TestCurrentNotFolded(t *testing.T) {
 		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
 		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "s", Agent: "claude", Activity: protocol.Idle,
 			ActivityAt: now.Add(-5 * time.Hour), Liveness: protocol.Alive, Managed: true}},
-		Locals:  []workspace.Local{{Name: "vm/s", Attach: "vm/s", Host: "vm"}},
+		Locals:  []protocol.Session{{Name: "vm/s", Attach: "vm/s", Host: "vm"}},
 		Current: "vm/s",
 		Now:     now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
 	}
@@ -1032,7 +1031,7 @@ func TestCurrentNotFolded(t *testing.T) {
 	in.Agents[0].ActivityAt = now
 	in.Agents[0].Session = "proj/w"
 	in.Worktrees = []protocol.Worktree{{ID: "venv/worktree//w", EnvironmentID: "venv", Repo: "proj", Branch: "w", Root: "/w", Session: "proj/w"}}
-	in.Locals = []workspace.Local{{Name: "vm/proj/w", Key: workspace.Key("venv", "/w"), Host: "vm", Settled: true}}
+	in.Locals = []protocol.Session{{Name: "vm/proj/w", Key: protocol.SessionKey("venv", "/w"), Host: "vm", Settled: true}}
 	in.Current = "vm/proj/w"
 	rs = Agents(in)
 	if len(rs.Main) != 1 || !rs.Main[0].Settled || !rs.Main[0].Dim || !rs.Main[0].Current || len(rs.Stale) != 0 {

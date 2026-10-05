@@ -115,14 +115,14 @@ func cmdRm(ctx context.Context, args []string) error {
 // though Find would say so for an empty name; then the host is
 // whichever configured one answers as the key's environment, which is
 // how the dashboard routes a row.
-func hostForSession(ctx context.Context, cfg config.Config, cur workspace.Local) (config.Host, protocol.Message, protocol.Message, error) {
+func hostForSession(ctx context.Context, cfg config.Config, cur protocol.Session) (config.Host, protocol.Message, protocol.Message, error) {
 	if cur.Host != "" {
 		if h, ok := cfg.Find(cur.Host); ok {
 			hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
 			return h, hello, snap, err
 		}
 	}
-	env, _ := workspace.SplitKey(cur.Key)
+	env, _ := protocol.SplitSessionKey(cur.Key)
 	h, hello, snap, err := hostByEnvironment(ctx, cfg, env)
 	if err != nil {
 		if cur.Host == "" {
@@ -206,11 +206,11 @@ func parseRmArgs(args []string) (rmArgs, error) {
 // can misname after a switch or a detach in the worktree; else the tags
 // give them when this machine's config knows the source, else the root
 // alone as --root does.
-func rmCurrent(cfg config.Config, cur workspace.Local, h config.Host, environmentID string, worktrees []protocol.Worktree) (command.Rm, error) {
+func rmCurrent(cfg config.Config, cur protocol.Session, h config.Host, environmentID string, worktrees []protocol.Worktree) (command.Rm, error) {
 	if !cur.Workspace() {
 		return command.Rm{}, fmt.Errorf("%s is not a workspace session; name <repo>/<branch> or give --root", cur.Name)
 	}
-	env, root := workspace.SplitKey(cur.Key)
+	env, root := protocol.SplitSessionKey(cur.Key)
 	if root == "" {
 		return command.Rm{}, fmt.Errorf("workspace session %s has no root in its key", cur.Name)
 	}

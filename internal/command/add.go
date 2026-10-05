@@ -109,7 +109,7 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 	out.Session, out.Created, err = workspace.Ensure(ctx, workspace.Spec{
 		Host: a.Host.Host, Managed: res.Session,
 		Name:   workspace.SessionName(a.Host.Name, a.Repo.Name, out.Branch),
-		Key:    workspace.Key(hello.EnvironmentID, res.Root),
+		Key:    protocol.SessionKey(hello.EnvironmentID, res.Root),
 		Source: a.Repo.Source, Branch: out.Branch,
 	})
 	return out, err

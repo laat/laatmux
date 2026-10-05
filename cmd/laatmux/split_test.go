@@ -6,6 +6,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -14,14 +15,14 @@ import (
 // for a local host and through ssh with cd for a remote one. The
 // direction flag is passed through and the default left to tmux.
 func TestSplitArgs(t *testing.T) {
-	plain := workspace.Local{Name: "notes"}
-	ws := workspace.Local{Name: "vm/proj/x", Key: "env//home/u/wt/proj/x", Host: "vm"}
+	plain := protocol.Session{Name: "notes"}
+	ws := protocol.Session{Name: "vm/proj/x", Key: "env//home/u/wt/proj/x", Host: "vm"}
 	local := config.Host{Host: client.Host{Name: "mac"}}
 	remote := config.Host{Host: client.Host{Name: "vm", SSH: "vm"}}
 	cases := []struct {
 		name string
 		dir  string
-		l    workspace.Local
+		l    protocol.Session
 		h    config.Host
 		want string
 	}{

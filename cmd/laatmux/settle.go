@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -23,7 +24,7 @@ func setSettled(ctx context.Context, verb string, args []string, settled bool) e
 	if len(args) > 1 {
 		return fmt.Errorf("usage: laatmux %s [<host>/<repo>/<branch>]", verb)
 	}
-	var l workspace.Local
+	var l protocol.Session
 	if len(args) == 1 {
 		locals, err := workspace.List(ctx)
 		if err != nil {

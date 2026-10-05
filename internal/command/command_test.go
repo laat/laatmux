@@ -15,7 +15,6 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // Progress replayed after a reconnect is passed on once, by number: a
@@ -68,13 +67,13 @@ func TestRootOf(t *testing.T) {
 	repo := config.Repo{Source: "git@x:o/proj.git", Name: "proj"}
 	cases := []struct {
 		name   string
-		locals []workspace.Local
+		locals []protocol.Session
 		want   string
 	}{
-		{"by tags", []workspace.Local{{Name: "other", Key: "env//r/x", Source: repo.Source, Branch: "x"}}, "/r/x"},
-		{"by name untagged", []workspace.Local{{Name: "vm/proj/x", Key: "env//r/x"}}, "/r/x"},
-		{"by name tagged for another", []workspace.Local{{Name: "vm/proj/x", Key: "env//r/y", Source: repo.Source, Branch: "y"}}, ""},
-		{"other environment", []workspace.Local{{Name: "vm/proj/x", Key: "env2//r/x"}}, ""},
+		{"by tags", []protocol.Session{{Name: "other", Key: "env//r/x", Source: repo.Source, Branch: "x"}}, "/r/x"},
+		{"by name untagged", []protocol.Session{{Name: "vm/proj/x", Key: "env//r/x"}}, "/r/x"},
+		{"by name tagged for another", []protocol.Session{{Name: "vm/proj/x", Key: "env//r/y", Source: repo.Source, Branch: "y"}}, ""},
+		{"other environment", []protocol.Session{{Name: "vm/proj/x", Key: "env2//r/x"}}, ""},
 		{"none", nil, ""},
 	}
 	for _, c := range cases {

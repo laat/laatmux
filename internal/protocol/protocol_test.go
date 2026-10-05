@@ -80,3 +80,16 @@ func TestGitStatusOldEnvelope(t *testing.T) {
 		t.Error("Same")
 	}
 }
+
+// A session key is the environment id and the root, and parses from
+// the left: the root may hold a slash, the id never does.
+func TestSessionKeyRoundTrip(t *testing.T) {
+	key := SessionKey("3fa9c1d2e4b5a6f7", "/home/u/src/worktrees/proj/fix/v1.2")
+	env, root := SplitSessionKey(key)
+	if env != "3fa9c1d2e4b5a6f7" || root != "/home/u/src/worktrees/proj/fix/v1.2" {
+		t.Fatalf("SplitSessionKey(%q) = %q, %q", key, env, root)
+	}
+	if !(Session{Key: key}).Workspace() || !(Session{Key: key}).Laatmux() || (Session{Attach: "vm/proj/x"}).Workspace() || !(Session{Attach: "vm/proj/x"}).Laatmux() || (Session{Name: "notes"}).Laatmux() {
+		t.Fatal("a workspace has a key; laatmux's sessions have a key or an attach tag")
+	}
+}

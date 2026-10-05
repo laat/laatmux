@@ -9,7 +9,6 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // The merged stream, read from the local daemon. The daemon dials the
@@ -422,17 +421,17 @@ func (m *merged) timedOut(names []string, wait time.Duration) {
 
 // locals are the local sessions as the merged stream last published
 // them.
-func (m *merged) locals() []workspace.Local {
+func (m *merged) locals() []protocol.Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.localsLocked()
 }
 
 // localsLocked is locals with m.mu held.
-func (m *merged) localsLocked() []workspace.Local {
-	out := make([]workspace.Local, 0, len(m.sessions))
+func (m *merged) localsLocked() []protocol.Session {
+	out := make([]protocol.Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		out = append(out, workspace.Local(s))
+		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

@@ -8,7 +8,6 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // The two views, as milestone five's note settles them: the tree, the
@@ -69,14 +68,14 @@ type join struct {
 	in       Input
 	hosts    map[string]Host
 	byEnv    map[string]string
-	byKey    map[string]*workspace.Local
-	byAttach map[string]*workspace.Local
-	byName   map[string]*workspace.Local
+	byKey    map[string]*protocol.Session
+	byAttach map[string]*protocol.Session
+	byName   map[string]*protocol.Session
 }
 
 func newJoin(in Input) *join {
 	j := &join{in: in, hosts: map[string]Host{}, byEnv: map[string]string{},
-		byKey: map[string]*workspace.Local{}, byAttach: map[string]*workspace.Local{}, byName: map[string]*workspace.Local{}}
+		byKey: map[string]*protocol.Session{}, byAttach: map[string]*protocol.Session{}, byName: map[string]*protocol.Session{}}
 	names := make([]string, 0, len(in.Hosts))
 	for _, h := range in.Hosts {
 		j.hosts[h.Name] = h
@@ -114,7 +113,7 @@ func (j *join) up(env string) bool {
 // agentLocal is the local session an agent stands for on its own: the
 // plain attachment to its managed session, or the observed session on
 // this machine's default server.
-func (j *join) agentLocal(host string, a *protocol.Agent) *workspace.Local {
+func (j *join) agentLocal(host string, a *protocol.Agent) *protocol.Session {
 	switch {
 	case a.Server == tmux.LaatmuxServer.Label():
 		return j.byAttach[host+"/"+a.Session]
@@ -122,7 +121,7 @@ func (j *join) agentLocal(host string, a *protocol.Agent) *workspace.Local {
 		if l := j.byName[a.Session]; l != nil {
 			return l
 		}
-		return &workspace.Local{Name: a.Session}
+		return &protocol.Session{Name: a.Session}
 	}
 	return nil
 }
@@ -238,7 +237,7 @@ func Tree(in Input) []Row {
 			standing[alias] = append(standing[alias], i)
 		}
 		if p.EnvironmentID != "" && p.Root != "" && !p.Gone && !(p.Done && !p.OK) {
-			seenKey[workspace.Key(p.EnvironmentID, p.Root)] = true
+			seenKey[protocol.SessionKey(p.EnvironmentID, p.Root)] = true
 		}
 	}
 	// The newest submitted task owns a worktree's children.
@@ -261,7 +260,7 @@ func Tree(in Input) []Row {
 		} else {
 			line.Name = w.Repo + "/" + w.Branch
 		}
-		key := workspace.Key(w.EnvironmentID, w.Root)
+		key := protocol.SessionKey(w.EnvironmentID, w.Root)
 		seenKey[key] = true
 		agents := j.worktreeAgents(w)
 		var children []Row
@@ -381,7 +380,7 @@ func Tree(in Input) []Row {
 		t := &tasks[i]
 		p := t.Pending
 		if t.stands() && p.EnvironmentID != "" && p.Root != "" {
-			t.Local = j.byKey[workspace.Key(p.EnvironmentID, p.Root)]
+			t.Local = j.byKey[protocol.SessionKey(p.EnvironmentID, p.Root)]
 		}
 		var children []Row
 		if t.stands() && p.EnvironmentID != "" && p.Session != "" && p.Root != "" {
@@ -419,7 +418,7 @@ func Tree(in Input) []Row {
 		if !l.Workspace() || seenKey[l.Key] {
 			continue
 		}
-		env, _ := workspace.SplitKey(l.Key)
+		env, _ := protocol.SplitSessionKey(l.Key)
 		if !j.up(env) {
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -74,7 +75,7 @@ func cmdSplit(ctx context.Context, args []string) error {
 // splitArgs is the split-window command for a pane: the plain split in
 // the pane's directory when its session is not a workspace, else a pane
 // at the worktree root on the host.
-func splitArgs(dir, paneID, cwd string, l workspace.Local, h config.Host) []string {
+func splitArgs(dir, paneID, cwd string, l protocol.Session, h config.Host) []string {
 	args := []string{"split-window"}
 	if dir != "" {
 		args = append(args, dir)
@@ -83,7 +84,7 @@ func splitArgs(dir, paneID, cwd string, l workspace.Local, h config.Host) []stri
 	if !l.Workspace() {
 		return append(args, "-c", cwd)
 	}
-	_, root := workspace.SplitKey(l.Key)
+	_, root := protocol.SplitSessionKey(l.Key)
 	if h.Local() {
 		return append(args, "-c", root)
 	}

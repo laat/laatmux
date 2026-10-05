@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -569,18 +570,35 @@ type HostStatus struct {
 // Local reports whether the host is the merging daemon's own machine.
 func (h HostStatus) Local() bool { return h.SSH == "" }
 
-// Session is one of laatmux's sessions on the merging daemon's default
-// tmux server, as its tags say: a workspace session with Key, or a plain
-// attachment with Attach. Sessions with neither are not laatmux's and are
-// not published. The field order is the workspace package's Local.
+// Session is a session on the merging daemon's default tmux server with
+// the laatmux tags it carries: a workspace session has Key, a plain
+// attachment Attach, and one with neither is not laatmux's. The
+// workspace package lists them all; only laatmux's are published.
 type Session struct {
 	Name    string `json:"name"`
-	Key     string `json:"key,omitempty"`    // @laatmux_workspace: <environment_id>/<root>
-	Host    string `json:"host,omitempty"`   // @laatmux_host
-	Source  string `json:"source,omitempty"` // @laatmux_repo
-	Branch  string `json:"branch,omitempty"` // @laatmux_branch
-	Attach  string `json:"attach,omitempty"` // @laatmux_attach
-	Settled bool   `json:"settled,omitempty"`
+	Key     string `json:"key,omitempty"`     // @laatmux_workspace: <environment_id>/<root>
+	Host    string `json:"host,omitempty"`    // @laatmux_host
+	Source  string `json:"source,omitempty"`  // @laatmux_repo; "" when unknown
+	Branch  string `json:"branch,omitempty"`  // @laatmux_branch
+	Attach  string `json:"attach,omitempty"`  // @laatmux_attach
+	Settled bool   `json:"settled,omitempty"` // @laatmux_settled
+}
+
+// Workspace reports whether the session is a workspace session.
+func (s Session) Workspace() bool { return s.Key != "" }
+
+// Laatmux reports whether the session is laatmux's at all: a workspace
+// or a plain attachment.
+func (s Session) Laatmux() bool { return s.Key != "" || s.Attach != "" }
+
+// SessionKey is the workspace key a session carries: <environment_id>/
+// <root>. The environment id is hex, so the key parses from the left.
+func SessionKey(environmentID, root string) string { return environmentID + "/" + root }
+
+// SplitSessionKey returns the environment id and root of a key.
+func SplitSessionKey(key string) (environmentID, root string) {
+	environmentID, root, _ = strings.Cut(key, "/")
+	return environmentID, root
 }
 
 // Message is the single envelope. Fields are used per Type; unused ones are

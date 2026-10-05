@@ -8,14 +8,6 @@ import (
 	"github.com/laat/laatmux/internal/tmux"
 )
 
-func TestKeyRoundTrip(t *testing.T) {
-	key := Key("3fa9c1d2e4b5a6f7", "/home/u/src/worktrees/proj/fix/v1.2")
-	env, root := SplitKey(key)
-	if env != "3fa9c1d2e4b5a6f7" || root != "/home/u/src/worktrees/proj/fix/v1.2" {
-		t.Fatalf("SplitKey(%q) = %q, %q", key, env, root)
-	}
-}
-
 func TestSessionName(t *testing.T) {
 	if got := SessionName("vm", "proj", "fix/v1.2"); got != "vm/proj/fix/v1%2e2" {
 		t.Fatalf("SessionName = %q", got)
@@ -37,6 +29,11 @@ func TestParseSessions(t *testing.T) {
 	ws := locals[0]
 	if !ws.Workspace() || ws.Key != "env1/root/a" || ws.Host != "vm" || !ws.Settled || ws.Source != "git@x:o/proj.git" || ws.Branch != "fix" {
 		t.Errorf("workspace session parsed as %+v", ws)
+	}
+	// Published: the workspace and the plain attachment, not the
+	// user's own session.
+	if recs := Records(locals); len(recs) != 2 || recs[0].Name != "vm/proj/fix" || recs[1].Name != "mac/work" {
+		t.Errorf("Records: %+v", recs)
 	}
 	// Found by identity tags whatever the name, and not across hosts.
 	if l, ok := FindWorktree(locals, "env1", "git@x:o/proj.git", "fix"); !ok || l.Name != "vm/proj/fix" {
