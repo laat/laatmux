@@ -164,6 +164,18 @@ func TestExchangeAndRefused(t *testing.T) {
 	if _, err := Refused(protocol.Message{}, io.EOF); err != io.EOF {
 		t.Fatalf("transport: %v", err)
 	}
+	// An error message is a value too, and progress for the id with no
+	// callback is passed over.
+	go func() {
+		sc := protocol.NewConn(server)
+		req, _ := sc.Read()
+		sc.Write(protocol.Message{Type: protocol.TypeProgress, ID: req.ID, N: 1, Detail: "one"})
+		sc.Write(protocol.Message{Type: protocol.TypeError, ID: req.ID, Error: "bad request"})
+	}()
+	res, err = c.Exchange(context.Background(), protocol.Message{Type: protocol.TypeAdd, ID: "r2"}, nil)
+	if err != nil || res.Type != protocol.TypeError || res.Error != "bad request" {
+		t.Fatalf("error message: %+v %v", res, err)
+	}
 
 	// Request on a connection the other side closes: the diagnostic
 	// is in the error.
