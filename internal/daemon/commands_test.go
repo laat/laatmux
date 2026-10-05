@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -902,5 +903,32 @@ func TestSelectCommand(t *testing.T) {
 	unmanaged := New(Config{EnvironmentID: "env", Targets: []Target{{Label: "default", Tmux: srv}}})
 	if protocol.Has(unmanaged.capabilities(), protocol.CapSelect) {
 		t.Error("select advertised without a managed server")
+	}
+}
+
+// A listing error is logged and published once per change of its text,
+// not once per poll, with the text on the listing record; a listing
+// that works again is published once, with the error cleared.
+func TestListingErrorOnce(t *testing.T) {
+	dir := t.TempDir()
+	repos := filepath.Join(dir, "repos")
+	// A file where the repos directory should be: every list fails.
+	if err := os.WriteFile(repos, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var logged strings.Builder
+	d := New(Config{EnvironmentID: "lenv", Version: "local", Logger: log.New(&logged, "", 0),
+		Store: worktree.New(config.Dirs{Repos: repos, Worktrees: filepath.Join(dir, "wt")}, nil)})
+	state := func() (uint64, string) { d.mu.Lock(); defer d.mu.Unlock(); return d.seq, d.listErr }
+	for range 3 {
+		d.pollWorktrees(context.Background())
+	}
+	if n, e := state(); n != 1 || e == "" || !strings.Contains(logged.String(), e) || strings.Count(logged.String(), "worktrees: ") != 1 {
+		t.Fatalf("seq %d, listErr %q, log:\n%s", n, e, logged.String())
+	}
+	os.Remove(repos)
+	d.pollWorktrees(context.Background())
+	if n, e := state(); n != 2 || e != "" {
+		t.Fatalf("after recovery: seq %d, listErr %q", n, e)
 	}
 }

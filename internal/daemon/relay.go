@@ -624,7 +624,7 @@ func (d *Daemon) unreachable(id string, err error) {
 
 // pause waits the reconnect backoff, then doubles it up to the cap, and
 // returns false when ctx ends first: the wait between tries of a dial,
-// a follow or a listing that failed.
+// a follow, a listing or a disk write that failed.
 func (d *Daemon) pause(ctx context.Context, wait *time.Duration) bool {
 	select {
 	case <-ctx.Done():
