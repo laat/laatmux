@@ -243,13 +243,13 @@ func (d *Daemon) evict(id string, c *command) {
 // repoLock serializes commands per repository: fetch and worktree add
 // write to the same main checkout, so that is the grain. Different
 // repositories proceed in parallel.
-func (d *Daemon) repoLock(source string) *sync.Mutex {
+func (d *Daemon) repoLock(key string) *sync.Mutex {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	l, ok := d.locks[source]
+	l, ok := d.locks[key]
 	if !ok {
 		l = &sync.Mutex{}
-		d.locks[source] = l
+		d.locks[key] = l
 	}
 	return l
 }

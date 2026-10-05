@@ -50,7 +50,7 @@ type merged struct {
 	// labels is this machine's name for a repository by its source, for
 	// the rows: a host labels a checkout its config does not list by
 	// its directory. nil keeps the host's labels.
-	labels func(source string) (string, bool)
+	labels func(src string) (string, bool)
 	// attentions are the merging daemon's attention records, by agent
 	// id; sidebar is the config's row order and stale settings.
 	attentions map[string]protocol.Attention
