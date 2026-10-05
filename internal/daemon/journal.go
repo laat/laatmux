@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -162,7 +163,7 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 		if de.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(de.Name(), ".tmp") {
+		if home.Temporary(de.Name()) {
 			// A write that died before its rename is nobody's entry.
 			os.Remove(filepath.Join(dir, de.Name()))
 			continue
@@ -263,22 +264,13 @@ func (j *journal) update(id string, change func(*entry)) (entry, error) {
 	return cp.clone(), nil
 }
 
-// writeLocked writes e's file through a temporary renamed into place.
+// writeLocked writes e's file whole.
 func (j *journal) writeLocked(e *entry) error {
 	b, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(j.dir, FileName(e.ID))
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return home.WriteAtomic(filepath.Join(j.dir, FileName(e.ID)), b)
 }
 
 // reserved lists the names allocated by entries of the source that are

@@ -88,11 +88,7 @@ func WriteRuntime(r Runtime) error {
 	if err != nil {
 		return err
 	}
-	tmp := runtimePath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, runtimePath())
+	return WriteAtomic(runtimePath(), b)
 }
 
 // ReadRuntime returns the runtime file if its daemon is alive.

@@ -1237,3 +1237,34 @@ func TestRelayDirectoryFatal(t *testing.T) {
 		t.Error("the relay capability advertised without a relay")
 	}
 }
+
+// A temporary a write left behind when its daemon died is swept when
+// the relay opens, and the records, one named with .tmp, are unchanged.
+func TestRelaySweepsTemporaries(t *testing.T) {
+	dir := t.TempDir()
+	r, err := openRelay(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "job.tmp"} {
+		if _, err := r.create(pendingFile{Pending: protocol.Pending{ID: id, Host: "vm"}, PromptText: "p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale := filepath.Join(dir, FileName("a")+".tmp.12345")
+	if err := os.WriteFile(stale, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err = openRelay(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("temporary not swept: %v", err)
+	}
+	for _, id := range []string{"a", "job.tmp"} {
+		if p, ok := r.get(id); !ok || p.PromptText != "p" {
+			t.Fatalf("record %s lost to the sweep: %+v %v", id, p, ok)
+		}
+	}
+}

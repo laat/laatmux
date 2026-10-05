@@ -17,6 +17,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	cmdpkg "github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -116,7 +117,7 @@ func openRelay(dir string, logger *log.Logger) (*relay, error) {
 		if de.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(de.Name(), ".tmp") {
+		if home.Temporary(de.Name()) {
 			// A write that died before its rename: the prompt may be in
 			// it, and it is nobody's record.
 			os.Remove(filepath.Join(dir, de.Name()))
@@ -193,16 +194,7 @@ func (r *relay) writeLocked(p *pendingFile) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(r.dir, FileName(p.ID))
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return home.WriteAtomic(filepath.Join(r.dir, FileName(p.ID)), b)
 }
 
 // removeLocked deletes the record and its file. Called with r.mu held.
