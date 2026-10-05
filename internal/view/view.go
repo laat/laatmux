@@ -401,6 +401,21 @@ type Line struct {
 
 func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 
+// bold and dim are one-span lines in those attributes, fit to the
+// width: an overlay's title and an error are bold, its hint dim.
+func bold(s string, w int) Line { return Line{Spans: []Span{{Text: fit(s, w)}}, Bold: true} }
+func dim(s string, w int) Line  { return Line{Spans: []Span{{Text: fit(s, w)}}, Dim: true} }
+
+// framed is an overlay's frame h lines tall: the lines so far, blank
+// lines to the height but one, and foot as the last line, whatever the
+// body's length.
+func framed(out []Line, h int, foot Line) []Line {
+	for len(out) < h-1 {
+		out = append(out, plain(""))
+	}
+	return append(out[:h-1], foot)
+}
+
 // Render draws the model into exactly Height lines of at most Width
 // cells each, and records which body line shows which row for the mouse.
 // Before the first snapshot the body says it is loading, and a list with
@@ -465,7 +480,7 @@ func (m *Model) Render() []Line {
 				for i := range ls {
 					ls[i].Reverse = true
 					// The band spans the width, not the text alone.
-					if n := m.Width - lineWidth(ls[i]); n > 0 {
+					if n := m.Width - spansWidth(ls[i].Spans); n > 0 {
 						ls[i].Spans = append(ls[i].Spans, Span{Text: strings.Repeat(" ", n)})
 					}
 				}
@@ -591,15 +606,6 @@ func (m *Model) Render() []Line {
 		}
 	}
 	return out
-}
-
-// lineWidth is the cells a line's spans take.
-func lineWidth(l Line) int {
-	n := 0
-	for _, sp := range l.Spans {
-		n += width(sp.Text)
-	}
-	return n
 }
 
 func (m *Model) footer() Line {

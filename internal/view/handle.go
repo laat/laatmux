@@ -71,14 +71,8 @@ func (m *Model) Handle(k term.Key) Action {
 			m.Filter, m.Filtering = "", false
 		case term.KeyEnter, term.KeyNewline:
 			m.Filtering = false
-		case term.KeyBackspace:
-			if r := []rune(m.Filter); len(r) > 0 {
-				m.Filter = string(r[:len(r)-1])
-			}
-		case term.KeyRune:
-			m.Filter += string(k.Rune)
-		case term.KeyPaste:
-			m.Filter += pasteLine(k.Text)
+		case term.KeyBackspace, term.KeyRune, term.KeyPaste:
+			m.Filter = edited(m.Filter, k)
 		case term.KeyUp:
 			m.move(-1)
 		case term.KeyDown:
@@ -350,6 +344,22 @@ func (m *Model) hitRow(y int, at time.Time) int {
 		}
 	}
 	return -1
+}
+
+// edited is one line of text after a key: a rune or a paste's text, as
+// one line, appended; backspace with the last rune gone.
+func edited(s string, k term.Key) string {
+	switch k.Kind {
+	case term.KeyRune:
+		return s + string(k.Rune)
+	case term.KeyPaste:
+		return s + pasteLine(k.Text)
+	case term.KeyBackspace:
+		if r := []rune(s); len(r) > 0 {
+			return string(r[:len(r)-1])
+		}
+	}
+	return s
 }
 
 // pasteLine is a paste as one line of text, for a filter or a name:

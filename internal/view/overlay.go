@@ -97,8 +97,8 @@ func (p *Picker) Handle(k term.Key) {
 	case term.KeyDown:
 		p.Selected++
 	case term.KeyBackspace:
-		if r := []rune(p.Filter); len(r) > 0 {
-			p.Filter = string(r[:len(r)-1])
+		if p.Filter != "" {
+			p.Filter = edited(p.Filter, k)
 			// The selection follows the entry, not the position.
 			p.keep(m)
 		}
@@ -110,11 +110,8 @@ func (p *Picker) Handle(k term.Key) {
 		if i := k.Y - 1 - p.top; i >= 0 && i < len(p.hits) && p.hits[i] >= 0 {
 			p.Chosen, p.done = p.hits[i], true
 		}
-	case term.KeyRune:
-		p.Filter += string(k.Rune)
-		p.keep(m)
-	case term.KeyPaste:
-		p.Filter += pasteLine(k.Text)
+	case term.KeyRune, term.KeyPaste:
+		p.Filter = edited(p.Filter, k)
 		p.keep(m)
 	}
 	clamp()
@@ -143,7 +140,7 @@ func (p *Picker) Render(w, h int) []Line {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
-	out := []Line{{Spans: []Span{{Text: fit(p.Title, w)}}, Bold: true}, plain(fit("> "+p.Filter+"_", w))}
+	out := []Line{bold(p.Title, w), plain(fit("> "+p.Filter+"_", w))}
 	p.top = len(out)
 	body := h - len(out) - 1
 	if body < 1 {
@@ -186,13 +183,9 @@ func (p *Picker) Render(w, h int) []Line {
 		out = append(out, l)
 	}
 	if len(m) == 0 {
-		out[p.top] = Line{Spans: []Span{{Text: fit("  no match", w)}}, Dim: true}
+		out[p.top] = dim("  no match", w)
 	}
-	for len(out) < h-1 {
-		out = append(out, plain(""))
-	}
-	out = append(out, Line{Spans: []Span{{Text: fit(p.Hint, w)}}, Dim: true})
-	return out[:h]
+	return framed(out, h, dim(p.Hint, w))
 }
 
 // Log is a running command's progress: lines appended from another
@@ -272,7 +265,7 @@ func (l *Log) Render(w, h int) []Line {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := []Line{{Spans: []Span{{Text: fit(l.Title, w)}}, Bold: true}}
+	out := []Line{bold(l.Title, w)}
 	body := h - 2
 	if body < 1 {
 		body = 1
@@ -290,19 +283,16 @@ func (l *Log) Render(w, h int) []Line {
 		lines = lines[len(lines)-body:]
 	}
 	out = append(out, lines...)
-	for len(out) < h-1 {
-		out = append(out, plain(""))
-	}
 	var foot Line
 	switch {
 	case !l.ended:
-		foot = Line{Spans: []Span{{Text: fit("running  (ctrl-c leaves it running on the host)", w)}}, Dim: true}
+		foot = dim("running  (ctrl-c leaves it running on the host)", w)
 	case l.err != nil:
-		foot = Line{Spans: []Span{{Text: fit("failed  (any key returns)", w)}}, Bold: true}
+		foot = bold("failed  (any key returns)", w)
 	default:
-		foot = Line{Spans: []Span{{Text: fit("done", w)}}, Dim: true}
+		foot = dim("done", w)
 	}
-	return append(out[:h-1], foot)
+	return framed(out, h, foot)
 }
 
 // wrap splits s into lines of at most w cells, at spaces where one
