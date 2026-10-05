@@ -77,6 +77,9 @@ func TestShellCommand(t *testing.T) {
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
+	if got, want := AttachCommand(h, "proj/x"), "ssh -t -o ServerAliveInterval=15 -o ServerAliveCountMax=3 vm 'tmux -u -L laatmux attach-session -t '\\''=proj/x'\\'''"; got != want {
+		t.Fatalf("remote attach:\n got %s\nwant %s", got, want)
+	}
 	if !strings.Contains(AttachCommand(h, "proj/x"), "ssh -t") || strings.Contains(AttachCommand(client.Host{Name: "mac"}, "proj/x"), "ssh") {
 		t.Error("AttachCommand picked the wrong transport")
 	}

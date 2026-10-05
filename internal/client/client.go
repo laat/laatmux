@@ -100,14 +100,11 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 		}
 		r, w, close = nc, nc, func() { nc.Close() }
 	} else {
-		// ServerAlive turns a silent network loss into an ssh exit within
-		// about 45 s, so the client sees EOF and reconnects rather than
-		// showing a connected host with frozen state.
-		cmd := exec.CommandContext(ctx, "ssh", "-T",
-			"-o", "BatchMode=yes",
-			"-o", "ServerAliveInterval=15",
-			"-o", "ServerAliveCountMax=3",
-			h.SSH, RemoteBin(h.Bin)+" bridge")
+		// The keepalive turns a silent network loss into an ssh exit
+		// within about 45 s, so the client sees EOF and reconnects rather
+		// than showing a connected host with frozen state.
+		argv := SSH(h.SSH, bridgeSSH, RemoteBin(h.Bin)+" bridge")
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		// ssh's stderr is kept rather than passed through: a client shows
 		// it in the host's row, and the merging daemon puts it in the host
 		// record, where the user sees it. On the terminal it would
@@ -124,6 +121,10 @@ func Dial(ctx context.Context, h Host) (*Conn, error) {
 	}
 	return Connect(ctx, h, r, w, close)
 }
+
+// bridgeSSH is how the bridge is reached: without a terminal, with a
+// keepalive that ends a silent connection within about 45 s.
+var bridgeSSH = SSHOptions{KeepAlive: 15 * time.Second, KeepAliveCount: 3}
 
 // RemoteBin is the configured binary as a word for the remote login
 // shell: a path under ~ is the remote home, spelled so the shell expands
