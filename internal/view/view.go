@@ -710,25 +710,10 @@ func gitSpans(r rows.Row, w int) []Span {
 	}
 	g := r.Worktree.Git
 	rebase, committed, uncommitted := gitRebase(g), gitCommitted(g), gitUncommitted(g)
-	join := func(parts ...[]Span) []Span {
-		var out []Span
-		for _, p := range parts {
-			if len(p) == 0 {
-				continue
-			}
-			if len(out) > 0 {
-				out = append(out, Span{Text: " "})
-			}
-			out = append(out, p...)
-		}
-		return out
-	}
-	for _, try := range [][]Span{join(rebase, committed, uncommitted), join(rebase, uncommitted), rebase} {
+	for _, try := range [][]Span{joinSpans(rebase, committed, uncommitted), joinSpans(rebase, uncommitted), rebase} {
 		if len(try) > 0 && spansWidth(try) <= w {
 			if g.Stale {
-				for i := range try {
-					try[i].Dim, try[i].Bold, try[i].Fg = true, false, ""
-				}
+				gitStale(try)
 			}
 			return try
 		}
@@ -764,21 +749,8 @@ func gitSync(r rows.Row, w int) []Span {
 	if g.Behind > 0 {
 		behind = []Span{{Text: "↓" + strconv.Itoa(g.Behind)}}
 	}
-	join := func(parts ...[]Span) []Span {
-		var out []Span
-		for _, p := range parts {
-			if len(p) == 0 {
-				continue
-			}
-			if len(out) > 0 {
-				out = append(out, Span{Text: " "})
-			}
-			out = append(out, p...)
-		}
-		return out
-	}
-	rest := join(conflict, ahead, behind)
-	if base != nil && spansWidth(join(base, rest)) > w {
+	rest := joinSpans(conflict, ahead, behind)
+	if base != nil && spansWidth(joinSpans(base, rest)) > w {
 		// The base cut to the room left beside the rest, → and two
 		// letters at the least.
 		room := w - spansWidth(rest)
@@ -789,12 +761,10 @@ func gitSync(r rows.Row, w int) []Span {
 			base = cutSpans(base, room)
 		}
 	}
-	for _, try := range [][]Span{join(base, rest), rest, join(conflict, ahead), conflict} {
+	for _, try := range [][]Span{joinSpans(base, rest), rest, joinSpans(conflict, ahead), conflict} {
 		if len(try) > 0 && spansWidth(try) <= w {
 			if g.Stale {
-				for i := range try {
-					try[i].Dim, try[i].Bold, try[i].Fg = true, false, ""
-				}
+				gitStale(try)
 			}
 			return try
 		}
@@ -850,7 +820,25 @@ func gitUncommitted(g *protocol.GitStatus) []Span {
 	return out
 }
 
-// gitStale makes stats from a refresh that timed out dim and plain.
+// joinSpans is the parts with a space between them, the empty ones
+// left out.
+func joinSpans(parts ...[]Span) []Span {
+	var out []Span
+	for _, p := range parts {
+		if len(p) == 0 {
+			continue
+		}
+		if len(out) > 0 {
+			out = append(out, Span{Text: " "})
+		}
+		out = append(out, p...)
+	}
+	return out
+}
+
+// gitStale makes spans from an answer that is stale dim and plain: the
+// git stats of a refresh that timed out, a PR state from a query that
+// did.
 func gitStale(spans []Span) []Span {
 	for i := range spans {
 		spans[i].Dim, spans[i].Bold, spans[i].Fg = true, false, ""
