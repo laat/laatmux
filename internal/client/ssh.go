@@ -12,11 +12,13 @@ type SSHOptions struct {
 	// command run from a daemon or a script fails rather than prompts.
 	TTY bool
 	// ConnectTimeout bounds the connection; zero leaves ssh's default.
+	// Durations are whole seconds to ssh; a fraction is rounded up.
 	ConnectTimeout time.Duration
-	// KeepAlive, with KeepAliveCount, is ServerAliveInterval and
+	// KeepAlive is ServerAliveInterval, and KeepAliveCount
 	// ServerAliveCountMax: a silent network loss becomes an ssh exit
 	// after KeepAlive times KeepAliveCount, so the caller sees EOF
-	// rather than a frozen connection. Zero leaves ssh's default, none.
+	// rather than a frozen connection. A zero KeepAlive leaves ssh's
+	// default, none; a zero count leaves ssh's, three.
 	KeepAlive      time.Duration
 	KeepAliveCount int
 }
@@ -32,11 +34,19 @@ func SSH(alias string, o SSHOptions, command string) []string {
 		argv = append(argv, "-T", "-o", "BatchMode=yes")
 	}
 	if o.ConnectTimeout > 0 {
-		argv = append(argv, "-o", "ConnectTimeout="+strconv.Itoa(int(o.ConnectTimeout/time.Second)))
+		argv = append(argv, "-o", "ConnectTimeout="+seconds(o.ConnectTimeout))
 	}
 	if o.KeepAlive > 0 {
-		argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(o.KeepAlive/time.Second)),
-			"-o", "ServerAliveCountMax="+strconv.Itoa(o.KeepAliveCount))
+		argv = append(argv, "-o", "ServerAliveInterval="+seconds(o.KeepAlive))
+		if o.KeepAliveCount > 0 {
+			argv = append(argv, "-o", "ServerAliveCountMax="+strconv.Itoa(o.KeepAliveCount))
+		}
 	}
 	return append(argv, alias, command)
+}
+
+// seconds is a positive duration as ssh takes it: whole seconds,
+// rounded up, so a fraction never becomes 0, which would mean none.
+func seconds(d time.Duration) string {
+	return strconv.Itoa(int((d + time.Second - 1) / time.Second))
 }
