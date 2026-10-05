@@ -41,9 +41,8 @@ const (
 // read decoded as it arrives, the held bytes when their wait is up, and
 // the screen is redrawn after each. The rows are refreshed on every
 // change signal and the ages every five seconds, every second while a
-// time in seconds
-// is drawn, the spinner four times a second while a working row is on
-// the list; a resize redraws. An overlay that
+// time in seconds is drawn, the spinner four times a second while a
+// working row is on the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
 func Run(ctx context.Context, t *term.Term, m *Model, h Host) error {

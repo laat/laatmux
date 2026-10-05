@@ -1,6 +1,7 @@
 package term
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"strings"
@@ -775,5 +776,42 @@ func TestPasteTextBrokenSequence(t *testing.T) {
 	// A chunk is not cut before such a sequence's text: it has ended.
 	if head, tail := splitTail([]byte("ok \x1b[\n12")); string(head) != "ok \x1b[\n12" || len(tail) != 0 {
 		t.Errorf("splitTail: %q %q", head, tail)
+	}
+}
+
+// Input as the loop drives it: Start gives what Background read, the
+// held escape is flushed when due, Rearm sets no timer with nothing
+// held, a late answer to the background query is swallowed, and Reads
+// closes when the read fails.
+func TestInput(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	in := (&Term{in: r, pending: []byte("j\x1b"), unanswered: true}).Input(ctx)
+	if ks := in.Start(); len(ks) != 1 || ks[0].Rune != 'j' {
+		t.Fatalf("Start = %+v", ks)
+	}
+	in.Rearm()
+	select {
+	case <-in.Flush:
+	case <-time.After(time.Second):
+		t.Fatal("no flush for the held escape")
+	}
+	if ks := in.Flushed(); len(ks) != 1 || ks[0].Kind != KeyEsc {
+		t.Fatalf("Flushed = %+v", ks)
+	}
+	if in.Rearm(); in.Flush != nil {
+		t.Fatal("timer armed with nothing held")
+	}
+	w.Write([]byte("\x1b]11;rgb:0000/0000/0000\x1b\\x"))
+	if ks := in.Decode(<-in.Reads); len(ks) != 1 || ks[0].Rune != 'x' {
+		t.Fatalf("late answer not swallowed: %+v", ks)
+	}
+	w.Close()
+	if _, ok := <-in.Reads; ok {
+		t.Fatal("Reads open after the read failed")
 	}
 }

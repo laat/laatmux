@@ -14,8 +14,9 @@ type Read struct {
 }
 
 // Input is the terminal's keys as a loop drives them: Reads carries
-// each read as it arrives, from a goroutine that reads until ctx ends
-// or the read fails, when it closes; Flush fires when held bytes are
+// each read as it arrives, from a goroutine that reads until the read
+// fails, when Reads is closed, or ctx ends, when the goroutine stops at
+// its next send and Reads stays open; Flush fires when held bytes are
 // due, the escape wait or a paste's grace later. The loop decodes each
 // read with Decode and the due bytes with Flushed, handles the keys,
 // then Rearms the timer, so a sequence split by a slow handler is still
