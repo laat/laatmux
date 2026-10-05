@@ -102,8 +102,7 @@ func (d *Daemon) stepRevision() protocol.Listing {
 // field passes over. Called with d.mu held.
 func (d *Daemon) publishListingLocked() {
 	l := d.listing
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Listing: &l, ListingError: d.listErr})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Listing: &l, ListingError: d.listErr})
 }
 
 // pokeWorktrees asks for a poll now; a poll already pending is enough.
@@ -171,8 +170,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			delete(d.gits, r.Root)
 		}
 		d.worktrees[r.Root] = w
-		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Worktree: &w})
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 	}
 	for root := range d.worktrees {
 		if seen[root] {
@@ -180,9 +178,8 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		}
 		delete(d.worktrees, root)
 		delete(d.gits, root)
-		d.seq++
 		l := d.listing
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, WorktreeID: d.worktreeID(root), RemovedIn: &l})
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root), RemovedIn: &l})
 		d.worktreeRemovedLocked(d.worktreeID(root), &l)
 	}
 }

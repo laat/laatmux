@@ -305,13 +305,7 @@ func (d *Daemon) forwardLocalLocked(m protocol.Message) {
 func (d *Daemon) mbroadcastLocked(m protocol.Message) {
 	d.mseq++
 	m.Seq = d.mseq
-	for s := range d.msubs {
-		select {
-		case s.ch <- m:
-		default:
-			d.mergedGoneLocked(s, true)
-		}
-	}
+	fanout(d.msubs, m, func(s *subscriber) { d.mergedGoneLocked(s, true) })
 }
 
 // mergedSnapshotLocked is the merged state: every host's record in config
