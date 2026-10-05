@@ -757,7 +757,7 @@ func TestComposeAct(t *testing.T) {
 	}
 	// Ctrl-C on a log ends the view.
 	log = view.NewLog("t")
-	d.run = &running{log: log, done: func(*view.Model) bool { return true }}
+	d.run = &running{done: func(*view.Model) bool { return true }}
 	m = &view.Model{Overlay: log, Width: 80, Height: 24}
 	m.Handle(view.Key{Kind: view.KeyCtrlC})
 	if !c.act(m, m.Poll()) {
