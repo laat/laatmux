@@ -235,6 +235,5 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 		w.Git = &st
 	}
 	d.worktrees[root] = w
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Worktree: &w})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 }

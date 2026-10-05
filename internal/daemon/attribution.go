@@ -255,8 +255,7 @@ func (d *Daemon) publishPaneLocked(key string, st *paneState, now time.Time) {
 		return
 	}
 	d.paneRecs[key] = rec
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Pane: &rec})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &rec})
 }
 
 // dropPaneLocked removes a pane's record, if it has one: the pane has
@@ -266,8 +265,7 @@ func (d *Daemon) dropPaneLocked(key string) {
 		return
 	}
 	delete(d.paneRecs, key)
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, PaneRecordID: d.paneRecordID(key)})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: d.paneRecordID(key)})
 }
 
 func samePane(a, b protocol.Pane) bool {
@@ -291,8 +289,7 @@ func (d *Daemon) reattributeLocked(now time.Time) {
 			}
 			a.WorktreeID, a.UpdatedAt = wid, now
 			d.agents[key] = a
-			d.seq++
-			d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &a})
+			d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 			continue
 		}
 		if st.bare {
@@ -314,8 +311,7 @@ func (d *Daemon) runStarted(r *runJob, at time.Time) {
 		StartedAt:     at,
 	}
 	d.runRecs[rec.ID] = rec
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Run: &rec})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &rec})
 }
 
 // runEndedLocked removes a run's record, if it was published. Called
@@ -326,8 +322,7 @@ func (d *Daemon) runEndedLocked(r *runJob) {
 		return
 	}
 	delete(d.runRecs, id)
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, RunID: id})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, RunID: id})
 }
 
 // paneRecsLocked and runRecsLocked are the published records, for a

@@ -93,8 +93,7 @@ func publish(d *Daemon, key string, a protocol.Agent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.agents[key] = a
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &a})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 }
 
 // discovered completes both sides of a daemon's first poll.

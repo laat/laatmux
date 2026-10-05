@@ -620,8 +620,7 @@ func (d *Daemon) removeUnseen(t *target, seen map[string]bool) {
 			continue
 		}
 		delete(d.agents, key)
-		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, Seq: d.seq, AgentID: d.agentID(key)})
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: d.agentID(key)})
 	}
 }
 
@@ -750,8 +749,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		return
 	}
 	d.agents[key] = a
-	d.seq++
-	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &a})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 }
 
 // nextActivity applies the state machine: startup grace, skip, and the
@@ -815,10 +813,13 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// broadcastLocked sends one of this host's own changes to its plain
-// subscribers, and into the merged stream when this machine is one of the
-// configured hosts.
+// broadcastLocked numbers one of this host's own changes on its
+// sequence and sends it to its plain subscribers, and into the merged
+// stream when this machine is one of the configured hosts, dropping a
+// subscriber that has fallen behind.
 func (d *Daemon) broadcastLocked(m protocol.Message) {
+	d.seq++
+	m.Seq = d.seq
 	d.forwardLocalLocked(m)
 	// The attention of the daemon's own agents follows their records:
 	// after the upsert, so a finish never names an agent a subscriber
@@ -830,18 +831,30 @@ func (d *Daemon) broadcastLocked(m protocol.Message) {
 		d.forgetLocked(m.AgentID)
 	}
 	d.flushAttentionLocked()
-	for s := range d.subs {
+	fanout(d.subs, m, d.goneLocked)
+}
+
+// fanout sends m to every subscriber in subs; one whose buffer is full
+// has fallen behind and is given to gone, which drops it and closes its
+// transport, so the peer sees EOF, reconnects, and gets an
+// authoritative snapshot rather than a stream with a hole in it.
+func fanout(subs map[*subscriber]struct{}, m protocol.Message, gone func(*subscriber)) {
+	for s := range subs {
 		select {
 		case s.ch <- m:
 		default:
-			// Slow subscriber. Drop it and close its transport so the peer
-			// sees EOF, reconnects, and gets an authoritative snapshot.
-			delete(d.subs, s)
-			close(s.ch)
-			if s.drop != nil {
-				go s.drop()
-			}
+			gone(s)
 		}
+	}
+}
+
+// goneLocked drops a plain subscriber that fell behind: out of the set,
+// its channel closed, its transport closed off the lock.
+func (d *Daemon) goneLocked(s *subscriber) {
+	delete(d.subs, s)
+	close(s.ch)
+	if s.drop != nil {
+		go s.drop()
 	}
 }
 

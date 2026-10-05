@@ -41,8 +41,7 @@ func TestOverflowClosesTransport(t *testing.T) {
 	// goroutine blocks on the first message and the channel fills.
 	d.mu.Lock()
 	for i := 0; i < subscriberBuffer+8; i++ {
-		d.seq++
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Seq: d.seq, Agent: &protocol.Agent{ID: "x"}})
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "x"}})
 	}
 	d.mu.Unlock()
 	// Drain until EOF; it must arrive.
@@ -173,4 +172,37 @@ func TestInterruptedIsIdleAtOnce(t *testing.T) {
 	if got := d.nextActivity(st, res, now); got != protocol.Idle || st.pendingIdle != nil || !st.activityAt.Equal(now) {
 		t.Fatalf("interrupted: %s, pending %v (%s via %s)", got, st.pendingIdle, res.State, res.Rule)
 	}
+}
+
+// The plain stream is numbered by the broadcaster, one up per message
+// from the snapshot's number, which is the last broadcast's, whatever
+// kind of record the message carries.
+func TestBroadcastNumbers(t *testing.T) {
+	d := newTestDaemon()
+	d.mu.Lock()
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
+	d.mu.Unlock()
+	s, snap := d.subscribe(nil)
+	if snap.Seq != 2 {
+		t.Fatalf("snapshot numbered %d after two broadcasts", snap.Seq)
+	}
+	d.mu.Lock()
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "x"}})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &protocol.Worktree{ID: "w"}})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: "x"})
+	d.mu.Unlock()
+	for i := uint64(1); i <= 3; i++ {
+		// The broadcasts are done: a message not there is missing, not
+		// late.
+		select {
+		case m := <-s.ch:
+			if m.Seq != snap.Seq+i {
+				t.Fatalf("message %d numbered %d after snapshot %d", i, m.Seq, snap.Seq)
+			}
+		default:
+			t.Fatalf("message %d never sent", i)
+		}
+	}
+	d.unsubscribe(s)
 }
