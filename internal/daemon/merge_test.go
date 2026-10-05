@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -759,5 +761,37 @@ func TestMergedSnapshotOrder(t *testing.T) {
 	a, aok := at["agent"]
 	if !wok || !gok || !aok || !(w < a) || !(g < a) {
 		t.Fatalf("order %v in %+v", at, msgs)
+	}
+}
+
+// A listing error is logged and published once per change of its text,
+// not once per poll; a listing that works again is published once.
+func TestSessionsErrorOnce(t *testing.T) {
+	var logged strings.Builder
+	d := New(Config{EnvironmentID: "lenv", Version: "local", Logger: log.New(&logged, "", 0)})
+	seq := func() uint64 { d.mu.Lock(); defer d.mu.Unlock(); return d.mseq }
+	apply := func(err error) {
+		d.mu.Lock()
+		d.applySessionsLocked(nil, err)
+		d.mu.Unlock()
+	}
+	denied := errors.New("tmux: permission denied")
+	apply(denied)
+	apply(denied)
+	apply(errors.New("tmux: permission denied"))
+	if n := seq(); n != 1 {
+		t.Fatalf("%d messages for one error repeated, want 1", n)
+	}
+	apply(errors.New("tmux: no server"))
+	if n := seq(); n != 2 {
+		t.Fatalf("%d messages after a different error, want 2", n)
+	}
+	apply(nil)
+	apply(nil)
+	if n := seq(); n != 3 {
+		t.Fatalf("%d messages after the listing works again, want 3", n)
+	}
+	if got := logged.String(); strings.Count(got, "permission denied") != 1 || strings.Count(got, "no server") != 1 || strings.Count(got, "listed again") != 1 {
+		t.Fatalf("log:\n%s", got)
 	}
 }

@@ -482,7 +482,7 @@ func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFil
 		if cur, exists := d.relay.get(id); !exists || cur.retired() {
 			return p, false
 		}
-		if !d.relayBackoff(ctx, &wait) {
+		if !d.pause(ctx, &wait) {
 			return p, false
 		}
 	}
@@ -622,9 +622,10 @@ func (d *Daemon) unreachable(id string, err error) {
 	})
 }
 
-// backoff waits the reconnect backoff, doubled to the max, or returns
-// false when ctx ends.
-func (d *Daemon) relayBackoff(ctx context.Context, wait *time.Duration) bool {
+// pause waits the reconnect backoff, then doubles it up to the cap, and
+// returns false when ctx ends first: the wait between tries of a dial,
+// a follow or a listing that failed.
+func (d *Daemon) pause(ctx context.Context, wait *time.Duration) bool {
 	select {
 	case <-ctx.Done():
 		return false
@@ -671,7 +672,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 				return
 			}
 			d.unreachable(id, err)
-			if !d.relayBackoff(ctx, &wait) {
+			if !d.pause(ctx, &wait) {
 				return
 			}
 			continue
@@ -689,7 +690,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			// sends again.
 			if _, ok := d.setPending(id, true, func(p *pendingFile) { p.Sent = true }); !ok {
 				c.Close()
-				if !d.relayBackoff(ctx, &wait) {
+				if !d.pause(ctx, &wait) {
 					return
 				}
 				continue
@@ -716,7 +717,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 		if err != nil {
 			// A transport failure: no message came. Follow next time.
 			d.unreachable(id, fmt.Errorf("connection lost: %v", err))
-			if !d.relayBackoff(ctx, &wait) {
+			if !d.pause(ctx, &wait) {
 				return
 			}
 			continue
@@ -848,7 +849,7 @@ func (d *Daemon) retire(ctx context.Context, id string) bool {
 			} else {
 				d.unreachable(id, err)
 			}
-			if !d.relayBackoff(ctx, &wait) {
+			if !d.pause(ctx, &wait) {
 				return false
 			}
 			continue
@@ -861,7 +862,7 @@ func (d *Daemon) retire(ctx context.Context, id string) bool {
 		c.Close()
 		if err != nil {
 			d.unreachable(id, fmt.Errorf("connection lost: %v", err))
-			if !d.relayBackoff(ctx, &wait) {
+			if !d.pause(ctx, &wait) {
 				return false
 			}
 			continue
@@ -994,7 +995,7 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 		// published; a write that fails is retried, everything checked
 		// again.
 		d.cfg.Logger.Printf("pending: %s: %v", id, err)
-		if !d.relayBackoff(ctx, &wait) {
+		if !d.pause(ctx, &wait) {
 			return
 		}
 	}
@@ -1300,7 +1301,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 				p, _ = d.relay.get(id)
 				return p, false
 			}
-			if !d.relayBackoff(ctx, &backoff) {
+			if !d.pause(ctx, &backoff) {
 				return p, false
 			}
 			continue
@@ -1320,7 +1321,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 				p, _ = d.relay.get(id)
 				return p, false
 			}
-			if !d.relayBackoff(ctx, &backoff) {
+			if !d.pause(ctx, &backoff) {
 				return p, false
 			}
 			continue
@@ -1338,7 +1339,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 				p, _ = d.relay.get(id)
 				return p, false
 			}
-			if !d.relayBackoff(ctx, &backoff) {
+			if !d.pause(ctx, &backoff) {
 				return p, false
 			}
 			continue

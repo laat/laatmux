@@ -419,12 +419,9 @@ func (d *Daemon) follow(ctx context.Context, mh *mergedHost) {
 				st.Connected, st.Listed, st.Error, st.Reconnecting = false, false, msg, true
 			})
 		}
-		select {
-		case <-ctx.Done():
+		if !d.pause(ctx, &backoff) {
 			return
-		case <-time.After(backoff):
 		}
-		backoff = min(backoff*2, reconnectMax)
 	}
 }
 
@@ -643,10 +640,8 @@ func (d *Daemon) runSessions(ctx context.Context) {
 // the current ones.
 func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 	if err != nil {
-		if msg := err.Error(); msg != d.sessionsErr {
-			d.cfg.Logger.Printf("sessions: %v", err)
-			d.sessionsErr = msg
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, SessionsError: msg})
+		if d.logOnce(&d.sessionsErr, "sessions: %v", err) {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, SessionsError: d.sessionsErr})
 		}
 		return
 	}
@@ -673,10 +668,14 @@ func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 }
 
 // logOnce logs a message once per change of its text, keeping the text in
-// last so a repeating failure is one line.
-func (d *Daemon) logOnce(last *string, format string, err error) {
-	if msg := err.Error(); msg != *last {
-		d.cfg.Logger.Printf(format, err)
-		*last = msg
+// last so a repeating failure is one line, and reports whether it logged,
+// for a caller that publishes the change too.
+func (d *Daemon) logOnce(last *string, format string, err error) bool {
+	msg := err.Error()
+	if msg == *last {
+		return false
 	}
+	d.cfg.Logger.Printf(format, err)
+	*last = msg
+	return true
 }
