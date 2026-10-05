@@ -117,7 +117,7 @@ func openRelay(dir string, logger *log.Logger) (*relay, error) {
 		if de.IsDir() {
 			continue
 		}
-		if strings.Contains(de.Name(), ".tmp.") {
+		if strings.Contains(de.Name(), ".tmp") {
 			// A write that died before its rename: the prompt may be in
 			// it, and it is nobody's record.
 			os.Remove(filepath.Join(dir, de.Name()))
