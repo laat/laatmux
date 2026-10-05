@@ -196,11 +196,11 @@ func snapshot(ctx context.Context, h peer.Host, needCap string) (hello, snap pro
 // listed or has failed. Not ok when the stream has no such host.
 func mergedSnapshot(ctx context.Context, c *client.Conn, h peer.Host, needCap string) (hello, snap protocol.Message, ok bool, err error) {
 	m := merged.New()
-	pending, err := m.Read(ctx, c, snapshotTimeout, func(pending []string) bool { return !slices.Contains(pending, h.Name) })
+	waiting, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool { return !slices.Contains(waiting, h.Name) })
 	if err != nil {
 		return hello, snap, true, err
 	}
-	for _, n := range pending {
+	for _, n := range waiting {
 		if n == h.Name {
 			return hello, snap, true, fmt.Errorf("%s: no snapshot from the local daemon after %s", h.Name, snapshotTimeout)
 		}

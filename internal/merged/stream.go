@@ -34,12 +34,12 @@ func Dial(ctx context.Context) (*client.Conn, bool) {
 }
 
 // Read subscribes to the merged stream and applies it until ready
-// holds of the hosts still pending or the wait is over, then returns
+// holds of the hosts still waited on or the wait is over, then returns
 // the hosts that are still neither listed nor failed. The snapshot
 // comes at once with what the daemon knows, which on a cold daemon is
 // the host rows alone, and the hosts fill in as their connections come
 // up.
-func (m *State) Read(ctx context.Context, c *client.Conn, wait time.Duration, ready func(pending []string) bool) ([]string, error) {
+func (m *State) Read(ctx context.Context, c *client.Conn, wait time.Duration, ready func(waiting []string) bool) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	defer c.CloseOnDone(ctx)()
@@ -73,11 +73,11 @@ func (m *State) Read(ctx context.Context, c *client.Conn, wait time.Duration, re
 			snapshot = true
 		}
 		m.Apply(msg)
-		if ready(m.Pending()) {
+		if ready(m.Waiting()) {
 			break
 		}
 	}
-	return m.Pending(), nil
+	return m.Waiting(), nil
 }
 
 // Follow keeps the merged stream applied, reconnecting to the local

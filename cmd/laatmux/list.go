@@ -12,9 +12,9 @@ import (
 	"github.com/laat/laatmux/internal/rows"
 )
 
-// render is ls's listing of the merged state: a line per host that is
-// not connected and listed, the tree, and a failed session listing
-// after it.
+// render is ls's listing of the merged state: the local daemon's line
+// when it is down, a line per host, the tree, and a failed session
+// listing after it.
 func render(s merged.Status) string {
 	var b strings.Builder
 	if s.DaemonErr != "" {
@@ -148,11 +148,11 @@ func cmdLs(ctx context.Context, args []string) error {
 		return err
 	}
 	defer c.Close()
-	pending, err := m.Read(ctx, c, snapshotTimeout, func(pending []string) bool { return len(pending) == 0 })
+	waiting, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool { return len(waiting) == 0 })
 	if err != nil {
 		return err
 	}
-	m.TimedOut(pending, snapshotTimeout)
+	m.TimedOut(waiting, snapshotTimeout)
 	fmt.Print(render(m.Status("")))
 	return nil
 }

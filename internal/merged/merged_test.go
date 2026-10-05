@@ -1,13 +1,16 @@
 package merged
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 )
 
 // The merged stream, applied: records are attributed to hosts through
@@ -28,8 +31,11 @@ func TestApply(t *testing.T) {
 		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/proj/x", EnvironmentID: "menv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
 		Sessions:  []protocol.Session{{Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac", Settled: true}},
 	})
-	if got := m.Pending(); len(got) != 1 || got[0] != "vm" {
+	if got := m.Waiting(); len(got) != 1 || got[0] != "vm" {
 		t.Errorf("pending = %v, want [vm]", got)
+	}
+	if _, ok := m.HostCaps("vm"); ok {
+		t.Error("HostCaps of a host that has not answered a hello")
 	}
 	s := m.Status("")
 	if !s.Loaded || s.ByHost["menv/laatmux/%1"] != "mac" || m.HostOf("menv") != "mac" || m.HostOf("venv") != "" {
@@ -44,9 +50,8 @@ func TestApply(t *testing.T) {
 	if h, ok := s.Host("vm"); !ok || h.Local || h.Connected || h.Listed || h.EnvID != "" {
 		t.Errorf("vm = %+v", h)
 	}
-	locals := m.Locals()
-	if len(locals) != 1 || !locals[0].Settled || !locals[0].Workspace() || len(s.Input.Locals) != 1 {
-		t.Errorf("locals = %+v, input %+v", locals, s.Input.Locals)
+	if locals := s.Input.Locals; len(locals) != 1 || !locals[0].Settled || !locals[0].Workspace() {
+		t.Errorf("locals = %+v", locals)
 	}
 	if len(s.Input.Agents) != 1 || len(s.Input.Worktrees) != 1 {
 		t.Errorf("input: %+v", s.Input)
@@ -55,7 +60,7 @@ func TestApply(t *testing.T) {
 	// The remote comes up: records arrive, then the host is listed.
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, Worktree: &protocol.Worktree{ID: "venv/worktree//r/proj/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/r/proj/y"}})
-	if got := m.Pending(); len(got) != 1 {
+	if got := m.Waiting(); len(got) != 1 {
 		t.Errorf("pending while snapshot pending = %v", got)
 	}
 	if caps, ok := m.HostCaps("vm"); !ok || !slices.Equal(caps, []string{"status", "worktrees"}) {
@@ -65,7 +70,7 @@ func TestApply(t *testing.T) {
 		t.Error("HostCaps of a host not in the stream")
 	}
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 6, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
-	if got := m.Pending(); len(got) != 0 {
+	if got := m.Waiting(); len(got) != 0 {
 		t.Errorf("pending after listed = %v", got)
 	}
 	hello, snap, ok, err := m.HostSnapshot("vm")
@@ -94,7 +99,7 @@ func TestApply(t *testing.T) {
 		t.Errorf("host removal left %+v %+v %v", s.Hosts, s.Input.Worktrees, s.ByHost)
 	}
 	m.Apply(protocol.Message{Type: protocol.TypeRemove, Seq: 9, LocalSessionName: "mac/proj/x"})
-	if len(m.Locals()) != 0 {
+	if s := m.Status(""); len(s.Input.Locals) != 0 {
 		t.Error("session removal ignored")
 	}
 }
@@ -126,6 +131,15 @@ func TestRemoveRecords(t *testing.T) {
 	if s := m.Status(""); len(s.Input.Agents)+len(s.Input.Panes)+len(s.Input.Runs) != 0 || len(s.ByHost) != 0 {
 		t.Errorf("after the record removes: %+v %v", s.Input, s.ByHost)
 	}
+	// A host that never answered a hello has no environment id, and
+	// its removal takes no pane or run, not those without one.
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts: []protocol.HostStatus{{Name: "new", SSH: "new"}},
+		Panes: []protocol.Pane{{ID: "p3"}}, Runs: []protocol.Run{{ID: "r3"}}})
+	m.Apply(protocol.Message{Type: protocol.TypeRemove, HostName: "new"})
+	if s := m.Status(""); len(s.Input.Panes) != 1 || len(s.Input.Runs) != 1 || len(s.Hosts) != 0 {
+		t.Errorf("after removing a host without an environment: %+v", s.Input)
+	}
 }
 
 // A one-shot client that gave up on a host marks it down with the wait,
@@ -139,17 +153,17 @@ func TestTimedOut(t *testing.T) {
 			{Name: "box", SSH: "box", EnvironmentID: "benv", Error: "disconnected", Reconnecting: true, Capabilities: []string{"status", "worktrees"}},
 		},
 	})
-	if p := m.Pending(); !slices.Equal(p, []string{"box", "vm"}) {
+	if p := m.Waiting(); !slices.Equal(p, []string{"box", "vm"}) {
 		t.Fatalf("pending = %v", p)
 	}
-	m.TimedOut(m.Pending(), 20*time.Second)
-	if p := m.Pending(); len(p) != 0 {
+	m.TimedOut(m.Waiting(), 20*time.Second)
+	if p := m.Waiting(); len(p) != 0 {
 		t.Errorf("pending after the timeout = %v", p)
 	}
 	s := m.Status("")
 	for _, n := range []string{"vm", "box"} {
 		h, _ := s.Host(n)
-		if !h.Ready() || h.Connected || h.Listed || h.Reconnecting || h.Down() != "no snapshot after 20s" || h.EnvID == "" {
+		if !h.ready() || h.Connected || h.Listed || h.Reconnecting || h.Down() != "no snapshot after 20s" || h.EnvID == "" {
 			t.Errorf("%s after the timeout: %+v", n, h)
 		}
 	}
@@ -173,7 +187,7 @@ func TestHostReady(t *testing.T) {
 		{Host{}, false, ""},
 	}
 	for _, c := range cases {
-		if got := c.st.Ready(); got != c.ready {
+		if got := c.st.ready(); got != c.ready {
 			t.Errorf("%+v ready = %v", c.st, got)
 		}
 		if got := c.st.Down(); got != c.down {
@@ -181,7 +195,7 @@ func TestHostReady(t *testing.T) {
 		}
 	}
 	st := fromStatus(protocol.HostStatus{Name: "vm", Error: "disconnected", Reconnecting: true})
-	if st.Ready() || !st.Reconnecting || st.Name != "vm" {
+	if st.ready() || !st.Reconnecting || st.Name != "vm" {
 		t.Errorf("fromStatus: %+v", st)
 	}
 	st = fromStatus(protocol.HostStatus{Name: "mac", Capabilities: []string{protocol.CapWorktrees, protocol.CapAttribution}})
@@ -219,14 +233,14 @@ func TestPendingsAndHandoffs(t *testing.T) {
 	})
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Pending: &protocol.Pending{ID: "add-2", Host: "vm"}})
 	s := m.Status("")
-	if len(s.Pendings) != 2 || len(s.Input.Pendings) != 2 || s.Handoffs["add-0"] != "venv/worktree//w/proj/old" {
-		t.Fatalf("status: pendings %+v, handoffs %v", s.Pendings, s.Handoffs)
+	if len(s.Input.Pendings) != 2 || s.Handoffs["add-0"] != "venv/worktree//w/proj/old" {
+		t.Fatalf("status: pendings %+v, handoffs %v", s.Input.Pendings, s.Handoffs)
 	}
 	m.Apply(protocol.Message{Type: protocol.TypeRemove, PendingID: "add-2", ReplacedBy: "venv/worktree//w/proj/new"})
 	m.Apply(protocol.Message{Type: protocol.TypeRemove, PendingID: "add-1"})
 	s = m.Status("")
-	if len(s.Pendings) != 0 || len(s.Handoffs) != 2 || s.Handoffs["add-2"] != "venv/worktree//w/proj/new" {
-		t.Fatalf("after the removes: pendings %+v, handoffs %v", s.Pendings, s.Handoffs)
+	if len(s.Input.Pendings) != 0 || len(s.Handoffs) != 2 || s.Handoffs["add-2"] != "venv/worktree//w/proj/new" {
+		t.Fatalf("after the removes: pendings %+v, handoffs %v", s.Input.Pendings, s.Handoffs)
 	}
 	m.mu.Lock()
 	first := m.handoffs["add-0"].at
@@ -312,9 +326,13 @@ func TestAttributionNeedsForwarding(t *testing.T) {
 	if !attribution() {
 		t.Fatal("attribution lost with a forwarding daemon")
 	}
-	m.stripped = true
+	m.via(&client.Conn{Hello: protocol.Message{Capabilities: []string{protocol.CapStatus, protocol.CapMerged}}})
 	if attribution() {
 		t.Fatal("attribution through a merging daemon that drops it")
+	}
+	m.via(&client.Conn{Hello: protocol.Message{Capabilities: []string{protocol.CapStatus, protocol.CapMerged, protocol.CapAttribution}}})
+	if !attribution() {
+		t.Fatal("attribution lost through a merging daemon that forwards it")
 	}
 }
 
@@ -345,30 +363,76 @@ func TestBranches(t *testing.T) {
 	}
 }
 
-// Changed signals once per change and keeps one signal while nobody
-// waits; Notify is a change from outside the stream.
+// A Status shares nothing with the state: the rows are built from it
+// after the lock is released, while the stream goes on being applied.
+func TestStatusIsACopy(t *testing.T) {
+	m := New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:          []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}}},
+		Worktrees:      []protocol.Worktree{{ID: "w1", EnvironmentID: "venv", Repo: "proj", Source: "s", Branch: "b0", Root: "/w/b0", Session: "proj/b0"}},
+		Attentions:     []protocol.Attention{{AgentID: "a"}},
+		BranchStatuses: []protocol.BranchStatus{{BranchKey: protocol.BranchKey{Source: "s", Branch: "b"}}},
+		Handoffs:       []protocol.Handoff{{ID: "t", ReplacedBy: "w"}},
+		Agents:         []protocol.Agent{{ID: "a", EnvironmentID: "venv"}},
+	})
+	s := m.Status("")
+	m.Apply(protocol.Message{Type: protocol.TypeRemove, AttentionID: "a", BranchStatusKey: &protocol.BranchKey{Source: "s", Branch: "b"}, HostName: "vm"})
+	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Attention: &protocol.Attention{AgentID: "c"}})
+	if _, ok := s.Input.Attention["a"]; !ok || len(s.Input.Attention) != 1 || len(s.Input.Branches) != 1 || len(s.Hosts) != 1 || len(s.ByHost) != 2 || len(s.Handoffs) != 1 || len(s.Input.Agents) != 1 {
+		t.Errorf("a status changed under a later apply: %+v", s)
+	}
+	// The rows built from one while the stream applies attention and
+	// branch upserts: a race here is a crash in a sidebar pane.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			m.Apply(protocol.Message{Type: protocol.TypeUpsert, Attention: &protocol.Attention{AgentID: fmt.Sprint("a", i%3)},
+				BranchStatus: &protocol.BranchStatus{BranchKey: protocol.BranchKey{Source: "s", Branch: fmt.Sprint("b", i%3)}}})
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		rows.Tree(m.Status("").Input)
+	}
+	<-done
+}
+
+// Changed is signalled by a message applied and by Notify, keeps one
+// signal while nobody waits, and the daemon error signals only when it
+// changes.
 func TestChanged(t *testing.T) {
 	m := New()
-	select {
-	case <-m.Changed():
+	signalled := func() bool {
+		select {
+		case <-m.Changed():
+			return true
+		default:
+			return false
+		}
+	}
+	if signalled() {
 		t.Fatal("signalled before any change")
-	default:
 	}
 	m.Apply(protocol.Message{Type: protocol.TypeSnapshot})
+	if !signalled() {
+		t.Fatal("not signalled after a message")
+	}
 	m.Notify()
-	select {
-	case <-m.Changed():
-	default:
-		t.Fatal("not signalled after a change")
+	m.Notify()
+	if !signalled() {
+		t.Fatal("not signalled after Notify")
 	}
-	select {
-	case <-m.Changed():
+	if signalled() {
 		t.Fatal("two signals kept")
-	default:
 	}
 	m.setDaemonErr("down")
+	if !signalled() {
+		t.Fatal("not signalled when the daemon error changes")
+	}
 	m.setDaemonErr("down")
-	<-m.Changed()
+	if signalled() {
+		t.Fatal("signalled when the daemon error did not change")
+	}
 	if s := m.Status(""); s.DaemonErr != "down" {
 		t.Errorf("daemon error: %q", s.DaemonErr)
 	}

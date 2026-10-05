@@ -237,8 +237,8 @@ func TestServeToRender(t *testing.T) {
 	m := merged.New()
 	m.Configure(cfg)
 	unlisted := 0
-	pending, err := m.Read(ctx, c, 20*time.Second, func(pending []string) bool {
-		if len(pending) == 0 {
+	waiting, err := m.Read(ctx, c, 20*time.Second, func(waiting []string) bool {
+		if len(waiting) == 0 {
 			return true
 		}
 		// The snapshot, with the host still unlisted: let the poll
@@ -247,8 +247,8 @@ func TestServeToRender(t *testing.T) {
 		open()
 		return false
 	})
-	if err != nil || len(pending) != 0 {
-		t.Fatalf("read merged: %v %v", pending, err)
+	if err != nil || len(waiting) != 0 {
+		t.Fatalf("read merged: %v %v", waiting, err)
 	}
 	if unlisted == 0 {
 		t.Error("the host was listed in the snapshot already: the wait was not exercised")

@@ -15,6 +15,7 @@ package merged
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -144,12 +145,12 @@ func fromStatus(st protocol.HostStatus) Host {
 		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution)}
 }
 
-// Ready reports whether a one-shot client can stop waiting on the host:
+// ready reports whether a one-shot client can stop waiting on the host:
 // its records are listed or it has failed. A host that is connecting,
 // connected with its snapshot pending, or reconnecting after a drop, is
 // neither: a daemon restarted for an upgrade is back within seconds,
 // and the wait is bounded by the snapshot timeout as for a cold host.
-func (h Host) Ready() bool { return h.Listed || (h.Error != "" && !h.Reconnecting) }
+func (h Host) ready() bool { return h.Listed || (h.Error != "" && !h.Reconnecting) }
 
 // Down is the host's error as a header line says it: with the reconnect
 // noted when one is under way.
@@ -393,18 +394,14 @@ func (m *State) HostCaps(name string) ([]string, bool) {
 	return st.Caps, true
 }
 
-// Pending lists the hosts that are neither listed nor failed, sorted.
-func (m *State) Pending() []string {
+// Waiting lists the hosts a one-shot client is still waiting on, those
+// neither listed nor failed, sorted.
+func (m *State) Waiting() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.pendingLocked()
-}
-
-// pendingLocked is Pending with the lock held.
-func (m *State) pendingLocked() []string {
 	var out []string
 	for n, st := range m.hosts {
-		if !st.Ready() {
+		if !st.ready() {
 			out = append(out, n)
 		}
 	}
@@ -427,15 +424,8 @@ func (m *State) TimedOut(names []string, wait time.Duration) {
 	}
 }
 
-// Locals are the local sessions as the merged stream last published
-// them, by name.
-func (m *State) Locals() []protocol.Session {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.localsLocked()
-}
-
-// localsLocked is Locals with the lock held.
+// localsLocked is the local sessions as the merged stream last
+// published them, by name.
 func (m *State) localsLocked() []protocol.Session {
 	out := make([]protocol.Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -492,13 +482,13 @@ type Status struct {
 	// Handoffs are the worktree ids retired records became, by record
 	// id, the day's only.
 	Handoffs map[string]string
-	Pendings []protocol.Pending
 	// ByHost is the host each agent or worktree record was attributed
 	// to when it arrived, by record id.
 	ByHost map[string]string
-	// Input is the rows package's view of the records, with the local
-	// sessions and the viewer's session, and the worktrees labelled by
-	// this machine's names where Configure gave them.
+	// Input is the rows package's view of the records, the pending
+	// records among them, with the local sessions and the viewer's
+	// session, and the worktrees labelled by this machine's names where
+	// Configure gave them.
 	Input rows.Input
 }
 
@@ -527,9 +517,6 @@ func (m *State) Status(current string) Status {
 	for id, h := range m.byHost {
 		s.ByHost[id] = h
 	}
-	for _, p := range m.pendings {
-		s.Pendings = append(s.Pendings, p)
-	}
 	names := make([]string, 0, len(m.hosts))
 	for n := range m.hosts {
 		names = append(names, n)
@@ -543,10 +530,12 @@ func (m *State) Status(current string) Status {
 }
 
 // inputLocked is the rows package's view of the state, with the local
-// sessions and the viewer's session.
+// sessions and the viewer's session. Nothing of the state is shared
+// with it: the rows are built after the lock is released, while the
+// stream goes on being applied.
 func (m *State) inputLocked(current string) rows.Input {
 	after, dim, collapse := m.sidebar.Stale()
-	in := rows.Input{Locals: m.localsLocked(), Current: current, Attention: m.attentions, Branches: m.branches, Now: time.Now(),
+	in := rows.Input{Locals: m.localsLocked(), Current: current, Attention: maps.Clone(m.attentions), Branches: maps.Clone(m.branches), Now: time.Now(),
 		StaleAfter: after, DimStale: dim, CollapseStale: collapse, Sort: m.sidebar.Sort}
 	for name, st := range m.hosts {
 		// A merging daemon older than attribution forwards agent records

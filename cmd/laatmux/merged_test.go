@@ -49,12 +49,22 @@ func TestRenderHosts(t *testing.T) {
 	if !v.Header[0].Down || v.Header[1].Down || v.Loading {
 		t.Errorf("header flags: %+v, loading %v", v.Header, v.Loading)
 	}
-	// Before the snapshot the dashboard is loading; a watch whose daemon
-	// went away says so first.
+	// Before the snapshot the dashboard is loading.
 	v, m2 := &view.Model{}, merged.New()
 	fill(v, m2.Status(""))
 	if !v.Loading || len(v.Header) != 0 {
 		t.Errorf("before a snapshot: loading %v, header %v", v.Loading, v.Header)
+	}
+	// A watch or dashboard whose daemon went away says so first, over
+	// the hosts it last saw.
+	s := m.Status("")
+	s.DaemonErr = "disconnected; reconnecting"
+	if out := render(s); !strings.HasPrefix(out, "local daemon  DOWN  disconnected; reconnecting\nbox  DOWN") {
+		t.Errorf("render with the daemon down:\n%s", out)
+	}
+	fill(v, s)
+	if len(v.Header) != 5 || v.Header[0].Text != "local daemon  DOWN  disconnected; reconnecting" || !v.Header[0].Down || v.Header[1].Text != "box  DOWN  disconnected (reconnecting)" {
+		t.Errorf("header with the daemon down: %+v", v.Header)
 	}
 }
 
@@ -74,7 +84,7 @@ func TestRenderTimedOutAndOrphaned(t *testing.T) {
 			{Name: "vm/proj/maybe", Key: "venv//r/proj/maybe", Host: "vm"},
 		},
 	})
-	m.TimedOut(m.Pending(), 20*time.Second)
+	m.TimedOut(m.Waiting(), 20*time.Second)
 	out := render(m.Status(""))
 	if !strings.Contains(out, "vm  DOWN  no snapshot after 20s\n") || !strings.Contains(out, "box  DOWN  no snapshot after 20s\n") || strings.Contains(out, "reconnecting") {
 		t.Errorf("timed out hosts not marked:\n%s", out)

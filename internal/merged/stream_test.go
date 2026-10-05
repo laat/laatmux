@@ -58,9 +58,9 @@ func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn) bool) func() int {
 	}
 }
 
-// Read applies the stream until ready holds of the pending hosts: with
-// a snapshot but a host that never lists, the wait ends with the host
-// pending and no error; a daemon that answers the hello but never sends
+// Read applies the stream until ready holds of the hosts waited on:
+// with a snapshot but a host that never lists, the wait ends with the
+// host still waited on and no error; a daemon that answers the hello but never sends
 // the snapshot is a timeout, not an empty listing.
 func TestRead(t *testing.T) {
 	fakeDaemon(t, func(pc *protocol.Conn) bool {
@@ -74,22 +74,29 @@ func TestRead(t *testing.T) {
 	defer c.Close()
 	m := New()
 	var seen [][]string
-	pending, err := m.Read(context.Background(), c, 200*time.Millisecond, func(pending []string) bool {
-		seen = append(seen, pending)
-		return len(pending) == 0
+	waiting, err := m.Read(context.Background(), c, 200*time.Millisecond, func(waiting []string) bool {
+		seen = append(seen, waiting)
+		return len(waiting) == 0
 	})
-	if err != nil || len(pending) != 1 || pending[0] != "vm" || len(seen) != 1 || len(seen[0]) != 1 {
-		t.Fatalf("pending = %v, err = %v, ready saw %v", pending, err, seen)
+	if err != nil || len(waiting) != 1 || waiting[0] != "vm" || len(seen) != 1 || len(seen[0]) != 1 {
+		t.Fatalf("waiting = %v, err = %v, ready saw %v", waiting, err, seen)
 	}
 	if !m.Status("").Loaded {
 		t.Error("the snapshot was not applied")
 	}
 	// Ready at once: the read stops on the snapshot with the host still
-	// pending.
-	c2, _ := Dial(context.Background())
+	// waited on, well before the wait is over.
+	c2, ok := Dial(context.Background())
+	if !ok {
+		t.Fatal("Dial failed")
+	}
 	defer c2.Close()
-	if pending, err := New().Read(context.Background(), c2, 200*time.Millisecond, func([]string) bool { return true }); err != nil || len(pending) != 1 {
-		t.Errorf("ready at once: pending = %v, err = %v", pending, err)
+	start := time.Now()
+	if waiting, err := New().Read(context.Background(), c2, 5*time.Second, func([]string) bool { return true }); err != nil || len(waiting) != 1 {
+		t.Errorf("ready at once: waiting = %v, err = %v", waiting, err)
+	}
+	if time.Since(start) > time.Second {
+		t.Error("ready at once waited for the timeout")
 	}
 
 	fakeDaemon(t, func(pc *protocol.Conn) bool { return true })

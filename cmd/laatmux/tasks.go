@@ -86,7 +86,7 @@ func listTasks(ctx context.Context) error {
 // named by its worktree when that is listed. tasks configures no
 // labels, so a worktree's repository is the host's name for it.
 func taskReport(s merged.Status) string {
-	ps := append([]protocol.Pending(nil), s.Pendings...)
+	ps := append([]protocol.Pending(nil), s.Input.Pendings...)
 	var handed []string
 	for id, to := range s.Handoffs {
 		where := to
