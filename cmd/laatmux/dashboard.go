@@ -332,8 +332,9 @@ func (m *merged) fill(v *view.Model, current string) {
 	in := m.input(m.localsLocked(), current)
 	// The tree first: the agent view's selection follows a handoff to
 	// the worktree's first agent in the tree's order.
-	v.SetTree(rows.Tree(in))
-	v.SetRows(rows.Agents(in))
+	tree := rows.Tree(in)
+	v.SetTree(tree)
+	v.SetRows(rows.Agents(in, tree))
 	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {

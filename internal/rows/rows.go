@@ -417,6 +417,15 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	return best
 }
 
+// newer orders tasks newest first: by submission, then by id for two
+// submitted in the same instant.
+func newer(a, b *protocol.Pending) bool {
+	if !a.SubmittedAt.Equal(b.SubmittedAt) {
+		return a.SubmittedAt.After(b.SubmittedAt)
+	}
+	return a.ID < b.ID
+}
+
 // before is a ahead of b in rowAgent's choice.
 func before(a, b *protocol.Agent) bool {
 	if (a.Liveness == protocol.Gone) != (b.Liveness == protocol.Gone) {
@@ -448,10 +457,7 @@ func less(a, b Row, order string) bool {
 		return a.Pending != nil
 	}
 	if a.Pending != nil {
-		if !a.Pending.SubmittedAt.Equal(b.Pending.SubmittedAt) {
-			return a.Pending.SubmittedAt.After(b.Pending.SubmittedAt)
-		}
-		return a.Pending.ID < b.Pending.ID
+		return newer(a.Pending, b.Pending)
 	}
 	switch order {
 	case SortRecency:

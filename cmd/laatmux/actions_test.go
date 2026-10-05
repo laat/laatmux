@@ -71,7 +71,7 @@ func dashModel(cfg config.Config) *view.Model {
 		},
 	}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.ShowHidden = true
 	m.Render()
 	return m
@@ -284,7 +284,11 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
 		Agents: []protocol.Agent{{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/task", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive}},
 		Locals: []protocol.Session{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
-	})
+	}, rows.Tree(rows.Input{
+		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/task", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive}},
+		Locals: []protocol.Session{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
+	}))
 	if len(rs.Main) != 1 || rs.Main[0].Host != "mac" {
 		t.Fatalf("rows = %+v", rs.Main)
 	}
@@ -473,7 +477,7 @@ func TestRmFor(t *testing.T) {
 	}
 	m.View = view.ViewAgents
 	m.SetTree(rows.Tree(scratch))
-	m.SetRows(rows.Agents(scratch))
+	m.SetRows(rows.Agents(scratch, rows.Tree(scratch)))
 	m.Render()
 	selectRow(t, m, "scratch")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
@@ -506,7 +510,7 @@ func TestRmTreeRows(t *testing.T) {
 	}
 	m := &view.Model{Width: 80, Height: 30, View: view.ViewTree}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	m.Handle(term.Key{Rune: 'f'}) // every fold open
 	x := func(id string) {
@@ -542,7 +546,7 @@ func TestRmTreeRows(t *testing.T) {
 	in.Agents[2].ActivityAt = time.Time{}
 	in.Now, in.StaleAfter, in.CollapseStale = time.Now(), time.Hour, true
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	x(rows.NodeStale)
 	if m.Confirm != "" || !strings.Contains(m.Message, "x removes worktrees") {
@@ -779,7 +783,10 @@ func TestPendingKeys(t *testing.T) {
 	m.SetRows(rows.Agents(rows.Input{
 		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Pendings: []protocol.Pending{stuck, running},
-	}))
+	}, rows.Tree(rows.Input{
+		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings: []protocol.Pending{stuck, running},
+	})))
 	var dismissed, delivered string
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(),
 		dismiss: func(id string) error { dismissed = id; return nil },
@@ -892,7 +899,7 @@ func TestTaskAction(t *testing.T) {
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}},
 	}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Handle(term.Key{Rune: 'g'})
 	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: term.Key{Rune: r}} }
 	for _, r := range []rune{'p', 'x', 'X'} {
@@ -976,7 +983,7 @@ func TestPendingOffers(t *testing.T) {
 	m := &view.Model{Width: 100, Height: 20}
 	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
 	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
-	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}, rows.Tree(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}})))
 	m.Handle(term.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
@@ -994,7 +1001,7 @@ func TestPendingOffers(t *testing.T) {
 	gone := listed
 	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
 	// A gone task whose prompt was delivered has nothing kept to show.
-	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}, rows.Tree(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}})))
 	m.Handle(term.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
@@ -1003,14 +1010,14 @@ func TestPendingOffers(t *testing.T) {
 	// p on a task whose host is removed, and x on a running task whose
 	// replacement only the view has seen, say why not.
 	stuck := protocol.Pending{ID: "add-9", Host: "old", Repo: "proj", Branch: "d", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
-	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}, rows.Tree(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}})))
 	m.Handle(term.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "host removed; x dismisses the task") {
 		t.Errorf("p on a removed host: %q", m.Message)
 	}
 	moving := protocol.Pending{ID: "add-8", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "e", Sent: true, Taken: true, SubmittedAt: time.Now()}
-	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
+	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}, rows.Tree(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}})))
 	m.Handle(term.Key{Rune: 'g'})
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {

@@ -110,7 +110,7 @@ other sessions
 	// The agent view's order: blocked, working, idle (most recent first),
 	// ties by host then name; the settled workspace's agent in the Stale
 	// fold. A worktree with no agent has no tile.
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	if want := "notes proj/down proj/fix proj/dead remote-notes scratch"; names(rs.Main) != want {
 		t.Errorf("main = %q\nwant  %q", names(rs.Main), want)
 	}
@@ -239,7 +239,7 @@ func TestJoinByEnvironment(t *testing.T) {
 		t.Error("ids collide")
 	}
 	// The agent view: one tile each, with its own host's worktree.
-	tiles := Agents(in).Main
+	tiles := Agents(in, Tree(in)).Main
 	if len(tiles) != 2 {
 		t.Fatalf("tiles = %+v", tiles)
 	}
@@ -293,7 +293,7 @@ func TestPending(t *testing.T) {
 		},
 		Current: "vm/proj/task",
 	}
-	got := Agents(in)
+	got := Agents(in, Tree(in))
 	var ids []string
 	for _, r := range got.Main {
 		ids = append(ids, r.ID())
@@ -637,7 +637,7 @@ func TestJoinByWorktreeID(t *testing.T) {
 	}
 	// One tile per agent, with the worktree it is attributed to; the
 	// chosen ones are not repeated.
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	tiles := map[string][]string{}
 	for _, r := range append(rs.Main, rs.Stale...) {
 		w := ""
@@ -715,7 +715,7 @@ func TestTwoAgentsOneSession(t *testing.T) {
 			}
 			tiles := map[string]int{}
 			var suffixes []string
-			rs := Agents(in)
+			rs := Agents(in, Tree(in))
 			for _, r := range append(rs.Main, rs.Stale...) {
 				if r.Agent != nil {
 					tiles[r.Agent.ID]++
@@ -747,7 +747,7 @@ func TestTwoAgentsOneSession(t *testing.T) {
 				held = append(held, n.Agent.ID)
 			}
 		}
-		for _, r := range Agents(Input{Hosts: hosts, Agents: agents}).Main {
+		for _, r := range Agents(Input{Hosts: hosts, Agents: agents}, Tree(Input{Hosts: hosts, Agents: agents})).Main {
 			tiles = append(tiles, r.Agent.ID+" "+r.Suffix)
 		}
 		if got := strings.Join(held, " ") + " | " + strings.Join(tiles, ", "); got != a.ID+" "+b.ID+" | "+a.ID+" (1), "+b.ID+" (2)" {
@@ -777,7 +777,7 @@ func TestWorktreeLineTakesAgentSession(t *testing.T) {
 	if len(lines) != 1 || lines[0].Worktree == nil || lines[0].Local == nil || lines[0].Local.Name != "notes" || !lines[0].Current {
 		t.Fatalf("lines %+v", lines)
 	}
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	if len(rs.Main) != 1 || len(rs.Stale) != 0 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current {
 		t.Fatalf("tiles %+v", rs)
 	}
@@ -803,7 +803,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	// session takes that. Build's row, in the dashboard's one list before
 	// the two views, had the workspace session; whether the tile should
 	// is #85.
-	if rs := Agents(first); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a-old" {
+	if rs := Agents(first, Tree(first)); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a-old" {
 		t.Fatalf("managed agent's tile: %+v", rs)
 	}
 	// With no workspace session yet, the plain attachment to the same
@@ -826,7 +826,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	if got = treeLines(Tree(in)); len(got) != 1 || got[0].Worktree == nil || got[0].Local == nil || got[0].Local.Name != "notes" || !got[0].Current || got[0].Settled {
 		t.Fatalf("default-server agent: %+v", got)
 	}
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	if len(rs.Main) != 1 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || rs.Main[0].Settled {
 		t.Fatalf("default-server agent's tile: %+v", rs)
 	}
@@ -838,7 +838,7 @@ func TestHomelessLineLocal(t *testing.T) {
 	if got = treeLines(Tree(in)); len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Settled {
 		t.Fatalf("agent in the workspace session: %+v", got)
 	}
-	rs = Agents(in)
+	rs = Agents(in, Tree(in))
 	if len(rs.Main) != 0 || len(rs.Stale) != 1 || rs.Stale[0].Local == nil || rs.Stale[0].Local.Name != "mac/proj/a" || !rs.Stale[0].Settled {
 		t.Fatalf("agent in the workspace session's tile: %+v", rs)
 	}
@@ -854,7 +854,7 @@ func TestHomelessLineLocal(t *testing.T) {
 		t.Fatalf("remote default-server agent: %+v", got)
 	}
 	// Its tile too, through the child's fallback to the line's session.
-	rs = Agents(remoteIn)
+	rs = Agents(remoteIn, Tree(remoteIn))
 	if len(rs.Main) != 1 || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "vm/proj/a" || !rs.Main[0].Current {
 		t.Fatalf("remote default-server agent's tile: %+v", rs)
 	}
@@ -908,7 +908,7 @@ func TestPrecedence(t *testing.T) {
 		},
 		Now: now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
 	}
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	names := func(rs []Row) string {
 		var out []string
 		for _, r := range rs {
@@ -933,7 +933,7 @@ func TestPrecedence(t *testing.T) {
 		t.Errorf("stale: %s, want %s", got, want)
 	}
 	in.DimStale, in.CollapseStale = false, false
-	rs = Agents(in)
+	rs = Agents(in, Tree(in))
 	if got, want := names(rs.Main), "blocked-old done-old+done working idle-new seen idle-old+stale"; got != want || len(rs.Stale) != 0 {
 		t.Errorf("stale kept in place and not dim: %s, want %s", got, want)
 	}
@@ -956,7 +956,7 @@ func TestPrecedence(t *testing.T) {
 		in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "proj", Branch: s, Root: root, Session: s})
 		in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/" + s, Key: protocol.SessionKey("venv", root), Host: "vm", Settled: true})
 	}
-	rs = Agents(in)
+	rs = Agents(in, Tree(in))
 	if got, want := names(rs.Main), "a b+done"; got != want {
 		t.Errorf("settled, main: %s, want %s", got, want)
 	}
@@ -994,7 +994,7 @@ func TestSortOrders(t *testing.T) {
 		in.Sort = order
 		var got []string
 		var panes []string
-		for _, r := range Agents(in).Main {
+		for _, r := range Agents(in, Tree(in)).Main {
 			got = append(got, r.Name)
 			if r.Agent != nil {
 				panes = append(panes, r.Agent.ID[len("venv/laatmux/"):])
@@ -1022,7 +1022,7 @@ func TestCurrentNotFolded(t *testing.T) {
 		Current: "vm/s",
 		Now:     now, StaleAfter: time.Hour, DimStale: true, CollapseStale: true,
 	}
-	rs := Agents(in)
+	rs := Agents(in, Tree(in))
 	if len(rs.Main) != 1 || !rs.Main[0].Stale || !rs.Main[0].Current || len(rs.Stale) != 0 {
 		t.Errorf("main %+v, stale %+v", rs.Main, rs.Stale)
 	}
@@ -1033,7 +1033,7 @@ func TestCurrentNotFolded(t *testing.T) {
 	in.Worktrees = []protocol.Worktree{{ID: "venv/worktree//w", EnvironmentID: "venv", Repo: "proj", Branch: "w", Root: "/w", Session: "proj/w"}}
 	in.Locals = []protocol.Session{{Name: "vm/proj/w", Key: protocol.SessionKey("venv", "/w"), Host: "vm", Settled: true}}
 	in.Current = "vm/proj/w"
-	rs = Agents(in)
+	rs = Agents(in, Tree(in))
 	if len(rs.Main) != 1 || !rs.Main[0].Settled || !rs.Main[0].Dim || !rs.Main[0].Current || len(rs.Stale) != 0 {
 		t.Errorf("settled: main %+v, stale %+v", rs.Main, rs.Stale)
 	}
@@ -1041,7 +1041,7 @@ func TestCurrentNotFolded(t *testing.T) {
 	in.Agents[0].Activity = protocol.Working
 	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "other", Agent: "claude",
 		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true})
-	rs = Agents(in)
+	rs = Agents(in, Tree(in))
 	if len(rs.Main) != 2 || rs.Main[0].Name != "other" || !rs.Main[1].Current {
 		t.Errorf("settled own tile sorts: %+v", rs.Main)
 	}

@@ -162,7 +162,8 @@ func TestTreeServerlessAgent(t *testing.T) {
 // worktree numbered in the tree's order, the viewer's agents current.
 func TestAgents(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	rs := Agents(treeInput(now))
+	in := treeInput(now)
+	rs := Agents(in, Tree(in))
 	// The task, then blocked (the newest activity first), working, idle.
 	want := `new-one
 scratch
@@ -177,9 +178,9 @@ agents-config (2) *
 	}
 	// A task's tile and its worktree's agent, the moment both are
 	// listed, are not numbered as a pair.
-	in := treeInput(now)
+	in = treeInput(now)
 	in.Pendings = append(in.Pendings, protocol.Pending{ID: "add-2", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "auto-layout", Root: "/r/auto-layout", Session: "laatmux/auto-layout", Taken: true, SubmittedAt: now})
-	for _, r := range Agents(in).Main {
+	for _, r := range Agents(in, Tree(in)).Main {
 		if r.Suffix != "" && (r.Pending != nil || r.Name == "auto-layout") {
 			t.Errorf("%s numbered %q beside its task", r.Name, r.Suffix)
 		}
@@ -337,10 +338,27 @@ func TestTreeJumpAgentAndViewer(t *testing.T) {
 		}
 		// Both are the viewer's worktree's agents: both current, the
 		// blocked visitor first in sort order, so following lands on it.
-		tiles := Agents(in).Main
+		tiles := Agents(in, Tree(in)).Main
 		if len(tiles) != 2 || !tiles[0].Current || tiles[0].Agent.ID != "venv/laatmux/%2" || !tiles[1].Current {
 			t.Errorf("tiles: %+v", tiles)
 		}
 		in.Agents[0], in.Agents[1] = in.Agents[1], in.Agents[0]
+	}
+}
+
+// A repository known by an orphaned session's source tag alone, no
+// worktree naming it, is named by the source's last element: the forge
+// path's for a forge form, the source's own otherwise, without .git.
+func TestRepoNamedBySourceAlone(t *testing.T) {
+	in := Input{
+		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true}},
+		Locals: []protocol.Session{
+			{Name: "mac/one/x", Key: "menv//w/one/x", Host: "mac", Source: "git@GitHub.com:Laat/One.git"},
+			{Name: "mac/two/y", Key: "menv//w/two/y", Host: "mac", Source: "alice@box:projects/two.git"},
+		},
+	}
+	want := "One\n  mac/one/x\ntwo\n  mac/two/y\n"
+	if got := outline(Tree(in)); got != want {
+		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
 	}
 }

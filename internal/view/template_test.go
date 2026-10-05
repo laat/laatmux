@@ -102,7 +102,7 @@ func TestTokens(t *testing.T) {
 	in := treeInput(now)
 	tree := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 80, Height: 30}
 	tree.SetTree(rows.Tree(in))
-	tree.SetRows(rows.Agents(in))
+	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	tree.Render() // the first folds decided: agents-config open, its agent working
 	at := func(id string) rows.Row { return tree.Tree[tree.indexOf(id)] }
 	for _, c := range []struct {
@@ -133,7 +133,7 @@ func TestTokens(t *testing.T) {
 	in.Worktrees[1].Session = ""
 	in.Agents[3].Server, in.Agents[3].Managed = "default", false
 	tree.SetTree(rows.Tree(in))
-	tree.SetRows(rows.Agents(in))
+	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	tm, _ = ParseTemplate("({host})")
 	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/auto-layout"), 80)}}); got != "(vm)\n" {
 		t.Errorf("a worktree line's host: %q", got)
@@ -147,7 +147,7 @@ func TestTokens(t *testing.T) {
 	}
 	in = treeInput(now)
 	tree.SetTree(rows.Tree(in))
-	tree.SetRows(rows.Agents(in))
+	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	// {idx} through Render counts as the digits do.
 	tree.SetTemplates(CompileTemplates(nil, "", nil, "", "{indent}{fold}{idx}:{primary}", "{indent}{idx}:{agent_label}", "", ""))
 	tree.Height = 30
@@ -457,7 +457,7 @@ func TestConfiguredTemplates(t *testing.T) {
 	tree := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 20}
 	tree.SetTemplates(CompileTemplates(nil, "", nil, "{repo} ({repo_count})", "{indent}{fold}{branch} [{child_count}]", "{indent}{status_icon} {nope}", "", ""))
 	tree.SetTree(rows.Tree(in))
-	tree.SetRows(rows.Agents(in))
+	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	out = Text(tree.Render())
 	if !strings.Contains(out, "laatmux (4)") || !strings.Contains(out, "  ▾ agents-config [4]") {
 		t.Errorf("tree templates:\n%s", out)
@@ -500,7 +500,7 @@ func TestConfiguredTemplates(t *testing.T) {
 	tree.SetTemplates(DefaultTemplates())
 	tree.Width, tree.Height = 70, 20
 	tree.SetTree(rows.Tree(in))
-	tree.SetRows(rows.Agents(in))
+	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	out = Text(tree.Render())
 	if !strings.Contains(out, "auto-layout (vm)") || !strings.Contains(out, "adding +318 -87  #49 × 3/5") {
 		t.Errorf("a standing task's line:\n%s", out)
@@ -515,7 +515,7 @@ func TestTemplateTreeEdges(t *testing.T) {
 	in := treeInput(now)
 	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	m.Select("venv/worktree//r/agents-config")
 	m.Handle(term.Key{Rune: 'h'})
