@@ -111,7 +111,7 @@ func (e *Error) Error() string { return "tmux " + strings.Join(e.Args, " ") + ":
 // failures to observe, not an empty server.
 func NoServer(err error) bool {
 	var te *Error
-	if !errorsAs(err, &te) {
+	if !errors.As(err, &te) {
 		return false
 	}
 	switch {
@@ -119,21 +119,6 @@ func NoServer(err error) bool {
 		return true
 	case strings.Contains(te.Msg, "error connecting to"):
 		return strings.Contains(te.Msg, "(No such file or directory)") || strings.Contains(te.Msg, "(Connection refused)")
-	}
-	return false
-}
-
-func errorsAs(err error, target **Error) bool {
-	for err != nil {
-		if e, ok := err.(*Error); ok {
-			*target = e
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
 	}
 	return false
 }
@@ -186,7 +171,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 	out, err := s.Run(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		var te *Error
-		if errorsAs(err, &te) && strings.Contains(te.Msg, "no current target") {
+		if errors.As(err, &te) && strings.Contains(te.Msg, "no current target") {
 			return nil, nil
 		}
 		return nil, err

@@ -179,7 +179,7 @@ func parseStyle(st style, items string) (style, error) {
 			if c == "default" {
 				// tmux's own: the colour cleared.
 				c = ""
-			} else if !paletteName(c) {
+			} else if !palette.Known(c) {
 				if _, err := palette.Parse(c); err != nil {
 					return st, fmt.Errorf("unknown colour %q", c)
 				}
@@ -194,16 +194,6 @@ func parseStyle(st style, items string) (style, error) {
 		}
 	}
 	return st, nil
-}
-
-// paletteName reports whether s names a palette colour.
-func paletteName(s string) bool {
-	for _, n := range palette.Names {
-		if n == s {
-			return true
-		}
-	}
-	return false
 }
 
 // Templates is the set of lines the views draw with, compiled from the
@@ -1108,24 +1098,13 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	if b == nil || b.PR == nil || mainline(r) {
 		return nil
 	}
-	// Without colours the states still differ: open bold, merged
-	// plain, closed and draft faint.
-	sp := Span{Text: fmt.Sprintf("#%d", b.PR.Number)}
-	switch {
-	case b.PR.Draft && b.PR.State == "open":
-		// A draft closed as one keeps its flag; closed is what counts.
-		sp.Dim = true
-	case b.PR.State == "open":
-		sp.Fg, sp.Bold = palette.Success, true
-	case b.PR.State == "merged":
-		sp.Fg = palette.Accent
-	default:
-		sp.Fg, sp.Dim = palette.Danger, true
-	}
+	sp := prStyle(prKind(b.PR))
+	sp.Text = fmt.Sprintf("#%d", b.PR.Number)
 	out := []Span{sp}
 	if b.Stale {
 		// Dim, with ? after; staleMark takes it off when the checks
-		// are drawn with theirs.
+		// are drawn with theirs. Not gitStale: an open PR's bold stays
+		// while stale, which is #81, a bug of its own.
 		for i := range out {
 			out[i].Dim, out[i].Fg = true, ""
 		}
@@ -1146,21 +1125,45 @@ func (m *Model) prState(r rows.Row) []Span {
 	if set == nil {
 		set = prIcons[IconsEmoji]
 	}
-	var sp Span
-	switch {
-	case b.PR.Draft && b.PR.State == "open":
-		sp = Span{Text: set[prDraft], Dim: true}
-	case b.PR.State == "open":
-		sp = Span{Text: set[prOpen], Fg: palette.Success, Bold: true}
-	case b.PR.State == "merged":
-		sp = Span{Text: set[prMerged], Fg: palette.Accent}
-	default:
-		sp = Span{Text: set[prClosed], Fg: palette.Danger, Dim: true}
-	}
+	k := prKind(b.PR)
+	sp := prStyle(k)
+	sp.Text = set[k]
+	spans := []Span{sp}
 	if b.Stale {
-		sp.Dim, sp.Fg, sp.Bold = true, "", false
+		gitStale(spans)
 	}
-	return []Span{sp}
+	return spans
+}
+
+// prKind is the PR's state as one of the four kinds, an index into a
+// set of prIcons. A draft closed as one keeps its flag; closed is what
+// counts.
+func prKind(pr *protocol.PullRequest) int {
+	switch {
+	case pr.Draft && pr.State == "open":
+		return prDraft
+	case pr.State == "open":
+		return prOpen
+	case pr.State == "merged":
+		return prMerged
+	}
+	return prClosed
+}
+
+// prStyle is a PR kind's look, on a span without text: open green and
+// bold, merged purple, closed red and dim, a draft dim. Without colours
+// the states still differ: open bold, merged plain, closed and draft
+// faint.
+func prStyle(kind int) Span {
+	switch kind {
+	case prDraft:
+		return Span{Dim: true}
+	case prOpen:
+		return Span{Fg: palette.Success, Bold: true}
+	case prMerged:
+		return Span{Fg: palette.Accent}
+	}
+	return Span{Fg: palette.Danger, Dim: true}
 }
 
 // The PR state icons by set: open, draft, merged, closed.
@@ -1252,10 +1255,7 @@ func (m *Model) prChecks(r rows.Row, w int) []Span {
 	finish := func(spans []Span) []Span {
 		out := append([]Span{}, spans...)
 		if b.Stale {
-			out = append(out, Span{Text: "?"})
-			for i := range out {
-				out[i].Dim, out[i].Fg = true, ""
-			}
+			out = gitStale(append(out, Span{Text: "?"}))
 		}
 		return out
 	}
