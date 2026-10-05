@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
@@ -288,7 +289,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	chips[0].Title = "repository"
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
-		if r.Name == preRepo || config.SameSource(r.Source, preRepo) {
+		if r.Name == preRepo || source.Same(r.Source, preRepo) {
 			chips[0].Selected = i
 		}
 	}

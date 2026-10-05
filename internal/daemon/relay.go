@@ -16,9 +16,9 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	cmdpkg "github.com/laat/laatmux/internal/command"
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // The relay: the background add, living in the daemon on the machine
@@ -294,7 +294,7 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = "repository required"
 	case m.Branch == "":
 		res.Error = "branch required"
-	case m.RepoEntry != nil && !config.SameSource(m.RepoEntry.Source, m.Repo):
+	case m.RepoEntry != nil && !source.Same(m.RepoEntry.Source, m.Repo):
 		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
 	}
 	if res.Error != "" {

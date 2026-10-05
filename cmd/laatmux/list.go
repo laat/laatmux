@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -71,14 +72,14 @@ func (m *merged) configure(cfg config.Config) {
 }
 
 // repoLabels is the config's names for its repositories, by source in
-// any form config.SameSource takes as one.
+// any form source.Same takes as one.
 func repoLabels(cfg config.Config) func(string) (string, bool) {
 	names := map[string]string{}
 	for _, r := range cfg.Repos {
-		names[config.SourceKey(r.Source)] = r.Name
+		names[source.Key(r.Source)] = r.Name
 	}
-	return func(source string) (string, bool) {
-		name, ok := names[config.SourceKey(source)]
+	return func(src string) (string, bool) {
+		name, ok := names[source.Key(src)]
 		return name, ok
 	}
 }

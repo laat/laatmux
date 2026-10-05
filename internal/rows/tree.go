@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -39,7 +39,7 @@ const (
 )
 
 // RepoNode is the id of a repository's node: repo/ and the source key.
-func RepoNode(source string) string { return "repo/" + config.SourceKey(source) }
+func RepoNode(src string) string { return "repo/" + source.Key(src) }
 
 // LabelRepoNode is the id of a repository line known by a host's label
 // alone, from an older host that reports no source.
@@ -134,7 +134,7 @@ func (j *join) finish(r *Row) {
 	h, known := j.hosts[r.Host]
 	r.HostDown = !known || !h.Connected
 	if w := r.Worktree; w != nil && w.Branch != "" && w.Source != "" {
-		if b, ok := in.Branches[protocol.BranchKey{Source: config.SourceKey(w.Source), Branch: w.Branch}]; ok {
+		if b, ok := in.Branches[protocol.BranchKey{Source: source.Key(w.Source), Branch: w.Branch}]; ok {
 			r.Branch = &b
 		}
 	}
@@ -207,9 +207,9 @@ func Tree(in Input) []Row {
 		nodes     [][]Row // one worktree line with its children each
 	}
 	repos := map[string]*repo{}
-	repoOf := func(source, name string) *repo {
-		key := config.SourceKey(source)
-		if source == "" {
+	repoOf := func(src, name string) *repo {
+		key := source.Key(src)
+		if src == "" {
 			key = strings.TrimPrefix(LabelRepoNode(name), "repo/")
 		}
 		r := repos[key]
@@ -436,7 +436,7 @@ func Tree(in Input) []Row {
 	// worktrees is missing; the tag's last element stands in.
 	for _, rp := range repos {
 		if rp.name == "" {
-			if _, p, ok := config.Forge(strings.TrimPrefix(rp.key, "forge\x00")); ok {
+			if _, p, ok := source.Forge(strings.TrimPrefix(rp.key, "forge\x00")); ok {
 				rp.name = path.Base(p)
 			} else {
 				rp.name = path.Base(strings.TrimSuffix(strings.TrimPrefix(rp.key, "exact\x00"), ".git"))

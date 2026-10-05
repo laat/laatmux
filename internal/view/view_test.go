@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -1344,7 +1344,7 @@ func TestRenderPR(t *testing.T) {
 		in.Worktrees[i].Source = src
 	}
 	key := func(branch string) protocol.BranchKey {
-		return protocol.BranchKey{Source: config.SourceKey(src), Branch: branch}
+		return protocol.BranchKey{Source: source.Key(src), Branch: branch}
 	}
 	in.Branches = map[protocol.BranchKey]protocol.BranchStatus{
 		key("fix-ls"): {PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}},
@@ -1407,8 +1407,8 @@ func treeInput(now time.Time) rows.Input {
 			{Name: "mac/laatmux/gone", Key: "menv//w/gone", Host: "mac", Source: src},
 		},
 		Branches: map[protocol.BranchKey]protocol.BranchStatus{
-			{Source: config.SourceKey(src), Branch: "agents-config"}: {PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}},
-			{Source: config.SourceKey(src), Branch: "auto-layout"}:   {PR: &protocol.PullRequest{Number: 49, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5}},
+			{Source: source.Key(src), Branch: "agents-config"}: {PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksSuccess, Passed: 5, Total: 5}},
+			{Source: source.Key(src), Branch: "auto-layout"}:   {PR: &protocol.PullRequest{Number: 49, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5}},
 		},
 		Attention: map[string]protocol.Attention{"venv/laatmux/%8": {AgentID: "venv/laatmux/%8", FinishedAt: now.Add(-time.Minute)}},
 		Current:   "vm/laatmux/agents-config",

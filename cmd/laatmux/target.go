@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // snapshotTimeout bounds a snapshot request: the daemon answers once its
@@ -230,7 +231,7 @@ func needCaps(h client.Host, hello protocol.Message, needCap string) error {
 func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool, error) {
 	var found []protocol.Worktree
 	for _, w := range ws {
-		if w.Branch == branch && branch != "" && config.SameSource(w.Source, repo.Source) {
+		if w.Branch == branch && branch != "" && source.Same(w.Source, repo.Source) {
 			found = append(found, w)
 		}
 	}

@@ -1,11 +1,14 @@
-package config
+// Package source names repositories: a source is the string git clones
+// from, and its key is the repository's identity, the same for the
+// forms a forge gives one repository.
+package source
 
 import (
 	"net/url"
 	"strings"
 )
 
-// SourceKey is a repository source's identity. The forms a forge gives
+// Key is a repository source's identity. The forms a forge gives
 // one repository get the same key: git@host:owner/repo,
 // ssh://git@host/owner/repo and https://host/owner/repo, each with or
 // without .git and a trailing slash, the host compared without case.
@@ -16,7 +19,7 @@ import (
 // source is its own key, since there a user, a port or a leading slash
 // can name another repository: alice@box:proj and bob@box:proj are two
 // home directories, and two ports can be two servers.
-func SourceKey(source string) string {
+func Key(source string) string {
 	host, path, ok := forge(source)
 	if !ok {
 		// Its own key, in a space of its own: a source could spell
@@ -26,8 +29,8 @@ func SourceKey(source string) string {
 	return "forge\x00" + strings.ToLower(host) + "/" + path
 }
 
-// SameSource reports whether two sources name one repository.
-func SameSource(a, b string) bool { return a == b || SourceKey(a) == SourceKey(b) }
+// Same reports whether two sources name one repository.
+func Same(a, b string) bool { return a == b || Key(a) == Key(b) }
 
 // Forge splits a source in one of the forge forms into its host and its
 // path, owner/repo on GitHub; ok is false for any other source.
