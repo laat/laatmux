@@ -1319,14 +1319,15 @@ func (d *Daemon) runAttempt(ctx context.Context, id string) {
 }
 
 // runAttemptLocked sends the open attempt as a prompt message and
-// follows it until the host answers. Resumed, the attempt was sent
-// before, by the daemon before this one, and is followed by number
-// first, one the host never saw sent; and an attempt left open by a
-// host that cannot be reached, or that refuses the connection, is
-// waited on with backoff. Fresh, it is sent, and left open it is
-// reported as unresolved to the caller, who follows it in the
-// background. An attempt is closed by the host's answer alone. Called
-// with the attempt lock held.
+// follows it until the host answers. Resumed, by a follower in the
+// background (after a restart, after a dismiss that did not remove the
+// record, or for a fresh call left unresolved), the attempt may have
+// been sent, so it is followed by number first and sent if the host
+// never saw it; one left open by a host that cannot be reached, or
+// that refuses the connection, is waited on with backoff. Fresh, it is
+// sent, and left open it is reported as unresolved to the caller, who
+// resumes it in the background. An attempt is closed by the host's
+// answer alone. Called with the attempt lock held.
 func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) (pendingFile, bool) {
 	sent, wait := resumed, resumed
 	backoff := d.cfg.ReconnectMin

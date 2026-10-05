@@ -55,9 +55,8 @@ type merged struct {
 	attentions map[string]protocol.Attention
 	sidebar    config.Sidebar
 	// branches are the merging daemon's PR and check records, by
-	// source key and branch; githubErr why it cannot read GitHub.
-	branches  map[protocol.BranchKey]protocol.BranchStatus
-	githubErr string
+	// source key and branch.
+	branches map[protocol.BranchKey]protocol.BranchStatus
 	// panes and runs are the pane and run records of hosts with
 	// attribution, by id, the tree's children beside the agents.
 	panes map[string]protocol.Pane

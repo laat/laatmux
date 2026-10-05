@@ -47,12 +47,11 @@ type style struct {
 }
 
 // part is one piece of a parsed template: literal text, a token by name
-// or the fill, with the style in force and the column it starts at.
+// or the fill, with the style in force.
 type part struct {
 	kind partKind
 	text string
 	st   style
-	col  int
 }
 
 // Template is one parsed line.
@@ -99,10 +98,9 @@ func ParseTemplate(src string) (Template, error) {
 	var st style
 	rs := []rune(src)
 	var text strings.Builder
-	textCol := 1
 	flush := func() {
 		if text.Len() > 0 {
-			t.parts = append(t.parts, part{kind: partText, text: text.String(), st: st, col: textCol})
+			t.parts = append(t.parts, part{kind: partText, text: text.String(), st: st})
 			text.Reset()
 		}
 	}
@@ -121,7 +119,6 @@ func ParseTemplate(src string) (Template, error) {
 			}
 			st = ns
 			i = end
-			textCol = i + 2
 		case rs[i] == '{':
 			end := indexRune(rs, i+1, '}')
 			if end < 0 {
@@ -134,18 +131,14 @@ func ParseTemplate(src string) (Template, error) {
 					return t, fmt.Errorf("a second {fill} at column %d", col)
 				}
 				t.fill = true
-				t.parts = append(t.parts, part{kind: partFill, st: st, col: col})
+				t.parts = append(t.parts, part{kind: partFill, st: st})
 			} else if _, ok := tokens[name]; ok {
-				t.parts = append(t.parts, part{kind: partToken, text: name, st: st, col: col})
+				t.parts = append(t.parts, part{kind: partToken, text: name, st: st})
 			} else {
 				return t, fmt.Errorf("unknown token {%s} at column %d", name, col)
 			}
 			i = end
-			textCol = i + 2
 		default:
-			if text.Len() == 0 {
-				textCol = col
-			}
 			text.WriteRune(rs[i])
 		}
 	}
@@ -1076,9 +1069,10 @@ func (m *Model) token(name string, r rows.Row) item {
 	return it
 }
 
-// statusLabel is a row's status as a word: a task's state, `worktree
-// gone` for an orphaned line, the agent's status on a tile or an agent
-// line; "" on a worktree line, whose folded icon says it.
+// statusLabel is a row's status as a word: a task's state, the agent's
+// status on a tile or an agent line; "" on a worktree line, whose
+// folded icon says it. An orphaned line is the status_label token's,
+// which answers it before asking here.
 func (m *Model) statusLabel(r rows.Row) string {
 	switch {
 	case r.Pending != nil:

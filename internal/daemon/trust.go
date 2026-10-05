@@ -177,8 +177,10 @@ func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.I
 }
 
 // startTrust starts the watcher for a launch, unless the daemon is
-// stopping; StopRuns cancels the watchers and waits for them.
-func (d *Daemon) startTrust(t trustTarget, wait, poll time.Duration) {
+// stopping; StopRuns cancels the watchers and waits for them. The
+// watcher polls every trustPoll for readyWait.
+func (d *Daemon) startTrust(t trustTarget) {
+	wait, poll := readyWait, trustPoll
 	if d.cfg.Store == nil || !d.cfg.Store.Owns(t.root) {
 		return
 	}
