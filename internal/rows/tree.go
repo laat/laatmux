@@ -175,9 +175,25 @@ func (j *join) worktreeAgents(w *protocol.Worktree) []*protocol.Agent {
 // sessions where they belong, and other sessions last. Depth is the
 // node's level, Children how many nodes are under a foldable one.
 func Tree(in Input) []Row {
-	// The agents in one order whatever the map they came from: by
-	// host, session, start and id, which the tree's children and the
-	// tiles' suffixes count on. A copy: the caller's slice is its own.
+	b := newBuilder(sorted(in))
+	b.tasks()
+	b.worktrees()
+	b.looseTasks()
+	b.orphans()
+	b.nameRepos()
+	out := b.repoLines()
+	out = b.otherSessions(out)
+	markViewer(out, in.Current)
+	return out
+}
+
+// sorted is the input with its agents and worktrees in one order
+// whatever the maps they came from: the agents by host, session, start
+// and id, which the tree's children and the tiles' suffixes count on;
+// the worktrees by host and root, so a repository this machine has no
+// label for is named by the first worktree naming it. Copies: the
+// caller's slices are its own.
+func sorted(in Input) Input {
 	in.Agents = append([]protocol.Agent(nil), in.Agents...)
 	sort.SliceStable(in.Agents, func(a, b int) bool {
 		x, y := &in.Agents[a], &in.Agents[b]
@@ -189,8 +205,6 @@ func Tree(in Input) []Row {
 		}
 		return before(x, y)
 	})
-	// The worktrees likewise, by host and root: a repository this
-	// machine has no label for is named by the first worktree naming it.
 	in.Worktrees = append([]protocol.Worktree(nil), in.Worktrees...)
 	sort.SliceStable(in.Worktrees, func(a, b int) bool {
 		x, y := &in.Worktrees[a], &in.Worktrees[b]
@@ -199,52 +213,95 @@ func Tree(in Input) []Row {
 		}
 		return x.Root < y.Root
 	})
-	j := newJoin(in)
-	type repo struct {
-		key, name string
-		source    string  // "" for a repository known by a host's label alone
-		nodes     [][]Row // one worktree line with its children each
-	}
-	repos := map[string]*repo{}
-	repoOf := func(src, name string) *repo {
-		key := source.Key(src)
-		if src == "" {
-			key = strings.TrimPrefix(LabelRepoNode(name), "repo/")
-		}
-		r := repos[key]
-		if r == nil {
-			r = &repo{key: key, name: name, source: src}
-			repos[key] = r
-		}
-		if r.name == "" {
-			r.name = name
-		}
-		return r
-	}
-	used := map[*protocol.Agent]bool{}
-	seenKey := map[string]bool{}
-	placed := map[int]bool{}
+	return in
+}
 
-	// The tasks: which stand for a listed worktree, by the worktree id.
-	standing := map[string][]int{}
-	tasks := make([]Row, len(in.Pendings))
+// repo is a repository line in the making: its node key, its name, its
+// source and the groups under it.
+type repo struct {
+	key, name string
+	source    string  // "" for a repository known by a host's label alone
+	nodes     [][]Row // one worktree line with its children each
+}
+
+// builder is the tree in the making: the passes in order, each reading
+// what the ones before it placed.
+type builder struct {
+	in    Input
+	j     *join
+	repos map[string]*repo
+	// used marks the agents placed under a worktree or a task, so the
+	// other sessions are the rest; seenKey the workspace keys a worktree
+	// or a task neither gone nor failed accounts for, so the orphans are
+	// the rest;
+	// placed the tasks a worktree line took, so the loose ones are the
+	// rest.
+	used    map[*protocol.Agent]bool
+	seenKey map[string]bool
+	placed  map[int]bool
+	// taskRows is one row per pending task; standing holds, by worktree
+	// id, the tasks that stand for a listed worktree, newest first.
+	taskRows []Row
+	standing map[string][]int
+	// otherOrphans are the orphaned sessions with no source tag, for
+	// other sessions.
+	otherOrphans []Row
+}
+
+func newBuilder(in Input) *builder {
+	return &builder{
+		in: in, j: newJoin(in), repos: map[string]*repo{},
+		used: map[*protocol.Agent]bool{}, seenKey: map[string]bool{}, placed: map[int]bool{},
+		standing: map[string][]int{},
+	}
+}
+
+// repoOf is the repository line for a source, or for a host's label
+// when the record carries no source; the first name given sticks.
+func (b *builder) repoOf(src, name string) *repo {
+	key := source.Key(src)
+	if src == "" {
+		key = strings.TrimPrefix(LabelRepoNode(name), "repo/")
+	}
+	r := b.repos[key]
+	if r == nil {
+		r = &repo{key: key, name: name, source: src}
+		b.repos[key] = r
+	}
+	if r.name == "" {
+		r.name = name
+	}
+	return r
+}
+
+// tasks makes the task rows and finds which stand for a listed
+// worktree, by the worktree id; the newest submitted of those owns the
+// worktree's children.
+func (b *builder) tasks() {
+	in, j := b.in, b.j
+	b.taskRows = make([]Row, len(in.Pendings))
 	for i := range in.Pendings {
 		p := &in.Pendings[i]
 		h, configured := j.hosts[p.Host]
-		tasks[i] = Row{Kind: KindTask, Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
+		b.taskRows[i] = Row{Kind: KindTask, Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
 			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
-		if alias := tasks[i].Alias(); alias != "" {
-			standing[alias] = append(standing[alias], i)
+		if alias := b.taskRows[i].Alias(); alias != "" {
+			b.standing[alias] = append(b.standing[alias], i)
 		}
 		if p.EnvironmentID != "" && p.Root != "" && !p.Gone && !(p.Done && !p.OK) {
-			seenKey[protocol.SessionKey(p.EnvironmentID, p.Root)] = true
+			b.seenKey[protocol.SessionKey(p.EnvironmentID, p.Root)] = true
 		}
 	}
-	// The newest submitted task owns a worktree's children.
-	for _, idx := range standing {
-		sort.SliceStable(idx, func(a, b int) bool { return newer(tasks[idx[a]].Pending, tasks[idx[b]].Pending) })
+	for _, idx := range b.standing {
+		sort.SliceStable(idx, func(x, y int) bool { return newer(b.taskRows[idx[x]].Pending, b.taskRows[idx[y]].Pending) })
 	}
+}
 
+// worktrees makes one group per listed worktree: the line with its
+// agents, panes and runs under it, or the newest standing task in the
+// line's place and the other standing tasks after its children.
+func (b *builder) worktrees() {
+	in, j := b.in, b.j
 	for i := range in.Worktrees {
 		w := &in.Worktrees[i]
 		host := j.byEnv[w.EnvironmentID]
@@ -255,11 +312,11 @@ func Tree(in Input) []Row {
 			line.Name = w.Repo + "/" + w.Branch
 		}
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
-		seenKey[key] = true
+		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
 		var children []Row
 		for _, a := range agents {
-			used[a] = true
+			b.used[a] = true
 			// The agent's own local session: the workspace session for
 			// one in the home session, else the attachment to its
 			// session, or its session on this machine's default server.
@@ -275,37 +332,8 @@ func Tree(in Input) []Row {
 			}
 			children = append(children, c)
 		}
-		var panes []Row
-		for k := range in.Panes {
-			if p := &in.Panes[k]; p.WorktreeID == w.ID && p.EnvironmentID == w.EnvironmentID {
-				panes = append(panes, Row{Kind: KindPane, Node: p.ID, Host: host, Name: p.Command, Worktree: w, Pane: p})
-			}
-		}
-		sort.SliceStable(panes, func(a, b int) bool {
-			pa, pb := panes[a].Pane, panes[b].Pane
-			if pa.Session != pb.Session {
-				return pa.Session < pb.Session
-			}
-			if pa.Window != pb.Window {
-				return pa.Window < pb.Window
-			}
-			return pa.PaneID < pb.PaneID
-		})
-		children = append(children, panes...)
-		var runs []Row
-		for k := range in.Runs {
-			if r := &in.Runs[k]; r.WorktreeID == w.ID && r.EnvironmentID == w.EnvironmentID {
-				runs = append(runs, Row{Kind: KindRun, Node: r.ID, Host: host, Name: strings.Join(r.Cmd, " "), Worktree: w, Run: r})
-			}
-		}
-		sort.SliceStable(runs, func(a, b int) bool {
-			ra, rb := runs[a].Run, runs[b].Run
-			if !ra.StartedAt.Equal(rb.StartedAt) {
-				return ra.StartedAt.Before(rb.StartedAt)
-			}
-			return ra.ID < rb.ID
-		})
-		children = append(children, runs...)
+		children = append(children, b.panes(w, host)...)
+		children = append(children, b.runs(w, host)...)
 		// The worktree's own session: the home session's workspace
 		// session, or the one its agent on this machine's default server
 		// stands for. The line's agent is the one its jump goes through;
@@ -331,41 +359,85 @@ func Tree(in Input) []Row {
 			// the worst's.
 			line.Dim = line.Dim && (line.Worst == nil || line.Worst.Dim)
 		}
-		rp := repoOf(w.Source, w.Repo)
-		if idx := standing[w.ID]; len(idx) > 0 {
+		rp := b.repoOf(w.Source, w.Repo)
+		if idx := b.standing[w.ID]; len(idx) > 0 {
 			// The newest standing task takes the line's place and its
 			// children; the others follow as lines of their own.
-			owner := &tasks[idx[0]]
+			owner := &b.taskRows[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
 			j.finish(owner)
 			for _, k := range idx[1:] {
-				tasks[k].Worktree, tasks[k].Local, tasks[k].Depth = w, line.Local, 1
-				j.finish(&tasks[k])
+				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth = w, line.Local, 1
+				j.finish(&b.taskRows[k])
 			}
 			group := append([]Row{*owner}, children...)
 			for _, k := range idx[1:] {
-				group = append(group, tasks[k])
+				group = append(group, b.taskRows[k])
 			}
 			rp.nodes = append(rp.nodes, group)
 			for _, k := range idx {
-				placed[k] = true
+				b.placed[k] = true
 			}
 			continue
 		}
 		rp.nodes = append(rp.nodes, append([]Row{line}, children...))
 	}
-	// The tasks left: before the host lists the worktree, or unable to
-	// become it. A standing one holds the add's agent in its session
-	// whose pane starts at the root; the newest of several owns it.
+}
+
+// panes is the worktree's pane rows, by session, window and pane.
+func (b *builder) panes(w *protocol.Worktree, host string) []Row {
+	var panes []Row
+	for k := range b.in.Panes {
+		if p := &b.in.Panes[k]; p.WorktreeID == w.ID && p.EnvironmentID == w.EnvironmentID {
+			panes = append(panes, Row{Kind: KindPane, Node: p.ID, Host: host, Name: p.Command, Worktree: w, Pane: p})
+		}
+	}
+	sort.SliceStable(panes, func(x, y int) bool {
+		pa, pb := panes[x].Pane, panes[y].Pane
+		if pa.Session != pb.Session {
+			return pa.Session < pb.Session
+		}
+		if pa.Window != pb.Window {
+			return pa.Window < pb.Window
+		}
+		return pa.PaneID < pb.PaneID
+	})
+	return panes
+}
+
+// runs is the worktree's run rows, oldest first.
+func (b *builder) runs(w *protocol.Worktree, host string) []Row {
+	var runs []Row
+	for k := range b.in.Runs {
+		if r := &b.in.Runs[k]; r.WorktreeID == w.ID && r.EnvironmentID == w.EnvironmentID {
+			runs = append(runs, Row{Kind: KindRun, Node: r.ID, Host: host, Name: strings.Join(r.Cmd, " "), Worktree: w, Run: r})
+		}
+	}
+	sort.SliceStable(runs, func(x, y int) bool {
+		ra, rb := runs[x].Run, runs[y].Run
+		if !ra.StartedAt.Equal(rb.StartedAt) {
+			return ra.StartedAt.Before(rb.StartedAt)
+		}
+		return ra.ID < rb.ID
+	})
+	return runs
+}
+
+// looseTasks places the tasks no worktree line took: before the host
+// lists the worktree, or unable to become it. A standing one holds the
+// add's agent in its session whose pane starts at the root; the newest
+// of several owns it.
+func (b *builder) looseTasks() {
+	in, j := b.in, b.j
 	var loose []int
-	for i := range tasks {
-		if !placed[i] {
+	for i := range b.taskRows {
+		if !b.placed[i] {
 			loose = append(loose, i)
 		}
 	}
-	sort.SliceStable(loose, func(a, b int) bool { return newer(tasks[loose[a]].Pending, tasks[loose[b]].Pending) })
+	sort.SliceStable(loose, func(x, y int) bool { return newer(b.taskRows[loose[x]].Pending, b.taskRows[loose[y]].Pending) })
 	for _, i := range loose {
-		t := &tasks[i]
+		t := &b.taskRows[i]
 		p := t.Pending
 		if t.stands() && p.EnvironmentID != "" && p.Root != "" {
 			t.Local = j.byKey[protocol.SessionKey(p.EnvironmentID, p.Root)]
@@ -374,8 +446,8 @@ func Tree(in Input) []Row {
 		if t.stands() && p.EnvironmentID != "" && p.Session != "" && p.Root != "" {
 			for k := range in.Agents {
 				a := &in.Agents[k]
-				if !used[a] && a.EnvironmentID == p.EnvironmentID && a.Server == protocol.ServerLaatmux && a.Session == p.Session && a.Cwd == p.Root {
-					used[a] = true
+				if !b.used[a] && a.EnvironmentID == p.EnvironmentID && a.Server == protocol.ServerLaatmux && a.Session == p.Session && a.Cwd == p.Root {
+					b.used[a] = true
 					// The task's workspace session, or the attachment
 					// to the add's session the viewer may be in.
 					local := t.Local
@@ -395,15 +467,19 @@ func Tree(in Input) []Row {
 		t.Worst = pressing(children)
 		t.Children, t.Depth = len(children), 1
 		j.finish(t)
-		rp := repoOf(p.Source, p.Repo)
+		rp := b.repoOf(p.Source, p.Repo)
 		rp.nodes = append(rp.nodes, append([]Row{*t}, children...))
 	}
-	// Orphaned sessions: under their repository by the source tag, or
-	// in other sessions.
-	var otherOrphans []Row
+}
+
+// orphans places the orphaned sessions, workspace sessions no worktree,
+// nor a task neither gone nor failed, accounts for: under their
+// repository by the source tag, or kept for other sessions without one.
+func (b *builder) orphans() {
+	in, j := b.in, b.j
 	for i := range in.Locals {
 		l := &in.Locals[i]
-		if !l.Workspace() || seenKey[l.Key] {
+		if !l.Workspace() || b.seenKey[l.Key] {
 			continue
 		}
 		env, _ := protocol.SplitSessionKey(l.Key)
@@ -413,16 +489,19 @@ func Tree(in Input) []Row {
 		line := Row{Kind: KindWorktree, Node: "session/" + l.Name, Host: j.byEnv[env], Name: l.Name, Local: l, Orphaned: true, Settled: l.Settled, Depth: 1}
 		j.finish(&line)
 		if l.Source != "" {
-			rp := repoOf(l.Source, "")
+			rp := b.repoOf(l.Source, "")
 			rp.nodes = append(rp.nodes, []Row{line})
 		} else {
-			otherOrphans = append(otherOrphans, line)
+			b.otherOrphans = append(b.otherOrphans, line)
 		}
 	}
-	// A repository named by a source tag alone: its label from the
-	// worktrees is missing; the source's last element stands in, a
-	// forge source's path's, without .git.
-	for _, rp := range repos {
+}
+
+// nameRepos names a repository known by a source tag alone: its label
+// from the worktrees is missing; the source's last element stands in,
+// a forge source's path's, without .git.
+func (b *builder) nameRepos() {
+	for _, rp := range b.repos {
 		if rp.name == "" {
 			p := rp.source
 			if _, fp, ok := source.Forge(rp.source); ok {
@@ -431,47 +510,56 @@ func Tree(in Input) []Row {
 			rp.name = path.Base(strings.TrimSuffix(p, ".git"))
 		}
 	}
+}
 
+// repoLines is the repositories by name, each line followed by its
+// groups: worktrees by branch, tasks and orphaned lines among them by
+// their name.
+func (b *builder) repoLines() []Row {
 	var out []Row
-	keys := make([]string, 0, len(repos))
-	for k := range repos {
+	keys := make([]string, 0, len(b.repos))
+	for k := range b.repos {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(a, b int) bool {
-		if repos[keys[a]].name != repos[keys[b]].name {
-			return repos[keys[a]].name < repos[keys[b]].name
+	sort.Slice(keys, func(x, y int) bool {
+		if b.repos[keys[x]].name != b.repos[keys[y]].name {
+			return b.repos[keys[x]].name < b.repos[keys[y]].name
 		}
-		return keys[a] < keys[b]
+		return keys[x] < keys[y]
 	})
 	for _, k := range keys {
-		rp := repos[k]
-		// Worktrees by branch; tasks and orphaned lines among them by
-		// their name.
-		sort.SliceStable(rp.nodes, func(a, b int) bool {
-			la, _ := rp.nodes[a][0].Labels()
-			lb, _ := rp.nodes[b][0].Labels()
+		rp := b.repos[k]
+		sort.SliceStable(rp.nodes, func(x, y int) bool {
+			la, _ := rp.nodes[x][0].Labels()
+			lb, _ := rp.nodes[y][0].Labels()
 			if la != lb {
 				return la < lb
 			}
 			// A worktree line before a task line beside it.
-			if ka, kb := rp.nodes[a][0].Kind, rp.nodes[b][0].Kind; ka != kb {
+			if ka, kb := rp.nodes[x][0].Kind, rp.nodes[y][0].Kind; ka != kb {
 				return ka == KindWorktree
 			}
-			return rp.nodes[a][0].ID() < rp.nodes[b][0].ID()
+			return rp.nodes[x][0].ID() < rp.nodes[y][0].ID()
 		})
 		out = append(out, Row{Kind: KindRepo, Node: "repo/" + k, Name: rp.name, Children: len(rp.nodes)})
 		for _, group := range rp.nodes {
 			out = append(out, group...)
 		}
 	}
-	// Other sessions: managed agents in no worktree, then observed ones,
-	// then the orphaned sessions with no source tag.
+	return out
+}
+
+// otherSessions appends the other sessions group: managed agents in no
+// worktree, then observed ones, then the orphaned sessions with no
+// source tag; nothing when there are none.
+func (b *builder) otherSessions(out []Row) []Row {
+	in, j := b.in, b.j
 	var others []Row
 	for pass := 0; pass < 2; pass++ {
 		for i := range in.Agents {
 			a := &in.Agents[i]
 			managed := a.Server == protocol.ServerLaatmux
-			if used[a] || managed != (pass == 0) {
+			if b.used[a] || managed != (pass == 0) {
 				continue
 			}
 			host := j.byEnv[a.EnvironmentID]
@@ -480,32 +568,35 @@ func Tree(in Input) []Row {
 			others = append(others, c)
 		}
 	}
-	others = append(others, otherOrphans...)
+	others = append(others, b.otherOrphans...)
 	if len(others) > 0 {
 		out = append(out, Row{Kind: KindGroup, Node: NodeOther, Name: "other sessions", Children: len(others)})
 		out = append(out, others...)
 	}
+	return out
+}
+
+// markViewer marks the viewer's lines: a line of its own, an orphaned
+// session or a session in other sessions, is the viewer's when its
+// session is; a worktree or task line is when the viewer sits with one
+// of its agents, through the workspace session or an attachment, as
+// following wants it.
+func markViewer(out []Row, current string) {
 	line := -1
 	for i := range out {
 		r := &out[i]
-		mine := in.Current != "" && r.Local != nil && r.Local.Name == in.Current
+		mine := current != "" && r.Local != nil && r.Local.Name == current
 		switch {
 		case r.Depth <= 1:
 			line = -1
 			if r.Depth == 1 && (r.Kind == KindWorktree || r.Kind == KindTask) {
 				line = i
 			}
-			// A line of its own, an orphaned session or a session in
-			// other sessions, is the viewer's when its session is.
 			r.Current = mine
 		case mine && line >= 0:
-			// The viewer sits with one of the line's agents, through
-			// the workspace session or an attachment: the line is the
-			// viewer's, as following wants it.
 			out[line].Current = true
 		}
 	}
-	return out
 }
 
 // pressing is the most pressing of a line's agent children, finished,
