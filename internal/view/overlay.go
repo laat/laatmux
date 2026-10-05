@@ -185,6 +185,10 @@ func (p *Picker) Render(w, h int) []Line {
 	if len(m) == 0 {
 		out[p.top] = dim("  no match", w)
 	}
+	if len(out) >= h {
+		// Too short for the hint: the entry is worth more.
+		return out[:h]
+	}
 	return framed(out, h, dim(p.Hint, w))
 }
 

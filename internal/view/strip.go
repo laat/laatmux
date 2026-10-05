@@ -107,7 +107,7 @@ func (m *Model) renderStrip() []Line {
 			text = frame(m.Now) + " Loading"
 			m.spinning = true
 		}
-		lines[0] = Line{Spans: []Span{{Text: fit(text, m.Width)}}, Dim: true}
+		lines[0] = dim(text, m.Width)
 	}
 	// The numbers the digits count, fold rows skipped, from the first
 	// chip, drawn or scrolled past.

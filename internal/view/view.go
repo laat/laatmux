@@ -402,7 +402,7 @@ type Line struct {
 func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 
 // bold and dim are one-span lines in those attributes, fit to the
-// width: an overlay's title and an error are bold, its hint dim.
+// width: a title, a message and an error are bold, a hint dim.
 func bold(s string, w int) Line { return Line{Spans: []Span{{Text: fit(s, w)}}, Bold: true} }
 func dim(s string, w int) Line  { return Line{Spans: []Span{{Text: fit(s, w)}}, Dim: true} }
 
@@ -580,7 +580,7 @@ func (m *Model) Render() []Line {
 	for i := shift; i < body; i++ {
 		switch j := m.scroll + i - shift; {
 		case tail && i-shift == window:
-			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
+			out = append(out, dim(fmt.Sprintf("↓ %d more", more), m.Width))
 		case j < len(lines):
 			out = append(out, lines[j])
 			m.hitIDs[i] = ids[j]
@@ -611,9 +611,9 @@ func (m *Model) Render() []Line {
 func (m *Model) footer() Line {
 	switch {
 	case m.Confirm != "":
-		return Line{Spans: []Span{{Text: fit(m.Confirm, m.Width)}}, Bold: true}
+		return bold(m.Confirm, m.Width)
 	case m.Message != "":
-		return Line{Spans: []Span{{Text: fit(m.Message, m.Width)}}, Bold: true}
+		return bold(m.Message, m.Width)
 	case m.Filtering:
 		return plain(fit("/"+m.Filter+"_", m.Width))
 	case m.Filter != "":
@@ -624,7 +624,7 @@ func (m *Model) footer() Line {
 		// The scope in force, ahead of the keys.
 		hint = "[" + s + "]  " + hint
 	}
-	return Line{Spans: []Span{{Text: fit(hint, m.Width)}}, Dim: true}
+	return dim(hint, m.Width)
 }
 
 // row draws one row in the current layout; a tree's node, and the stale

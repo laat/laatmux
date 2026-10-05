@@ -204,4 +204,20 @@ func TestEdited(t *testing.T) {
 	if got := edited("", term.Key{Kind: term.KeyBackspace}); got != "" {
 		t.Fatalf("backspace on empty: %q", got)
 	}
+	if got := edited("aé", term.Key{Kind: term.KeyBackspace}); got != "a" {
+		t.Fatalf("backspace drops a rune: %q", got)
+	}
+}
+
+// A picker too short for its hint keeps its entry: the only one drawn
+// at three lines is the selected one, and the hint comes with the
+// fourth line.
+func TestPickerShort(t *testing.T) {
+	p := NewPicker("pick", []Choice{{Label: "one"}, {Label: "two"}}, 1)
+	if got := Text(p.Render(20, 3)); got != "pick\n> _\n  two\n" {
+		t.Errorf("three lines: %q", got)
+	}
+	if got := Text(p.Render(60, 4)); got != "pick\n> _\n  two\n"+p.Hint+"\n" {
+		t.Errorf("four lines: %q", got)
+	}
 }
