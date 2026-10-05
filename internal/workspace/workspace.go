@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
@@ -370,9 +371,7 @@ func AttachCommand(h client.Host, session string) string {
 	if h.Local() {
 		return tmux.ShellJoin(append([]string{"env", "-u", "TMUX"}, attach...))
 	}
-	return tmux.ShellJoin([]string{"ssh", "-t",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-		h.SSH, tmux.ShellJoin(attach)})
+	return tmux.ShellJoin(client.SSH(h.SSH, client.SSHOptions{TTY: true, KeepAlive: 15 * time.Second, KeepAliveCount: 3}, tmux.ShellJoin(attach)))
 }
 
 // ShellCommand is the shell command a shell window runs for a worktree
@@ -382,7 +381,7 @@ func AttachCommand(h client.Host, session string) string {
 // side. A local window needs no command; it is started in the root.
 func ShellCommand(h client.Host, root string) string {
 	remote := tmux.ShellJoin([]string{"cd", root}) + ` && exec "$SHELL" -l`
-	return tmux.ShellJoin([]string{"ssh", "-t", h.SSH, remote})
+	return tmux.ShellJoin(client.SSH(h.SSH, client.SSHOptions{TTY: true}, remote))
 }
 
 // Inside reports whether the calling process is inside the default tmux

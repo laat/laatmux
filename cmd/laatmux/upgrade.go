@@ -91,8 +91,11 @@ const (
 	platformTimeout = 30 * time.Second
 	installTimeout  = 5 * time.Minute
 	restartTimeout  = 60 * time.Second
-	sshConnect      = "ConnectTimeout=15"
 )
+
+// sshOptions is how upgrade reaches a host: without a terminal, with a
+// bounded connection.
+var sshOptions = client.SSHOptions{ConnectTimeout: 15 * time.Second}
 
 // upgradeHost upgrades one host: find its platform, build for it,
 // install, which stops the old daemon, then connect, which starts the
@@ -243,7 +246,8 @@ func parsePlatform(unameSM string) (goos, goarch string, err error) {
 
 // sshOutput runs a command on the host and returns its stdout.
 func sshOutput(ctx context.Context, alias, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", sshConnect, alias, command)
+	argv := client.SSH(alias, sshOptions, command)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -264,7 +268,8 @@ func installRemote(ctx context.Context, h client.Host, file string) error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", sshConnect, h.SSH, tmux.ShellJoin([]string{"sh", "-c", installScript(h.Bin)}))
+	argv := client.SSH(h.SSH, sshOptions, tmux.ShellJoin([]string{"sh", "-c", installScript(h.Bin)}))
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = f
 	cmd.Stdout = os.Stdout
 	var stderr bytes.Buffer

@@ -191,3 +191,24 @@ func TestExchangeAndRefused(t *testing.T) {
 		t.Fatalf("request err = %v", err)
 	}
 }
+
+// SSH's argv for each kind of command laatmux runs over ssh, as the
+// sites wrote them by hand before: the options in a fixed order, the
+// alias, the command as one argument.
+func TestSSHArgv(t *testing.T) {
+	cases := []struct {
+		o    SSHOptions
+		want string
+	}{
+		{SSHOptions{KeepAlive: 15 * time.Second, KeepAliveCount: 3}, "ssh -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 vm laatmux bridge"},
+		{SSHOptions{ConnectTimeout: 10 * time.Second, KeepAlive: 5 * time.Second, KeepAliveCount: 2}, "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 vm laatmux bridge"},
+		{SSHOptions{ConnectTimeout: 15 * time.Second}, "ssh -T -o BatchMode=yes -o ConnectTimeout=15 vm laatmux bridge"},
+		{SSHOptions{TTY: true, KeepAlive: 15 * time.Second, KeepAliveCount: 3}, "ssh -t -o ServerAliveInterval=15 -o ServerAliveCountMax=3 vm laatmux bridge"},
+		{SSHOptions{TTY: true}, "ssh -t vm laatmux bridge"},
+	}
+	for _, c := range cases {
+		if got := strings.Join(SSH("vm", c.o, "laatmux bridge"), " "); got != c.want {
+			t.Errorf("SSH(%+v):\n got %s\nwant %s", c.o, got, c.want)
+		}
+	}
+}

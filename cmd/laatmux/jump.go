@@ -240,13 +240,9 @@ func checkSession(ctx context.Context, h client.Host, session string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, preflightTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
-		"-o", "ServerAliveInterval=5",
-		"-o", "ServerAliveCountMax=2",
-		h.SSH,
+	argv := client.SSH(h.SSH, client.SSHOptions{ConnectTimeout: 10 * time.Second, KeepAlive: 5 * time.Second, KeepAliveCount: 2},
 		tmux.ShellJoin(append([]string{"tmux"}, tmux.LaatmuxServer.ArgsBare("has-session", "-t", "="+session)...)))
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	// After the deadline kills ssh, do not wait on its stderr pipe for
