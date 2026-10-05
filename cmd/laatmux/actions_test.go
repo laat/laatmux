@@ -17,7 +17,6 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/view"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 func dashConfig(t *testing.T) config.Config {
@@ -65,7 +64,7 @@ func dashModel(cfg config.Config) *view.Model {
 			{ID: "venv/worktree//w/proj/spike", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "spike", Root: "/w/proj/spike"},
 			{ID: "menv/worktree//w/x/y", EnvironmentID: "menv", Repo: "x", Branch: "y", Root: "/w/x/y", Session: "x/y"},
 		},
-		Locals: []workspace.Local{
+		Locals: []protocol.Session{
 			{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "task"},
 			{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "gone"},
 		},
@@ -185,7 +184,7 @@ func TestAddFlowDefaults(t *testing.T) {
 			{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/laatmux.git", Branch: "x", Root: "/w/proj/x", Session: "proj/x"},
 			{ID: "venv/worktree//w/old/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/old/y", Session: "proj/y"},
 		},
-		Locals: []workspace.Local{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
+		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "https://github.com/other/proj"}},
 	}))
 	m.Render()
 	for _, c := range []struct{ source, want string }{{"git@github.com:laat/laatmux.git", "laatmux"}, {"https://github.com/other/proj", "laatmux"}, {"", "proj"}} {
@@ -275,7 +274,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	d.st.hosts["mac"] = hostState{Local: true, EnvID: "menv"}
 	d.st.hosts["vm"] = hostState{EnvID: "venv"}
-	r := rows.Row{Host: "vm", Name: "proj/task", Local: &workspace.Local{Name: "oldvm/proj/task", Key: "venv//w/proj/task", Host: "oldvm"}}
+	r := rows.Row{Host: "vm", Name: "proj/task", Local: &protocol.Session{Name: "oldvm/proj/task", Key: "venv//w/proj/task", Host: "oldvm"}}
 	l, err := d.localFor(r)
 	if err != nil || l.Host != "vm" || l.Name != "oldvm/proj/task" {
 		t.Errorf("renamed host: localFor = %+v, %v", l, err)
@@ -283,7 +282,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	rs := rows.Agents(rows.Input{
 		Hosts:  []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}, {Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
 		Agents: []protocol.Agent{{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/task", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive}},
-		Locals: []workspace.Local{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
+		Locals: []protocol.Session{{Name: "vm/proj/task", Key: "venv//w/proj/task", Host: "vm"}},
 	})
 	if len(rs.Main) != 1 || rs.Main[0].Host != "mac" {
 		t.Fatalf("rows = %+v", rs.Main)
@@ -292,10 +291,10 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	if err != nil || l.Host != "vm" {
 		t.Errorf("observed agent in a workspace window: localFor = %+v, %v", l, err)
 	}
-	if _, err := d.localFor(rows.Row{Name: "s", Orphaned: true, Local: &workspace.Local{Name: "s", Key: "venv//gone"}}); err == nil {
+	if _, err := d.localFor(rows.Row{Name: "s", Orphaned: true, Local: &protocol.Session{Name: "s", Key: "venv//gone"}}); err == nil {
 		t.Error("orphaned row accepted")
 	}
-	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &workspace.Local{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
+	if _, err := d.localFor(rows.Row{Name: "scratch", Local: &protocol.Session{Name: "mac/scratch", Attach: "mac/scratch"}}); err == nil {
 		t.Error("plain attachment accepted")
 	}
 	// A row without a local session gets the one its own jump makes: a
@@ -338,7 +337,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	tm := &view.Model{Tree: []rows.Row{{Kind: rows.KindRepo, Node: "repo/x"}, line,
 		{Kind: rows.KindAgent, Depth: 2, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second},
 		{Kind: rows.KindPane, Depth: 2, Host: "vm", Node: "venv/pane/%8", Worktree: &lost, Pane: &protocol.Pane{PaneID: "%8", Session: "scratch"}}}}
-	for _, r := range []rows.Row{tm.Tree[2], tm.Tree[3], {Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/scratch", Attach: "vm/scratch"}}} {
+	for _, r := range []rows.Row{tm.Tree[2], tm.Tree[3], {Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &protocol.Session{Name: "vm/scratch", Attach: "vm/scratch"}}} {
 		row, err := shellRow(tm, r)
 		if err != nil || row.ID() != lost.ID {
 			t.Errorf("%v: shell row %+v, %v", r.Kind, row, err)
@@ -349,7 +348,7 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 		}
 	}
 	// A tile with a workspace session of its own keeps it.
-	own := rows.Row{Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &workspace.Local{Name: "vm/proj/z", Key: "venv//w/proj/z"}}
+	own := rows.Row{Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &protocol.Session{Name: "vm/proj/z", Key: "venv//w/proj/z"}}
 	if row, err := shellRow(tm, own); err != nil || row.ID() != second.ID {
 		t.Errorf("a tile with its own session: %+v, %v", row, err)
 	}

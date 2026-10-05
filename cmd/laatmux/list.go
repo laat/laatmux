@@ -13,7 +13,6 @@ import (
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // merged is the client's view of every host's stream, fed from the
@@ -143,7 +142,7 @@ func (m *merged) notify() {
 
 // input is the rows package's view of the merged state, with the local
 // sessions and the viewer's session. Called with m.mu held.
-func (m *merged) input(locals []workspace.Local, current string) rows.Input {
+func (m *merged) input(locals []protocol.Session, current string) rows.Input {
 	after, dim, collapse := m.sidebar.Stale()
 	in := rows.Input{Locals: locals, Current: current, Attention: m.attentions, Branches: m.branches, Now: time.Now(),
 		StaleAfter: after, DimStale: dim, CollapseStale: collapse, Sort: m.sidebar.Sort}
@@ -179,7 +178,7 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 	return in
 }
 
-func (m *merged) render(locals []workspace.Local) string {
+func (m *merged) render(locals []protocol.Session) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var b strings.Builder
@@ -273,7 +272,7 @@ func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
 			note += "  " + d
 		}
 	case n.Orphaned:
-		_, root := workspace.SplitKey(n.Local.Key)
+		_, root := protocol.SplitSessionKey(n.Local.Key)
 		note = "worktree gone " + root
 	case n.Worktree != nil && n.Children == 0:
 		note = n.State()

@@ -14,7 +14,6 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // fakeDaemon stands in for the local daemon: a loopback listener the
@@ -317,12 +316,12 @@ func TestHostByEnvironment(t *testing.T) {
 	for _, c := range []struct {
 		host, want string
 	}{{"box", "box"}, {"old", "box"}, {"", "box"}} {
-		h, hello, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "benv//r/x", Host: c.host})
+		h, hello, _, err := hostForSession(context.Background(), cfg, protocol.Session{Name: "s", Key: "benv//r/x", Host: c.host})
 		if err != nil || h.Name != c.want || hello.EnvironmentID != "benv" {
 			t.Errorf("tag %q: %+v %+v %v", c.host, h, hello, err)
 		}
 	}
-	if _, _, _, err := hostForSession(context.Background(), cfg, workspace.Local{Name: "s", Key: "nope//r/x"}); err == nil || !strings.Contains(err.Error(), "carries no host tag") {
+	if _, _, _, err := hostForSession(context.Background(), cfg, protocol.Session{Name: "s", Key: "nope//r/x"}); err == nil || !strings.Contains(err.Error(), "carries no host tag") {
 		t.Errorf("no tag, unknown environment: %v", err)
 	}
 }

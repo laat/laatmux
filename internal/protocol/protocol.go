@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -581,6 +582,23 @@ type Session struct {
 	Branch  string `json:"branch,omitempty"` // @laatmux_branch
 	Attach  string `json:"attach,omitempty"` // @laatmux_attach
 	Settled bool   `json:"settled,omitempty"`
+}
+
+// Workspace reports whether the session is a workspace session.
+func (s Session) Workspace() bool { return s.Key != "" }
+
+// Laatmux reports whether the session is laatmux's at all: a workspace
+// or a plain attachment.
+func (s Session) Laatmux() bool { return s.Key != "" || s.Attach != "" }
+
+// SessionKey is the workspace key a session carries: <environment_id>/
+// <root>. The environment id is hex, so the key parses from the left.
+func SessionKey(environmentID, root string) string { return environmentID + "/" + root }
+
+// SplitSessionKey returns the environment id and root of a key.
+func SplitSessionKey(key string) (environmentID, root string) {
+	environmentID, root, _ = strings.Cut(key, "/")
+	return environmentID, root
 }
 
 // Message is the single envelope. Fields are used per Type; unused ones are

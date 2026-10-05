@@ -9,7 +9,6 @@ import (
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // has is whether the folds hold the id, whatever its value.
@@ -159,7 +158,7 @@ func TestScopes(t *testing.T) {
 	// A viewer in a task's session before the listing: the task line
 	// with the add's agent.
 	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
-	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
+	in.Locals = append(in.Locals, protocol.Session{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
 	in.Current = "vm/laatmux/new-one"
 	m.Scope = ScopeSession
 	set()
@@ -174,7 +173,7 @@ func TestScopes(t *testing.T) {
 	// A session with no worktree: the viewer's line alone; one that is
 	// no row's: the empty state.
 	in.Current = "mac/scratch"
-	in.Locals = append(in.Locals, workspace.Local{Name: "mac/scratch", Attach: "mac/scratch", Host: "mac"})
+	in.Locals = append(in.Locals, protocol.Session{Name: "mac/scratch", Attach: "mac/scratch", Host: "mac"})
 	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%12", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Identity: &protocol.Identity{PID: 12, StartUnix: 12}})
 	set()
 	if got := ids(m); got != "menv/laatmux/%12" {
@@ -216,7 +215,7 @@ func TestScopes(t *testing.T) {
 	in = treeInput(now)
 	in.Agents = append(in.Agents, protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/new-one", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Pendings = []protocol.Pending{{ID: "add-new", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
-	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
+	in.Locals = append(in.Locals, protocol.Session{Name: "vm/laatmux/new-one", Attach: "vm/laatmux/new-one", Host: "vm"})
 	in.Current = "vm/laatmux/new-one"
 	m.View = ViewAgents
 	set()

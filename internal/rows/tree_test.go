@@ -7,7 +7,6 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // treeInput is two repositories on two hosts: laatmux with a worktree
@@ -40,7 +39,7 @@ func treeInput(now time.Time) Input {
 		},
 		Panes: []protocol.Pane{{ID: "venv/pane/laatmux/%7", EnvironmentID: "venv", Session: "laatmux/agents-config", Window: 1, PaneID: "%7", Command: "zsh", WorktreeID: "venv/worktree//r/agents-config"}},
 		Runs:  []protocol.Run{{ID: "venv/run/r1", EnvironmentID: "venv", Root: "/r/agents-config", WorktreeID: "venv/worktree//r/agents-config", Cmd: []string{"make", "test"}, StartedAt: now.Add(-42 * time.Second)}},
-		Locals: []workspace.Local{
+		Locals: []protocol.Session{
 			{Name: "vm/laatmux/agents-config", Key: "venv//r/agents-config", Host: "vm"},
 			{Name: "mac/proj/batch", Key: "menv//w/batch", Host: "mac"},
 			{Name: "mac/proj/gone", Key: "menv//w/gone", Host: "mac", Source: "https://github.com/laat/proj"},
@@ -212,7 +211,7 @@ func TestTreeContents(t *testing.T) {
 			{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "b", Root: "/w/b", Session: "proj/b"},
 			{ID: "venv/worktree//w/d", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "d", Root: "/w/d"},
 		},
-		Locals: []workspace.Local{{Name: "vm/proj/lost", Key: "venv//w/lost", Host: "vm"}},
+		Locals: []protocol.Session{{Name: "vm/proj/lost", Key: "venv//w/lost", Host: "vm"}},
 		Pendings: []protocol.Pending{
 			{ID: "t-old", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, SubmittedAt: now.Add(-time.Minute)},
 			// Done with the prompt undelivered: it needs the user, and
@@ -285,7 +284,7 @@ func TestPressing(t *testing.T) {
 			{ID: "venv/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Gone, Managed: true, WorktreeID: "venv/worktree//w/a", Identity: &protocol.Identity{PID: 3, StartUnix: 3}},
 		},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a", Session: "proj/a"}},
-		Locals:    []workspace.Local{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm", Settled: true}},
+		Locals:    []protocol.Session{{Name: "vm/proj/a", Key: "venv//w/a", Host: "vm", Settled: true}},
 		Now:       now,
 	}
 	for _, n := range Tree(in) {
@@ -316,7 +315,7 @@ func TestTreeJumpAgentAndViewer(t *testing.T) {
 			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/a", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//w/a", Cwd: "/w/a", Identity: &protocol.Identity{PID: 1, StartUnix: 1}},
 		},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "a", Root: "/w/a"}},
-		Locals:    []workspace.Local{{Name: "vm/other", Attach: "vm/other", Host: "vm"}},
+		Locals:    []protocol.Session{{Name: "vm/other", Attach: "vm/other", Host: "vm"}},
 		Current:   "vm/other",
 		Now:       now,
 	}

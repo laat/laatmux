@@ -93,7 +93,7 @@ func cmdRun(ctx context.Context, args []string) error {
 			return fmt.Errorf("workspace session %s is on host %q, which is not configured", cur.Name, cur.Host)
 		}
 		run.Host = h
-		_, run.Root = workspace.SplitKey(cur.Key)
+		_, run.Root = protocol.SplitSessionKey(cur.Key)
 		if repo, ok := cfg.RepoBySource(cur.Source); ok {
 			run.Repo, run.Branch = repo, cur.Branch
 		}

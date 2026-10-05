@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -15,7 +16,7 @@ import (
 // an ssh window. The window is tagged @laatmux_shell; when the session
 // has one already it is selected rather than opened again. The session
 // must be a workspace session, and its host is looked up in cfg.
-func Shell(ctx context.Context, cfg config.Config, l workspace.Local) error {
+func Shell(ctx context.Context, cfg config.Config, l protocol.Session) error {
 	if !l.Workspace() {
 		return fmt.Errorf("%s is not a workspace session", l.Name)
 	}
@@ -23,7 +24,7 @@ func Shell(ctx context.Context, cfg config.Config, l workspace.Local) error {
 	if !ok {
 		return fmt.Errorf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
 	}
-	_, root := workspace.SplitKey(l.Key)
+	_, root := protocol.SplitSessionKey(l.Key)
 	out, err := workspace.Server.Run(ctx, "list-windows", "-t", "="+l.Name, "-F", "#{window_id}"+tmux.Sep+"#{@laatmux_shell}")
 	if err != nil {
 		return err

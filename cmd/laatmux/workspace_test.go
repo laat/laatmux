@@ -14,7 +14,6 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 func TestSplitRepoBranch(t *testing.T) {
@@ -157,7 +156,7 @@ func TestRender(t *testing.T) {
 			{ID: "env1/worktree//r/shell", EnvironmentID: "env1", Repo: "proj", Branch: "shell", Root: "/r/shell", Session: "proj/shell"},
 		},
 	})
-	locals := []workspace.Local{
+	locals := []protocol.Session{
 		{Name: "vm/proj/old", Key: "env1//r/old", Host: "vm", Settled: true},
 		{Name: "vm/proj/gone", Key: "env1//r/gone", Host: "vm"},
 		{Name: "box/proj/x", Key: "env2//r/x", Host: "box"},

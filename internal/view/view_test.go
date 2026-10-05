@@ -14,7 +14,6 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -56,7 +55,7 @@ func fixtureInput(now time.Time) rows.Input {
 			{ID: "benv/worktree//r/down", EnvironmentID: "benv", Repo: "proj", Branch: "down", Root: "/r/down", Session: "proj/down"},
 			{ID: "menv/worktree//w/done", EnvironmentID: "menv", Repo: "proj", Branch: "done", Root: "/w/done", Session: "proj/done"},
 		},
-		Locals: []workspace.Local{
+		Locals: []protocol.Session{
 			{Name: "vm/proj/other", Key: "venv//r/other", Host: "vm"},
 			{Name: "mac/proj/task", Key: "menv//w/task", Host: "mac"},
 			{Name: "mac/proj/done", Key: "menv//w/done", Host: "mac", Settled: true},
@@ -628,7 +627,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	// Moves that change nothing keep following: up from the first row,
 	// onto the selected row, on an empty list.
 	in = fixtureInput(now)
-	in.Locals = append(in.Locals, workspace.Local{Name: "vm/laatmux/fix-ls", Key: "venv//r/fix-ls", Host: "vm"})
+	in.Locals = append(in.Locals, protocol.Session{Name: "vm/laatmux/fix-ls", Key: "venv//r/fix-ls", Host: "vm"})
 	in.Current = "vm/laatmux/fix-ls"
 	m = model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
@@ -1280,7 +1279,7 @@ func TestRenderAttention(t *testing.T) {
 	in.Worktrees = append(in.Worktrees,
 		protocol.Worktree{ID: "venv/worktree//r/old", EnvironmentID: "venv", Repo: "proj", Branch: "old", Root: "/r/old", Session: "proj/old"},
 		protocol.Worktree{ID: "venv/worktree//r/asks", EnvironmentID: "venv", Repo: "proj", Branch: "asks", Root: "/r/asks", Session: "proj/asks"})
-	in.Locals = append(in.Locals, workspace.Local{Name: "vm/proj/asks", Key: "venv//r/asks", Host: "vm", Settled: true})
+	in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/asks", Key: "venv//r/asks", Host: "vm", Settled: true})
 	in.Attention = map[string]protocol.Attention{
 		// notes finished after the last visit; other was seen since.
 		"menv/default/%6": {AgentID: "menv/default/%6", FinishedAt: now.Add(-time.Minute)},
@@ -1401,7 +1400,7 @@ func treeInput(now time.Time) rows.Input {
 		},
 		Panes: []protocol.Pane{{ID: "venv/pane/laatmux/%7", EnvironmentID: "venv", Session: "laatmux/agents-config", Window: 1, PaneID: "%7", Command: "zsh", WorktreeID: "venv/worktree//r/agents-config"}},
 		Runs:  []protocol.Run{{ID: "venv/run/r1", EnvironmentID: "venv", Root: "/r/agents-config", WorktreeID: "venv/worktree//r/agents-config", Cmd: []string{"make", "test"}, StartedAt: now.Add(-42 * time.Second)}},
-		Locals: []workspace.Local{
+		Locals: []protocol.Session{
 			{Name: "vm/laatmux/agents-config", Key: "venv//r/agents-config", Host: "vm"},
 			{Name: "mac/anki-llm/batch-processing", Key: "menv//w/batch", Host: "mac"},
 			{Name: "mac/laatmux/gone", Key: "menv//w/gone", Host: "mac", Source: src},

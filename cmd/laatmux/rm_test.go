@@ -11,7 +11,6 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // rm inside a workspace session takes the workspace from the session:
@@ -34,32 +33,32 @@ func TestRmCurrent(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		cur  workspace.Local
+		cur  protocol.Session
 		h    config.Host
 		env  string
 		ws   []protocol.Worktree
 		want command.Rm
 		err  string
 	}{
-		{"record wins over the tags", workspace.Local{Name: "vm/proj/x", Key: "env//r/proj/x", Host: "vm", Source: proj.Source, Branch: "x"}, vm, "env", records,
+		{"record wins over the tags", protocol.Session{Name: "vm/proj/x", Key: "env//r/proj/x", Host: "vm", Source: proj.Source, Branch: "x"}, vm, "env", records,
 			command.Rm{Host: vm, Repo: proj, Branch: "renamed", Root: "/r/proj/x", Environment: "env"}, ""},
-		{"detached record: repository and root", workspace.Local{Name: "vm/proj/d", Key: "env//r/proj/d", Host: "vm", Source: proj.Source, Branch: "d"}, vm, "env", records,
+		{"detached record: repository and root", protocol.Session{Name: "vm/proj/d", Key: "env//r/proj/d", Host: "vm", Source: proj.Source, Branch: "d"}, vm, "env", records,
 			command.Rm{Host: vm, Repo: proj, Root: "/r/proj/d", Environment: "env"}, ""},
-		{"record of a source not configured here: root alone", workspace.Local{Name: "vm/other/y", Key: "env//r/other/y", Host: "vm", Source: "git@x:o/other.git", Branch: "y"}, vm, "env", records,
+		{"record of a source not configured here: root alone", protocol.Session{Name: "vm/other/y", Key: "env//r/other/y", Host: "vm", Source: "git@x:o/other.git", Branch: "y"}, vm, "env", records,
 			command.Rm{Host: vm, Root: "/r/other/y", Environment: "env"}, ""},
-		{"no record: the tags", workspace.Local{Name: "vm/proj/z", Key: "env//r/proj/z", Host: "vm", Source: proj.Source, Branch: "z"}, vm, "env", records,
+		{"no record: the tags", protocol.Session{Name: "vm/proj/z", Key: "env//r/proj/z", Host: "vm", Source: proj.Source, Branch: "z"}, vm, "env", records,
 			command.Rm{Host: vm, Repo: proj, Branch: "z", Root: "/r/proj/z", Environment: "env"}, ""},
-		{"no record, unknown source", workspace.Local{Name: "mac/other/q", Key: "env//r/other/q", Host: "mac", Source: "git@x:o/other.git", Branch: "q"}, mac, "env", nil,
+		{"no record, unknown source", protocol.Session{Name: "mac/other/q", Key: "env//r/other/q", Host: "mac", Source: "git@x:o/other.git", Branch: "q"}, mac, "env", nil,
 			command.Rm{Host: mac, Root: "/r/other/q", Environment: "env"}, ""},
-		{"no record, no branch tag", workspace.Local{Name: "mac/proj/z", Key: "env//r/proj/z", Host: "mac", Source: proj.Source}, mac, "env", nil,
+		{"no record, no branch tag", protocol.Session{Name: "mac/proj/z", Key: "env//r/proj/z", Host: "mac", Source: proj.Source}, mac, "env", nil,
 			command.Rm{Host: mac, Root: "/r/proj/z", Environment: "env"}, ""},
-		{"host answers as another environment", workspace.Local{Name: "vm/proj/x", Key: "env//r/proj/x", Host: "vm", Source: proj.Source, Branch: "x"}, vm, "other", records,
+		{"host answers as another environment", protocol.Session{Name: "vm/proj/x", Key: "env//r/proj/x", Host: "vm", Source: proj.Source, Branch: "x"}, vm, "other", records,
 			command.Rm{}, "answers as other"},
-		{"record on another environment is not this one", workspace.Local{Name: "vm/proj/x", Key: "other//r/proj/x", Host: "vm"}, vm, "other", records[3:],
+		{"record on another environment is not this one", protocol.Session{Name: "vm/proj/x", Key: "other//r/proj/x", Host: "vm"}, vm, "other", records[3:],
 			command.Rm{Host: vm, Repo: proj, Branch: "x", Root: "/r/proj/x", Environment: "other"}, ""},
-		{"not a workspace", workspace.Local{Name: "notes"}, mac, "env", nil, command.Rm{}, "not a workspace session"},
-		{"attachment", workspace.Local{Name: "vm/work", Attach: "vm/work", Host: "vm"}, vm, "env", nil, command.Rm{}, "not a workspace session"},
-		{"no root", workspace.Local{Name: "vm/proj/x", Key: "env", Host: "vm"}, vm, "env", nil, command.Rm{}, "no root"},
+		{"not a workspace", protocol.Session{Name: "notes"}, mac, "env", nil, command.Rm{}, "not a workspace session"},
+		{"attachment", protocol.Session{Name: "vm/work", Attach: "vm/work", Host: "vm"}, vm, "env", nil, command.Rm{}, "not a workspace session"},
+		{"no root", protocol.Session{Name: "vm/proj/x", Key: "env", Host: "vm"}, vm, "env", nil, command.Rm{}, "no root"},
 	}
 	for _, c := range cases {
 		got, err := rmCurrent(cfg, c.cur, c.h, c.env, c.ws)

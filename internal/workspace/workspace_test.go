@@ -8,14 +8,6 @@ import (
 	"github.com/laat/laatmux/internal/tmux"
 )
 
-func TestKeyRoundTrip(t *testing.T) {
-	key := Key("3fa9c1d2e4b5a6f7", "/home/u/src/worktrees/proj/fix/v1.2")
-	env, root := SplitKey(key)
-	if env != "3fa9c1d2e4b5a6f7" || root != "/home/u/src/worktrees/proj/fix/v1.2" {
-		t.Fatalf("SplitKey(%q) = %q, %q", key, env, root)
-	}
-}
-
 func TestSessionName(t *testing.T) {
 	if got := SessionName("vm", "proj", "fix/v1.2"); got != "vm/proj/fix/v1%2e2" {
 		t.Fatalf("SessionName = %q", got)

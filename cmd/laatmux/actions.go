@@ -590,7 +590,7 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 			rm.Branch = ""
 		}
 	case r.Orphaned:
-		rm.Environment, rm.Root = workspace.SplitKey(r.Local.Key)
+		rm.Environment, rm.Root = protocol.SplitSessionKey(r.Local.Key)
 		if repo, ok := d.cfg.RepoBySource(r.Local.Source); ok && r.Local.Branch != "" {
 			rm.Repo, rm.Branch = repo, r.Local.Branch
 		}
@@ -780,13 +780,13 @@ func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 // not by the row's host: an observed agent on this machine's default
 // server sits in a local window of a workspace whose worktree may be
 // on another host, and the shell belongs where the worktree is.
-func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
+func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Orphaned {
-		return workspace.Local{}, errors.New(r.Name + ": its worktree is gone")
+		return protocol.Session{}, errors.New(r.Name + ": its worktree is gone")
 	}
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
-		env, _ := workspace.SplitKey(l.Key)
+		env, _ := protocol.SplitSessionKey(l.Key)
 		if name := d.st.hostOf(env); name != "" {
 			l.Host = name
 		}
@@ -794,13 +794,13 @@ func (d *dash) localFor(r rows.Row) (workspace.Local, error) {
 	}
 	spec, err := localSpec(d.cfg, r)
 	if err != nil {
-		return workspace.Local{}, err
+		return protocol.Session{}, err
 	}
 	name, _, err := workspace.Ensure(d.ctx, spec)
 	if err != nil {
-		return workspace.Local{}, err
+		return protocol.Session{}, err
 	}
-	return workspace.Local{Name: name, Key: spec.Key, Host: spec.Host.Name, Source: spec.Source, Branch: spec.Branch}, nil
+	return protocol.Session{Name: name, Key: spec.Key, Host: spec.Host.Name, Source: spec.Source, Branch: spec.Branch}, nil
 }
 
 // localSpec is the workspace session a row without one gets for its

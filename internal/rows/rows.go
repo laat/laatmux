@@ -20,7 +20,6 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
-	"github.com/laat/laatmux/internal/workspace"
 )
 
 // Host is one configured host as the rows need it: the connectivity axis
@@ -47,7 +46,7 @@ type Input struct {
 	Hosts     []Host
 	Agents    []protocol.Agent
 	Worktrees []protocol.Worktree
-	Locals    []workspace.Local
+	Locals    []protocol.Session
 	// Pendings are the relay's background adds that have not handed
 	// over to their worktree rows.
 	Pendings []protocol.Pending
@@ -103,7 +102,7 @@ type Row struct {
 	// Local is the local session for the row, when there is one: the
 	// workspace session by key, the plain attachment by tag, or the
 	// observed session itself on the local default server.
-	Local    *workspace.Local
+	Local    *protocol.Session
 	Settled  bool
 	Orphaned bool // a local workspace session with no worktree on a listed host
 	// Done is an idle agent that went from working to idle since the
