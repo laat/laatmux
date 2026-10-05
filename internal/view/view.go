@@ -16,7 +16,6 @@ import (
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Layout is how a row is drawn.
@@ -644,7 +643,7 @@ func (m *Model) where(r rows.Row) Span {
 	}
 	s := "@" + host
 	if r.Agent != nil {
-		if srv := r.Agent.Server; srv != tmux.LaatmuxServer.Label() {
+		if srv := r.Agent.Server; srv != protocol.ServerLaatmux {
 			s += "/" + srv
 		}
 	}

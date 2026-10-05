@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/laat/laatmux/internal/protocol"
 )
 
 func TestShellJoin(t *testing.T) {
@@ -178,4 +180,14 @@ func decodeBranch(name string) string {
 		b.WriteByte(name[i])
 	}
 	return b.String()
+}
+
+// The two named servers are labelled as the protocol's records say.
+func TestServerLabelsAreTheProtocolConstants(t *testing.T) {
+	if LaatmuxServer.Label() != protocol.ServerLaatmux || DefaultServer.Label() != protocol.ServerDefault {
+		t.Fatalf("labels %q %q", LaatmuxServer.Label(), DefaultServer.Label())
+	}
+	if Parse(protocol.ServerLaatmux) != LaatmuxServer || Parse(protocol.ServerDefault) != DefaultServer {
+		t.Fatal("the labels do not parse back to the servers")
+	}
 }

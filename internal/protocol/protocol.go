@@ -358,12 +358,21 @@ type Identity struct {
 	LeaderPID int    `json:"leader_pid,omitempty"` // foreground process group leader of the tty
 }
 
+// The tmux server labels records carry, as the tmux package labels its
+// servers: the managed server, where laatmux makes sessions, and this
+// machine's default server, which a daemon may watch and a local client
+// switch within. Any other label is a socket path, watched read-only.
+const (
+	ServerLaatmux = "laatmux"
+	ServerDefault = "default"
+)
+
 // Agent is one pane on one host as the sidebar sees it. Only panes with an
 // identified agent instance, alive or gone, are published.
 type Agent struct {
 	ID            string    `json:"id"` // "<environment_id>/<server>/<pane_id>"; opaque to clients
 	EnvironmentID string    `json:"environment_id"`
-	Server        string    `json:"server,omitempty"` // tmux server label: "laatmux", "default", or a socket path
+	Server        string    `json:"server,omitempty"` // tmux server label: ServerLaatmux, ServerDefault, or a socket path
 	Session       string    `json:"session"`
 	Window        int       `json:"window"`
 	PaneID        string    `json:"pane_id"`
