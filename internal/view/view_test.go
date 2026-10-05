@@ -759,8 +759,11 @@ func TestAnchorFollowsTask(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != "add-3" || m.alias != "" {
 		t.Fatalf("selected %+v alias %q", r, m.alias)
 	}
-	m.Handoffs = map[string]string{"add-3": wt.ID}
-	set(m, nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
+	// Through Set, as the dashboard refreshes: the handoff is in place
+	// before the rows that need it.
+	in := rows.Input{Hosts: hosts, Worktrees: []protocol.Worktree{other, wt}, Agents: []protocol.Agent{agent}}
+	tree := rows.Tree(in)
+	m.Set(tree, rows.Agents(in, tree), map[string]string{"add-3": wt.ID})
 	if r := m.Selection(); r == nil || r.ID() != wt.ID {
 		t.Fatalf("through the handoffs: %+v", r)
 	}

@@ -122,7 +122,6 @@ func (m *Model) renderStrip() []Line {
 	shown := 0
 	for i := m.hscroll; i < len(vis) && shown < perLine && (shown == 0 || col+iw <= m.Width-reserve); i++ {
 		r := vis[i].Row
-		m.rowIdx = numbered[i]
 		// The first chip is drawn whatever the room, clipped: a strip
 		// too narrow for a chip beside the marker still shows one.
 		chip := iw
@@ -134,7 +133,7 @@ func (m *Model) renderStrip() []Line {
 		for l := 0; l < height; l++ {
 			var spans []Span
 			if l < len(tmpl) && !tmpl[l].Blank() {
-				spans = m.line(tmpl[l], *r, chip)
+				spans = m.line(tmpl[l], *r, chip, numbered[i])
 			}
 			if n := chip - spansWidth(spans); n > 0 {
 				spans = append(spans, Span{Text: strings.Repeat(" ", n)})

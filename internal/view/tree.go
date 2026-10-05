@@ -33,6 +33,16 @@ func ParseView(s string) (View, error) {
 }
 
 // SetTree replaces the tree's nodes, keeping the selection on the node
+// Set is the model's rows after a refresh, in the order they depend on:
+// the handoffs first, which the anchor lookup consults; the tree, whose
+// order the agent view's selection follows across a handoff; then the
+// tiles.
+func (m *Model) Set(tree []rows.Row, tiles rows.Rows, handoffs map[string]string) {
+	m.Handoffs = handoffs
+	m.SetTree(tree)
+	m.SetRows(tiles)
+}
+
 // it was on, as SetRows does for the rows. A task that handed over
 // passes its fold to the node that takes its children, unless the user
 // has set that node's own.
@@ -648,8 +658,10 @@ func (m *Model) tabs() Line {
 	return Line{Spans: clip(append([]Span{{Text: " "}}, spans...), m.Width)}
 }
 
-// treeLine draws one node of the tree, or the agent view's stale fold.
-func (m *Model) treeLine(r rows.Row) []Line {
+// treeLine draws one node of the tree, or the agent view's stale fold,
+// numbered idx among the nodes the digits count. The other-sessions
+// group is not drawn here: Visible makes it a header item.
+func (m *Model) treeLine(r rows.Row, idx int) []Line {
 	w := m.Width
 	t := m.templates().Tree
 	var spans []Span
@@ -660,12 +672,10 @@ func (m *Model) treeLine(r rows.Row) []Line {
 			mark = "▸ "
 		}
 		spans = []Span{{Text: mark + r.Name, Fg: palette.Header, Dim: true}}
-	case rows.KindGroup:
-		spans = []Span{{Text: r.Name, Fg: palette.Header, Dim: true}}
 	case rows.KindRepo:
-		spans = m.line(t.Repo, r, w)
+		spans = m.line(t.Repo, r, w, idx)
 	case rows.KindWorktree, rows.KindTask:
-		spans = m.line(t.Worktree, r, w)
+		spans = m.line(t.Worktree, r, w, idx)
 	case rows.KindAgent:
 		if r.Depth == 1 {
 			// A session in other sessions: its name, host, then the
@@ -674,13 +684,11 @@ func (m *Model) treeLine(r rows.Row) []Line {
 			spans = []Span{{Text: indent + "  " + r.Name}, {Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost}, {Text: "  "}, m.iconSpan(r), {Text: " " + r.AgentName()}}
 			break
 		}
-		spans = m.line(t.Agent, r, w)
+		spans = m.line(t.Agent, r, w, idx)
 	case rows.KindPane:
-		spans = m.line(t.Pane, r, w)
+		spans = m.line(t.Pane, r, w, idx)
 	case rows.KindRun:
-		spans = m.line(t.Run, r, w)
-	default:
-		spans = []Span{{Text: strings.Repeat("  ", r.Depth) + r.Name}}
+		spans = m.line(t.Run, r, w, idx)
 	}
 	return []Line{{Dim: r.Dim, Spans: clip(spans, w)}}
 }
@@ -713,7 +721,7 @@ func (m *Model) pinned(items []Item, ids []string) (*Line, string) {
 	if repo == nil || repo.ID() == top || repo.Kind != rows.KindRepo {
 		return nil, ""
 	}
-	l := m.treeLine(*repo)[0]
+	l := m.treeLine(*repo, 0)[0]
 	return &l, repo.ID()
 }
 
