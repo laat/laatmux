@@ -570,18 +570,18 @@ type HostStatus struct {
 // Local reports whether the host is the merging daemon's own machine.
 func (h HostStatus) Local() bool { return h.SSH == "" }
 
-// Session is one of laatmux's sessions on the merging daemon's default
-// tmux server, as its tags say: a workspace session with Key, or a plain
-// attachment with Attach. Sessions with neither are not laatmux's and are
-// not published. The field order is the workspace package's Local.
+// Session is a session on the merging daemon's default tmux server with
+// the laatmux tags it carries: a workspace session has Key, a plain
+// attachment Attach, and one with neither is not laatmux's. The
+// workspace package lists them all; only laatmux's are published.
 type Session struct {
 	Name    string `json:"name"`
-	Key     string `json:"key,omitempty"`    // @laatmux_workspace: <environment_id>/<root>
-	Host    string `json:"host,omitempty"`   // @laatmux_host
-	Source  string `json:"source,omitempty"` // @laatmux_repo
-	Branch  string `json:"branch,omitempty"` // @laatmux_branch
-	Attach  string `json:"attach,omitempty"` // @laatmux_attach
-	Settled bool   `json:"settled,omitempty"`
+	Key     string `json:"key,omitempty"`     // @laatmux_workspace: <environment_id>/<root>
+	Host    string `json:"host,omitempty"`    // @laatmux_host
+	Source  string `json:"source,omitempty"`  // @laatmux_repo; "" when unknown
+	Branch  string `json:"branch,omitempty"`  // @laatmux_branch
+	Attach  string `json:"attach,omitempty"`  // @laatmux_attach
+	Settled bool   `json:"settled,omitempty"` // @laatmux_settled
 }
 
 // Workspace reports whether the session is a workspace session.

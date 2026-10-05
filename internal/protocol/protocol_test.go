@@ -89,7 +89,7 @@ func TestSessionKeyRoundTrip(t *testing.T) {
 	if env != "3fa9c1d2e4b5a6f7" || root != "/home/u/src/worktrees/proj/fix/v1.2" {
 		t.Fatalf("SplitSessionKey(%q) = %q, %q", key, env, root)
 	}
-	if (Session{Key: key}).Workspace() != true || (Session{Attach: "vm/proj/x"}).Workspace() || !(Session{Attach: "vm/proj/x"}).Laatmux() || (Session{Name: "notes"}).Laatmux() {
+	if !(Session{Key: key}).Workspace() || !(Session{Key: key}).Laatmux() || (Session{Attach: "vm/proj/x"}).Workspace() || !(Session{Attach: "vm/proj/x"}).Laatmux() || (Session{Name: "notes"}).Laatmux() {
 		t.Fatal("a workspace has a key; laatmux's sessions have a key or an attach tag")
 	}
 }

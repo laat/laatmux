@@ -30,6 +30,11 @@ func TestParseSessions(t *testing.T) {
 	if !ws.Workspace() || ws.Key != "env1/root/a" || ws.Host != "vm" || !ws.Settled || ws.Source != "git@x:o/proj.git" || ws.Branch != "fix" {
 		t.Errorf("workspace session parsed as %+v", ws)
 	}
+	// Published: the workspace and the plain attachment, not the
+	// user's own session.
+	if recs := Records(locals); len(recs) != 2 || recs[0].Name != "vm/proj/fix" || recs[1].Name != "mac/work" {
+		t.Errorf("Records: %+v", recs)
+	}
 	// Found by identity tags whatever the name, and not across hosts.
 	if l, ok := FindWorktree(locals, "env1", "git@x:o/proj.git", "fix"); !ok || l.Name != "vm/proj/fix" {
 		t.Errorf("FindWorktree: %+v %v", l, ok)
