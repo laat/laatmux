@@ -25,7 +25,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // It is the agent view as the dashboard builds it: the two worktrees with
 // no agent and the orphaned workspace are tree lines, not tiles, and the
 // settled workspace's agent is in the stale fold.
-func fixture(now time.Time) rows.Rows { return rows.Agents(fixtureInput(now)) }
+func fixture(now time.Time) rows.Rows {
+	in := fixtureInput(now)
+	return rows.Agents(in, rows.Tree(in))
+}
 
 func fixtureInput(now time.Time) rows.Input {
 	return rows.Input{
@@ -269,8 +272,8 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Agents(rows.Input{}))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(rows.Input{}, rows.Tree(rows.Input{})))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got.Name != "proj/task" || m.Selected != 1 {
 		t.Errorf("after reorder: selected %q at %d, want proj/task at 1", got.Name, m.Selected)
 	}
@@ -287,7 +290,7 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 			break
 		}
 	}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	// The row is gone: the selection is on none, not on the row that
 	// took its index, so Enter jumps nowhere.
 	if got := m.Selection(); got != nil || m.Selected != -1 {
@@ -355,7 +358,7 @@ func TestFollowSelection(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
 	in := fixtureInput(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Current || m.Selected != 2 {
 		t.Fatalf("initial: %+v at %d", got, m.Selected)
 	}
@@ -368,7 +371,7 @@ func TestFollowSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || m.Selected != 1 {
 		t.Fatalf("after reorder: %+v at %d", got, m.Selected)
 	}
@@ -384,7 +387,7 @@ func TestFollowSelection(t *testing.T) {
 	// No row is the viewer's session: nothing selected, nothing drawn
 	// selected, Enter does nothing; a digit counts the main group.
 	in.Current = ""
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got != nil || m.Selected != -1 {
 		t.Fatalf("no current row: %+v at %d", got, m.Selected)
 	}
@@ -405,7 +408,7 @@ func TestFollowSelection(t *testing.T) {
 	// reorder keeps it on the row it was on, not on the viewer's.
 	m.Follow = true
 	in.Current = "mac/proj/task"
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if m.Selected != 1 {
 		t.Fatalf("following again: %d", m.Selected)
 	}
@@ -419,13 +422,13 @@ func TestFollowSelection(t *testing.T) {
 			in.Agents[i].Activity = protocol.Blocked
 		}
 	}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got == nil || got.Name != taken.Name {
 		t.Fatalf("user's selection moved: %+v, was %s", got, taken.Name)
 	}
 	// Without Follow the model is as it was: the first row selected.
 	m = model(now)
-	m.SetRows(rows.Agents(fixtureInput(now)))
+	m.SetRows(fixture(now))
 	if m.Selected != 0 {
 		t.Fatalf("without follow: %d", m.Selected)
 	}
@@ -442,7 +445,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
 	in := fixtureInput(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	// Filter to rows that are not the viewer's: rows remain, none is
 	// selected, and Enter has nothing to act on.
 	m.Handle(term.Key{Rune: '/'})
@@ -470,7 +473,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 			in.Locals[i].Settled = true
 		}
 	}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Settled || !m.Follow {
 		t.Fatalf("settled: %+v follow=%v", got, m.Follow)
 	}
@@ -487,7 +490,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m = model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Follow = true
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if m.Selected != 0 {
 		t.Fatalf("current first: %d", m.Selected)
 	}
@@ -504,7 +507,7 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	}
 	m = model(now)
 	m.Follow = true
-	m.SetRows(rows.Agents(rows.Input{}))
+	m.SetRows(rows.Agents(rows.Input{}, rows.Tree(rows.Input{})))
 	m.Handle(term.Key{Rune: 'j'})
 	m.Handle(term.Key{Rune: 'G'})
 	if got := m.Selection(); got != nil || !m.Follow {
@@ -521,7 +524,7 @@ func TestSpinner(t *testing.T) {
 	m := model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	in := fixtureInput(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	if !m.Spinning() {
 		t.Fatal("working rows and no spinning")
@@ -563,7 +566,7 @@ func TestSpinner(t *testing.T) {
 			in.Agents[i].Liveness = protocol.Gone
 		}
 	}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	if m.Spinning() {
 		t.Fatal("gone agents spin")
@@ -594,7 +597,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 6 // header lines, a few body lines, footer
-	m.SetRows(rows.Agents(fixtureInput(now)))
+	m.SetRows(fixture(now))
 	m.Render()
 	if !m.Spinning() {
 		t.Fatal("working rows at the top and no spinning")
@@ -641,7 +644,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	// keeps is cut off by the height, and does not count.
 	m = model(now)
 	m.Layout, m.Width = Compact, 80
-	m.SetRows(rows.Agents(fixtureInput(now)))
+	m.SetRows(fixture(now))
 	m.Filter = "proj/task" // the one row is the live working one
 	m.Header = []HeaderLine{{Text: "one"}, {Text: "two"}}
 	m.Height = 4 // headers, the body line, footer: the icon is drawn
@@ -658,7 +661,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		for _, w := range []int{12, 6, 3, 2} {
 			m = model(now)
 			m.Layout, m.Width, m.Height = layout, w, 30
-			m.SetRows(rows.Agents(fixtureInput(now)))
+			m.SetRows(fixture(now))
 			lines := m.Render()
 			if out := Debug(lines); !strings.Contains(out, "⟨") {
 				t.Errorf("layout %v width %d: no colour:\n%s", layout, w, out)
@@ -671,7 +674,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 		}
 		m = model(now)
 		m.Layout, m.Width, m.Height = layout, 1, 30
-		m.SetRows(rows.Agents(fixtureInput(now)))
+		m.SetRows(fixture(now))
 		m.Render() // one cell: the stripe alone, no panic
 	}
 }
@@ -718,7 +721,7 @@ func TestAnchorFollowsTask(t *testing.T) {
 	set := func(m *Model, ps []protocol.Pending, ws []protocol.Worktree, as []protocol.Agent) {
 		in := rows.Input{Hosts: hosts, Pendings: ps, Worktrees: ws, Agents: as}
 		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
 	}
 	m := &Model{Width: 60, Height: 20, Now: now, View: ViewTree}
 	set(m, []protocol.Pending{task}, []protocol.Worktree{other}, nil)
@@ -796,7 +799,7 @@ func TestRenderPending(t *testing.T) {
 				Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready within a minute", SubmittedAt: now.Add(-time.Minute)},
 		},
 	}
-	m := &Model{Rows: rows.Agents(in), LocalHost: "mac", Now: now, Width: 40, Height: 12}
+	m := &Model{Rows: rows.Agents(in, rows.Tree(in)), LocalHost: "mac", Now: now, Width: 40, Height: 12}
 	golden(t, "pending-tiles", Debug(m.Render()))
 	m.Layout, m.Titles, m.Width = Compact, true, 72
 	golden(t, "pending-compact", Debug(m.Render()))
@@ -819,7 +822,7 @@ func TestAnchorStandIn(t *testing.T) {
 	set := func(m *Model, ps ...protocol.Pending) {
 		in := rows.Input{Hosts: hosts, Pendings: ps, Worktrees: []protocol.Worktree{wt}}
 		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
 	}
 	m := &Model{Width: 60, Height: 20, Now: now}
 	set(m, stuck, next)
@@ -883,7 +886,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	in := fixtureInput(now)
 	in.Current = "mac/proj/task"
 	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: now, Follow: true}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	own := m.Selected
 	m.Render()
 	// The first body line is the first row; the own row is elsewhere.
@@ -914,7 +917,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	for i := range in2.Agents {
 		in2.Agents[i].Activity = protocol.Idle
 	}
-	m.SetRows(rows.Agents(in2))
+	m.SetRows(rows.Agents(in2, rows.Tree(in2)))
 	if a := m.Handle(term.Key{Kind: term.KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
 		t.Fatalf("after a reorder: jumped to %+v, drawn was %q", a.Row, drawn)
 	}
@@ -944,7 +947,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 			in2.Locals[i].Settled = true
 		}
 	}
-	m.SetRows(rows.Agents(in2))
+	m.SetRows(rows.Agents(in2, rows.Tree(in2)))
 	if i := m.hitRow(sy, time.Time{}); i != -1 {
 		t.Fatalf("a row collapsed since resolved to %d", i)
 	}
@@ -960,7 +963,7 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 	t0 := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	in := fixtureInput(t0)
 	m := &Model{Layout: Compact, Width: 80, Height: 30, Now: t0}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	y := 1 + len(m.Header)
 	seen := m.Visible()[m.hitRow(y, time.Time{})].Row.ID()
@@ -970,7 +973,7 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 		in.Agents[i].Activity = protocol.Idle
 	}
 	in.Agents[len(in.Agents)-1].Activity = protocol.Blocked
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Now = t0.Add(2 * time.Second)
 	m.Render()
 	if now := m.Visible()[m.hitRow(y, time.Time{})].Row.ID(); now == seen {
@@ -1010,7 +1013,7 @@ func TestRenderAttention(t *testing.T) {
 	}
 	in.Now, in.StaleAfter, in.DimStale, in.CollapseStale = now, time.Hour, true, true
 	m := model(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Layout, m.Titles, m.Width, m.Height = Compact, true, 90, 34
 	m.ShowHidden = true
 	golden(t, "attention", Debug(m.Render()))
@@ -1042,7 +1045,7 @@ func TestRenderGit(t *testing.T) {
 		}
 	}
 	m := model(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Layout, m.Width, m.Height = Tiles, 45, 40
 	golden(t, "git-tiles", Debug(m.Render()))
 	m.Width = 26
@@ -1079,7 +1082,7 @@ func TestRenderPR(t *testing.T) {
 		}
 	}
 	m := model(now)
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Layout, m.Width, m.Height = Tiles, 48, 44
 	golden(t, "pr-tiles", Debug(m.Render()))
 	m.Width = 22
@@ -1144,7 +1147,7 @@ func TestRenderTree(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	in := treeInput(now)
 	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 20, Follow: true}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	golden(t, "tree", Debug(m.Render()))
 	// auto-layout, whose agent is done, starts open; fix-sidebar has no
@@ -1169,7 +1172,7 @@ func TestSwitch(t *testing.T) {
 	in := treeInput(now)
 	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: "git@github.com:laat/laatmux.git", Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Taken: true, SubmittedAt: now}}
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	sel := func() string {
 		r := m.Selection()
@@ -1243,7 +1246,7 @@ func TestFolds(t *testing.T) {
 	in.Agents[3].Activity = protocol.Idle // auto-layout's agent: idle, and seen
 	in.Attention = nil
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	m.Render()
 	open := func(id string) bool { return !m.closed(&m.Tree[m.indexOf(id)]) }
@@ -1294,7 +1297,7 @@ func TestFollowTree(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	in := treeInput(now)
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30, Follow: true}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" {
 		t.Errorf("tree follows %+v", r)
@@ -1318,7 +1321,7 @@ func TestTreeEdges(t *testing.T) {
 		ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/r/new-one", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
 	in.Pendings = []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	m.Render()
 	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
@@ -1331,7 +1334,7 @@ func TestTreeEdges(t *testing.T) {
 	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
 	in.Pendings = nil
 	m.Handoffs = map[string]string{"add-1": "venv/worktree//r/new-one"}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	if m.closed(&m.Tree[m.indexOf("venv/worktree//r/new-one")]) {
 		t.Error("the worktree line did not take the task's fold")
@@ -1345,7 +1348,7 @@ func TestTreeEdges(t *testing.T) {
 	m.Select("add-1")
 	m.View = ViewAgents
 	m.anchor = "add-1"
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
 		t.Errorf("handoff in the agent view: %+v", r)
 	}
@@ -1419,7 +1422,7 @@ func TestTreePinned(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	in := treeInput(now)
 	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 8}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	m.Render()
 	vis := m.Visible()
@@ -1496,7 +1499,7 @@ func TestTreePinned(t *testing.T) {
 	}
 	m.Height = 8
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Handle(term.Key{Rune: 'G'})
 	text = Debug(m.Render())
 	if strings.Contains(text, "laatmux") {
@@ -1523,7 +1526,7 @@ func TestTreePinnedSmall(t *testing.T) {
 	for h := 6; h <= 9; h++ {
 		m := &Model{Now: now, View: ViewTree, Tabs: true, Width: 60, Height: h}
 		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
 		m.Render()
 		m.Handle(term.Key{Rune: 'G'})
 		text := Debug(m.Render())
@@ -1561,7 +1564,7 @@ func TestTreePinnedEnd(t *testing.T) {
 	}
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 11}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	m.Handle(term.Key{Rune: 'G'})
 	out := m.Render()
@@ -1596,7 +1599,7 @@ func TestHandoffStanding(t *testing.T) {
 	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
 	set := func(m *Model) {
 		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
 	}
 	m := &Model{Now: now, View: ViewTree, Width: 60, Height: 30}
 	set(m)
@@ -1699,7 +1702,7 @@ func TestSwitchToStale(t *testing.T) {
 		}
 	}
 	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 30}
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.SetTree(rows.Tree(in))
 	m.Render()
 	if len(m.Rows.Stale) != 1 {

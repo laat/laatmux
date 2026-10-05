@@ -202,6 +202,7 @@ func Tree(in Input) []Row {
 	j := newJoin(in)
 	type repo struct {
 		key, name string
+		source    string  // "" for a repository known by a host's label alone
 		nodes     [][]Row // one worktree line with its children each
 	}
 	repos := map[string]*repo{}
@@ -212,7 +213,7 @@ func Tree(in Input) []Row {
 		}
 		r := repos[key]
 		if r == nil {
-			r = &repo{key: key, name: name}
+			r = &repo{key: key, name: name, source: src}
 			repos[key] = r
 		}
 		if r.name == "" {
@@ -241,13 +242,7 @@ func Tree(in Input) []Row {
 	}
 	// The newest submitted task owns a worktree's children.
 	for _, idx := range standing {
-		sort.SliceStable(idx, func(a, b int) bool {
-			pa, pb := tasks[idx[a]].Pending, tasks[idx[b]].Pending
-			if !pa.SubmittedAt.Equal(pb.SubmittedAt) {
-				return pa.SubmittedAt.After(pb.SubmittedAt)
-			}
-			return pa.ID < pb.ID
-		})
+		sort.SliceStable(idx, func(a, b int) bool { return newer(tasks[idx[a]].Pending, tasks[idx[b]].Pending) })
 	}
 
 	for i := range in.Worktrees {
@@ -368,13 +363,7 @@ func Tree(in Input) []Row {
 			loose = append(loose, i)
 		}
 	}
-	sort.SliceStable(loose, func(a, b int) bool {
-		pa, pb := tasks[loose[a]].Pending, tasks[loose[b]].Pending
-		if !pa.SubmittedAt.Equal(pb.SubmittedAt) {
-			return pa.SubmittedAt.After(pb.SubmittedAt)
-		}
-		return pa.ID < pb.ID
-	})
+	sort.SliceStable(loose, func(a, b int) bool { return newer(tasks[loose[a]].Pending, tasks[loose[b]].Pending) })
 	for _, i := range loose {
 		t := &tasks[i]
 		p := t.Pending
@@ -431,14 +420,15 @@ func Tree(in Input) []Row {
 		}
 	}
 	// A repository named by a source tag alone: its label from the
-	// worktrees is missing; the tag's last element stands in.
+	// worktrees is missing; the source's last element stands in, a
+	// forge source's path's, without .git.
 	for _, rp := range repos {
 		if rp.name == "" {
-			if _, p, ok := source.Forge(strings.TrimPrefix(rp.key, "forge\x00")); ok {
-				rp.name = path.Base(p)
-			} else {
-				rp.name = path.Base(strings.TrimSuffix(strings.TrimPrefix(rp.key, "exact\x00"), ".git"))
+			p := rp.source
+			if _, fp, ok := source.Forge(rp.source); ok {
+				p = fp
 			}
+			rp.name = path.Base(strings.TrimSuffix(p, ".git"))
 		}
 	}
 
@@ -583,13 +573,14 @@ func (r Row) Home() string {
 	return ""
 }
 
-// Agents is the agent view: the tasks first, the newest first, then one
-// tile per agent in the sort order; the stale agents and those of
-// settled workspaces, unless pressing or the viewer's own, in the Stale
-// fold. Tiles that share a primary label, several agents of one worktree
-// say, are numbered in the tree's order.
-func Agents(in Input) Rows {
-	tree := Tree(in)
+// Agents is the agent view, from the tree Tree built of the input: the
+// tasks first, the newest first, then one tile per agent in the sort
+// order; the stale agents and those of settled workspaces, unless
+// pressing or the viewer's own, in the Stale fold. Tiles that share a
+// primary label, several agents of one worktree say, are numbered in
+// the tree's order. Of the input it reads the sort order and the stale
+// fold setting.
+func Agents(in Input, tree []Row) Rows {
 	var rows []Row
 	viewer := map[string]bool{} // worktree ids and session names the viewer is in
 	for _, n := range tree {

@@ -49,7 +49,7 @@ func TestScopes(t *testing.T) {
 	m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 40, Follow: true}
 	set := func() {
 		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
 		m.Render()
 	}
 	set()
@@ -269,7 +269,7 @@ func TestCommands(t *testing.T) {
 	in := treeInput(now)
 	m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 60, Height: 30}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	for _, c := range []struct{ line, err string }{
 		{"next", ""}, {"prev", ""}, {"jump 3", ""}, {"jump 3 client=/dev/ttys004", ""}, {"view tree", ""}, {"scope session", ""},
@@ -356,7 +356,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	in := treeInput(now)
 	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 20, AskQuit: true, HelpTitle: "keys", Help: []string{"z            settle"}}
 	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	m.Render()
 	m.Handle(term.Key{Rune: '?'})
 	if m.Overlay == nil {
@@ -442,7 +442,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	}
 	other := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 20}
 	other.SetTree(rows.Tree(in))
-	other.SetRows(rows.Agents(in))
+	other.SetRows(rows.Agents(in, rows.Tree(in)))
 	other.Render()
 	other.Select("venv/laatmux/%8") // under auto-layout
 	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
@@ -526,7 +526,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	hin.Pendings = []protocol.Pending{{ID: "add-h", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one", Taken: true, SubmittedAt: now}}
 	h := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 60, Height: 30}
 	h.SetTree(rows.Tree(hin))
-	h.SetRows(rows.Agents(hin))
+	h.SetRows(rows.Agents(hin, rows.Tree(hin)))
 	h.Render()
 	h.ApplyFolds(map[string]bool{"add-h": true}) // the user's, from the file
 	h.setFold("add-h", false)                    // a reveal here
@@ -535,7 +535,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	hin.Pendings = nil
 	h.Handoffs = map[string]string{"add-h": "venv/worktree//r/new-one"}
 	h.SetTree(rows.Tree(hin))
-	h.SetRows(rows.Agents(hin))
+	h.SetRows(rows.Agents(hin, rows.Tree(hin)))
 	if h.closed(&h.Tree[h.indexOf("venv/worktree//r/new-one")]) {
 		t.Error("the reveal not kept on the successor")
 	}
