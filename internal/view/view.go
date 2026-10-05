@@ -401,6 +401,21 @@ type Line struct {
 
 func plain(s string) Line { return Line{Spans: []Span{{Text: s}}} }
 
+// bold and dim are one-span lines in those attributes, fit to the
+// width: a title, a message and an error are bold, a hint dim.
+func bold(s string, w int) Line { return Line{Spans: []Span{{Text: fit(s, w)}}, Bold: true} }
+func dim(s string, w int) Line  { return Line{Spans: []Span{{Text: fit(s, w)}}, Dim: true} }
+
+// framed is an overlay's frame h lines tall: the lines so far, blank
+// lines to the height but one, and foot as the last line, whatever the
+// body's length.
+func framed(out []Line, h int, foot Line) []Line {
+	for len(out) < h-1 {
+		out = append(out, plain(""))
+	}
+	return append(out[:h-1], foot)
+}
+
 // Render draws the model into exactly Height lines of at most Width
 // cells each, and records which body line shows which row for the mouse.
 // Before the first snapshot the body says it is loading, and a list with
@@ -465,7 +480,7 @@ func (m *Model) Render() []Line {
 				for i := range ls {
 					ls[i].Reverse = true
 					// The band spans the width, not the text alone.
-					if n := m.Width - lineWidth(ls[i]); n > 0 {
+					if n := m.Width - spansWidth(ls[i].Spans); n > 0 {
 						ls[i].Spans = append(ls[i].Spans, Span{Text: strings.Repeat(" ", n)})
 					}
 				}
@@ -565,7 +580,7 @@ func (m *Model) Render() []Line {
 	for i := shift; i < body; i++ {
 		switch j := m.scroll + i - shift; {
 		case tail && i-shift == window:
-			out = append(out, Line{Spans: []Span{{Text: fit(fmt.Sprintf("↓ %d more", more), m.Width)}}, Dim: true})
+			out = append(out, dim(fmt.Sprintf("↓ %d more", more), m.Width))
 		case j < len(lines):
 			out = append(out, lines[j])
 			m.hitIDs[i] = ids[j]
@@ -593,21 +608,12 @@ func (m *Model) Render() []Line {
 	return out
 }
 
-// lineWidth is the cells a line's spans take.
-func lineWidth(l Line) int {
-	n := 0
-	for _, sp := range l.Spans {
-		n += width(sp.Text)
-	}
-	return n
-}
-
 func (m *Model) footer() Line {
 	switch {
 	case m.Confirm != "":
-		return Line{Spans: []Span{{Text: fit(m.Confirm, m.Width)}}, Bold: true}
+		return bold(m.Confirm, m.Width)
 	case m.Message != "":
-		return Line{Spans: []Span{{Text: fit(m.Message, m.Width)}}, Bold: true}
+		return bold(m.Message, m.Width)
 	case m.Filtering:
 		return plain(fit("/"+m.Filter+"_", m.Width))
 	case m.Filter != "":
@@ -618,7 +624,7 @@ func (m *Model) footer() Line {
 		// The scope in force, ahead of the keys.
 		hint = "[" + s + "]  " + hint
 	}
-	return Line{Spans: []Span{{Text: fit(hint, m.Width)}}, Dim: true}
+	return dim(hint, m.Width)
 }
 
 // row draws one row in the current layout; a tree's node, and the stale

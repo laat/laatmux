@@ -315,16 +315,12 @@ func (f *Form) lineEnd(i int) int {
 // outright.
 func (f *Form) branchKey(k term.Key) {
 	switch k.Kind {
-	case term.KeyRune:
-		f.branch += string(k.Rune)
-		f.edited = true
 	case term.KeyPaste:
+		// A branch name has no spaces: a paste loses them.
 		f.branch += strings.ReplaceAll(pasteLine(k.Text), " ", "")
 		f.edited = true
-	case term.KeyBackspace:
-		if r := []rune(f.branch); len(r) > 0 {
-			f.branch = string(r[:len(r)-1])
-		}
+	case term.KeyRune, term.KeyBackspace:
+		f.branch = edited(f.branch, k)
 		f.edited = true
 	case term.KeyEnter:
 		f.submit()
@@ -358,20 +354,20 @@ func (f *Form) Render(w, h int) []Line {
 	if f.picker != nil {
 		return f.picker.Render(w, h)
 	}
-	out := []Line{{Spans: []Span{{Text: fit(f.Title, w)}}, Bold: true}}
+	out := []Line{bold(f.Title, w)}
 	out = append(out, f.chipLines(w)...)
 	// Footer: the hint, or the error; the note under it when there is
 	// room and one to give.
 	var foot []Line
 	switch {
 	case f.Error != "":
-		foot = append(foot, Line{Spans: []Span{{Text: fit(f.Error, w)}}, Bold: true})
+		foot = append(foot, bold(f.Error, w))
 	default:
-		foot = append(foot, Line{Spans: []Span{{Text: fit(f.Hint, w)}}, Dim: true})
+		foot = append(foot, dim(f.Hint, w))
 	}
 	if f.Note != nil {
 		if n := f.Note(f); n != "" {
-			foot = append(foot, Line{Spans: []Span{{Text: fit(n, w)}}, Bold: true})
+			foot = append(foot, bold(n, w))
 		}
 	}
 	// The branch line, and the prompt box in what is left. A focused

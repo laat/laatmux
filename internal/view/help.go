@@ -79,7 +79,7 @@ func (h *Help) Render(w, hgt int) []Line {
 		}
 		return out
 	}
-	out := []Line{{Spans: []Span{{Text: fit(h.Title, w)}}, Bold: true}}
+	out := []Line{bold(h.Title, w)}
 	h.body = max(hgt-2, 1)
 	if h.scroll > len(h.Lines)-h.body {
 		h.scroll = len(h.Lines) - h.body
@@ -94,15 +94,11 @@ func (h *Help) Render(w, hgt int) []Line {
 			out = append(out, plain(""))
 		}
 	}
-	for len(out) < hgt-1 {
-		out = append(out, plain(""))
-	}
 	hint := "any key closes"
 	if len(h.Lines) > h.body {
 		hint = "↑ ↓ scroll  any other key closes"
 	}
-	out = append(out, Line{Spans: []Span{{Text: fit(hint, w)}}, Dim: true})
-	return out[:hgt]
+	return framed(out, hgt, dim(hint, w))
 }
 
 func (h *Help) Handle(k term.Key) {

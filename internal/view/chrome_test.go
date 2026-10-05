@@ -257,7 +257,7 @@ func TestChromeEdges(t *testing.T) {
 	}
 	m = &Model{Now: now, Width: 1, Height: 3, Loading: true}
 	for _, l := range m.Render() {
-		if lineWidth(l) > 1 {
+		if spansWidth(l.Spans) > 1 {
 			t.Errorf("Loading wider than the pane: %q", Text([]Line{l}))
 		}
 	}
@@ -275,7 +275,7 @@ func TestWidthSweep(t *testing.T) {
 						m := model(now)
 						m.Layout, m.Icons, m.Width, m.Height, m.Selected, m.Titles = layout, icons, w, h, sel, true
 						for _, l := range m.Render() {
-							if n := lineWidth(l); n > w {
+							if n := spansWidth(l.Spans); n > w {
 								t.Fatalf("layout %v icons %+v %dx%d selected %d: a line of %d cells: %q", layout, icons, w, h, sel, n, Text([]Line{l}))
 							}
 						}

@@ -174,3 +174,50 @@ func TestModelOverlayAndConfirm(t *testing.T) {
 		t.Errorf("poll after success: %+v", a)
 	}
 }
+
+// An overlay's frame is its lines padded to the height but one and the
+// foot last, whatever the body's length: a frame too short for the
+// body still ends with the foot.
+func TestFramed(t *testing.T) {
+	body := []Line{plain("a"), plain("b"), plain("c")}
+	if got := Text(framed(body, 6, plain("foot"))); got != "a\nb\nc\n\n\nfoot\n" {
+		t.Errorf("padded: %q", got)
+	}
+	if got := Text(framed(body, 2, plain("foot"))); got != "a\nfoot\n" {
+		t.Errorf("short: %q", got)
+	}
+	if got := Text(framed(nil, 1, plain("foot"))); got != "foot\n" {
+		t.Errorf("one line: %q", got)
+	}
+}
+
+// One line of text edited by keys: runes and pastes append, a paste as
+// one line, backspace drops the last rune, other keys change nothing.
+func TestEdited(t *testing.T) {
+	s := ""
+	for _, k := range []term.Key{{Rune: 'a'}, {Rune: 'é'}, {Kind: term.KeyPaste, Text: "b\nc"}, {Kind: term.KeyBackspace}, {Kind: term.KeyUp}} {
+		s = edited(s, k)
+	}
+	if s != "aéb " {
+		t.Fatalf("edited: %q", s)
+	}
+	if got := edited("", term.Key{Kind: term.KeyBackspace}); got != "" {
+		t.Fatalf("backspace on empty: %q", got)
+	}
+	if got := edited("aé", term.Key{Kind: term.KeyBackspace}); got != "a" {
+		t.Fatalf("backspace drops a rune: %q", got)
+	}
+}
+
+// A picker too short for its hint keeps its entry: the only one drawn
+// at three lines is the selected one, and the hint comes with the
+// fourth line.
+func TestPickerShort(t *testing.T) {
+	p := NewPicker("pick", []Choice{{Label: "one"}, {Label: "two"}}, 1)
+	if got := Text(p.Render(20, 3)); got != "pick\n> _\n  two\n" {
+		t.Errorf("three lines: %q", got)
+	}
+	if got := Text(p.Render(60, 4)); got != "pick\n> _\n  two\n"+p.Hint+"\n" {
+		t.Errorf("four lines: %q", got)
+	}
+}
