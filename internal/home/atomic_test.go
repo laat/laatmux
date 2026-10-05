@@ -49,6 +49,8 @@ func TestTemporary(t *testing.T) {
 		"a.json.tmp.json":         false,
 		"a.json.tmp.":             false,
 		"a.json.tmp.x":            false,
+		"a.json.tmp.-1":           false,
+		"a.json.tmp.+1":           false,
 		"a.tmp":                   false,
 	} {
 		if got := Temporary(name); got != want {
