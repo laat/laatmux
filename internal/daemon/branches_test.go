@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // fakeGH answers a branch query with a state per branch name: a PR with
@@ -100,7 +100,7 @@ func drainBranches(s *subscriber) (ups []protocol.BranchStatus, removes []protoc
 }
 
 func bkey(branch string) protocol.BranchKey {
-	return protocol.BranchKey{Source: config.SourceKey(ghSource), Branch: branch}
+	return protocol.BranchKey{Source: source.Key(ghSource), Branch: branch}
 }
 
 // A fetch upserts each branch's record, keyed by the source key; one

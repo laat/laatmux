@@ -30,6 +30,7 @@ two sidebar views and the sidebar at workmux's level, is designed in
 | `internal/view` | the list view: pure renderer for the tile and compact layouts, keys and mouse, raw mode, the draw loop |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
 | `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon, `sidebar`; `.laatmux.yaml` per repository |
+| `internal/source` | a repository source's key, the same for the forms a forge gives one repository, and the forge split |
 
 ## Run
 

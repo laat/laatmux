@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -232,7 +232,7 @@ func TestTreeContents(t *testing.T) {
 		got = append(got, strings.Repeat("  ", n.Depth)+id)
 	}
 	want := []string{
-		"repo/" + config.SourceKey(src),
+		"repo/" + source.Key(src),
 		"  oenv/worktree//w/a",
 		"    agent oenv/laatmux/%1",
 		"  t-new", // the newest task stands for b, with its agent

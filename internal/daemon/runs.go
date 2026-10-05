@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -200,7 +200,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		if !found {
 			return fmt.Errorf("%s is not a worktree of a known repository", root)
 		}
-		if m.Repo != "" && !config.SameSource(rec.Source, m.Repo) {
+		if m.Repo != "" && !source.Same(rec.Source, m.Repo) {
 			// The client sends the source; a source that is not the
 			// record's may still be a label, resolved as add resolves
 			// it. A bare source equal to another entry's label is the
@@ -213,7 +213,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 			if !ok {
 				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
 			}
-			if !config.SameSource(rec.Source, repo.Source) {
+			if !source.Same(rec.Source, repo.Source) {
 				return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
 			}
 		}

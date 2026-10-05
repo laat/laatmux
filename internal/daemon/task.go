@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -214,7 +215,7 @@ func (r *addRun) run(ctx context.Context) error {
 	if err != nil {
 		return stageErr(stage, err)
 	}
-	if known && !config.SameSource(repo.Source, r.e.Source) {
+	if known && !source.Same(repo.Source, r.e.Source) {
 		// A resend is the recorded add, never another repository's.
 		return stageErr(stage, fmt.Errorf("the add %s was submitted for %s, not %s", m.ID, r.e.Source, repo.Source))
 	}
@@ -712,7 +713,7 @@ func (d *Daemon) worktreeReplaced(ctx context.Context, e entry) string {
 		return "worktree " + e.Root + " could not be checked: " + err.Error()
 	case !found:
 		return "worktree replaced: " + e.Root + " is gone"
-	case !config.SameSource(rec.Source, e.Source):
+	case !source.Same(rec.Source, e.Source):
 		return "worktree replaced: " + e.Root + " is now a worktree of " + rec.Repo
 	case rec.Branch != "" && rec.Branch != e.Branch:
 		return "worktree replaced: " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
@@ -981,7 +982,7 @@ func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 		}
 		return repo, nil
 	}
-	if e.Source == "" || !config.SameSource(e.Source, m.Repo) {
+	if e.Source == "" || !source.Same(e.Source, m.Repo) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
 	}
 	if repo, ok := d.cfg.Store.BySource(e.Source); ok {

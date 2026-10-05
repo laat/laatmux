@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // PR and checks: the merging daemon reads, through gh on this machine,
@@ -116,7 +116,7 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 		if w.Source == "" || w.Branch == "" {
 			return
 		}
-		host, path, ok := config.Forge(w.Source)
+		host, path, ok := source.Forge(w.Source)
 		if !ok || !d.githubHost(host) {
 			return
 		}
@@ -124,7 +124,7 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 		if !ok || strings.Contains(repo, "/") {
 			return
 		}
-		bk := protocol.BranchKey{Source: config.SourceKey(w.Source), Branch: w.Branch}
+		bk := protocol.BranchKey{Source: source.Key(w.Source), Branch: w.Branch}
 		out[branchKeyString(bk)] = branchQuery{key: branchKeyString(bk), bk: bk, host: strings.ToLower(host),
 			b: github.Branch{Owner: owner, Repo: repo, Branch: w.Branch}}
 	}

@@ -431,7 +431,7 @@ type Attention struct {
 func (a Attention) Done() bool { return a.FinishedAt.After(a.SeenAt) }
 
 // BranchKey is what a branch_status record is keyed by: the source key,
-// normalised as the config's SourceKey does, and the branch.
+// normalised as source.Key does, and the branch.
 type BranchKey struct {
 	Source string `json:"source"`
 	Branch string `json:"branch"`

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -1055,7 +1055,7 @@ func TestBranchAttached(t *testing.T) {
 		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "r", Source: "https://github.com/o/r.git", Branch: "a", Root: "/w/a"}},
 		Branches: map[protocol.BranchKey]protocol.BranchStatus{
-			{Source: config.SourceKey("git@github.com:o/r.git"), Branch: "a"}: {PR: &protocol.PullRequest{Number: 3}},
+			{Source: source.Key("git@github.com:o/r.git"), Branch: "a"}: {PR: &protocol.PullRequest{Number: 3}},
 		},
 	}
 	lines := treeLines(Tree(in))

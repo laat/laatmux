@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/laat/laatmux/internal/source"
 	"gopkg.in/yaml.v3"
 )
 
@@ -111,15 +112,15 @@ func (c Config) RepoByName(name string) (Repo, bool) {
 }
 
 // RepoBySource finds a known repository by its source, its identity,
-// in any of the forms SameSource takes as one.
-func (c Config) RepoBySource(source string) (Repo, bool) {
+// in any of the forms source.Same takes as one.
+func (c Config) RepoBySource(src string) (Repo, bool) {
 	for _, r := range c.Repos {
-		if r.Source == source {
+		if r.Source == src {
 			return r, true
 		}
 	}
 	for _, r := range c.Repos {
-		if SameSource(r.Source, source) {
+		if source.Same(r.Source, src) {
 			return r, true
 		}
 	}
@@ -143,13 +144,13 @@ func deriveNames(repos []Repo) error {
 		if r.Source == "" {
 			return fmt.Errorf("repos: entry %d has no source", i+1)
 		}
-		if j, dup := bySource[SourceKey(r.Source)]; dup {
+		if j, dup := bySource[source.Key(r.Source)]; dup {
 			if repos[j].Source == r.Source {
 				return fmt.Errorf("repos: %s listed twice (entries %d and %d)", r.Source, j+1, i+1)
 			}
 			return fmt.Errorf("repos: %s and %s are one repository (entries %d and %d)", repos[j].Source, r.Source, j+1, i+1)
 		}
-		bySource[SourceKey(r.Source)] = i
+		bySource[source.Key(r.Source)] = i
 	}
 	type parts struct{ org, base string }
 	derived := map[int]parts{}

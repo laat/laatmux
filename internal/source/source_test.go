@@ -1,8 +1,8 @@
-package config
+package source
 
 import "testing"
 
-func TestSameSource(t *testing.T) {
+func TestSame(t *testing.T) {
 	same := []string{
 		"git@github.com:laat/laatmux.git",
 		"git@github.com:laat/laatmux",
@@ -19,7 +19,7 @@ func TestSameSource(t *testing.T) {
 	}
 	for _, a := range same {
 		for _, b := range same {
-			if !SameSource(a, b) {
+			if !Same(a, b) {
 				t.Errorf("%s and %s differ", a, b)
 			}
 		}
@@ -53,16 +53,16 @@ func TestSameSource(t *testing.T) {
 		{"https://example.com/o/r%2Egit", "https://example.com/o/r"},
 		// A source that spells another's key is not that source.
 		{"forge:example.com/o/r", "https://example.com/o/r"},
-		{SourceKey("https://example.com/o/r"), "https://example.com/o/r"},
+		{Key("https://example.com/o/r"), "https://example.com/o/r"},
 	}
 	for _, p := range differ {
-		if SameSource(p[0], p[1]) {
+		if Same(p[0], p[1]) {
 			t.Errorf("%s and %s are the same", p[0], p[1])
 		}
 	}
 	// Other sources are compared exactly.
 	for _, s := range []string{"/src/laatmux", "./laatmux", "file:///src/x", "C:/x", "host:~/x", "alice@box:proj", "ssh://git@h:2222/o/r"} {
-		if !SameSource(s, s) || SameSource(s, s+"x") || SameSource(s, s+".git") {
+		if !Same(s, s) || Same(s, s+"x") || Same(s, s+".git") {
 			t.Errorf("%q is not compared exactly", s)
 		}
 	}

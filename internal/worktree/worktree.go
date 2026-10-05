@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // Repo is a known repository: its source, the identity, and its label,
@@ -69,7 +70,7 @@ func New(dirs config.Dirs, repos []config.Repo) *Store {
 }
 
 // Repo finds a repository this host's config lists by name, else by
-// source, in any form config.SameSource takes as one: the same order as
+// source, in any form source.Same takes as one: the same order as
 // config.Config.Repo, since a bare local source can equal another
 // entry's label.
 func (s *Store) Repo(nameOrSource string) (Repo, bool) {
@@ -82,15 +83,15 @@ func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 }
 
 // BySource finds a repository this host's config lists by its source,
-// in any form config.SameSource takes as one.
-func (s *Store) BySource(source string) (Repo, bool) {
+// in any form source.Same takes as one.
+func (s *Store) BySource(src string) (Repo, bool) {
 	for _, r := range s.Repos {
-		if r.Source == source {
+		if r.Source == src {
 			return r, true
 		}
 	}
 	for _, r := range s.Repos {
-		if config.SameSource(r.Source, source) {
+		if source.Same(r.Source, src) {
 			return r, true
 		}
 	}
@@ -123,7 +124,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 		}
 	}
 	for i := 1; i < len(named); i++ {
-		if !config.SameSource(named[i].Source, named[0].Source) {
+		if !source.Same(named[i].Source, named[0].Source) {
 			return Repo{}, false, fmt.Errorf("%q names both %s and %s on this host; name the repository by its source", nameOrSource, named[0].Source, named[i].Source)
 		}
 	}
@@ -134,7 +135,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 		return r, true, nil
 	}
 	for _, co := range cos {
-		if config.SameSource(co.origin, nameOrSource) {
+		if source.Same(co.origin, nameOrSource) {
 			return s.label(co), true, nil
 		}
 	}
@@ -143,7 +144,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 
 // Checkout finds the main checkout of repo under the repos directory: the
 // direct child whose remote.origin.url is the source, in any form
-// config.SameSource takes as one, so each host fetches over the
+// source.Same takes as one, so each host fetches over the
 // transport its checkout was cloned with. Reads of origin are cached by
 // the mtime and size of .git/config, so an idle poll spawns no git
 // processes. Not found is ("", false, nil).
@@ -152,12 +153,12 @@ func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	dir, ok := checkouts[config.SourceKey(repo.Source)]
+	dir, ok := checkouts[source.Key(repo.Source)]
 	return dir, ok, nil
 }
 
 // Checkouts scans the repos directory once and maps each origin found,
-// by config.SourceKey, to its checkout, the first in directory order
+// by source.Key, to its checkout, the first in directory order
 // when two share an origin. One scan serves every repository in a poll.
 func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 	cos, err := s.scan(ctx)
@@ -166,7 +167,7 @@ func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 	}
 	out := map[string]string{}
 	for _, co := range cos {
-		key := config.SourceKey(co.origin)
+		key := source.Key(co.origin)
 		if _, dup := out[key]; !dup {
 			out[key] = co.dir
 		}
@@ -564,7 +565,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 	}
 	var matches []match
 	for _, co := range cos {
-		if !config.SameSource(co.origin, repo.Source) {
+		if !source.Same(co.origin, repo.Source) {
 			continue
 		}
 		if first == "" {

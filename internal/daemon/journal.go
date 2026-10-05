@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // The journal's clock contract, from the milestone-four note. Retention
@@ -277,12 +277,12 @@ func (j *journal) writeLocked(e *entry) error {
 // not terminal, other than id's own: what an allocation must avoid
 // between another add's allocation and its branch, across a daemon
 // death.
-func (j *journal) reserved(source, id string) []string {
+func (j *journal) reserved(src, id string) []string {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	var names []string
 	for _, e := range j.byID {
-		if e.ID != id && config.SameSource(e.Source, source) && e.Allocated && !e.terminal() {
+		if e.ID != id && source.Same(e.Source, src) && e.Allocated && !e.terminal() {
 			names = append(names, e.Branch)
 		}
 	}

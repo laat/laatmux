@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -191,7 +192,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
 	}
 	if local, ok := cfg.RepoByName(label); ok && branch != "" {
-		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && config.SameSource(w.Source, local.Source) }); ok || err != nil {
+		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && source.Same(w.Source, local.Source) }); ok || err != nil {
 			return w, ok, err
 		}
 	}

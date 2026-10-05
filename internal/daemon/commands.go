@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -243,13 +243,13 @@ func (d *Daemon) evict(id string, c *command) {
 // repoLock serializes commands per repository: fetch and worktree add
 // write to the same main checkout, so that is the grain. Different
 // repositories proceed in parallel.
-func (d *Daemon) repoLock(source string) *sync.Mutex {
+func (d *Daemon) repoLock(key string) *sync.Mutex {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	l, ok := d.locks[source]
+	l, ok := d.locks[key]
 	if !ok {
 		l = &sync.Mutex{}
-		d.locks[source] = l
+		d.locks[key] = l
 	}
 	return l
 }
@@ -319,7 +319,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				return err
 			}
 			if found {
-				if repo.Source != "" && !config.SameSource(rec.Source, repo.Source) {
+				if repo.Source != "" && !source.Same(rec.Source, repo.Source) {
 					return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
 				}
 				if m.Branch != "" && rec.Branch != m.Branch {
@@ -440,14 +440,14 @@ func (d *Daemon) holdRepos() func() {
 // directory at once. The caller has the shared hold. The order is
 // always hold, source, name, and nothing waits on a source holding a
 // name. The returned func releases both locks.
-func (d *Daemon) lockRepo(source, name string) func() {
-	src := d.repoLock("repo/" + config.SourceKey(source))
-	src.Lock()
+func (d *Daemon) lockRepo(src, name string) func() {
+	repo := d.repoLock("repo/" + source.Key(src))
+	repo.Lock()
 	dir := d.repoLock("name/" + name)
 	dir.Lock()
 	return func() {
 		dir.Unlock()
-		src.Unlock()
+		repo.Unlock()
 	}
 }
 
