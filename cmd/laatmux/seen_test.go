@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/laat/laatmux/internal/daemon"
-	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -33,36 +32,6 @@ func TestPickBeside(t *testing.T) {
 		if got := pickBeside(c.out); got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
 		}
-	}
-}
-
-// The merged stream's attention records: a snapshot sets them, an upsert
-// changes one, a remove drops one, and the rows see them.
-func TestMergedAttention(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Attentions: []protocol.Attention{{AgentID: "a"}, {AgentID: "b"}}})
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, Attention: &protocol.Attention{AgentID: "c"}})
-	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, AttentionID: "a"})
-	in := m.input(nil, "")
-	if len(in.Attention) != 2 || in.Attention["b"].AgentID != "b" || in.Attention["c"].AgentID != "c" {
-		t.Errorf("attention: %+v", in.Attention)
-	}
-	if in.StaleAfter == 0 || !in.DimStale || !in.CollapseStale {
-		t.Errorf("stale defaults: %+v", in)
-	}
-}
-
-// The merged stream's branch records: a snapshot sets them, an upsert
-// changes one, a remove drops one. The GitHub error beside them is
-// `hosts`'s to print; the views keep nothing of it.
-func TestMergedBranches(t *testing.T) {
-	m := newMerged()
-	a, b := protocol.BranchKey{Source: "s", Branch: "a"}, protocol.BranchKey{Source: "s", Branch: "b"}
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, BranchStatuses: []protocol.BranchStatus{{BranchKey: a}}, GitHubError: "gh is not installed"})
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &protocol.BranchStatus{BranchKey: b}})
-	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &a})
-	if _, ok := m.branches[b]; !ok || len(m.branches) != 1 {
-		t.Errorf("%+v", m.branches)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -23,8 +24,6 @@ import (
 type fakeDaemon struct {
 	caps  []string
 	serve func(pc *protocol.Conn, m protocol.Message) bool // false ends the connection
-	mu    sync.Mutex
-	conns int
 }
 
 func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, m protocol.Message) bool) *fakeDaemon {
@@ -45,9 +44,6 @@ func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, 
 			if err != nil {
 				return
 			}
-			f.mu.Lock()
-			f.conns++
-			f.mu.Unlock()
 			go func() {
 				defer c.Close()
 				pc := protocol.NewConn(c)
@@ -64,16 +60,10 @@ func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, 
 	return f
 }
 
-func (f *fakeDaemon) connections() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.conns
-}
-
 // A daemon without the capability sends the client down the direct path,
 // where the local host is the same daemon with a plain subscribe.
 func TestSnapshotFallsBackToDirect(t *testing.T) {
-	var plain, merged int
+	var plain, mergedSubs int
 	var mu sync.Mutex
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapWorktrees}, func(pc *protocol.Conn, m protocol.Message) bool {
 		if m.Type != protocol.TypeSubscribe {
@@ -81,7 +71,7 @@ func TestSnapshotFallsBackToDirect(t *testing.T) {
 		}
 		mu.Lock()
 		if m.Merged {
-			merged++
+			mergedSubs++
 		} else {
 			plain++
 		}
@@ -89,8 +79,8 @@ func TestSnapshotFallsBackToDirect(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Worktrees: []protocol.Worktree{{ID: "lenv/worktree//w/x", EnvironmentID: "lenv", Repo: "proj", Branch: "x", Root: "/w/x"}}})
 		return true
 	})
-	if _, ok := dialMerged(context.Background()); ok {
-		t.Fatal("dialMerged accepted a daemon without the capability")
+	if _, ok := merged.Dial(context.Background()); ok {
+		t.Fatal("Dial accepted a daemon without the capability")
 	}
 	// ls and watch refuse such a daemon and say how to replace it.
 	if _, err := dialMergedOrExplain(context.Background()); err == nil || !strings.Contains(err.Error(), "older build") || !strings.Contains(err.Error(), "laatmux stop") {
@@ -102,14 +92,14 @@ func TestSnapshotFallsBackToDirect(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if plain != 1 || merged != 0 {
-		t.Errorf("subscribes: plain %d merged %d", plain, merged)
+	if plain != 1 || mergedSubs != 0 {
+		t.Errorf("subscribes: plain %d merged %d", plain, mergedSubs)
 	}
 }
 
 // Through the merged stream, snapshot waits for the one host to be
-// listed, takes its records alone, and falls back for a host the daemon
-// does not know.
+// listed, not for the others, takes its records alone, and falls back
+// for a host the daemon does not know.
 func TestMergedSnapshotWaitsForHost(t *testing.T) {
 	var direct int
 	var mu sync.Mutex
@@ -127,6 +117,7 @@ func TestMergedSnapshotWaitsForHost(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
 			{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{"status", "merged"}},
 			{Name: "vm", SSH: "vm"},
+			{Name: "slow", SSH: "slow"}, // never lists
 		}})
 		time.Sleep(50 * time.Millisecond)
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 2, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: []string{"status", "worktrees", "rm"}}})
@@ -135,9 +126,13 @@ func TestMergedSnapshotWaitsForHost(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees", "rm"}}})
 		return true
 	})
+	start := time.Now()
 	hello, snap, err := snapshot(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, protocol.CapRm)
 	if err != nil || hello.EnvironmentID != "venv" || hello.Version != "v1" {
 		t.Fatalf("hello = %+v %v", hello, err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("the slow host was waited on")
 	}
 	if len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != "/r/y" || len(snap.Agents) != 0 {
 		t.Errorf("vm's records = %+v", snap)
@@ -198,17 +193,11 @@ func TestMergedSnapshotWaitsThroughReconnect(t *testing.T) {
 	}
 }
 
-// A daemon that answers the hello but never sends the snapshot is a
-// timeout, not an empty listing.
-func TestReadMergedTimesOutWithoutSnapshot(t *testing.T) {
+// The stream alone is what ls, watch and the sidebar take; the add
+// form, the dashboard, compose and tasks refuse a daemon without the
+// relay, an older build, before they need a terminal or a repository.
+func TestNeedRelay(t *testing.T) {
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool { return true })
-	c, ok := dialMerged(context.Background())
-	if !ok {
-		t.Fatal("dialMerged failed")
-	}
-	defer c.Close()
-	// The stream alone is what ls, watch and the sidebar take; the add
-	// form refuses a daemon without the relay, an older build.
 	if c2, err := dialMergedOrExplain(context.Background()); err != nil {
 		t.Fatalf("the stream alone refused: %v", err)
 	} else if err := needRelay(c2); err == nil || !strings.Contains(err.Error(), "no relay") || !strings.Contains(err.Error(), "laatmux stop") {
@@ -234,58 +223,6 @@ func TestReadMergedTimesOutWithoutSnapshot(t *testing.T) {
 	})
 	if err := listTasks(context.Background()); err != nil {
 		t.Fatalf("tasks on a daemon with the relay: %v", err)
-	}
-	m := newMerged()
-	_, err := m.readMerged(context.Background(), c, 200*time.Millisecond, func(*merged) bool { return false })
-	if err == nil || !strings.Contains(err.Error(), "no snapshot after") {
-		t.Fatalf("err = %v", err)
-	}
-	// With a snapshot but a host that never lists, the wait ends with
-	// the host pending and no error.
-	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
-		if m.Type == protocol.TypeSubscribe {
-			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm"}}})
-		}
-		return true
-	})
-	c2, ok := dialMerged(context.Background())
-	if !ok {
-		t.Fatal("dialMerged failed")
-	}
-	defer c2.Close()
-	m = newMerged()
-	pending, err := m.readMerged(context.Background(), c2, 200*time.Millisecond, func(m *merged) bool { return len(m.pending()) == 0 })
-	if err != nil || len(pending) != 1 || pending[0] != "vm" {
-		t.Fatalf("pending = %v, err = %v", pending, err)
-	}
-}
-
-// watch backs off after a subscription the daemon drops, not only after
-// a failed dial, and stops when its context ends.
-func TestFollowMergedBacksOff(t *testing.T) {
-	followBackoffMin = 300 * time.Millisecond
-	defer func() { followBackoffMin = time.Second }()
-	f := startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
-		return m.Type != protocol.TypeSubscribe // hang up on subscribe
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	m := newMerged()
-	done := make(chan struct{})
-	go func() {
-		m.followMerged(ctx, nil)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("followMerged did not stop with its context")
-	}
-	if n := f.connections(); n < 1 || n > 3 {
-		t.Errorf("%d connections in 500 ms with a 300 ms backoff", n)
-	}
-	if !m.daemonErrIs("disconnected; reconnecting") {
-		t.Error("daemon row not marked while reconnecting")
 	}
 }
 

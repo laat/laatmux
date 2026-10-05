@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -131,7 +132,7 @@ func TestFindWorktreeBySource(t *testing.T) {
 // is gone from a connected host as orphaned; from the merged stream, as
 // ls reads it.
 func TestRender(t *testing.T) {
-	m := newMerged()
+	m := merged.New()
 	now := time.Now()
 	hosts := []protocol.HostStatus{
 		{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}},
@@ -142,7 +143,14 @@ func TestRender(t *testing.T) {
 		{Name: "slow", Connected: true, Version: "v", EnvironmentID: "env3", Capabilities: []string{protocol.CapWorktrees}},
 		{Name: "old", Connected: true, Listed: true, Version: "v", EnvironmentID: "env4"},
 	}
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Hosts: hosts,
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: hosts,
+		Sessions: []protocol.Session{
+			{Name: "vm/proj/old", Key: "env1//r/old", Host: "vm", Settled: true},
+			{Name: "vm/proj/gone", Key: "env1//r/gone", Host: "vm"},
+			{Name: "box/proj/x", Key: "env2//r/x", Host: "box"},
+			{Name: "slow/proj/y", Key: "env3//r/y", Host: "slow"},
+			{Name: "old/proj/z", Key: "env4//r/z", Host: "old"},
+		},
 		Agents: []protocol.Agent{
 			{ID: "env1/laatmux/%1", EnvironmentID: "env1", Server: "laatmux", Session: "proj/fix", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Managed: true, Title: "fixing"},
 			{ID: "env1/laatmux/%2", EnvironmentID: "env1", Server: "laatmux", Session: "proj/old", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
@@ -156,14 +164,7 @@ func TestRender(t *testing.T) {
 			{ID: "env1/worktree//r/shell", EnvironmentID: "env1", Repo: "proj", Branch: "shell", Root: "/r/shell", Session: "proj/shell"},
 		},
 	})
-	locals := []protocol.Session{
-		{Name: "vm/proj/old", Key: "env1//r/old", Host: "vm", Settled: true},
-		{Name: "vm/proj/gone", Key: "env1//r/gone", Host: "vm"},
-		{Name: "box/proj/x", Key: "env2//r/x", Host: "box"},
-		{Name: "slow/proj/y", Key: "env3//r/y", Host: "slow"},
-		{Name: "old/proj/z", Key: "env4//r/z", Host: "old"},
-	}
-	out := m.render(locals)
+	out := render(m.Status(""))
 	if strings.Contains(out, "slow/proj/y") || strings.Contains(out, "old/proj/z") {
 		t.Errorf("workspace listed as orphaned without evidence:\n%s", out)
 	}
@@ -210,16 +211,16 @@ func TestRender(t *testing.T) {
 // daemon's does: its cached records stay attributed to it and the tree
 // marks them host down, and the host line says why.
 func TestHostDownKeepsIdentity(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+	m := merged.New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
 		Hosts:     []protocol.HostStatus{{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}},
 		Worktrees: []protocol.Worktree{{ID: "env1/worktree//r/x", EnvironmentID: "env1", Repo: "proj", Branch: "x", Root: "/r/x"}}})
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "vm", Error: "disconnected", Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}})
-	out := m.render(nil)
+	m.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "vm", Error: "disconnected", Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}})
+	out := render(m.Status(""))
 	if !strings.Contains(out, "vm  DOWN  disconnected") || !strings.Contains(out, "x (vm, host down)") {
 		t.Errorf("records lost their host:\n%s", out)
 	}
-	if st := m.hosts["vm"]; st.EnvID != "env1" || st.Version != "v" || st.Connected || st.Listed {
+	if st, _ := m.Status("").Host("vm"); st.EnvID != "env1" || st.Version != "v" || st.Connected || st.Listed {
 		t.Errorf("host state = %+v", st)
 	}
 }

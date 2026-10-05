@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -116,7 +117,7 @@ func visibleRow(t *testing.T, m *view.Model, name string) *rows.Row {
 func TestAddFlowPrefilled(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	treeView(m)
 	selectRow(t, m, "proj/spike")
@@ -161,7 +162,7 @@ func TestAddFlowDefaults(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task") // a row with a session pre-fills its repository and host, not the branch
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
@@ -230,7 +231,7 @@ func TestAddFlowDefaults(t *testing.T) {
 	// candidate.
 	cfg.Agents = map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}
 	cfg.Hosts = cfg.Hosts[1:2]
-	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d = &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m = dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f = m.Overlay.(*view.Form)
@@ -240,7 +241,7 @@ func TestAddFlowDefaults(t *testing.T) {
 
 	// No agents: refused with a message, nothing up.
 	cfg.Agents = nil
-	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d = &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m = dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	if m.Overlay != nil || d.add != nil || m.Message != "no agents configured" {
@@ -258,7 +259,7 @@ func TestAddFlowRefusesBadLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	if m.Overlay != nil || d.add != nil || !strings.HasPrefix(m.Message, "last.json: ") {
@@ -272,9 +273,8 @@ func TestAddFlowRefusesBadLast(t *testing.T) {
 // workspace is this machine while the worktree is on the other one.
 func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
-	d.st.hosts["mac"] = hostState{Local: true, EnvID: "menv"}
-	d.st.hosts["vm"] = hostState{EnvID: "venv"}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	d.st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv"}, {Name: "vm", SSH: "vm", EnvironmentID: "venv"}}})
 	r := rows.Row{Host: "vm", Name: "proj/task", Local: &protocol.Session{Name: "oldvm/proj/task", Key: "venv//w/proj/task", Host: "oldvm"}}
 	l, err := d.localFor(r)
 	if err != nil || l.Host != "vm" || l.Name != "oldvm/proj/task" {
@@ -435,7 +435,7 @@ func TestAddPartialSuccess(t *testing.T) {
 // orphaned session from their lines in the tree.
 func TestRmFor(t *testing.T) {
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
@@ -489,7 +489,7 @@ func TestRmFor(t *testing.T) {
 // agent or not.
 func TestRmTreeRows(t *testing.T) {
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	src := "git@github.com:laat/proj.git"
 	in := rows.Input{
 		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
@@ -555,7 +555,7 @@ func TestRmTreeRows(t *testing.T) {
 // carries the hint to use X and stays until a key; then the list
 // returns with the message.
 func TestRmRefusalHint(t *testing.T) {
-	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	m := dashModel(d.cfg)
 	d.rm = command.Rm{Host: d.cfg.Hosts[1], Root: "/w/proj/task"}
 	// Start with a run that fails the way git refuses a dirty worktree.
@@ -677,7 +677,7 @@ func TestBuildForm(t *testing.T) {
 func TestSubmitFormOutcomes(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
@@ -722,7 +722,7 @@ func TestComposeAct(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
 	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), add: f}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), add: f}
 	c := &composer{d: d, f: f}
 	var last home.Last
 	form := buildForm(cfg, f, last, "proj", "", "", nil)
@@ -783,7 +783,7 @@ func TestPendingKeys(t *testing.T) {
 	}
 	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	var dismissed, delivered string
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(),
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(),
 		dismiss: func(id string) error { dismissed = id; return nil },
 		deliver: func(id string) (string, string, error) { delivered = id; return protocol.DeliveryDelivered, "", nil }}
 	finish := func() {
@@ -974,7 +974,7 @@ func TestPendingOffers(t *testing.T) {
 	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := &view.Model{Width: 100, Height: 20}
 	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
 	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
@@ -1044,7 +1044,7 @@ func TestClickJumpRefocuses(t *testing.T) {
 	refocused := 0
 	var jumped []string
 	jumpErr := error(nil)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ },
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), refocus: func() { refocused++ },
 		jumper: func(r rows.Row) error { jumped = append(jumped, r.ID()); return jumpErr }}
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: row, Mouse: true})
 	if refocused != 1 || len(jumped) != 1 || jumped[0] != row.ID() {
@@ -1106,7 +1106,7 @@ func TestJumpNowhereSelects(t *testing.T) {
 	treeView(m)
 	m.Follow = true
 	refocused := 0
-	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged(), refocus: func() { refocused++ },
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), refocus: func() { refocused++ },
 		jumper: func(rows.Row) error { return errors.New("no session") }}
 	target := visibleRow(t, m, "x/y")
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: target})

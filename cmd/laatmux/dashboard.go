@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -109,11 +109,11 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	if cur, err := workspace.Current(ctx); err == nil {
 		current = cur.Name
 	}
-	st := newMerged()
-	st.configure(cfg)
+	st := merged.New()
+	st.Configure(cfg)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go st.followMerged(ctx, c)
+	go st.Follow(ctx, c)
 	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
@@ -142,9 +142,9 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		}
 	}
 	return view.Run(ctx, t, m, view.Host{
-		Changed:  st.change,
+		Changed:  st.Changed(),
 		Commands: cmds,
-		Refresh:  func(m *view.Model) { st.fill(m, current) },
+		Refresh:  func(m *view.Model) { fill(m, st.Status(current)) },
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionSettings:
@@ -295,18 +295,6 @@ func needRelay(c *client.Conn) error {
 	return nil
 }
 
-// hostCaps is a host's cached daemon capabilities from the merged
-// stream, ok when the host has answered a hello.
-func (m *merged) hostCaps(name string) ([]string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	st, ok := m.hosts[name]
-	if !ok || st.EnvID == "" {
-		return nil, false
-	}
-	return st.Caps, true
-}
-
 // localHostName is the configured name of this machine.
 func localHostName(cfg config.Config) string {
 	if h, ok := cfg.Local(); ok {
@@ -316,45 +304,31 @@ func localHostName(cfg config.Config) string {
 }
 
 // fill sets the model's rows and header from the merged state: the rows
-// from every record and the local sessions, and a header line for the
-// local daemon being down, each host that is not connected and listed,
-// and a failed session listing.
-func (m *merged) fill(v *view.Model, current string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// The day's handoffs only.
-	m.pruneHandoffsLocked()
-	handoffs := make(map[string]string, len(m.handoffs))
-	for id, h := range m.handoffs {
-		handoffs[id] = h.to
-	}
-	in := m.input(m.localsLocked(), current)
-	tree := rows.Tree(in)
-	v.Set(tree, rows.Agents(in, tree), handoffs)
-	v.Loading = !m.snapshotted
+// from every record and the local sessions, the day's handoffs, and a
+// header line for the local daemon being down, each host that is not
+// connected and listed, and a failed session listing.
+func fill(v *view.Model, s merged.Status) {
+	tree := rows.Tree(s.Input)
+	v.Set(tree, rows.Agents(s.Input, tree), s.Handoffs)
+	v.Loading = !s.Loaded
 	v.Header = v.Header[:0]
-	if m.daemonErr != "" {
-		v.Header = append(v.Header, view.HeaderLine{Text: "local daemon  DOWN  " + m.daemonErr, Down: true})
+	if s.DaemonErr != "" {
+		v.Header = append(v.Header, view.HeaderLine{Text: "local daemon  DOWN  " + s.DaemonErr, Down: true})
 	}
-	names := make([]string, 0, len(m.hosts))
-	for n := range m.hosts {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		st := m.hosts[n]
+	for _, st := range s.Hosts {
+		n := st.Name
 		switch {
 		case st.Connected && st.Listed:
 		case st.Connected:
 			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connected  (snapshot pending)"})
 		case st.Error != "":
-			v.Header = append(v.Header, view.HeaderLine{Text: n + "  DOWN  " + st.down(), Down: true})
+			v.Header = append(v.Header, view.HeaderLine{Text: n + "  DOWN  " + st.Down(), Down: true})
 		default:
 			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connecting"})
 		}
 	}
-	if m.sessionsErr != "" {
-		v.Header = append(v.Header, view.HeaderLine{Text: "local sessions not listed: " + m.sessionsErr})
+	if s.SessionsErr != "" {
+		v.Header = append(v.Header, view.HeaderLine{Text: "local sessions not listed: " + s.SessionsErr})
 	}
 }
 

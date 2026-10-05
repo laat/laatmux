@@ -5,93 +5,65 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/view"
 )
 
-// The merged stream, applied: records are attributed to hosts through
-// the environment id in the host records, hosts are ready when listed or
-// failed, and one host's part comes back out as the hello and snapshot
-// the direct path would have fetched.
-func TestApplyMerged(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Seq: 3,
+// ls's host lines and the dashboard's header: the local daemon down
+// first, then a line per host by name, connected with its version,
+// connected with the snapshot pending, down with its error and the
+// reconnect noted, or connecting; a failed session listing last. The
+// dashboard leaves a connected and listed host out.
+func TestRenderHosts(t *testing.T) {
+	m := merged.New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot, SessionsError: "tmux: permission denied",
 		Hosts: []protocol.HostStatus{
-			{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Version: "v2", Capabilities: []string{"status", "worktrees", "merged"}},
-			{Name: "vm", SSH: "vm"},
+			{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1"},
+			{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Version: "v2"},
+			{Name: "box", SSH: "box", EnvironmentID: "benv", Error: "disconnected", Reconnecting: true},
+			{Name: "new", SSH: "new"},
 		},
-		Agents:    []protocol.Agent{{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/x", Agent: "claude", Activity: protocol.Working}},
-		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/proj/x", EnvironmentID: "menv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
 		Sessions:  []protocol.Session{{Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac", Settled: true}},
+		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/proj/x", EnvironmentID: "menv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
 	})
-	if got := m.pending(); len(got) != 1 || got[0] != "vm" {
-		t.Errorf("pending = %v, want [vm]", got)
+	out := render(m.Status(""))
+	want := "box  DOWN  disconnected (reconnecting)\nmac  connected  v2\nnew  connecting\nvm  connected  v1  (snapshot pending)\n\nproj\n"
+	if !strings.HasPrefix(out, want) || !strings.HasSuffix(out, "\nlocal sessions not listed: tmux: permission denied\n") {
+		t.Errorf("render:\n%s", out)
 	}
-	if h := m.byHost["menv/laatmux/%1"]; h != "mac" {
-		t.Errorf("agent attributed to %q", h)
-	}
-	locals := m.locals()
-	if len(locals) != 1 || !locals[0].Settled || !locals[0].Workspace() {
-		t.Errorf("locals = %+v", locals)
-	}
-	out := m.render(locals)
-	for _, want := range []string{"mac  connected  v2", "vm  connecting", "settled", "x (mac)"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("render lacks %q:\n%s", want, out)
+	for _, s := range []string{"x (mac)", "settled"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("render lacks %q:\n%s", s, out)
 		}
 	}
-
-	// The remote comes up: records arrive, then the host is listed.
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, Worktree: &protocol.Worktree{ID: "venv/worktree//r/proj/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/r/proj/y"}})
-	if got := m.pending(); len(got) != 1 {
-		t.Errorf("pending while snapshot pending = %v", got)
+	v := &view.Model{}
+	fill(v, m.Status(""))
+	var header []string
+	for _, h := range v.Header {
+		header = append(header, h.Text)
 	}
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, Seq: 6, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
-	if got := m.pending(); len(got) != 0 {
-		t.Errorf("pending after listed = %v", got)
+	if got := strings.Join(header, "|"); got != "box  DOWN  disconnected (reconnecting)|new  connecting|vm  connected  (snapshot pending)|local sessions not listed: tmux: permission denied" {
+		t.Errorf("header: %s", got)
 	}
-	hello, snap, ok, err := m.hostSnapshot("vm")
-	if !ok || err != nil || hello.EnvironmentID != "venv" || !protocol.Has(hello.Capabilities, protocol.CapWorktrees) {
-		t.Fatalf("hostSnapshot = %+v %v %v", hello, ok, err)
+	if !v.Header[0].Down || v.Header[1].Down || v.Loading {
+		t.Errorf("header flags: %+v, loading %v", v.Header, v.Loading)
 	}
-	if len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != "/r/proj/y" || len(snap.Agents) != 0 {
-		t.Errorf("vm snapshot = %+v", snap)
-	}
-	if _, _, ok, _ := m.hostSnapshot("box"); ok {
-		t.Error("unknown host reported as in the stream")
-	}
-
-	// Down: the error is the direct dial's failure; records stay.
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, Seq: 7, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Error: "disconnected"}})
-	if _, _, ok, err := m.hostSnapshot("vm"); !ok || err == nil || !strings.Contains(err.Error(), "vm: disconnected") {
-		t.Errorf("hostSnapshot while down = %v %v", ok, err)
-	}
-	if !strings.Contains(m.render(m.locals()), "vm  DOWN  disconnected") {
-		t.Error("host down not rendered")
-	}
-	if len(m.worktrees) != 2 {
-		t.Error("records dropped on host down")
-	}
-
-	// Removed from the config: the host and everything of its go.
-	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, Seq: 8, HostName: "vm"})
-	if _, ok := m.hosts["vm"]; ok || len(m.worktrees) != 1 {
-		t.Errorf("host removal left %+v %+v", m.hosts, m.worktrees)
-	}
-	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, Seq: 9, LocalSessionName: "mac/proj/x"})
-	if len(m.locals()) != 0 {
-		t.Error("session removal ignored")
+	// Before the snapshot the dashboard is loading; a watch whose daemon
+	// went away says so first.
+	v, m2 := &view.Model{}, merged.New()
+	fill(v, m2.Status(""))
+	if !v.Loading || len(v.Header) != 0 {
+		t.Errorf("before a snapshot: loading %v, header %v", v.Loading, v.Header)
 	}
 }
 
-// A one-shot client that gave up on a host says so in its row; an orphaned
-// local session is judged only against a host that is connected and
-// listed.
-func TestMergedTimedOutAndOrphaned(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+// A one-shot client that gave up on a host says so in its row, the
+// reconnect note gone; an orphaned local session is judged only against
+// a host that is connected and listed.
+func TestRenderTimedOutAndOrphaned(t *testing.T) {
+	m := merged.New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
 		Hosts: []protocol.HostStatus{
 			{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
 			{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Capabilities: []string{"status", "worktrees"}},
@@ -101,173 +73,68 @@ func TestMergedTimedOutAndOrphaned(t *testing.T) {
 			{Name: "mac/proj/gone", Key: "menv//w/proj/gone", Host: "mac"},
 			{Name: "vm/proj/maybe", Key: "venv//r/proj/maybe", Host: "vm"},
 		},
-		SessionsError: "",
 	})
-	if p := m.pending(); len(p) != 2 || p[0] != "box" || p[1] != "vm" {
-		t.Fatalf("pending = %v", p)
-	}
-	m.timedOut(m.pending(), 20*time.Second)
-	out := m.render(m.locals())
-	if !strings.Contains(out, "vm  DOWN  no snapshot after 20s") {
-		t.Errorf("timed out host not marked:\n%s", out)
-	}
-	// A host still reconnecting when the wait ended is timed out the
-	// same way, and the state is terminal: the reconnect note is gone.
-	if !strings.Contains(out, "box  DOWN  no snapshot after 20s\n") || strings.Contains(out, "reconnecting") || !m.hosts["box"].ready() {
-		t.Errorf("reconnecting host after the timeout:\n%s", out)
+	m.TimedOut(m.Pending(), 20*time.Second)
+	out := render(m.Status(""))
+	if !strings.Contains(out, "vm  DOWN  no snapshot after 20s\n") || !strings.Contains(out, "box  DOWN  no snapshot after 20s\n") || strings.Contains(out, "reconnecting") {
+		t.Errorf("timed out hosts not marked:\n%s", out)
 	}
 	if !strings.Contains(out, "mac/proj/gone") || strings.Contains(out, "vm/proj/maybe") {
 		t.Errorf("orphaned judged wrongly:\n%s", out)
 	}
-	m.mu.Lock()
-	m.sessionsErr = "tmux: permission denied"
-	m.mu.Unlock()
-	if !strings.Contains(m.render(m.locals()), "local sessions not listed: tmux: permission denied") {
-		t.Error("sessions error not printed")
-	}
-}
-
-// A host is ready when listed or failed; a dropped connection being
-// dialled again is neither, and the header says the reconnect is on.
-func TestHostReady(t *testing.T) {
-	cases := []struct {
-		st    hostState
-		ready bool
-		down  string
-	}{
-		{hostState{Listed: true, Connected: true}, true, ""},
-		{hostState{Error: "ssh: refused"}, true, "ssh: refused"},
-		{hostState{Error: "disconnected", Reconnecting: true}, false, "disconnected (reconnecting)"},
-		{hostState{Connected: true}, false, ""},
-		{hostState{}, false, ""},
-	}
-	for _, c := range cases {
-		if got := c.st.ready(); got != c.ready {
-			t.Errorf("%+v ready = %v", c.st, got)
-		}
-		if got := c.st.down(); got != c.down {
-			t.Errorf("%+v down = %q", c.st, got)
-		}
-	}
-	st := fromStatus(protocol.HostStatus{Name: "vm", Error: "disconnected", Reconnecting: true})
-	if st.ready() || !st.Reconnecting {
-		t.Errorf("fromStatus: %+v", st)
-	}
 }
 
 // ls prints a pending task where its worktree row would be, with its
-// state and detail, and hides the worktree row behind it; the views
-// get the handoffs with the rows.
+// state and detail, and hides the worktree row behind it; the dashboard
+// gets the handoffs with the rows.
 func TestMergedPendingRows(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
+	m := merged.New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
 		Hosts:     []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}}},
 		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/proj/fix", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Session: "proj/fix"}},
 		Pendings: []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "fix", Root: "/w/proj/fix",
 			Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready"}},
 		Handoffs: []protocol.Handoff{{ID: "add-0", ReplacedBy: "venv/worktree//w/proj/old"}},
 	})
-	out := m.render(m.locals())
+	out := render(m.Status(""))
 	if !strings.Contains(out, "! prompt not delivered") || !strings.Contains(out, "fix (vm)") || !strings.Contains(out, "not ready") || strings.Contains(out, "no agent") {
 		t.Fatalf("render:\n%s", out)
 	}
 	v := &view.Model{}
-	m.fill(v, "")
+	fill(v, m.Status(""))
 	if len(v.Rows.Main) != 1 || v.Rows.Main[0].ID() != "add-1" || v.Handoffs["add-0"] != "venv/worktree//w/proj/old" {
 		t.Fatalf("fill: %d rows, handoffs %v", len(v.Rows.Main), v.Handoffs)
-	}
-	// A handoff seen again keeps its first sight; past the day it goes.
-	m.mu.Lock()
-	first := m.handoffs["add-0"].at
-	m.mu.Unlock()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
-		Handoffs: []protocol.Handoff{{ID: "add-0", ReplacedBy: "venv/worktree//w/proj/old"}}})
-	m.mu.Lock()
-	again := m.handoffs["add-0"].at
-	m.mu.Unlock()
-	if !again.Equal(first) {
-		t.Fatal("a handoff seen again was dated again")
-	}
-	was := handoffRetention
-	handoffRetention = 0
-	defer func() { handoffRetention = was }()
-	m.fill(v, "")
-	if len(v.Handoffs) != 0 {
-		t.Fatalf("handoffs past the day: %v", v.Handoffs)
-	}
-}
-
-// The rows name a host's worktree by this machine's name for its
-// source, in any form: a host labels a checkout its config does not
-// list by its directory. A source this machine does not know keeps the
-// host's label.
-func TestMergedRowsUseLocalNames(t *testing.T) {
-	cfg, err := config.Parse([]byte("repos:\n  - source: https://example.com/o/proj\n    name: mine\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := newMerged()
-	m.labels = repoLabels(cfg)
-	m.worktrees["a"] = protocol.Worktree{ID: "a", EnvironmentID: "e", Repo: "checkout-dir", Source: "git@example.com:o/proj.git", Branch: "x", Root: "/w/a"}
-	m.worktrees["b"] = protocol.Worktree{ID: "b", EnvironmentID: "e", Repo: "theirs", Source: "git@example.com:o/other.git", Branch: "y", Root: "/w/b"}
-	got := map[string]string{}
-	for _, w := range m.input(nil, "").Worktrees {
-		got[w.ID] = w.Repo
-	}
-	if got["a"] != "mine" || got["b"] != "theirs" || m.worktrees["a"].Repo != "checkout-dir" {
-		t.Fatalf("labels %v, stored %q", got, m.worktrees["a"].Repo)
-	}
-}
-
-// A host's attribution reaches the rows only when the merging daemon
-// forwards it: one older than attribution drops the worktree from every
-// agent it forwards, and the rows then pair by session name.
-func TestMergedAttributionNeedsForwarding(t *testing.T) {
-	m := newMerged()
-	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot,
-		Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
-			Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution}}}})
-	attribution := func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		for _, h := range m.input(nil, "").Hosts {
-			if h.Name == "vm" {
-				return h.Attribution
-			}
-		}
-		t.Fatal("no host vm")
-		return false
-	}
-	if !attribution() {
-		t.Fatal("attribution lost on the direct path")
-	}
-	m.stripped = true
-	if attribution() {
-		t.Fatal("attribution through a merging daemon that drops it")
 	}
 }
 
 // tasks lists the pending records, then the tasks that handed over,
 // named by their worktree when it is listed; handed-over tasks alone
-// are listed too.
+// are listed too, and a record whose host is not in the stream says so.
 func TestTaskReport(t *testing.T) {
-	m := newMerged()
-	if got := m.taskReport(); got != "no pending tasks\n" {
+	m := merged.New()
+	if got := taskReport(m.Status("")); got != "no pending tasks\n" {
 		t.Fatalf("empty: %q", got)
 	}
-	m.hosts["vm"] = hostState{EnvID: "venv"}
-	m.worktrees["venv/worktree//w/a"] = protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
-	m.byHost["venv/worktree//w/a"] = "vm"
-	m.handoffLocked("t1", "venv/worktree//w/a")
-	m.handoffLocked("t2", "venv/worktree//w/gone")
-	got := m.taskReport()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:     []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv"}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}},
+		Handoffs:  []protocol.Handoff{{ID: "t1", ReplacedBy: "venv/worktree//w/a"}, {ID: "t2", ReplacedBy: "venv/worktree//w/gone"}},
+	})
+	got := taskReport(m.Status(""))
 	want := "t1  handed over to proj/a on vm; laatmux tasks show t1 prints its prompt, tasks dismiss drops it\n" +
 		"t2  handed over to venv/worktree//w/gone; laatmux tasks show t2 prints its prompt, tasks dismiss drops it\n"
 	if got != want {
 		t.Fatalf("handed over only:\n%s\nwant\n%s", got, want)
 	}
-	m.pendings["p1"] = protocol.Pending{ID: "p1", Host: "vm", Repo: "proj", Branch: "b"}
-	if got := m.taskReport(); !strings.HasPrefix(got, "p1  proj/b on vm") || !strings.HasSuffix(got, want) {
-		t.Fatalf("with a pending record:\n%s", got)
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.Local)
+	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Pending: &protocol.Pending{ID: "p1", Host: "vm", Repo: "proj", Branch: "b", SubmittedAt: at.Add(time.Minute)}})
+	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Pending: &protocol.Pending{ID: "p0", Host: "old", Repo: "proj", Branch: "c", SubmittedAt: at}})
+	got = taskReport(m.Status(""))
+	lines := strings.SplitAfter(got, "\n")
+	if len(lines) != 5 || !strings.HasPrefix(lines[0], "p0  proj/c on old  "+at.Format(time.DateTime)+"  ") || !strings.HasPrefix(lines[1], "p1  proj/b on vm  ") || !strings.HasSuffix(got, want) {
+		t.Fatalf("with pending records:\n%s", got)
+	}
+	if !strings.HasSuffix(lines[0], "  host removed; laatmux tasks dismiss p0 drops it\n") || !strings.HasSuffix(lines[1], "  submitted\n") {
+		t.Fatalf("host configured or not:\n%s", got)
 	}
 }

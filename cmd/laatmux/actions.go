@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
@@ -28,7 +29,7 @@ import (
 type dash struct {
 	ctx        context.Context
 	cfg        config.Config
-	st         *merged
+	st         *merged.State
 	exitOnJump bool
 	// submit hands an add to the local daemon; a test replaces it, as
 	// it does dismiss and deliver, a pending task's x and p.
@@ -183,7 +184,7 @@ func (d *dash) start(m *view.Model, title string, run func(command.Reporter) err
 	go func() {
 		err := run(r)
 		log.End(err)
-		d.st.notify()
+		d.st.Notify()
 	}()
 }
 
@@ -191,17 +192,17 @@ func (d *dash) start(m *view.Model, title string, run func(command.Reporter) err
 // view.
 type logReporter struct {
 	log *view.Log
-	st  *merged
+	st  *merged.State
 }
 
 func (r logReporter) Progress(m protocol.Message) {
 	r.log.Append(command.ProgressLine(m))
-	r.st.notify()
+	r.st.Notify()
 }
 
 func (r logReporter) Note(s string) {
 	r.log.Append("laatmux: " + s)
-	r.st.notify()
+	r.st.Notify()
 }
 
 // addForm is the a key: the task form, with the candidates its chips
@@ -274,7 +275,7 @@ func (d *dash) startAdd(m *view.Model) {
 			preRepo = repo.Name
 		}
 	}
-	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.hostCaps)
+	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.HostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
 	d.add = f
 	m.Overlay = form
@@ -787,7 +788,7 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
 		env, _ := protocol.SplitSessionKey(l.Key)
-		if name := d.st.hostOf(env); name != "" {
+		if name := d.st.HostOf(env); name != "" {
 			l.Host = name
 		}
 		return l, nil

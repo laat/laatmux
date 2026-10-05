@@ -9,6 +9,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/worktree"
@@ -46,10 +47,10 @@ func cmdCompose(ctx context.Context, args []string) error {
 	// The merged stream is followed while the form is up, so the note
 	// about a host's daemon reflects the hello that arrives after the
 	// snapshot on a cold daemon.
-	st := newMerged()
+	st := merged.New()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go st.followMerged(ctx, c)
+	go st.Follow(ctx, c)
 	f := &addForm{repos: cfg.Repos, agents: cfg.AgentNames()}
 	for _, h := range cfg.Hosts {
 		if h.CanAdd() {
@@ -72,7 +73,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if repo, err := resolveRepo(ctx, cfg, ""); err == nil {
 		preRepo = repo.Name
 	}
-	form := buildForm(cfg, f, last, preRepo, "", "", st.hostCaps)
+	form := buildForm(cfg, f, last, preRepo, "", "", st.HostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(ctx, strings.TrimSpace(b)) }
 	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
@@ -83,7 +84,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, add: f}
 	c2 := &composer{d: d, f: f}
 	err = view.Run(ctx, t, m, view.Host{
-		Changed: st.change,
+		Changed: st.Changed(),
 		Refresh: func(*view.Model) {},
 		Act:     c2.act,
 	})

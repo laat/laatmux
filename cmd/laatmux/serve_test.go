@@ -14,6 +14,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/view"
@@ -233,11 +234,11 @@ func TestServeToRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newMerged()
-	m.configure(cfg)
+	m := merged.New()
+	m.Configure(cfg)
 	unlisted := 0
-	pending, err := m.readMerged(ctx, c, 20*time.Second, func(m *merged) bool {
-		if len(m.pending()) == 0 {
+	pending, err := m.Read(ctx, c, 20*time.Second, func(pending []string) bool {
+		if len(pending) == 0 {
 			return true
 		}
 		// The snapshot, with the host still unlisted: let the poll
@@ -253,7 +254,7 @@ func TestServeToRender(t *testing.T) {
 		t.Error("the host was listed in the snapshot already: the wait was not exercised")
 	}
 	// ls's listing: the host line, the repository and its worktree.
-	listing := m.render(m.locals())
+	listing := render(m.Status(""))
 	for _, want := range []string{"box  connected", "proj", "task (box)"} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("ls lacks %q:\n%s", want, listing)
@@ -266,7 +267,7 @@ func TestServeToRender(t *testing.T) {
 	}
 	// The dashboard's fill and both views.
 	v := &view.Model{Width: 100, Height: 30, LocalHost: "box", View: view.ViewTree, Layout: view.Compact, Titles: true}
-	m.fill(v, "")
+	fill(v, m.Status(""))
 	if v.Loading || len(v.Header) != 0 {
 		t.Fatalf("after fill: loading %v header %v", v.Loading, v.Header)
 	}
@@ -280,12 +281,10 @@ func TestServeToRender(t *testing.T) {
 		t.Errorf("the agent view:\n%s", agents)
 	}
 	// The worktree the store added is the one the stream carries.
-	m.mu.Lock()
 	var roots, branches []string
-	for _, w := range m.worktrees {
+	for _, w := range m.Status("").Input.Worktrees {
 		roots, branches = append(roots, w.Root), append(branches, w.Branch)
 	}
-	m.mu.Unlock()
 	if len(roots) != 1 || roots[0] != s.added.Root || branches[0] != "task" {
 		t.Errorf("worktrees in the merged state: %v %v, want %s task", roots, branches, s.added.Root)
 	}
