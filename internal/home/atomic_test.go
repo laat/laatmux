@@ -41,12 +41,15 @@ func TestTemporary(t *testing.T) {
 	for name, want := range map[string]bool{
 		"a.json.tmp.12345": true,
 		"a.json.tmp":       true,
-		"a.json":           false,
-		"job.tmp.json":     false,
-		"a.json.tmp.json":  false,
-		"a.json.tmp.":      false,
-		"a.json.tmp.x":     false,
-		"a.tmp":            false,
+		// An id that contains the temporary's own suffix.
+		"a.json.tmp.1.json.tmp.2": true,
+		"a.json.tmp.1.json":       false,
+		"a.json":                  false,
+		"job.tmp.json":            false,
+		"a.json.tmp.json":         false,
+		"a.json.tmp.":             false,
+		"a.json.tmp.x":            false,
+		"a.tmp":                   false,
 	} {
 		if got := Temporary(name); got != want {
 			t.Errorf("Temporary(%q) = %v, want %v", name, got, want)

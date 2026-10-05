@@ -38,7 +38,6 @@ func Temporary(name string) bool {
 	if i < 0 {
 		return false
 	}
-	pid := name[i+len(".json.tmp."):]
-	_, err := strconv.Atoi(pid)
-	return pid != "" && err == nil
+	_, err := strconv.Atoi(name[i+len(".json.tmp."):])
+	return err == nil
 }
