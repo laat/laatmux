@@ -1083,8 +1083,6 @@ func (m *Model) statusLabel(r rows.Row) string {
 	switch {
 	case r.Pending != nil:
 		return r.State()
-	case r.Orphaned:
-		return "worktree gone"
 	case r.Kind != rows.KindTile && r.Kind != rows.KindAgent:
 		return ""
 	case r.Agent == nil:

@@ -82,15 +82,6 @@ func Records(locals []Local) []protocol.Session {
 	return out
 }
 
-// FromRecords converts published session records back to locals.
-func FromRecords(recs []protocol.Session) []Local {
-	out := make([]Local, 0, len(recs))
-	for _, r := range recs {
-		out = append(out, Local(r))
-	}
-	return out
-}
-
 var sessionFormat = strings.Join([]string{
 	"#{session_name}", "#{@laatmux_workspace}", "#{@laatmux_host}", "#{@laatmux_attach}", "#{@laatmux_settled}",
 	"#{@laatmux_repo}", "#{@laatmux_branch}",

@@ -281,12 +281,10 @@ type paneState struct {
 	identity     procs.Identity
 	hasIdentity  bool // an agent instance is known; it may be gone
 	gone         bool // the known instance no longer exists
-	instanceAt   time.Time
 	activity     protocol.Activity
 	activityAt   time.Time
 	pendingIdle  *time.Time
 	pendingCount int
-	lastResult   detect.Result
 	// obs is what the last observation of the pane saw, for a delivery
 	// waiting on it; written and read under d.mu, where the rest of the
 	// state is the poll goroutine's own.
@@ -678,7 +676,6 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 			st.identity = id
 			st.hasIdentity = true
 			st.gone = false
-			st.instanceAt = now
 			st.pendingIdle = nil
 			st.pendingCount = 0
 			st.activity = protocol.Unknown
@@ -715,7 +712,6 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	} else {
 		res = detect.Result{State: detect.Unknown, Reason: "no_known_agent"}
 	}
-	st.lastResult = res
 	activity := d.nextActivity(st, res, now)
 
 	// Build the record and publish on change.
@@ -1037,7 +1033,7 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 				// client killed before it read the answer must not
 				// leave its task unrun until the daemon restarts. The
 				// host is contacted after the answer either way.
-				res := d.acceptRelay(ctx, m)
+				res := d.acceptRelay(m)
 				err := pc.Write(res)
 				if res.OK {
 					d.startPending(d.runCtx(), m.ID)

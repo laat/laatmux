@@ -81,7 +81,6 @@ func TestTokens(t *testing.T) {
 		{"pr_number", "#52"}, {"pr_checks", "× 3/5"}, {"pr_state", "●"}, {"pr_detail", "test (macos-latest)"}, {"idx", "2"}, {"jump_key", "M-2"},
 		{"repo_count", ""}, {"fold", ""}, {"worst_status", ""}, {"child_count", ""}, {"command", ""}, {"indent", ""},
 	} {
-		c := c
 		tm, err := ParseTemplate("{" + c.token + "}")
 		if err != nil {
 			t.Fatal(err)

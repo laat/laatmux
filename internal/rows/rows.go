@@ -40,7 +40,6 @@ type Host struct {
 	// they belong to, and reach the view with it: a worktree row takes
 	// its agent by that, not by session name.
 	Attribution bool
-	Error       string
 }
 
 // Input is everything the rows are built from.
@@ -253,8 +252,6 @@ func (r Row) State() string {
 	case r.Pending != nil:
 		s, _ := r.pendingState()
 		return s
-	case r.Orphaned:
-		return "no worktree"
 	case r.Agent != nil:
 		return ""
 	case r.Worktree != nil && r.Worktree.Session != "":

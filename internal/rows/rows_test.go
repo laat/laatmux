@@ -41,7 +41,7 @@ func TestJoin(t *testing.T) {
 		Hosts: []Host{
 			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true},
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true},
-			{Name: "box", EnvironmentID: "benv", Error: "unreachable"},
+			{Name: "box", EnvironmentID: "benv"},
 			{Name: "slow", EnvironmentID: "senv", Connected: true, Worktrees: true},
 			{Name: "old", EnvironmentID: "oenv", Connected: true, Listed: true},
 		},
@@ -162,7 +162,7 @@ other sessions
 	if r := byName["proj/down"]; !r.HostDown || !r.Dim {
 		t.Errorf("host down not dim: %+v", r)
 	}
-	if r := byName["vm/proj/gone"]; !r.Orphaned || !r.Dim || r.State() != "no worktree" || r.Local == nil || r.Host != "vm" {
+	if r := byName["vm/proj/gone"]; !r.Orphaned || !r.Dim || r.Local == nil || r.Host != "vm" {
 		t.Errorf("orphaned: %+v", r)
 	}
 	// A orphaned session tagged with a host's old name is the host's that
@@ -210,7 +210,7 @@ func TestJoinAttribution(t *testing.T) {
 func TestJoinByEnvironment(t *testing.T) {
 	now := time.Now()
 	in := Input{
-		Hosts: []Host{{Name: "a", EnvironmentID: "aenv", Error: "down"}, {Name: "b", EnvironmentID: "benv", Error: "down"}},
+		Hosts: []Host{{Name: "a", EnvironmentID: "aenv"}, {Name: "b", EnvironmentID: "benv"}},
 		Agents: []protocol.Agent{
 			{ID: "aenv/laatmux/%1", EnvironmentID: "aenv", Server: "laatmux", Session: "proj/x", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
 			{ID: "benv/laatmux/%1", EnvironmentID: "benv", Server: "laatmux", Session: "proj/x", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
