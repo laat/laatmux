@@ -163,7 +163,7 @@ func openJournal(dir string, logger *log.Logger) (*journal, error) {
 		if de.IsDir() {
 			continue
 		}
-		if strings.Contains(de.Name(), ".tmp") {
+		if home.Temporary(de.Name()) {
 			// A write that died before its rename is nobody's entry.
 			os.Remove(filepath.Join(dir, de.Name()))
 			continue

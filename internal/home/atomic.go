@@ -3,13 +3,15 @@ package home
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // WriteAtomic writes data to path whole: through a temporary beside it,
-// named for this process so two writers never share one, renamed into
+// named for this process so two processes never share one, renamed into
 // place, so a reader sees the old contents or the new and never a
 // partial file. A failed write or rename leaves no temporary behind;
-// one left by a process that died mid-write has ".tmp." in its name.
+// one left by a process that died mid-write is named as Temporary
+// says.
 func WriteAtomic(path string, data []byte) error {
 	tmp := path + ".tmp." + strconv.Itoa(os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
@@ -21,4 +23,22 @@ func WriteAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// Temporary reports whether a file name is a temporary of a write that
+// died before its rename: "<file>.tmp.<pid>" as WriteAtomic names it,
+// or "<file>.tmp" as builds before it did. A file whose own name ends
+// in ".tmp" is not one; the sweeps ask about record files, which end
+// in ".json".
+func Temporary(name string) bool {
+	if strings.HasSuffix(name, ".json.tmp") {
+		return true
+	}
+	i := strings.LastIndex(name, ".json.tmp.")
+	if i < 0 {
+		return false
+	}
+	pid := name[i+len(".json.tmp."):]
+	_, err := strconv.Atoi(pid)
+	return pid != "" && err == nil
 }

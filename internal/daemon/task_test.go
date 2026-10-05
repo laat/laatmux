@@ -1154,6 +1154,9 @@ func TestJournalSweepsTemporaries(t *testing.T) {
 	if err := j.create(entry{ID: "a"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := j.create(entry{ID: "job.tmp"}); err != nil {
+		t.Fatal(err)
+	}
 	stale := filepath.Join(dir, FileName("a")+".tmp.12345")
 	if err := os.WriteFile(stale, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1165,7 +1168,9 @@ func TestJournalSweepsTemporaries(t *testing.T) {
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("temporary not swept: %v", err)
 	}
-	if _, ok := j.get("a"); !ok {
-		t.Fatal("the entry was lost with its temporary")
+	for _, id := range []string{"a", "job.tmp"} {
+		if _, ok := j.get(id); !ok {
+			t.Fatalf("entry %s lost to the sweep", id)
+		}
 	}
 }

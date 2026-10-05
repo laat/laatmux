@@ -35,3 +35,21 @@ func TestWriteAtomic(t *testing.T) {
 		t.Fatalf("after the failure %q %v", b, err)
 	}
 }
+
+// Temporary knows both names a dead write leaves, and no record's.
+func TestTemporary(t *testing.T) {
+	for name, want := range map[string]bool{
+		"a.json.tmp.12345": true,
+		"a.json.tmp":       true,
+		"a.json":           false,
+		"job.tmp.json":     false,
+		"a.json.tmp.json":  false,
+		"a.json.tmp.":      false,
+		"a.json.tmp.x":     false,
+		"a.tmp":            false,
+	} {
+		if got := Temporary(name); got != want {
+			t.Errorf("Temporary(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
