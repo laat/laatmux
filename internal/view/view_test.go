@@ -759,8 +759,11 @@ func TestAnchorFollowsTask(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != "add-3" || m.alias != "" {
 		t.Fatalf("selected %+v alias %q", r, m.alias)
 	}
-	m.Handoffs = map[string]string{"add-3": wt.ID}
-	set(m, nil, []protocol.Worktree{other, wt}, []protocol.Agent{agent})
+	// Through Set, as the dashboard refreshes: the handoff is in place
+	// before the rows that need it.
+	in := rows.Input{Hosts: hosts, Worktrees: []protocol.Worktree{other, wt}, Agents: []protocol.Agent{agent}}
+	tree := rows.Tree(in)
+	m.Set(tree, rows.Agents(in, tree), map[string]string{"add-3": wt.ID})
 	if r := m.Selection(); r == nil || r.ID() != wt.ID {
 		t.Fatalf("through the handoffs: %+v", r)
 	}
@@ -1742,5 +1745,59 @@ func TestMode(t *testing.T) {
 	m.Handle(term.Key{Rune: 'n'})
 	if m.Confirm != "sure?" || !m.Filtering {
 		t.Fatalf("the overlay's key reached the confirm line or the filter: %q %v", m.Confirm, m.Filtering)
+	}
+}
+
+// The row's number reaches the tiles and compact layouts: {idx} in every
+// slot counts the numbered rows, the title line included.
+func TestIdxLayouts(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	for _, lay := range []Layout{Tiles, Compact} {
+		m := model(now)
+		m.Layout, m.Titles, m.Width, m.Height = lay, true, 60, 60
+		m.SetTemplates(CompileTemplates([]string{"<{idx}>{primary}", "", "[{idx}]"}, "<{idx}>{primary}", nil, "", "", "", "", ""))
+		text := Text(m.Render())
+		n := 0
+		for _, it := range m.Visible() {
+			if it.Row.Numbered() {
+				n++
+				for _, want := range []string{"<" + strconv.Itoa(n) + ">", "[" + strconv.Itoa(n) + "]"} {
+					if !strings.Contains(text, want) {
+						t.Errorf("%v: row %d without %s:\n%s", lay, n, want, text)
+					}
+				}
+			}
+		}
+		if n < 2 {
+			t.Fatalf("%v: %d numbered rows", lay, n)
+		}
+	}
+}
+
+// Set's order: the tree before the tiles. A task tile handed over to a
+// worktree that gained a first agent lands on that agent in the new
+// tree's order; the tiles reselected against the old tree would stay on
+// the agent the task had.
+func TestSetFollowsTheNewTree(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	hosts := []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}}
+	other := protocol.Worktree{ID: "venv/worktree//r/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/r/a"}
+	wt := protocol.Worktree{ID: "venv/worktree//r/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task"}
+	task := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/r/task", Session: "proj/task", Taken: true, Reachable: true, Stage: protocol.StageAgent, SubmittedAt: now}
+	a9 := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
+	a8 := a9
+	a8.ID = "venv/laatmux/%8"
+	m := &Model{Width: 60, Height: 20, Now: now}
+	old := rows.Input{Hosts: hosts, Pendings: []protocol.Pending{task}, Worktrees: []protocol.Worktree{other, wt}, Agents: []protocol.Agent{a9}}
+	ot := rows.Tree(old)
+	m.Set(ot, rows.Agents(old, ot), nil)
+	if !m.Select("add-1") {
+		t.Fatal("no task tile")
+	}
+	in := rows.Input{Hosts: hosts, Worktrees: []protocol.Worktree{other, wt}, Agents: []protocol.Agent{a9, a8}}
+	tree := rows.Tree(in)
+	m.Set(tree, rows.Agents(in, tree), map[string]string{"add-1": wt.ID})
+	if r := m.Selection(); r == nil || r.ID() != a8.ID {
+		t.Fatalf("not on the worktree's first agent in the new tree's order: %+v", r)
 	}
 }

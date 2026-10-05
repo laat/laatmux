@@ -322,19 +322,15 @@ func localHostName(cfg config.Config) string {
 func (m *merged) fill(v *view.Model, current string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// The handoffs first: the anchor lookup in SetRows consults them,
-	// the day's only.
+	// The day's handoffs only.
 	m.pruneHandoffsLocked()
-	v.Handoffs = make(map[string]string, len(m.handoffs))
+	handoffs := make(map[string]string, len(m.handoffs))
 	for id, h := range m.handoffs {
-		v.Handoffs[id] = h.to
+		handoffs[id] = h.to
 	}
 	in := m.input(m.localsLocked(), current)
-	// The tree first: the agent view's selection follows a handoff to
-	// the worktree's first agent in the tree's order.
 	tree := rows.Tree(in)
-	v.SetTree(tree)
-	v.SetRows(rows.Agents(in, tree))
+	v.Set(tree, rows.Agents(in, tree), handoffs)
 	v.Loading = !m.snapshotted
 	v.Header = v.Header[:0]
 	if m.daemonErr != "" {

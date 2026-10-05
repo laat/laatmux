@@ -1,9 +1,11 @@
 // Package view is the list view the sidebar pane and the dashboard popup
 // share: rows with a selection, a header of host problems and a footer,
-// drawn into a tmux pane's worth of terminal. The renderer is a pure
-// function from the model to lines, so the layouts are tested against
-// golden strings without a terminal; the terminal, raw mode and keys
-// are in term.go and run.go.
+// drawn into a tmux pane's worth of terminal. The renderer is a function
+// from the model to lines, keeping what the next frame, click or refresh
+// needs: the scroll, the click map and the spinner flags, the selection
+// settled, a new line's first fold. The layouts are tested against
+// golden strings without a terminal; the terminal and its keys are
+// internal/term, the loop run.go.
 package view
 
 import (
@@ -114,7 +116,6 @@ type Model struct {
 	AgentIcons map[string]AgentIcon
 	JumpKeys   bool
 	tmpl       *Templates // the lines' templates, the defaults until set
-	rowIdx     int        // the number of the row being drawn, for {idx}
 	scroll     int        // first body line drawn
 	// hitIDs is the id of the row each body line drew, "" for none, and
 	// hitTop the header lines above the body, both as the last Render
@@ -471,12 +472,12 @@ func (m *Model) Render() []Line {
 		if it.Row == nil {
 			ls = []Line{{Spans: []Span{{Text: fit(it.Header, m.Width), Fg: palette.Header, Dim: true}}}}
 		} else {
-			m.rowIdx = 0
+			idx := 0
 			if it.Row.Numbered() {
 				numbered++
-				m.rowIdx = numbered
+				idx = numbered
 			}
-			ls = m.row(*it.Row)
+			ls = m.row(*it.Row, idx)
 			if it.Index == m.Selected {
 				// The divider after a tile is not the tile: a short
 				// pane shows the tile's lines, its head first.
@@ -634,16 +635,17 @@ func (m *Model) footer() Line {
 	return dim(hint, m.Width)
 }
 
-// row draws one row in the current layout; a tree's node, and the stale
-// fold, are one line each.
-func (m *Model) row(r rows.Row) []Line {
+// row draws one row in the current layout, numbered idx among the rows
+// the digits count (0 for one they do not); a tree's node, and the
+// stale fold, are one line each.
+func (m *Model) row(r rows.Row, idx int) []Line {
 	if r.Kind != rows.KindTile {
-		return m.treeLine(r)
+		return m.treeLine(r, idx)
 	}
 	if m.Layout == Compact {
-		return m.compact(r)
+		return m.compact(r, idx)
 	}
-	return m.tile(r)
+	return m.tile(r, idx)
 }
 
 // where is the host tag: @host, with the server after it for an agent
@@ -871,13 +873,13 @@ func spansWidth(spans []Span) int {
 // secondary label and the host tag; and the pane title, or what the row
 // is instead. A divider follows. An empty third line keeps its place,
 // so tiles keep their height; a blank template is no line.
-func (m *Model) tile(r rows.Row) []Line {
+func (m *Model) tile(r rows.Row, idx int) []Line {
 	var out []Line
 	for _, t := range m.templates().Tiles {
 		if t.Blank() {
 			continue
 		}
-		out = append(out, Line{Dim: r.Dim, Spans: m.line(t, r, m.Width)})
+		out = append(out, Line{Dim: r.Dim, Spans: m.line(t, r, m.Width, idx)})
 	}
 	return append(out, Line{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}})
 }
@@ -885,11 +887,11 @@ func (m *Model) tile(r rows.Row) []Line {
 // compact is the compact template's one line: the head with the
 // secondary label and host tag after the primary. With Titles, the
 // third tile line follows.
-func (m *Model) compact(r rows.Row) []Line {
+func (m *Model) compact(r rows.Row, idx int) []Line {
 	t := m.templates()
-	lines := []Line{{Dim: r.Dim, Spans: m.line(t.Compact, r, m.Width)}}
+	lines := []Line{{Dim: r.Dim, Spans: m.line(t.Compact, r, m.Width, idx)}}
 	if m.Titles && len(t.Tiles) >= 3 && !t.Tiles[2].Blank() {
-		lines = append(lines, Line{Dim: r.Dim, Spans: m.line(t.Tiles[2], r, m.Width)})
+		lines = append(lines, Line{Dim: r.Dim, Spans: m.line(t.Tiles[2], r, m.Width, idx)})
 	}
 	return lines
 }

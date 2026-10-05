@@ -71,7 +71,6 @@ func tokenRow(now time.Time) rows.Row {
 func TestTokens(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	m := &Model{Now: now, LocalHost: "mac", Width: 80, AgentIcons: map[string]AgentIcon{"claude": {Icon: "CL"}}, JumpKeys: true}
-	m.rowIdx = 2
 	r := tokenRow(now)
 	for _, c := range []struct{ token, want string }{
 		{"primary", "fix-ls"}, {"secondary", "laatmux"}, {"branch", "fix-ls"}, {"repo", "laatmux"}, {"host", "vm"},
@@ -86,7 +85,7 @@ func TestTokens(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := strings.TrimSpace(Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, 80)}}))
+		got := strings.TrimSpace(Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, 80, 2)}}))
 		if got != c.want {
 			t.Errorf("{%s} = %q, want %q", c.token, got, c.want)
 		}
@@ -95,7 +94,7 @@ func TestTokens(t *testing.T) {
 	// the config leaves alone.
 	m.AgentIcons = nil
 	tm, _ := ParseTemplate("{agent_icon}")
-	if sp := m.line(Compiled{Template: tm}, r, 80); len(sp) != 1 || sp[0].Text != "CC" || sp[0].Fg != "#d97757" {
+	if sp := m.line(Compiled{Template: tm}, r, 80, 2); len(sp) != 1 || sp[0].Text != "CC" || sp[0].Fg != "#d97757" {
 		t.Errorf("the default agent icon: %+v", sp)
 	}
 	// Tree tokens on tree nodes.
@@ -117,7 +116,7 @@ func TestTokens(t *testing.T) {
 		{"session/mac/laatmux/gone", "status_label", "worktree gone"}, {"session/mac/laatmux/gone", "primary", "mac/laatmux/gone"},
 	} {
 		tm, _ := ParseTemplate("{" + c.token + "}")
-		got := strings.TrimSpace(Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at(c.id), 80)}}))
+		got := strings.TrimSpace(Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at(c.id), 80, 0)}}))
 		if got != c.want {
 			t.Errorf("%s {%s} = %q, want %q", c.id, c.token, got, c.want)
 		}
@@ -125,7 +124,7 @@ func TestTokens(t *testing.T) {
 	// The pane's indent is its depth; a folded line shows the worst
 	// agent's icon.
 	tm, _ = ParseTemplate("{indent}|")
-	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/pane/laatmux/%7"), 80)}}); !strings.HasPrefix(got, "    |") {
+	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/pane/laatmux/%7"), 80, 0)}}); !strings.HasPrefix(got, "    |") {
 		t.Errorf("a pane's indent: %q", got)
 	}
 	// A worktree line's host is the worktree's, not its agent's server;
@@ -135,12 +134,12 @@ func TestTokens(t *testing.T) {
 	tree.SetTree(rows.Tree(in))
 	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	tm, _ = ParseTemplate("({host})")
-	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/auto-layout"), 80)}}); got != "(vm)\n" {
+	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/auto-layout"), 80, 0)}}); got != "(vm)\n" {
 		t.Errorf("a worktree line's host: %q", got)
 	}
 	for _, r := range tree.Rows.Main {
 		if r.ID() == "venv/laatmux/%8" {
-			if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, r, 80)}}); got != "(vm/default)\n" {
+			if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, r, 80, 0)}}); got != "(vm/default)\n" {
 				t.Errorf("a tile's host: %q", got)
 			}
 		}
@@ -164,7 +163,7 @@ func TestTokens(t *testing.T) {
 	tree.Select("venv/worktree//r/agents-config")
 	tree.Handle(term.Key{Rune: 'h'})
 	tm, _ = ParseTemplate("{worst_status}")
-	if got := strings.TrimSpace(Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/agents-config"), 80)}})); got == "" {
+	if got := strings.TrimSpace(Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/agents-config"), 80, 0)}})); got == "" {
 		t.Error("a folded line has no worst status")
 	}
 }
@@ -183,7 +182,7 @@ func TestTemplateStyles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return Debug([]Line{{Spans: m.line(Compiled{Template: tm}, r, w)}})
+		return Debug([]Line{{Spans: m.line(Compiled{Template: tm}, r, w, 0)}})
 	}
 	if got := render("#[fg=accent,bold]{secondary}#[default] {pr_number} #[bg=#112233]{host}", 40); got != "...|«⟨accent:laatmux⟩» «⟨success:#52⟩» ‹⟦#112233:vm⟧›\n" {
 		t.Errorf("styles: %q", got)
@@ -197,7 +196,7 @@ func TestTemplateStyles(t *testing.T) {
 	}
 	// The partial mark on the uncommitted count, as in the stats.
 	r.Worktree.Git.UncommittedPartial = true
-	if got := Text([]Line{{Spans: m.line(mustParse(t, "{git_uncommitted} | {git_stats}"), r, 60)}}); got != "✎ +28+ -3 | R +46 -11 ✎ +28+ -3\n" {
+	if got := Text([]Line{{Spans: m.line(mustParse(t, "{git_uncommitted} | {git_stats}"), r, 60, 2)}}); got != "✎ +28+ -3 | R +46 -11 ✎ +28+ -3\n" {
 		t.Errorf("the partial mark: %q", got)
 	}
 	r.Worktree.Git.UncommittedPartial = false
@@ -240,7 +239,7 @@ func TestTemplateStyles(t *testing.T) {
 		for _, st := range []string{protocol.ChecksSuccess, protocol.ChecksFailure, protocol.ChecksPending} {
 			r.Branch.Checks = &protocol.Checks{State: st, Passed: 3, Total: 5}
 			for w := 3; w <= 40; w++ {
-				got := Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}})
+				got := Text([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}})
 				if strings.Contains(got, "#7") && !strings.Contains(got, "?") {
 					t.Errorf("%q at %d: %q without the stale mark", src, w, got)
 				}
@@ -283,7 +282,7 @@ func TestTemplateStyles(t *testing.T) {
 		t.Errorf("fg=default: %q", got)
 	}
 	c := Compile("tiles[1]", "{nope}", "")
-	if got := Debug([]Line{{Spans: m.line(c, r, 60)}}); got != "...|⟨danger:template error: unknown token {nope} at column 1 in tiles[1]⟩\n" {
+	if got := Debug([]Line{{Spans: m.line(c, r, 60, 2)}}); got != "...|⟨danger:template error: unknown token {nope} at column 1 in tiles[1]⟩\n" {
 		t.Errorf("an error drawn: %q", got)
 	}
 }
@@ -303,7 +302,7 @@ func TestTemplateOverflow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, w)}})
+		return Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, w, 0)}})
 	}
 	third := "{pane_title}{fill}{pr_number} {pr_checks}"
 	for _, c := range []struct {
@@ -522,7 +521,7 @@ func TestTemplateTreeEdges(t *testing.T) {
 	r := m.Tree[m.indexOf("venv/worktree//r/agents-config")]
 	line := func(src string, r rows.Row, w int) string {
 		t.Helper()
-		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}}), "\n")
+		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}}), "\n")
 	}
 	if got := line(DefaultWorktree, r, 20); got != "  ▸ agents-… (vm) ⠋⠙" {
 		t.Errorf("the icon at 20: %q", got)
@@ -573,11 +572,11 @@ func TestColumns(t *testing.T) {
 	r := tokenRow(now)
 	render := func(src string, w int) string {
 		t.Helper()
-		return Debug([]Line{{Spans: m.line(mustParse(t, src), r, w)}})
+		return Debug([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}})
 	}
 	plain := func(src string, w int) string {
 		t.Helper()
-		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w)}}), "\n")
+		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}}), "\n")
 	}
 	// The base off main, its origin/ taken off; the conflict mark red.
 	r.Worktree.Git.Base = "origin/feature"
@@ -694,7 +693,7 @@ func TestColumns(t *testing.T) {
 		t.Errorf("pr_detail cut: %q", got)
 	}
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksPending, Passed: 1, Total: 5, PendingSince: now.Add(-4*time.Minute - 12*time.Second)}
-	sp := m.line(mustParse(t, "{pr_detail}"), r, 40)
+	sp := m.line(mustParse(t, "{pr_detail}"), r, 40, 2)
 	if len(sp) != 1 || sp[0].Text != "4:12" || sp[0].Fg != palette.Accent || !sp[0].tick {
 		t.Errorf("pr_detail pending: %+v", sp)
 	}
@@ -706,14 +705,14 @@ func TestColumns(t *testing.T) {
 		t.Errorf("pr_detail's time in seven cells: %q", got)
 	}
 	r.Branch.Checks.PendingSince = now.Add(-3 * time.Hour)
-	sp = m.line(mustParse(t, "{pr_detail}"), r, 40)
+	sp = m.line(mustParse(t, "{pr_detail}"), r, 40, 2)
 	if len(sp) != 1 || sp[0].Text != "3h" || sp[0].tick {
 		t.Errorf("pr_detail pending for hours: %+v", sp)
 	}
 	// Stale: the time as of the last answer, standing still.
 	r.Branch.Stale, r.Branch.FetchedAt = true, now.Add(-10*time.Minute)
 	r.Branch.Checks.PendingSince = now.Add(-14*time.Minute - 12*time.Second)
-	sp = m.line(mustParse(t, "{pr_detail}"), r, 40)
+	sp = m.line(mustParse(t, "{pr_detail}"), r, 40, 2)
 	if len(sp) != 1 || sp[0].Text != "4:12" || sp[0].tick || !sp[0].Dim || sp[0].Fg != "" {
 		t.Errorf("pr_detail stale under an hour: %+v", sp)
 	}
@@ -767,7 +766,7 @@ func TestColumns(t *testing.T) {
 	r.Worktree.Git.Base, r.Worktree.Git.Ahead, r.Worktree.Git.Behind = "origin/feature", 2, 1
 	r.Worktree.Git.Conflict = &yes
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
-	lines := m.compact(r)
+	lines := m.compact(r, 0)
 	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n" {
 		t.Errorf("the dashboard's compact lines:\n%s", got)
 	}
@@ -789,7 +788,7 @@ func TestColumns(t *testing.T) {
 		{80, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos…"},
 		{70, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
 	} {
-		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w)}}), "\n"); got != c.want {
+		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w, 0)}}), "\n"); got != c.want {
 			t.Errorf("the dashboard's worktree line at %d:\n%q\n%q", c.w, got, c.want)
 		}
 	}
@@ -797,7 +796,7 @@ func TestColumns(t *testing.T) {
 	// The second tile line: the sync after the stats, the first to
 	// shrink.
 	r.Worktree.Git.Base = "origin/feature"
-	if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tiles[1], r, 50)}}), "\n"); got != "▌    laatmux @vm +46 -11 ✎ +28 -3  →featu… ! ↑2 ↓1" {
+	if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tiles[1], r, 50, 2)}}), "\n"); got != "▌    laatmux @vm +46 -11 ✎ +28 -3  →featu… ! ↑2 ↓1" {
 		t.Errorf("the dashboard's second tile line: %q", got)
 	}
 }

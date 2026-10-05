@@ -345,9 +345,10 @@ type item struct {
 func (it item) width() int { return spansWidth(it.spans) }
 
 // line draws one template for a row in w cells: the evaluated parts
-// fitted to the width by the rules above. A template that did not parse
-// draws its error.
-func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
+// fitted to the width by the rules above. idx is the row's number among
+// the rows the digits count, 0 for one they do not. A template that did
+// not parse draws its error.
+func (m *Model) line(t Compiled, r rows.Row, w int, idx int) []Span {
 	if t.Err != "" {
 		return clip([]Span{{Text: t.Err, Fg: palette.Danger}}, w)
 	}
@@ -362,7 +363,7 @@ func (m *Model) line(t Compiled, r rows.Row, w int) []Span {
 		case partText:
 			*side = append(*side, item{part: p, spans: []Span{styled(Span{Text: p.text}, p.st)}})
 		case partToken:
-			it := m.token(p.text, r)
+			it := m.token(p.text, r, idx)
 			it.part = p
 			for i := range it.spans {
 				it.spans[i] = styled(it.spans[i], p.st)
@@ -760,7 +761,7 @@ func dropWidest(right []item) []item {
 }
 
 // token evaluates a token for a row.
-func (m *Model) token(name string, r rows.Row) item {
+func (m *Model) token(name string, r rows.Row, idx int) item {
 	it := item{kind: tokens[name]}
 	text := func(s string) item {
 		if s != "" {
@@ -1003,13 +1004,13 @@ func (m *Model) token(name string, r rows.Row) item {
 		}
 		return it
 	case "idx":
-		if r.Numbered() && m.rowIdx > 0 {
-			return text(strconv.Itoa(m.rowIdx))
+		if r.Numbered() && idx > 0 {
+			return text(strconv.Itoa(idx))
 		}
 		return it
 	case "jump_key":
-		if r.Numbered() && m.JumpKeys && m.rowIdx > 0 && m.rowIdx <= 9 {
-			return text("M-" + strconv.Itoa(m.rowIdx))
+		if r.Numbered() && m.JumpKeys && idx > 0 && idx <= 9 {
+			return text("M-" + strconv.Itoa(idx))
 		}
 		return it
 	case "repo_count":
