@@ -117,6 +117,48 @@ other sessions
 	}
 }
 
+// A record naming no server is on none the tree knows: attributed to
+// its worktree it is a line under it, but not the agent the worktree's
+// own line shows and jumps through, with no local session of its own;
+// unattributed, it is listed among the observed sessions after the
+// managed agents.
+func TestTreeServerlessAgent(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	in.Worktrees[1].Session = "laatmux/auto-layout"
+	a := protocol.Agent{ID: "venv//%8", EnvironmentID: "venv", Session: "laatmux/auto-layout", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "venv/worktree//r/auto-layout"}
+	in.Agents = append(in.Agents, a)
+	find := func(nodes []Row) (wt, agent *Row) {
+		for i := range nodes {
+			switch nodes[i].Node {
+			case "venv/worktree//r/auto-layout":
+				wt = &nodes[i]
+			case "venv//%8":
+				agent = &nodes[i]
+			}
+		}
+		return wt, agent
+	}
+	wt, agent := find(Tree(in))
+	if wt == nil || wt.Agent != nil || wt.Children != 1 {
+		t.Fatalf("worktree line took the serverless agent: %+v", wt)
+	}
+	if agent == nil || agent.Depth != 2 || agent.Local != nil {
+		t.Fatalf("serverless agent's line: %+v", agent)
+	}
+	// Without attribution the worktree's agents are found by server and
+	// session, which a serverless record never is.
+	in.Hosts[1].Attribution = false
+	in.Agents[len(in.Agents)-1].WorktreeID = ""
+	wt, agent = find(Tree(in))
+	if wt == nil || wt.Agent != nil || wt.Children != 0 {
+		t.Fatalf("worktree line matched the serverless agent by session: %+v", wt)
+	}
+	if agent == nil || agent.Depth != 1 || agent.Local != nil {
+		t.Fatalf("serverless agent's row: %+v", agent)
+	}
+}
+
 // The agent view: one tile per agent, the task first, agents of one
 // worktree numbered in the tree's order, the viewer's agents current.
 func TestAgents(t *testing.T) {
