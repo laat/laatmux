@@ -11,12 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -43,7 +44,7 @@ func cmdServe(ctx context.Context, args []string) error {
 			specs = append(specs, strings.TrimSpace(v))
 		}
 	}
-	watched, err := config.ParseServers(specs)
+	watched, err := tmux.ParseServers(specs)
 	if err != nil {
 		return err
 	}
@@ -120,12 +121,12 @@ func cmdServe(ctx context.Context, args []string) error {
 		// The merged stream: the hosts are re-read from the file on every
 		// merged subscription, and the local sessions listed from the
 		// default server.
-		Hosts: func() ([]client.Host, error) {
+		Hosts: func() ([]peer.Host, error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return nil, err
 			}
-			hosts := make([]client.Host, 0, len(cfg.Hosts))
+			hosts := make([]peer.Host, 0, len(cfg.Hosts))
 			for _, h := range cfg.Hosts {
 				hosts = append(hosts, h.Host)
 			}

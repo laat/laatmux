@@ -8,6 +8,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
@@ -157,7 +158,7 @@ func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p pa
 // managed server, over the same connection every command takes. A
 // daemon without the capability leaves the pane as it is, which is no
 // error.
-var selectRemote = func(ctx context.Context, h client.Host, paneID string) error {
+var selectRemote = func(ctx context.Context, h peer.Host, paneID string) error {
 	c, err := client.Dial(ctx, h)
 	if err != nil {
 		return err

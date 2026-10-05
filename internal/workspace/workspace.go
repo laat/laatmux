@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
@@ -170,11 +171,11 @@ func ByName(locals []protocol.Session, name string) (protocol.Session, bool) {
 
 // Spec describes the local session for a managed session on a host.
 type Spec struct {
-	Host    client.Host // how the attach command reaches the host
-	Managed string      // managed session name on the host
-	Name    string      // local session name
-	Key     string      // workspace key; "" for a plain attachment
-	Source  string      // repository source, when known
+	Host    peer.Host // how the attach command reaches the host
+	Managed string    // managed session name on the host
+	Name    string    // local session name
+	Key     string    // workspace key; "" for a plain attachment
+	Source  string    // repository source, when known
 	Branch  string
 }
 
@@ -340,7 +341,7 @@ func ensureAttach(ctx context.Context, name string, s Spec) error {
 // AttachCommand is the shell command the attach window runs. TMUX is unset
 // so the inner tmux does not refuse to nest; -u tells it the terminal is
 // UTF-8.
-func AttachCommand(h client.Host, session string) string {
+func AttachCommand(h peer.Host, session string) string {
 	attach := append([]string{"tmux", "-u"}, tmux.LaatmuxServer.AttachArgsBare(session)...)
 	if h.Local() {
 		return tmux.ShellJoin(append([]string{"env", "-u", "TMUX"}, attach...))
@@ -353,7 +354,7 @@ func AttachCommand(h client.Host, session string) string {
 // root, then a literal exec of the login shell so the root passes through
 // as one argument whatever it contains and $SHELL expands on the remote
 // side. A local window needs no command; it is started in the root.
-func ShellCommand(h client.Host, root string) string {
+func ShellCommand(h peer.Host, root string) string {
 	remote := tmux.ShellJoin([]string{"cd", root}) + ` && exec "$SHELL" -l`
 	return tmux.ShellJoin(client.SSH(h.SSH, client.SSHOptions{TTY: true}, remote))
 }

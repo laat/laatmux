@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -566,14 +566,14 @@ func TestRelaySweepIgnoresStaleAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.local.mu.Lock()
-	f.local.mhosts["vm"] = &mergedHost{host: client.Host{Name: "vm", SSH: "elsewhere"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "other"}}
+	f.local.mhosts["vm"] = &mergedHost{host: peer.Host{Name: "vm", SSH: "elsewhere"}, status: protocol.HostStatus{Name: "vm", EnvironmentID: "other"}}
 	f.local.mu.Unlock()
 	f.local.sweepRelay(time.Now())
 	if _, ok := f.local.relay.get("k7"); !ok {
 		t.Fatal("swept on an answer from an entry the config no longer has")
 	}
 	f.local.mu.Lock()
-	f.local.mhosts["vm"].host = client.Host{Name: "vm", SSH: "vm"}
+	f.local.mhosts["vm"].host = peer.Host{Name: "vm", SSH: "vm"}
 	f.local.mu.Unlock()
 	f.local.sweepRelay(time.Now())
 	if _, ok := f.local.relay.get("k7"); ok {

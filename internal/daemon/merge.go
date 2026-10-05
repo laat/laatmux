@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -42,7 +42,7 @@ const (
 // mergedHost is one configured host in the merged stream: its record, the
 // records cached from it, and the goroutine following it.
 type mergedHost struct {
-	host      client.Host
+	host      peer.Host
 	status    protocol.HostStatus
 	agents    map[string]protocol.Agent    // by id; empty for the local host, whose records are the daemon's own
 	worktrees map[string]protocol.Worktree // by id
@@ -175,8 +175,8 @@ func (d *Daemon) mergedIdle(gen uint64) {
 // reconcileHostsLocked brings the host set in line with the config. A
 // host whose entry changed is dropped and added again, since its ssh
 // alias is how it is reached.
-func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
-	want := map[string]client.Host{}
+func (d *Daemon) reconcileHostsLocked(hosts []peer.Host) {
+	want := map[string]peer.Host{}
 	for _, h := range hosts {
 		want[h.Name] = h
 	}

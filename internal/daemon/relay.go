@@ -17,6 +17,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	cmdpkg "github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 )
@@ -413,17 +414,17 @@ func (d *Daemon) hostConfigured(name string) bool {
 
 // relayHost finds the configured host by name: ok when it is there,
 // an error when the config could not be read.
-func (d *Daemon) relayHost(name string) (client.Host, bool, error) {
+func (d *Daemon) relayHost(name string) (peer.Host, bool, error) {
 	hosts, err := d.cfg.Hosts()
 	if err != nil {
-		return client.Host{}, false, err
+		return peer.Host{}, false, err
 	}
 	for _, h := range hosts {
 		if h.Name == name {
 			return h, true, nil
 		}
 	}
-	return client.Host{}, false, nil
+	return peer.Host{}, false, nil
 }
 
 // publishPending sends the record into the merged stream. Called with
@@ -534,7 +535,7 @@ func (d *Daemon) runRelaySweep(ctx context.Context) {
 // says nothing.
 func (d *Daemon) sweepRelay(now time.Time) {
 	hosts, err := d.cfg.Hosts()
-	configured := map[string]client.Host{}
+	configured := map[string]peer.Host{}
 	for _, h := range hosts {
 		configured[h.Name] = h
 	}

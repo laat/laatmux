@@ -16,6 +16,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -262,7 +263,7 @@ func sshOutput(ctx context.Context, alias, command string) (string, error) {
 
 // installRemote streams the binary to the host over ssh and runs the
 // install script there, which puts it in place and stops the old daemon.
-func installRemote(ctx context.Context, h client.Host, file string) error {
+func installRemote(ctx context.Context, h peer.Host, file string) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err

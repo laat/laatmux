@@ -23,6 +23,7 @@ two sidebar views and the sidebar at workmux's level, is designed in
 | `internal/detect` | screen and title rules, ported from herdr's manifests (Apache 2.0, see `manifests/NOTICE`) |
 | `internal/procs` | agent instance identity from the tty's foreground process group (sysctl on macOS, /proc on Linux) |
 | `internal/tmux` | `list-panes -a -F`, `capture-pane`, managed server config, `new-session` in one invocation, `kill-session`, branch encoding for session names |
+| `internal/peer` | a configured host as a value: its label, ssh alias and remote binary |
 | `internal/client` | dial local daemon (start on demand) or `ssh -T host laatmux bridge`; request and streamed command |
 | `internal/command` | the client side of `add`, `rm`, `run` and `shell`, one implementation each for the CLI and the dashboard, with the reconnect and follow logic |
 | `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |

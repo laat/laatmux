@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
@@ -214,7 +215,7 @@ const (
 // jumpMode decides how a session is reached, or that it is not: the managed
 // server anywhere is attached; the default server on this machine is
 // switched to; everything else is observed only.
-func jumpMode(h client.Host, srv tmux.Server, session string) (jumpKind, error) {
+func jumpMode(h peer.Host, srv tmux.Server, session string) (jumpKind, error) {
 	switch {
 	case srv.Managed():
 		return jumpAttach, nil
@@ -232,7 +233,7 @@ func jumpMode(h client.Host, srv tmux.Server, session string) (jumpKind, error) 
 // failure is reported as such, with ssh's own diagnostics, and the check is
 // bounded so a stalled connection cannot block jump before the attach
 // window's own keepalive protection applies.
-func checkSession(ctx context.Context, h client.Host, session string) error {
+func checkSession(ctx context.Context, h peer.Host, session string) error {
 	if h.Local() {
 		if !tmux.LaatmuxServer.HasSession(ctx, session) {
 			return fmt.Errorf("%s/%s: no such session on the laatmux tmux server", h.Name, session)

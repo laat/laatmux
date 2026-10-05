@@ -14,6 +14,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/worktree"
@@ -121,7 +122,7 @@ func serveFixture(t *testing.T) *served {
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		nc, err := client.DialLocal(ctx, false)
 		if err == nil {
-			c, err = client.Connect(ctx, client.Host{Name: "box"}, nc, nc, func() { nc.Close() })
+			c, err = client.Connect(ctx, peer.Host{Name: "box"}, nc, nc, func() { nc.Close() })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -220,7 +221,7 @@ func TestServeToRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := client.Connect(ctx, client.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}

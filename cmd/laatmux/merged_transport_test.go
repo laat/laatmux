@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -96,7 +96,7 @@ func TestSnapshotFallsBackToDirect(t *testing.T) {
 	if _, err := dialMergedOrExplain(context.Background()); err == nil || !strings.Contains(err.Error(), "older build") || !strings.Contains(err.Error(), "laatmux stop") {
 		t.Fatalf("an older daemon explained as: %v", err)
 	}
-	hello, snap, err := snapshot(context.Background(), client.Host{Name: "mac"}, protocol.CapWorktrees)
+	hello, snap, err := snapshot(context.Background(), peer.Host{Name: "mac"}, protocol.CapWorktrees)
 	if err != nil || hello.EnvironmentID != "lenv" || len(snap.Worktrees) != 1 {
 		t.Fatalf("direct snapshot = %+v %+v %v", hello, snap, err)
 	}
@@ -135,19 +135,19 @@ func TestMergedSnapshotWaitsForHost(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees", "rm"}}})
 		return true
 	})
-	hello, snap, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapRm)
+	hello, snap, err := snapshot(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, protocol.CapRm)
 	if err != nil || hello.EnvironmentID != "venv" || hello.Version != "v1" {
 		t.Fatalf("hello = %+v %v", hello, err)
 	}
 	if len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != "/r/y" || len(snap.Agents) != 0 {
 		t.Errorf("vm's records = %+v", snap)
 	}
-	if _, _, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapAdd); err == nil || !strings.Contains(err.Error(), "does not support add") {
+	if _, _, err := snapshot(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, protocol.CapAdd); err == nil || !strings.Contains(err.Error(), "does not support add") {
 		t.Errorf("missing capability not reported: %v", err)
 	}
 	// A host the merged stream lacks is dialled directly; here that is
 	// the fake daemon again, with a plain subscribe.
-	if _, _, err := snapshot(context.Background(), client.Host{Name: "other"}, ""); err != nil {
+	if _, _, err := snapshot(context.Background(), peer.Host{Name: "other"}, ""); err != nil {
 		t.Errorf("fallback for an unknown host: %v", err)
 	}
 	mu.Lock()
@@ -176,7 +176,7 @@ func TestMergedSnapshotWaitsThroughReconnect(t *testing.T) {
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: caps}})
 		return true
 	})
-	hello, snap, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees)
+	hello, snap, err := snapshot(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees)
 	if err != nil || hello.EnvironmentID != "venv" || len(snap.Worktrees) != 1 {
 		t.Fatalf("through a reconnect: %+v %+v %v", hello, snap, err)
 	}
@@ -190,7 +190,7 @@ func TestMergedSnapshotWaitsThroughReconnect(t *testing.T) {
 		return true
 	})
 	start := time.Now()
-	if _, _, err := snapshot(context.Background(), client.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees); err == nil || !strings.Contains(err.Error(), "Connection refused") {
+	if _, _, err := snapshot(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, protocol.CapWorktrees); err == nil || !strings.Contains(err.Error(), "Connection refused") {
 		t.Fatalf("refused dial: %v", err)
 	}
 	if time.Since(start) > 5*time.Second {
@@ -302,7 +302,7 @@ func TestHostByEnvironment(t *testing.T) {
 		}
 		return true
 	})
-	cfg := config.Config{Hosts: []config.Host{{Host: client.Host{Name: "mac"}}, {Host: client.Host{Name: "box", SSH: "box"}}}}
+	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "mac"}}, {Host: peer.Host{Name: "box", SSH: "box"}}}}
 	h, hello, snap, err := hostByEnvironment(context.Background(), cfg, "benv")
 	if err != nil || h.Name != "box" || hello.Version != "v2" || len(snap.Worktrees) != 1 {
 		t.Fatalf("box by environment: %+v %+v %+v %v", h, hello, snap, err)

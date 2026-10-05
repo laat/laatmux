@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -68,7 +68,7 @@ func TestParseSessions(t *testing.T) {
 // The remote shell command passes the root through as one argument
 // whatever it contains, and $SHELL is left for the remote side to expand.
 func TestShellCommand(t *testing.T) {
-	h := client.Host{Name: "vm", SSH: "vm"}
+	h := peer.Host{Name: "vm", SSH: "vm"}
 	got := ShellCommand(h, "/home/u/src/worktrees/proj/it's here")
 	want := `ssh -t vm 'cd '\''/home/u/src/worktrees/proj/it'\''\'\'''\''s here'\'' && exec "$SHELL" -l'`
 	if got != want {
@@ -77,7 +77,7 @@ func TestShellCommand(t *testing.T) {
 	if got, want := AttachCommand(h, "proj/x"), "ssh -t -o ServerAliveInterval=15 -o ServerAliveCountMax=3 vm 'tmux -u -L laatmux attach-session -t '\\''=proj/x'\\'''"; got != want {
 		t.Fatalf("remote attach:\n got %s\nwant %s", got, want)
 	}
-	if !strings.Contains(AttachCommand(h, "proj/x"), "ssh -t") || strings.Contains(AttachCommand(client.Host{Name: "mac"}, "proj/x"), "ssh") {
+	if !strings.Contains(AttachCommand(h, "proj/x"), "ssh -t") || strings.Contains(AttachCommand(peer.Host{Name: "mac"}, "proj/x"), "ssh") {
 		t.Error("AttachCommand picked the wrong transport")
 	}
 }
@@ -85,15 +85,15 @@ func TestShellCommand(t *testing.T) {
 // A reuse that does not know the source or branch leaves the session's
 // tags alone rather than clearing them.
 func TestTagArgsPreserveUnknownIdentity(t *testing.T) {
-	full := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Key: "k", Source: "src", Branch: "b"}), " ")
+	full := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Key: "k", Source: "src", Branch: "b"}), " ")
 	if !strings.Contains(full, "@laatmux_repo src") || !strings.Contains(full, "@laatmux_branch b") {
 		t.Errorf("full spec did not tag identity: %s", full)
 	}
-	partial := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Key: "k", Branch: "b"}), " ")
+	partial := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Key: "k", Branch: "b"}), " ")
 	if strings.Contains(partial, "@laatmux_repo") || !strings.Contains(partial, "@laatmux_branch b") || !strings.Contains(partial, "@laatmux_host vm") {
 		t.Errorf("partial spec wrote an empty source or dropped the rest: %s", partial)
 	}
-	if plain := strings.Join(tagArgs("s", Spec{Host: client.Host{Name: "vm"}, Source: "src"}), " "); strings.Contains(plain, "@laatmux_repo") {
+	if plain := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Source: "src"}), " "); strings.Contains(plain, "@laatmux_repo") {
 		t.Errorf("plain attachment got identity tags: %s", plain)
 	}
 }

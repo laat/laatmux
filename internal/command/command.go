@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -98,7 +99,7 @@ var ErrSubmissionExpired = errors.New("outcome unknown: the submission is older 
 // here: a message with SubmittedAt is neither sent nor resent past it.
 // The relay in the daemon has a send loop of its own, with unbounded
 // backoff and its record on disk, under the same SenderLifetime.
-func stream(ctx context.Context, h client.Host, needCaps []string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
+func stream(ctx context.Context, h peer.Host, needCaps []string, m protocol.Message, r Reporter, o streamOpts) (hello, res protocol.Message, err error) {
 	f := &progressFilter{fn: r.Progress}
 	sent := false // the command may have reached a daemon on this execution
 	ever := false // it was written to a daemon at some point: nothing is refused as unsent after

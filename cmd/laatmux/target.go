@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 )
@@ -164,7 +165,7 @@ func hostFor(cfg config.Config, flag string, repo config.Repo) (config.Host, hom
 // made. A host the local daemon's config lacks, or a daemon without the
 // capability, falls back to dialling the host. The connection is closed;
 // commands open their own.
-func snapshot(ctx context.Context, h client.Host, needCap string) (hello, snap protocol.Message, err error) {
+func snapshot(ctx context.Context, h peer.Host, needCap string) (hello, snap protocol.Message, err error) {
 	if c, ok := dialMerged(ctx); ok {
 		hello, snap, ok, err := mergedSnapshot(ctx, c, h, needCap)
 		c.Close()
@@ -191,7 +192,7 @@ func snapshot(ctx context.Context, h client.Host, needCap string) (hello, snap p
 
 // mergedSnapshot waits on the merged stream for the one host until it is
 // listed or has failed. Not ok when the stream has no such host.
-func mergedSnapshot(ctx context.Context, c *client.Conn, h client.Host, needCap string) (hello, snap protocol.Message, ok bool, err error) {
+func mergedSnapshot(ctx context.Context, c *client.Conn, h peer.Host, needCap string) (hello, snap protocol.Message, ok bool, err error) {
 	m := newMerged()
 	pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool {
 		st, ok := m.hosts[h.Name]
@@ -214,7 +215,7 @@ func mergedSnapshot(ctx context.Context, c *client.Conn, h client.Host, needCap 
 
 // needCaps checks the hello for status and the capability the command
 // needs.
-func needCaps(h client.Host, hello protocol.Message, needCap string) error {
+func needCaps(h peer.Host, hello protocol.Message, needCap string) error {
 	for _, cap := range []string{protocol.CapStatus, needCap} {
 		if cap != "" && !protocol.Has(hello.Capabilities, cap) {
 			return fmt.Errorf("%s: daemon %s does not support %s", h.Name, hello.Version, cap)

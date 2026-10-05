@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/view"
@@ -390,7 +390,7 @@ func TestRmPartialSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	rm := command.Rm{Host: config.Host{Host: client.Host{Name: "lab"}}, Root: "/w/proj/task"}
+	rm := command.Rm{Host: config.Host{Host: peer.Host{Name: "lab"}}, Root: "/w/proj/task"}
 	res, err := rm.Run(context.Background(), command.Discard{})
 	if err == nil || res.Root != "/w/proj/task" || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -413,7 +413,7 @@ func TestAddPartialSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	add := command.Add{Host: config.Host{Host: client.Host{Name: "lab"}}, Repo: config.Repo{Source: "git@x:o/proj.git", Name: "proj"}, Branch: "x", Agent: "claude"}
+	add := command.Add{Host: config.Host{Host: peer.Host{Name: "lab"}}, Repo: config.Repo{Source: "git@x:o/proj.git", Name: "proj"}, Branch: "x", Agent: "claude"}
 	res, err := add.Run(context.Background(), command.Discard{})
 	if err == nil || res.Root != "/w/proj/x" || res.Managed != "proj/x" || res.Session != "" || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -437,7 +437,7 @@ func TestRmFor(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
-	want := command.Rm{Host: config.Host{Host: client.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
+	want := command.Rm{Host: config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
 		Repo: cfg.Repos[1], Branch: "task", Root: "/w/proj/task"}
 	if d.rm.Host.Name != want.Host.Name || d.rm.Repo.Source != want.Repo.Source || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
 		t.Errorf("rm = %+v", d.rm)
@@ -588,7 +588,7 @@ func TestRmRefusalHint(t *testing.T) {
 // lack tasks; a branch given is the user's.
 func TestBuildForm(t *testing.T) {
 	cfg := config.Config{
-		Hosts:  []config.Host{{Host: client.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: client.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
+		Hosts:  []config.Host{{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
 		Repos:  []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}, {Source: "git@x:o/other.git", Name: "other"}},
 		Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}, "codex": {Cmd: []string{"codex"}}},
 	}

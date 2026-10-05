@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -24,7 +25,7 @@ import (
 // github line out, and the stream's clients explain through
 // dialMergedOrExplain.
 func dialMerged(ctx context.Context) (*client.Conn, bool) {
-	c, err := client.Dial(ctx, client.Host{Name: "local"})
+	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
 		return nil, false
 	}
