@@ -76,6 +76,9 @@ func TestNoServer(t *testing.T) {
 		if got := NoServer(&Error{Msg: msg}); got != want {
 			t.Errorf("NoServer(%q) = %v, want %v", msg, got, want)
 		}
+		if got := NoServer(fmt.Errorf("list: %w", &Error{Msg: msg})); got != want {
+			t.Errorf("NoServer(wrapped %q) = %v, want %v", msg, got, want)
+		}
 	}
 	if NoServer(context.Canceled) {
 		t.Error("non-tmux error reported as no server")

@@ -196,7 +196,6 @@ func parseStyle(st style, items string) (style, error) {
 	return st, nil
 }
 
-// paletteName reports whether s names a palette colour.
 // Templates is the set of lines the views draw with, compiled from the
 // config with the defaults for what it leaves out. A template that did
 // not parse keeps its error, which the view draws in its place.
@@ -1099,7 +1098,7 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	if b == nil || b.PR == nil || mainline(r) {
 		return nil
 	}
-	sp := prStyle(b.PR)
+	sp := prStyle(prKind(b.PR))
 	sp.Text = fmt.Sprintf("#%d", b.PR.Number)
 	out := []Span{sp}
 	if b.Stale {
@@ -1126,17 +1125,9 @@ func (m *Model) prState(r rows.Row) []Span {
 	if set == nil {
 		set = prIcons[IconsEmoji]
 	}
-	sp := prStyle(b.PR)
-	switch {
-	case b.PR.Draft && b.PR.State == "open":
-		sp.Text = set[prDraft]
-	case b.PR.State == "open":
-		sp.Text = set[prOpen]
-	case b.PR.State == "merged":
-		sp.Text = set[prMerged]
-	default:
-		sp.Text = set[prClosed]
-	}
+	k := prKind(b.PR)
+	sp := prStyle(k)
+	sp.Text = set[k]
 	spans := []Span{sp}
 	if b.Stale {
 		gitStale(spans)
@@ -1144,22 +1135,35 @@ func (m *Model) prState(r rows.Row) []Span {
 	return spans
 }
 
-// prStyle is a PR state's look, on a span without text: open green and
+// prKind is the PR's state as one of the four kinds, an index into a
+// set of prIcons. A draft closed as one keeps its flag; closed is what
+// counts.
+func prKind(pr *protocol.PullRequest) int {
+	switch {
+	case pr.Draft && pr.State == "open":
+		return prDraft
+	case pr.State == "open":
+		return prOpen
+	case pr.State == "merged":
+		return prMerged
+	}
+	return prClosed
+}
+
+// prStyle is a PR kind's look, on a span without text: open green and
 // bold, merged purple, closed red and dim, a draft dim. Without colours
 // the states still differ: open bold, merged plain, closed and draft
 // faint.
-func prStyle(pr *protocol.PullRequest) Span {
-	switch {
-	case pr.Draft && pr.State == "open":
-		// A draft closed as one keeps its flag; closed is what counts.
+func prStyle(kind int) Span {
+	switch kind {
+	case prDraft:
 		return Span{Dim: true}
-	case pr.State == "open":
+	case prOpen:
 		return Span{Fg: palette.Success, Bold: true}
-	case pr.State == "merged":
+	case prMerged:
 		return Span{Fg: palette.Accent}
-	default:
-		return Span{Fg: palette.Danger, Dim: true}
 	}
+	return Span{Fg: palette.Danger, Dim: true}
 }
 
 // The PR state icons by set: open, draft, merged, closed.

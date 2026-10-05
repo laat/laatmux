@@ -837,8 +837,8 @@ func joinSpans(parts ...[]Span) []Span {
 }
 
 // gitStale makes spans from an answer that is stale dim and plain: the
-// git stats of a refresh that timed out, a PR state from a query that
-// did.
+// git stats of a refresh that timed out, a PR's state or checks from a
+// query that did.
 func gitStale(spans []Span) []Span {
 	for i := range spans {
 		spans[i].Dim, spans[i].Bold, spans[i].Fg = true, false, ""
