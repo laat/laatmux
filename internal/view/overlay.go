@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/laat/laatmux/internal/term"
 )
 
 // Overlay takes the screen and the keys while it is up: a picker, a
@@ -12,7 +14,7 @@ import (
 // what it chose or how it ended left in the overlay itself.
 type Overlay interface {
 	Render(width, height int) []Line
-	Handle(k Key)
+	Handle(k term.Key)
 	// Done reports that the overlay has finished: a choice made or
 	// cancelled, a command ended and, when it failed, acknowledged.
 	Done() bool
@@ -69,7 +71,7 @@ func (p *Picker) Matches() []int {
 func (p *Picker) Done() bool { return p.done }
 
 // Handle applies one key.
-func (p *Picker) Handle(k Key) {
+func (p *Picker) Handle(k term.Key) {
 	if p.done {
 		return
 	}
@@ -84,23 +86,23 @@ func (p *Picker) Handle(k Key) {
 	}
 	clamp()
 	switch k.Kind {
-	case KeyEsc, KeyCtrlC:
+	case term.KeyEsc, term.KeyCtrlC:
 		p.Chosen, p.done = -1, true
-	case KeyEnter, KeyNewline:
+	case term.KeyEnter, term.KeyNewline:
 		if len(m) > 0 {
 			p.Chosen, p.done = m[p.Selected], true
 		}
-	case KeyUp:
+	case term.KeyUp:
 		p.Selected--
-	case KeyDown:
+	case term.KeyDown:
 		p.Selected++
-	case KeyBackspace:
+	case term.KeyBackspace:
 		if r := []rune(p.Filter); len(r) > 0 {
 			p.Filter = string(r[:len(r)-1])
 			// The selection follows the entry, not the position.
 			p.keep(m)
 		}
-	case KeyMouse:
+	case term.KeyMouse:
 		if k.Wheel != 0 {
 			p.Selected += k.Wheel
 			break
@@ -108,10 +110,10 @@ func (p *Picker) Handle(k Key) {
 		if i := k.Y - 1 - p.top; i >= 0 && i < len(p.hits) && p.hits[i] >= 0 {
 			p.Chosen, p.done = p.hits[i], true
 		}
-	case KeyRune:
+	case term.KeyRune:
 		p.Filter += string(k.Rune)
 		p.keep(m)
-	case KeyPaste:
+	case term.KeyPaste:
 		p.Filter += pasteLine(k.Text)
 		p.keep(m)
 	}
@@ -249,13 +251,13 @@ func (l *Log) Done() bool {
 // Handle acknowledges a failure with any key but a mouse event, which
 // a wheel over the popup would send, and a paste, which is never a
 // key pressed on purpose.
-func (l *Log) Handle(k Key) {
+func (l *Log) Handle(k term.Key) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
 	case l.ended:
-		l.acked = l.acked || (k.Kind != KeyMouse && k.Kind != KeyPaste)
-	case k.Kind == KeyCtrlC:
+		l.acked = l.acked || (k.Kind != term.KeyMouse && k.Kind != term.KeyPaste)
+	case k.Kind == term.KeyCtrlC:
 		l.Quit = true
 	}
 }

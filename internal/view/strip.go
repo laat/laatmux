@@ -7,6 +7,7 @@ import (
 
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 )
 
 // The strip: the sidebar along the top, the agent view as a row of
@@ -188,14 +189,14 @@ func (m *Model) renderStrip() []Line {
 // stripKey is what the strip does with the keys that mean something
 // else in a list: the arrows and h, l move sideways, Tab does nothing,
 // v neither, and a click lands on the chip under it.
-func (m *Model) stripKey(k Key) (Action, bool) {
+func (m *Model) stripKey(k term.Key) (Action, bool) {
 	switch k.Kind {
-	case KeyLeft:
+	case term.KeyLeft:
 		m.move(-1)
-	case KeyRight:
+	case term.KeyRight:
 		m.move(1)
-	case KeyTab:
-	case KeyMouse:
+	case term.KeyTab:
+	case term.KeyMouse:
 		if k.Wheel != 0 {
 			m.move(k.Wheel)
 			return Action{}, true
@@ -212,7 +213,7 @@ func (m *Model) stripKey(k Key) (Action, bool) {
 			a.Mouse = a.Kind == ActionJump
 			return a, true
 		}
-	case KeyRune:
+	case term.KeyRune:
 		switch k.Rune {
 		case 'h':
 			m.move(-1)

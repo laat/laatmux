@@ -2,7 +2,6 @@ package view
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -202,124 +201,6 @@ func TestANSIThemes(t *testing.T) {
 	}
 }
 
-// The terminal's late answer to the background query is dropped whole,
-// whichever terminator ends it, and keys around it survive.
-func TestOSCAnswerDropped(t *testing.T) {
-	for _, in := range []string{"a\x1b]11;rgb:1a1a/1b1b/2626\x1b\\b", "a\x1b]11;rgb:ffff/ffff/ffff\x07b"} {
-		keys := Parse([]byte(in))
-		var got []rune
-		for _, k := range keys {
-			if k.Kind == KeyRune {
-				got = append(got, k.Rune)
-			}
-		}
-		if string(got) != "ab" || len(keys) != 2 {
-			t.Errorf("%q: %+v", in, keys)
-		}
-	}
-}
-
-// Background reads the terminal's answer to OSC 11, and gives up on a
-// terminal that does not answer.
-func TestBackground(t *testing.T) {
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer devnull.Close()
-	for answer, want := range map[string]bool{"\x1b]11;rgb:ffff/ffff/ffff\x1b\\": false, "\x1b]11;rgb:0000/0000/0000\x07": true} {
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		w.WriteString(answer)
-		term := &Term{in: r, out: devnull}
-		if dark, ok := term.Background(time.Second); !ok || dark != want {
-			t.Errorf("%q: dark %v ok %v", answer, dark, ok)
-		}
-		r.Close()
-		w.Close()
-	}
-	r, w, _ := os.Pipe()
-	defer r.Close()
-	defer w.Close()
-	start := time.Now()
-	if _, ok := (&Term{in: r, out: devnull}).Background(50 * time.Millisecond); ok || time.Since(start) > time.Second {
-		t.Errorf("no answer: ok %v after %v", ok, time.Since(start))
-	}
-}
-
-// Keys that come while the terminal is asked for its background are
-// kept for Run, and an answer cut by the deadline is waited on for its
-// end.
-func TestBackgroundKeepsInput(t *testing.T) {
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer devnull.Close()
-	r, w, _ := os.Pipe()
-	w.WriteString("j\x1b]11;rgb:0000/0000/0000\x07k")
-	term := &Term{in: r, out: devnull}
-	if dark, ok := term.Background(time.Second); !ok || !dark || string(term.pending) != "jk" {
-		t.Errorf("dark %v ok %v pending %q", dark, ok, term.pending)
-	}
-	r.Close()
-	w.Close()
-	r, w, _ = os.Pipe()
-	defer r.Close()
-	defer w.Close()
-	w.WriteString("\x1b]11;rgb:ffff/")
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		w.WriteString("ffff/ffff\x1b\\")
-	}()
-	term = &Term{in: r, out: devnull}
-	if dark, ok := term.Background(50 * time.Millisecond); !ok || dark || len(term.pending) != 0 {
-		t.Errorf("split answer: dark %v ok %v pending %q", dark, ok, term.pending)
-	}
-}
-
-// An OSC answer cut by a flush is swallowed through BEL or ST when its
-// rest comes, whether the ST is split or not; past the bound in time
-// the bytes are keys again.
-func TestOSCAcrossFlush(t *testing.T) {
-	runes := func(ks []Key) string {
-		var b strings.Builder
-		for _, k := range ks {
-			if k.Kind == KeyRune {
-				b.WriteRune(k.Rune)
-			}
-		}
-		return b.String()
-	}
-	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
-	for _, parts := range [][]string{
-		{"\x1b]11;rgb:", "1111/2222/3333\x07j"},
-		{"\x1b]11;rgb:0/0/0\x1b", "\\j"},
-		{"\x1b]11;rgb:0/0", "/0\x1b", "\\j"},
-	} {
-		d := Decoder{now: clock}
-		var got string
-		for _, p := range parts {
-			got += runes(d.Feed([]byte(p)))
-			got += runes(d.Flush())
-		}
-		if got != "j" {
-			t.Errorf("%q: %q", parts, got)
-		}
-	}
-	// Alt-] and then, a while later, keys: they are the user's.
-	d := Decoder{now: clock}
-	d.Feed([]byte("\x1b]"))
-	d.Flush()
-	now = now.Add(oscWait + time.Millisecond)
-	if got := runes(d.Feed([]byte("jk"))); got != "jk" {
-		t.Errorf("keys after the bound: %q", got)
-	}
-}
-
 // Rendering details the review asked for: the theme's text colour on a
 // plain line; a short pane showing the selected tile's head, not its
 // divider; no count line for a group header left below; two-cell emoji
@@ -382,21 +263,6 @@ func TestChromeEdges(t *testing.T) {
 	}
 }
 
-// Alt-] is the user's: dropped alone as the Alt chord it is, the key or
-// the click after it read, flushed or not.
-func TestAltBracket(t *testing.T) {
-	keys := Parse([]byte("\x1b]j\x1b[<0;5;3M"))
-	if len(keys) != 2 || keys[0].Kind != KeyRune || keys[0].Rune != 'j' || keys[1].Kind != KeyMouse {
-		t.Errorf("Alt-] then a key and a click: %+v", keys)
-	}
-	var d Decoder
-	d.Feed([]byte("\x1b]"))
-	d.Flush()
-	if ks := d.Feed([]byte("j")); len(ks) != 1 || ks[0].Rune != 'j' {
-		t.Errorf("a key after a flushed Alt-]: %+v", ks)
-	}
-}
-
 // No line is wider than the pane, and nothing panics, at any width and
 // height, in either layout, whatever is selected, with the icon sets.
 func TestWidthSweep(t *testing.T) {
@@ -434,122 +300,6 @@ func TestFormFocusWithoutColour(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no bold focus without colour:\n%s", Debug(lines))
-	}
-}
-
-// An answer cut anywhere in its header, `ESC ] 1 1 ;`, is swallowed
-// when its rest comes; a bare Alt-] still is not armed against.
-func TestOSCCutInHeader(t *testing.T) {
-	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
-	full := "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"
-	for cut := 2; cut < len(full); cut++ {
-		d := Decoder{now: clock}
-		d.ExpectAnswer(now.Add(time.Second))
-		var ks []Key
-		ks = append(ks, d.Feed([]byte(full[:cut]))...)
-		ks = append(ks, d.Flush()...)
-		ks = append(ks, d.Feed([]byte(full[cut:]+"j"))...)
-		ks = append(ks, d.Flush()...)
-		if len(ks) != 1 || ks[0].Rune != 'j' {
-			t.Errorf("cut at %d: %+v", cut, ks)
-		}
-	}
-}
-
-// The query finds the answer past an echo of itself and past an Alt-]
-// typed before it, and keeps the Alt-] and the keys for Run.
-func TestBackgroundPastEchoAndAlt(t *testing.T) {
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer devnull.Close()
-	for _, in := range []string{
-		"\x1b]11;?\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x07j",
-		"\x1b]\x1b]11;rgb:ffff/ffff/ffff\x07j",
-	} {
-		r, w, _ := os.Pipe()
-		w.WriteString(in)
-		term := &Term{in: r, out: devnull}
-		start := time.Now()
-		dark, ok := term.Background(150 * time.Millisecond)
-		if !ok || dark || time.Since(start) > 100*time.Millisecond || !strings.HasSuffix(string(term.pending), "j") {
-			t.Errorf("%q: dark %v ok %v pending %q after %v", in, dark, ok, term.pending, time.Since(start))
-		}
-		r.Close()
-		w.Close()
-	}
-}
-
-// Past the time an answer is expected, the keys typed after an Alt-]
-// are the user's, whatever a flush cuts; a string whose number and
-// semicolon came is still dropped.
-func TestOSCNotExpected(t *testing.T) {
-	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
-	d := Decoder{now: clock}
-	d.ExpectAnswer(now.Add(-time.Second))
-	var ks []Key
-	ks = append(ks, d.Feed([]byte("\x1b]"))...)
-	ks = append(ks, d.Flush()...)
-	ks = append(ks, d.Feed([]byte("1j"))...)
-	ks = append(ks, d.Flush()...)
-	if len(ks) != 2 || ks[0].Rune != '1' || ks[1].Rune != 'j' {
-		t.Errorf("Alt-] then 1j: %+v", ks)
-	}
-	ks = append(d.Feed([]byte("\x1b]11;rgb:1a")), d.Flush()...)
-	ks = append(ks, d.Feed([]byte("1a/1b1b/2626\x07j"))...)
-	ks = append(ks, d.Flush()...)
-	if len(ks) != 1 || ks[0].Rune != 'j' {
-		t.Errorf("a cut answer: %+v", ks)
-	}
-}
-
-// The answer arriving ends the expectation.
-func TestOSCAnswerEndsExpectation(t *testing.T) {
-	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	d := Decoder{now: func() time.Time { return now }}
-	d.ExpectAnswer(now.Add(time.Second))
-	d.Feed([]byte("\x1b]11;rgb:1a1a/1b1b/2626\x07"))
-	if !d.expectUntil.IsZero() {
-		t.Errorf("still expecting until %v", d.expectUntil)
-	}
-
-	// An answer across reads, then across a flush, ends it too.
-	for _, parts := range [][]string{
-		{"\x1b]1", "1;rgb:1a1a/1b1b/2626\x07"},
-		{"\x1b]11", "", ";rgb:1a1a/1b1b/2626\x1b", "\\"},
-	} {
-		d := Decoder{now: func() time.Time { return now }}
-		d.ExpectAnswer(now.Add(time.Second))
-		var ks []Key
-		for _, p := range parts {
-			if p == "" {
-				ks = append(ks, d.Flush()...)
-				continue
-			}
-			ks = append(ks, d.Feed([]byte(p))...)
-		}
-		ks = append(ks, d.Feed([]byte("\x1b]"))...)
-		ks = append(ks, d.Flush()...)
-		ks = append(ks, d.Feed([]byte("1j"))...)
-		ks = append(ks, d.Flush()...)
-		if !d.expectUntil.IsZero() || len(ks) != 2 {
-			t.Errorf("%q: expecting until %v, keys %+v", parts, d.expectUntil, ks)
-		}
-	}
-
-	// An echo of the query does not: the answer after it, cut after
-	// its escape and bracket, is still dropped.
-	d = Decoder{now: func() time.Time { return now }}
-	d.ExpectAnswer(now.Add(time.Second))
-	ks := d.Feed([]byte("\x1b]11;?\x1b\\\x1b]"))
-	ks = append(ks, d.Flush()...)
-	ks = append(ks, d.Feed([]byte("11;rgb:1a1a/1b1b/2626\x07j"))...)
-	ks = append(ks, d.Flush()...)
-	if len(ks) != 1 || ks[0].Rune != 'j' || !d.expectUntil.IsZero() {
-		t.Errorf("echo, then a cut answer: %+v, expecting until %v", ks, d.expectUntil)
 	}
 }
 

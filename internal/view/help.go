@@ -1,6 +1,10 @@
 package view
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/laat/laatmux/internal/term"
+)
 
 // Help is the ? overlay: the keys, one a line, scrolled by the arrows
 // and the wheel, closed by any other key.
@@ -101,13 +105,13 @@ func (h *Help) Render(w, hgt int) []Line {
 	return out[:hgt]
 }
 
-func (h *Help) Handle(k Key) {
+func (h *Help) Handle(k term.Key) {
 	switch {
-	case k.Kind == KeyUp || k.Kind == KeyMouse && k.Wheel < 0:
+	case k.Kind == term.KeyUp || k.Kind == term.KeyMouse && k.Wheel < 0:
 		h.scroll--
-	case k.Kind == KeyDown || k.Kind == KeyMouse && k.Wheel > 0:
+	case k.Kind == term.KeyDown || k.Kind == term.KeyMouse && k.Wheel > 0:
 		h.scroll++
-	case k.Kind == KeyMouse:
+	case k.Kind == term.KeyMouse:
 		// A click or a release is not a key pressed.
 	default:
 		h.done = true

@@ -28,7 +28,8 @@ two sidebar views and the sidebar at workmux's level, is designed in
 | `internal/command` | the client side of `add`, `rm`, `run` and `shell`, one implementation each for the CLI and the dashboard, with the reconnect and follow logic |
 | `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |
 | `internal/rows` | the rows the listing, the sidebar and the dashboard share: worktrees joined with agents and local sessions, dim state, groups |
-| `internal/view` | the list view: pure renderer for the tile and compact layouts, keys and mouse, raw mode, the draw loop |
+| `internal/term` | the terminal: raw mode and the alternate screen, the frame drawn, the bytes read decoded into keys, mouse events and pastes |
+| `internal/view` | the list view: pure renderer for the tile and compact layouts, the model's keys and mouse, the draw loop |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
 | `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon, `sidebar`; `.laatmux.yaml` per repository |
 | `internal/source` | a repository source's key, the same for the forms a forge gives one repository, and the forge split |
@@ -712,9 +713,10 @@ seen`, which the sidebar's hooks on `client-session-changed`,
 remote host's default server or another observed server is never done:
 no view can take the user there.
 
-The view, in `internal/view`, is a tmux pane's worth of terminal: raw
-mode through termios, ANSI for cursor, colours and attributes, SGR
-mouse reporting for clicks and the wheel, no TUI library. The renderer
+The view is a tmux pane's worth of terminal, no TUI library: raw mode
+through termios, the alternate screen and the SGR mouse reports decoded
+into keys, clicks and the wheel are `internal/term`; ANSI for cursor,
+colours and attributes and the renderer are `internal/view`. The renderer
 is a pure function from rows, size and selection to lines that name
 their colours from a palette, and is tested against golden files for
 both layouts; only the terminal encoding looks the colours up

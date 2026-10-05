@@ -9,6 +9,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -73,7 +74,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	}
 	form := buildForm(cfg, f, last, preRepo, "", "", st.hostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(ctx, strings.TrimSpace(b)) }
-	t, err := view.Open(os.Stdin, os.Stdout)
+	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
 	}

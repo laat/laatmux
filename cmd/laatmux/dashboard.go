@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
@@ -113,7 +114,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.followMerged(ctx, c)
-	t, err := view.Open(os.Stdin, os.Stdout)
+	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
-			case taskAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == view.KeyRune && a.Key.Rune == 'z':
+			case taskAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z':
 				// The sidebar takes a task's p and x, and what follows
 				// from them, and z, which settles; none of the
 				// dashboard's other keys.
@@ -248,7 +249,7 @@ func taskAction(m *view.Model, a view.Action) bool {
 	switch a.Kind {
 	case view.ActionOther:
 		r := m.Selection()
-		return r != nil && r.Pending != nil && a.Key.Kind == view.KeyRune && (a.Key.Rune == 'p' || a.Key.Rune == 'x' || a.Key.Rune == 'X')
+		return r != nil && r.Pending != nil && a.Key.Kind == term.KeyRune && (a.Key.Rune == 'p' || a.Key.Rune == 'x' || a.Key.Rune == 'X')
 	case view.ActionConfirm:
 		return m.ConfirmTag == "dismiss"
 	case view.ActionOverlay:

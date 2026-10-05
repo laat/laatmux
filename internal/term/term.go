@@ -1,4 +1,4 @@
-package view
+package term
 
 import (
 	"errors"
@@ -20,8 +20,8 @@ type Term struct {
 	// colours and draws with the attributes alone.
 	Theme palette.Theme
 	// pending is input Background read that was not its answer, for
-	// Run to decode first; unanswered is that the query went and no
-	// answer came, so Run's decoder expects one for a while.
+	// Input to decode first; unanswered is that the query went and no
+	// answer came, so Input's decoder expects one for a while.
 	pending    []byte
 	unanswered bool
 }
@@ -61,12 +61,12 @@ func Open(in, out *os.File) (*Term, error) {
 
 // Background asks the terminal for its background colour with OSC 11 and
 // reports whether it is dark, waiting at most wait for the answer; ok is
-// false when none came or it could not be read. It is called before Run
-// reads the keys, so it reads the terminal itself: whatever else comes
-// meanwhile, keys typed or the start of a paste, is kept for Run, and
-// an answer begun by the deadline is waited on a while longer for its
-// end. One cut short is left for Run's decoder, which swallows it; so
-// is one that comes later. tmux answers for its pane.
+// false when none came or it could not be read. It is called before
+// Input reads the keys, so it reads the terminal itself: whatever else
+// comes meanwhile, keys typed or the start of a paste, is kept for
+// Input, and an answer begun by the deadline is waited on a while longer
+// for its end. One cut short is left for Input's decoder, which swallows
+// it; so is one that comes later. tmux answers for its pane.
 func (t *Term) Background(wait time.Duration) (dark, ok bool) {
 	t.write("\x1b]11;?\x1b\\")
 	deadline := time.Now().Add(wait)
@@ -126,16 +126,17 @@ func (t *Term) Size() (w, h int) {
 	return int(ws.Col), int(ws.Row)
 }
 
-// Draw writes a whole frame: every line from the top, each cleared to
-// the end, so nothing of the previous frame shows through.
-func (t *Term) Draw(lines []Line) {
+// Draw writes a whole frame: every line from the top, each already
+// encoded with its attributes, each cleared to the end, so nothing of
+// the previous frame shows through.
+func (t *Term) Draw(lines []string) {
 	var b strings.Builder
 	b.WriteString("\x1b[H")
 	for i, l := range lines {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		b.WriteString(ANSI(l, t.Theme))
+		b.WriteString(l)
 		b.WriteString("\x1b[K")
 	}
 	t.write(b.String())

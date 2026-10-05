@@ -9,6 +9,7 @@ import (
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 )
 
 // The parser: tokens, styles and the fill; an unknown token, an unclosed
@@ -161,7 +162,7 @@ func TestTokens(t *testing.T) {
 	}
 	tree.SetTemplates(DefaultTemplates())
 	tree.Select("venv/worktree//r/agents-config")
-	tree.Handle(Key{Rune: 'h'})
+	tree.Handle(term.Key{Rune: 'h'})
 	tm, _ = ParseTemplate("{worst_status}")
 	if got := strings.TrimSpace(Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/worktree//r/agents-config"), 80)}})); got == "" {
 		t.Error("a folded line has no worst status")
@@ -517,7 +518,7 @@ func TestTemplateTreeEdges(t *testing.T) {
 	m.SetRows(rows.Agents(in))
 	m.Render()
 	m.Select("venv/worktree//r/agents-config")
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	r := m.Tree[m.indexOf("venv/worktree//r/agents-config")]
 	line := func(src string, r rows.Row, w int) string {
 		t.Helper()

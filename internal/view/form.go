@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/palette"
+	"github.com/laat/laatmux/internal/term"
 )
 
 // Form is the task form of milestone four: three chips for the
@@ -126,7 +127,7 @@ func (f *Form) propose() {
 }
 
 // Handle applies one key.
-func (f *Form) Handle(k Key) {
+func (f *Form) Handle(k term.Key) {
 	if f.done {
 		return
 	}
@@ -147,18 +148,18 @@ func (f *Form) Handle(k Key) {
 		return
 	}
 	switch k.Kind {
-	case KeyEsc, KeyCtrlC:
+	case term.KeyEsc, term.KeyCtrlC:
 		f.Cancelled, f.done = true, true
 		return
-	case KeyTab:
+	case term.KeyTab:
 		f.focus = (f.focus + 1) % 5
 		return
-	case KeyShiftTab:
+	case term.KeyShiftTab:
 		f.focus = (f.focus + 4) % 5
 		return
-	case KeyMouse:
+	case term.KeyMouse:
 		return
-	case KeyPaste:
+	case term.KeyPaste:
 		// A paste is text for the prompt wherever the focus is, but on
 		// the branch line: dropped on a chip it would be lost.
 		if f.focus != fieldBranch {
@@ -177,19 +178,19 @@ func (f *Form) Handle(k Key) {
 
 // chipKey is a key on a chip: Left and Right cycle, Enter opens the
 // picker.
-func (f *Form) chipKey(k Key) {
+func (f *Form) chipKey(k term.Key) {
 	c := &f.Chips[f.focus]
 	n := len(c.Choices)
 	switch k.Kind {
-	case KeyLeft, KeyUp:
+	case term.KeyLeft, term.KeyUp:
 		if n > 0 {
 			f.setChip(f.focus, (c.Selected+n-1)%n)
 		}
-	case KeyRight, KeyDown:
+	case term.KeyRight, term.KeyDown:
 		if n > 0 {
 			f.setChip(f.focus, (c.Selected+1)%n)
 		}
-	case KeyEnter, KeyNewline:
+	case term.KeyEnter, term.KeyNewline:
 		if n > 0 {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
 		}
@@ -208,18 +209,18 @@ func (f *Form) setChip(i, sel int) {
 }
 
 // promptKey edits the prompt.
-func (f *Form) promptKey(k Key) {
+func (f *Form) promptKey(k term.Key) {
 	switch k.Kind {
-	case KeyRune:
+	case term.KeyRune:
 		f.insert([]rune{k.Rune})
-	case KeyNewline:
+	case term.KeyNewline:
 		f.insert([]rune{'\n'})
-	case KeyPaste:
+	case term.KeyPaste:
 		f.insert([]rune(k.Text))
 	// Moves and deletes step over the zero-width runes after a rune,
 	// a variation selector say, so the cursor never splits a symbol
 	// from its selector.
-	case KeyBackspace:
+	case term.KeyBackspace:
 		if f.cursor > 0 {
 			i := f.cursor - 1
 			for i > 0 && joins(f.prompt[i]) {
@@ -229,7 +230,7 @@ func (f *Form) promptKey(k Key) {
 			f.cursor = i
 			f.propose()
 		}
-	case KeyDelete:
+	case term.KeyDelete:
 		if f.cursor < len(f.prompt) {
 			j := f.cursor + 1
 			for j < len(f.prompt) && joins(f.prompt[j]) {
@@ -238,7 +239,7 @@ func (f *Form) promptKey(k Key) {
 			f.prompt = append(f.prompt[:f.cursor], f.prompt[j:]...)
 			f.propose()
 		}
-	case KeyLeft:
+	case term.KeyLeft:
 		// Within the line: Up and Down change lines.
 		start := f.lineStart(f.cursor)
 		if f.cursor > start {
@@ -247,27 +248,27 @@ func (f *Form) promptKey(k Key) {
 				f.cursor--
 			}
 		}
-	case KeyRight:
+	case term.KeyRight:
 		if end := f.lineEnd(f.cursor); f.cursor < end {
 			f.cursor++
 			for f.cursor < end && joins(f.prompt[f.cursor]) {
 				f.cursor++
 			}
 		}
-	case KeyHome:
+	case term.KeyHome:
 		f.cursor = f.lineStart(f.cursor)
-	case KeyEnd:
+	case term.KeyEnd:
 		f.cursor = f.lineEnd(f.cursor)
-	case KeyUp:
+	case term.KeyUp:
 		f.cursor = f.lineStart(f.cursor)
 		if f.cursor > 0 {
 			f.cursor = f.lineStart(f.cursor - 1)
 		}
-	case KeyDown:
+	case term.KeyDown:
 		if end := f.lineEnd(f.cursor); end < len(f.prompt) {
 			f.cursor = end + 1
 		}
-	case KeyEnter:
+	case term.KeyEnter:
 		// From the prompt, Enter submits when there is one; the branch
 		// line submits without, an agent started on a branch with no
 		// prompt being the add as it was.
@@ -312,20 +313,20 @@ func (f *Form) lineEnd(i int) int {
 // branchKey edits the branch line; an edit stops it following the
 // prompt, an emptied line included, so the proposal can be replaced
 // outright.
-func (f *Form) branchKey(k Key) {
+func (f *Form) branchKey(k term.Key) {
 	switch k.Kind {
-	case KeyRune:
+	case term.KeyRune:
 		f.branch += string(k.Rune)
 		f.edited = true
-	case KeyPaste:
+	case term.KeyPaste:
 		f.branch += strings.ReplaceAll(pasteLine(k.Text), " ", "")
 		f.edited = true
-	case KeyBackspace:
+	case term.KeyBackspace:
 		if r := []rune(f.branch); len(r) > 0 {
 			f.branch = string(r[:len(r)-1])
 		}
 		f.edited = true
-	case KeyEnter:
+	case term.KeyEnter:
 		f.submit()
 	}
 }

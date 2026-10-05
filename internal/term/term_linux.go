@@ -1,4 +1,4 @@
-package view
+package term
 
 import "golang.org/x/sys/unix"
 
