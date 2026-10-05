@@ -193,8 +193,15 @@ func TestBroadcastNumbers(t *testing.T) {
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: "x"})
 	d.mu.Unlock()
 	for i := uint64(1); i <= 3; i++ {
-		if m := <-s.ch; m.Seq != snap.Seq+i {
-			t.Fatalf("message %d numbered %d after snapshot %d", i, m.Seq, snap.Seq)
+		// The broadcasts are done: a message not there is missing, not
+		// late.
+		select {
+		case m := <-s.ch:
+			if m.Seq != snap.Seq+i {
+				t.Fatalf("message %d numbered %d after snapshot %d", i, m.Seq, snap.Seq)
+			}
+		default:
+			t.Fatalf("message %d never sent", i)
 		}
 	}
 	d.unsubscribe(s)
