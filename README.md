@@ -713,9 +713,10 @@ seen`, which the sidebar's hooks on `client-session-changed`,
 remote host's default server or another observed server is never done:
 no view can take the user there.
 
-The view, in `internal/view`, is a tmux pane's worth of terminal: raw
-mode through termios, ANSI for cursor, colours and attributes, SGR
-mouse reporting for clicks and the wheel, no TUI library. The renderer
+The view is a tmux pane's worth of terminal, no TUI library: raw mode
+through termios, the alternate screen and the SGR mouse reports decoded
+into keys, clicks and the wheel are `internal/term`; ANSI for cursor,
+colours and attributes and the renderer are `internal/view`. The renderer
 is a pure function from rows, size and selection to lines that name
 their colours from a palette, and is tested against golden files for
 both layouts; only the terminal encoding looks the colours up

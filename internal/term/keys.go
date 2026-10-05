@@ -117,9 +117,10 @@ type Decoder struct {
 
 // Bounds on a paste: PasteGrace the silence after which its text so far
 // is given out, pasteMax the size past which a chunk is. Neither ends
-// the framing, so a pasted line break after them is never Enter; a paste whose end
-// marker is lost ends on the user's bare escape or Ctrl-C after a
-// stall, bytes no paste sends alone, and that key only ends it.
+// the framing, so a pasted line break after them is never Enter; a
+// paste whose end marker is lost ends on the user's bare escape or
+// Ctrl-C after a stall, bytes no paste sends alone, and that key only
+// ends it.
 const (
 	PasteGrace = time.Second
 	pasteMax   = 1 << 20

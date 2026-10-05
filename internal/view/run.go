@@ -36,20 +36,12 @@ const (
 	secondTick = time.Second
 )
 
-// answerLate is how long an answer to the background query is expected
-// after the query gave up on it.
-const answerLate = 3 * time.Second
-
-// escapeWait is how long a bare escape, or the start of a sequence, is
-// held for the rest before it is read as the escape key. tmux writes a
-// sequence in one go, so the wait is only ever paid for the escape key.
-const escapeWait = 50 * time.Millisecond
-
 // Run draws the model and handles keys until the host is done, q is
 // pressed, or ctx ends. The keys come from the terminal's Input: each
 // read decoded as it arrives, the held bytes when their wait is up, and
-// the screen is redrawn after each. The rows are refreshed on every change signal
-// and the ages every five seconds, every second while a time in seconds
+// the screen is redrawn after each. The rows are refreshed on every
+// change signal and the ages every five seconds, every second while a
+// time in seconds
 // is drawn, the spinner four times a second while a working row is on
 // the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
