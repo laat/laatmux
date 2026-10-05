@@ -12,7 +12,6 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 // merged is the client's view of every host's stream, fed from the
@@ -247,7 +246,7 @@ func renderTree(b *strings.Builder, nodes []rows.Row, now time.Time) {
 func where(n rows.Row) string {
 	s := n.Host
 	if a := n.Agent; a != nil && n.Kind == rows.KindAgent {
-		if srv := a.Server; srv != tmux.LaatmuxServer.Label() {
+		if srv := a.Server; srv != protocol.ServerLaatmux {
 			s += "/" + srv
 		}
 	}

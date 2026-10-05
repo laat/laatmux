@@ -13,7 +13,6 @@ import (
 
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Attention: what the user has seen. The merging daemon keeps, per agent,
@@ -152,9 +151,9 @@ func (d *Daemon) flushAttentionLocked() {
 // jumped to, so it would never be seen.
 func tracked(a protocol.Agent, local bool) bool {
 	switch server := a.Server; {
-	case server == tmux.LaatmuxServer.Label():
+	case server == protocol.ServerLaatmux:
 		return true
-	case local && server == tmux.DefaultServer.Label():
+	case local && server == protocol.ServerDefault:
 		return true
 	}
 	return false
@@ -348,7 +347,7 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 	if !ok {
 		return false
 	}
-	managed := a.Server == tmux.LaatmuxServer.Label()
+	managed := a.Server == protocol.ServerLaatmux
 	agentHost := e.Host
 	if mh := d.localHostLocked(); e.Local && mh != nil {
 		// This machine by the name the config gives it now, which
@@ -381,7 +380,7 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 			if target != "" && target == a.Session && host == agentHost {
 				return true
 			}
-		case e.Local && a.Server == tmux.DefaultServer.Label() && v.Pane != "" && v.Pane == a.PaneID:
+		case e.Local && a.Server == protocol.ServerDefault && v.Pane != "" && v.Pane == a.PaneID:
 			return true
 		}
 	}

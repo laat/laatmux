@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Host is one configured host as the rows need it: the connectivity axis
@@ -401,13 +400,13 @@ func (r Row) AgentName() string {
 func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {
-		managed := a.Server == tmux.LaatmuxServer.Label()
+		managed := a.Server == protocol.ServerLaatmux
 		switch {
 		case w.Session != "" && (!managed || a.Session != w.Session):
 			continue
 		case w.Session == "" && managed && !(a.Managed && a.Cwd == w.Root):
 			continue
-		case w.Session == "" && !managed && a.Server != tmux.DefaultServer.Label():
+		case w.Session == "" && !managed && a.Server != protocol.ServerDefault:
 			// Another observed server's sessions are not jumped to.
 			continue
 		}
