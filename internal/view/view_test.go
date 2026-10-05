@@ -1717,3 +1717,30 @@ func TestSwitchToStale(t *testing.T) {
 		t.Errorf("switch to a stale tile: %+v shown %v", r, m.ShowHidden)
 	}
 }
+
+// The modes are settled by order: an overlay over a confirm line over a
+// filter over the list, and each key goes to the top one.
+func TestMode(t *testing.T) {
+	var m Model
+	if m.mode() != modeList {
+		t.Fatal("an empty model is not the list")
+	}
+	m.Filtering = true
+	if m.mode() != modeFilter {
+		t.Fatal("filtering is not the filter's")
+	}
+	m.Confirm = "sure?"
+	if m.mode() != modeConfirm {
+		t.Fatal("a confirm line over the filter is not the confirm's")
+	}
+	m.Overlay = NewLog("add")
+	if m.mode() != modeOverlay {
+		t.Fatal("an overlay over the confirm line is not the overlay's")
+	}
+	// The key goes to the overlay: the confirm line and the filter are
+	// untouched for after it.
+	m.Handle(term.Key{Rune: 'n'})
+	if m.Confirm != "sure?" || !m.Filtering {
+		t.Fatalf("the overlay's key reached the confirm line or the filter: %q %v", m.Confirm, m.Filtering)
+	}
+}

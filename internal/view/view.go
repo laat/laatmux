@@ -324,11 +324,18 @@ func (m *Model) followed(vis []Item) int {
 }
 
 // Selection is the selected row, nil when the list is empty or, while
-// Follow holds, when no visible row is the viewer's own. It also records
-// the row as the anchor for the next SetRows. While following, the
-// selection is found afresh on every read, so a filter typed or cleared
-// and a group expanded or collapsed move it as a refresh does.
-func (m *Model) Selection() *rows.Row {
+// Follow holds, when no visible row is the viewer's own. It commits the
+// selection first: while following, the selection is found afresh on
+// every read, so a filter typed or cleared and a group expanded or
+// collapsed move it as a refresh does.
+func (m *Model) Selection() *rows.Row { return m.commit() }
+
+// commit settles the selection after a change of the rows, the filter
+// or the folds, and records the row as the anchor for the next SetRows:
+// following, it is the viewer's row again; a user's is clamped to the
+// list, or stays on no row while lost. Called for the effect by the
+// keys that change what is visible; Selection is it with the row.
+func (m *Model) commit() *rows.Row {
 	vis := m.Visible()
 	if m.Follow {
 		m.Selected = m.followed(vis)
@@ -453,7 +460,7 @@ func (m *Model) Render() []Line {
 	// below the window; the stale fold is a row.
 	var starts []int
 	selStart, selEnd := -1, -1
-	m.Selection()
+	m.commit()
 	items := m.Items()
 	numbered := 0 // the rows the digits count, for {idx}
 	for _, it := range items {
@@ -610,11 +617,11 @@ func (m *Model) Render() []Line {
 
 func (m *Model) footer() Line {
 	switch {
-	case m.Confirm != "":
+	case m.mode() == modeConfirm:
 		return bold(m.Confirm, m.Width)
 	case m.Message != "":
 		return bold(m.Message, m.Width)
-	case m.Filtering:
+	case m.mode() == modeFilter:
 		return plain(fit("/"+m.Filter+"_", m.Width))
 	case m.Filter != "":
 		return plain(fit("/"+m.Filter+"  (esc clears)", m.Width))

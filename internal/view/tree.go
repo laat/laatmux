@@ -464,7 +464,7 @@ func (m *Model) Switch() {
 		if id := m.followedID(); id != "" {
 			m.reveal(id)
 		}
-		m.Selection()
+		m.commit()
 		return
 	}
 	if target == "" {
