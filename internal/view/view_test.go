@@ -1718,8 +1718,8 @@ func TestSwitchToStale(t *testing.T) {
 	}
 }
 
-// The modes stack: an overlay over a confirm line over a filter over
-// the list, and each key goes to the top one.
+// The modes are settled by order: an overlay over a confirm line over a
+// filter over the list, and each key goes to the top one.
 func TestMode(t *testing.T) {
 	var m Model
 	if m.mode() != modeList {

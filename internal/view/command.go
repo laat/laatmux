@@ -75,7 +75,7 @@ func ParseCommand(line string) (Command, error) {
 // view or scope switched, a jump's action returned for the host. With
 // an overlay or a question up it does nothing.
 func (m *Model) Command(c Command) Action {
-	if m.Overlay != nil || m.Confirm != "" {
+	if md := m.mode(); md == modeOverlay || md == modeConfirm {
 		return Action{}
 	}
 	// A change already waiting to be written, a fold carried at a

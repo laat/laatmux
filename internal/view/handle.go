@@ -37,9 +37,9 @@ const (
 
 // mode is what the model is doing, which decides whose key the next one
 // is: an overlay's while one is up, the confirm line's while one is
-// asked, the filter's while one is typed, else the list's. The modes
-// stack in that order: an overlay opened over a confirm line keeps the
-// line for after it.
+// asked, the filter's while one is typed, else the list's. The order
+// settles what is on top: a quit question asked while a filter is typed
+// leaves the filter for after the answer.
 type mode int
 
 const (
