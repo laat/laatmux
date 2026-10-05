@@ -46,15 +46,16 @@ const answerLate = 3 * time.Second
 const escapeWait = 50 * time.Millisecond
 
 // Run draws the model and handles keys until the host is done, q is
-// pressed, or ctx ends. The keys come from the terminal's Input, a
-// batch per read or flush, and the screen is redrawn after each. The rows are refreshed on every change signal
+// pressed, or ctx ends. The keys come from the terminal's Input: each
+// read decoded as it arrives, the held bytes when their wait is up, and
+// the screen is redrawn after each. The rows are refreshed on every change signal
 // and the ages every five seconds, every second while a time in seconds
 // is drawn, the spinner four times a second while a working row is on
 // the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
 func Run(ctx context.Context, t *term.Term, m *Model, h Host) error {
-	keys := t.Input(ctx)
+	in := t.Input(ctx)
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 	defer signal.Stop(winch)
@@ -88,6 +89,12 @@ func Run(ctx context.Context, t *term.Term, m *Model, h Host) error {
 	if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
 		return nil
 	}
+	// Keys that came while the terminal was asked for its background
+	// are the first input.
+	if handle(in.Start()) {
+		return nil
+	}
+	in.Rearm()
 	draw()
 	for {
 		spin = nil
@@ -127,13 +134,19 @@ func Run(ctx context.Context, t *term.Term, m *Model, h Host) error {
 			}
 		case <-spin:
 		case <-winch:
-		case ks, ok := <-keys:
+		case <-in.Flush:
+			if handle(in.Flushed()) {
+				return nil
+			}
+			in.Rearm()
+		case r, ok := <-in.Reads:
 			if !ok {
 				return nil
 			}
-			if handle(ks) {
+			if handle(in.Decode(r)) {
 				return nil
 			}
+			in.Rearm()
 		}
 		draw()
 	}
