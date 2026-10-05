@@ -361,7 +361,8 @@ type Identity struct {
 // The tmux server labels records carry, as the tmux package labels its
 // servers: the managed server, where laatmux makes sessions, and this
 // machine's default server, which a daemon may watch and a local client
-// switch within. Any other label is a socket path, watched read-only.
+// switch within. Any other label names another server, by its -L name
+// or its -S socket path, watched read-only.
 const (
 	ServerLaatmux = "laatmux"
 	ServerDefault = "default"
@@ -372,7 +373,7 @@ const (
 type Agent struct {
 	ID            string    `json:"id"` // "<environment_id>/<server>/<pane_id>"; opaque to clients
 	EnvironmentID string    `json:"environment_id"`
-	Server        string    `json:"server,omitempty"` // tmux server label: ServerLaatmux, ServerDefault, or a socket path
+	Server        string    `json:"server,omitempty"` // tmux server label: ServerLaatmux, ServerDefault, or another server's -L name or -S path
 	Session       string    `json:"session"`
 	Window        int       `json:"window"`
 	PaneID        string    `json:"pane_id"`

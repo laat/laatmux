@@ -185,7 +185,7 @@ func decodeBranch(name string) string {
 // The two named servers are labelled as the protocol's records say.
 func TestServerLabelsAreTheProtocolConstants(t *testing.T) {
 	if LaatmuxServer.Label() != protocol.ServerLaatmux || DefaultServer.Label() != protocol.ServerDefault {
-		t.Fatalf("labels %q %q", LaatmuxServer.Label(), DefaultServer.Label())
+		t.Fatalf("labels %q %q, protocol constants %q %q", LaatmuxServer.Label(), DefaultServer.Label(), protocol.ServerLaatmux, protocol.ServerDefault)
 	}
 	if Parse(protocol.ServerLaatmux) != LaatmuxServer || Parse(protocol.ServerDefault) != DefaultServer {
 		t.Fatal("the labels do not parse back to the servers")

@@ -14,7 +14,6 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
-	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
@@ -758,7 +757,7 @@ func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 		if l := m.OwnerLine(row.Worktree.ID); l != nil {
 			row = *l
 		}
-	} else if row.Pending == nil && row.Agent != nil && row.Agent.Server == tmux.LaatmuxServer.Label() {
+	} else if row.Pending == nil && row.Agent != nil && row.Agent.Server == protocol.ServerLaatmux {
 		// The add's agent before the host lists the worktree: the
 		// task line holding it, as the pane jump routes it. Only on
 		// the managed server: an observed session of the same name
