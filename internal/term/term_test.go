@@ -56,7 +56,7 @@ func TestBackground(t *testing.T) {
 }
 
 // Keys that come while the terminal is asked for its background are
-// kept for Run, and an answer cut by the deadline is waited on for its
+// kept for Input, and an answer cut by the deadline is waited on for its
 // end.
 func TestBackgroundKeepsInput(t *testing.T) {
 	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -162,7 +162,7 @@ func TestOSCCutInHeader(t *testing.T) {
 }
 
 // The query finds the answer past an echo of itself and past an Alt-]
-// typed before it, and keeps the Alt-] and the keys for Run.
+// typed before it, and keeps the Alt-] and the keys for Input.
 func TestBackgroundPastEchoAndAlt(t *testing.T) {
 	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
