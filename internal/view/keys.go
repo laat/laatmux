@@ -611,14 +611,6 @@ func oscScan(b []byte) (kind, n int, body bool) {
 	return oscMore, 0, true
 }
 
-// oscEnd is the length of the whole OSC string b starts with, or -1.
-func oscEnd(b []byte) int {
-	if kind, n, _ := oscScan(b); kind == oscDone {
-		return n
-	}
-	return -1
-}
-
 // Parse reads one complete chunk of input as keys, flushing what is
 // incomplete.
 func Parse(b []byte) []Key {

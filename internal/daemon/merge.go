@@ -215,19 +215,15 @@ func (d *Daemon) reconcileHostsLocked(hosts []client.Host) {
 			// have never seen its records: the worktrees first, which
 			// the others name.
 			for _, w := range d.worktrees {
-				w := w
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
 			}
 			for _, a := range d.agents {
-				a := a
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 			}
 			for _, p := range d.paneRecs {
-				p := p
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Pane: &p})
 			}
 			for _, r := range d.runRecs {
-				r := r
 				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Run: &r})
 			}
 		}
@@ -666,7 +662,6 @@ func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 			continue
 		}
 		d.msessions[s.Name] = s
-		s := s
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, LocalSession: &s})
 	}
 	for name := range d.msessions {

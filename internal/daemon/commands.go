@@ -45,7 +45,6 @@ type command struct {
 	outBytes  int
 	truncated bool
 	done      bool
-	doneAt    time.Time
 	result    protocol.Message
 	followers int // goroutines serving streams, the wakers included, for tests
 	// job is the run this command is; nil for add and rm.
@@ -67,7 +66,6 @@ func (c *command) emit(m protocol.Message) {
 	if m.Type == protocol.TypeResult {
 		c.result = m
 		c.done = true
-		c.doneAt = time.Now()
 		c.mu.Unlock()
 		c.cond.Broadcast()
 		return

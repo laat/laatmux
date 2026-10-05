@@ -51,9 +51,9 @@ type dash struct {
 	refocus func()
 }
 
-// running is a command under way: its log, and what to do when it ends.
+// running is a command under way: what to do when it ends; its log is
+// the overlay.
 type running struct {
-	log  *view.Log
 	done func(m *view.Model) (exit bool)
 }
 
@@ -183,7 +183,7 @@ func (d *dash) overlayDone(m *view.Model) bool {
 // overlay, then calls done on the view's goroutine when it succeeded.
 func (d *dash) start(m *view.Model, title string, run func(command.Reporter) error, done func(m *view.Model) bool) {
 	log := view.NewLog(title)
-	d.run = &running{log: log, done: done}
+	d.run = &running{done: done}
 	m.Overlay = log
 	r := logReporter{log: log, st: d.st}
 	go func() {

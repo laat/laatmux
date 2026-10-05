@@ -40,7 +40,6 @@ type Host struct {
 	// they belong to, and reach the view with it: a worktree row takes
 	// its agent by that, not by session name.
 	Attribution bool
-	Error       string
 }
 
 // Input is everything the rows are built from.
@@ -247,14 +246,13 @@ func (r Row) Mark() string {
 
 // State is the second-line text for a row without an agent: what the
 // row is instead. "" for a row with one. A pending task says where the
-// add is, whatever agent its worktree has.
+// add is, whatever agent its worktree has. An orphaned row is not
+// State's: ls and the status_label token say `worktree gone` first.
 func (r Row) State() string {
 	switch {
 	case r.Pending != nil:
 		s, _ := r.pendingState()
 		return s
-	case r.Orphaned:
-		return "no worktree"
 	case r.Agent != nil:
 		return ""
 	case r.Worktree != nil && r.Worktree.Session != "":

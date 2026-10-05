@@ -255,7 +255,7 @@ func TestTrustWatcherBounds(t *testing.T) {
 	}
 	ft.set(func() { ft.keys = nil })
 	// A root outside the worktrees directory starts nothing.
-	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5}, time.Second, 10*time.Millisecond)
+	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5})
 	d.mu.Lock()
 	n := d.trusting
 	d.mu.Unlock()
@@ -264,7 +264,7 @@ func TestTrustWatcherBounds(t *testing.T) {
 	}
 	// StopRuns cancels a watcher still waiting for the question.
 	ft.set(func() { ft.screen = []string{"loading"} })
-	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}, time.Minute, 10*time.Millisecond)
+	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	d.StopRuns(ctx)

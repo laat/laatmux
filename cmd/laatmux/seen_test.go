@@ -52,21 +52,17 @@ func TestMergedAttention(t *testing.T) {
 	}
 }
 
-// The merged stream's branch records and GitHub error: a snapshot sets
-// them, an upsert changes one, a remove drops one, github_ok clears the
-// error.
+// The merged stream's branch records: a snapshot sets them, an upsert
+// changes one, a remove drops one. The GitHub error beside them is
+// `hosts`'s to print; the views keep nothing of it.
 func TestMergedBranches(t *testing.T) {
 	m := newMerged()
 	a, b := protocol.BranchKey{Source: "s", Branch: "a"}, protocol.BranchKey{Source: "s", Branch: "b"}
 	m.applyMerged(protocol.Message{Type: protocol.TypeSnapshot, BranchStatuses: []protocol.BranchStatus{{BranchKey: a}}, GitHubError: "gh is not installed"})
 	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &protocol.BranchStatus{BranchKey: b}})
 	m.applyMerged(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &a})
-	if _, ok := m.branches[b]; !ok || len(m.branches) != 1 || m.githubErr == "" {
-		t.Errorf("%+v %q", m.branches, m.githubErr)
-	}
-	m.applyMerged(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
-	if m.githubErr != "" {
-		t.Error("github_ok did not clear")
+	if _, ok := m.branches[b]; !ok || len(m.branches) != 1 {
+		t.Errorf("%+v", m.branches)
 	}
 }
 

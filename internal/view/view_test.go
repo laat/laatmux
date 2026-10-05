@@ -33,7 +33,7 @@ func fixtureInput(now time.Time) rows.Input {
 		Hosts: []rows.Host{
 			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true},
 			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true},
-			{Name: "box", EnvironmentID: "benv", Error: "ssh: connect to host box port 22: No route to host"},
+			{Name: "box", EnvironmentID: "benv"},
 		},
 		Agents: []protocol.Agent{
 			{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/fix-ls", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "Permission to run pnpm test in packages/api?"},

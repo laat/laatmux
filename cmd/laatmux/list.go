@@ -55,9 +55,8 @@ type merged struct {
 	attentions map[string]protocol.Attention
 	sidebar    config.Sidebar
 	// branches are the merging daemon's PR and check records, by
-	// source key and branch; githubErr why it cannot read GitHub.
-	branches  map[protocol.BranchKey]protocol.BranchStatus
-	githubErr string
+	// source key and branch.
+	branches map[protocol.BranchKey]protocol.BranchStatus
 	// panes and runs are the pane and run records of hosts with
 	// attribution, by id, the tree's children beside the agents.
 	panes map[string]protocol.Pane
@@ -93,7 +92,6 @@ type hostState struct {
 	Reconnecting bool
 	Version      string
 	EnvID        string
-	Since        time.Time
 	// Worktrees is the daemon's worktrees capability; without it a
 	// snapshot carries no records and says nothing about worktrees.
 	// Listed is set once the host's snapshot has arrived. Until both, its
@@ -126,7 +124,7 @@ func (h hostState) down() string {
 // it.
 func fromStatus(st protocol.HostStatus) hostState {
 	return hostState{Local: st.Local(), Connected: st.Connected, Error: st.Error, Reconnecting: st.Reconnecting, Version: st.Version, EnvID: st.EnvironmentID,
-		Since: st.Since, Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities,
+		Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities,
 		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution)}
 }
 
@@ -152,7 +150,7 @@ func (m *merged) input(locals []workspace.Local, current string) rows.Input {
 		// A merging daemon older than attribution forwards agent records
 		// without the field, whatever the host sends.
 		in.Hosts = append(in.Hosts, rows.Host{Name: name, Local: st.Local, EnvironmentID: st.EnvID,
-			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees, Error: st.Error,
+			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees,
 			Attribution: st.Attribution && !m.stripped})
 	}
 	// The rows package attributes records to hosts by environment id,

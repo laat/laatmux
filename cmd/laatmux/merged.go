@@ -221,19 +221,12 @@ func (m *merged) applyMerged(msg protocol.Message) {
 		for _, b := range msg.BranchStatuses {
 			m.branches[b.BranchKey] = b
 		}
-		m.githubErr = msg.GitHubError
 	case protocol.TypeUpsert:
 		if b := msg.BranchStatus; b != nil {
 			if m.branches == nil {
 				m.branches = map[protocol.BranchKey]protocol.BranchStatus{}
 			}
 			m.branches[b.BranchKey] = *b
-		}
-		if msg.GitHubError != "" {
-			m.githubErr = msg.GitHubError
-		}
-		if msg.GitHubOK {
-			m.githubErr = ""
 		}
 		if a := msg.Attention; a != nil {
 			if m.attentions == nil {

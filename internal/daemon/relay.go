@@ -295,7 +295,7 @@ func (r *relay) pendingsLocked() ([]protocol.Pending, []protocol.Handoff) {
 // same cached capability and says so before submit. An id the relay
 // has is accepted again and started if it is not running, which is
 // how a client whose answer was lost gets its task run.
-func (d *Daemon) acceptRelay(ctx context.Context, m protocol.Message) protocol.Message {
+func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	if d.relay == nil {
 		res.Error = "this daemon has no relay capability"
@@ -1275,7 +1275,7 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = "pending: the attempt could not be written"
 		return res
 	}
-	p, resolved := d.runAttemptLocked(ctx, id, false, false)
+	p, resolved := d.runAttemptLocked(ctx, id, false)
 	res.Attempt = p.Attempt
 	if _, ok := d.relay.get(id); !ok {
 		// Dismissed while the attempt ran: the record is gone as the
@@ -1311,7 +1311,7 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 func (d *Daemon) runAttempt(ctx context.Context, id string) {
 	l := d.relay.attemptLock(id)
 	l.Lock()
-	d.runAttemptLocked(ctx, id, true, true)
+	d.runAttemptLocked(ctx, id, true)
 	l.Unlock()
 	if ctx.Err() == nil {
 		d.settle(ctx, id)
@@ -1319,14 +1319,17 @@ func (d *Daemon) runAttempt(ctx context.Context, id string) {
 }
 
 // runAttemptLocked sends the open attempt as a prompt message and
-// follows it until the host answers. With sent, the attempt was sent
-// before, by the daemon before this one, and is followed by number
-// first; one the host never saw is sent. An attempt is closed by the
-// host's answer alone: a host that cannot be reached, or that refuses
-// the connection, leaves it open, waited on with backoff when wait is
-// set, else reported as unresolved to the caller, who follows it in
-// the background. Called with the attempt lock held.
-func (d *Daemon) runAttemptLocked(ctx context.Context, id string, sent, wait bool) (pendingFile, bool) {
+// follows it until the host answers. Resumed, by a follower in the
+// background (after a restart, after a dismiss that did not remove the
+// record, or for a fresh call left unresolved), the attempt may have
+// been sent, so it is followed by number first and sent if the host
+// never saw it; one left open by a host that cannot be reached, or
+// that refuses the connection, is waited on with backoff. Fresh, it is
+// sent, and left open it is reported as unresolved to the caller, who
+// resumes it in the background. An attempt is closed by the host's
+// answer alone. Called with the attempt lock held.
+func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) (pendingFile, bool) {
+	sent, wait := resumed, resumed
 	backoff := d.cfg.ReconnectMin
 	for ctx.Err() == nil {
 		p, ok := d.relay.get(id)
