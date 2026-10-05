@@ -45,6 +45,7 @@ hosts:
     worktrees: ~/worktrees
   - name: vm
     ssh: vm
+    bin: ~/.local/bin/laatmux
     repos: ~/src
     worktrees: ~/src/worktrees
   - ssh: bare
@@ -69,7 +70,7 @@ func TestParseFull(t *testing.T) {
 		t.Fatalf("local: %+v %v", mac, ok)
 	}
 	vm, ok := c.Find("vm")
-	if !ok || vm.SSH != "vm" || !vm.CanAdd() {
+	if !ok || vm.SSH != "vm" || vm.Bin != "~/.local/bin/laatmux" || !vm.CanAdd() {
 		t.Fatalf("vm: %+v %v", vm, ok)
 	}
 	bare, ok := c.Find("bare")

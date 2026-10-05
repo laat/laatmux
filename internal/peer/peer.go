@@ -3,7 +3,8 @@
 // binary there.
 package peer
 
-// Host is one machine laatmux talks to.
+// Host is one machine laatmux talks to. The config inlines it, so the
+// field names are the keys of a hosts: entry: name, ssh and bin.
 type Host struct {
 	Name string // label shown in the sidebar
 	SSH  string // ssh alias; "" means this machine
