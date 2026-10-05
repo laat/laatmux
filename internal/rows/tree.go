@@ -232,7 +232,8 @@ type builder struct {
 	repos map[string]*repo
 	// used marks the agents placed under a worktree or a task, so the
 	// other sessions are the rest; seenKey the workspace keys a worktree
-	// or a standing task accounts for, so the orphans are the rest;
+	// or a task neither gone nor failed accounts for, so the orphans are
+	// the rest;
 	// placed the tasks a worktree line took, so the loose ones are the
 	// rest.
 	used    map[*protocol.Agent]bool
@@ -248,7 +249,11 @@ type builder struct {
 }
 
 func newBuilder(in Input) *builder {
-	return &builder{in: in, j: newJoin(in), repos: map[string]*repo{}, used: map[*protocol.Agent]bool{}, seenKey: map[string]bool{}, placed: map[int]bool{}, standing: map[string][]int{}}
+	return &builder{
+		in: in, j: newJoin(in), repos: map[string]*repo{},
+		used: map[*protocol.Agent]bool{}, seenKey: map[string]bool{}, placed: map[int]bool{},
+		standing: map[string][]int{},
+	}
 }
 
 // repoOf is the repository line for a source, or for a host's label
@@ -467,9 +472,9 @@ func (b *builder) looseTasks() {
 	}
 }
 
-// orphans places the orphaned sessions, workspace sessions no worktree
-// or standing task accounts for: under their repository by the source
-// tag, or kept for other sessions without one.
+// orphans places the orphaned sessions, workspace sessions no worktree,
+// nor a task neither gone nor failed, accounts for: under their
+// repository by the source tag, or kept for other sessions without one.
 func (b *builder) orphans() {
 	in, j := b.in, b.j
 	for i := range in.Locals {
