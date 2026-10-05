@@ -867,7 +867,7 @@ func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	snap := protocol.Message{Type: protocol.TypeSnapshot, Agents: agents, Worktrees: d.worktreesLocked(),
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(),
 		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr}
 	if d.listed {
 		l := d.listing

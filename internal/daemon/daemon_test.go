@@ -175,11 +175,18 @@ func TestInterruptedIsIdleAtOnce(t *testing.T) {
 }
 
 // The plain stream is numbered by the broadcaster, one up per message
-// from the snapshot's number, whatever kind of record the message
-// carries.
+// from the snapshot's number, which is the last broadcast's, whatever
+// kind of record the message carries.
 func TestBroadcastNumbers(t *testing.T) {
 	d := newTestDaemon()
+	d.mu.Lock()
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
+	d.mu.Unlock()
 	s, snap := d.subscribe(nil)
+	if snap.Seq != 2 {
+		t.Fatalf("snapshot numbered %d after two broadcasts", snap.Seq)
+	}
 	d.mu.Lock()
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "x"}})
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &protocol.Worktree{ID: "w"}})
