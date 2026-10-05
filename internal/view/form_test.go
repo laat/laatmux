@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 	"unicode"
+
+	"github.com/laat/laatmux/internal/term"
 )
 
 // propose is a stand-in for the branch proposal: the first words,
@@ -35,15 +37,15 @@ func TestFormRender(t *testing.T) {
 	golden(t, "form-empty", Debug(f.Render(60, 12)))
 	f.SetPrompt("Make the sidebar follow the current row when the sort moves it, and select nothing when no row is this session.")
 	golden(t, "form-prompt", Debug(f.Render(60, 12)))
-	f.Handle(Key{Kind: KeyTab})
-	f.Handle(Key{Rune: '-'})
-	f.Handle(Key{Rune: '2'})
+	f.Handle(term.Key{Kind: term.KeyTab})
+	f.Handle(term.Key{Rune: '-'})
+	f.Handle(term.Key{Rune: '2'})
 	golden(t, "form-branch", Debug(f.Render(60, 12)))
-	f.Handle(Key{Kind: KeyTab})
+	f.Handle(term.Key{Kind: term.KeyTab})
 	golden(t, "form-chip", Debug(f.Render(60, 12)))
-	f.Handle(Key{Kind: KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	golden(t, "form-picker", Debug(f.Render(60, 12)))
-	f.Handle(Key{Kind: KeyEsc})
+	f.Handle(term.Key{Kind: term.KeyEsc})
 	f.Note = func(f *Form) string {
 		if f.Chips[fieldHost].Label() == "vm" {
 			return "tasks not supported by vm's daemon"
@@ -57,7 +59,7 @@ func TestFormRender(t *testing.T) {
 	// A focused branch longer than the room shows its end, cursor
 	// included.
 	long := NewForm("t", chips(), strings.Repeat("abcdefghij", 6))
-	long.Handle(Key{Kind: KeyTab})
+	long.Handle(term.Key{Kind: term.KeyTab})
 	if text := Text(long.Render(40, 12)); !strings.Contains(text, "…") || !strings.Contains(text, "hij█") {
 		t.Fatalf("long branch:\n%s", text)
 	}
@@ -69,16 +71,16 @@ func TestFormRender(t *testing.T) {
 func TestFormRenderStateless(t *testing.T) {
 	f := NewForm("t", chips(), "")
 	f.SetPrompt(strings.Repeat("line\n", 30))
-	f.Handle(Key{Kind: KeyUp})
-	f.Handle(Key{Kind: KeyUp})
-	f.Handle(Key{Kind: KeyUp})
+	f.Handle(term.Key{Kind: term.KeyUp})
+	f.Handle(term.Key{Kind: term.KeyUp})
+	f.Handle(term.Key{Kind: term.KeyUp})
 	f.Render(40, 10)
 	after := Text(f.Render(40, 12))
 	g := NewForm("t", chips(), "")
 	g.SetPrompt(strings.Repeat("line\n", 30))
-	g.Handle(Key{Kind: KeyUp})
-	g.Handle(Key{Kind: KeyUp})
-	g.Handle(Key{Kind: KeyUp})
+	g.Handle(term.Key{Kind: term.KeyUp})
+	g.Handle(term.Key{Kind: term.KeyUp})
+	g.Handle(term.Key{Kind: term.KeyUp})
 	if fresh := Text(g.Render(40, 12)); fresh != after {
 		t.Fatalf("render depends on the render before:\n%s\n--\n%s", after, fresh)
 	}
@@ -88,13 +90,13 @@ func TestFormRenderStateless(t *testing.T) {
 // its newlines and tabs spaces.
 func TestPasteIntoFilters(t *testing.T) {
 	p := NewPicker("t", choices(), 0)
-	p.Handle(Key{Kind: KeyPaste, Text: "pro\nj"})
+	p.Handle(term.Key{Kind: term.KeyPaste, Text: "pro\nj"})
 	if p.Filter != "pro j" || p.Done() {
 		t.Fatalf("picker filter %q done %v", p.Filter, p.Done())
 	}
 	var m Model
 	m.Filtering = true
-	m.Handle(Key{Kind: KeyPaste, Text: "x\ny\tz"})
+	m.Handle(term.Key{Kind: term.KeyPaste, Text: "x\ny\tz"})
 	if m.Filter != "x y z" {
 		t.Fatalf("model filter %q", m.Filter)
 	}
@@ -118,112 +120,112 @@ func TestFormHandle(t *testing.T) {
 		t.Fatalf("focus %d", f.Focus())
 	}
 	for _, r := range "Fix the tests" {
-		f.Handle(Key{Rune: r})
+		f.Handle(term.Key{Rune: r})
 	}
-	f.Handle(Key{Kind: KeyNewline})
-	f.Handle(Key{Kind: KeyPaste, Text: "and the\nlint"})
+	f.Handle(term.Key{Kind: term.KeyNewline})
+	f.Handle(term.Key{Kind: term.KeyPaste, Text: "and the\nlint"})
 	if f.Prompt() != "Fix the tests\nand the\nlint" || f.Branch() != "fix-the-tests-and-the-lint" || !f.Generated() {
 		t.Fatalf("prompt %q branch %q generated %v", f.Prompt(), f.Branch(), f.Generated())
 	}
 	// Editing keys within the text.
-	f.Handle(Key{Kind: KeyHome})
-	f.Handle(Key{Kind: KeyDelete})
-	f.Handle(Key{Kind: KeyLeft}) // at the start of a line: stays
-	f.Handle(Key{Kind: KeyRune, Rune: 'L'})
-	f.Handle(Key{Kind: KeyEnd})
-	f.Handle(Key{Kind: KeyBackspace})
-	f.Handle(Key{Kind: KeyUp})
-	f.Handle(Key{Kind: KeyUp})
-	f.Handle(Key{Kind: KeyRight})
-	f.Handle(Key{Kind: KeyRight})
-	f.Handle(Key{Kind: KeyDown})
+	f.Handle(term.Key{Kind: term.KeyHome})
+	f.Handle(term.Key{Kind: term.KeyDelete})
+	f.Handle(term.Key{Kind: term.KeyLeft}) // at the start of a line: stays
+	f.Handle(term.Key{Kind: term.KeyRune, Rune: 'L'})
+	f.Handle(term.Key{Kind: term.KeyEnd})
+	f.Handle(term.Key{Kind: term.KeyBackspace})
+	f.Handle(term.Key{Kind: term.KeyUp})
+	f.Handle(term.Key{Kind: term.KeyUp})
+	f.Handle(term.Key{Kind: term.KeyRight})
+	f.Handle(term.Key{Kind: term.KeyRight})
+	f.Handle(term.Key{Kind: term.KeyDown})
 	if f.Prompt() != "Fix the tests\nand the\nLin" {
 		t.Fatalf("prompt after edits %q", f.Prompt())
 	}
 	// Tab to the branch, edit it, and the proposal stops following.
-	f.Handle(Key{Kind: KeyTab})
+	f.Handle(term.Key{Kind: term.KeyTab})
 	if f.Focus() != fieldBranch {
 		t.Fatalf("focus %d", f.Focus())
 	}
-	f.Handle(Key{Rune: 'x'})
-	f.Handle(Key{Kind: KeyShiftTab})
-	f.Handle(Key{Rune: '!'})
+	f.Handle(term.Key{Rune: 'x'})
+	f.Handle(term.Key{Kind: term.KeyShiftTab})
+	f.Handle(term.Key{Rune: '!'})
 	if f.Branch() != "fix-the-tests-and-the-linx" || f.Generated() {
 		t.Fatalf("branch %q generated %v", f.Branch(), f.Generated())
 	}
 	// Clearing it keeps it the user's, so the proposal can be replaced
 	// outright.
-	f.Handle(Key{Kind: KeyTab})
+	f.Handle(term.Key{Kind: term.KeyTab})
 	for range len([]rune(f.Branch())) {
-		f.Handle(Key{Kind: KeyBackspace})
+		f.Handle(term.Key{Kind: term.KeyBackspace})
 	}
 	for _, r := range "repair" {
-		f.Handle(Key{Rune: r})
+		f.Handle(term.Key{Rune: r})
 	}
 	if f.Generated() || f.Branch() != "repair" {
 		t.Fatalf("replaced branch %q generated %v", f.Branch(), f.Generated())
 	}
 	// Chips: Tab on round to the repository, Right cycles, Left back.
-	f.Handle(Key{Kind: KeyTab})
+	f.Handle(term.Key{Kind: term.KeyTab})
 	if f.Focus() != fieldRepo {
 		t.Fatalf("focus %d", f.Focus())
 	}
-	f.Handle(Key{Kind: KeyRight})
+	f.Handle(term.Key{Kind: term.KeyRight})
 	if f.Chips[fieldRepo].Label() != "proj" {
 		t.Fatalf("repo %q", f.Chips[fieldRepo].Label())
 	}
-	f.Handle(Key{Kind: KeyLeft})
-	f.Handle(Key{Kind: KeyLeft})
+	f.Handle(term.Key{Kind: term.KeyLeft})
+	f.Handle(term.Key{Kind: term.KeyLeft})
 	if f.Chips[fieldRepo].Label() != "proj" {
 		t.Fatalf("repo after wrap %q", f.Chips[fieldRepo].Label())
 	}
 	// Enter on a chip opens the picker; a pick sets the chip.
-	f.Handle(Key{Kind: KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if f.picker == nil {
 		t.Fatal("no picker")
 	}
-	f.Handle(Key{Kind: KeyUp})
-	f.Handle(Key{Kind: KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyUp})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if f.picker != nil || f.Chips[fieldRepo].Label() != "laatmux" {
 		t.Fatalf("after the picker: %q", f.Chips[fieldRepo].Label())
 	}
 	// Submit from the branch line; a bad name is refused with the
 	// error, a good one ends the form.
-	f.Handle(Key{Kind: KeyShiftTab})
-	f.Handle(Key{Rune: '.'})
-	f.Handle(Key{Rune: '.'})
-	f.Handle(Key{Kind: KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyShiftTab})
+	f.Handle(term.Key{Rune: '.'})
+	f.Handle(term.Key{Rune: '.'})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if f.Done() || f.Error != "bad name" {
 		t.Fatalf("bad branch: done %v error %q", f.Done(), f.Error)
 	}
-	f.Handle(Key{Kind: KeyBackspace})
-	f.Handle(Key{Kind: KeyBackspace})
-	f.Handle(Key{Kind: KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyBackspace})
+	f.Handle(term.Key{Kind: term.KeyBackspace})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if !f.Done() || f.Cancelled {
 		t.Fatalf("submit: done %v cancelled %v", f.Done(), f.Cancelled)
 	}
 	// An empty prompt does not submit from the prompt; Esc cancels.
 	g := NewForm("t", chips(), "")
-	g.Handle(Key{Kind: KeyEnter})
+	g.Handle(term.Key{Kind: term.KeyEnter})
 	if g.Done() || g.Error == "" {
 		t.Fatalf("empty prompt submitted: %v %q", g.Done(), g.Error)
 	}
-	g.Handle(Key{Kind: KeyEsc})
+	g.Handle(term.Key{Kind: term.KeyEsc})
 	if !g.Done() || !g.Cancelled {
 		t.Fatal("esc did not cancel")
 	}
 	// From the branch line an empty prompt submits with a given branch,
 	// the add as it was; a generated one is empty and refused.
 	h := NewForm("t", chips(), "fix")
-	h.Handle(Key{Kind: KeyTab})
-	h.Handle(Key{Kind: KeyEnter})
+	h.Handle(term.Key{Kind: term.KeyTab})
+	h.Handle(term.Key{Kind: term.KeyEnter})
 	if !h.Done() || h.Cancelled || h.Prompt() != "" || h.Generated() {
 		t.Fatalf("branch submit without a prompt: done %v prompt %q generated %v", h.Done(), h.Prompt(), h.Generated())
 	}
 	i := NewForm("t", chips(), "")
 	i.Propose = propose
-	i.Handle(Key{Kind: KeyTab})
-	i.Handle(Key{Kind: KeyEnter})
+	i.Handle(term.Key{Kind: term.KeyTab})
+	i.Handle(term.Key{Kind: term.KeyEnter})
 	if i.Done() || !strings.Contains(i.Error, "no branch name") {
 		t.Fatalf("empty generated branch: done %v error %q", i.Done(), i.Error)
 	}
@@ -240,12 +242,12 @@ func TestFormHandle(t *testing.T) {
 // line it is dropped; a paste never submits.
 func TestFormPaste(t *testing.T) {
 	f := NewForm("t", chips(), "")
-	f.Handle(Key{Kind: KeyPaste, Text: "one\ntwo\n"})
+	f.Handle(term.Key{Kind: term.KeyPaste, Text: "one\ntwo\n"})
 	if f.Done() || f.Prompt() != "one\ntwo\n" {
 		t.Fatalf("done %v prompt %q", f.Done(), f.Prompt())
 	}
-	f.Handle(Key{Kind: KeyTab})
-	f.Handle(Key{Kind: KeyPaste, Text: "a\nb"})
+	f.Handle(term.Key{Kind: term.KeyTab})
+	f.Handle(term.Key{Kind: term.KeyPaste, Text: "a\nb"})
 	if f.Branch() != "ab" || f.Done() {
 		t.Fatalf("branch %q", f.Branch())
 	}
@@ -266,88 +268,12 @@ func TestFormWrapAndScroll(t *testing.T) {
 			t.Fatalf("line wider than the box: %q", l)
 		}
 	}
-	f.Handle(Key{Kind: KeyHome})
+	f.Handle(term.Key{Kind: term.KeyHome})
 	for range 8 {
-		f.Handle(Key{Kind: KeyUp})
+		f.Handle(term.Key{Kind: term.KeyUp})
 	}
 	if !strings.Contains(Text(f.Render(30, 10)), "█word") {
 		t.Fatalf("cursor at the start not shown:\n%s", Text(f.Render(30, 10)))
-	}
-}
-
-// The decoder reads the editing keys, Shift-Tab, a bracketed paste
-// whole, even split across reads, with its line breaks as newlines,
-// and does not flush a paste under way.
-func TestDecoderPasteAndKeys(t *testing.T) {
-	cases := map[string][]Key{
-		"\t":                           {{Kind: KeyTab}},
-		"\x1b[Z":                       {{Kind: KeyShiftTab}},
-		"\n":                           {{Kind: KeyNewline}},
-		"\x1b[C\x1b[D":                 {{Kind: KeyRight}, {Kind: KeyLeft}},
-		"\x1b[H\x1b[F":                 {{Kind: KeyHome}, {Kind: KeyEnd}},
-		"\x1b[1~\x1b[4~":               {{Kind: KeyHome}, {Kind: KeyEnd}},
-		"\x1b[3~":                      {{Kind: KeyDelete}},
-		"\x1bOC\x1bOH":                 {{Kind: KeyRight}, {Kind: KeyHome}},
-		"\x1b[200~a\r\nb\x1b[201~":     {{Kind: KeyPaste, Text: "a\nb"}},
-		"x\x1b[200~\t\x1b[A\x1b[201~y": {{Rune: 'x'}, {Kind: KeyPaste, Text: "\t"}, {Rune: 'y'}},
-	}
-	for in, want := range cases {
-		got := Parse([]byte(in))
-		if len(got) != len(want) {
-			t.Errorf("Parse(%q) = %+v, want %+v", in, got, want)
-			continue
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("Parse(%q)[%d] = %+v, want %+v", in, i, got[i], want[i])
-			}
-		}
-	}
-	in := "j\x1b[200~line one\nline two\x1b[201~k"
-	want := Parse([]byte(in))
-	for cut := 1; cut < len(in); cut++ {
-		var d Decoder
-		got := d.Feed([]byte(in[:cut]))
-		got = append(got, d.Feed([]byte(in[cut:]))...)
-		got = append(got, d.Flush()...)
-		if len(got) != len(want) {
-			t.Fatalf("split at %d = %+v, want %+v", cut, got, want)
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Fatalf("split at %d: key %d = %+v, want %+v", cut, i, got[i], want[i])
-			}
-		}
-	}
-	// The start of a paste marker split by a slow read survives the
-	// flush too: dropped, the text's line breaks would be Enter.
-	var split Decoder
-	if got := split.Feed([]byte("\x1b[200")); len(got) != 0 || !split.Pending() {
-		t.Fatalf("marker prefix: %+v", got)
-	}
-	if got := split.Flush(); len(got) != 0 || !split.Pending() {
-		t.Fatalf("flush on a marker prefix: %+v", got)
-	}
-	// And past the grace: only an escape and bracket alone are let go.
-	split.now = func() time.Time { return time.Unix(0, 0).Add(2 * pasteGrace) }
-	if got := split.Flush(); len(got) != 0 || !split.Pending() || split.Wait() != 0 {
-		t.Fatalf("flush on a marker prefix past the grace: %+v pending %v", got, split.Pending())
-	}
-	got := split.Feed([]byte("~fix\rmore\x1b[201~"))
-	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "fix\nmore" {
-		t.Fatalf("paste after the split marker: %+v", got)
-	}
-	// A paste under way survives a flush: the escape wait must not cut
-	// a long paste short.
-	var d Decoder
-	if got := d.Feed([]byte("\x1b[200~abc")); len(got) != 0 || !d.Pending() {
-		t.Fatalf("paste start: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 0 || !d.Pending() {
-		t.Fatalf("flush during a paste: %+v pending %v", got, d.Pending())
-	}
-	if got := d.Feed([]byte("def\x1b[201~")); len(got) != 1 || got[0].Text != "abcdef" || d.Pending() {
-		t.Fatalf("paste end: %+v", got)
 	}
 }
 
@@ -355,7 +281,7 @@ func TestDecoderPasteAndKeys(t *testing.T) {
 // cursor moves with it.
 func TestFormTabs(t *testing.T) {
 	f := NewForm("t", chips(), "")
-	f.Handle(Key{Kind: KeyPaste, Text: "\tx\n\t\ty"})
+	f.Handle(term.Key{Kind: term.KeyPaste, Text: "\tx\n\t\ty"})
 	text := Text(f.Render(40, 12))
 	if !strings.Contains(text, "│     x ") || !strings.Contains(text, "│         y█") {
 		t.Fatalf("tabs:\n%s", text)
@@ -365,151 +291,15 @@ func TestFormTabs(t *testing.T) {
 	}
 }
 
-// A paste keeps its framing past the bounds: a stalled paste gives out
-// its text so far and a resumed one with a line break in it is still
-// a paste, as is a chunk past the size cap; a bare escape alone after a
-// stall is the user's Esc, which ends a paste whose end is lost.
-func TestDecoderPasteBounded(t *testing.T) {
-	now := time.Unix(1000, 0)
-	d := Decoder{now: func() time.Time { return now }}
-	if got := d.Feed([]byte("\x1b[200~lost")); len(got) != 0 || !d.Pending() {
-		t.Fatalf("start: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 0 || !d.Pending() {
-		t.Fatalf("flush within the grace: %+v", got)
-	}
-	now = now.Add(pasteGrace + time.Millisecond)
-	got := d.Flush()
-	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "lost" || !d.Pending() {
-		t.Fatalf("flush past the grace: %+v pending %v", got, d.Pending())
-	}
-	// The paste resumes with a carriage return and a tab and then ends:
-	// still one paste, never Enter.
-	got = d.Feed([]byte("\rmore\t\x1b[201~"))
-	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "\nmore\t" || d.Pending() {
-		t.Fatalf("resumed paste: %+v pending %v", got, d.Pending())
-	}
-	// A lost end marker: a stall, then the user's Esc ends it, pressed
-	// once or twice, after typing, or as Ctrl-C; the key is spent on
-	// ending it, and never reaches the form.
-	for _, c := range []struct {
-		in   string
-		text string
-		rest int
-	}{
-		{"\x1b", "more", 0},
-		{"\x1b\x1b", "more", 0},
-		{"q\x03\x1b", "moreq", 0},
-		{"\x03", "more", 0},
-		{"\x03j", "more", 1},
-		// A click after the key: when it was read is not known, so
-		// it is dropped rather than resolved on the screen drawn now.
-		{"\x03\x1b[<0;5;3Mj", "more", 1},
-	} {
-		d := Decoder{now: func() time.Time { return now }}
-		d.Feed([]byte("\x1b[200~gone"))
-		now = now.Add(pasteGrace + time.Millisecond)
-		if got := d.Flush(); len(got) != 1 || got[0].Text != "gone" {
-			t.Fatalf("%q stalled: %+v", c.in, got)
-		}
-		if d.Wait() != 0 {
-			t.Fatalf("%q: a stalled paste with no new bytes waits %v", c.in, d.Wait())
-		}
-		d.Feed([]byte("more" + c.in))
-		if w := d.Wait(); w <= 0 || w > pasteGrace {
-			t.Fatalf("%q: waits %v for the grace", c.in, w)
-		}
-		now = now.Add(pasteGrace + time.Millisecond)
-		got := d.Flush()
-		want := 1 + c.rest
-		if len(got) != want || got[0].Kind != KeyPaste || got[0].Text != c.text || d.Pending() {
-			t.Fatalf("%q after a lost end: %+v pending %v", c.in, got, d.Pending())
-		}
-		for _, k := range got {
-			if k.Kind == KeyEsc || k.Kind == KeyCtrlC {
-				t.Fatalf("%q: the recovery key came through: %+v", c.in, got)
-			}
-		}
-	}
-	// An escape followed by another byte after a stall is a chord or a
-	// sequence, as everywhere, not the user's Esc: the paste goes on.
-	chord := Decoder{now: func() time.Time { return now }}
-	chord.Feed([]byte("\x1b[200~gone"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	chord.Flush()
-	chord.Feed([]byte("more\x1bj"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := chord.Flush(); len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "morej" || !chord.Pending() {
-		t.Fatalf("a chord after a stall: %+v pending %v", got, chord.Pending())
-	}
-	// A bare escape in a slow paste's first chunk, the output of tput
-	// say, is paste and not the user's: only after a stall does one
-	// end the framing.
-	slow := Decoder{now: func() time.Time { return now }}
-	slow.Feed([]byte("\x1b[200~echo $(tput sgr0)\x1b(Bdone\r"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := slow.Flush(); len(got) != 1 || got[0].Kind != KeyPaste || !slow.Pending() {
-		t.Fatalf("escape before any stall: %+v pending %v", got, slow.Pending())
-	}
-	// The first chunk's trailing carriage return was held, and leads.
-	if got := slow.Feed([]byte("second line\r\x1b[201~")); len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "\nsecond line\n" || slow.Pending() {
-		t.Fatalf("the rest of a slow paste: %+v", got)
-	}
-	// An end marker split across the stall still ends the paste, and a
-	// trailing carriage return is held so \r\n split by it is one
-	// newline.
-	e := Decoder{now: func() time.Time { return now }}
-	e.Feed([]byte("\x1b[200~abc\r"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := e.Flush(); len(got) != 1 || got[0].Text != "abc" {
-		t.Fatalf("stalled before the marker: %+v", got)
-	}
-	e.Feed([]byte("\nd\x1b[20"))
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := e.Flush(); len(got) != 1 || got[0].Text != "\nd" || !e.Pending() {
-		t.Fatalf("stalled inside the marker: %+v pending %v", got, e.Pending())
-	}
-	if got := e.Feed([]byte("1~")); len(got) != 0 || e.Pending() {
-		t.Fatalf("marker completed: %+v pending %v", got, e.Pending())
-	}
-	// Past the size cap the text comes in chunks and the framing stays.
-	var big Decoder
-	big.Feed([]byte("\x1b[200~"))
-	got = big.Feed([]byte(strings.Repeat("a", pasteMax+1)))
-	if len(got) != 1 || got[0].Kind != KeyPaste || len(got[0].Text) != pasteMax+1 || !big.Pending() {
-		t.Fatalf("size cap: %d keys pending %v", len(got), big.Pending())
-	}
-	got = big.Feed([]byte("b\rc\x1b[201~"))
-	if len(got) != 1 || got[0].Kind != KeyPaste || got[0].Text != "b\nc" || big.Pending() {
-		t.Fatalf("after the cap: %+v pending %v", got, big.Pending())
-	}
-	// A sequence cut by the cap is held whole, so its rest is not text.
-	var seq Decoder
-	seq.Feed([]byte("\x1b[200~"))
-	got = seq.Feed([]byte(strings.Repeat("a", pasteMax) + "\x1b[3"))
-	got = append(got, seq.Feed([]byte("1mb\x1b[201~"))...)
-	if len(got) != 2 || strings.Contains(got[0].Text, "[3") || got[1].Text != "b" {
-		t.Fatalf("sequence at the cap: %d keys, last %q", len(got), got[len(got)-1].Text)
-	}
-	// A rune split at the cap is held whole.
-	var split Decoder
-	split.Feed([]byte("\x1b[200~"))
-	got = split.Feed(append([]byte(strings.Repeat("a", pasteMax)), 0xc3))
-	got = append(got, split.Feed([]byte{0xb8, 'x', 0x1b, '[', '2', '0', '1', '~'})...)
-	if len(got) != 2 || !strings.HasSuffix(got[1].Text, "øx") || strings.Contains(got[0].Text, "\uFFFD") {
-		t.Fatalf("rune at the cap: %d keys, last %q", len(got), got[len(got)-1].Text)
-	}
-}
-
 // A paste does not acknowledge a failed log.
 func TestLogIgnoresPaste(t *testing.T) {
 	l := NewLog("t")
 	l.End(errors.New("failed"))
-	l.Handle(Key{Kind: KeyPaste, Text: "oops\n"})
+	l.Handle(term.Key{Kind: term.KeyPaste, Text: "oops\n"})
 	if l.Done() {
 		t.Fatal("a paste acknowledged the log")
 	}
-	l.Handle(Key{Rune: 'x'})
+	l.Handle(term.Key{Rune: 'x'})
 	if !l.Done() {
 		t.Fatal("a key did not")
 	}
@@ -522,7 +312,7 @@ func TestDecoderIntoForm(t *testing.T) {
 	for _, in := range []string{"\x1b\x7f", "\x1bb", "\x1bf"} {
 		f := NewForm("t", chips(), "")
 		f.SetPrompt("a long prompt")
-		for _, k := range Parse([]byte(in)) {
+		for _, k := range term.Parse([]byte(in)) {
 			f.Handle(k)
 		}
 		if f.Cancelled || f.Prompt() != "a long prompt" {
@@ -530,13 +320,13 @@ func TestDecoderIntoForm(t *testing.T) {
 		}
 	}
 	now := time.Unix(0, 0)
-	d := Decoder{now: func() time.Time { return now }}
+	d := term.Decoder{Now: func() time.Time { return now }}
 	f := NewForm("t", chips(), "")
 	feed := func(b string) {
-		for _, k := range d.Feed([]byte(b)) {
+		for _, k := range d.FeedAt([]byte(b), time.Time{}) {
 			f.Handle(k)
 		}
-		now = now.Add(pasteGrace + time.Millisecond)
+		now = now.Add(term.PasteGrace + time.Millisecond)
 		for _, k := range d.Flush() {
 			f.Handle(k)
 		}
@@ -557,14 +347,14 @@ func TestDecoderIntoForm(t *testing.T) {
 	// the escape and bracket, is a newline and never a submit; a plain
 	// one submits.
 	for _, in := range [][]string{{"\x1b[13;2u"}, {"\x1b[27;2;13~"}, {"\x1b[2", "7;5;13~"}, {"\x1b[1", "3;2u"}, {"\x1b\r"}} {
-		d := Decoder{}
+		d := term.Decoder{}
 		f := NewForm("t", chips(), "")
 		f.Propose = propose
 		f.SetPrompt("one")
 		// A split key's rest comes within the escape wait, so the
 		// flush is after the last chunk only.
 		for _, b := range in {
-			for _, k := range d.Feed([]byte(b)) {
+			for _, k := range d.FeedAt([]byte(b), time.Time{}) {
 				f.Handle(k)
 			}
 		}
@@ -574,7 +364,7 @@ func TestDecoderIntoForm(t *testing.T) {
 		if f.Done() || f.Prompt() != "one\n" {
 			t.Fatalf("%q: done %v prompt %q", in, f.Done(), f.Prompt())
 		}
-		for _, k := range Parse([]byte("\x1b[13u")) {
+		for _, k := range term.Parse([]byte("\x1b[13u")) {
 			f.Handle(k)
 		}
 		if !f.Done() {
@@ -583,43 +373,13 @@ func TestDecoderIntoForm(t *testing.T) {
 	}
 }
 
-// The start of a paste marker held alone is dropped after the grace,
-// and the key after it is read; a held escape waits the escape wait;
-// nothing held waits nothing.
-func TestDecoderHeldStart(t *testing.T) {
-	now := time.Unix(0, 0)
-	d := Decoder{now: func() time.Time { return now }}
-	if d.Wait() != 0 {
-		t.Fatalf("nothing held waits %v", d.Wait())
-	}
-	d.Feed([]byte("\x1b"))
-	if d.Wait() != escapeWait {
-		t.Fatalf("a held escape waits %v", d.Wait())
-	}
-	d.Flush()
-	d.Feed([]byte("\x1b["))
-	if w := d.Wait(); w <= 0 || w > pasteGrace {
-		t.Fatalf("a held marker start waits %v", w)
-	}
-	if got := d.Flush(); len(got) != 0 || !d.Pending() {
-		t.Fatalf("flushed within the grace: %+v pending %v", got, d.Pending())
-	}
-	now = now.Add(pasteGrace + time.Millisecond)
-	if got := d.Flush(); len(got) != 0 || d.Pending() || d.Wait() != 0 {
-		t.Fatalf("flushed past the grace: %+v pending %v", got, d.Pending())
-	}
-	if got := d.Feed([]byte("a")); len(got) != 1 || got[0].Rune != 'a' {
-		t.Fatalf("the key after: %+v", got)
-	}
-}
-
 // A paste on a chip goes into the prompt, which takes the focus; a
 // prompt of whitespace is none; a height too short for the form keeps
 // the footer, where the error is.
 func TestFormPasteOnChipShortAndBlank(t *testing.T) {
 	f := NewForm("t", chips(), "")
-	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip
-	f.Handle(Key{Kind: KeyPaste, Text: "pasted"})
+	f.Handle(term.Key{Kind: term.KeyShiftTab}) // the agent chip
+	f.Handle(term.Key{Kind: term.KeyPaste, Text: "pasted"})
 	if f.Prompt() != "pasted" || f.Focus() != fieldPrompt {
 		t.Fatalf("paste on a chip: prompt %q focus %d", f.Prompt(), f.Focus())
 	}
@@ -666,29 +426,29 @@ func TestWrapVS16(t *testing.T) {
 func TestPromptEditVS16(t *testing.T) {
 	f := &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt}
 	f.cursor = 3
-	f.promptKey(Key{Kind: KeyLeft})
+	f.promptKey(term.Key{Kind: term.KeyLeft})
 	if f.cursor != 1 {
 		t.Errorf("left: cursor %d", f.cursor)
 	}
-	f.promptKey(Key{Kind: KeyRight})
+	f.promptKey(term.Key{Kind: term.KeyRight})
 	if f.cursor != 3 {
 		t.Errorf("right: cursor %d", f.cursor)
 	}
-	f.promptKey(Key{Kind: KeyBackspace})
+	f.promptKey(term.Key{Kind: term.KeyBackspace})
 	if string(f.prompt) != "ab" || f.cursor != 1 {
 		t.Errorf("backspace: %q at %d", string(f.prompt), f.cursor)
 	}
 	f = &Form{prompt: []rune("a⚠️b"), focus: fieldPrompt, cursor: 1}
-	f.promptKey(Key{Kind: KeyDelete})
+	f.promptKey(term.Key{Kind: term.KeyDelete})
 	if string(f.prompt) != "ab" || f.cursor != 1 {
 		t.Errorf("delete: %q at %d", string(f.prompt), f.cursor)
 	}
 	f = &Form{prompt: []rune("1️⃣z"), focus: fieldPrompt, cursor: 4}
-	f.promptKey(Key{Kind: KeyLeft})
+	f.promptKey(term.Key{Kind: term.KeyLeft})
 	if f.cursor != 3 {
 		t.Errorf("left past z: cursor %d", f.cursor)
 	}
-	f.promptKey(Key{Kind: KeyBackspace})
+	f.promptKey(term.Key{Kind: term.KeyBackspace})
 	if string(f.prompt) != "z" || f.cursor != 0 {
 		t.Errorf("backspace a keycap: %q at %d", string(f.prompt), f.cursor)
 	}

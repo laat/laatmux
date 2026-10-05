@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 )
 
@@ -119,7 +120,7 @@ func TestAddFlowPrefilled(t *testing.T) {
 	m := dashModel(cfg)
 	treeView(m)
 	selectRow(t, m, "proj/spike")
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f, ok := m.Overlay.(*view.Form)
 	if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || len(f.Chips[1].Choices) != 2 || len(f.Chips[2].Choices) != 2 {
 		t.Fatalf("form: %+v", m.Overlay)
@@ -131,18 +132,18 @@ func TestAddFlowPrefilled(t *testing.T) {
 		t.Error("form accepted a name git refuses")
 	}
 	// The picker opens from a chip and is drawn in the form's place.
-	f.Handle(view.Key{Kind: view.KeyTab})
-	f.Handle(view.Key{Kind: view.KeyTab})
-	f.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyTab})
+	f.Handle(term.Key{Kind: term.KeyTab})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if !strings.Contains(view.Text(f.Render(60, 12)), "add a task: repository") {
 		t.Fatalf("no picker:\n%s", view.Text(f.Render(60, 12)))
 	}
-	f.Handle(view.Key{Kind: view.KeyEsc})
+	f.Handle(term.Key{Kind: term.KeyEsc})
 	d.act(m, m.Poll())
 	if m.Overlay == nil {
 		t.Fatal("esc in the picker ended the form")
 	}
-	f.Handle(view.Key{Kind: view.KeyEsc})
+	f.Handle(term.Key{Kind: term.KeyEsc})
 	d.act(m, m.Poll())
 	if m.Overlay != nil || d.add != nil || d.run != nil {
 		t.Errorf("esc did not return to the list: overlay=%v add=%v run=%v", m.Overlay, d.add, d.run)
@@ -163,12 +164,12 @@ func TestAddFlowDefaults(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task") // a row with a session pre-fills its repository and host, not the branch
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
 	if f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" || f.Branch() != "" {
 		t.Fatalf("preselected %q %q %q branch %q", f.Chips[0].Label(), f.Chips[1].Label(), f.Chips[2].Label(), f.Branch())
 	}
-	f.Handle(view.Key{Kind: view.KeyEsc})
+	f.Handle(term.Key{Kind: term.KeyEsc})
 	d.act(m, m.Poll())
 
 	// A repository line preselects by its source, not the host's label
@@ -195,12 +196,12 @@ func TestAddFlowDefaults(t *testing.T) {
 		if !m.Select(id) {
 			t.Fatalf("no repository line for %q", c.source)
 		}
-		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 		f = m.Overlay.(*view.Form)
 		if f.Chips[0].Label() != c.want {
 			t.Fatalf("the repository line for %s preselected %q", c.source, f.Chips[0].Label())
 		}
-		f.Handle(view.Key{Kind: view.KeyEsc})
+		f.Handle(term.Key{Kind: term.KeyEsc})
 		d.act(m, m.Poll())
 	}
 
@@ -216,12 +217,12 @@ func TestAddFlowDefaults(t *testing.T) {
 	for _, c := range []struct{ def, want string }{{"codex", "codex"}, {"", "claude"}} {
 		cfg.DefaultAgentName = c.def
 		d.cfg = cfg
-		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 		f := m.Overlay.(*view.Form)
 		if f.Chips[0].Label() != "laatmux" || f.Chips[2].Label() != c.want {
 			t.Fatalf("default_agent %q: preselected %q, agent %q", c.def, f.Chips[0].Label(), f.Chips[2].Label())
 		}
-		f.Handle(view.Key{Kind: view.KeyEsc})
+		f.Handle(term.Key{Kind: term.KeyEsc})
 		d.act(m, m.Poll())
 	}
 
@@ -231,7 +232,7 @@ func TestAddFlowDefaults(t *testing.T) {
 	cfg.Hosts = cfg.Hosts[1:2]
 	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m = dashModel(cfg)
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f = m.Overlay.(*view.Form)
 	if len(f.Chips[1].Choices) != 1 || len(f.Chips[2].Choices) != 1 || f.Chips[1].Label() != "vm" || f.Chips[2].Label() != "claude" {
 		t.Fatalf("single candidates: %+v", f.Chips)
@@ -241,7 +242,7 @@ func TestAddFlowDefaults(t *testing.T) {
 	cfg.Agents = nil
 	d = &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m = dashModel(cfg)
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	if m.Overlay != nil || d.add != nil || m.Message != "no agents configured" {
 		t.Errorf("no agents: overlay=%v message=%q", m.Overlay, m.Message)
 	}
@@ -259,7 +260,7 @@ func TestAddFlowRefusesBadLast(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	if m.Overlay != nil || d.add != nil || !strings.HasPrefix(m.Message, "last.json: ") {
 		t.Errorf("overlay=%v add=%v message=%q", m.Overlay, d.add, m.Message)
 	}
@@ -436,7 +437,7 @@ func TestRmFor(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task")
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	want := command.Rm{Host: config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
 		Repo: cfg.Repos[1], Branch: "task", Root: "/w/proj/task"}
 	if d.rm.Host.Name != want.Host.Name || d.rm.Repo.Source != want.Repo.Source || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
@@ -445,25 +446,25 @@ func TestRmFor(t *testing.T) {
 	if m.Confirm != "remove proj/task on vm (/w/proj/task) with its agent? y/n" || m.ConfirmTag != "rm" {
 		t.Errorf("confirm = %q tag %q", m.Confirm, m.ConfirmTag)
 	}
-	m.Handle(view.Key{Rune: 'n'})
+	m.Handle(term.Key{Rune: 'n'})
 
 	treeView(m)
 	selectRow(t, m, "x/y")
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'X'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'X'}})
 	if d.rm.Repo.Source != "" || d.rm.Branch != "" || d.rm.Root != "/w/x/y" || !d.rm.Force || d.rm.Host.Name != "mac" {
 		t.Errorf("unknown repository: rm = %+v", d.rm)
 	}
 	if m.Confirm != "force-remove /w/x/y on mac (/w/x/y)? y/n" {
 		t.Errorf("confirm = %q", m.Confirm)
 	}
-	m.Handle(view.Key{Rune: 'n'})
+	m.Handle(term.Key{Rune: 'n'})
 
 	selectRow(t, m, "vm/proj/gone")
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	if d.rm.Repo.Source != cfg.Repos[1].Source || d.rm.Branch != "gone" || d.rm.Root != "/w/proj/gone" || d.rm.Host.Name != "vm" {
 		t.Errorf("orphaned: rm = %+v", d.rm)
 	}
-	m.Handle(view.Key{Rune: 'n'})
+	m.Handle(term.Key{Rune: 'n'})
 
 	// An agent with no worktree is not rm's.
 	scratch := rows.Input{
@@ -475,7 +476,7 @@ func TestRmFor(t *testing.T) {
 	m.SetRows(rows.Agents(scratch))
 	m.Render()
 	selectRow(t, m, "scratch")
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "not a worktree") {
 		t.Errorf("agent row: confirm=%q message=%q", m.Confirm, m.Message)
 	}
@@ -507,14 +508,14 @@ func TestRmTreeRows(t *testing.T) {
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in))
 	m.Render()
-	m.Handle(view.Key{Rune: 'f'}) // every fold open
+	m.Handle(term.Key{Rune: 'f'}) // every fold open
 	x := func(id string) {
 		t.Helper()
 		m.Message, m.Confirm = "", ""
 		if !m.Select(id) {
 			t.Fatalf("%s is not visible", id)
 		}
-		d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	}
 	for _, id := range []string{rows.RepoNode(src), "venv/pane/laatmux/%7", "venv/run/r1"} {
 		x(id)
@@ -529,13 +530,13 @@ func TestRmTreeRows(t *testing.T) {
 		if m.Confirm != "remove proj/spike on vm (/w/proj/spike) with its agent? y/n" {
 			t.Errorf("%s: confirm=%q message=%q", id, m.Confirm, m.Message)
 		}
-		m.Handle(view.Key{Rune: 'n'})
+		m.Handle(term.Key{Rune: 'n'})
 	}
 	x("venv/laatmux/%2")
 	if m.Confirm != "remove proj/task on vm (/w/proj/task) with its 2 agents? y/n" {
 		t.Errorf("two agents: confirm=%q message=%q", m.Confirm, m.Message)
 	}
-	m.Handle(view.Key{Rune: 'n'})
+	m.Handle(term.Key{Rune: 'n'})
 	// The agent view's stale fold.
 	m.View = view.ViewAgents
 	in.Agents[2].ActivityAt = time.Time{}
@@ -567,7 +568,7 @@ func TestRmRefusalHint(t *testing.T) {
 	if d.act(m, m.Poll()) || m.Overlay != log {
 		t.Fatal("a failed log did not stay on screen")
 	}
-	log.Handle(view.Key{Rune: ' '})
+	log.Handle(term.Key{Rune: ' '})
 	if d.act(m, m.Poll()) || m.Overlay != nil {
 		t.Fatal("a key did not return to the list")
 	}
@@ -625,28 +626,28 @@ func TestBuildForm(t *testing.T) {
 	if form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
 		t.Fatalf("proj defaults %q %q", form.Chips[1].Label(), form.Chips[2].Label())
 	}
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
-	form.Handle(view.Key{Kind: view.KeyRight})
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyShiftTab}) // the repository chip
+	form.Handle(term.Key{Kind: term.KeyRight})
 	if form.Chips[0].Label() != "other" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
 		t.Fatalf("after choosing other: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
 	}
-	form.Handle(view.Key{Kind: view.KeyTab}) // the host chip
-	form.Handle(view.Key{Kind: view.KeyLeft})
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyLeft}) // back to proj
+	form.Handle(term.Key{Kind: term.KeyTab}) // the host chip
+	form.Handle(term.Key{Kind: term.KeyLeft})
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyLeft}) // back to proj
 	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
 		t.Fatalf("after the user's host: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
 	}
 	// Picking the value already shown is the user's choice too.
 	form = buildForm(cfg, f, last, "proj", "", "", caps)
-	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the agent chip
-	form.Handle(view.Key{Kind: view.KeyEnter})    // the picker on claude
-	form.Handle(view.Key{Kind: view.KeyEnter})    // accept claude
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyShiftTab}) // the repository chip
-	form.Handle(view.Key{Kind: view.KeyRight})    // other: last agent codex
+	form.Handle(term.Key{Kind: term.KeyShiftTab}) // the agent chip
+	form.Handle(term.Key{Kind: term.KeyEnter})    // the picker on claude
+	form.Handle(term.Key{Kind: term.KeyEnter})    // accept claude
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyShiftTab}) // the repository chip
+	form.Handle(term.Key{Kind: term.KeyRight})    // other: last agent codex
 	if form.Chips[0].Label() != "other" || form.Chips[2].Label() != "claude" || form.Chips[1].Label() != "vm" {
 		t.Fatalf("picked agent kept: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
 	}
@@ -658,11 +659,11 @@ func TestBuildForm(t *testing.T) {
 	}
 	// The record's host is as good as the user's: picking the
 	// repository again does not replace it.
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyShiftTab})
-	form.Handle(view.Key{Kind: view.KeyRight}) // other, whose last host is vm
-	form.Handle(view.Key{Kind: view.KeyRight}) // back to proj
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyShiftTab})
+	form.Handle(term.Key{Kind: term.KeyRight}) // other, whose last host is vm
+	form.Handle(term.Key{Kind: term.KeyRight}) // back to proj
 	if form.Chips[1].Label() != "mac" {
 		t.Fatalf("the record's host replaced: %q", form.Chips[1].Label())
 	}
@@ -677,7 +678,7 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: newMerged()}
 	m := dashModel(cfg)
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f := m.Overlay.(*view.Form)
 	f.SetPrompt("Fix it")
 	var got command.Add
@@ -685,7 +686,7 @@ func TestSubmitFormOutcomes(t *testing.T) {
 		got = a
 		return "", errors.New("tasks not supported by vm's daemon")
 	}
-	f.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if d.act(m, m.Poll()) {
 		t.Fatal("a refusal ended the view")
 	}
@@ -699,15 +700,15 @@ func TestSubmitFormOutcomes(t *testing.T) {
 	// An answer the daemon may have taken: the form goes, the view
 	// stays with the message.
 	d.submit = func(a command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
-	f.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if d.act(m, m.Poll()) || !strings.Contains(m.Message, "submitted add-1") || m.Overlay != nil || d.add != nil {
 		t.Fatalf("uncertain submit: message %q overlay %v add %v", m.Message, m.Overlay, d.add)
 	}
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'a'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
 	f = m.Overlay.(*view.Form)
 	f.SetPrompt("Fix it")
 	d.submit = func(a command.Add) (string, error) { return "add-2", nil }
-	f.Handle(view.Key{Kind: view.KeyEnter})
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if !d.act(m, m.Poll()) || m.Message != "accepted add-2" || d.add != nil {
 		t.Fatalf("accepted: message %q add %v", m.Message, d.add)
 	}
@@ -727,12 +728,12 @@ func TestComposeAct(t *testing.T) {
 	form.SetPrompt("Fix it")
 	m := &view.Model{Overlay: form, Width: 80, Height: 24}
 	d.submit = func(command.Add) (string, error) { return "", errors.New("tasks not supported by vm's daemon") }
-	form.Handle(view.Key{Kind: view.KeyEnter})
+	form.Handle(term.Key{Kind: term.KeyEnter})
 	if c.act(m, m.Poll()) || m.Overlay != form || form.Error == "" {
 		t.Fatalf("refusal: overlay %v error %q", m.Overlay, form.Error)
 	}
 	d.submit = func(command.Add) (string, error) { return "add-1", errors.New("the answer was lost") }
-	form.Handle(view.Key{Kind: view.KeyEnter})
+	form.Handle(term.Key{Kind: term.KeyEnter})
 	if c.act(m, m.Poll()) {
 		t.Fatal("an uncertain answer ended the view at once")
 	}
@@ -740,16 +741,16 @@ func TestComposeAct(t *testing.T) {
 	if !ok || log.Done() {
 		t.Fatalf("no ended log waiting: %v", m.Overlay)
 	}
-	log.Handle(view.Key{Kind: view.KeyPaste, Text: "stray"})
+	log.Handle(term.Key{Kind: term.KeyPaste, Text: "stray"})
 	if log.Done() {
 		t.Fatal("a paste dismissed the log")
 	}
-	log.Handle(view.Key{Rune: 'x'})
+	log.Handle(term.Key{Rune: 'x'})
 	if !c.act(m, m.Poll()) || !strings.Contains(c.outcome, "submitted add-1") {
 		t.Fatalf("after the key: outcome %q", c.outcome)
 	}
 	fresh := buildForm(cfg, f, last, "proj", "", "", nil)
-	fresh.Handle(view.Key{Kind: view.KeyEsc})
+	fresh.Handle(term.Key{Kind: term.KeyEsc})
 	m = &view.Model{Overlay: fresh}
 	if !c.act(m, m.Poll()) {
 		t.Fatal("esc on the form did not end the view")
@@ -758,7 +759,7 @@ func TestComposeAct(t *testing.T) {
 	log = view.NewLog("t")
 	d.run = &running{done: func(*view.Model) bool { return true }}
 	m = &view.Model{Overlay: log, Width: 80, Height: 24}
-	m.Handle(view.Key{Kind: view.KeyCtrlC})
+	m.Handle(term.Key{Kind: term.KeyCtrlC})
 	if !c.act(m, m.Poll()) {
 		t.Fatal("Ctrl-C on the log did not end compose")
 	}
@@ -794,14 +795,14 @@ func TestPendingKeys(t *testing.T) {
 		}
 		d.act(m, m.Poll())
 	}
-	key := func(r rune) view.Action { return m.Handle(view.Key{Rune: r}) }
+	key := func(r rune) view.Action { return m.Handle(term.Key{Rune: r}) }
 
 	// The running one, newest, is first.
-	m.Handle(view.Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	if r := m.Selection(); r == nil || r.ID() != "add-2" {
 		t.Fatalf("selected %+v", r)
 	}
-	a := m.Handle(view.Key{Kind: view.KeyEnter})
+	a := m.Handle(term.Key{Kind: term.KeyEnter})
 	if exit, jumped := d.jumpRow(m, *m.Selection()); a.Kind != view.ActionJump || exit || jumped || m.Message != "" {
 		t.Fatalf("enter on a running task: %+v message %q", a, m.Message)
 	}
@@ -815,7 +816,7 @@ func TestPendingKeys(t *testing.T) {
 	}
 
 	// The stuck one: p delivers, x asks then dismisses.
-	m.Handle(view.Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	d.act(m, key('p'))
 	finish()
 	if delivered != "add-1" || m.Message != "prompt delivered" {
@@ -892,8 +893,8 @@ func TestTaskAction(t *testing.T) {
 	}
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in))
-	m.Handle(view.Key{Rune: 'g'})
-	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: view.Key{Rune: r}} }
+	m.Handle(term.Key{Rune: 'g'})
+	other := func(r rune) view.Action { return view.Action{Kind: view.ActionOther, Key: term.Key{Rune: r}} }
 	for _, r := range []rune{'p', 'x', 'X'} {
 		if !taskAction(m, other(r)) {
 			t.Errorf("%c on a task's row not taken", r)
@@ -976,17 +977,17 @@ func TestPendingOffers(t *testing.T) {
 	expired := protocol.Pending{ID: "add-1", Host: "vm", Repo: "proj", Branch: "b", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: protocol.ErrRecoveryExpired, SubmittedAt: time.Now()}
 	listed := protocol.Pending{ID: "add-2", Host: "vm", Repo: "proj", Branch: "c", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now().Add(-time.Minute)}
 	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{expired, listed}}))
-	m.Handle(view.Key{Rune: 'g'})
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	m.Handle(term.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "laatmux tasks show add-1 prints the prompt, if one was kept") {
 		t.Errorf("p on an expired prompt: %q", m.Message)
 	}
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'z'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
 	if !strings.Contains(m.Message, "pending task") {
 		t.Errorf("z on a task: %q", m.Message)
 	}
-	m.Handle(view.Key{Rune: 'j'})
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	m.Handle(term.Key{Rune: 'j'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "hands over to its worktree row") {
 		t.Errorf("x awaiting the listing: confirm %q message %q", m.Confirm, m.Message)
 	}
@@ -994,8 +995,8 @@ func TestPendingOffers(t *testing.T) {
 	gone.Gone, gone.Root, gone.EnvironmentID, gone.Session = true, "/r/c", "venv", "proj/c"
 	// A gone task whose prompt was delivered has nothing kept to show.
 	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{gone}}))
-	m.Handle(view.Key{Rune: 'g'})
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	m.Handle(term.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "the prompt is delivered") || strings.Contains(m.Message, "tasks show") {
 		t.Errorf("p on a gone, delivered task: %q", m.Message)
 	}
@@ -1003,19 +1004,19 @@ func TestPendingOffers(t *testing.T) {
 	// replacement only the view has seen, say why not.
 	stuck := protocol.Pending{ID: "add-9", Host: "old", Repo: "proj", Branch: "d", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
 	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", Connected: true}}, Pendings: []protocol.Pending{stuck}}))
-	m.Handle(view.Key{Rune: 'g'})
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	m.Handle(term.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if !strings.Contains(m.Message, "host removed; x dismisses the task") {
 		t.Errorf("p on a removed host: %q", m.Message)
 	}
 	moving := protocol.Pending{ID: "add-8", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "e", Sent: true, Taken: true, SubmittedAt: time.Now()}
 	m.SetRows(rows.Agents(rows.Input{Hosts: []rows.Host{{Name: "vm", EnvironmentID: "wenv", Connected: true}}, Pendings: []protocol.Pending{moving}}))
-	m.Handle(view.Key{Rune: 'g'})
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'x'}})
+	m.Handle(term.Key{Rune: 'g'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
 	if m.Confirm != "" || !strings.Contains(m.Message, "has not yet seen the machine change") {
 		t.Errorf("x on an unrecorded replacement: confirm %q message %q", m.Confirm, m.Message)
 	}
-	d.act(m, view.Action{Kind: view.ActionOther, Key: view.Key{Rune: 'p'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'p'}})
 	if m.Message != "proj/e: host replaced" {
 		t.Errorf("p on an unrecorded replacement offers x: %q", m.Message)
 	}
@@ -1111,7 +1112,7 @@ func TestJumpNowhereSelects(t *testing.T) {
 	visibleRow(t, m, "proj/task").Current = true
 	m.Follow = true
 	before := m.Selection().ID()
-	a := m.Handle(view.Key{Kind: view.KeyEnter})
+	a := m.Handle(term.Key{Kind: term.KeyEnter})
 	if a.Kind != view.ActionJump || a.Row != nil {
 		t.Fatalf("enter: %+v", a)
 	}

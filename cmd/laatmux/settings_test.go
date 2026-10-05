@@ -12,6 +12,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 )
@@ -74,7 +75,7 @@ func TestSettings(t *testing.T) {
 	m.View, m.Layout, m.Scope = view.ViewTree, view.Tiles, view.ScopeAll
 	m.ApplyFolds(map[string]bool{"repo/x": true, "repo/y": false}) // the file's, whole
 	m.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}}
-	m.Handle(view.Key{Rune: 'f'}) // repo/x was closed from the file: f opens it here
+	m.Handle(term.Key{Rune: 'f'}) // repo/x was closed from the file: f opens it here
 	if err := saveSettings(m, now.Add(time.Minute), settingsHost{}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,16 +103,16 @@ func TestSettings(t *testing.T) {
 	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.Layout = "tiles" }); err != nil {
 		t.Fatal(err)
 	}
-	m.Handle(view.Key{Kind: view.KeyTab}) // agents
-	m.Handle(view.Key{Rune: 'v'})         // compact
+	m.Handle(term.Key{Kind: term.KeyTab}) // agents
+	m.Handle(term.Key{Rune: 'v'})         // compact
 	if err := saveSettings(m, now.Add(3*time.Minute), settingsHost{fixedLayout: true}); err != nil {
 		t.Fatal(err)
 	}
 	if s, _, _ := home.ReadSidebar(); s.View != "agents" || s.Layout != "tiles" {
 		t.Errorf("after Tab and v with the layout fixed: %+v", s)
 	}
-	m.Handle(view.Key{Rune: 'v'}) // tiles
-	m.Handle(view.Key{Rune: 'v'}) // compact
+	m.Handle(term.Key{Rune: 'v'}) // tiles
+	m.Handle(term.Key{Rune: 'v'}) // compact
 	if err := saveSettings(m, now.Add(4*time.Minute), settingsHost{}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestSettings(t *testing.T) {
 		t.Errorf("after v: %+v", s)
 	}
 	strip := &view.Model{Layout: view.Strip, View: view.ViewAgents}
-	strip.Handle(view.Key{Kind: view.KeyTab})
+	strip.Handle(term.Key{Kind: term.KeyTab})
 	if err := saveSettings(strip, now.Add(5*time.Minute), settingsHost{fixedView: true, fixedLayout: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +128,8 @@ func TestSettings(t *testing.T) {
 		t.Errorf("a strip wrote the defaults: %+v", s)
 	}
 	// The dashboard's Tab and v write its own keys, not the sidebar's.
-	dash.Handle(view.Key{Kind: view.KeyTab})
-	dash.Handle(view.Key{Rune: 'v'})
+	dash.Handle(term.Key{Kind: term.KeyTab})
+	dash.Handle(term.Key{Rune: 'v'})
 	if err := saveSettings(dash, now.Add(6*time.Minute), settingsHost{dashboard: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestSettings(t *testing.T) {
 	carrier := &view.Model{View: view.ViewTree, Width: 60, Height: 20}
 	carrier.Tree = []rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}, {Kind: rows.KindTask, Depth: 1, Host: "vm", Children: 1, Pending: &protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Root: "/r/z", Session: "z", Taken: true}}}
 	carrier.Select("add-z")
-	carrier.Handle(view.Key{Rune: 'h'})
+	carrier.Handle(term.Key{Rune: 'h'})
 	carrier.DirtyFolds()
 	carrier.Handoffs = map[string]string{"add-z": "venv/worktree//r/z"}
 	carrier.SetTree([]rows.Row{{Kind: rows.KindRepo, Node: "repo/x", Children: 1}, {Kind: rows.KindWorktree, Depth: 1, Host: "vm", Node: "venv/worktree//r/z", Children: 1, Worktree: &protocol.Worktree{ID: "venv/worktree//r/z"}}})

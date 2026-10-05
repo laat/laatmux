@@ -8,6 +8,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/palette"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 )
 
@@ -20,7 +21,7 @@ const backgroundWait = 150 * time.Millisecond
 // auto asks the terminal for its background, dark when it does not say.
 // The config was validated when it was read, so the custom colours
 // parse.
-func look(cfg config.Config, t *view.Term) (palette.Theme, view.Icons) {
+func look(cfg config.Config, t *term.Term) (palette.Theme, view.Icons) {
 	return lookWith(cfg, func() (bool, bool) { return t.Background(backgroundWait) })
 }
 

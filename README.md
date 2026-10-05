@@ -28,7 +28,8 @@ two sidebar views and the sidebar at workmux's level, is designed in
 | `internal/command` | the client side of `add`, `rm`, `run` and `shell`, one implementation each for the CLI and the dashboard, with the reconnect and follow logic |
 | `internal/workspace` | the local workspace session on the default tmux server: tags, attach and shell commands, create, switch, kill |
 | `internal/rows` | the rows the listing, the sidebar and the dashboard share: worktrees joined with agents and local sessions, dim state, groups |
-| `internal/view` | the list view: pure renderer for the tile and compact layouts, keys and mouse, raw mode, the draw loop |
+| `internal/term` | the terminal: raw mode and the alternate screen, the frame drawn, the bytes read decoded into keys, mouse events and pastes |
+| `internal/view` | the list view: pure renderer for the tile and compact layouts, the model's keys and mouse, the draw loop |
 | `internal/home` | state dir, environment id, runtime file, startup lock, `last.json` |
 | `internal/config` | `~/.config/laatmux/config.yaml`: hosts with their directories, agents, the repository list, `tmux_servers` for this machine's daemon, `sidebar`; `.laatmux.yaml` per repository |
 | `internal/source` | a repository source's key, the same for the forms a forge gives one repository, and the forge split |

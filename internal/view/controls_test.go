@@ -9,6 +9,7 @@ import (
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 )
 
 // has is whether the folds hold the id, whatever its value.
@@ -60,7 +61,7 @@ func TestScopes(t *testing.T) {
 	// repository line shared with the panes on all.
 	m.View, m.Scope = ViewTree, ScopeSession
 	m.Render()
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	d, _ := m.DirtyFolds()
 	if _, repo := d[rows.RepoNode(src)]; repo || len(d) == 0 {
 		t.Errorf("f under session: %v", d)
@@ -68,12 +69,12 @@ func TestScopes(t *testing.T) {
 	if _, other := d["venv/worktree//r/auto-layout"]; other {
 		t.Errorf("f under session set another worktree's fold: %v", d)
 	}
-	m.Handle(Key{Rune: 'f'}) // open again
+	m.Handle(term.Key{Rune: 'f'}) // open again
 	// With the repository line folded by a pane on all, f opens it here
 	// alone, a reveal, and the lines under it decide the rest.
 	m.ApplyFolds(map[string]bool{rows.RepoNode(src): true})
 	m.DirtyFolds()
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if m.closed(&m.Tree[m.indexOf(rows.RepoNode(src))]) {
 		t.Error("f under session left the repository line folded")
 	}
@@ -87,14 +88,14 @@ func TestScopes(t *testing.T) {
 		m.ApplyFolds(map[string]bool{}) // the reveal's value forgotten, so the file's takes again
 		m.ApplyFolds(map[string]bool{rows.RepoNode(src): true, "add-ac": closed})
 		m.DirtyFolds()
-		m.Handle(Key{Rune: 'f'})
+		m.Handle(term.Key{Rune: 'f'})
 		if m.closed(&m.Tree[m.indexOf("add-ac")]) {
 			t.Errorf("f with the repository folded and add-ac closed=%v did not open it", closed)
 		}
 		if d, _ := m.DirtyFolds(); !has(d, "add-ac") || d["add-ac"] || has(d, rows.RepoNode(src)) {
 			t.Errorf("f with the repository folded wrote %v", d)
 		}
-		m.Handle(Key{Rune: 'f'})
+		m.Handle(term.Key{Rune: 'f'})
 		if !m.closed(&m.Tree[m.indexOf("add-ac")]) {
 			t.Error("f again with everything open did not close")
 		}
@@ -104,7 +105,7 @@ func TestScopes(t *testing.T) {
 	m.View, m.Scope = ViewAgents, ScopeAll
 	m.ApplyFolds(map[string]bool{})
 	// F: to session. The viewer is in agents-config's home session.
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	if !m.SettingsChanged() {
 		t.Error("F changed no setting")
 	}
@@ -125,16 +126,16 @@ func TestScopes(t *testing.T) {
 	}
 	// F from project goes to session and back to project; from
 	// session alone, to all.
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	if m.Scope != ScopeSession {
 		t.Errorf("F from project: %s", m.Scope)
 	}
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	if m.Scope != ScopeProject {
 		t.Errorf("F back: %s", m.Scope)
 	}
 	m.Scope, m.prevScope = ScopeSession, ""
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	if m.Scope != ScopeAll {
 		t.Errorf("F from session alone: %s", m.Scope)
 	}
@@ -166,7 +167,7 @@ func TestScopes(t *testing.T) {
 		t.Errorf("a task's session:\n%s", got)
 	}
 	m.Select("add-new")
-	m.Handle(Key{Rune: 'l'})
+	m.Handle(term.Key{Rune: 'l'})
 	if got := ids(m); got != rows.RepoNode(src)+"\nadd-new\nvenv/laatmux/%9" {
 		t.Errorf("a task's session, unfolded:\n%s", got)
 	}
@@ -308,9 +309,9 @@ func TestCommands(t *testing.T) {
 	// A scope set from outside clears F's memory: F from session goes
 	// to all, not back to what F left.
 	m.Scope, m.prevScope = ScopeProject, ""
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	m.Command(Command{Name: "scope", Arg: "session"})
-	m.Handle(Key{Rune: 'F'})
+	m.Handle(term.Key{Rune: 'F'})
 	if m.Scope != ScopeAll {
 		t.Errorf("F after a scope from outside: %s", m.Scope)
 	}
@@ -357,7 +358,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in))
 	m.Render()
-	m.Handle(Key{Rune: '?'})
+	m.Handle(term.Key{Rune: '?'})
 	if m.Overlay == nil {
 		t.Fatal("no help overlay")
 	}
@@ -365,59 +366,59 @@ func TestHelpQuitSettings(t *testing.T) {
 	if !strings.HasPrefix(text, "keys\n") || !strings.Contains(text, "Tab          switch view") || !strings.Contains(text, "z            settle") {
 		t.Errorf("help:\n%s", text)
 	}
-	m.Handle(Key{Rune: 'x'})
+	m.Handle(term.Key{Rune: 'x'})
 	if m.Overlay != nil {
 		t.Error("a key did not close the help")
 	}
 	m.Layout = Strip
-	m.Handle(Key{Rune: '?'})
+	m.Handle(term.Key{Rune: '?'})
 	if text := Text(m.Render()); strings.Contains(text, "Tab") || !strings.Contains(text, "\nf            the stale chip, open or closed") {
 		t.Errorf("the strip's help:\n%s", text)
 	}
-	m.Handle(Key{Rune: 'x'})
+	m.Handle(term.Key{Rune: 'x'})
 	// A one-line strip: the keys alone, one at a time, scrolled.
 	m.Height = 1
-	m.Handle(Key{Rune: '?'})
+	m.Handle(term.Key{Rune: '?'})
 	if out := m.Render(); len(out) != 1 || !strings.HasPrefix(Text(out), "h l") {
 		t.Errorf("help on one line:\n%s", Debug(out))
 	}
-	m.Handle(Key{Kind: KeyDown})
+	m.Handle(term.Key{Kind: term.KeyDown})
 	if out := m.Render(); !strings.HasPrefix(Text(out), "g G") {
 		t.Errorf("help on one line scrolled:\n%s", Debug(out))
 	}
 	for i := 0; i < 20; i++ {
-		m.Handle(Key{Kind: KeyDown})
+		m.Handle(term.Key{Kind: term.KeyDown})
 	}
 	if out := m.Render(); !strings.HasPrefix(Text(out), "z            settle") {
 		t.Errorf("help on one line scrolled past the end:\n%s", Debug(out))
 	}
-	m.Handle(Key{Rune: 'x'})
+	m.Handle(term.Key{Rune: 'x'})
 	m.Height = 20
 	m.Layout = Tiles
-	if a := m.Handle(Key{Rune: 'q'}); a.Kind != ActionNone || m.Confirm != "Quit sidebar? y/n" {
+	if a := m.Handle(term.Key{Rune: 'q'}); a.Kind != ActionNone || m.Confirm != "Quit sidebar? y/n" {
 		t.Errorf("q: %+v %q", a, m.Confirm)
 	}
-	if a := m.Handle(Key{Rune: 'n'}); a.Kind != ActionNone || m.Confirm != "" {
+	if a := m.Handle(term.Key{Rune: 'n'}); a.Kind != ActionNone || m.Confirm != "" {
 		t.Errorf("n: %+v %q", a, m.Confirm)
 	}
-	m.Handle(Key{Rune: '/'})
-	m.Handle(Key{Kind: KeyCtrlC})
+	m.Handle(term.Key{Rune: '/'})
+	m.Handle(term.Key{Kind: term.KeyCtrlC})
 	if m.Confirm == "" {
 		t.Error("Ctrl-C while filtering did not ask")
 	}
-	if a := m.Handle(Key{Rune: 'y'}); a.Kind != ActionQuit {
+	if a := m.Handle(term.Key{Rune: 'y'}); a.Kind != ActionQuit {
 		t.Errorf("y: %+v", a)
 	}
 	m.Filtering = false
 	m.AskQuit = false
-	if a := m.Handle(Key{Rune: 'q'}); a.Kind != ActionQuit {
+	if a := m.Handle(term.Key{Rune: 'q'}); a.Kind != ActionQuit {
 		t.Errorf("q without the question: %+v", a)
 	}
 	// Settings: a fold toggled, the view switched, the layout, F; each
 	// reported once; the toggled folds given and taken.
 	m.SettingsChanged()
 	m.Select("venv/worktree//r/agents-config")
-	m.Handle(Key{Rune: 's'})
+	m.Handle(term.Key{Rune: 's'})
 	if !m.SettingsChanged() || m.SettingsChanged() {
 		t.Error("a fold toggled: not reported once")
 	}
@@ -425,17 +426,17 @@ func TestHelpQuitSettings(t *testing.T) {
 	if len(folds) != 1 || !folds["venv/worktree//r/agents-config"] {
 		t.Errorf("toggled folds: %v", folds)
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if !m.SettingsChanged() {
 		t.Error("the view switched: not reported")
 	}
-	m.Handle(Key{Rune: 'v'})
+	m.Handle(term.Key{Rune: 'v'})
 	if !m.SettingsChanged() {
 		t.Error("the layout: not reported")
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	m.SettingsChanged()
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if !m.SettingsChanged() || len(m.ToggledFolds()) < 3 {
 		t.Errorf("f: %v", m.ToggledFolds())
 	}
@@ -458,7 +459,7 @@ func TestHelpQuitSettings(t *testing.T) {
 		t.Errorf("folds from outside dirty: %v", d)
 	}
 	other.Select("venv/worktree//r/auto-layout")
-	other.Handle(Key{Rune: 's'})
+	other.Handle(term.Key{Rune: 's'})
 	if d, c := other.DirtyFolds(); len(d) != 1 || !d["venv/worktree//r/auto-layout"] || len(c) != 0 {
 		t.Errorf("the pane's own fold not dirty: %v %v", d, c)
 	}
@@ -467,7 +468,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	}
 	// The stale fold is a fold like the others: toggled, dirty, taken.
 	other.View = ViewAgents
-	other.Handle(Key{Rune: 'f'})
+	other.Handle(term.Key{Rune: 'f'})
 	if d, _ := other.DirtyFolds(); !other.ShowHidden || len(d) != 1 || d[rows.NodeStale] {
 		t.Errorf("the stale fold opened: shown %v dirty %v", other.ShowHidden, d)
 	}
@@ -494,8 +495,8 @@ func TestHelpQuitSettings(t *testing.T) {
 	// A value this pane wrote is the baseline: another pane's change
 	// back to the old value is a change.
 	other.Select("venv/worktree//r/agents-config")
-	other.Handle(Key{Rune: 'l'}) // open, the user's
-	other.DirtyFolds()           // written
+	other.Handle(term.Key{Rune: 'l'}) // open, the user's
+	other.DirtyFolds()                // written
 	other.ApplyFolds(map[string]bool{"venv/worktree//r/agents-config": true})
 	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/agents-config")]) {
 		t.Error("another pane's change back not applied after a write here")
@@ -512,7 +513,7 @@ func TestHelpQuitSettings(t *testing.T) {
 	}
 	other.ApplyFolds(map[string]bool{"venv/worktree//r/auto-layout": false})
 	other.Select("venv/worktree//r/auto-layout")
-	other.Handle(Key{Rune: 'h'}) // set here, not yet written
+	other.Handle(term.Key{Rune: 'h'}) // set here, not yet written
 	other.ApplyFolds(map[string]bool{})
 	if !other.closed(&other.Tree[other.indexOf("venv/worktree//r/auto-layout")]) {
 		t.Error("a fold set here forgotten with the file's")
@@ -555,32 +556,32 @@ func TestStrip(t *testing.T) {
 	m := model(now)
 	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 60, 3, 18
 	golden(t, "strip", Debug(m.Render()))
-	m.Handle(Key{Kind: KeyRight})
-	m.Handle(Key{Kind: KeyRight})
-	m.Handle(Key{Kind: KeyRight})
+	m.Handle(term.Key{Kind: term.KeyRight})
+	m.Handle(term.Key{Kind: term.KeyRight})
+	m.Handle(term.Key{Kind: term.KeyRight})
 	golden(t, "strip-scrolled", Debug(m.Render()))
 	if m.Selected != 3 {
 		t.Errorf("right thrice: %d", m.Selected)
 	}
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	if m.Selected != 2 {
 		t.Errorf("h: %d", m.Selected)
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if m.View != ViewAgents {
 		t.Error("Tab switched the strip's view")
 	}
 	m.Render()
-	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 1}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != m.Visible()[m.hscroll].Row.ID() {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 2, Y: 1}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != m.Visible()[m.hscroll].Row.ID() {
 		t.Errorf("a click on the first chip: %+v", a)
 	}
-	m.Handle(Key{Rune: '/'})
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: '/'})
+	m.Handle(term.Key{Rune: 'f'})
 	out := m.Render()
 	if len(out) != 3 || Text(out[2:]) != "/f_\n" {
 		t.Errorf("the footer while filtering:\n%s", Debug(out))
 	}
-	m.Handle(Key{Kind: KeyEsc})
+	m.Handle(term.Key{Kind: term.KeyEsc})
 	if out := m.Render(); strings.HasPrefix(Text(out[2:]), "/") {
 		t.Error("the footer without something to say")
 	}
@@ -613,7 +614,7 @@ func TestStrip(t *testing.T) {
 	// The marker keeps its room: no chip is drawn under it, and a click
 	// there lands on nothing.
 	out = m.Render()
-	if a := m.Handle(Key{Kind: KeyMouse, X: 58, Y: 1}); a.Kind == ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 58, Y: 1}); a.Kind == ActionJump {
 		t.Errorf("a click on the marker jumped:\n%s", Debug(out))
 	}
 	// A click from before the last draw is judged by that draw's
@@ -624,10 +625,10 @@ func TestStrip(t *testing.T) {
 	m.Filtering = false
 	m.Now = m.Now.Add(time.Second)
 	m.Render()
-	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3, At: then}); a.Kind == ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 2, Y: 3, At: then}); a.Kind == ActionJump {
 		t.Error("a click on the footer of the frame before jumped")
 	}
-	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 1, At: then}); a.Kind != ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 2, Y: 1, At: then}); a.Kind != ActionJump {
 		t.Errorf("a click on a chip of the frame before: %+v", a)
 	}
 	// A click on the footer line is no chip: with a filter set and not
@@ -635,10 +636,10 @@ func TestStrip(t *testing.T) {
 	m.Height = 3
 	m.Filter, m.Filtering = "a", false
 	m.Render()
-	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 3}); a.Kind == ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 2, Y: 3}); a.Kind == ActionJump {
 		t.Error("a click on the footer jumped")
 	}
-	if a := m.Handle(Key{Kind: KeyMouse, X: 2, Y: 1}); a.Kind != ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 2, Y: 1}); a.Kind != ActionJump {
 		t.Errorf("a click on a chip: %+v", a)
 	}
 	m.Filter = ""
@@ -655,14 +656,14 @@ func TestStrip(t *testing.T) {
 	if stale < 0 {
 		t.Fatalf("no stale chip: %+v", m.hitCols)
 	}
-	if a := m.Handle(Key{Kind: KeyMouse, X: stale + 1, Y: 1}); a.Kind != ActionNone || !m.ShowHidden {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: stale + 1, Y: 1}); a.Kind != ActionNone || !m.ShowHidden {
 		t.Errorf("a click on the stale chip: %+v shown %v", a, m.ShowHidden)
 	}
 	// The chips' numbers are the digits', fold rows skipped, and a dim
 	// row's chip is dim, its template's colour stripped.
 	m.SetTemplates(CompileTemplates(nil, "", []string{"{idx} #[fg=accent]{primary}"}, "", "", "", "", ""))
 	m.ShowHidden = true
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	text := Text(m.Render())
 	first := strings.SplitN(text, "\n", 2)[0]
 	var n int

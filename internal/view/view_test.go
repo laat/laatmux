@@ -4,7 +4,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/term"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -164,230 +164,85 @@ func TestHandle(t *testing.T) {
 	m.Layout, m.Width, m.Height = Compact, 80, 30
 	m.Render()
 	n := len(m.Visible())
-	m.Handle(Key{Rune: 'k'})
+	m.Handle(term.Key{Rune: 'k'})
 	if m.Selected != 0 {
 		t.Error("k at the top moved")
 	}
-	m.Handle(Key{Rune: 'G'})
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'j'})
 	if m.Selected != n-1 {
 		t.Errorf("G then j = %d, want %d", m.Selected, n-1)
 	}
-	m.Handle(Key{Rune: 'g'})
-	if a := m.Handle(Key{Rune: '3'}); a.Kind != ActionJump || m.Selection().Name != m.Visible()[2].Row.Name {
+	m.Handle(term.Key{Rune: 'g'})
+	if a := m.Handle(term.Key{Rune: '3'}); a.Kind != ActionJump || m.Selection().Name != m.Visible()[2].Row.Name {
 		t.Errorf("3 = %+v on %q", a, m.Selection().Name)
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionJump {
 		t.Errorf("enter = %+v", a)
 	}
-	if a := m.Handle(Key{Kind: KeyNewline}); a.Kind != ActionJump {
+	if a := m.Handle(term.Key{Kind: term.KeyNewline}); a.Kind != ActionJump {
 		t.Errorf("newline = %+v", a)
 	}
-	m.Handle(Key{Rune: 'v'})
+	m.Handle(term.Key{Rune: 'v'})
 	if m.Layout != Tiles {
 		t.Error("v did not toggle")
 	}
 	for _, r := range "/dea" {
-		m.Handle(Key{Rune: r})
+		m.Handle(term.Key{Rune: r})
 	}
 	if !m.Filtering || m.Filter != "dea" || len(m.Visible()) != 1 || m.Visible()[0].Row.Name != "proj/dead" {
 		t.Errorf("filter: %q filtering=%v visible=%d", m.Filter, m.Filtering, len(m.Visible()))
 	}
-	m.Handle(Key{Kind: KeyBackspace})
+	m.Handle(term.Key{Kind: term.KeyBackspace})
 	if m.Filter != "de" {
 		t.Errorf("backspace: %q", m.Filter)
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone || m.Filtering || m.Filter != "de" {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone || m.Filtering || m.Filter != "de" {
 		t.Errorf("enter while filtering: %+v filtering=%v filter=%q", a, m.Filtering, m.Filter)
 	}
-	m.Handle(Key{Kind: KeyEsc})
+	m.Handle(term.Key{Kind: term.KeyEsc})
 	if m.Filter != "" || len(m.Visible()) != n {
 		t.Errorf("esc did not clear the filter: %q", m.Filter)
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	// The stale fold holds one tile: the settled workspace's agent.
 	if len(m.Visible()) != n+1 {
 		t.Errorf("f showed %d rows, want %d", len(m.Visible()), n+1)
 	}
 	// The digits count the numbered rows whatever the fold: 1 is the
 	// first tile from anywhere.
-	m.Handle(Key{Rune: 'G'})
-	if a := m.Handle(Key{Rune: '1'}); a.Kind != ActionJump || m.Selection().Name != "laatmux/fix-ls" {
+	m.Handle(term.Key{Rune: 'G'})
+	if a := m.Handle(term.Key{Rune: '1'}); a.Kind != ActionJump || m.Selection().Name != "laatmux/fix-ls" {
 		t.Errorf("1 = %+v on %q", a, m.Selection().Name)
 	}
-	m.Handle(Key{Rune: 'f'})
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'g'})
 	m.Layout = Compact
 	m.Render()
-	if a := m.Handle(Key{Kind: KeyMouse, X: 3, Y: 1 + len(m.Header) + 2}); a.Kind != ActionJump || m.Selected != 2 {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 1 + len(m.Header) + 2}); a.Kind != ActionJump || m.Selected != 2 {
 		t.Errorf("click on the third row = %+v selected %d", a, m.Selected)
 	}
-	if a := m.Handle(Key{Kind: KeyMouse, X: 3, Y: 1 + len(m.Header) + n + 5}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 1 + len(m.Header) + n + 5}); a.Kind != ActionNone {
 		t.Errorf("click below the list = %+v", a)
 	}
-	m.Handle(Key{Kind: KeyMouse, Wheel: 1})
+	m.Handle(term.Key{Kind: term.KeyMouse, Wheel: 1})
 	if m.Selected != 3 {
 		t.Errorf("wheel down = %d", m.Selected)
 	}
-	if a := m.Handle(Key{Rune: 'x'}); a.Kind != ActionOther || a.Key.Rune != 'x' {
+	if a := m.Handle(term.Key{Rune: 'x'}); a.Kind != ActionOther || a.Key.Rune != 'x' {
 		t.Errorf("unknown key = %+v", a)
 	}
-	if a := m.Handle(Key{Rune: 'q'}); a.Kind != ActionQuit {
+	if a := m.Handle(term.Key{Rune: 'q'}); a.Kind != ActionQuit {
 		t.Errorf("q = %+v", a)
 	}
 	m.Message = "hello"
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	if m.Message != "" {
 		t.Error("message survived a key")
 	}
 	m.Rows = rows.Rows{}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone {
 		t.Errorf("enter on an empty list = %+v", a)
-	}
-}
-
-func TestParse(t *testing.T) {
-	cases := map[string][]Key{
-		"j":              {{Rune: 'j'}},
-		"\x1b[A\x1b[B":   {{Kind: KeyUp}, {Kind: KeyDown}},
-		"\x1bOA":         {{Kind: KeyUp}},
-		"\x1b":           {{Kind: KeyEsc}},
-		"\r":             {{Kind: KeyEnter}},
-		"\x7f":           {{Kind: KeyBackspace}},
-		"\x03":           {{Kind: KeyCtrlC}},
-		"\x1b[<0;12;5M":  {{Kind: KeyMouse, X: 12, Y: 5}},
-		"\x1b[<0;12;5m":  {{Kind: -1}},
-		"\x1b[<64;1;1M":  {{Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
-		"\x1b[<65;1;1M":  {{Kind: KeyMouse, X: 1, Y: 1, Wheel: 1}},
-		"\x1b[<2;1;1M":   {{Kind: -1}},
-		"\x1b[<32;1;1M":  {{Kind: -1}},
-		"ø":              {{Rune: 'ø'}},
-		"\x1b[1;5Cq":     {{Kind: -1}, {Rune: 'q'}},
-		"\x1bj":          {},
-		"\x1b[13;2u":     {{Kind: KeyNewline}},
-		"\x1b[27;2;13~":  {{Kind: KeyNewline}},
-		"\x1b[27;5;13~":  {{Kind: KeyNewline}},
-		"\x1b[13u":       {{Kind: KeyEnter}},
-		"\x1b[27;1;13~":  {{Kind: KeyEnter}},
-		"\x1b[9;2u":      {{Kind: KeyShiftTab}},
-		"\x1b[27u":       {{Kind: KeyEsc}},
-		"\x1b[99;5u":     {{Kind: KeyCtrlC}},
-		"\x1b[97;5u":     {{Kind: -1}},
-		"\x1b[97u":       {{Rune: 'a'}},
-		"\x1b[97:65;2u":  {{Rune: 'A'}},
-		"\x1b[27;2;97~":  {{Rune: 'A'}},
-		"\x1b[97;2u":     {{Rune: 'A'}},
-		"\x1b[106;5u":    {{Kind: KeyNewline}},
-		"\x1b[27;3;13~":  {{Kind: KeyNewline}},
-		"\x1b[27;3;120~": {{Kind: -1}},
-		"\x1b\x7f":       {},
-		"\x1b\r":         {{Kind: KeyNewline}},
-		"\x1bOP":         {},
-		"\x1b[49;2u":     {{Kind: -1}},
-		"\x1b\x1b":       {{Kind: KeyEsc}, {Kind: KeyEsc}},
-	}
-	for in, want := range cases {
-		got := Parse([]byte(in))
-		if len(got) != len(want) {
-			t.Errorf("Parse(%q) = %+v, want %+v", in, got, want)
-			continue
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("Parse(%q)[%d] = %+v, want %+v", in, i, got[i], want[i])
-			}
-		}
-	}
-}
-
-// Input split across reads: a multi-byte rune, an arrow and a mouse
-// report arrive whole once their bytes are in; a bare escape is held
-// until Flush, and an invalid byte is dropped, never a panic.
-func TestDecoderSplit(t *testing.T) {
-	for _, in := range []string{"ø", "\x1b[A", "\x1b[<0;12;5M", "j\x1b[Bk", "日本"} {
-		want := Parse([]byte(in))
-		for cut := 1; cut < len(in); cut++ {
-			var d Decoder
-			got := d.Feed([]byte(in[:cut]))
-			got = append(got, d.Feed([]byte(in[cut:]))...)
-			if d.Pending() {
-				t.Errorf("%q split at %d: still pending", in, cut)
-			}
-			if len(got) != len(want) {
-				t.Errorf("%q split at %d = %+v, want %+v", in, cut, got, want)
-				continue
-			}
-			for i := range got {
-				if got[i] != want[i] {
-					t.Errorf("%q split at %d: key %d = %+v, want %+v", in, cut, i, got[i], want[i])
-				}
-			}
-		}
-	}
-	var d Decoder
-	if got := d.Feed([]byte{0x1b}); len(got) != 0 || !d.Pending() {
-		t.Errorf("bare escape read at once: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc || d.Pending() {
-		t.Errorf("flushed escape = %+v", got)
-	}
-	if got := d.Feed([]byte{0xc3}); len(got) != 0 || !d.Pending() {
-		t.Errorf("partial rune read at once: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 0 {
-		t.Errorf("flushed partial rune = %+v", got)
-	}
-	// A mouse report cut short is dropped on flush, never read as an
-	// escape and the digits 1 and 2, which would jump.
-	if got := d.Feed([]byte("\x1b[<0;12;")); len(got) != 0 || !d.Pending() {
-		t.Errorf("partial mouse report read at once: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 0 {
-		t.Errorf("flushed partial mouse report = %+v", got)
-	}
-	// Its tail arriving after the flush is swallowed through the final
-	// byte; the key after it is read.
-	if got := d.Feed([]byte("5M")); len(got) != 0 {
-		t.Errorf("late tail of a mouse report = %+v", got)
-	}
-	if got := d.Feed([]byte("j")); len(got) != 1 || got[0].Rune != 'j' {
-		t.Errorf("key after a swallowed tail = %+v", got)
-	}
-	if got := d.Feed([]byte("\x1b[<0;1")); len(got) != 0 {
-		t.Errorf("second partial report = %+v", got)
-	}
-	d.Flush()
-	if got := d.Feed([]byte("2;3Mk")); len(got) != 1 || got[0].Rune != 'k' {
-		t.Errorf("tail and key in one read = %+v", got)
-	}
-	// A fresh report while discarding is a new sequence, read whole, not
-	// a tail whose digits leak out.
-	d.Feed([]byte("\x1b[<0;1"))
-	d.Flush()
-	if got := d.Feed([]byte("\x1b[<0;12;5M")); len(got) != 1 || got[0].Kind != KeyMouse || got[0].X != 12 {
-		t.Errorf("fresh report during discard = %+v", got)
-	}
-	d.Feed([]byte("\x1bO"))
-	d.Flush()
-	if got := d.Feed([]byte("\x1b")); len(got) != 0 || !d.Pending() {
-		t.Errorf("fresh escape during discard = %+v", got)
-	}
-	if got := d.Flush(); len(got) != 1 || got[0].Kind != KeyEsc {
-		t.Errorf("flushed fresh escape = %+v", got)
-	}
-	if got := d.Feed([]byte("\x1bO")); len(got) != 0 {
-		t.Errorf("partial SS3 read at once: %+v", got)
-	}
-	if got := d.Flush(); len(got) != 0 {
-		t.Errorf("flushed partial SS3 = %+v", got)
-	}
-	// Escape then a key that is no sequence, in one read, is an Alt
-	// chord: neither the Esc that cancels nor the key.
-	if got := d.Feed([]byte("\x1bj")); len(got) != 0 || d.Pending() {
-		t.Errorf("escape then j = %+v", got)
-	}
-	if got := Parse([]byte{0xc3, 'j'}); len(got) != 1 || got[0].Rune != 'j' {
-		t.Errorf("invalid byte then j = %+v", got)
 	}
 }
 
@@ -397,8 +252,8 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
 	m.Layout, m.Width, m.Height = Compact, 80, 30
-	m.Handle(Key{Rune: 'j'})
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	was := m.Selection()
 	if was.Name != "proj/task" || m.Selected != 2 {
 		t.Fatalf("selected %q at %d", was.Name, m.Selected)
@@ -438,7 +293,7 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 	if got := m.Selection(); got != nil || m.Selected != -1 {
 		t.Errorf("after removal: %+v index %d", got, m.Selected)
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone {
 		t.Errorf("enter on no selection = %+v", a)
 	}
 	m.Render()
@@ -446,7 +301,7 @@ func TestSetRowsKeepsSelection(t *testing.T) {
 		t.Error("a render put the selection back on a row")
 	}
 	// A key moves it onto a row again, the user's.
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	if got := m.Selection(); got == nil || m.Selected != 0 {
 		t.Errorf("j after removal: %+v index %d", got, m.Selected)
 	}
@@ -538,12 +393,12 @@ func TestFollowSelection(t *testing.T) {
 			t.Fatal("a row drawn selected with nothing selected")
 		}
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone {
 		t.Fatalf("Enter with nothing selected: %+v", a)
 	}
 	// A digit jumps to the row it counts; the selection goes on
 	// following, so it is on the viewer's own row when they are back.
-	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.Name != m.Visible()[1].Row.Name || m.Selected != -1 || !m.Follow || a.Mouse {
+	if a := m.Handle(term.Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.Name != m.Visible()[1].Row.Name || m.Selected != -1 || !m.Follow || a.Mouse {
 		t.Fatalf("digit with nothing selected: %+v at %d follow=%v", a, m.Selected, m.Follow)
 	}
 	// Following again, then a key: the selection is the user's and a
@@ -554,7 +409,7 @@ func TestFollowSelection(t *testing.T) {
 	if m.Selected != 1 {
 		t.Fatalf("following again: %d", m.Selected)
 	}
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	taken := m.Selection()
 	if m.Follow || taken == nil || taken.Name == "proj/task" || m.Selected != 2 {
 		t.Fatalf("after j: %+v at %d follow=%v", taken, m.Selected, m.Follow)
@@ -590,21 +445,21 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	m.SetRows(rows.Agents(in))
 	// Filter to rows that are not the viewer's: rows remain, none is
 	// selected, and Enter has nothing to act on.
-	m.Handle(Key{Rune: '/'})
+	m.Handle(term.Key{Rune: '/'})
 	for _, r := range "notes" {
-		m.Handle(Key{Kind: KeyRune, Rune: r})
+		m.Handle(term.Key{Kind: term.KeyRune, Rune: r})
 	}
-	m.Handle(Key{Kind: KeyEnter}) // leaves the filter typing, keeps the filter
+	m.Handle(term.Key{Kind: term.KeyEnter}) // leaves the filter typing, keeps the filter
 	if vis := m.Visible(); len(vis) == 0 || m.Filter != "notes" {
 		t.Fatalf("filter %q left %d rows", m.Filter, len(vis))
 	}
 	if got := m.Selection(); got != nil || !m.Follow {
 		t.Fatalf("filtered away: %+v follow=%v", got, m.Follow)
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone {
 		t.Fatalf("Enter with the viewer's row filtered away: %+v", a)
 	}
-	m.Handle(Key{Kind: KeyEsc})
+	m.Handle(term.Key{Kind: term.KeyEsc})
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
 		t.Fatalf("filter cleared: %+v follow=%v", got, m.Follow)
 	}
@@ -619,8 +474,8 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !got.Settled || !m.Follow {
 		t.Fatalf("settled: %+v follow=%v", got, m.Follow)
 	}
-	m.Handle(Key{Rune: 'f'})
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if got := m.Selection(); got == nil || got.Name != "proj/task" || !m.Follow {
 		t.Fatalf("after f twice: %+v follow=%v", got, m.Follow)
 	}
@@ -636,22 +491,22 @@ func TestFollowThroughFilterAndGroups(t *testing.T) {
 	if m.Selected != 0 {
 		t.Fatalf("current first: %d", m.Selected)
 	}
-	m.Handle(Key{Kind: KeyUp})
-	m.Handle(Key{Rune: 'k'})
-	m.Handle(Key{Rune: 'g'})
-	m.Handle(Key{Kind: KeyMouse, Wheel: -1})
-	if a := m.Handle(Key{Rune: '1'}); a.Kind != ActionJump || !m.Follow || m.Selected != 0 {
+	m.Handle(term.Key{Kind: term.KeyUp})
+	m.Handle(term.Key{Rune: 'k'})
+	m.Handle(term.Key{Rune: 'g'})
+	m.Handle(term.Key{Kind: term.KeyMouse, Wheel: -1})
+	if a := m.Handle(term.Key{Rune: '1'}); a.Kind != ActionJump || !m.Follow || m.Selected != 0 {
 		t.Fatalf("moves that change nothing: %+v follow=%v at %d", a, m.Follow, m.Selected)
 	}
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	if m.Follow || m.Selected != 1 {
 		t.Fatalf("a move that changes: follow=%v at %d", m.Follow, m.Selected)
 	}
 	m = model(now)
 	m.Follow = true
 	m.SetRows(rows.Agents(rows.Input{}))
-	m.Handle(Key{Rune: 'j'})
-	m.Handle(Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'G'})
 	if got := m.Selection(); got != nil || !m.Follow {
 		t.Fatalf("empty list: %+v follow=%v", got, m.Follow)
 	}
@@ -744,12 +599,12 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	if !m.Spinning() {
 		t.Fatal("working rows at the top and no spinning")
 	}
-	m.Handle(Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'G'})
 	m.Render()
 	if m.Spinning() {
 		t.Fatal("working rows scrolled off and still spinning")
 	}
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	m.Render()
 	if !m.Spinning() {
 		t.Fatal("scrolled back and not spinning")
@@ -771,7 +626,7 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	// window's last line for their count, so six body lines show its
 	// icon and five cut the tile off above it.
 	m.Layout = Tiles
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	m.Height = len(m.Header) + 6 + 1
 	m.Render()
 	if !m.Spinning() {
@@ -826,19 +681,19 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 func TestNewlineIsEnter(t *testing.T) {
 	m := &Model{Width: 80, Height: 24}
 	m.Filtering = true
-	m.Handle(Key{Kind: KeyNewline})
+	m.Handle(term.Key{Kind: term.KeyNewline})
 	if m.Filtering {
 		t.Fatal("the filter did not close on a newline")
 	}
 	p := NewPicker("t", []Choice{{Label: "a"}}, 0)
-	p.Handle(Key{Kind: KeyNewline})
+	p.Handle(term.Key{Kind: term.KeyNewline})
 	if !p.Done() || p.Chosen != 0 {
 		t.Fatalf("picker: done %v chosen %d", p.Done(), p.Chosen)
 	}
 	f := NewForm("t", chips(), "")
-	f.Handle(Key{Kind: KeyShiftTab})
-	f.Handle(Key{Kind: KeyShiftTab}) // the agent chip
-	f.Handle(Key{Kind: KeyNewline})
+	f.Handle(term.Key{Kind: term.KeyShiftTab})
+	f.Handle(term.Key{Kind: term.KeyShiftTab}) // the agent chip
+	f.Handle(term.Key{Kind: term.KeyNewline})
 	if f.picker == nil {
 		t.Fatal("a newline on a chip did not open the picker")
 	}
@@ -968,7 +823,7 @@ func TestAnchorStandIn(t *testing.T) {
 	}
 	m := &Model{Width: 60, Height: 20, Now: now}
 	set(m, stuck, next)
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	if r := m.Selection(); r == nil || r.ID() != "add-b" {
 		t.Fatalf("selected %+v", r)
 	}
@@ -999,7 +854,7 @@ func TestAnchorStandIn(t *testing.T) {
 	// the same worktree, found by the alias alone.
 	u := &Model{Width: 60, Height: 20, Now: now}
 	set(u, stuck, next)
-	u.Handle(Key{Rune: 'g'})
+	u.Handle(term.Key{Rune: 'g'})
 	u.Selection()
 	set(u, stuck)
 	if r := u.Selection(); r == nil || r.ID() != "add-a" {
@@ -1037,14 +892,14 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	if m.hitRow(y, time.Time{}) == own {
 		t.Fatal("the fixture's first row is the viewer's own")
 	}
-	a := m.Handle(Key{Kind: KeyMouse, Y: y})
+	a := m.Handle(term.Key{Kind: term.KeyMouse, Y: y})
 	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || !a.Mouse || !m.Follow || m.Selected != own {
 		t.Fatalf("click while following: %+v selected %d follow %v", a, m.Selected, m.Follow)
 	}
 	// The user's own selection: j, then a click, moves it there.
-	m.Handle(Key{Rune: 'j'})
+	m.Handle(term.Key{Rune: 'j'})
 	m.Render()
-	a = m.Handle(Key{Kind: KeyMouse, Y: y})
+	a = m.Handle(term.Key{Kind: term.KeyMouse, Y: y})
 	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y, time.Time{}) {
 		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
 	}
@@ -1060,11 +915,11 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 		in2.Agents[i].Activity = protocol.Idle
 	}
 	m.SetRows(rows.Agents(in2))
-	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, Y: y}); a.Kind != ActionJump || a.Row.Name != drawn {
 		t.Fatalf("after a reorder: jumped to %+v, drawn was %q", a.Row, drawn)
 	}
 	m.Filter = "zzz-nothing"
-	if a := m.Handle(Key{Kind: KeyMouse, Y: y}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, Y: y}); a.Kind != ActionNone {
 		t.Fatalf("a row filtered away since: %+v", a)
 	}
 	// A row that moved into a collapsed group since is no target either:
@@ -1093,7 +948,7 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	if i := m.hitRow(sy, time.Time{}); i != -1 {
 		t.Fatalf("a row collapsed since resolved to %d", i)
 	}
-	if a := m.Handle(Key{Kind: KeyMouse, Y: sy}); a.Kind != ActionNone {
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, Y: sy}); a.Kind != ActionNone {
 		t.Fatalf("a click on a row collapsed since: %+v", a)
 	}
 }
@@ -1129,140 +984,6 @@ func TestClickOnScreenItWasRead(t *testing.T) {
 	m.Render()
 	if i := m.hitRow(y, clicked); i != -1 {
 		t.Fatalf("a click read before two redraws resolved to %d", i)
-	}
-}
-
-// A click split across reads is dated from when its first bytes came;
-// a click begun in a read from that read, whatever the held bytes
-// before it turned out to be.
-func TestFeedAtDatesClicks(t *testing.T) {
-	t1, t2, t3 := time.Unix(10, 0), time.Unix(20, 0), time.Unix(30, 0)
-	click := func(ks []Key, want time.Time) bool {
-		return len(ks) == 1 && ks[0].Kind == KeyMouse && ks[0].At.Equal(want)
-	}
-	var dec Decoder
-	if ks := dec.FeedAt([]byte("\x1b[<0;5;"), t1); len(ks) != 0 {
-		t.Fatalf("half a click: %+v", ks)
-	}
-	if ks := dec.FeedAt([]byte("3M"), t2); !click(ks, t1) {
-		t.Fatalf("split click: %+v", ks)
-	}
-	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2); !click(ks, t2) {
-		t.Fatalf("whole click: %+v", ks)
-	}
-	// The completion of a held click and a fresh one in the same read,
-	// then the rest of a click begun in that read.
-	dec.FeedAt([]byte("\x1b[<0;5;"), t1)
-	ks := dec.FeedAt([]byte("3M\x1b[<0;6;4M\x1b[<0;7;"), t2)
-	if len(ks) != 2 || !ks[0].At.Equal(t1) || !ks[1].At.Equal(t2) {
-		t.Fatalf("completion and a fresh click: %+v", ks)
-	}
-	if ks := dec.FeedAt([]byte("8M"), t3); !click(ks, t2) {
-		t.Fatalf("a click begun after a completion: %+v", ks)
-	}
-	// Held bytes completed as a sequence that gives no key: a click
-	// after them in the same read is that read's, whole or split.
-	dec.FeedAt([]byte("\x1bO"), t1)
-	if ks := dec.FeedAt([]byte("P\x1b[<0;5;3M"), t2); !click(ks, t2) {
-		t.Fatalf("a click after an ignored completion: %+v", ks)
-	}
-	dec.FeedAt([]byte("\x1bO"), t1)
-	if ks := dec.FeedAt([]byte("P\x1b[<0;5;"), t2); len(ks) != 0 {
-		t.Fatalf("an ignored completion and half a click: %+v", ks)
-	}
-	if ks := dec.FeedAt([]byte("3M"), t3); !click(ks, t2) {
-		t.Fatalf("a split click after an ignored completion: %+v", ks)
-	}
-	// A bare escape held, then flushed as the escape key: a click after
-	// it has its own time.
-	dec.FeedAt([]byte("\x1b"), t1)
-	dec.Flush()
-	if ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t3); !click(ks, t3) {
-		t.Fatalf("a click after a flushed escape: %+v", ks)
-	}
-	// Feed, with no time, dates nothing.
-	if ks := dec.Feed([]byte("\x1b[<0;5;3M")); !click(ks, time.Time{}) {
-		t.Fatalf("a click fed with no time: %+v", ks)
-	}
-}
-
-// A sequence cut short by a new escape, Alt-[ or an Esc and [ read
-// together, is dropped up to it, and what follows is parsed afresh: a
-// click right after is the click, not the digits of its report, which
-// would jump. Held across reads, the click keeps its own read's time.
-func TestBrokenSequenceBeforeClick(t *testing.T) {
-	for in, want := range map[string][]Key{
-		"\x1b[\x1b[<0;5;3M": {{Kind: -1}, {Kind: KeyMouse, X: 5, Y: 3}},
-		"\x1b[1;\x1b[A":     {{Kind: -1}, {Kind: KeyUp}},
-		"\x1b[\x03":         {{Kind: -1}, {Kind: KeyCtrlC}},
-		// Alt-O the same way: SS3 cut short.
-		"\x1bO\x1b[<0;5;3M": {{Kind: KeyMouse, X: 5, Y: 3}},
-		"\x1bO\r":           {{Kind: KeyEnter}},
-		// The old form of a modified F1 is dropped whole, not a digit.
-		"\x1bO2P":              nil,
-		"\x1bO1;2Pj":           {{Rune: 'j'}},
-		"\x1bO2\x03":           {{Kind: KeyCtrlC}},
-		"\x1bO 2Pj":            {{Rune: 'j'}},
-		"\x1b[12\x1b[<64;1;1M": {{Kind: -1}, {Kind: KeyMouse, X: 1, Y: 1, Wheel: -1}},
-	} {
-		if got := Parse([]byte(in)); !reflect.DeepEqual(got, want) {
-			t.Errorf("%q: %+v, want %+v", in, got, want)
-		}
-	}
-	t1, t2 := time.Unix(10, 0), time.Unix(20, 0)
-	var dec Decoder
-	if ks := dec.FeedAt([]byte("\x1b["), t1); len(ks) != 0 || !dec.Pending() {
-		t.Fatalf("Alt-[ held: %+v", ks)
-	}
-	ks := dec.FeedAt([]byte("\x1b[<0;5;3M"), t2)
-	if len(ks) != 2 || ks[0].Kind != -1 || ks[1].Kind != KeyMouse || ks[1].X != 5 || !ks[1].At.Equal(t2) || dec.Pending() {
-		t.Fatalf("a click after a held Alt-[: %+v pending %v", ks, dec.Pending())
-	}
-}
-
-// A sequence flushed incomplete is discarded through its final byte
-// when the rest comes, but a byte that cannot go on, Ctrl-C or Enter or
-// a fresh escape, is the user's and comes through.
-func TestDiscardStopsAtUserKeys(t *testing.T) {
-	for in, want := range map[string][]Key{
-		"2;5H":   nil,
-		"\x03":   {{Kind: KeyCtrlC}},
-		"\rq":    {{Kind: KeyEnter}, {Rune: 'q'}},
-		"\x1b[A": {{Kind: KeyUp}},
-		"1;\x03": {{Kind: KeyCtrlC}},
-		"9~j":    {{Rune: 'j'}},
-	} {
-		var d Decoder
-		d.Feed([]byte("\x1b[1"))
-		if got := d.Flush(); len(got) != 0 {
-			t.Fatalf("flush: %+v", got)
-		}
-		if got := d.Feed([]byte(in)); !reflect.DeepEqual(got, want) {
-			t.Errorf("%q after a flushed ESC [1: %+v, want %+v", in, got, want)
-		}
-	}
-}
-
-// A sequence cut short inside pasted text is dropped up to the byte
-// that ends it, which stays text; a whole one is dropped whole.
-func TestPasteTextBrokenSequence(t *testing.T) {
-	for in, want := range map[string]string{
-		"a\x1b[31mb":       "ab",
-		"a\x1b[\nbéc":      "a\nbéc",
-		"x\x1b[ 1 2 3 日":   "x日",
-		"\x1b[\x1b[31mred": "red",
-		"a\x1bOPb":         "ab",
-		"a\x1bO\nb":        "a\nb",
-		"a\x1bO1;2Pb":      "ab",
-		"a\x1bO 1Pb":       "ab",
-	} {
-		if got := pasteText([]byte(in)); got != want {
-			t.Errorf("pasteText(%q) = %q, want %q", in, got, want)
-		}
-	}
-	// A chunk is not cut before such a sequence's text: it has ended.
-	if head, tail := splitTail([]byte("ok \x1b[\n12")); string(head) != "ok \x1b[\n12" || len(tail) != 0 {
-		t.Errorf("splitTail: %q %q", head, tail)
 	}
 }
 
@@ -1429,12 +1150,12 @@ func TestRenderTree(t *testing.T) {
 	// auto-layout, whose agent is done, starts open; fix-sidebar has no
 	// children; folding agents-config shows the working spinner at the
 	// right.
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	golden(t, "tree-folded", Debug(m.Render()))
 	m.Width = 30
 	golden(t, "tree-narrow", Debug(m.Render()))
 	m.Width = 60
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	golden(t, "tree-agents", Debug(m.Render()))
 }
 
@@ -1458,54 +1179,54 @@ func TestSwitch(t *testing.T) {
 		return r.ID()
 	}
 	m.Select("venv/laatmux/%2") // codex under agents-config
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if m.View != ViewAgents || sel() != "venv/laatmux/%2" {
 		t.Errorf("agent to its tile: view %s, selection %q", m.View, sel())
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if m.View != ViewTree || sel() != "venv/laatmux/%2" {
 		t.Errorf("tile to its node: view %s, selection %q", m.View, sel())
 	}
 	// The worktree line, then a pane under it: the first agent.
 	for _, id := range []string{"venv/worktree//r/agents-config", "venv/pane/laatmux/%7"} {
 		m.Select(id)
-		m.Handle(Key{Kind: KeyTab})
+		m.Handle(term.Key{Kind: term.KeyTab})
 		if sel() != "venv/laatmux/%1" {
 			t.Errorf("from %s: %q", id, sel())
 		}
-		m.Handle(Key{Kind: KeyTab})
+		m.Handle(term.Key{Kind: term.KeyTab})
 	}
 	// A repository line: its first worktree's first agent.
 	m.Select(rows.RepoNode("git@github.com:laat/laatmux.git"))
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if sel() != "venv/laatmux/%1" {
 		t.Errorf("from the repository: %q", sel())
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	// A task: itself.
 	m.Select("add-1")
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if sel() != "add-1" {
 		t.Errorf("from a task: %q", sel())
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	// A worktree with no agent: no row.
 	m.Select("menv/worktree//w/fix-sidebar")
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if sel() != "" {
 		t.Errorf("from an empty worktree: %q", sel())
 	}
 	// Folded away, then reached from the tile: opened.
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	m.Select("venv/worktree//r/agents-config")
 	before := len(m.Visible())
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	if len(m.Visible()) != before-4 {
 		t.Fatalf("not folded: %d rows, %d before", len(m.Visible()), before)
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	m.Select("venv/laatmux/%2")
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if sel() != "venv/laatmux/%2" || m.closed(&m.Tree[m.indexOf("venv/worktree//r/agents-config")]) {
 		t.Errorf("a target in a folded worktree: %q, still folded", sel())
 	}
@@ -1536,33 +1257,33 @@ func TestFolds(t *testing.T) {
 		t.Error("a fold changed as the agent worked")
 	}
 	m.Select("venv/laatmux/%2")
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" {
 		t.Errorf("h from a child: %+v", r)
 	}
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	if open("venv/worktree//r/agents-config") {
 		t.Error("h on the line did not fold")
 	}
-	m.Handle(Key{Rune: 'l'})
+	m.Handle(term.Key{Rune: 'l'})
 	if !open("venv/worktree//r/agents-config") {
 		t.Error("l did not unfold")
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if !open("venv/worktree//r/auto-layout") {
 		t.Error("f with a fold closed did not open every one")
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if open("venv/worktree//r/agents-config") || open(rows.RepoNode("git@github.com:laat/laatmux.git")) {
 		t.Error("f with every fold open did not close every one")
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	m.Select(rows.RepoNode("git@github.com:laat/laatmux.git"))
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionNone || open(rows.RepoNode("git@github.com:laat/laatmux.git")) {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionNone || open(rows.RepoNode("git@github.com:laat/laatmux.git")) {
 		t.Errorf("Enter on a repository line: %+v", a)
 	}
-	m.Handle(Key{Kind: KeyEnter})
-	if a := m.Handle(Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != "venv/worktree//r/agents-config" {
+	m.Handle(term.Key{Kind: term.KeyEnter})
+	if a := m.Handle(term.Key{Rune: '2'}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != "venv/worktree//r/agents-config" {
 		t.Errorf("2: %+v", a)
 	}
 }
@@ -1578,7 +1299,7 @@ func TestFollowTree(t *testing.T) {
 	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" {
 		t.Errorf("tree follows %+v", r)
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%1" || !m.Follow {
 		t.Errorf("agent view follows %+v", r)
 	}
@@ -1604,7 +1325,7 @@ func TestTreeEdges(t *testing.T) {
 		t.Error("a task with an idle agent started open")
 	}
 	m.Select("add-1")
-	m.Handle(Key{Rune: 'l'}) // the user's own fold: open
+	m.Handle(term.Key{Rune: 'l'}) // the user's own fold: open
 	// The host lists the worktree; the task hands over.
 	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
 	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
@@ -1619,8 +1340,8 @@ func TestTreeEdges(t *testing.T) {
 		t.Errorf("selection after the handoff: %+v", r)
 	}
 	// In the agent view the handoff lands on the worktree's first tile.
-	m.Handle(Key{Kind: KeyTab})
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	m.Select("add-1")
 	m.View = ViewAgents
 	m.anchor = "add-1"
@@ -1632,25 +1353,25 @@ func TestTreeEdges(t *testing.T) {
 	// them), a switch away and back.
 	m.View, m.Follow = ViewTree, true
 	m.Selection()
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if len(m.Visible()) > 6 {
 		t.Fatalf("not folded: %d", len(m.Visible()))
 	}
-	m.Handle(Key{Kind: KeyTab})
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if r := m.Selection(); r == nil || r.ID() != "venv/worktree//r/agents-config" || !m.Follow {
 		t.Errorf("following after a switch with folds closed: %+v", r)
 	}
 	// f keeps a user's selection on its row, or on the line over it.
-	m.Handle(Key{Rune: 'f'}) // every fold open again
+	m.Handle(term.Key{Rune: 'f'}) // every fold open again
 	if !m.Select("venv/laatmux/%2") {
 		t.Fatal("the child is not visible")
 	}
-	m.Handle(Key{Rune: 'f'}) // closes every fold: the child is hidden
+	m.Handle(term.Key{Rune: 'f'}) // closes every fold: the child is hidden
 	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
 		t.Errorf("f with the selection on a child: %+v", r)
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if r := m.Selection(); r == nil || r.ID() != rows.RepoNode(src) {
 		t.Errorf("f opening every fold moved the selection: %+v", r)
 	}
@@ -1659,9 +1380,9 @@ func TestTreeEdges(t *testing.T) {
 	m.Follow = false
 	shown, hidden := "venv/worktree//r/agents-config", "venv/worktree//r/auto-layout"
 	m.Select(hidden)
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	m.Select(shown)
-	m.Handle(Key{Rune: 'l'})
+	m.Handle(term.Key{Rune: 'l'})
 	if !m.closed(&m.Tree[m.indexOf(hidden)]) || m.closed(&m.Tree[m.indexOf(shown)]) {
 		t.Fatal("the folds before the filter")
 	}
@@ -1670,7 +1391,7 @@ func TestTreeEdges(t *testing.T) {
 	if vis := m.Visible(); len(vis) != 6 || vis[1].Row.ID() != shown {
 		t.Fatalf("the filtered tree: %d rows", len(vis))
 	}
-	m.Handle(Key{Rune: 'f'})
+	m.Handle(term.Key{Rune: 'f'})
 	if !m.closed(&m.Tree[m.indexOf(shown)]) {
 		t.Error("f under a filter opened by a hidden fold")
 	}
@@ -1678,15 +1399,15 @@ func TestTreeEdges(t *testing.T) {
 	// A click on the tab shown does nothing; on the other, a switch.
 	m.Tabs = true
 	m.Render()
-	m.Handle(Key{Kind: KeyMouse, X: 12, Y: 1})
+	m.Handle(term.Key{Kind: term.KeyMouse, X: 12, Y: 1})
 	if m.View != ViewTree {
 		t.Error("a click on the shown tab switched")
 	}
-	m.Handle(Key{Kind: KeyMouse, X: 4, Y: 1})
+	m.Handle(term.Key{Kind: term.KeyMouse, X: 4, Y: 1})
 	if m.View != ViewAgents {
 		t.Error("a click on the other tab did not switch")
 	}
-	m.Handle(Key{Kind: KeyMouse, X: 9, Y: 1})
+	m.Handle(term.Key{Kind: term.KeyMouse, X: 9, Y: 1})
 	if m.View != ViewAgents {
 		t.Error("a click between the tabs switched")
 	}
@@ -1702,7 +1423,7 @@ func TestTreePinned(t *testing.T) {
 	m.SetTree(rows.Tree(in))
 	m.Render()
 	vis := m.Visible()
-	m.Handle(Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'G'})
 	out := m.Render()
 	last := vis[len(vis)-1].Row
 	if r := m.Selection(); r == nil || r.ID() != last.ID() {
@@ -1721,7 +1442,7 @@ func TestTreePinned(t *testing.T) {
 	// Walking up to the top: the selection shown on every step, no row
 	// under the more line, never "0 more", and a repository line at the
 	// top of the window has no pin over it.
-	walk := func(m *Model, key Key) {
+	walk := func(m *Model, key term.Key) {
 		t.Helper()
 		for step := 0; ; step++ {
 			out := m.Render()
@@ -1745,7 +1466,7 @@ func TestTreePinned(t *testing.T) {
 			if m.scroll > 0 && strings.Contains(out[1].Spans[0].Text, "laatmux") && out[1].Spans[0].Bold && out[2].Spans[0].Bold {
 				t.Errorf("step %d: a repository pinned over itself:\n%s", step, text)
 			}
-			if m.Selected == 0 && key.Kind == KeyUp || m.Selected == len(m.Visible())-1 && key.Kind == KeyDown {
+			if m.Selected == 0 && key.Kind == term.KeyUp || m.Selected == len(m.Visible())-1 && key.Kind == term.KeyDown {
 				break
 			}
 			m.Handle(key)
@@ -1753,18 +1474,18 @@ func TestTreePinned(t *testing.T) {
 	}
 	for _, h := range []int{7, 8, 9} {
 		m.Height = h
-		m.Handle(Key{Rune: 'G'})
-		walk(m, Key{Kind: KeyUp})
-		m.Handle(Key{Rune: 'g'})
-		walk(m, Key{Kind: KeyDown})
+		m.Handle(term.Key{Rune: 'G'})
+		walk(m, term.Key{Kind: term.KeyUp})
+		m.Handle(term.Key{Rune: 'g'})
+		walk(m, term.Key{Kind: term.KeyDown})
 	}
 	// Moving down to where the more line is needed pins the repository
 	// in the same render.
 	m.Height = 8
-	m.Handle(Key{Rune: 'g'})
+	m.Handle(term.Key{Rune: 'g'})
 	m.Render()
 	for i := 0; i < 5; i++ {
-		m.Handle(Key{Kind: KeyDown})
+		m.Handle(term.Key{Kind: term.KeyDown})
 	}
 	if out := m.Render(); m.scroll == 0 || !out[1].Spans[0].Bold || m.hitIDs[0] != rows.RepoNode("git@github.com:laat/anki-llm") && m.hitIDs[0] != rows.RepoNode("git@github.com:laat/laatmux.git") {
 		t.Errorf("scroll %d without a pin:\n%s", m.scroll, Debug(out))
@@ -1776,12 +1497,12 @@ func TestTreePinned(t *testing.T) {
 	m.Height = 8
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in))
-	m.Handle(Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'G'})
 	text = Debug(m.Render())
 	if strings.Contains(text, "laatmux") {
 		t.Errorf("a repository pinned over other sessions:\n%s", text)
 	}
-	walk(m, Key{Kind: KeyUp})
+	walk(m, term.Key{Kind: term.KeyUp})
 }
 
 // Two repositories with an empty worktree each and one observed agent
@@ -1804,7 +1525,7 @@ func TestTreePinnedSmall(t *testing.T) {
 		m.SetTree(rows.Tree(in))
 		m.SetRows(rows.Agents(in))
 		m.Render()
-		m.Handle(Key{Rune: 'G'})
+		m.Handle(term.Key{Rune: 'G'})
 		text := Debug(m.Render())
 		if !strings.Contains(text, "\nS") || strings.Contains(text, "↓ 0 more") {
 			t.Errorf("height %d: the selection is not shown:\n%s", h, text)
@@ -1813,7 +1534,7 @@ func TestTreePinnedSmall(t *testing.T) {
 			t.Errorf("height %d: the next render differs:\n%s\nthen:\n%s", h, text, again)
 		}
 		for m.Selected > 0 {
-			m.Handle(Key{Kind: KeyUp})
+			m.Handle(term.Key{Kind: term.KeyUp})
 			if text := Debug(m.Render()); !strings.Contains(text, "\nS") {
 				t.Errorf("height %d: the selection is not shown:\n%s", h, text)
 			}
@@ -1842,7 +1563,7 @@ func TestTreePinnedEnd(t *testing.T) {
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in))
 	m.Render()
-	m.Handle(Key{Rune: 'G'})
+	m.Handle(term.Key{Rune: 'G'})
 	out := m.Render()
 	text := Debug(out)
 	if !strings.Contains(text, "\nS") || strings.Contains(text, "↓") {
@@ -1884,7 +1605,7 @@ func TestHandoffStanding(t *testing.T) {
 		t.Fatal("the owner with an idle agent started open")
 	}
 	m.Select("add-2")
-	m.Handle(Key{Rune: 'l'}) // opened by the user
+	m.Handle(term.Key{Rune: 'l'}) // opened by the user
 	// add-2 hands over; add-1 stands still.
 	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree//r/new-one", EnvironmentID: "venv", Repo: "laatmux", Source: src, Branch: "new-one", Root: "/r/new-one", Session: "laatmux/new-one"})
 	in.Agents[len(in.Agents)-1].WorktreeID = "venv/worktree//r/new-one"
@@ -1922,7 +1643,7 @@ func TestHandoffStanding(t *testing.T) {
 	// the closed fold, with no handoff.
 	m.Handoffs = nil
 	m.Select("add-1")
-	m.Handle(Key{Rune: 'h'})
+	m.Handle(term.Key{Rune: 'h'})
 	if !m.closed(&m.Tree[m.indexOf("add-1")]) {
 		t.Fatal("h did not fold the owner")
 	}
@@ -1952,7 +1673,7 @@ func TestHandoffStanding(t *testing.T) {
 		t.Fatalf("the newest loose task does not hold the agent: %q", m.successor("venv/worktree//r/new-one"))
 	}
 	m.Select("add-2")
-	m.Handle(Key{Rune: 'l'})
+	m.Handle(term.Key{Rune: 'l'})
 	// A fresh record: the tree's rows point into the input's.
 	in.Pendings = append([]protocol.Pending(nil), in.Pendings...)
 	in.Pendings[1].Done, in.Pendings[1].OK, in.Pendings[1].Error = true, false, "failed at agent: boom"
@@ -1984,11 +1705,11 @@ func TestSwitchToStale(t *testing.T) {
 	if len(m.Rows.Stale) != 1 {
 		t.Fatalf("stale tiles: %d", len(m.Rows.Stale))
 	}
-	m.Handle(Key{Rune: 'f'}) // every fold open
+	m.Handle(term.Key{Rune: 'f'}) // every fold open
 	if !m.Select("venv/laatmux/%8") {
 		t.Fatal("the stale agent is not visible in the tree")
 	}
-	m.Handle(Key{Kind: KeyTab})
+	m.Handle(term.Key{Kind: term.KeyTab})
 	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%8" || !m.ShowHidden {
 		t.Errorf("switch to a stale tile: %+v shown %v", r, m.ShowHidden)
 	}

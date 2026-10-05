@@ -896,6 +896,16 @@ func clip(spans []Span, w int) []Span {
 	return out
 }
 
+// encode is the frame as the terminal draws it, each line with its
+// attributes in the theme.
+func encode(lines []Line, th palette.Theme) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = ANSI(l, th)
+	}
+	return out
+}
+
 // Text is the lines as plain text, one per line, for tests and for a
 // terminal without attributes.
 func Text(lines []Line) string {

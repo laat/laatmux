@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
@@ -62,7 +63,7 @@ type running struct {
 func (d *dash) act(m *view.Model, a view.Action) bool {
 	switch a.Kind {
 	case view.ActionOther:
-		if a.Key.Kind != view.KeyRune {
+		if a.Key.Kind != term.KeyRune {
 			return false
 		}
 		switch a.Key.Rune {

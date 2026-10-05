@@ -6,6 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/laat/laatmux/internal/term"
 )
 
 // Host is what a view's host supplies: a signal that the rows changed,
@@ -44,37 +46,15 @@ const answerLate = 3 * time.Second
 const escapeWait = 50 * time.Millisecond
 
 // Run draws the model and handles keys until the host is done, q is
-// pressed, or ctx ends. The rows are refreshed on every change signal
+// pressed, or ctx ends. The keys come from the terminal's Input, a
+// batch per read or flush, and the screen is redrawn after each. The rows are refreshed on every change signal
 // and the ages every five seconds, every second while a time in seconds
 // is drawn, the spinner four times a second while a working row is on
 // the list; a resize redraws. An overlay that
 // finishes on its own is noticed on the change signal, so a host that
 // ends one from another goroutine signals it.
-func Run(ctx context.Context, t *Term, m *Model, h Host) error {
-	// Each read is stamped as it arrives: a click is on the screen that
-	// was drawn then, whatever is drawn before it is handled.
-	type input struct {
-		b  []byte
-		at time.Time
-	}
-	keys := make(chan input)
-	go func() {
-		buf := make([]byte, 256)
-		for {
-			n, err := t.in.Read(buf)
-			if err != nil {
-				close(keys)
-				return
-			}
-			b := make([]byte, n)
-			copy(b, buf[:n])
-			select {
-			case keys <- input{b, time.Now()}:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+func Run(ctx context.Context, t *term.Term, m *Model, h Host) error {
+	keys := t.Input(ctx)
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 	defer signal.Stop(winch)
@@ -83,12 +63,12 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 	draw := func() {
 		m.Now = time.Now()
 		m.Width, m.Height = t.Size()
-		t.Draw(m.Render())
+		t.Draw(encode(m.Render(), t.Theme))
 		// The new screen is on the terminal from here: a click read
 		// before now was on the one before it.
 		m.hitAt = time.Now()
 	}
-	handle := func(ks []Key) (done bool) {
+	handle := func(ks []term.Key) (done bool) {
 		for _, k := range ks {
 			a := m.Handle(k)
 			if a.Kind == ActionQuit {
@@ -103,27 +83,10 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 		}
 		return false
 	}
-	var dec Decoder
-	var flush, spin <-chan time.Time
+	var spin <-chan time.Time
 	h.Refresh(m)
 	if m.SettingsChanged() && h.Act(m, Action{Kind: ActionSettings}) {
 		return nil
-	}
-	// An answer the query did not get may come late: the decoder
-	// expects it a while. Keys that came while the terminal was asked
-	// for its background are the first input.
-	if t.unanswered {
-		dec.ExpectAnswer(time.Now().Add(answerLate))
-	}
-	if len(t.pending) > 0 {
-		ks := dec.FeedAt(t.pending, time.Now())
-		t.pending = nil
-		if handle(ks) {
-			return nil
-		}
-		if w := dec.Wait(); w > 0 {
-			flush = time.After(w)
-		}
 	}
 	draw()
 	for {
@@ -164,27 +127,12 @@ func Run(ctx context.Context, t *Term, m *Model, h Host) error {
 			}
 		case <-spin:
 		case <-winch:
-		case <-flush:
-			flush = nil
-			if handle(dec.Flush()) {
-				return nil
-			}
-			if w := dec.Wait(); w > 0 {
-				// A paste under way: looked at again, so one whose end
-				// never comes is taken once its bytes have stopped.
-				flush = time.After(w)
-			}
-		case in, ok := <-keys:
+		case ks, ok := <-keys:
 			if !ok {
 				return nil
 			}
-			ks := dec.FeedAt(in.b, in.at)
 			if handle(ks) {
 				return nil
-			}
-			flush = nil
-			if w := dec.Wait(); w > 0 {
-				flush = time.After(w)
 			}
 		}
 		draw()

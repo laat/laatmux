@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/laat/laatmux/internal/term"
 )
 
 func choices() []Choice {
@@ -30,46 +32,46 @@ func TestPickerHandle(t *testing.T) {
 	p := NewPicker("t", choices(), 2)
 	p.Render(60, 8)
 	for _, r := range "ot" {
-		p.Handle(Key{Rune: r})
+		p.Handle(term.Key{Rune: r})
 	}
 	if m := p.Matches(); len(m) != 1 || m[0] != 2 || p.Selected != 0 {
 		t.Errorf("filter ot: matches %v selected %d", m, p.Selected)
 	}
-	p.Handle(Key{Kind: KeyBackspace})
-	p.Handle(Key{Kind: KeyBackspace})
+	p.Handle(term.Key{Kind: term.KeyBackspace})
+	p.Handle(term.Key{Kind: term.KeyBackspace})
 	if p.Filter != "" || p.Selected != 2 {
 		t.Errorf("after backspace: filter %q selected %d", p.Filter, p.Selected)
 	}
-	p.Handle(Key{Rune: 'e'}) // example.com matches by detail
+	p.Handle(term.Key{Rune: 'e'}) // example.com matches by detail
 	if m := p.Matches(); len(m) != 1 || m[0] != 2 {
 		t.Errorf("detail filter: %v", m)
 	}
-	p.Handle(Key{Kind: KeyEsc})
+	p.Handle(term.Key{Kind: term.KeyEsc})
 	if !p.Done() || p.Chosen != -1 {
 		t.Errorf("esc: done=%v chosen=%d", p.Done(), p.Chosen)
 	}
 
 	p = NewPicker("t", choices(), 0)
 	p.Render(60, 8)
-	p.Handle(Key{Kind: KeyDown})
-	p.Handle(Key{Kind: KeyMouse, Wheel: 1})
-	p.Handle(Key{Kind: KeyMouse, Wheel: 1})
+	p.Handle(term.Key{Kind: term.KeyDown})
+	p.Handle(term.Key{Kind: term.KeyMouse, Wheel: 1})
+	p.Handle(term.Key{Kind: term.KeyMouse, Wheel: 1})
 	if p.Selected != 2 {
 		t.Errorf("down past the end: %d", p.Selected)
 	}
-	p.Handle(Key{Kind: KeyEnter})
+	p.Handle(term.Key{Kind: term.KeyEnter})
 	if !p.Done() || p.Chosen != 2 {
 		t.Errorf("enter: done=%v chosen=%d", p.Done(), p.Chosen)
 	}
 
 	p = NewPicker("t", choices(), 0)
 	p.Render(60, 8)
-	p.Handle(Key{Kind: KeyMouse, X: 3, Y: 4}) // title, filter, then the second entry
+	p.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 4}) // title, filter, then the second entry
 	if !p.Done() || p.Chosen != 1 {
 		t.Errorf("click: done=%v chosen=%d", p.Done(), p.Chosen)
 	}
 	p = NewPicker("t", nil, 0)
-	p.Handle(Key{Kind: KeyEnter})
+	p.Handle(term.Key{Kind: term.KeyEnter})
 	if p.Done() {
 		t.Error("enter on an empty picker finished it")
 	}
@@ -83,7 +85,7 @@ func TestLog(t *testing.T) {
 		l.Append(s)
 	}
 	golden(t, "log-running", Debug(l.Render(50, 4)))
-	l.Handle(Key{Rune: 'q'})
+	l.Handle(term.Key{Rune: 'q'})
 	if l.Done() {
 		t.Error("q while running finished the log")
 	}
@@ -92,11 +94,11 @@ func TestLog(t *testing.T) {
 	if l.Done() {
 		t.Error("a failure finished without a key")
 	}
-	l.Handle(Key{Kind: KeyMouse, Wheel: 1})
+	l.Handle(term.Key{Kind: term.KeyMouse, Wheel: 1})
 	if l.Done() {
 		t.Error("the wheel acknowledged the failure")
 	}
-	l.Handle(Key{Rune: 'x'})
+	l.Handle(term.Key{Rune: 'x'})
 	if !l.Done() {
 		t.Error("a key did not acknowledge the failure")
 	}
@@ -106,7 +108,7 @@ func TestLog(t *testing.T) {
 		t.Error("success did not finish at once")
 	}
 	l = NewLog("t")
-	l.Handle(Key{Kind: KeyCtrlC})
+	l.Handle(term.Key{Kind: term.KeyCtrlC})
 	if !l.Done() || !l.Quit {
 		t.Error("ctrl-c did not quit")
 	}
@@ -141,13 +143,13 @@ func TestModelOverlayAndConfirm(t *testing.T) {
 	m := &Model{Width: 40, Height: 5, Hint: "hint"}
 	p := NewPicker("t", choices(), 0)
 	m.Overlay = p
-	if a := m.Handle(Key{Rune: 'p'}); a.Kind != ActionNone || p.Filter != "p" {
+	if a := m.Handle(term.Key{Rune: 'p'}); a.Kind != ActionNone || p.Filter != "p" {
 		t.Errorf("p with a picker up: %+v filter=%q", a, p.Filter)
 	}
 	if got := Text(m.Render()); !strings.HasPrefix(got, "t\n> p_\n") {
 		t.Errorf("render did not draw the overlay:\n%s", got)
 	}
-	if a := m.Handle(Key{Kind: KeyEnter}); a.Kind != ActionOverlay {
+	if a := m.Handle(term.Key{Kind: term.KeyEnter}); a.Kind != ActionOverlay {
 		t.Errorf("enter: %+v", a)
 	}
 	m.Overlay = nil
@@ -155,11 +157,11 @@ func TestModelOverlayAndConfirm(t *testing.T) {
 	if got := Text(m.Render()); !strings.Contains(got, "remove proj/x on vm (/w/x)? y/n") {
 		t.Errorf("confirm not in the footer:\n%s", got)
 	}
-	if a := m.Handle(Key{Rune: 'n'}); a.Kind != ActionNone || m.Confirm != "" || m.ConfirmTag != "" {
+	if a := m.Handle(term.Key{Rune: 'n'}); a.Kind != ActionNone || m.Confirm != "" || m.ConfirmTag != "" {
 		t.Errorf("n: %+v confirm=%q tag=%q", a, m.Confirm, m.ConfirmTag)
 	}
 	m.Ask("q?", "rm")
-	if a := m.Handle(Key{Rune: 'y'}); a.Kind != ActionConfirm || m.ConfirmTag != "rm" || m.Confirm != "" {
+	if a := m.Handle(term.Key{Rune: 'y'}); a.Kind != ActionConfirm || m.ConfirmTag != "rm" || m.Confirm != "" {
 		t.Errorf("y: %+v tag=%q", a, m.ConfirmTag)
 	}
 	l := NewLog("t")
