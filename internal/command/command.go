@@ -212,10 +212,12 @@ var ErrOutcomeUnknown = errors.New("outcome unknown: the daemon no longer knows 
 // result, passing progress to onProgress; a refusal is an error. A
 // cancel that arrives is sent after the request, never before it, so
 // it cannot reach the daemon ahead of the command it stops: the sender
-// starts once the request is written, which Exchange does first, and
-// the write of the cancel then follows it on the connection. Cancelling
-// ctx closes the connection.
+// starts once the request is written. Cancelling ctx closes the
+// connection.
 func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel <-chan struct{}, onProgress func(protocol.Message)) (protocol.Message, error) {
+	if err := c.Write(req); err != nil {
+		return protocol.Message{}, err
+	}
 	if cancel != nil {
 		stop := make(chan struct{})
 		defer close(stop)
@@ -227,7 +229,7 @@ func exchange(ctx context.Context, c *client.Conn, req protocol.Message, cancel 
 			}
 		}()
 	}
-	return client.Refused(c.Exchange(ctx, req, onProgress))
+	return client.Refused(c.Await(ctx, req.ID, onProgress))
 }
 
 // pause waits a second between attempts, or returns when ctx ends.
