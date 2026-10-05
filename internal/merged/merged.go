@@ -440,7 +440,8 @@ func (m *State) localsLocked() []protocol.Session {
 // and a snapshot of its records. Not ok when the host is not in the
 // stream; an error when the host is down, as the direct dial would have
 // failed. A host still reconnecting when the caller stopped waiting is
-// down with its error as well; the caller names it as pending first.
+// down with its error as well; the caller names it as still waited on
+// first.
 func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -468,7 +469,11 @@ func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool
 
 // Status is the state as a reporter reads it, one copy taken under the
 // lock: ls's listing, the dashboard's fill and tasks's report are
-// functions of it.
+// functions of it. Its maps and slices are the reporter's own; the
+// records in them share what they point to (an agent's identity, a
+// branch's PR and checks, a host's capabilities) with the state, which
+// replaces those whole and never writes through them, and a reporter
+// reads them.
 type Status struct {
 	// Loaded is that a snapshot has been applied; a view says it is
 	// loading until then.
@@ -530,9 +535,9 @@ func (m *State) Status(current string) Status {
 }
 
 // inputLocked is the rows package's view of the state, with the local
-// sessions and the viewer's session. Nothing of the state is shared
-// with it: the rows are built after the lock is released, while the
-// stream goes on being applied.
+// sessions and the viewer's session. Its maps and slices are copies:
+// the rows are built after the lock is released, while the stream goes
+// on being applied.
 func (m *State) inputLocked(current string) rows.Input {
 	after, dim, collapse := m.sidebar.Stale()
 	in := rows.Input{Locals: m.localsLocked(), Current: current, Attention: maps.Clone(m.attentions), Branches: maps.Clone(m.branches), Now: time.Now(),

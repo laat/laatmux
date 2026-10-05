@@ -60,8 +60,8 @@ func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn) bool) func() int {
 
 // Read applies the stream until ready holds of the hosts waited on:
 // with a snapshot but a host that never lists, the wait ends with the
-// host still waited on and no error; a daemon that answers the hello but never sends
-// the snapshot is a timeout, not an empty listing.
+// host still waited on and no error; a daemon that answers the hello
+// but never sends the snapshot is a timeout, not an empty listing.
 func TestRead(t *testing.T) {
 	fakeDaemon(t, func(pc *protocol.Conn) bool {
 		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm"}, {Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true}}})

@@ -32,7 +32,7 @@ func TestApply(t *testing.T) {
 		Sessions:  []protocol.Session{{Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac", Settled: true}},
 	})
 	if got := m.Waiting(); len(got) != 1 || got[0] != "vm" {
-		t.Errorf("pending = %v, want [vm]", got)
+		t.Errorf("waiting = %v, want [vm]", got)
 	}
 	if _, ok := m.HostCaps("vm"); ok {
 		t.Error("HostCaps of a host that has not answered a hello")
@@ -61,7 +61,7 @@ func TestApply(t *testing.T) {
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, Worktree: &protocol.Worktree{ID: "venv/worktree//r/proj/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/r/proj/y"}})
 	if got := m.Waiting(); len(got) != 1 {
-		t.Errorf("pending while snapshot pending = %v", got)
+		t.Errorf("waiting while the snapshot is pending = %v", got)
 	}
 	if caps, ok := m.HostCaps("vm"); !ok || !slices.Equal(caps, []string{"status", "worktrees"}) {
 		t.Errorf("HostCaps = %v %v", caps, ok)
@@ -71,7 +71,7 @@ func TestApply(t *testing.T) {
 	}
 	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 6, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Version: "v1", Capabilities: []string{"status", "worktrees"}}})
 	if got := m.Waiting(); len(got) != 0 {
-		t.Errorf("pending after listed = %v", got)
+		t.Errorf("waiting after listed = %v", got)
 	}
 	hello, snap, ok, err := m.HostSnapshot("vm")
 	if !ok || err != nil || hello.EnvironmentID != "venv" || hello.Host != "vm" || hello.Version != "v1" || !protocol.Has(hello.Capabilities, protocol.CapWorktrees) {
@@ -154,11 +154,11 @@ func TestTimedOut(t *testing.T) {
 		},
 	})
 	if p := m.Waiting(); !slices.Equal(p, []string{"box", "vm"}) {
-		t.Fatalf("pending = %v", p)
+		t.Fatalf("waiting = %v", p)
 	}
 	m.TimedOut(m.Waiting(), 20*time.Second)
 	if p := m.Waiting(); len(p) != 0 {
-		t.Errorf("pending after the timeout = %v", p)
+		t.Errorf("waiting after the timeout = %v", p)
 	}
 	s := m.Status("")
 	for _, n := range []string{"vm", "box"} {
@@ -363,7 +363,7 @@ func TestBranches(t *testing.T) {
 	}
 }
 
-// A Status shares nothing with the state: the rows are built from it
+// A Status's maps and slices are its own: the rows are built from it
 // after the lock is released, while the stream goes on being applied.
 func TestStatusIsACopy(t *testing.T) {
 	m := New()
@@ -382,7 +382,13 @@ func TestStatusIsACopy(t *testing.T) {
 		t.Errorf("a status changed under a later apply: %+v", s)
 	}
 	// The rows built from one while the stream applies attention and
-	// branch upserts: a race here is a crash in a sidebar pane.
+	// branch upserts for a live agent on a worktree, which the rows look
+	// up in both maps: a race here is a crash in a sidebar pane.
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:     []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}}},
+		Agents:    []protocol.Agent{{ID: "a0", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b0", Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true}},
+		Worktrees: []protocol.Worktree{{ID: "w1", EnvironmentID: "venv", Repo: "proj", Source: "s", Branch: "b0", Root: "/w/b0", Session: "proj/b0"}},
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -392,7 +398,9 @@ func TestStatusIsACopy(t *testing.T) {
 		}
 	}()
 	for i := 0; i < 500; i++ {
-		rows.Tree(m.Status("").Input)
+		if tree := rows.Tree(m.Status("").Input); len(tree) < 3 {
+			t.Fatalf("rows built from a status: %d, want the repository, its worktree and the agent", len(tree))
+		}
 	}
 	<-done
 }
