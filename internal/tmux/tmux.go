@@ -625,12 +625,14 @@ func FormatLiteral(s string) string {
 }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux does not keep "." or ":" in a session name, new-session expands
-// a "#" in the name as a format, and an argument that ends in ";" is a
-// command separator, so "%" becomes "%25", "#" becomes "%23", "."
-// becomes "%2e", ":" becomes "%3a" and ";" becomes "%3b"; nothing else
-// changes. Distinct branches give distinct names and the encoding is
-// exact.
+// tmux does not keep "." or ":" in a session name and stores a "\" in
+// one doubled, new-session expands a "#" in the name as a format, and
+// an argument that ends in ";" is a command separator, so "%" becomes
+// "%25", "#" becomes "%23", "." becomes "%2e", ":" becomes "%3a", ";"
+// becomes "%3b" and "\" becomes "%5c"; nothing else changes. git takes
+// no "\" in a branch, but a detached worktree's session is named by its
+// directory, encoded the same way. Distinct branches give distinct
+// names and the encoding is exact.
 func EncodeBranch(branch string) string {
 	var b strings.Builder
 	for i := 0; i < len(branch); i++ {
@@ -645,6 +647,8 @@ func EncodeBranch(branch string) string {
 			b.WriteString("%3a")
 		case ';':
 			b.WriteString("%3b")
+		case '\\':
+			b.WriteString("%5c")
 		default:
 			b.WriteByte(c)
 		}
