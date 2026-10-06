@@ -87,7 +87,8 @@ func procArgs(pid int) (argv, env []string) {
 // argument is a lone NUL and keeps its place in argv; an empty env
 // string carries nothing and is dropped, as the NULs that pad the env
 // from the strings the kernel adds after it are. An empty argv[0] is
-// taken for padding: nothing tells the two apart.
+// taken for padding: telling them apart would rest on the padding's
+// alignment, which is the kernel's to change.
 func parseProcArgs(raw []byte) (argv, env []string) {
 	if len(raw) < 4 {
 		return nil, nil

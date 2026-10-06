@@ -36,6 +36,21 @@ func TestParseProcArgs(t *testing.T) {
 	}
 }
 
+// zombieOn reports whether pid is a zombie whose controlling terminal
+// is tty.
+func zombieOn(t *testing.T, pid int, tty string) bool {
+	t.Helper()
+	st, err := os.Stat(tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kp.Proc.P_stat == sZomb && kp.Eproc.Tdev == st.Sys().(*syscall.Stat_t).Rdev
+}
+
 // openPTY opens a pty's master and names its slave, as posix_openpt,
 // grantpt, unlockpt and ptsname do.
 func openPTY(t *testing.T) (*os.File, string) {

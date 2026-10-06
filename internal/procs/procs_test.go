@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,29 +230,44 @@ func TestListTTYDropsZombies(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer slave.Close()
-	r, w, err := os.Pipe()
+	pidR, pidW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer pidR.Close()
+	doneR, doneW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The empty argument ends the test flags and is read back in its
-	// place, and the env after it whole.
+	// place, and the env after it whole. An env hint of the host's would
+	// make the parent a tentative agent once its child is off the tty.
 	parent := exec.Command(os.Args[0], "-test.run=^TestZombieParent$", "", "end")
 	hint := zombieEnv + "=" + claude
-	parent.Env = append(os.Environ(), hint)
+	parent.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, EnvHint+"=")
+	}), hint)
 	parent.Stdin = slave
-	parent.ExtraFiles = []*os.File{w}
+	parent.ExtraFiles = []*os.File{pidW, doneR}
 	parent.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	err = parent.Start()
-	w.Close()
+	pidW.Close()
+	doneR.Close()
 	if err != nil {
+		doneW.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		parent.Process.Kill()
+		// The parent ends and reaps its child and exits when doneW
+		// closes; failing that, its process group, the child in it, is
+		// killed.
+		doneW.Close()
+		kill := time.AfterFunc(10*time.Second, func() { syscall.Kill(-parent.Process.Pid, syscall.SIGKILL) })
 		parent.Wait()
+		kill.Stop()
 	})
-	line, err := bufio.NewReader(r).ReadString('\n')
+	pidR.SetReadDeadline(time.Now().Add(30 * time.Second))
+	line, err := bufio.NewReader(pidR).ReadString('\n')
 	if err != nil {
 		t.Fatalf("no pid from the zombie's parent: %v", err)
 	}
@@ -290,8 +306,12 @@ func TestListTTYDropsZombies(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("pid %d, exited and not reaped, still listed on %s: %s", zombie, tty, pidComms(list))
+			t.Fatalf("pid %d still listed on %s 10s after its start: %s", zombie, tty, pidComms(list))
 		}
+	}
+	// Off the listing as a zombie on the tty, not by leaving it.
+	if !zombieOn(t, zombie, tty) {
+		t.Fatalf("pid %d is not a zombie on %s", zombie, tty)
 	}
 	if p, ok := Lookup(zombie); !ok || p.Comm != "claude" {
 		t.Fatalf("Lookup of the zombie %d: %+v ok=%v, want it found as claude", zombie, p, ok)
@@ -311,8 +331,12 @@ func pidComms(list []Proc) string {
 const zombieEnv = "LAATMUX_PROCS_ZOMBIE"
 
 // TestZombieParent is TestListTTYDropsZombies's session leader on the
-// pty: it starts the program it is given, writes its pid to fd 3 and
-// never reaps it.
+// pty: it starts the program it is given and writes its pid to fd 3,
+// and reaps it only when fd 4 reads EOF, the test done or gone; the
+// zombie is not left to whatever reaps orphans on the host. The kill
+// before the reap ends a child the test failed before it exited, held
+// at its launch by a check of the new binary, say; on a zombie it does
+// nothing.
 func TestZombieParent(t *testing.T) {
 	prog := os.Getenv(zombieEnv)
 	if prog == "" {
@@ -325,7 +349,9 @@ func TestZombieParent(t *testing.T) {
 	out := os.NewFile(3, "pid")
 	fmt.Fprintln(out, child.Process.Pid)
 	out.Close()
-	time.Sleep(time.Minute)
+	io.Copy(io.Discard, os.NewFile(4, "done"))
+	child.Process.Kill()
+	child.Wait()
 }
 
 func TestSameIdentity(t *testing.T) {
