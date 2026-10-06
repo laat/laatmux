@@ -418,9 +418,9 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// testDaemon is the stand-in daemon of TestStop: serve is the real
-// daemon with the shutdown message; legacy is one without it, ended by
-// SIGTERM.
+// testDaemon is the stand-in daemon of TestStop, and of
+// TestReportPrefixOnce's start: serve is the real daemon with the
+// shutdown message; legacy is one without it, ended by SIGTERM.
 func testDaemon(mode string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
@@ -860,6 +860,8 @@ func TestIsDaemon(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// First: a daemon client.StartDaemon starts is this binary with
+	// "serve" and no -test.run, which would run the whole suite.
 	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
 		testDaemon(mode)
 	}
