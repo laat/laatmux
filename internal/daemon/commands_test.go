@@ -225,7 +225,7 @@ func newAddDaemon(t *testing.T) (*Daemon, *fakeServer, *worktree.Store, string) 
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
-		Commands: t.TempDir(),
+		Commands: t.TempDir(), Timings: testTimings,
 	})
 	t.Cleanup(func() {
 		// The trust watchers an add starts end with the test.
@@ -512,7 +512,7 @@ func TestRmLeavesExternalWorktree(t *testing.T) {
 // arriving, and the id is then fresh again.
 func TestCommandEviction(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
-	d.commandTTL = 50 * time.Millisecond
+	d.cfg.Timings.CommandTTL = 50 * time.Millisecond
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
 	if res, _ := result(t, pc, "c1"); !res.OK {

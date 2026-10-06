@@ -58,6 +58,7 @@ func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}, "argv": {"claude", PromptPlaceholder}},
 		Commands: hostCommands, WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
+		Timings: testTimings,
 	})
 	go host.Run(ctx)
 	fr := newFakeRemote(t, ctx, host)
@@ -65,6 +66,7 @@ func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Dial: fr.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, SessionInterval: 20 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(ctx)
@@ -921,7 +923,7 @@ func TestRelayRecoveryExpired(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "x1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
-	f.host.journal.sweep(time.Now().Add(journalRetention + time.Hour))
+	f.host.journal.sweep(time.Now().Add(f.host.journal.retention + time.Hour))
 	if _, ok := f.host.journal.get("x1"); ok {
 		t.Fatal("entry not swept")
 	}
@@ -941,9 +943,7 @@ func TestRelayRecoveryExpired(t *testing.T) {
 // A host that refuses the add as submission expired makes the record
 // outcome unknown.
 func TestRelaySubmissionExpiredByHost(t *testing.T) {
-	was := journalRetention
-	journalRetention = time.Hour
-	t.Cleanup(func() { journalRetention = was })
+	setTiming(t, &testTimings.JournalRetention, time.Hour)
 	f := newRelayFixture(t, nil)
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "e1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "expired", AgentName: "argv", SubmittedAt: time.Now().Add(-2 * time.Hour)}); !res.OK {
 		t.Fatal(res.Error)
@@ -977,7 +977,7 @@ func TestRelayLaptopRestartDuringAdd(t *testing.T) {
 	os.WriteFile(filepath.Join(f.dir, FileName("l1")), b, 0o600)
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -1023,9 +1023,7 @@ func TestRelayAttemptNumberResync(t *testing.T) {
 // A merged stream that never shows the worktree holds the row for the
 // patience, then the record hands over on the listing alone.
 func TestRelayHandoffPatience(t *testing.T) {
-	was := handoffPatience
-	handoffPatience = 2 * time.Second
-	t.Cleanup(func() { handoffPatience = was })
+	setTiming(t, &testTimings.HandoffPatience, 2*time.Second)
 	f := newRelayFixture(t, nil)
 	c, _, _ := f.merged(t)
 	defer c.Close()

@@ -436,3 +436,20 @@ func TestConnRefusals(t *testing.T) {
 	}
 	alive()
 }
+
+// A zero timing takes its default and a set one is kept; the journal
+// keeps for the retention it was given.
+func TestTimingsDefaults(t *testing.T) {
+	d := New(Config{EnvironmentID: "env"})
+	if d.cfg.Timings != DefaultTimings {
+		t.Fatalf("zero timings = %+v, want the defaults %+v", d.cfg.Timings, DefaultTimings)
+	}
+	want := Timings{ReadyWait: 1, TrustPoll: 2, JournalRetention: 3, HandoffRecheck: 4, HandoffPatience: 5, CommandTTL: 6, KillDelay: 7}
+	d = New(Config{EnvironmentID: "env", Timings: want, Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}, Commands: t.TempDir()})
+	if d.cfg.Timings != want {
+		t.Fatalf("set timings = %+v, want %+v", d.cfg.Timings, want)
+	}
+	if d.journal == nil || d.journal.retention != 3 {
+		t.Fatalf("journal retention = %v, want 3", d.journal.retention)
+	}
+}

@@ -32,9 +32,6 @@ const (
 	journalSweep  = time.Hour
 )
 
-// journalRetention is a variable so a test can shorten it.
-var journalRetention = 30 * 24 * time.Hour
-
 // Launch states of an entry: the agent stage journaled as two
 // transitions around new-session.
 const (
@@ -139,10 +136,11 @@ func (e *entry) lastAttempt() *attempt {
 // out, and the same entries in memory. It is the daemon's own; one
 // process writes it.
 type journal struct {
-	dir    string
-	logger *log.Logger
-	mu     sync.Mutex
-	byID   map[string]*entry
+	dir       string
+	logger    *log.Logger
+	retention time.Duration // how long a finished entry is kept
+	mu        sync.Mutex
+	byID      map[string]*entry
 }
 
 // openJournal loads every entry under dir, making the directory when it
@@ -150,11 +148,11 @@ type journal struct {
 // death left: an attempt still attempting is unknown, and a launch still
 // launching stays so, which the add reads as unknown. A file that does
 // not parse is left alone and logged; it is not laatmux's to delete.
-func openJournal(dir string, logger *log.Logger) (*journal, error) {
+func openJournal(dir string, logger *log.Logger, retention time.Duration) (*journal, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	j := &journal{dir: dir, logger: logger, byID: map[string]*entry{}}
+	j := &journal{dir: dir, logger: logger, retention: retention, byID: map[string]*entry{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -320,7 +318,7 @@ func (j *journal) sweep(now time.Time) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for id, e := range j.byID {
-		if !e.terminal() || now.Sub(e.TerminalAt) < journalRetention {
+		if !e.terminal() || now.Sub(e.TerminalAt) < j.retention {
 			continue
 		}
 		if err := os.Remove(filepath.Join(j.dir, FileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -334,11 +332,11 @@ func (j *journal) sweep(now time.Time) {
 // expired reports whether a submission is outside what the journal
 // would keep: more than a day in this host's future, or older than the
 // retention. A zero time, from a client without task, is never expired.
-func expired(submitted, now time.Time) bool {
+func (j *journal) expired(submitted, now time.Time) bool {
 	if submitted.IsZero() {
 		return false
 	}
-	return submitted.After(now.Add(journalFuture)) || submitted.Before(now.Add(-journalRetention))
+	return submitted.After(now.Add(journalFuture)) || submitted.Before(now.Add(-j.retention))
 }
 
 // recorded is the result message a terminal entry answers with: the

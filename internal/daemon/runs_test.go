@@ -144,7 +144,7 @@ func TestRunCancelledWhileResolving(t *testing.T) {
 // it. A cancel for a finished run or an unknown id does nothing.
 func TestRunCancel(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
-	d.killDelay = 200 * time.Millisecond
+	d.cfg.Timings.KillDelay = 200 * time.Millisecond
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
 	for _, c := range []struct {
@@ -264,7 +264,7 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 // child gets SIGKILL after the delay, before the result.
 func TestRunCancelKillsGroup(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
-	d.killDelay = 300 * time.Millisecond
+	d.cfg.Timings.KillDelay = 300 * time.Millisecond
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
 	token := fmt.Sprintf("laatmux-run-test-%d", os.Getpid())
@@ -295,7 +295,7 @@ func TestRunCancelKillsGroup(t *testing.T) {
 // than left for no rm or shutdown to find.
 func TestRunExitWithPipesHeld(t *testing.T) {
 	d, _, _, remote := newAddDaemon(t)
-	d.killDelay = 300 * time.Millisecond
+	d.cfg.Timings.KillDelay = 300 * time.Millisecond
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
 	token := fmt.Sprintf("laatmux-run-bg-%d", os.Getpid())
