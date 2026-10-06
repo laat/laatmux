@@ -36,7 +36,11 @@ func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	sessionTarget := "=" + l.Name + ":"
 	cmd := []string{"new-window", "-t", sessionTarget, "-n", "shell"}
 	if h.Local() {
-		cmd = append(cmd, "-c", root)
+		// new-window expands -c as a format, and the root has the
+		// branch in it: a directory that is not there after expansion
+		// starts the shell in $HOME, with no error. The ssh command is
+		// not expanded.
+		cmd = append(cmd, "-c", tmux.FormatLiteral(root))
 	} else {
 		cmd = append(cmd, workspace.ShellCommand(h.Host, root))
 	}
