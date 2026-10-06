@@ -81,15 +81,21 @@ func TestFindInterpreterHosted(t *testing.T) {
 }
 
 // An interpreter whose argv cannot be read, a zombie node on the tty
-// say, is not an agent, and classifying it does not panic (it sliced
-// a nil argv once, and the poll goroutine with it).
+// say, is no verified agent, and classifying it does not panic (it
+// sliced a nil argv once, and the poll goroutine with it); an exec with
+// no argv gives an empty, non-nil one on macOS, the same. argv[0] alone
+// never panicked and is here to show nothing changed. An env hint still
+// names the agent tentatively, as it does when comm and argv say
+// nothing.
 func TestClassifyInterpreterWithoutArgv(t *testing.T) {
 	for _, comm := range []string{"node", "bun", "deno"} {
-		if ag, score := classify(Proc{Comm: comm}); ag != "" || score != 0 {
-			t.Fatalf("%s without argv classified as %q (%d)", comm, ag, score)
+		for name, argv := range map[string][]string{"nil argv": nil, "empty argv": {}, "argv[0] alone": {comm}} {
+			if ag, score := classify(Proc{Comm: comm, Argv: argv}); ag != "" || score != 0 {
+				t.Fatalf("%s with %s classified as %q (%d)", comm, name, ag, score)
+			}
 		}
-		if ag, score := classify(Proc{Comm: comm, Argv: []string{comm}}); ag != "" || score != 0 {
-			t.Fatalf("%s with argv[0] alone classified as %q (%d)", comm, ag, score)
+		if ag, score := classify(Proc{Comm: comm, Env: []string{EnvHint + "=claude"}}); ag != "claude" || score != 1 {
+			t.Fatalf("%s without argv but with a hint classified as %q (%d), want claude tentatively", comm, ag, score)
 		}
 	}
 	procs := []Proc{

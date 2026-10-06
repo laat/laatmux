@@ -239,8 +239,9 @@ func classify(p Proc) (agent string, score int) {
 		}
 	}
 	if interpreters[filepath.Base(prog)] && len(p.Argv) > 1 {
-		// An interpreter with no readable argv (a zombie, or a sandbox
-		// that denies the read) hosts nothing that can be named.
+		// An interpreter with no readable argv (a zombie, a sandbox that
+		// denies the read, an exec with no argv) names no script; only
+		// an env hint can name the agent then.
 		for _, a := range p.Argv[1:] {
 			if strings.HasPrefix(a, "-") {
 				continue
