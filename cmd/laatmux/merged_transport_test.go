@@ -17,16 +17,12 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 )
 
-// fakeDaemon stands in for the local daemon: a loopback listener the
-// runtime file under a scratch LAATMUX_HOME points at, answering the
-// hello with the given capabilities and every later message through
-// serve. Dial finds it as it would the real one, and never starts one.
-type fakeDaemon struct {
-	caps  []string
-	serve func(pc *protocol.Conn, m protocol.Message) bool // false ends the connection
-}
-
-func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, m protocol.Message) bool) *fakeDaemon {
+// startFakeDaemon stands in for the local daemon: a loopback listener
+// the runtime file under a scratch LAATMUX_HOME points at, answering
+// the hello with the given capabilities and every later message
+// through serve, false ending the connection. Dial finds it as it
+// would the real one, and never starts one.
+func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, m protocol.Message) bool) {
 	t.Helper()
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -37,9 +33,7 @@ func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, 
 	if err := home.WriteRuntime(home.Runtime{Address: "tcp:" + ln.Addr().String(), PID: os.Getpid(), Version: "fake", EnvironmentID: "lenv"}); err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeDaemon{caps: caps, serve: serve}
-	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: f.caps}, f.serve)
-	return f
+	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: caps}, serve)
 }
 
 // serveFake accepts on ln until it closes, answering each connection

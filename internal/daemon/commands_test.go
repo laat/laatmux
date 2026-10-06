@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,9 +22,10 @@ import (
 	"github.com/laat/laatmux/internal/worktree"
 )
 
-// fakeServer is a managed tmux server with any number of panes. NewSession
-// adds a managed pane tagged with the root, as the real one does;
-// KillSession removes it.
+// fakeServer is a tmux server, the managed one or the user's, with any
+// number of panes. NewSession adds a managed pane tagged with the root,
+// as the real one does, under an id no listed pane has; KillSession
+// removes it.
 type fakeServer struct {
 	mu     sync.Mutex
 	panes  []tmux.Pane
@@ -105,8 +107,11 @@ func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.
 	if f.newErr != nil {
 		return tmux.Session{}, f.newErr
 	}
-	f.next++
-	id := "%" + strconv.Itoa(f.next)
+	id := ""
+	for id == "" || slices.ContainsFunc(f.panes, func(p tmux.Pane) bool { return p.ID == id }) {
+		f.next++
+		id = "%" + strconv.Itoa(f.next)
+	}
 	server := f.server
 	if server == 0 {
 		server = 5

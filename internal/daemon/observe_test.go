@@ -410,7 +410,7 @@ func TestConnRefusals(t *testing.T) {
 	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.Error != "" || !got.OK || got.ID != "n" || got.Session != "proj/x" || got.PaneID != "%1" {
+	if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.Error != "" || !got.OK || got.ID != "n" || got.Session != "proj/x" || got.PaneID != "%2" {
 		t.Errorf("new: %+v %v", got, err)
 	}
 	alive()
