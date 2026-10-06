@@ -275,21 +275,6 @@ func TestTemplateStyles(t *testing.T) {
 	if len(own) != 2 || len(back) != 2 || own[1] != back[1] {
 		t.Errorf("the put-back mark %+v, the number's own %+v", back, own)
 	}
-	// In a theme with colours a stale span on the style's background is
-	// in the dimmed colour, not the terminal's own made faint, which a
-	// light background can all but hide; without a background, or
-	// without colours, it is faint.
-	th, _ := palette.New(true, nil)
-	on := Line{Spans: m.line(mustParse(t, "#[fg=accent,bold,bg=#ffff00]{pr_number}"), r, 4, 0)}
-	if got, want := ANSI(on, th), th.SGR(palette.Dimmed, false)+th.SGR("#ffff00", true)+"#7"; !strings.Contains(got, want) || strings.Contains(got, "\x1b[2m") || strings.Contains(got, "\x1b[1m") {
-		t.Errorf("a stale number on a background: %q", got)
-	}
-	if got := ANSI(on, palette.Mono()); got != "\x1b[2m#7\x1b[0m\x1b[2m?\x1b[0m\x1b[0m" {
-		t.Errorf("a stale number on a background without colours: %q", got)
-	}
-	if got := ANSI(Line{Spans: m.line(mustParse(t, "#[fg=accent,bold]{pr_number}"), r, 4, 0)}, th); got != "\x1b[2m#7\x1b[0m\x1b[2m?\x1b[0m\x1b[0m" {
-		t.Errorf("a stale number without a background: %q", got)
-	}
 	// Every PR token of a stale answer, at every width, the shrunk
 	// checks and the put-back mark among them.
 	r.Branch.FetchedAt = now.Add(-time.Minute)

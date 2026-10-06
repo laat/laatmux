@@ -1141,11 +1141,10 @@ alike; only the lines it leaves differ.
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves
   a token's own colours alone. A token a stale answer leaves dim and
-  plain takes only the style's background, drawn on it in the dimmed
-  colour in a theme with colours: stale wins over the style's colour
-  and bold, so the token reads dim and plain whatever the template
-  says. The padding `{fill}` takes the style in force at the fill, and
-  a background gives way to the selection's band.
+  plain takes only the style's background: stale wins over the style's
+  colour and bold, so the token reads dim and plain whatever the
+  template says. The padding `{fill}` takes the style in force at the
+  fill, and a background gives way to the selection's band.
 - **Errors.** A template that does not parse is shown in the view in
   its place, `template error: unknown token {x} at column 7 in
   tiles[0]`, rather than failing the pane. The fold row, the
