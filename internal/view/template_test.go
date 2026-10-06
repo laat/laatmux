@@ -208,15 +208,15 @@ func TestTemplateStyles(t *testing.T) {
 		t.Errorf("all empty: %q", got)
 	}
 	// A stale answer marks the pair once, on the checks; the number
-	// alone carries it.
+	// alone carries it. Dim and plain: the open PR's bold goes too.
 	r.Branch.Stale = true
-	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»› ‹×›‹ 3/5›‹?›\n" {
+	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹#52› ‹×›‹ 3/5›‹?›\n" {
 		t.Errorf("a stale pair: %q", got)
 	}
-	if got := render("{pr_number}", 40); got != "...|‹«#52»›‹?›\n" {
+	if got := render("{pr_number}", 40); got != "...|‹#52›‹?›\n" {
 		t.Errorf("a stale number without the checks drawn: %q", got)
 	}
-	if got := render("{pr_number}{fill}{pr_checks} {host}", 5); got != "...|‹«#52»›‹?›\n" {
+	if got := render("{pr_number}{fill}{pr_checks} {host}", 5); got != "...|‹#52›‹?›\n" {
 		t.Errorf("a stale number with the checks dropped: %q", got)
 	}
 	// Of a one-digit number and the check mark with the stale mark,
@@ -230,7 +230,7 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render(DefaultTile3, 12); got != "...|⟨accent:▌⟩    Per… ‹✓›‹?›\n" {
 		t.Errorf("the number before the checks at 12: %q", got)
 	}
-	if got := render("{pane_title}{fill}{pr_number}", 8); got != "...|Per… ‹«#7»›‹?›\n" {
+	if got := render("{pane_title}{fill}{pr_number}", 8); got != "...|Per… ‹#7›‹?›\n" {
 		t.Errorf("the number alone with its mark: %q", got)
 	}
 	// Whatever the width, a PR number drawn on a stale row has its mark,
@@ -247,18 +247,18 @@ func TestTemplateStyles(t *testing.T) {
 		}
 	}
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksSuccess}
-	if got := render("{fill}{pr_number} {pr_checks}", 5); got != "...|‹«#7»› ‹✓›‹?›\n" {
+	if got := render("{fill}{pr_number} {pr_checks}", 5); got != "...|‹#7› ‹✓›‹?›\n" {
 		t.Errorf("the number's mark not counted while the checks stand: %q", got)
 	}
 	if got := render("#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", 6); got != "...|⟦#112233:fi…⟧⟦#112233: ⟧‹⟦#112233:✓⟧›‹⟦#112233:?⟧›\n" {
 		t.Errorf("the mark styled: %q", got)
 	}
-	if got := render("#[bg=#112233]{pr_number}{fill}{pr_checks} {host}", 4); got != "...|‹«⟦#112233:#7⟧»›‹⟦#112233:?⟧›\n" {
+	if got := render("#[bg=#112233]{pr_number}{fill}{pr_checks} {host}", 4); got != "...|‹⟦#112233:#7⟧›‹⟦#112233:?⟧›\n" {
 		t.Errorf("the mark put back styled: %q", got)
 	}
 	r.Branch.PR.Number = 52
 	r.Branch.Checks = nil
-	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹«#52»›‹?›\n" {
+	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹#52›‹?›\n" {
 		t.Errorf("a stale number alone: %q", got)
 	}
 	r = tokenRow(now)
@@ -676,6 +676,10 @@ func TestColumns(t *testing.T) {
 	r.Branch.Stale = true
 	if got := render("{pr_state}", 40); got != "...|‹●›\n" {
 		t.Errorf("pr_state stale: %q", got)
+	}
+	// The number of a stale open PR is plain as its state is: not bold.
+	if got := render("{pr_number} {pr_state}", 40); got != "...|‹#52›‹?› ‹●›\n" {
+		t.Errorf("pr_number and pr_state stale: %q", got)
 	}
 	r.Branch.Stale = false
 	r.Branch.PR = nil
