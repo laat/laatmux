@@ -742,29 +742,49 @@ func (d *dash) settle(m *view.Model) {
 
 // noWorkspaceHint says what enter on a line with no local workspace
 // session does about one, by where the line's jump goes: it makes the
-// session; or it switches to the session of the line's agent on this
-// machine's default server, and add, which starts a managed session at
-// the root, is what makes one; or it is refused, and its reason is the
-// hint. A task still running has nothing to jump to yet, the add making
-// the session meanwhile, and keeps the plain hint, as does a row of no
-// worktree.
+// session; or it jumps to the session of the line's agent on this
+// machine's default server; or it is refused, and the refusal is the
+// hint. A worktree with no home whose jump goes by such an agent, or by
+// one on another host's default server, gets its workspace session from
+// add, which starts a managed session at the root: the hint ends with
+// the add line. A task still running has nothing to jump to until it is
+// done; a row of no worktree keeps the plain hint.
 func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
 		enter = "enter on the line"
 	}
-	if line.Worktree == nil || line.Pending != nil && !line.Pending.Done {
-		return enter + " creates one"
-	}
-	_, session, err := jumpTarget(cfg, line)
 	switch {
-	case err != nil:
-		return err.Error()
-	case session != "":
-		h, _ := cfg.Find(line.Host)
-		return fmt.Sprintf("%s switches to %s, where its agent runs; %s", enter, session, addHint(cfg, h, *line.Worktree))
+	case line.Worktree == nil:
+		return enter + " creates one"
+	case line.Pending != nil && !line.Pending.Done:
+		return enter + " creates one once the task is done"
 	}
-	return enter + " creates one"
+	var hint string
+	switch _, session, err := jumpTarget(cfg, line); {
+	case err == nil && session == "":
+		return enter + " creates one"
+	case err == nil:
+		hint = fmt.Sprintf("%s jumps to %s, its agent's session", enter, session)
+	default:
+		hint = err.Error()
+	}
+	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil {
+		// Enter went by the agent, which only the jump of a worktree
+		// with no home does: add gives it a home and the session.
+		hint += "; " + addsSession(cfg, h, *line.Worktree)
+	}
+	return hint
+}
+
+// addsSession says how add makes a workspace session for a worktree
+// with no home: by its branch, which a detached worktree has to have
+// checked out first.
+func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
+	if w.Branch == "" {
+		return "laatmux add makes one once a branch is checked out in " + w.Root
+	}
+	return addCommand(cfg, h, w) + " makes one"
 }
 
 // shell opens the shell window in the selected workspace, creating the
