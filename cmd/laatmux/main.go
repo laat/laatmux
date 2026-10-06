@@ -1,8 +1,6 @@
 // laatmux: git worktrees and coding agents across hosts, from tmux.
-//
-// Milestone one: status daemon, sidebar, launcher, jump.
-// Milestone two: worktrees and workspaces: add, rm, path, shell, settle.
-// Milestone three: the merged stream, sidebar, dashboard, split, run.
+// The commands, and the sidebar's tmux side, over the internal
+// packages; docs/architecture.md says what runs where.
 package main
 
 import (

@@ -119,8 +119,8 @@ func (m *Model) Handle(k term.Key) Action {
 	case term.KeyDown:
 		m.move(1)
 	case term.KeyEnter, term.KeyNewline:
-		// A newline is Enter on the list, as \n was before the form
-		// told the two apart.
+		// A newline is Enter on the list; the form alone tells the two
+		// apart.
 		return m.jump()
 	case term.KeyEsc:
 		m.Filter = ""

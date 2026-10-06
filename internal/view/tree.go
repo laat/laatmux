@@ -8,10 +8,10 @@ import (
 	"github.com/laat/laatmux/internal/rows"
 )
 
-// The two views, as milestone five's note settles them: the agent view,
-// one tile per agent with the stale ones folded, and the tree, the
-// repositories with their worktrees and what runs in each, with folds.
-// Tab switches; the selection follows across, by node id.
+// The two views as the model shows them (rows/tree.go says how they
+// are built): the agent view, one tile per agent with the stale ones
+// folded, and the tree, with folds. Tab switches; the selection follows
+// across, by node id.
 
 // View is which of the two the model shows.
 type View string

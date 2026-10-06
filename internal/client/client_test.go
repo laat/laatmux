@@ -15,7 +15,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 )
 
-// Review finding 8: a pending Request returns when its context is cancelled.
+// A pending Request returns when its context is cancelled.
 func TestRequestHonoursCancel(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -41,7 +41,7 @@ func TestRequestHonoursCancel(t *testing.T) {
 	}
 }
 
-// Review 2 finding 4: cancellation and ordinary cleanup both close a
+// Cancellation and ordinary cleanup both close a
 // subprocess-backed connection. Under -race this must not double-reap.
 // `cat` echoes our hello back, which completes the handshake; it then echoes
 // the request, which is never a result, so Request waits until cancelled.

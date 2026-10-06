@@ -320,7 +320,8 @@ func setSidebarHooks(ctx context.Context, exe string) error {
 // it reads the hooks and does nothing when they are gone: an attach that
 // was queued behind off must not put a pane back. With the sidebar on
 // for some sessions, a window in another gets none; a hook from an
-// older build names no session, and its window gets a pane as before.
+// older build names no session, and its window gets a pane whatever
+// its session.
 func sidebarAttach(ctx context.Context, window, session string) error {
 	unlock, err := sidebarLock()
 	if err != nil {

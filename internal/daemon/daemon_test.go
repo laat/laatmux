@@ -18,7 +18,7 @@ func newTestDaemon() *Daemon {
 	return New(Config{EnvironmentID: "env", Version: "test"})
 }
 
-// Review finding 3: a subscriber that falls behind must be disconnected, not
+// A subscriber that falls behind must be disconnected, not
 // silently frozen, so it reconnects and gets a fresh snapshot.
 func TestOverflowClosesTransport(t *testing.T) {
 	d := newTestDaemon()
@@ -57,7 +57,7 @@ func TestOverflowClosesTransport(t *testing.T) {
 	}
 }
 
-// Review finding 6: a subscribe before the first poll must wait for it.
+// A subscribe before the first poll must wait for it.
 func TestSubscribeWaitsForDiscovery(t *testing.T) {
 	d := newTestDaemon()
 	server, client := net.Pipe()
@@ -92,7 +92,7 @@ func TestSubscribeWaitsForDiscovery(t *testing.T) {
 	}
 }
 
-// Review finding 2: when the agent exits, its record stays with liveness
+// When the agent exits, its record stays with liveness
 // gone and its last activity, rather than being replaced by the shell.
 func TestGoneAgentKeepsActivity(t *testing.T) {
 	d := newTestDaemon()
@@ -111,7 +111,7 @@ func detectUnknown() detect.Result {
 	return detect.Result{State: detect.Unknown, Reason: "no_known_agent"}
 }
 
-// shutdown ends the daemon as SIGTERM does, answered first; a daemon
+// Shutdown ends the daemon as SIGTERM does, answered first; a daemon
 // without the hook refuses and does not advertise it.
 func TestShutdownMessage(t *testing.T) {
 	called := make(chan struct{}, 1)

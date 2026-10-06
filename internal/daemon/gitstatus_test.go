@@ -297,7 +297,7 @@ func TestGitForwarded(t *testing.T) {
 	}
 }
 
-// Review round 1: a refresh whose root changed branch, or went and came
+// A refresh whose root changed branch, or went and came
 // back, while it ran publishes nothing; a watched file changed during the
 // read makes the worktree due again.
 func TestGitRefreshAcrossListing(t *testing.T) {

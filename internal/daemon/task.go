@@ -902,8 +902,9 @@ func (rn *taskRunner) attemptLock(id string) *sync.Mutex { return rn.repoLock("a
 // for, from the journal: the recorded result of a terminal entry,
 // interrupted with the stage reached for one the daemon died in, the
 // recorded outcome of an attempt, or the errors that say the journal
-// has nothing. nil when there is no journal, which is unknown command
-// as before.
+// has nothing. nil when there is no journal, or when it has no entry
+// for a follow without an attempt; the caller answers either as an
+// unknown command.
 func (rn *taskRunner) answerFollow(m protocol.Message) *protocol.Message {
 	if rn.journal == nil {
 		return nil

@@ -56,9 +56,10 @@ const (
 )
 
 // pendingFile is what the relay keeps per task: the record as the
-// stream carries it, and what the stream must not: the prompt, the
-// listing barrier, whether the add may have reached the host, and the
-// handoff once retired.
+// stream carries it, Sent included, and what the record leaves out:
+// the prompt, the listing barrier, the repository entry, and when it
+// retired (RetiredAt; ReplacedBy, which the stream carries as a
+// handoff).
 type pendingFile struct {
 	protocol.Pending
 	PromptText string            `json:"prompt_text,omitempty"`
@@ -67,8 +68,8 @@ type pendingFile struct {
 	// it; a file from before entries has none, and the host resolves
 	// the source against its own config.
 	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
-	// Sent, that the add may have reached the host, is the record's own
-	// field, so the views see it: same key in the file as before.
+	// ReplacedBy is the worktree id the record retired into, and
+	// RetiredAt when.
 	ReplacedBy string    `json:"replaced_by,omitempty"`
 	RetiredAt  time.Time `json:"retired_at,omitzero"`
 }

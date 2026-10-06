@@ -223,7 +223,7 @@ func BenchmarkStatus(b *testing.B) {
 	}
 }
 
-// Review round 1: a staged change the working tree undoes is dirty; the
+// A staged change the working tree undoes is dirty; the
 // committed stats are of the commits given, whatever the names point at
 // now; a local base with a slash is watched under refs/heads; a cancelled
 // resolution is an error, not a missing base; an unreadable untracked
@@ -308,7 +308,7 @@ func TestStatusEdges(t *testing.T) {
 	}
 }
 
-// Review round 1 (Opus): a refresh never rewrites the index, even with
+// A refresh never rewrites the index, even with
 // files whose stat data changed and content did not; an orphan branch,
 // with no merge base, gets ahead and behind alone.
 func TestStatusIndexAndOrphan(t *testing.T) {

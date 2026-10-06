@@ -90,14 +90,17 @@ const (
 	CapDismissRoot = "dismiss-root"
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
-	// workspace sessions. Only a daemon with hosts in its config has it.
+	// workspace sessions. Every daemon serve starts has it; a host's
+	// config lists only the host itself, as a rule, and then its merged
+	// stream is its own records.
 	CapMerged = "merged"
 	// CapRepoEntry is the repository coming from the machine the user
 	// sits at: an add with repo_entry for a repository this host's
 	// config does not list is resolved against that entry, and the
 	// worktree listing covers every checkout under the repos directory.
 	// A repository the config lists is resolved against the config's
-	// entry, as before. A daemon without it ignores the entry and
+	// entry, whatever entry the add brought for it; an entry for another
+	// source is refused. A daemon without it ignores the entry and
 	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
 	// CapAttribution is the host attributing what runs to its worktrees:
@@ -719,8 +722,8 @@ type Message struct {
 	// record in this envelope.
 	AgentName string `json:"agent_name,omitempty"`
 	// Prompt, on add and on the prompt message, is the text the agent is
-	// to be started with, or given; on a result, and on the pending
-	// records of milestone four, it is the delivery state, one of the
+	// to be started with, or given; on a result, and on the relay's
+	// pending records, it is the delivery state, one of the
 	// Delivery constants. The text never travels in a result, a progress
 	// message or a record. Generated asks a daemon with task to allocate
 	// the branch: Branch is a proposal, made unique in the allocate

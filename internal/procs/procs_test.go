@@ -24,7 +24,7 @@ func TestFindAgentUnderWrapperWithoutArgv(t *testing.T) {
 	}
 }
 
-// Review finding 1: a wrapper whose arguments name the agent must not win
+// A wrapper whose arguments name the agent must not win
 // over the agent it started.
 func TestFindWrapperArgvDoesNotWin(t *testing.T) {
 	procs := []Proc{
@@ -48,7 +48,7 @@ func TestFindWrapperArgvDoesNotWin(t *testing.T) {
 	}
 }
 
-// Review 2 finding 1: a shell's -c text is not evidence of an agent process.
+// A shell's -c text is not evidence of an agent process.
 // The child is the agent; the surviving shell alone is nothing.
 func TestFindShellDashCIsNotTheAgent(t *testing.T) {
 	procs := []Proc{
@@ -80,7 +80,7 @@ func TestFindInterpreterHosted(t *testing.T) {
 	}
 }
 
-// Review finding 2: a tool taking the foreground must not replace the agent.
+// A tool taking the foreground must not replace the agent.
 func TestFindSurvivesForegroundHandoff(t *testing.T) {
 	procs := []Proc{
 		{PID: 10, PPID: 1, PGID: 10, TPGID: 200, Comm: "zsh", Start: at(0)},
