@@ -223,9 +223,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	}
 	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
 	if s.Key != "" {
-		args = append(args, ";", "set-option", "-t", s.Name, "@laatmux_workspace", s.Key)
+		args = append(args, ";", "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", s.Key)
 	} else {
-		args = append(args, ";", "set-option", "-t", s.Name, "@laatmux_attach", attach)
+		args = append(args, ";", "set-option", "-t", sessionTarget(s.Name), "@laatmux_attach", attach)
 	}
 	args = append(args, ";")
 	args = append(args, tagArgs(s.Name, s)...)
@@ -254,7 +254,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 // with its pane tagged, as Ensure then finds it by key. Last, the
 // attach pane is respawned or made as for a reuse.
 func adopt(ctx context.Context, name string, s Spec) error {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", sessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
 	if err != nil {
 		return err
 	}
@@ -266,8 +266,8 @@ func adopt(ctx context.Context, name string, s Spec) error {
 			}
 		}
 	}
-	args := []string{"set-option", "-t", name, "@laatmux_workspace", s.Key,
-		";", "set-option", "-u", "-t", name, "@laatmux_attach", ";"}
+	args := []string{"set-option", "-t", sessionTarget(name), "@laatmux_workspace", s.Key,
+		";", "set-option", "-u", "-t", sessionTarget(name), "@laatmux_attach", ";"}
 	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
 		return err
 	}
@@ -291,13 +291,23 @@ func startAttach(ctx context.Context, paneID string, s Spec) error {
 	return err
 }
 
+// sessionTarget is the target of a window or pane command for the
+// session with exactly this name, and a session gone is an error. A bare
+// name may be taken as a pane or window of the current session before it
+// is a session, and as a session it is a prefix of after; the current
+// session is the one with the pane TMUX_PANE names on that server, else
+// the most recently active. =name without the colon still falls back to
+// a session prefix where a window is wanted, set-option refuses it, and
+// switch-client looks it up as a pane when the name has a %, as an
+// encoded branch does. kill-session takes only a session target, for
+// which =name alone is exact.
+func sessionTarget(name string) string { return "=" + name + ":" }
+
 // SetHost tags the session with the host's name, for one whose tag
 // names no configured host: the session is on the server TMUX names,
-// where Current and PaneSession found it, and named exactly (a bare
-// target would take a window of the current session, or a session the
-// name is a prefix of, when the session is gone).
+// where Current and PaneSession found it, and named exactly.
 func SetHost(ctx context.Context, name, host string) error {
-	_, err := (tmux.Server{}).Run(ctx, "set-option", "-t", "="+name+":", "@laatmux_host", host)
+	_, err := (tmux.Server{}).Run(ctx, "set-option", "-t", sessionTarget(name), "@laatmux_host", host)
 	return err
 }
 
@@ -306,12 +316,13 @@ func SetHost(ctx context.Context, name, host string) error {
 // A source or branch the spec does not know is not written, so a reuse
 // that could not resolve one keeps what the session already carries.
 func tagArgs(name string, s Spec) []string {
-	args := []string{"set-option", "-t", name, "@laatmux_host", s.Host.Name}
+	target := sessionTarget(name)
+	args := []string{"set-option", "-t", target, "@laatmux_host", s.Host.Name}
 	if s.Key != "" && s.Source != "" {
-		args = append(args, ";", "set-option", "-t", name, "@laatmux_repo", s.Source)
+		args = append(args, ";", "set-option", "-t", target, "@laatmux_repo", s.Source)
 	}
 	if s.Key != "" && s.Branch != "" {
-		args = append(args, ";", "set-option", "-t", name, "@laatmux_branch", s.Branch)
+		args = append(args, ";", "set-option", "-t", target, "@laatmux_branch", s.Branch)
 	}
 	return args
 }
@@ -325,7 +336,7 @@ func tagArgs(name string, s Spec) []string {
 // is left as it is. Other panes in the session are the user's and are
 // left alone.
 func ensureAttach(ctx context.Context, name string, s Spec) error {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", sessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
 	if err != nil {
 		return err
 	}
@@ -341,7 +352,7 @@ func ensureAttach(ctx context.Context, name string, s Spec) error {
 		}
 		return nil
 	}
-	out, err = Server.Run(ctx, "new-window", "-t", "="+name+":", "-n", "agent", "-P", "-F", "#{pane_id}", placeholder)
+	out, err = Server.Run(ctx, "new-window", "-t", sessionTarget(name), "-n", "agent", "-P", "-F", "#{pane_id}", placeholder)
 	if err != nil {
 		return err
 	}
@@ -390,13 +401,13 @@ func Inside(ctx context.Context) bool {
 
 // Switch makes the session current for the calling client.
 func Switch(ctx context.Context, name string) error {
-	_, err := Server.Run(ctx, "switch-client", "-t", "="+name)
+	_, err := Server.Run(ctx, "switch-client", "-t", sessionTarget(name))
 	return err
 }
 
 // SwitchClient makes the session current for the named client.
 func SwitchClient(ctx context.Context, client, name string) error {
-	_, err := Server.Run(ctx, "switch-client", "-c", client, "-t", "="+name)
+	_, err := Server.Run(ctx, "switch-client", "-c", client, "-t", sessionTarget(name))
 	return err
 }
 
@@ -422,13 +433,14 @@ func Kill(ctx context.Context, name string) error {
 	return err
 }
 
-// SetSettled sets or clears @laatmux_settled on the session.
+// SetSettled sets or clears @laatmux_settled on the session with exactly
+// this name; a session gone is an error, not another session tagged.
 func SetSettled(ctx context.Context, name string, settled bool) error {
 	var err error
 	if settled {
-		_, err = Server.Run(ctx, "set-option", "-t", name, "@laatmux_settled", "1")
+		_, err = Server.Run(ctx, "set-option", "-t", sessionTarget(name), "@laatmux_settled", "1")
 	} else {
-		_, err = Server.Run(ctx, "set-option", "-u", "-t", name, "@laatmux_settled")
+		_, err = Server.Run(ctx, "set-option", "-u", "-t", sessionTarget(name), "@laatmux_settled")
 	}
 	return err
 }
@@ -437,7 +449,7 @@ func SetSettled(ctx context.Context, name string, settled bool) error {
 // it has none: the pane a jump to an agent's pane selects, so the
 // session shows the attach whatever window the user left it on.
 func AttachPane(ctx context.Context, name string) string {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+name, "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep))
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", sessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep))
 	if err != nil {
 		return ""
 	}

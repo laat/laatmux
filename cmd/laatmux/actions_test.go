@@ -459,9 +459,9 @@ func TestSettleGoesByLine(t *testing.T) {
 	// from the state it has.
 	expect := func(name string, settled bool) (string, string) {
 		if settled {
-			return "-L default set-option -u -t " + name + " @laatmux_settled\n", "unsettled " + name
+			return "-L default set-option -u -t =" + name + ": @laatmux_settled\n", "unsettled " + name
 		}
-		return "-L default set-option -t " + name + " @laatmux_settled 1\n", "settled " + name
+		return "-L default set-option -t =" + name + ": @laatmux_settled 1\n", "settled " + name
 	}
 	children := []struct {
 		name string
