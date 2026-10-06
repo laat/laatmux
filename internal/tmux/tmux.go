@@ -581,7 +581,8 @@ func ShellJoin(argv []string) string { return shellJoin(argv) }
 // it is, since tmux keeps such a run, as the start of a style, and
 // would keep ## there too. tmux expands the -c directory of
 // new-session, new-window and split-window as a format, and a worktree
-// root has the branch in it.
+// root has the branch in it; it expands a run-shell command too, where
+// the sidebar's hooks and keys put laatmux's path.
 func FormatLiteral(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
