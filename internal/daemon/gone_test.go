@@ -55,7 +55,10 @@ func rmOnHost(t *testing.T, f *relayFixture, id, branch, root string) {
 
 // stopFollow cancels the laptop daemon's follow of the host, so only the
 // listings the test makes reach the task, and waits for what the follow
-// had started to end.
+// had started to end. The task is left with no memo, as the follow's
+// latest listing, which shows its worktree, leaves it: one from before
+// the worktree was listed, run late, could have left the memo of an
+// empty listing, which the test's own would then pass over.
 func stopFollow(t *testing.T, f *relayFixture, id string) *mergedHost {
 	t.Helper()
 	f.local.mu.Lock()
@@ -64,6 +67,9 @@ func stopFollow(t *testing.T, f *relayFixture, id string) *mergedHost {
 	mh.cancel = func() {}
 	f.local.mu.Unlock()
 	awaitRechecks(t, f, id)
+	f.local.relay.mu.Lock()
+	delete(f.local.relay.checked, id)
+	f.local.relay.mu.Unlock()
 	return mh
 }
 
@@ -306,17 +312,21 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	}
 	// Another listing that lacks it is checked again.
 	elsewhere := map[string]bool{"henv/worktree//elsewhere": true}
-	if !listing(elsewhere) || memo() != "henv\x00henv/worktree//elsewhere" {
-		t.Fatalf("a changed listing was not checked: %q", memo())
+	asked := listing(elsewhere)
+	if sig = memo(); !asked || sig != "henv\x00henv/worktree//elsewhere" {
+		t.Fatalf("a changed listing was not checked: asked %v, memo %q", asked, sig)
 	}
 	// One that shows it has the task forget that, and the same listing
 	// that lacks it is checked again.
-	listing(map[string]bool{p.WorktreeID(): true, "henv/worktree//elsewhere": true})
+	if listing(map[string]bool{p.WorktreeID(): true, "henv/worktree//elsewhere": true}) {
+		t.Fatal("a listing that shows the worktree asked the host")
+	}
 	if sig = memo(); sig != "" {
 		t.Fatalf("a listing that shows the worktree kept the memo: %q", sig)
 	}
-	if !listing(elsewhere) || memo() != "henv\x00henv/worktree//elsewhere" {
-		t.Fatalf("the listing was not checked again: %q", memo())
+	asked = listing(elsewhere)
+	if sig = memo(); !asked || sig != "henv\x00henv/worktree//elsewhere" {
+		t.Fatalf("the listing was not checked again: asked %v, memo %q", asked, sig)
 	}
 	// Then the worktree goes while the connection is down, and the
 	// reconnect's snapshot reads as the listing already checked against:
@@ -356,8 +366,21 @@ func TestRelayGoneAgainstSeenListing(t *testing.T) {
 	f := newRelayFixture(t, []string{"loading"})
 	c, _, _ := f.merged(t)
 	defer c.Close()
-	// Only the listings below reach the task; the add is followed on
-	// the relay's own connection.
+	// Once the host has said who it is, so the add is accepted pinned
+	// as its siblings' are, only the listings below reach the task; the
+	// add is followed on the relay's own connection.
+	for i := 0; ; i++ {
+		f.local.mu.Lock()
+		env := f.local.mhosts["vm"].status.EnvironmentID
+		f.local.mu.Unlock()
+		if env != "" {
+			break
+		}
+		if i > 500 {
+			t.Fatal("the host never said who it is")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	stopFollow(t, f, "n6")
 	f.local.mu.Lock()
 	f.local.hostListedLocked("henv", map[string]bool{}, false)
