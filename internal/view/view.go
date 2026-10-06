@@ -392,12 +392,14 @@ type Span struct {
 // dimmed is the span as a dim line draws it: dim throughout, without a
 // template's background, and without its colour but for the viewer's
 // own label, which keeps its colour and is not faint. ANSI draws a dim
-// line's spans so, and the strip a dim row's chip, whose line is not
-// dim.
+// line's spans so off the band, and the strip a dim row's chip, whose
+// line is not dim.
 func (s Span) dimmed() Span {
 	s.Bg = ""
 	if s.Fg != palette.CurrentWorktreeFg {
 		s.Dim, s.Fg = true, ""
+	} else {
+		s.Dim = false
 	}
 	return s
 }

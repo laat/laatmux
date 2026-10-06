@@ -1145,7 +1145,8 @@ alike; only the lines it leaves differ.
   plain takes only the style's background: stale wins over the style's
   colour and bold, so the token reads dim and plain whatever the
   template says. The padding `{fill}` takes the style in force at the
-  fill, and a background gives way to the selection's band. Dim text
+  fill, and a background gives way to the selection's band and is not
+  drawn on a dim row, in the list or the strip. Dim text
   with no colour on a style's background, neither its own nor the
   style's (a stale token always; a remote host, a draft's number or
   `#[dim]` text under a style without `fg`), is not faint in the

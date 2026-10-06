@@ -732,7 +732,7 @@ func TestStrip(t *testing.T) {
 // A dim row's chip is dim throughout, as its line is in the list: faint
 // and without the template's background, which a fresh row's chip
 // keeps; the viewer's own label on a dim chip keeps its colour, not the
-// background.
+// background, and is not faint where a template makes it dim.
 func TestStripDimChip(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -741,9 +741,9 @@ func TestStripDimChip(t *testing.T) {
 	m.SetTemplates(CompileTemplates(nil, "", []string{"#[bg=#ffff00]{primary}"}, "", "", "", "", ""))
 	dark, _ := palette.New(true, nil)
 	yellow := dark.SGR("#ffff00", true)
-	// chip is the named chip of the first line, drawn alone on a line
-	// as the strip draws it.
-	chip := func(name string) string {
+	// chipIn is the named chip of the first line, drawn alone on a line
+	// as the strip draws it, in a theme.
+	chipIn := func(name string, th palette.Theme) string {
 		t.Helper()
 		out := m.Render()
 		var chips [][]Span
@@ -756,12 +756,13 @@ func TestStripDimChip(t *testing.T) {
 		}
 		for _, c := range chips {
 			if l := (Line{Spans: c}); strings.HasPrefix(Text([]Line{l}), name+" ") {
-				return ANSI(l, dark)
+				return ANSI(l, th)
 			}
 		}
 		t.Fatalf("no chip %s:\n%s", name, Debug(out))
 		return ""
 	}
+	chip := func(name string) string { t.Helper(); return chipIn(name, dark) }
 	if got := chip("remote-notes"); !strings.Contains(got, yellow+"remote-notes") {
 		t.Errorf("a fresh chip lost the template's background: %q", got)
 	}
@@ -775,5 +776,10 @@ func TestStripDimChip(t *testing.T) {
 	}
 	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, dark.SGR(palette.CurrentWorktreeFg, false)+"dead") {
 		t.Errorf("the viewer's label on a dim chip: %q", got)
+	}
+	// Without colours, where faint would show.
+	m.SetTemplates(CompileTemplates(nil, "", []string{"#[dim]{primary}"}, "", "", "", "", ""))
+	if got := chipIn("dead", palette.Mono()); !strings.HasPrefix(got, "\x1b[1mdead") {
+		t.Errorf("the viewer's label made dim on a dim chip: %q", got)
 	}
 }

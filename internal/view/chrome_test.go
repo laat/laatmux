@@ -172,8 +172,8 @@ func TestMoreBelow(t *testing.T) {
 }
 
 // A theme with colours draws the selection as a background band across
-// the line and a dim line in the dimmed colour, a span's own colour
-// included, but under the band, where a span keeps its colour; without
+// the line, and a dim line in the dimmed colour, a span's own colour
+// included; a dim line under the band keeps its spans' colours. Without
 // colours the selection is reverse video and a dim line the dim
 // attribute alone.
 func TestANSIThemes(t *testing.T) {
