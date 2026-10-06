@@ -738,9 +738,10 @@ func (d *dash) shell(m *view.Model) bool {
 		return false
 	}
 	// localFor has put the configured name on the session, by its
-	// environment when the tag named a renamed host.
+	// environment when the tag named a renamed host; one it could not
+	// name is not the local host, as the CLI has it.
 	h, ok := d.cfg.Find(l.Host)
-	if !ok {
+	if l.Host == "" || !ok {
 		m.Message = fmt.Sprintf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
 		return false
 	}

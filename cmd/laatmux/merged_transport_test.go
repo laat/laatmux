@@ -15,6 +15,7 @@ import (
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -248,7 +249,11 @@ func TestHostByEnvironment(t *testing.T) {
 		t.Fatalf("unknown environment: %v", err)
 	}
 	// A capability the host lacks passes it over, as a host that does
-	// not answer is.
+	// not answer is: mac, first in the config, has no worktrees, box
+	// has; neither has add.
+	if h, _, _, err := hostByEnvironment(context.Background(), cfg, "benv", protocol.CapWorktrees); err != nil || h.Name != "box" {
+		t.Fatalf("box by environment with worktrees: %+v %v", h, err)
+	}
 	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "benv", protocol.CapAdd); err == nil || !strings.Contains(err.Error(), "does not support add") {
 		t.Fatalf("missing capability: %v", err)
 	}
@@ -267,17 +272,19 @@ func TestHostByEnvironment(t *testing.T) {
 		t.Errorf("no tag, unknown environment: %v", err)
 	}
 	// What shell, run and split run inside a session use: the tag, else
-	// the environment, with no capability asked for; the retag is best
-	// effort (no session s exists here).
+	// the environment; the retag is best effort (no session s exists
+	// here). A tag that names a configured host wins over the
+	// environment: a session tagged mac whose key is box's resolves to
+	// mac, with no lookup.
 	for _, c := range []struct {
 		host, want string
-	}{{"box", "box"}, {"old", "box"}, {"", "box"}} {
-		h, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "benv//r/x", Host: c.host}, "")
+	}{{"box", "box"}, {"mac", "mac"}, {"old", "box"}, {"", "box"}} {
+		h, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "benv//r/x", Host: c.host})
 		if err != nil || h.Name != c.want {
 			t.Errorf("workspaceHost tag %q: %+v %v", c.host, h, err)
 		}
 	}
-	if _, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "nope//r/x", Host: "old"}, ""); err == nil || !strings.Contains(err.Error(), `is on host "old", which is not configured, and no configured host answers`) {
+	if _, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "nope//r/x", Host: "old"}); err == nil || !strings.Contains(err.Error(), `is on host "old", which is not configured, and no configured host answers`) {
 		t.Errorf("renamed host, unknown environment: %v", err)
 	}
 }
@@ -305,13 +312,98 @@ func TestWorkspaceHostRetags(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The retag goes to the server TMUX names, where the session was
+	// found: here the isolated default server.
+	out, err := workspace.Server.Run(ctx, "display", "-p", "-t", "=old/proj/x:", "#{socket_path},#{pid},#{session_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", strings.TrimSpace(string(out)))
 	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "box", SSH: "box"}}}}
 	cur := protocol.Session{Name: "old/proj/x", Key: "benv//r/x", Host: "old"}
-	if h, err := workspaceHost(ctx, cfg, cur, ""); err != nil || h.Name != "box" {
+	if h, err := workspaceHost(ctx, cfg, cur); err != nil || h.Name != "box" {
 		t.Fatalf("renamed host: %+v %v", h, err)
 	}
-	out, err := workspace.Server.Run(ctx, "display", "-p", "-t", "old/proj/x", "#{@laatmux_host}")
+	out, err = workspace.Server.Run(ctx, "display", "-p", "-t", "=old/proj/x:", "#{@laatmux_host}")
 	if err != nil || strings.TrimSpace(string(out)) != "box" {
 		t.Fatalf("tag after the lookup: %q %v", out, err)
+	}
+}
+
+// shell and split run inside a session tagged with a renamed host find
+// the host by the environment and work: the split's new pane and the
+// shell window open at the root, and the session is retagged. The host
+// is this machine in the config, so both open local windows.
+func TestRenamedHostCommands(t *testing.T) {
+	isolatedDefault(t)
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status"}},
+			}})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: box\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	root := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"new-session", "-d", "-s", "old/proj/x", "sleep 1000"},
+		{"set-option", "-t", "=old/proj/x:", "@laatmux_workspace", "benv/" + root},
+		{"set-option", "-t", "=old/proj/x:", "@laatmux_host", "old"},
+	} {
+		if _, err := workspace.Server.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := workspace.Server.Run(ctx, "display", "-p", "-t", "=old/proj/x:", "#{socket_path},#{pid},#{session_id}\t#{pane_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, pane, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	t.Setenv("TMUX", tm)
+	t.Setenv("TMUX_PANE", pane)
+	if err := cmdSplit(ctx, []string{"-h", pane}); err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	tag := func() string {
+		out, _ := workspace.Server.Run(ctx, "display", "-p", "-t", "=old/proj/x:", "#{@laatmux_host}")
+		return strings.TrimSpace(string(out))
+	}
+	if tag() != "box" {
+		t.Fatalf("tag after split: %q", tag())
+	}
+	// The stale tag back, for shell.
+	if _, err := workspace.Server.Run(ctx, "set-option", "-t", "=old/proj/x:", "@laatmux_host", "old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdShell(ctx, nil); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if tag() != "box" {
+		t.Fatalf("tag after shell: %q", tag())
+	}
+	out, err = workspace.Server.Run(ctx, "list-panes", "-s", "-t", "=old/proj/x:", "-F", "#{pane_start_path}"+tmux.Sep+"#{@laatmux_shell}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	atRoot, shells := 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, tmux.Sep)
+		if len(f) == 2 && f[0] == root {
+			atRoot++
+		}
+		if len(f) == 2 && f[1] != "" {
+			shells++
+		}
+	}
+	// The split's pane and the shell window's: two at the root beside
+	// the sleep, and one window tagged as the shell.
+	if atRoot != 2 || shells != 1 {
+		t.Fatalf("panes at the root %d, shell windows %d:\n%s", atRoot, shells, out)
 	}
 }

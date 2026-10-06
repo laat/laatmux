@@ -292,9 +292,12 @@ func startAttach(ctx context.Context, paneID string, s Spec) error {
 }
 
 // SetHost tags the session with the host's name, for one whose tag
-// named a host since renamed in the config.
+// names no configured host: the session is on the server TMUX names,
+// where Current and PaneSession found it, and named exactly (a bare
+// target would take a window of the current session, or a session the
+// name is a prefix of, when the session is gone).
 func SetHost(ctx context.Context, name, host string) error {
-	_, err := Server.Run(ctx, "set-option", "-t", name, "@laatmux_host", host)
+	_, err := (tmux.Server{}).Run(ctx, "set-option", "-t", "="+name+":", "@laatmux_host", host)
 	return err
 }
 

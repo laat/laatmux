@@ -59,7 +59,7 @@ func cmdSplit(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if h, err = workspaceHost(ctx, cfg, l, ""); err != nil {
+		if h, err = workspaceHost(ctx, cfg, l); err != nil {
 			return err
 		}
 	}

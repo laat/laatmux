@@ -88,7 +88,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		if !cur.Workspace() {
 			return fmt.Errorf("%s is not a workspace session; name <repo>/<branch>", cur.Name)
 		}
-		h, err := workspaceHost(ctx, cfg, cur, "")
+		h, err := workspaceHost(ctx, cfg, cur)
 		if err != nil {
 			return err
 		}

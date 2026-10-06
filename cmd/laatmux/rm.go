@@ -142,18 +142,20 @@ func untaggedErr(cur protocol.Session, err error) error {
 // workspaceHost is the configured host of a workspace session, for a
 // command run inside it that needs no snapshot: the one its tag names,
 // else, after a host rename, the one whose daemon answers as the key's
-// environment, found as hostForSession finds it; the session is then
-// tagged with the name it has now, so the next command finds it by the
-// tag, as a jump does. needCap is what the caller needs of the host,
-// "" for nothing.
-func workspaceHost(ctx context.Context, cfg config.Config, cur protocol.Session, needCap string) (config.Host, error) {
+// environment, found as hostForSession finds it (each host asked in
+// config order, through the merged stream where there is one, which
+// can take a while for a host that is reconnecting); the session is
+// then tagged with the name it has now, so the next command finds it
+// by the tag, as a jump does. The command's own capability is checked
+// where it is used, as before.
+func workspaceHost(ctx context.Context, cfg config.Config, cur protocol.Session) (config.Host, error) {
 	if cur.Host != "" {
 		if h, ok := cfg.Find(cur.Host); ok {
 			return h, nil
 		}
 	}
 	env, _ := protocol.SplitSessionKey(cur.Key)
-	h, _, _, err := hostByEnvironment(ctx, cfg, env, needCap)
+	h, _, _, err := hostByEnvironment(ctx, cfg, env, "")
 	if err != nil {
 		return h, untaggedErr(cur, err)
 	}
