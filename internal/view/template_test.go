@@ -169,7 +169,8 @@ func TestTokens(t *testing.T) {
 }
 
 // Styles hold until the next one and leave a token's own colours; a
-// stale token takes the background alone; a background is drawn; the
+// dim token with no colour of its own, a stale one among them, takes
+// the background alone; a background is drawn; the
 // fill puts the right part against the edge; an empty token takes its
 // separator with it; a template that did not parse draws its error.
 func TestTemplateStyles(t *testing.T) {
@@ -303,6 +304,35 @@ func TestTemplateStyles(t *testing.T) {
 		t.Errorf("a split run before: %q", got)
 	}
 	r = tokenRow(now)
+	// A dim token with no colour of its own takes a style's background
+	// alone, as a stale one does: a remote host and a draft's number on
+	// a chip are not drawn in the chip's colour or bold, which would
+	// read local and fresh; the literal between them is.
+	r.Branch.PR.Draft = true
+	if got := render("#[fg=#000000,bg=#ffff00]{host} {pr_number}", 40); got != "...|‹⟦#ffff00:vm⟧›⟦#ffff00:⟨#000000: ⟩⟧‹⟦#ffff00:#52⟧›\n" {
+		t.Errorf("a remote host and a draft on a chip: %q", got)
+	}
+	r.Branch.PR.Draft = false
+	for _, c := range []struct{ src, local, want string }{
+		{"#[fg=accent]{host}", "mac", "...|‹vm›\n"},
+		{"#[fg=accent]{host}", "vm", "...|⟨accent:vm⟩\n"},
+		{"#[bold]{host}", "mac", "...|‹vm›\n"},
+		{"#[bold]{host}", "vm", "...|«vm»\n"},
+	} {
+		m.LocalHost = c.local
+		if got := render(c.src, 40); got != c.want {
+			t.Errorf("%q with %s local: %q, want %q", c.src, c.local, got, c.want)
+		}
+	}
+	m.LocalHost = "mac"
+	// A dim token's own colour wins over dim: a closed PR's red and the
+	// committed counts' green take the style's background and bold as
+	// any coloured token does.
+	r.Branch.PR.State = "closed"
+	if got := render("#[fg=#000000,bg=#ffff00,bold]{pr_number} {git_committed}", 40); got != "...|‹«⟦#ffff00:⟨danger:#52⟩⟧»›«⟦#ffff00:⟨#000000: ⟩⟧»‹«⟦#ffff00:⟨success:+46⟩⟧»›«⟦#ffff00:⟨#000000: ⟩⟧»‹«⟦#ffff00:⟨danger:-11⟩⟧»›\n" {
+		t.Errorf("own colours on a chip: %q", got)
+	}
+	r = tokenRow(now)
 	// A fresh base takes a style's colour and bold, as a label does.
 	if got := render("#[fg=accent,bold]{git_branch}", 20); got != "...|«⟨accent:origin/main⟩»\n" {
 		t.Errorf("a fresh base styled: %q", got)
@@ -349,11 +379,12 @@ func TestTemplateStyles(t *testing.T) {
 // terminal's: on the lightest backgrounds the dark theme's, on the
 // darkest the light theme's, whatever the theme, and on those between
 // the background half way to white or to black, for a remote host, a
-// draft's number, dim literal text and a stale token under a chip's
-// colour alike; a palette name through the theme, an indexed colour by
-// xterm's; faint on a colour 0 to 15. Where no template background is
-// drawn, under the selection's band, on a dim line, on a strip chip's
-// band and without colours, the line is drawn as it is without one.
+// draft's number and a stale token under a chip's colour, and dim
+// literal text, alike; a palette name through the theme, an indexed
+// colour by xterm's; faint on a colour 0 to 15. Where no template
+// background is drawn, under the selection's band, on a dim line, on a
+// strip chip's band and without colours, the line is drawn as it is
+// without one.
 func TestDimOnBackground(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	m := &Model{Now: now, LocalHost: "mac"}
@@ -384,6 +415,14 @@ func TestDimOnBackground(t *testing.T) {
 	if got := draw(r, "#[fg=#000000,bg=#ffff00]{pr_number} {git_ahead}", Line{}, dark); got != want {
 		t.Errorf("stale tokens on a chip:\n%q, want\n%q", got, want)
 	}
+	// A remote host and a draft on the same chip, as the stale tokens:
+	// on one chip every dim token reads one way.
+	r = tokenRow(now)
+	r.Branch.PR.Draft = true
+	want = darkDim + yellow + "vm\x1b[0m" + black + yellow + " \x1b[0m" + darkDim + yellow + "#52\x1b[0m\x1b[0m"
+	if got := draw(r, "#[fg=#000000,bg=#ffff00]{host} {pr_number}", Line{}, dark); got != want {
+		t.Errorf("a host and a draft on a chip:\n%q, want\n%q", got, want)
+	}
 	r = tokenRow(now)
 	for _, c := range []struct {
 		src  string
@@ -404,7 +443,7 @@ func TestDimOnBackground(t *testing.T) {
 		{"#[bg=colour243]{host}", light, light.SGR("#3b3b3b", false) + "\x1b[48;5;243mvm\x1b[0m\x1b[0m"},
 		{"#[bg=colour3]{host}", dark, "\x1b[2m\x1b[48;5;3mvm\x1b[0m\x1b[0m"},
 		// Bold keeps its bold.
-		{"#[bold,bg=#ffff00]{host}", dark, "\x1b[1m" + darkDim + yellow + "vm\x1b[0m\x1b[0m"},
+		{"#[bold,dim,bg=#ffff00]vm", dark, "\x1b[1m" + darkDim + yellow + "vm\x1b[0m\x1b[0m"},
 		// A colour of the span's own is drawn as it is.
 		{"#[fg=accent,dim,bg=#ffff00]x", dark, dark.SGR(palette.Accent, false) + yellow + "x\x1b[0m\x1b[0m"},
 	} {
