@@ -72,7 +72,11 @@ func cmdSplit(ctx context.Context, args []string) error {
 
 // splitArgs is the split-window command for a pane: the plain split in
 // the pane's directory when its session is not a workspace, else a pane
-// at the worktree root on the host.
+// at the worktree root on the host. split-window expands -c as a
+// format, so the directory is passed as one that expands to itself: a
+// root has the branch in it, and a pane's path can have anything. A
+// directory that is not there after expansion would start the pane in
+// $HOME, with no error. The ssh command is not expanded.
 func splitArgs(dir, paneID, cwd string, l protocol.Session, h config.Host) []string {
 	args := []string{"split-window"}
 	if dir != "" {
@@ -80,11 +84,11 @@ func splitArgs(dir, paneID, cwd string, l protocol.Session, h config.Host) []str
 	}
 	args = append(args, "-t", paneID)
 	if !l.Workspace() {
-		return append(args, "-c", cwd)
+		return append(args, "-c", tmux.FormatLiteral(cwd))
 	}
 	_, root := protocol.SplitSessionKey(l.Key)
 	if h.Local() {
-		return append(args, "-c", root)
+		return append(args, "-c", tmux.FormatLiteral(root))
 	}
 	return append(args, workspace.ShellCommand(h.Host, root))
 }

@@ -366,7 +366,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	// new-session expands -c as a format, and a root has the branch in
 	// it. A directory that is not there after expansion would start the
 	// pane in $HOME, with no error.
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", formatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", FormatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -569,11 +569,13 @@ func shellJoin(argv []string) string {
 // built with it.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
 
-// formatLiteral is s as a tmux format that expands to s: a # is
+// FormatLiteral is s as a tmux format that expands to s: a # is
 // written ##, which expands to #, but a run of #s before a [ is left as
 // it is, since tmux keeps such a run, as the start of a style, and
-// would keep ## there too.
-func formatLiteral(s string) string {
+// would keep ## there too. tmux expands the -c directory of
+// new-session, new-window and split-window as a format, and a worktree
+// root has the branch in it.
+func FormatLiteral(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		if s[i] != '#' {

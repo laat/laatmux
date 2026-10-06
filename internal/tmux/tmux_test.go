@@ -310,8 +310,10 @@ func TestNewSessionRootWithHash(t *testing.T) {
 	}
 }
 
-// formatLiteral doubles every # but a run of them before a [, which
-// tmux keeps as it is; the new-session test above checks with tmux.
+// FormatLiteral doubles every # but a run of them before a [, which
+// tmux keeps as it is; the new-session test above checks with tmux, as
+// the split and shell test in cmd/laatmux does for split-window and
+// new-window.
 func TestFormatLiteral(t *testing.T) {
 	cases := map[string]string{
 		"":                 "",
@@ -326,8 +328,8 @@ func TestFormatLiteral(t *testing.T) {
 		"/w/#[s]/proj/x#H": "/w/#[s]/proj/x##H",
 	}
 	for in, want := range cases {
-		if got := formatLiteral(in); got != want {
-			t.Errorf("formatLiteral(%q) = %q, want %q", in, got, want)
+		if got := FormatLiteral(in); got != want {
+			t.Errorf("FormatLiteral(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
