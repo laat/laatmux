@@ -384,9 +384,10 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 // root, as its tile and as its node, whether or not B has a home: the
 // session z toggles from the same row. With no workspace session of B's
 // it makes one from B's home, as enter on the line does, or refuses
-// without a home, as z does; it opens nothing in A's. A child in a
-// window of B's own workspace session, under a line holding a plain
-// session, does what S on the line does.
+// without a home, as z does; it opens nothing in A's. A line whose
+// jump agent sits in a plain session holds B's workspace session when
+// that exists: S and z on the line and on every agent it holds act on
+// that session, while enter on the line goes to the plain session.
 func TestShellGoesByLine(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tmux.log")
@@ -466,10 +467,13 @@ func TestShellGoesByLine(t *testing.T) {
 		}
 	}
 	// B without a home whose oldest agent, its line's jump agent, sits in
-	// a plain session on this machine's default server: the line holds
-	// that session. Another agent of B in a window of B's own workspace
-	// session has that session as its own; S on it does what S on the
-	// line does.
+	// the plain session notes on this machine's default server, and
+	// another agent of B in a window of B's own workspace session, which
+	// has that session as its own: the line holds B's workspace session.
+	// S on the line and on either agent opens the shell there, and z
+	// toggles it, though enter on the line goes to notes (#188). With no
+	// workspace session of B's the line holds notes, and S and z refuse
+	// on it and on its agent.
 	b.Session = ""
 	notes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/w/b", WorktreeID: b.ID, Identity: &protocol.Identity{PID: 100, StartUnix: 1}}
 	inB := agent
@@ -478,23 +482,52 @@ func TestShellGoesByLine(t *testing.T) {
 		Hosts:     []rows.Host{host},
 		Agents:    []protocol.Agent{notes, inB},
 		Worktrees: []protocol.Worktree{a, b},
-		Locals:    []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/b", Key: "menv//w/b", Host: "mac"}},
+		Locals:    []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/b", Key: "menv//w/b", Host: "mac"}, {Name: "notes"}},
 	}
-	m := show(in, true)
-	if l := m.OwnerLine(b.ID); l == nil || l.Local == nil || l.Local.Name != "notes" || l.Local.Workspace() {
-		t.Fatalf("B's line is %+v", l)
-	}
-	lineMsg, lineCmds := press(m, b.ID, 'S')
 	for _, tree := range []bool{false, true} {
 		m := show(in, tree)
-		if !m.Select(inB.ID) {
-			t.Fatalf("tree %v: no row %s", tree, inB.ID)
+		l := m.OwnerLine(b.ID)
+		if l == nil || l.Agent == nil || l.Agent.ID != notes.ID || l.Local == nil || l.Local.Name != "mac/proj/b" {
+			t.Fatalf("tree %v: B's line is %+v", tree, l)
 		}
-		if r := m.Selection(); r.Worktree == nil || r.Worktree.ID != b.ID || r.Local == nil || r.Local.Name != "mac/proj/b" {
-			t.Fatalf("tree %v: the agent's row is %+v", tree, r)
+		if tree {
+			os.Remove(log)
+			d.jumpRow(m, *l)
+			if got, _ := os.ReadFile(log); !strings.HasPrefix(m.Message, "notes is on the default tmux server") || len(got) != 0 {
+				t.Errorf("enter on B's line: message %q, tmux %q", m.Message, got)
+			}
 		}
-		if msg, cmds := press(m, inB.ID, 'S'); msg != lineMsg || cmds != lineCmds {
-			t.Errorf("tree %v: S on B's agent in B's session: message %q, tmux %q; on the line: message %q, tmux %q", tree, msg, cmds, lineMsg, lineCmds)
+		ids := []string{notes.ID, inB.ID}
+		if tree {
+			ids = append(ids, b.ID)
+		}
+		for _, id := range ids {
+			if msg, cmds := press(m, id, 'S'); !strings.Contains(cmds, "-L default new-window -t =mac/proj/b: -n shell -c /w/b ;") ||
+				strings.Contains(cmds, "new-session") || strings.Contains(cmds, "notes") || !strings.HasPrefix(msg, "mac/proj/b is on the default tmux server") {
+				t.Errorf("tree %v: S on %s: message %q, tmux %q", tree, id, msg, cmds)
+			}
+			if msg, cmds := press(m, id, 'z'); msg != "settled mac/proj/b" || cmds != "-L default set-option -t =mac/proj/b: @laatmux_settled 1\n" {
+				t.Errorf("tree %v: z on %s: message %q, tmux %q", tree, id, msg, cmds)
+			}
+		}
+	}
+	in.Agents, in.Locals = []protocol.Agent{notes}, []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "notes"}}
+	for _, tree := range []bool{false, true} {
+		m := show(in, tree)
+		if l := m.OwnerLine(b.ID); l == nil || l.Local == nil || l.Local.Name != "notes" {
+			t.Fatalf("tree %v: B's line without a workspace session is %+v", tree, l)
+		}
+		ids := []string{notes.ID}
+		if tree {
+			ids = append(ids, b.ID)
+		}
+		for _, id := range ids {
+			if msg, cmds := press(m, id, 'S'); msg != "proj/b: not a workspace" || cmds != "" {
+				t.Errorf("tree %v: S on %s without a workspace session: message %q, tmux %q", tree, id, msg, cmds)
+			}
+			if msg, cmds := press(m, id, 'z'); !strings.HasPrefix(msg, "proj/b: no local workspace session;") || cmds != "" {
+				t.Errorf("tree %v: z on %s without a workspace session: message %q, tmux %q", tree, id, msg, cmds)
+			}
 		}
 	}
 }
