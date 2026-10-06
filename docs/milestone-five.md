@@ -283,11 +283,14 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   settled workspace fold with the stale ones and show 💤, unless blocked
   or done, which stay in place with their own icon. An agent observed
   on this machine's default server in a window of the workspace
-  session is one of its agents too, also where it stands in other
-  sessions with its worktree on another host, so `z` on it changes its
-  own row as well as the worktree's line. The viewer's own row never
-  folds: settled or stale, it stays in sight, sorted with the stale
-  ones, so `z` in the sidebar can undo itself.
+  session, where no worktree line takes it as a child (the session's
+  worktree on another host, say, or the agent's directory in no
+  worktree), is one of its agents too: it stands in other sessions
+  with the session's state, and `z` on it changes its row as well as
+  the session's line, when a line holds the session. One that a line
+  takes as a child, by its directory, is that line's. The viewer's own
+  row never folds: settled or stale, it stays in sight, sorted with
+  the stale ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:
   its most pressing agent's, in the order above; with no agent, none.
 

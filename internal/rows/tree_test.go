@@ -305,9 +305,10 @@ func TestPressing(t *testing.T) {
 // An agent observed on this machine's default server in a window of a
 // workspace session whose worktree is on another host stands in other
 // sessions, and is one of that workspace's agents all the same: settled
-// as the session is, dim and in the Stale fold unless pressing or the
-// viewer's own, and not settled with the session unsettled. One in a
-// session that is no workspace's is not settled by a stray option.
+// as the session is, dim unless pressing, and in the Stale fold unless
+// pressing or the viewer's own; not settled with the session unsettled.
+// One in a plain attachment is not settled by an option set there by
+// hand.
 func TestObservedAgentSettled(t *testing.T) {
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	observed := func(id, session string, act protocol.Activity) protocol.Agent {
@@ -330,7 +331,7 @@ func TestObservedAgentSettled(t *testing.T) {
 			Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/w/task", Session: "proj/task"}},
 			Locals: []protocol.Session{
 				{Name: "vm/proj/task", Key: "venv//w/task", Host: "vm", Settled: settled},
-				{Name: "notes", Settled: true},
+				{Name: "notes", Attach: "notes", Settled: true},
 			},
 			Current: current,
 			Now:     now,
