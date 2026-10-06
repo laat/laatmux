@@ -427,8 +427,8 @@ func branchOrDetached(branch string) string {
 }
 
 // holdRepos is the shared hold on every repository that an add takes
-// before it resolves anything and keeps to its end, and that rm takes
-// alone. The returned func releases it.
+// before it resolves anything and keeps until its agent is launched,
+// and that rm takes alone. The returned func releases it.
 func (d *Daemon) holdRepos() func() {
 	d.repos.RLock()
 	return d.repos.RUnlock

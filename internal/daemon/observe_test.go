@@ -382,6 +382,7 @@ func TestConnRefusals(t *testing.T) {
 		{"merged subscribe", protocol.Message{Type: protocol.TypeSubscribe, Merged: true}, protocol.Message{Type: protocol.TypeError, Error: "this daemon has no merged capability; it has no hosts in its config"}},
 		{"unknown", protocol.Message{Type: "dance", ID: "u"}, protocol.Message{Type: protocol.TypeError, ID: "u", Error: `unknown message type "dance"`}},
 		{"ping", protocol.Message{Type: protocol.TypePing}, protocol.Message{Type: protocol.TypePong}},
+		{"ping again", protocol.Message{Type: protocol.TypePing}, protocol.Message{Type: protocol.TypePong}},
 	} {
 		if err := pc.Write(c.req); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
@@ -394,23 +395,44 @@ func TestConnRefusals(t *testing.T) {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
 		}
 	}
-	// A store and the managed server, but no journal: a prompt is
-	// refused for what it lacks, in order.
-	d = New(Config{EnvironmentID: "env", Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}})
+	// A store but no managed server: add needs it, run does not.
+	d = New(Config{EnvironmentID: "env", Targets: unmanaged(&fakeTmux{pane: pane}), Store: &worktree.Store{}})
 	pc = conn(t, d)
-	for _, c := range []struct {
-		req  protocol.Message
-		want string
-	}{
-		{protocol.Message{Type: protocol.TypePrompt}, "command id required"},
-		{protocol.Message{Type: protocol.TypePrompt, ID: "p"}, "this daemon has no task capability"},
-		{protocol.Message{Type: protocol.TypeSelect, ID: "s"}, "pane id required"},
-	} {
-		if err := pc.Write(c.req); err != nil {
+	// alive is that the connection is still answering.
+	alive := func() {
+		t.Helper()
+		if err := pc.Write(protocol.Message{Type: protocol.TypePing}); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.Error != c.want {
-			t.Errorf("%+v: %+v %v, want %q", c.req, got, err, c.want)
+		if got, err := pc.Read(); err != nil || got.Type != protocol.TypePong {
+			t.Fatalf("ping: %+v %v", got, err)
 		}
 	}
+	refused := func(req protocol.Message, want string) {
+		t.Helper()
+		if err := pc.Write(req); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.ID != req.ID || got.OK || got.Error != want {
+			t.Errorf("%+v: %+v %v, want %q", req, got, err, want)
+		}
+	}
+	refused(protocol.Message{Type: protocol.TypeAdd, ID: "a"}, errNoManaged)
+	refused(protocol.Message{Type: protocol.TypeRun}, "command id required")
+	alive()
+	// A store and the managed server, but no journal: a prompt is
+	// refused for what it lacks, in order, and new answers with the
+	// session and its pane.
+	d = New(Config{EnvironmentID: "env", Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}})
+	pc = conn(t, d)
+	refused(protocol.Message{Type: protocol.TypePrompt}, "command id required")
+	refused(protocol.Message{Type: protocol.TypePrompt, ID: "p"}, "this daemon has no task capability")
+	refused(protocol.Message{Type: protocol.TypeSelect, ID: "s"}, "pane id required")
+	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pc.Read(); err != nil || !got.OK || got.ID != "n" || got.Session != "proj/x" || got.PaneID != "%0" {
+		t.Errorf("new: %+v %v", got, err)
+	}
+	alive()
 }

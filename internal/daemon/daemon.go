@@ -153,36 +153,46 @@ type Config struct {
 
 // Daemon holds the derived state for every watched tmux server.
 //
-// Locks. mu guards the fields from it down, but for those that say
-// otherwise, and the stream: every record is published under it, so a
-// snapshot and the upserts after it never interleave. The locks outside
-// it, and the order they are taken in, are:
+// Locks. mu guards the mutable fields from it down, but for those that
+// say otherwise, and the stream: every record is published under it, so
+// a snapshot and the upserts after it never interleave. The locks
+// outside it, and the order they are taken in, are:
 //
 //   - relay.mu, the pending records, before mu: a record's mutation and
 //     its publication are one step, and the merged snapshot reads the
-//     records the same way. tasksAtLocked, under mu, reads them on a
-//     goroutine of its own for that.
+//     records the same way. tasksAtLocked and worktreeRemovedLocked,
+//     under mu, read them on a goroutine of their own for that.
 //   - subMu serializes a subscription's config read and session listing
 //     with the poll's, so neither is applied after a newer one; taken
-//     before mu. lastHostsErr is under it.
+//     before relay.mu and mu. lastHostsErr is under it.
 //   - pollMu holds the worktree poll and its publication together, so an
 //     older observation never overwrites a newer one; taken before mu.
-//   - repos, and the keyed locks repoLock hands out: an add holds repos
-//     shared and its repository's "repo/" and "name/" locks for its
-//     whole run, rm holds repos alone (holdRepos, lockRepo); a prompt
-//     delivery on this host holds "deliver/<root>" and "attempt/<id>".
-//     All are held across mu, never taken under it.
-//   - the relay's keyed locks, "attempt/<id>" and "settle/<id>" per
-//     pending record, hold a delivery from the laptop's side; they are
-//     taken before relay.mu and mu, never under them.
-//   - journal.mu, runJob.mu and the resolver's are leaves: each guards
-//     its own struct and takes nothing under it.
+//     lastListErr is under it.
+//   - repos, and the keyed locks repoLock hands out, all held across mu
+//     and never taken under it. An add holds repos shared, then its
+//     repository's "repo/" lock, then its "name/" lock (holdRepos,
+//     lockRepo) until its agent is launched; a typed prompt's wait runs
+//     without them. rm holds repos alone (lockRepos). "deliver/<root>"
+//     is held by a delivery's readiness check and paste, by rm from
+//     git's removal on, by an add's result and by a trust step; it is
+//     taken under repos or under this host's "attempt/<id>", which a
+//     prompt's attempts hold, never the other way.
+//   - the relay's keyed locks per pending record, "attempt/<id>" for a
+//     delivery attempt or a dismiss and "settle/<id>" for its retiring
+//     and handoff, never nested; taken before relay.mu and mu, never
+//     under them.
+//   - journal.mu, runJob.mu, command.mu (taken under mu by forgetDone)
+//     and the resolver's are leaves: each guards its own struct and
+//     takes nothing under it.
 //
 // A method with the Locked suffix is called with its receiver's lock
-// held: mu for a Daemon method, relay.mu for a relay method, journal.mu
-// for a journal method, the resolver's for its own. The exceptions say
-// which lock: runAttemptLocked, the relay's attempt lock; publishPending
-// and publishRemoved, relay.mu, taking mu inside.
+// held: mu for a Daemon method and for a branches method (its mu is the
+// daemon's), relay.mu for a relay method, journal.mu for a journal
+// method, the resolver's for its own. The exceptions say which lock:
+// runAttemptLocked, the relay's attempt lock; startRunnerLocked and
+// dropRetiredLocked, relay.mu; mergedSnapshotLocked, relay.mu and mu.
+// Called with a lock held but without the suffix: publishPending and
+// publishRemoved, relay.mu, taking mu inside; listSessions, subMu.
 type Daemon struct {
 	cfg     Config
 	targets []*target
@@ -200,7 +210,7 @@ type Daemon struct {
 	lastList     []worktree.Record
 	listed       bool
 	managedRoots map[string]string // root -> session
-	lastListErr  string            // logged once per change
+	lastListErr  string            // logged once per change; under pollMu
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run

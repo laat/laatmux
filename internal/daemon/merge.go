@@ -311,7 +311,8 @@ func (d *Daemon) mbroadcastLocked(m protocol.Message) {
 }
 
 // mergedSnapshotLocked is the merged state: every host's record in config
-// order, all cached records, and the local sessions by name.
+// order, all cached records, and the local sessions by name. Called
+// with relay.mu and d.mu held.
 func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 	m := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.mseq, SessionsError: d.sessionsErr}
 	for _, name := range d.mnames {
