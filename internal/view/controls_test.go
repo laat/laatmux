@@ -780,10 +780,11 @@ func TestStripDimChip(t *testing.T) {
 
 // A dim row's chip is drawn cell for cell as the row's line in the list
 // under the same template: faint in the dimmed colour in a theme with
-// colours and faint without, a token's colour and a style's dropped,
-// bold kept, no background, and the viewer's own label in its colour,
-// not faint. A fresh row's dim token stays faint in the terminal's
-// colour, on its chip as on its line.
+// colours, dark, light or on a guessed background, and faint without
+// them, a token's colour and a style's dropped, bold kept, no
+// background, and the viewer's own label in its colour, not faint. A
+// fresh row's dim token stays faint in the terminal's colour, on its
+// chip as on its line.
 func TestStripDimChipAsLine(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	dark, _ := palette.New(true, nil)
@@ -822,15 +823,23 @@ func TestStripDimChipAsLine(t *testing.T) {
 		chip.Spans = clip(chip.Spans, spansWidth(line.Spans))
 		return *line, *chip
 	}
-	for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}"} {
-		for _, current := range []bool{false, true} {
-			line, chip := both(src, "dead", current)
-			if !line.Dim {
-				t.Fatalf("%q: the dead row's line is not dim", src)
-			}
-			for _, th := range []palette.Theme{dark, mono} {
-				if got, want := drawn(t, ANSI(chip, th)), drawn(t, ANSI(line, th)); got != want {
-					t.Errorf("%q, current %v, mono %v: the chip draws\n%s\nthe line\n%s", src, current, th.Mono, got, want)
+	light, _ := palette.New(false, nil)
+	guessed := dark
+	guessed.Guessed = true
+	themes := map[string]palette.Theme{"dark": dark, "light": light, "guessed": guessed, "mono": mono}
+	// The dead agent's icon is blank; the down host's agent spins in a
+	// colour of its own.
+	for _, name := range []string{"dead", "down"} {
+		for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}"} {
+			for _, current := range []bool{false, true} {
+				line, chip := both(src, name, current)
+				if !line.Dim {
+					t.Fatalf("%q: the %s row's line is not dim", src, name)
+				}
+				for tn, th := range themes {
+					if got, want := drawn(t, ANSI(chip, th)), drawn(t, ANSI(line, th)); got != want {
+						t.Errorf("%s %q, current %v, %s: the chip draws\n%s\nthe line\n%s", name, src, current, tn, got, want)
+					}
 				}
 			}
 		}

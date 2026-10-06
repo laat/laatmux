@@ -383,7 +383,8 @@ type Span struct {
 	spin bool
 	// faded marks a span dimmed as a dim line draws it, so on a line
 	// that is not dim, a dim row's chip in the strip, it is drawn as
-	// that line would draw it: faint, in the dimmed colour.
+	// that line would draw it: faint, and in a theme with colours in
+	// the dimmed colour.
 	faded bool
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.

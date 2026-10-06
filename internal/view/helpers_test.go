@@ -53,7 +53,9 @@ func Debug(lines []Line) string {
 
 // drawn is what a terminal draws of an ANSI line: the text in runs of
 // one look, each run's look before it, so two encodings that draw the
-// same cells compare equal. It knows the codes ANSI writes.
+// same cells compare equal. It knows the codes ANSI writes. Faint and
+// bold are two attributes, in whatever order they are set, as tmux
+// keeps them for every cell it draws on the outer terminal.
 func drawn(t *testing.T, s string) string {
 	t.Helper()
 	type look struct {
