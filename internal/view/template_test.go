@@ -345,7 +345,7 @@ func TestTemplateStyles(t *testing.T) {
 }
 
 // Dim text with no colour of its own on a template's background is
-// drawn in the dimmed colour that reads on it, not faint in the
+// drawn in the dim colour that reads on it, not faint in the
 // terminal's: on the lightest backgrounds the dark theme's, on the
 // darkest the light theme's, whatever the theme, and on those between
 // the background half way to white or to black, for a remote host, a
@@ -394,9 +394,10 @@ func TestDimOnBackground(t *testing.T) {
 		{"#[bg=#112233]{host}", light, lightDim + dark.SGR("#112233", true) + "vm\x1b[0m\x1b[0m"},
 		{"#[bg=highlight_row_bg]{host}", light, darkDim + light.SGR(palette.HighlightRowBg, true) + "vm\x1b[0m\x1b[0m"},
 		{"#[bg=230]{host}", dark, darkDim + "\x1b[48;5;230mvm\x1b[0m\x1b[0m"},
-		// Between, where neither dimmed reads, the background's own
-		// half: lighter on the dark highlight row and colour235, on the
-		// light theme's accent and darker on colour243.
+		// Between, where a half reads better than either dimmed, the
+		// background's own half: lighter on the dark highlight row and
+		// colour235, on the light theme's accent and darker on
+		// colour243.
 		{"#[bg=highlight_row_bg]{host}", dark, dark.SGR("#9399ab", false) + dark.SGR(palette.HighlightRowBg, true) + "vm\x1b[0m\x1b[0m"},
 		{"#[bg=colour235]{host}", dark, dark.SGR("#929292", false) + "\x1b[48;5;235mvm\x1b[0m\x1b[0m"},
 		{"#[bg=accent]{host}", light, light.SGR("#bba3de", false) + light.SGR(palette.Accent, true) + "vm\x1b[0m\x1b[0m"},
@@ -633,7 +634,7 @@ func TestConfiguredTemplates(t *testing.T) {
 		t.Errorf("compiled from the config: %+v", ct)
 	}
 	// The painter draws a background, not under the selection's band,
-	// and dim with a background stays dim, in the dimmed colour that
+	// and dim with a background stays dim, in the dim colour that
 	// reads on it (TestDimOnBackground).
 	th, _ := palette.New(true, nil)
 	l := Line{Spans: []Span{{Text: "x", Bg: palette.Accent}}}

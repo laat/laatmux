@@ -121,9 +121,9 @@ func contrast(a, b float64) float64 {
 	return (a + 0.05) / (b + 0.05)
 }
 
-// mix is the colour half way between c and d, channel by channel, the
-// odd half rounded down; both must have red, green and blue, as rgb
-// reports.
+// mix is the colour half way between c and d, channel by channel,
+// rounded down where the sum is odd; both must have red, green and
+// blue, as rgb reports.
 func mix(c, d Color) Color {
 	r1, g1, b1, _ := c.rgb()
 	r2, g2, b2, _ := d.rgb()

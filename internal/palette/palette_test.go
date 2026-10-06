@@ -106,7 +106,7 @@ func TestLuminance(t *testing.T) {
 
 // Dim text on a template's background: the dark default's dimmed on
 // the lightest backgrounds, the light default's on the darkest,
-// whatever the theme, and between them, where neither reads, the
+// whatever the theme, and between them, where a half reads better, the
 // background half way to white or to black; a palette name through the
 // theme, an indexed colour by its xterm colour; nothing on 0 to 15,
 // none, or in a theme without colours. A user's own dimmed where it
@@ -117,7 +117,8 @@ func TestDimmedOn(t *testing.T) {
 	darkDim, lightDim := dark.SGR("#565f89", false), dark.SGR("#8990b3", false)
 	mono := dark
 	mono.Mono = true
-	// The contrast the pick reaches is #152's and #166's tables.
+	// The colour drawn and the contrast it reaches, the halves rounded
+	// down.
 	for _, c := range []struct {
 		th    Theme
 		bg    string
@@ -169,6 +170,9 @@ func TestDimmedOn(t *testing.T) {
 		{map[string]string{Dimmed: "#c0c0c0"}, "#112233", dark.SGR("#c0c0c0", false)},
 		{map[string]string{Dimmed: "#eeeeee"}, "#007197", dark.SGR("#eeeeee", false)},
 		{map[string]string{Dimmed: "#9a9a9a"}, "#007197", dark.SGR("#7fb8cb", false)},
+		// colour246 is #292929's half to white, #949494: a tie, and the
+		// user's own is drawn, as they wrote it.
+		{map[string]string{Dimmed: "246"}, "#292929", "\x1b[38;5;246m"},
 		{map[string]string{Dimmed: "#7f849c"}, "#ffff00", darkDim},
 		{map[string]string{Dimmed: "8"}, "#ffff00", darkDim},
 		{map[string]string{Dimmed: "8"}, "#112233", lightDim},
