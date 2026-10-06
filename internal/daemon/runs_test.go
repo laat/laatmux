@@ -328,7 +328,7 @@ func TestFollowerReleasedOnDisconnect(t *testing.T) {
 			break
 		}
 	}
-	c, _ := d.lookup("r1")
+	c, _ := d.cmds.lookup("r1")
 	server, client := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	go d.HandleConn(ctx, server, func() { server.Close() })

@@ -150,7 +150,7 @@ func TestAddArgvPrompt(t *testing.T) {
 	}
 	// A resend under the id, once the memory has let it go, is answered
 	// from the journal: nothing runs.
-	d.forgetDone("c1")
+	d.cmds.forgetDone("c1")
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: secret, SubmittedAt: time.Now()})
 	again, ps := result(t, pc, "c1")
 	if !again.OK || again.Prompt != protocol.DeliveryDelivered || len(ps) != 0 || len(ft.cmds) != 1 {
@@ -454,9 +454,7 @@ func TestSubmissionExpired(t *testing.T) {
 		if res, ps := result(t, pc, "old"); res.OK || res.Error != protocol.ErrSubmissionExpired || len(ps) != 0 {
 			t.Fatalf("%s: %+v", at, res)
 		}
-		d.mu.Lock()
-		delete(d.cmds, "old")
-		d.mu.Unlock()
+		d.cmds.forgetDone("old")
 	}
 	if _, ok := d.journal.get("old"); ok {
 		t.Fatal("a refused add was journaled")
@@ -489,11 +487,9 @@ func TestPromptMessage(t *testing.T) {
 	if len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered || e.Delivery != protocol.DeliveryDelivered {
 		t.Fatalf("entry %+v", e)
 	}
-	// The command is remembered for a while; evict it so the repeat
+	// The command is remembered for a while; forget it so the repeat
 	// reaches the journal.
-	d.mu.Lock()
-	delete(d.cmds, promptKey("c1", 1))
-	d.mu.Unlock()
+	d.cmds.forgetDone(promptKey("c1", 1))
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
 	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 {
 		t.Fatalf("repeat: %+v pastes %d", res, len(ft.pastes))

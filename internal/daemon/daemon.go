@@ -239,9 +239,14 @@ type Config struct {
 //     delivery attempt or a dismiss and "settle/<id>" for its retiring
 //     and handoff, never nested; taken before relay.mu and mu, never
 //     under them.
-//   - journal.mu, runJob.mu, command.mu (taken under mu by forgetDone)
-//     and the resolver's are leaves: each guards its own struct and
-//     takes nothing under it.
+//   - the command table's lock, under which forgetDone takes command.mu
+//     and get runs its init; the keyed locks' own lock, held across the
+//     map alone, never across a lock it hands out; journal.mu,
+//     runJob.mu, command.mu and the resolver's. These are leaves: each
+//     guards its own struct and takes nothing under it but as said.
+//     Nothing enforces any more that a keyed lock is not taken under
+//     mu (repoLock took mu itself, so such a call deadlocked at once);
+//     the order above is the rule. The table's lock, a leaf, may be.
 //
 // A method with the Locked suffix is called with its receiver's lock
 // held: mu for a Daemon method and for a branches method (its mu is the
@@ -279,8 +284,8 @@ type Daemon struct {
 	runRecs  map[string]protocol.Run
 	paths    *resolver
 
-	cmds  map[string]*command    // recent add, rm and run by id
-	locks map[string]*sync.Mutex // per repository source
+	cmds  *commandTable // recent add, rm, run and prompt by key, with a lock of its own
+	locks *keyedLocks   // the repository, name, delivery and attempt locks, with a lock of its own
 	// repos is held shared by every add for its repository's lock and
 	// alone by rm, which must see every add in flight complete.
 	repos sync.RWMutex
@@ -450,8 +455,8 @@ func New(cfg Config) *Daemon {
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
 		paths:        newResolver(),
-		cmds:         map[string]*command{},
-		locks:        map[string]*sync.Mutex{},
+		cmds:         newCommandTable(cfg.Timings.CommandTTL),
+		locks:        newKeyedLocks(),
 		runs:         map[string]map[*runJob]struct{}{},
 		rootGen:      map[string]uint64{},
 		pasted:       map[string]time.Time{},
@@ -1212,7 +1217,7 @@ func (c *clientConn) command(m protocol.Message) error {
 	if m.Type == protocol.TypePrompt {
 		key = promptKey(m.ID, m.Attempt)
 	}
-	cmd, fresh := d.command(key, func(c *command) {
+	cmd, fresh := d.cmds.get(key, func(c *command) {
 		if m.Type == protocol.TypeRun {
 			c.ring = true
 			c.job = newRunJob()
@@ -1251,7 +1256,7 @@ func (c *clientConn) follow(m protocol.Message) error {
 	if m.Attempt > 0 {
 		key = promptKey(m.ID, m.Attempt)
 	}
-	cmd, ok := d.lookup(key)
+	cmd, ok := d.cmds.lookup(key)
 	if !ok {
 		// The journal answers for what the memory has let go.
 		res := d.answerFollow(m)
