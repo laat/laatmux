@@ -15,14 +15,10 @@ import (
 // the local workspace session: a local window started in the root, or
 // an ssh window. The window is tagged @laatmux_shell; when the session
 // has one already it is selected rather than opened again. The session
-// must be a workspace session, and its host is looked up in cfg.
-func Shell(ctx context.Context, cfg config.Config, l protocol.Session) error {
+// must be a workspace session; h is its host, resolved by the caller.
+func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	if !l.Workspace() {
 		return fmt.Errorf("%s is not a workspace session", l.Name)
-	}
-	h, ok := cfg.Find(l.Host)
-	if !ok {
-		return fmt.Errorf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
 	}
 	_, root := protocol.SplitSessionKey(l.Key)
 	out, err := workspace.Server.Run(ctx, "list-windows", "-t", "="+l.Name, "-F", "#{window_id}"+tmux.Sep+"#{@laatmux_shell}")

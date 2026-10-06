@@ -31,5 +31,9 @@ func cmdShell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return command.Shell(ctx, cfg, cur)
+	h, err := workspaceHost(ctx, cfg, cur)
+	if err != nil {
+		return err
+	}
+	return command.Shell(ctx, h, cur)
 }
