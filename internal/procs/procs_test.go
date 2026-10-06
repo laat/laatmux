@@ -1,6 +1,11 @@
 package procs
 
 import (
+	"bytes"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -197,5 +202,32 @@ func TestSameIdentity(t *testing.T) {
 	b := Identity{PID: 1, Start: at(11)}
 	if a.Same(b) {
 		t.Fatal("same pid, different start must differ")
+	}
+}
+
+// StartID's form is persisted by a daemon and compared by the next
+// build's stop, so it is pinned to the kernel's values: darwin's
+// microseconds since the epoch, Linux's boot id and the starttime
+// field of /proc/<pid>/stat, in that form.
+func TestStartIDForm(t *testing.T) {
+	p, ok := Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("no lookup of this process")
+	}
+	want := strconv.FormatInt(p.Start.UnixMicro(), 10)
+	if runtime.GOOS == "linux" {
+		id, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat, err := os.ReadFile("/proc/self/stat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+2:]))
+		want = strings.TrimSpace(string(id)) + "/" + fields[19]
+	}
+	if p.StartID != want {
+		t.Fatalf("StartID %q, the kernel's values give %q", p.StartID, want)
 	}
 }

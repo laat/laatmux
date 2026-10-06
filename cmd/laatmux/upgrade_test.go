@@ -18,6 +18,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -275,6 +276,8 @@ func TestStop(t *testing.T) {
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("stop a starting daemon: %v", err)
 	}
+	// Reached once it listens: the helper exits with an error when
+	// signalled before that.
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("stop of a starting daemon took %s", took)
 	}
@@ -306,7 +309,7 @@ func TestStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stopDaemon(context.Background(), nc, home.Runtime{Address: rt.Address, PID: bystander.Process.Pid}); !errors.Is(err, errMoved) {
+	if err := stopDaemon(context.Background(), nc, home.Runtime{Address: rt.Address, PID: bystander.Process.Pid}, time.Now().Add(stopWait)); !errors.Is(err, errMoved) {
 		t.Fatalf("mismatched record: %v", err)
 	}
 	if pid, _ := home.Holder(); pid != serve.Process.Pid {
@@ -319,7 +322,7 @@ func TestStop(t *testing.T) {
 	start = time.Now()
 	err = cmdStop(context.Background(), nil)
 	stopWait = 20 * time.Second
-	if err == nil || !strings.Contains(err.Error(), "not the daemon the runtime record names") {
+	if err == nil || !strings.Contains(err.Error(), "is answered by another daemon, after") {
 		t.Fatalf("persistent mismatch: %v", err)
 	}
 	if took := time.Since(start); took < time.Second || took > 5*time.Second {
@@ -359,7 +362,7 @@ func TestStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	home.WriteRuntime(home.Runtime{Address: rt.Address, PID: bystander.Process.Pid, Version: "replacement"})
-	if err := stopDaemon(context.Background(), nc, rt); !errors.Is(err, errMoved) {
+	if err := stopDaemon(context.Background(), nc, rt, time.Now().Add(stopWait)); !errors.Is(err, errMoved) {
 		t.Fatalf("legacy with a replaced record: %v", err)
 	}
 	if !home.Alive(bystander.Process.Pid) {
@@ -371,6 +374,45 @@ func TestStop(t *testing.T) {
 	}
 	legacy.Wait()
 	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
+	// A daemon that holds the lock and is the one the record names, by
+	// pid and start time, but cannot be asked, listening on nothing or
+	// accepting without a hello, is ended with SIGTERM rather than
+	// waited out; the hello wait is shortened so the wedged case does
+	// not take 15 s.
+	was := client.HelloTimeout
+	client.HelloTimeout = 300 * time.Millisecond
+	defer func() { client.HelloTimeout = was }()
+	for _, mode := range []string{"nolisten", "wedged"} {
+		d := exec.Command(os.Args[0], "-test.run=TestStop")
+		d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON="+mode)
+		if err := d.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			pid, _ := home.Holder()
+			if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				d.Process.Kill()
+				d.Wait()
+				t.Fatalf("%s daemon did not come up", mode)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		start := time.Now()
+		if err := cmdStop(context.Background(), nil); err != nil {
+			d.Process.Kill()
+			d.Wait()
+			t.Fatalf("stop %s: %v", mode, err)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("stop %s took %s", mode, took)
+		}
+		if err := d.Wait(); err != nil {
+			t.Fatalf("%s daemon: %v", mode, err)
+		}
+	}
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
 	}
@@ -398,6 +440,11 @@ func testDaemon(mode string) {
 	case "slow":
 		// The lock first, the listener a while later, as serve does.
 		err = legacyServeAfter(ctx, 800*time.Millisecond)
+	case "nolisten", "wedged", "wedged-old":
+		// The lock and the record, and nothing to ask: no listener at
+		// the record's address, or one that accepts and never answers;
+		// -old writes a record without the start, as an older build.
+		err = wedgedServe(ctx, mode != "nolisten", mode == "wedged-old")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -421,7 +468,7 @@ func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 	select {
 	case <-time.After(pause):
 	case <-ctx.Done():
-		return nil
+		return errors.New("signalled before listening")
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -438,6 +485,362 @@ func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "legacy", Version: "legacy", Capabilities: []string{protocol.CapStatus}}, nil)
 	<-ctx.Done()
 	return nil
+}
+
+// wedgedServe is a daemon that cannot be asked: the lock and the
+// runtime record, then a listener that accepts and says nothing, or
+// none at the record's address. SIGTERM ends it.
+func wedgedServe(ctx context.Context, listen, old bool) error {
+	lock, err := home.TryLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	// Nothing listens at a socket path in the state directory; a port
+	// released would be another process's to take.
+	addr := "unix:" + filepath.Join(home.Dir(), "wedged.sock")
+	if listen {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		defer ln.Close()
+		addr = "tcp:" + ln.Addr().String()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() { <-ctx.Done(); c.Close() }()
+			}
+		}()
+	}
+	rt := home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged", StartedAt: time.Now()}
+	if self, ok := procs.Lookup(os.Getpid()); ok && !old {
+		rt.ProcessStart = self.StartID
+	}
+	if err := home.WriteRuntime(rt); err != nil {
+		return err
+	}
+	defer home.RemoveRuntime(os.Getpid())
+	<-ctx.Done()
+	return nil
+}
+
+// crashLeft is what a daemon that died without its defers leaves: a
+// lock file and a record naming its pid, with that pid now another
+// process's, the bystander, which a stop must never signal.
+func crashLeft(t *testing.T) *exec.Cmd {
+	t.Helper()
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	bystander := exec.Command("sleep", "30")
+	if err := bystander.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// signalled's goroutine is the one that waits; the cleanup only
+	// ends it.
+	t.Cleanup(func() { bystander.Process.Kill() })
+	if err := os.WriteFile(filepath.Join(home.Dir(), "daemon.lock"), []byte(fmt.Sprintf("%d\n", bystander.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The record carries the dead daemon's start, which is not the
+	// bystander's.
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "none.sock"), PID: bystander.Process.Pid, Version: "crashed", StartedAt: time.Now(), ProcessStart: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	return bystander
+}
+
+// signalled reports whether the bystander ended within a moment; it
+// is called once per bystander, and its goroutine reaps it.
+func signalled(bystander *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() { done <- bystander.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			err = errors.New("exited")
+		}
+		return err
+	case <-time.After(300 * time.Millisecond):
+		return nil
+	}
+}
+
+// holdLock takes the flock on the lock file without rewriting it, as a
+// daemon between its flock and its truncate holds it.
+func holdLock(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(home.Dir(), "daemon.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// A crash-left record names a pid since reused, and the files alone say
+// it holds the lock: stop never signals it. A new daemon stalled
+// between taking the lock and rewriting the file shows the old content
+// on every reading; a probe holds the free lock for an instant over it;
+// a new daemon holds the lock with its own pid written.
+func TestStopNeverSignalsAReusedPid(t *testing.T) {
+	was := stopWait
+	stopWait = time.Second
+	defer func() { stopWait = was }()
+	t.Run("stalled winner", func(t *testing.T) {
+		bystander := crashLeft(t)
+		holdLock(t)
+		err := cmdStop(context.Background(), nil)
+		if err == nil || !strings.Contains(err.Error(), "holds the lock but answers on no socket") {
+			t.Errorf("stop: %v", err)
+		}
+		if err := signalled(bystander); err != nil {
+			t.Fatalf("bystander (pid %d) signalled while another holds the lock: %v", bystander.Process.Pid, err)
+		}
+	})
+	t.Run("short probe", func(t *testing.T) {
+		bystander := crashLeft(t)
+		f := holdLock(t)
+		unlocked := make(chan struct{})
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			close(unlocked)
+		}()
+		cmdStop(context.Background(), nil)
+		<-unlocked
+		if err := signalled(bystander); err != nil {
+			t.Fatalf("bystander signalled after a short probe: %v", err)
+		}
+	})
+	t.Run("identified, another holder", func(t *testing.T) {
+		// The record names a laatmux by pid and start, which is this
+		// machine's daemon of another state directory; our lock is
+		// another daemon's. The holder check alone keeps it unsignalled.
+		crashLeft(t)
+		twin := exec.Command(os.Args[0], "-test.run=TestStop")
+		twin.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held", "LAATMUX_HOME="+t.TempDir())
+		if err := twin.Start(); err != nil {
+			t.Fatal(err)
+		}
+		var twinErr error
+		twinDone := make(chan struct{})
+		go func() { twinErr = twin.Wait(); close(twinDone) }()
+		defer func() {
+			twin.Process.Kill()
+			<-twinDone
+		}()
+		p, ok := procs.Lookup(twin.Process.Pid)
+		if !ok {
+			t.Fatal("no lookup of the twin")
+		}
+		if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "none.sock"), PID: twin.Process.Pid, Version: "twin", StartedAt: time.Now(), ProcessStart: p.StartID}); err != nil {
+			t.Fatal(err)
+		}
+		held := exec.Command(os.Args[0], "-test.run=TestStop")
+		held.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held")
+		if err := held.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { held.Process.Signal(syscall.SIGTERM); held.Wait() }()
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			if pid, _ := home.Holder(); pid == held.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("held did not take the lock")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err := cmdStop(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "while the runtime record's") {
+			t.Errorf("stop: %v", err)
+		}
+		select {
+		case <-twinDone:
+			t.Fatalf("the record's process signalled while another holds the lock (exit %v)", twinErr)
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+	t.Run("other holder", func(t *testing.T) {
+		bystander := crashLeft(t)
+		held := exec.Command(os.Args[0], "-test.run=TestStop")
+		held.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held")
+		if err := held.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { held.Process.Signal(syscall.SIGTERM); held.Wait() }()
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			if pid, _ := home.Holder(); pid == held.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("held did not take the lock")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		cmdStop(context.Background(), nil)
+		if err := signalled(bystander); err != nil {
+			t.Fatalf("bystander signalled while another daemon holds the lock: %v", err)
+		}
+	})
+}
+
+// The hello wait is bounded by stop's own deadline: a wedged daemon
+// the record does not identify (a build before the start field) is
+// reported when the deadline passes, not after the whole hello wait.
+func TestStopHelloWaitBounded(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	d := exec.Command(os.Args[0], "-test.run=TestStop")
+	d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=wedged-old")
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.Wait() }()
+	defer func() {
+		d.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		pid, _ := home.Holder()
+		if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("did not come up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	was := stopWait
+	stopWait = time.Second
+	defer func() { stopWait = was }()
+	start := time.Now()
+	err := cmdStop(context.Background(), nil)
+	if took := time.Since(start); err == nil || !strings.Contains(err.Error(), "gives no hello before the wait ran out after") || !strings.Contains(err.Error(), fmt.Sprintf("kill %d ends it", d.Process.Pid)) || took > 3*time.Second {
+		t.Fatalf("stop of an unidentified wedged daemon: %v after %s", err, took)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("an unidentified daemon signalled (exit %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A stop whose context is cancelled signals nothing, against a daemon
+// that holds the lock, is the record's and listens on nothing.
+func TestStopCancelledSignalsNothing(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	d := exec.Command(os.Args[0], "-test.run=TestStop")
+	d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=nolisten")
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.Wait() }()
+	defer func() {
+		d.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		pid, _ := home.Holder()
+		if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("did not come up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := cmdStop(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("stop with a cancelled context: %v", err)
+	}
+	// Two seconds: a signalled helper takes about one to exit under
+	// the race detector.
+	select {
+	case err := <-done:
+		t.Fatalf("daemon signalled under a cancelled context (exit %v)", err)
+	case <-time.After(2 * time.Second):
+	}
+}
+
+// The record's daemon is told from a pid reused since it died by the
+// start the kernel keeps for the process, which the record carries:
+// the same pid with another start is another process, and a record
+// without the start names no daemon this way.
+func TestIsDaemon(t *testing.T) {
+	me := os.Getpid()
+	self, ok := procs.Lookup(me)
+	if !ok || self.StartID == "" {
+		t.Fatalf("no lookup of this process: %+v %v", self, ok)
+	}
+	if !isDaemon(home.Runtime{PID: me, ProcessStart: self.StartID}) {
+		t.Error("this process, with its own start: not the daemon")
+	}
+	if isDaemon(home.Runtime{PID: me, ProcessStart: self.StartID + "1"}) {
+		t.Error("this pid with another start taken as the daemon")
+	}
+	if isDaemon(home.Runtime{PID: me}) {
+		t.Error("a record without the start taken as naming the daemon")
+	}
+	other := exec.Command("sleep", "100")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer other.Process.Kill()
+	// Linux counts starts in clock ticks: a child started in this
+	// process's tick has its start, and the case is not made then.
+	started := func(p *os.Process) string {
+		lp, ok := procs.Lookup(p.Pid)
+		if !ok || lp.StartID == "" {
+			t.Fatalf("no lookup of pid %d: %+v %v", p.Pid, lp, ok)
+		}
+		return lp.StartID
+	}
+	if started(other.Process) != self.StartID && isDaemon(home.Runtime{PID: other.Process.Pid, ProcessStart: self.StartID}) {
+		t.Error("another process with this one's start taken as the daemon")
+	}
+	other.Process.Kill()
+	other.Wait()
+	if isDaemon(home.Runtime{PID: 1 << 30, ProcessStart: self.StartID}) {
+		t.Error("a pid that is no process taken as the daemon")
+	}
+	// A laatmux of the same binary whose record names another start:
+	// the pid reused by a laatmux, or a crash-left record naming the
+	// pid of the daemon that replaced it.
+	twin := exec.Command(os.Args[0], "-test.run=TestStop")
+	twin.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held", "LAATMUX_HOME="+t.TempDir())
+	if err := twin.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { twin.Process.Kill(); twin.Wait() }()
+	if started(twin.Process) != self.StartID && isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: self.StartID}) {
+		t.Error("another laatmux with this one's start taken as the daemon")
+	}
+	if isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: started(twin.Process) + "1"}) {
+		t.Error("a laatmux with another start taken as the daemon")
+	}
+	if !isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: started(twin.Process)}) {
+		t.Error("a laatmux with its own start not the daemon")
+	}
 }
 
 func TestMain(m *testing.M) {

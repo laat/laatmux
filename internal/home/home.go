@@ -75,6 +75,10 @@ type Runtime struct {
 	Version       string    `json:"version"`
 	EnvironmentID string    `json:"environment_id"`
 	StartedAt     time.Time `json:"started_at"`
+	// ProcessStart is the daemon's start as the kernel keeps it
+	// (procs.Lookup's StartID), the identity with PID of the process
+	// that wrote the record; "" from a build before it.
+	ProcessStart string `json:"process_start,omitempty"`
 }
 
 func runtimePath() string { return filepath.Join(Dir(), "runtime.json") }
@@ -171,8 +175,9 @@ func TryLock() (*Lock, error) {
 // released by the kernel when the holder exits, reaped or not, so a
 // daemon that is gone is gone here. The pid is not to be signalled on
 // its own: the file keeps its content when a probe holds the lock for an
-// instant, and a daemon between taking the lock and writing its pid is
-// read as none. The probe takes the lock for an instant when it is free;
+// instant, and a daemon between taking the lock and rewriting the file
+// is read as the previous holder, then, between truncating and writing,
+// as none. The probe takes the lock for an instant when it is free;
 // a daemon starting in that instant loses it and its client waits out a
 // start that is not coming, which a stop racing a start is anyway.
 func Holder() (int, error) {

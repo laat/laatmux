@@ -23,8 +23,17 @@ type Proc struct {
 	TPGID int // foreground process group of the controlling tty, as seen by this process
 	Comm  string
 	Start time.Time
-	Argv  []string // best effort; empty when unreadable
-	Env   []string // best effort; empty when unreadable
+	// StartID is the process's start as the kernel recorded it, for
+	// Lookup: an identity with the pid, compared exactly, where Start is
+	// derived through a clock (Linux's boot time). Darwin's microseconds
+	// since the epoch at the start; Linux's boot id and clock ticks
+	// since the boot, as the ticks alone start over at every boot; ""
+	// when the kernel gives none. The form is a persisted contract: a
+	// daemon writes it into its runtime record and the next build's
+	// stop compares it, so a change to it needs the old form read too.
+	StartID string
+	Argv    []string // best effort; empty when unreadable
+	Env     []string // best effort; empty when unreadable
 }
 
 // Identity is a resolved agent instance in a pane.

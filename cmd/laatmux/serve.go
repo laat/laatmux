@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -90,6 +91,9 @@ func cmdServe(ctx context.Context, args []string) error {
 		agents[name] = a.Cmd
 	}
 	rt := home.Runtime{Address: network + ":" + ln.Addr().String(), PID: os.Getpid(), Version: version, EnvironmentID: envID, StartedAt: time.Now()}
+	if self, ok := procs.Lookup(os.Getpid()); ok {
+		rt.ProcessStart = self.StartID
+	}
 	logger := log.New(os.Stderr, "laatmux ", log.LstdFlags)
 	labels := make([]string, len(watched))
 	for i, s := range watched {
