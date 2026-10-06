@@ -55,17 +55,33 @@ func rmOnHost(t *testing.T, f *relayFixture, id, branch, root string) {
 
 // stopFollow cancels the laptop daemon's follow of the host, so only the
 // listings the test makes reach the task, and waits for what the follow
-// had started to end. The task is left with no memo, as the follow's
-// latest listing, which shows its worktree, leaves it: one from before
-// the worktree was listed, run late, could have left the memo of an
-// empty listing, which the test's own would then pass over.
+// had started to end. It cancels a connected follow, under the lock the
+// follow says so under: its read then fails and it returns without
+// dialing again, so a test's checks are the host's only dials after. The
+// task is left with no memo, as the follow's latest listing, which shows
+// its worktree, leaves it: one from before the worktree was listed, run
+// late, could have left the memo of an empty listing, which the test's
+// own would then pass over.
 func stopFollow(t *testing.T, f *relayFixture, id string) *mergedHost {
 	t.Helper()
-	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
-	f.local.mu.Unlock()
+	var mh *mergedHost
+	for i := 0; ; i++ {
+		f.local.mu.Lock()
+		mh = f.local.mhosts["vm"]
+		connected := mh.status.Connected
+		if connected {
+			mh.cancel()
+			mh.cancel = func() {}
+		}
+		f.local.mu.Unlock()
+		if connected {
+			break
+		}
+		if i > 500 {
+			t.Fatal("the follow never connected")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	awaitRechecks(t, f, id)
 	f.local.relay.mu.Lock()
 	delete(f.local.relay.checked, id)
@@ -229,7 +245,28 @@ func TestRelayGoneOnListingStamp(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	p := notDelivered(t, f, "n4", "stamp")
+	// The follow has the worktree cached, as it has since the worktree
+	// was listed, and a stamp read against that cache shows it: it asks
+	// nothing.
+	for i := 0; ; i++ {
+		f.local.mu.Lock()
+		_, cached := f.local.mhosts["vm"].worktrees[p.WorktreeID()]
+		f.local.mu.Unlock()
+		if cached {
+			break
+		}
+		if i > 500 {
+			t.Fatal("the follow never had the worktree")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	mh := stopFollow(t, f, "n4")
+	dials := f.remote.count()
+	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeUpsert, Listing: &protocol.Listing{Generation: 1, Revision: 1}})
+	awaitRechecks(t, f, "n4")
+	if f.remote.count() != dials {
+		t.Fatal("a stamp whose listing shows the worktree asked the host")
+	}
 	rmOnHost(t, f, "rm-n4", "stamp", p.Root)
 	f.local.mu.Lock()
 	delete(mh.worktrees, p.WorktreeID())
@@ -366,21 +403,10 @@ func TestRelayGoneAgainstSeenListing(t *testing.T) {
 	f := newRelayFixture(t, []string{"loading"})
 	c, _, _ := f.merged(t)
 	defer c.Close()
-	// Once the host has said who it is, so the add is accepted pinned
-	// as its siblings' are, only the listings below reach the task; the
-	// add is followed on the relay's own connection.
-	for i := 0; ; i++ {
-		f.local.mu.Lock()
-		env := f.local.mhosts["vm"].status.EnvironmentID
-		f.local.mu.Unlock()
-		if env != "" {
-			break
-		}
-		if i > 500 {
-			t.Fatal("the host never said who it is")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Only the listings below reach the task. The follow is stopped once
+	// connected, so the host has said who it is and the add is accepted
+	// pinned, as its siblings' are; it is followed on the relay's own
+	// connection.
 	stopFollow(t, f, "n6")
 	f.local.mu.Lock()
 	f.local.hostListedLocked("henv", map[string]bool{}, false)
