@@ -146,10 +146,10 @@ func (m *Model) renderStrip() []Line {
 					// The band on the chip alone: reverse video span
 					// by span.
 					spans[j].band = true
-				} else if r.Dim && spans[j].Fg != palette.CurrentWorktreeFg {
+				} else if r.Dim {
 					// A dim row's chip is dim throughout, as its line
-					// would be, but for the viewer's own label.
-					spans[j].Dim, spans[j].Fg = true, ""
+					// would be: each span as a dim line draws it.
+					spans[j] = spans[j].dimmed()
 				}
 			}
 			lines[l].Spans = append(lines[l].Spans, spans...)

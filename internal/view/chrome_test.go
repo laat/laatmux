@@ -173,8 +173,9 @@ func TestMoreBelow(t *testing.T) {
 
 // A theme with colours draws the selection as a background band across
 // the line and a dim line in the dimmed colour, a span's own colour
-// included; without colours the selection is reverse video and a dim
-// line the dim attribute alone.
+// included, but under the band, where a span keeps its colour; without
+// colours the selection is reverse video and a dim line the dim
+// attribute alone.
 func TestANSIThemes(t *testing.T) {
 	th, _ := palette.New(true, nil)
 	sel := Line{Reverse: true, Spans: []Span{{Text: "x", Fg: palette.Info}}}
@@ -189,6 +190,11 @@ func TestANSIThemes(t *testing.T) {
 	if !strings.Contains(got, th.SGR(palette.Dimmed, false)) || strings.Contains(got, th.SGR(palette.Accent, false)) {
 		t.Errorf("colour dim line: %q", got)
 	}
+	dim.Reverse = true
+	if got := ANSI(dim, th); !strings.Contains(got, th.SGR(palette.Accent, false)+"x") {
+		t.Errorf("colour dim selection: %q", got)
+	}
+	dim.Reverse = false
 	if got := ANSI(dim, palette.Mono()); got != "\x1b[2mx\x1b[0m" {
 		t.Errorf("mono dim line: %q", got)
 	}
