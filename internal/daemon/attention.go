@@ -432,10 +432,10 @@ func (d *Daemon) runSeen(ctx context.Context) {
 // outlives it. A listing with nothing unseen moves nothing. One with no
 // view open only records a visit for a later view, and on a host's
 // daemon, whose agents the laptop's daemon tracks for its own views, no
-// later view comes: it listed once a second for as long as one of them
-// stayed done. The idle time covers a dashboard's jump, whose subscriber
-// leaves as the jump lands. A finish lists at once, view or not, through
-// its poke.
+// later view comes, and a listing each second for as long as one of them
+// stays done would be for nothing. The idle time covers a dashboard's
+// jump, whose subscriber leaves as the jump lands. A finish lists at
+// once, view or not, through its poke.
 func (d *Daemon) seenWanted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()

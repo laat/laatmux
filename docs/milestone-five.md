@@ -325,22 +325,23 @@ it.
   #{@laatmux_sidebar} #{@laatmux_attach_pane} #{@laatmux_attach_target}
   #{@laatmux_host} #{@laatmux_attach} #{@laatmux_workspace}`, options
   resolving through the client's current pane and session,
-  every second while an entry is unseen and a merged subscriber is
-  there or left less than the idle minute ago, and once, right away,
-  when it records a finish, view or not. The idle minute covers a jump
-  from the dashboard, whose subscriber leaves as the jump lands, so a
-  dashboard-only user's jump is seen. A host's daemon has no merged
-  subscriber, the laptop following it through a plain
-  subscription, so it lists only when one of its own agents finishes,
-  not once a second for as long as one stays done. The laptop follows
-  the same rule: a visit made while no sidebar or dashboard is open,
-  and none closed in the last minute, is not recorded, and a view
-  opened later records it only if a client still shows the agent then.
-  This reverses the first version of this note, which listed every
-  second while any entry was unseen, subscriber or not, to record such
-  visits, and accepted that cost; #124 found it paid on every host's
-  daemon, for agents only the laptop's views show. A client *sees* an
-  agent by the pane it shows:
+  every second while an entry is unseen and a view is open or closed
+  less than the idle minute ago, a view being any merged subscriber: a
+  sidebar, the dashboard, or a one-shot client such as `ls` or `jump`.
+  It lists once, right away, when it records a finish, view or not, and
+  on a poke. The idle minute covers a jump from the dashboard, whose
+  subscriber leaves as the jump lands, so a dashboard-only user's jump
+  is seen. A host's daemon has no merged subscriber, the laptop
+  following it through a plain subscription, so it lists only when one
+  of its own agents finishes, not once a second for as long as one
+  stays done. The laptop follows the same rule: a visit made while no
+  view is open, and none closed in the last minute, is recorded only by
+  a finish or a poke, or by a view opened later if a client still shows
+  the agent then. This reverses the first version of this note, which
+  listed every second while any entry was unseen, subscriber or not, to
+  record such visits, and accepted that cost; #124 found it paid on
+  every host's daemon, for agents only the laptop's views show. A
+  client *sees* an agent by the pane it shows:
   - a live attach pane, tagged `@laatmux_attach_pane` and not dead,
     whose target is the agent's managed session and whose session's
     `@laatmux_host` is the agent's host, in a workspace session or a
@@ -1230,16 +1231,15 @@ view and folds step 6 keeps in memory.
   the user left, the listing each second only with an agent done and a
   view open or closed within the idle minute, a cached record replayed
   on reconnect not counted, a local agent's finish with no subscriber,
-  a new identity in the same pane, a
-  reused pane id after a server restart, an agent on a remote default
-  server never done, a client on a workspace session's shell window
-  seeing nothing, a dead attach pane seeing nothing after its host
-  reconnects, an attach pane from before #56 with no target, an agent
-  on vm not seen from an attach to mac's session of the same name, two
-  workspace attach panes from before #56 on one host told apart by
-  their keys, a focused sidebar pane beside the attach, a host taken
-  out of the config, a host clock hours ahead of the laptop's, and an
-  agent removed.
+  a new identity in the same pane, a reused pane id after a server
+  restart, an agent on a remote default server never done, a client on
+  a workspace session's shell window seeing nothing, a dead attach pane
+  seeing nothing after its host reconnects, an attach pane from before
+  #56 with no target, an agent on vm not seen from an attach to mac's
+  session of the same name, two workspace attach panes from before #56
+  on one host told apart by their keys, a focused sidebar pane beside
+  the attach, a host taken out of the config, a host clock hours ahead
+  of the laptop's, and an agent removed.
 - **Precedence:** done beats stale, blocked is never stale, a settled
   workspace's blocked agent stays in place.
 - **Jumps:** a tree jump to a pane in the home session, in another
