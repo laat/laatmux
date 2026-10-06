@@ -701,7 +701,7 @@ func (m *Model) otherSession(r rows.Row, w int) []Span {
 	host := m.where(r)
 	// What the name, the brackets, the gap and the icon leave the host.
 	room := w - spansWidth([]Span{name, {Text: " ()  "}, icon})
-	if bare := hostName(r); width(host.Text) > room {
+	if bare := r.HostName(); width(host.Text) > room {
 		if room > width(bare) {
 			host.Text = cutSpans([]Span{{Text: host.Text}}, room)[0].Text
 		} else {

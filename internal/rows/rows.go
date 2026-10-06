@@ -385,6 +385,15 @@ func (r Row) AgentName() string {
 	return r.Agent.Agent
 }
 
+// HostName is the row's host as the view and ls print it, ? for one no
+// host record claims.
+func (r Row) HostName() string {
+	if r.Host == "" {
+		return "?"
+	}
+	return r.Host
+}
+
 // rowAgent is the agent a worktree row shows of the agents attributed
 // to it, the row being jumped to through it. With a home session it is
 // an agent there or none. Without one it is the agent laatmux made at

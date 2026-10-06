@@ -71,11 +71,11 @@ func renderTree(b *strings.Builder, nodes []rows.Row, now time.Time) {
 	}
 }
 
-// where is a node's host, with the server for an agent observed off the
-// managed server, as jump --server takes it, and a note when the host
-// is down.
+// where is a node's host, ? for one no host record claims, with the
+// server for an agent observed off the managed server, as jump --server
+// takes it, and a note when the host is down.
 func where(n rows.Row) string {
-	s := n.Host
+	s := n.HostName()
 	if a := n.Agent; a != nil && n.Kind == rows.KindAgent {
 		if srv := a.Server; srv != protocol.ServerLaatmux {
 			s += "/" + srv
