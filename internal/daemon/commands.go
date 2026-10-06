@@ -181,7 +181,7 @@ func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) 
 // a client that lost its bridge can follow the id and get the result
 // back. Its lock guards the table alone: forgetDone takes command.mu
 // under it and get runs its init under it, and nothing else is taken
-// under it; never d.mu. rm's forgetDone holds it under repos and the
+// under it; never the daemon's mu. rm's forgetDone holds it under repos and the
 // root's delivery lock.
 type commandTable struct {
 	mu   sync.Mutex
@@ -273,8 +273,8 @@ func (k *keyedLocks) get(key string) *sync.Mutex {
 // lockDeliveries takes the root's delivery lock, which deliveries to
 // the root hold across their readiness check and paste, and an add
 // across the publication of its result; the returned func releases it.
-func (d *Daemon) lockDeliveries(root string) func() {
-	l := d.repoLock("deliver/" + root)
+func (rn *taskRunner) lockDeliveries(root string) func() {
+	l := rn.repoLock("deliver/" + root)
 	l.Lock()
 	return l.Unlock
 }
@@ -284,7 +284,7 @@ func (d *Daemon) lockDeliveries(root string) func() {
 // write to the same main checkout, while different repositories
 // proceed in parallel; "name/<name>", "deliver/<root>" and
 // "attempt/<id>".
-func (d *Daemon) repoLock(key string) *sync.Mutex { return d.locks.get(key) }
+func (rn *taskRunner) repoLock(key string) *sync.Mutex { return rn.locks.get(key) }
 
 // runRm removes a worktree, then every managed session whose pane records
 // its root. Each step is inspected, so a retry after a crash between them
@@ -299,7 +299,7 @@ func (d *Daemon) repoLock(key string) *sync.Mutex { return d.locks.get(key) }
 // registered for the branch, or, once that registration is gone, the
 // root the session step matches on. A root that git registers for another
 // branch or repository is a mismatch, not a target.
-func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
+func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	err := func() error {
 		if m.Repo != "" {
@@ -309,7 +309,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		} else if m.Root == "" {
 			return errors.New("rm needs a repository and branch, or a root")
 		}
-		unlock := d.lockRepos()
+		unlock := rn.lockRepos()
 		defer unlock()
 
 		// The repository is found under the lock: an add still making
@@ -318,7 +318,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		// finds the session.
 		var repo worktree.Repo
 		if m.Repo != "" {
-			r, ok, err := d.cfg.Store.Known(ctx, m.Repo)
+			r, ok, err := rn.cfg.Store.Known(ctx, m.Repo)
 			switch {
 			case err != nil:
 				return err
@@ -337,8 +337,8 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			// worktrees directory is a target: sessions elsewhere, made by
 			// new with any cwd, are not rm's to kill.
 			root = filepath.Clean(root)
-			if !d.cfg.Store.Owns(root) {
-				return fmt.Errorf("%s is not under the worktrees directory %s", root, d.cfg.Store.Dirs.Worktrees)
+			if !rn.cfg.Store.Owns(root) {
+				return fmt.Errorf("%s is not under the worktrees directory %s", root, rn.cfg.Store.Dirs.Worktrees)
 			}
 		}
 		switch {
@@ -346,7 +346,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			// The root decides the checkout, since two clones of one
 			// repository each list their own worktrees; repository and
 			// branch, when given, must be what git registers there.
-			rec, co, found, err := d.cfg.Store.Find(ctx, root)
+			rec, co, found, err := rn.cfg.Store.Find(ctx, root)
 			if err != nil {
 				return err
 			}
@@ -364,7 +364,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				// The registration at the root is gone; the root still
 				// finds the session, unless the branch has moved to a
 				// worktree elsewhere since.
-				rec, _, moved, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+				rec, _, moved, err := rn.cfg.Store.ByBranch(ctx, repo, m.Branch)
 				if err != nil {
 					return err
 				}
@@ -373,7 +373,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				}
 			}
 		default:
-			rec, co, found, err := d.cfg.Store.ByBranch(ctx, repo, m.Branch)
+			rec, co, found, err := rn.cfg.Store.ByBranch(ctx, repo, m.Branch)
 			if err != nil {
 				return err
 			}
@@ -396,7 +396,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		// rather than a replacement session; an add records and
 		// publishes its result under it, so no success is published
 		// between the mark and the drop.
-		unlockDeliveries := d.lockDeliveries(root)
+		unlockDeliveries := rn.lockDeliveries(root)
 		defer unlockDeliveries()
 		if checkout != "" {
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
@@ -408,28 +408,28 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 				// result carries the step, which dates the removal
 				// against the adds at the root: rm's dismiss drops only
 				// the tasks from before it.
-				l := d.stepRevision()
+				l := rn.core.stepRevision()
 				res.Listing = &l
 			}
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait
 		// makes the ok mean nothing of laatmux's is left there.
-		d.cancelRunsIn(root)
+		rn.cancelRunsIn(root)
 		// The journal's entries at the root are removed with it: a
 		// follow or a resend for one is answered removed from now on,
 		// which means the finished commands the memory still holds for
 		// them go, so the journal answers.
-		if d.journal != nil {
-			ids, err := d.journal.markRemoved(root, time.Now())
+		if rn.journal != nil {
+			ids, err := rn.journal.markRemoved(root, time.Now())
 			for _, id := range ids {
-				d.cmds.forgetDone(id)
+				rn.cmds.forgetDone(id)
 			}
 			if err != nil {
 				return err
 			}
 		}
-		panes, err := d.managed.Tmux.ListPanes(ctx)
+		panes, err := rn.managed.Tmux.ListPanes(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {
 				return nil
@@ -441,14 +441,14 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 			if !p.Managed || p.Cwd != root || killed[p.Session] {
 				continue
 			}
-			if err := d.managed.Tmux.KillSession(ctx, p.Session); err != nil {
+			if err := rn.managed.Tmux.KillSession(ctx, p.Session); err != nil {
 				return err
 			}
 			killed[p.Session] = true
 		}
 		return nil
 	}()
-	d.finish(c, res, err)
+	rn.finish(c, res, err)
 }
 
 func branchOrDetached(branch string) string {
@@ -461,9 +461,9 @@ func branchOrDetached(branch string) string {
 // holdRepos is the shared hold on every repository that an add takes
 // before it resolves anything and keeps until its agent is launched,
 // and that rm takes alone. The returned func releases it.
-func (d *Daemon) holdRepos() func() {
-	d.repos.RLock()
-	return d.repos.RUnlock
+func (rn *taskRunner) holdRepos() func() {
+	rn.repos.RLock()
+	return rn.repos.RUnlock
 }
 
 // lockRepo takes a repository's lock, by its identity, so two forms of
@@ -472,10 +472,10 @@ func (d *Daemon) holdRepos() func() {
 // directory at once. The caller has the shared hold. The order is
 // always hold, source, name, and nothing waits on a source holding a
 // name. The returned func releases both locks.
-func (d *Daemon) lockRepo(src, name string) func() {
-	repo := d.repoLock("repo/" + source.Key(src))
+func (rn *taskRunner) lockRepo(src, name string) func() {
+	repo := rn.repoLock("repo/" + source.Key(src))
 	repo.Lock()
-	dir := d.repoLock("name/" + name)
+	dir := rn.repoLock("name/" + name)
 	dir.Lock()
 	return func() {
 		dir.Unlock()
@@ -485,18 +485,18 @@ func (d *Daemon) lockRepo(src, name string) func() {
 
 // lockRepos holds every repository, known or not: no add is in flight
 // until the returned func releases them.
-func (d *Daemon) lockRepos() func() {
-	d.repos.Lock()
-	return d.repos.Unlock
+func (rn *taskRunner) lockRepos() func() {
+	rn.repos.Lock()
+	return rn.repos.Unlock
 }
 
 // finish records the result and asks for a worktree poll, so the record
 // follows the command.
-func (d *Daemon) finish(c *command, res protocol.Message, err error) {
+func (rn *taskRunner) finish(c *command, res protocol.Message, err error) {
 	res = resultOf(res, err)
-	d.pokeWorktrees()
+	rn.core.pokeWorktrees()
 	c.emit(res)
-	d.cmds.evict(res.ID, c)
+	rn.cmds.evict(res.ID, c)
 }
 
 // resultOf is the result message for an outcome: ok, or the error with

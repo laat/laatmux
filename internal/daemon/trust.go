@@ -157,10 +157,10 @@ type trustTarget struct {
 // with its process identity, and ready when its prompt box is up, past
 // the question. It is the detector's view, as old as its last poll;
 // trustStep checks the pane itself before any key.
-func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.Identity) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	st, ok := d.panes[paneKey(d.managed.Label, t.pane)]
+func (rn *taskRunner) trustState(t trustTarget) (gone, claude, ready bool, id procs.Identity) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	st, ok := rn.panes[paneKey(rn.managed.Label, t.pane)]
 	if !ok {
 		return false, false, false, procs.Identity{}
 	}
@@ -173,40 +173,40 @@ func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.I
 }
 
 // startTrust starts the watcher for a launch, unless the daemon is
-// stopping; StopRuns cancels the watchers and waits for them. The
+// stopping; stopRuns cancels the watchers and waits for them. The
 // watcher polls every TrustPoll for ReadyWait.
-func (d *Daemon) startTrust(t trustTarget) {
-	wait, poll := d.cfg.Timings.ReadyWait, d.cfg.Timings.TrustPoll
-	if d.cfg.Store == nil || !d.cfg.Store.Owns(t.root) {
+func (rn *taskRunner) startTrust(t trustTarget) {
+	wait, poll := rn.cfg.Timings.ReadyWait, rn.cfg.Timings.TrustPoll
+	if rn.cfg.Store == nil || !rn.cfg.Store.Owns(t.root) {
 		return
 	}
 	t.real = t.root
 	if r, err := filepath.EvalSymlinks(t.root); err == nil {
 		t.real = r
 	}
-	d.mu.Lock()
-	if d.stopping {
-		d.mu.Unlock()
+	rn.mu.Lock()
+	if rn.stopping {
+		rn.mu.Unlock()
 		return
 	}
-	if d.trustCancel == nil {
-		d.trustCtx, d.trustCancel = context.WithCancel(context.Background())
+	if rn.trustCancel == nil {
+		rn.trustCtx, rn.trustCancel = context.WithCancel(context.Background())
 	}
-	ctx := d.trustCtx
-	d.trusting++
-	d.mu.Unlock()
+	ctx := rn.trustCtx
+	rn.trusting++
+	rn.mu.Unlock()
 	go func() {
 		defer func() {
-			d.mu.Lock()
-			d.trusting--
-			d.mu.Unlock()
+			rn.mu.Lock()
+			rn.trusting--
+			rn.mu.Unlock()
 		}()
-		run := d.runCtx()
+		run := rn.core.runCtx()
 		ctx, cancel := context.WithTimeout(ctx, wait)
 		defer cancel()
 		stop := context.AfterFunc(run, cancel)
 		defer stop()
-		d.answerTrust(ctx, t, poll)
+		rn.answerTrust(ctx, t, poll)
 	}()
 }
 
@@ -219,11 +219,11 @@ func (d *Daemon) startTrust(t trustTarget) {
 // The first verified Claude seen in the pane is the one answered for:
 // another process in its place, a wrapper's second run say, ends the
 // watcher.
-func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
+func (rn *taskRunner) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
 	moved := false
 	var bound *procs.Identity
 	for ctx.Err() == nil {
-		gone, claude, ready, id := d.trustState(t)
+		gone, claude, ready, id := rn.trustState(t)
 		if gone || ready {
 			return
 		}
@@ -236,7 +236,7 @@ func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Durat
 			if bound == nil {
 				bound = &id
 			}
-			done, stop := d.trustStep(ctx, t, *bound, &moved)
+			done, stop := rn.trustStep(ctx, t, *bound, &moved)
 			if done || stop {
 				return
 			}
@@ -261,14 +261,14 @@ func (d *Daemon) answerTrust(ctx context.Context, t trustTarget, poll time.Durat
 // lock the pane itself is looked at first: still there and alive, in
 // the launched session, on the launched server instance, its working
 // directory the root, which is also the folder Claude asks about.
-func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Identity, moved *bool) (done, stop bool) {
-	unlock := d.lockDeliveries(t.root)
+func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.Identity, moved *bool) (done, stop bool) {
+	unlock := rn.lockDeliveries(t.root)
 	defer unlock()
-	gone, claude, _, id := d.trustState(t)
+	gone, claude, _, id := rn.trustState(t)
 	if gone || !claude || id.PID != bound.PID || !id.Start.Equal(bound.Start) {
 		return false, gone || claude
 	}
-	panes, err := d.managed.Tmux.ListPanes(ctx)
+	panes, err := rn.managed.Tmux.ListPanes(ctx)
 	if err != nil {
 		return false, true
 	}
@@ -288,14 +288,14 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 	}
 	// The bound Claude itself, now, not as the last poll saw it: a
 	// replacement started in the pane since gets nothing.
-	alive, err := d.cfg.Procs.Exists(here.TTY, bound)
+	alive, err := rn.cfg.Procs.Exists(here.TTY, bound)
 	if err != nil {
 		return false, false
 	}
 	if !alive {
 		return false, true
 	}
-	screen, err := d.managed.Tmux.Capture(ctx, t.pane, d.cfg.CaptureLines)
+	screen, err := rn.managed.Tmux.Capture(ctx, t.pane, rn.cfg.CaptureLines)
 	if err != nil {
 		return false, true
 	}
@@ -319,15 +319,15 @@ func (d *Daemon) trustStep(ctx context.Context, t trustTarget, bound procs.Ident
 			keys[i] = key
 		}
 		*moved = true
-		if err := d.managed.Tmux.SendKeys(ctx, t.pane, keys...); err != nil {
+		if err := rn.managed.Tmux.SendKeys(ctx, t.pane, keys...); err != nil {
 			return false, true
 		}
 		return false, false
 	}
-	if err := d.managed.Tmux.SendKeys(ctx, t.pane, "Enter"); err != nil {
+	if err := rn.managed.Tmux.SendKeys(ctx, t.pane, "Enter"); err != nil {
 		return false, true
 	}
-	d.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
+	rn.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
 	return true, false
 }
 
