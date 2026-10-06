@@ -208,6 +208,28 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// A record whose environment no host record claims prints its host as
+// ?, as the view draws it: an agent in other sessions with its server
+// after it when observed, alone when managed, and a worktree line.
+func TestRenderUnclaimedHost(t *testing.T) {
+	m := merged.New()
+	now := time.Now()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts: []protocol.HostStatus{{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}},
+		Agents: []protocol.Agent{
+			{ID: "xenv/work/%4", EnvironmentID: "xenv", Server: "work", Session: "stray", Agent: "claude", Activity: protocol.Idle, ActivityAt: now},
+			{ID: "xenv/laatmux/%5", EnvironmentID: "xenv", Server: "laatmux", Session: "loose", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Managed: true},
+		},
+		Worktrees: []protocol.Worktree{{ID: "xenv/worktree//r/lost", EnvironmentID: "xenv", Repo: "proj", Branch: "lost", Root: "/r/lost"}},
+	})
+	out := render(m.Status(""))
+	for _, s := range []string{"stray (?/work, host down)", "loose (?, host down)", "lost (?, host down)"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("render lacks %q:\n%s", s, out)
+		}
+	}
+}
+
 // A host down whose status upsert keeps its environment id, as the
 // daemon's does: its cached records stay attributed to it and the tree
 // marks them host down, and the host line says why.
