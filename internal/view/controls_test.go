@@ -1,6 +1,7 @@
 package view
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -730,9 +731,10 @@ func TestStrip(t *testing.T) {
 }
 
 // A dim row's chip is dim throughout, as its line is in the list: faint
-// and without the template's background, which a fresh row's chip
-// keeps; the viewer's own label on a dim chip keeps its colour, not the
-// background, and is not faint where a template makes it dim.
+// in the dimmed colour and without the template's background, which a
+// fresh row's chip keeps; the viewer's own label on a dim chip keeps
+// its colour, not the background, and is not faint where a template
+// makes it dim.
 func TestStripDimChip(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
@@ -746,15 +748,7 @@ func TestStripDimChip(t *testing.T) {
 	chipIn := func(name string, th palette.Theme) string {
 		t.Helper()
 		out := m.Render()
-		var chips [][]Span
-		for _, sp := range append([]Span{{Text: stripSep, Fg: palette.Border}}, out[0].Spans...) {
-			if sp.Text == stripSep && sp.Fg == palette.Border {
-				chips = append(chips, nil)
-				continue
-			}
-			chips[len(chips)-1] = append(chips[len(chips)-1], sp)
-		}
-		for _, c := range chips {
+		for _, c := range stripChips(out[0]) {
 			if l := (Line{Spans: c}); strings.HasPrefix(Text([]Line{l}), name+" ") {
 				return ANSI(l, th)
 			}
@@ -766,7 +760,7 @@ func TestStripDimChip(t *testing.T) {
 	if got := chip("remote-notes"); !strings.Contains(got, yellow+"remote-notes") {
 		t.Errorf("a fresh chip lost the template's background: %q", got)
 	}
-	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, "\x1b[2mdead") {
+	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, "\x1b[2m"+dark.SGR(palette.Dimmed, false)+"dead") {
 		t.Errorf("a dim chip not drawn as its line: %q", got)
 	}
 	for _, it := range m.Visible() {
@@ -782,4 +776,98 @@ func TestStripDimChip(t *testing.T) {
 	if got := chipIn("dead", palette.Mono()); !strings.HasPrefix(got, "\x1b[1mdead") {
 		t.Errorf("the viewer's label made dim on a dim chip: %q", got)
 	}
+}
+
+// A dim row's chip is drawn cell for cell as the row's line in the list
+// under the same template: faint in the dimmed colour in a theme with
+// colours and faint without, a token's colour and a style's dropped,
+// bold kept, no background, and the viewer's own label in its colour,
+// not faint. A fresh row's dim token stays faint in the terminal's
+// colour, on its chip as on its line.
+func TestStripDimChipAsLine(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	dark, _ := palette.New(true, nil)
+	mono := palette.Mono()
+	const iw = 30
+	// both is the named row's line in the compact list, as wide as a
+	// chip, and its chip in the strip alone on a line, without the
+	// padding the list's line does not draw.
+	both := func(src, name string, current bool) (Line, Line) {
+		t.Helper()
+		m := model(now)
+		m.View, m.ItemWidth, m.ShowHidden = ViewAgents, iw, true
+		m.SetTemplates(CompileTemplates(nil, src, []string{src}, "", "", "", "", ""))
+		for _, it := range m.Visible() {
+			if it.Row.Name == "proj/"+name {
+				it.Row.Current = current
+			}
+		}
+		named := func(l Line) bool { return slices.Contains(strings.Fields(Text([]Line{l})), name) }
+		m.Layout, m.Width, m.Height = Compact, iw, 40
+		var line, chip *Line
+		for _, l := range m.Render() {
+			if named(l) {
+				line = &l
+			}
+		}
+		m.Layout, m.Width, m.Height = Strip, 400, 1
+		for _, c := range stripChips(m.Render()[0]) {
+			if named(Line{Spans: c}) {
+				chip = &Line{Spans: c}
+			}
+		}
+		if line == nil || chip == nil {
+			t.Fatalf("%q: no line or no chip for %s: %v %v", src, name, line, chip)
+		}
+		chip.Spans = clip(chip.Spans, spansWidth(line.Spans))
+		return *line, *chip
+	}
+	for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}"} {
+		for _, current := range []bool{false, true} {
+			line, chip := both(src, "dead", current)
+			if !line.Dim {
+				t.Fatalf("%q: the dead row's line is not dim", src)
+			}
+			for _, th := range []palette.Theme{dark, mono} {
+				if got, want := drawn(t, ANSI(chip, th)), drawn(t, ANSI(line, th)); got != want {
+					t.Errorf("%q, current %v, mono %v: the chip draws\n%s\nthe line\n%s", src, current, th.Mono, got, want)
+				}
+			}
+		}
+	}
+	// The bytes: the line's as they were, and the chip's the same.
+	line, chip := both("{primary}", "dead", false)
+	for _, c := range []struct {
+		th   palette.Theme
+		want string
+	}{
+		{dark, "\x1b[2m" + dark.SGR(palette.Dimmed, false) + "dead\x1b[0m"},
+		{mono, "\x1b[2mdead\x1b[0m"},
+	} {
+		if got := ANSI(line, c.th); got != c.want {
+			t.Errorf("mono %v: the dim line %q, want %q", c.th.Mono, got, c.want)
+		}
+		if got := ANSI(chip, c.th); !strings.HasPrefix(got, c.want) {
+			t.Errorf("mono %v: the dim chip %q, want its line's %q", c.th.Mono, got, c.want)
+		}
+	}
+	line, chip = both("{primary} @{host}", "remote-notes", false)
+	for _, l := range []Line{line, chip} {
+		if got := ANSI(l, dark); !strings.Contains(got, "@\x1b[2mvm/default\x1b[0m") {
+			t.Errorf("a fresh row's remote host not faint in the terminal's colour: %q", got)
+		}
+	}
+}
+
+// stripChips is a strip line's chips: the spans between the separators.
+func stripChips(l Line) [][]Span {
+	chips := [][]Span{nil}
+	for _, sp := range l.Spans {
+		if sp.Text == stripSep && sp.Fg == palette.Border {
+			chips = append(chips, nil)
+			continue
+		}
+		chips[len(chips)-1] = append(chips[len(chips)-1], sp)
+	}
+	return chips
 }
