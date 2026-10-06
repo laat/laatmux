@@ -118,7 +118,7 @@ func (d *Daemon) cancelRunsIn(root string) {
 // cancelCommand stops the run under id, if there is one and it has not
 // finished. A cancel for an add, an rm or an unknown id does nothing.
 func (d *Daemon) cancelCommand(id string) {
-	c, ok := d.lookup(id)
+	c, ok := d.cmds.lookup(id)
 	if !ok || c.job == nil {
 		return
 	}
@@ -245,7 +245,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		res.OK = true
 	}
 	c.emit(res)
-	d.evict(res.ID, c)
+	d.cmds.evict(res.ID, c)
 }
 
 // runProcess starts the command in the run's root and waits for it,

@@ -176,46 +176,51 @@ func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) 
 	}
 }
 
-// command returns the command for id, creating it when unknown, with
-// init run on it before any other connection can see it, so a cancel
-// that arrives at once finds the job. The caller runs a new one; an
-// existing one is only followed.
-func (d *Daemon) command(id string, init func(*command)) (*command, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if c, ok := d.cmds[id]; ok {
+// commandTable is the recent commands by id: those in flight, and
+// those finished within the TTL, so a client that lost its bridge can
+// follow the id and get the result back. Its lock is a leaf, taken
+// under no other and holding only the table.
+type commandTable struct {
+	mu   sync.Mutex
+	byID map[string]*command
+	ttl  time.Duration
+}
+
+func newCommandTable(ttl time.Duration) *commandTable {
+	return &commandTable{byID: map[string]*command{}, ttl: ttl}
+}
+
+// get returns the command for id, creating it when unknown, with init
+// run on it before any other connection can see it, so a cancel that
+// arrives at once finds the job. The caller runs a new one; an existing
+// one is only followed.
+func (t *commandTable) get(id string, init func(*command)) (*command, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.byID[id]; ok {
 		return c, false
 	}
 	c := newCommand(id)
 	if init != nil {
 		init(c)
 	}
-	d.cmds[id] = c
+	t.byID[id] = c
 	return c, true
 }
 
-// lookup returns the command for id when the daemon still has it.
-func (d *Daemon) lookup(id string) (*command, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	c, ok := d.cmds[id]
+// lookup returns the command for id when the table still has it.
+func (t *commandTable) lookup(id string) (*command, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.byID[id]
 	return c, ok
 }
 
-// lockDeliveries takes the root's delivery lock, which deliveries to
-// the root hold across their readiness check and paste, and an add
-// across the publication of its result; the returned func releases it.
-func (d *Daemon) lockDeliveries(root string) func() {
-	l := d.repoLock("deliver/" + root)
-	l.Lock()
-	return l.Unlock
-}
-
 // forgetDone drops the command under id when it has finished.
-func (d *Daemon) forgetDone(id string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	c, ok := d.cmds[id]
+func (t *commandTable) forgetDone(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.byID[id]
 	if !ok {
 		return
 	}
@@ -223,36 +228,58 @@ func (d *Daemon) forgetDone(id string) {
 	done := c.done
 	c.mu.Unlock()
 	if done {
-		delete(d.cmds, id)
+		delete(t.byID, id)
 	}
 }
 
-// evict forgets a finished command once its TTL has passed, whether or
+// evict forgets a finished command once the TTL has passed, whether or
 // not any other command arrives meanwhile. The identity check keeps a
 // timer from evicting a newer command under the same id.
-func (d *Daemon) evict(id string, c *command) {
-	time.AfterFunc(d.cfg.Timings.CommandTTL, func() {
-		d.mu.Lock()
-		if d.cmds[id] == c {
-			delete(d.cmds, id)
+func (t *commandTable) evict(id string, c *command) {
+	time.AfterFunc(t.ttl, func() {
+		t.mu.Lock()
+		if t.byID[id] == c {
+			delete(t.byID, id)
 		}
-		d.mu.Unlock()
+		t.mu.Unlock()
 	})
+}
+
+// keyedLocks hands out a lock per key, made on first use: the
+// repository, name, delivery and attempt locks the commands serialize
+// on. Its own lock holds only the map, never a lock handed out.
+type keyedLocks struct {
+	mu   sync.Mutex
+	byID map[string]*sync.Mutex
+}
+
+func newKeyedLocks() *keyedLocks { return &keyedLocks{byID: map[string]*sync.Mutex{}} }
+
+// get is the lock for key.
+func (k *keyedLocks) get(key string) *sync.Mutex {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	l, ok := k.byID[key]
+	if !ok {
+		l = &sync.Mutex{}
+		k.byID[key] = l
+	}
+	return l
+}
+
+// lockDeliveries takes the root's delivery lock, which deliveries to
+// the root hold across their readiness check and paste, and an add
+// across the publication of its result; the returned func releases it.
+func (d *Daemon) lockDeliveries(root string) func() {
+	l := d.locks.get("deliver/" + root)
+	l.Lock()
+	return l.Unlock
 }
 
 // repoLock serializes commands per repository: fetch and worktree add
 // write to the same main checkout, so that is the grain. Different
 // repositories proceed in parallel.
-func (d *Daemon) repoLock(key string) *sync.Mutex {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	l, ok := d.locks[key]
-	if !ok {
-		l = &sync.Mutex{}
-		d.locks[key] = l
-	}
-	return l
-}
+func (d *Daemon) repoLock(key string) *sync.Mutex { return d.locks.get(key) }
 
 // runRm removes a worktree, then every managed session whose pane records
 // its root. Each step is inspected, so a retry after a crash between them
@@ -391,7 +418,7 @@ func (d *Daemon) runRm(ctx context.Context, m protocol.Message, c *command) {
 		if d.journal != nil {
 			ids, err := d.journal.markRemoved(root, time.Now())
 			for _, id := range ids {
-				d.forgetDone(id)
+				d.cmds.forgetDone(id)
 			}
 			if err != nil {
 				return err
@@ -464,7 +491,7 @@ func (d *Daemon) finish(c *command, res protocol.Message, err error) {
 	res = resultOf(res, err)
 	d.pokeWorktrees()
 	c.emit(res)
-	d.evict(res.ID, c)
+	d.cmds.evict(res.ID, c)
 }
 
 // resultOf is the result message for an outcome: ok, or the error with

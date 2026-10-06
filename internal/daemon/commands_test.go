@@ -520,9 +520,7 @@ func TestCommandEviction(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		d.mu.Lock()
-		_, kept := d.cmds["c1"]
-		d.mu.Unlock()
+		_, kept := d.cmds.lookup("c1")
 		if !kept {
 			break
 		}
@@ -531,7 +529,7 @@ func TestCommandEviction(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, fresh := d.command("c1", nil); !fresh {
+	if _, fresh := d.cmds.get("c1", nil); !fresh {
 		t.Fatal("evicted id not fresh")
 	}
 }

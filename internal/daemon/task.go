@@ -78,7 +78,7 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		} else {
 			c.emit(r.res)
 		}
-		d.evict(m.ID, c)
+		d.cmds.evict(m.ID, c)
 		return
 	}
 	res := resultOf(r.res, err)
@@ -117,7 +117,7 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 	}
 	d.pokeWorktrees()
 	c.emit(res)
-	d.evict(m.ID, c)
+	d.cmds.evict(m.ID, c)
 }
 
 // addRun is one add in flight: the request, its journal entry as the
@@ -885,10 +885,10 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 	if strings.HasPrefix(res.Error, protocol.ErrAttemptNotRecorded) {
 		// Nothing was done for the number: the sender retries it, and
 		// the retry must run, not replay this answer.
-		d.forgetDone(promptKey(m.ID, m.Attempt))
+		d.cmds.forgetDone(promptKey(m.ID, m.Attempt))
 		return
 	}
-	d.evict(promptKey(m.ID, m.Attempt), c)
+	d.cmds.evict(promptKey(m.ID, m.Attempt), c)
 }
 
 // promptKey is the command key of one attempt, so a follow with the
