@@ -657,6 +657,49 @@ func TestSettleGoesByLine(t *testing.T) {
 	if got, cmds := press(model(setup{attached: true}, true), w.ID); got != "proj/z: no local workspace session; enter creates one" || cmds != "" {
 		t.Errorf("no workspace session, z on the line: message %q, tmux %q", got, cmds)
 	}
+	// A row of no worktree that no line holds, with no workspace session:
+	// the repository line, the stale fold, an agent on this machine's
+	// default server in the plain session notes, and one laatmux new made
+	// in the managed session scratch, with a plain attachment or without,
+	// as its tile and as its node. None is a workspace, and z says so, as
+	// S does, whatever enter on it does.
+	notes := protocol.Agent{ID: "menv/default/%7", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/Users/u"}
+	scratch := protocol.Agent{ID: "venv/laatmux/%8", EnvironmentID: "venv", Server: "laatmux", Session: "scratch", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/Users/u"}
+	for _, attached := range []bool{false, true} {
+		// The workspace session settled, so that w's agents are in the
+		// stale fold.
+		in := rows.Input{
+			Hosts:     []rows.Host{host, {Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+			Agents:    append(append([]protocol.Agent{}, agents...), notes, scratch),
+			Worktrees: []protocol.Worktree{w},
+			Locals:    []protocol.Session{{Name: "notes"}, {Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: true}},
+		}
+		attachment := ""
+		if attached {
+			attachment = "vm/scratch"
+			in.Locals = append(in.Locals, protocol.Session{Name: attachment, Attach: attachment})
+		}
+		for _, c := range []struct {
+			id, name string
+			tree     bool
+			local    string // the row's own local session
+		}{
+			{rows.RepoNode(w.Source), "proj", true, ""}, {rows.NodeStale, "2 stale", false, ""},
+			{notes.ID, "notes", false, "notes"}, {notes.ID, "notes", true, "notes"},
+			{scratch.ID, "scratch", false, attachment}, {scratch.ID, "scratch", true, attachment},
+		} {
+			m := show(in, c.tree)
+			if !m.Select(c.id) {
+				t.Fatalf("attached %v tree %v: no row %s", attached, c.tree, c.id)
+			}
+			if r := m.Selection(); r.Worktree != nil || c.local == "" && r.Local != nil || c.local != "" && (r.Local == nil || r.Local.Name != c.local) {
+				t.Fatalf("attached %v tree %v: the row of %s is %+v", attached, c.tree, c.id, r)
+			}
+			if got, cmds := press(m, c.id); got != c.name+": not a workspace" || cmds != "" {
+				t.Errorf("attached %v tree %v: z on %s: message %q, tmux %q", attached, c.tree, c.id, got, cmds)
+			}
+		}
+	}
 	// The add's agent before the host lists the worktree, as its node
 	// and as its tile, with the task's workspace session settled: the
 	// task's, refused.

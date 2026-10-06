@@ -717,6 +717,16 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
+	if r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
+		// A row of no worktree, which no line holds but the add's agent
+		// refused above, and of no workspace session: a repository line,
+		// the stale fold, or an agent in other sessions, in a plain
+		// session or a managed one. Enter folds the line and the fold,
+		// and switches to the agent's session or attaches to it; none of
+		// it is a workspace session to settle, as S says.
+		m.Message = r.Name + ": not a workspace"
+		return
+	}
 	if line.Local == nil || !line.Local.Workspace() {
 		m.Message = line.Name + ": no local workspace session; " + noWorkspaceHint(d.cfg, *line, resolved)
 		return
