@@ -687,36 +687,52 @@ var openURL = func(url string) error {
 	return nil
 }
 
-// settle toggles the settled tag on the selected row's workspace
-// session. The merged stream carries the change back within a second:
-// in the agent view the workspace's tiles move into or out of the
-// stale fold, but for a blocked or done one and the viewer's own,
-// which stay in place, sorted with the stale rows, to be unsettled; in
-// the tree the line stays where it is, dim with the stale icon unless
-// an agent there wants the user.
+// settle toggles the settled tag on the workspace session of the
+// selected line, or of the line holding the selected row. The merged
+// stream carries the change back within a second: in the agent view
+// the workspace's tiles move into or out of the stale fold, but for a
+// blocked or done one and the viewer's own, which stay in place,
+// sorted with the stale rows, to be unsettled; in the tree the line
+// stays where it is, dim with the stale icon unless an agent there
+// wants the user.
 func (d *dash) settle(m *view.Model) {
 	r := m.Selection()
 	if r == nil {
 		return
 	}
-	if r.Pending != nil {
-		// The row is the task's until it hands over: z settles the
-		// worktree row it becomes.
-		m.Message = r.Name + ": a pending task; z settles its worktree row once it hands over"
+	// The settled state is the line's, and its children show it: a
+	// tile, an agent, a pane or a run toggles it in the session of the
+	// line holding it, whatever local session it has of its own, in
+	// the direction of its copy of the state. So does one under a task
+	// standing for a listed worktree, whose line carries the workspace
+	// session but, being a task's row, not the state.
+	line, resolved := r, false
+	if l := ownerLine(m, *r); l != nil && r.Pending == nil {
+		line, resolved = l, true
+	}
+	if r.Pending != nil || line.Pending != nil && r.Worktree == nil {
+		// The row is the task's until it hands over, and so is the
+		// add's agent before the host lists the worktree: z settles
+		// the worktree row it becomes.
+		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
-	if r.Local == nil || !r.Local.Workspace() {
-		m.Message = r.Name + ": no local workspace session; enter creates one"
+	if line.Local == nil || !line.Local.Workspace() {
+		hint := "enter creates one"
+		if resolved {
+			hint = "enter on the line creates one"
+		}
+		m.Message = line.Name + ": no local workspace session; " + hint
 		return
 	}
-	if err := workspace.SetSettled(d.ctx, r.Local.Name, !r.Settled); err != nil {
+	if err := workspace.SetSettled(d.ctx, line.Local.Name, !r.Settled); err != nil {
 		m.Message = err.Error()
 		return
 	}
 	if r.Settled {
-		m.Message = "unsettled " + r.Local.Name
+		m.Message = "unsettled " + line.Local.Name
 	} else {
-		m.Message = "settled " + r.Local.Name
+		m.Message = "settled " + line.Local.Name
 	}
 }
 
@@ -765,18 +781,8 @@ func (d *dash) shell(m *view.Model) bool {
 // goes by the line holding it, whose jump agent the lost-home case
 // counts on; a task's row by the task's own rules for its session.
 func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
-	if row.Kind == rows.KindWorktree || row.Kind == rows.KindTask || row.Local != nil && row.Local.Workspace() {
-		// A line, or a row with a workspace session of its own.
-	} else if row.Worktree != nil {
-		if l := m.OwnerLine(row.Worktree.ID); l != nil {
-			row = *l
-		}
-	} else if row.Pending == nil && row.Agent != nil && row.Agent.Server == protocol.ServerLaatmux {
-		// The add's agent before the host lists the worktree: the
-		// task line holding it, as the pane jump routes it. Only on
-		// the managed server: an observed session of the same name
-		// is not the task's.
-		if l := m.LineFor(row.Host, row.Agent.Session); l != nil && l.Pending != nil {
+	if row.Local == nil || !row.Local.Workspace() {
+		if l := ownerLine(m, row); l != nil {
 			row = *l
 		}
 	}
@@ -784,6 +790,26 @@ func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 		return pendingTarget(row)
 	}
 	return row, nil
+}
+
+// ownerLine is the line holding a tile, an agent, a pane or a run: the
+// one holding its worktree's children, or the task line holding the
+// add's agent before the host lists the worktree. Nil for a line and
+// for a row no line holds.
+func ownerLine(m *view.Model, row rows.Row) *rows.Row {
+	switch {
+	case row.Kind == rows.KindWorktree || row.Kind == rows.KindTask:
+		return nil
+	case row.Worktree != nil:
+		return m.OwnerLine(row.Worktree.ID)
+	case row.Pending == nil && row.Agent != nil && row.Agent.Server == protocol.ServerLaatmux:
+		// As the pane jump routes it. Only on the managed server: an
+		// observed session of the same name is not the task's.
+		if l := m.LineFor(row.Host, row.Agent.Session); l != nil && l.Pending != nil {
+			return l
+		}
+	}
+	return nil
 }
 
 // localFor is the row's workspace session, made from the worktree

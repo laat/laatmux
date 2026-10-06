@@ -376,6 +376,118 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	}
 }
 
+// z toggles the line's settled state from any row the line holds, not
+// by a child's own local session: a second agent at the root in a
+// session of its own settles the workspace session whether or not a
+// plain attachment to its session is left, as its tile, as its node,
+// and as a pane or a run, which have none; so it does under a standing
+// task holding the line, whose own row refuses. The add's agent before
+// the host lists the worktree is the task's and refuses as well.
+func TestSettleGoesByLine(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tmux.log")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	w := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	agents := []protocol.Agent{
+		{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: w.Root, WorktreeID: w.ID},
+		{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z-2", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: w.Root, WorktreeID: w.ID},
+	}
+	pane := protocol.Pane{ID: "venv/pane/%3", EnvironmentID: "venv", PaneID: "%3", Session: "proj/z-2", Command: "vim", WorktreeID: w.ID}
+	run := protocol.Run{ID: "venv/run/r1", EnvironmentID: "venv", Root: w.Root, WorktreeID: w.ID, Cmd: []string{"make"}}
+	task := protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "z", Root: w.Root, Session: "proj/z", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
+	host := rows.Host{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	show := func(in rows.Input, tree bool) *view.Model {
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		if tree {
+			m.View = view.ViewTree
+		}
+		m.Render()
+		return m
+	}
+	type setup struct{ attached, settled, workspace, task bool }
+	model := func(s setup, tree bool) *view.Model {
+		in := rows.Input{Hosts: []rows.Host{host}, Agents: agents, Panes: []protocol.Pane{pane}, Runs: []protocol.Run{run}, Worktrees: []protocol.Worktree{w}}
+		if s.workspace {
+			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: s.settled})
+		}
+		if s.attached {
+			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z-2", Attach: "vm/proj/z-2"})
+		}
+		if s.task {
+			in.Pendings = []protocol.Pending{task}
+		}
+		return show(in, tree)
+	}
+	// z on the row with the id: the message and the tmux commands run.
+	press := func(m *view.Model, id string) (string, string) {
+		t.Helper()
+		os.Remove(log)
+		if !m.Select(id) {
+			t.Fatalf("no row %s", id)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got)
+	}
+	children := []struct {
+		name string
+		tree bool
+		id   string
+	}{{"tile", false, agents[1].ID}, {"node", true, agents[1].ID}, {"pane", true, pane.ID}, {"run", true, run.ID}}
+	for _, s := range []setup{
+		{settled: false, workspace: true}, {settled: true, workspace: true},
+		{attached: true, settled: false, workspace: true}, {attached: true, settled: true, workspace: true},
+		{attached: true, settled: false, workspace: true, task: true}, {attached: true, settled: true, workspace: true, task: true},
+	} {
+		want, msg := "-L default set-option -t vm/proj/z @laatmux_settled 1\n", "settled vm/proj/z"
+		if s.settled {
+			want, msg = "-L default set-option -u -t vm/proj/z @laatmux_settled\n", "unsettled vm/proj/z"
+		}
+		for _, c := range children {
+			if got, cmds := press(model(s, c.tree), c.id); got != msg || cmds != want {
+				t.Errorf("%+v: z on the %s: message %q, tmux %q", s, c.name, got, cmds)
+			}
+		}
+	}
+	// The standing task's own row, its line and its tile, refuses.
+	for _, tree := range []bool{false, true} {
+		if got, cmds := press(model(setup{settled: true, workspace: true, task: true}, tree), task.ID); !strings.HasPrefix(got, "proj/z: a pending task") || cmds != "" {
+			t.Errorf("tree %v: z on the task: message %q, tmux %q", tree, got, cmds)
+		}
+	}
+	// No workspace session: a child says so of its line, whose enter
+	// makes one, not of its own attachment.
+	if got, cmds := press(model(setup{attached: true}, false), agents[1].ID); got != "proj/z: no local workspace session; enter on the line creates one" || cmds != "" {
+		t.Errorf("no workspace session, z on the tile: message %q, tmux %q", got, cmds)
+	}
+	if got, cmds := press(model(setup{attached: true}, true), w.ID); got != "proj/z: no local workspace session; enter creates one" || cmds != "" {
+		t.Errorf("no workspace session, z on the line: message %q, tmux %q", got, cmds)
+	}
+	// The add's agent before the host lists the worktree, as its node
+	// and as its tile, with the task's workspace session settled: the
+	// task's, refused.
+	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "proj/y", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/w/proj/y"}
+	loose := protocol.Pending{ID: "add-y", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now()}
+	in := rows.Input{
+		Hosts:    []rows.Host{host},
+		Agents:   []protocol.Agent{add},
+		Locals:   []protocol.Session{{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm", Settled: true}},
+		Pendings: []protocol.Pending{loose},
+	}
+	for _, tree := range []bool{false, true} {
+		if got, cmds := press(show(in, tree), add.ID); !strings.HasPrefix(got, "proj/y: a pending task") || cmds != "" {
+			t.Errorf("tree %v: z on the add's agent: message %q, tmux %q", tree, got, cmds)
+		}
+	}
+}
+
 // An rm whose host side succeeded and whose local cleanup then failed
 // returns the root with the error, so the CLI prints the removal before
 // the error and the dashboard says what was removed.
