@@ -966,7 +966,12 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 		return it
 	case "git_branch":
 		if g != nil && g.Base != "" {
-			return text(g.Base)
+			it = text(g.Base)
+			if g.Stale {
+				// A refresh that timed out: dim and plain, as {git_sync}
+				// draws the base.
+				it.spans = gitStale(it.spans)
+			}
 		}
 		return it
 	case "git_sync":
