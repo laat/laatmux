@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1101,17 +1102,28 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
+	runners := func() []*runner {
+		f.local.relay.mu.Lock()
+		defer f.local.relay.mu.Unlock()
+		return append([]*runner(nil), f.local.relay.runners["s2"]...)
+	}
+	before := runners()
 	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
-	f.hosts.mu.Lock()
-	flip := f.hosts.flip
-	f.hosts.mu.Unlock()
+	after := runners()
 	close(release)
 	if res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss with the host back %+v", res)
 	}
-	if flip != 0 {
-		t.Fatal("the dismiss never read the host as gone")
+	// The follow the dismiss found has ended and another follows the
+	// add: the dismiss read the host as gone, then as back.
+	if len(before) == 0 || len(after) == 0 {
+		t.Fatalf("%d runners before the dismiss, %d after", len(before), len(after))
+	}
+	for _, r := range before {
+		if slices.Contains(after, r) {
+			t.Fatal("the follow was not stopped and started again")
+		}
 	}
 	if got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.retired() }); !got.OK {
 		t.Fatalf("record after the restart %+v", got)
