@@ -808,21 +808,41 @@ func TestHomelessLineLocal(t *testing.T) {
 	if rs := Agents(first, Tree(first)); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a" {
 		t.Fatalf("managed agent's tile: %+v", rs)
 	}
-	// Another managed agent at the root, not the line's: it keeps the
-	// attachment to its own session.
-	other := protocol.Agent{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/b", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID, ActivityAt: managed.ActivityAt.Add(time.Second)}
+	// A viewer in the attachment is on the line and its tile all the
+	// same, as following wants it.
+	viewer := first
+	viewer.Current = "mac/proj/a-old"
+	if got = treeLines(Tree(viewer)); len(got) != 1 || !got[0].Current {
+		t.Fatalf("viewer in the attachment: %+v", got)
+	}
+	if rs := Agents(viewer, Tree(viewer)); len(rs.Main) != 1 || !rs.Main[0].Current {
+		t.Fatalf("viewer in the attachment, the tile: %+v", rs)
+	}
+	// Another managed agent at the root in a session of its own, older
+	// by its identity so the line's agent is still the first: it keeps
+	// the attachment to its own session. A second agent in the line
+	// agent's session takes the workspace session as that agent does:
+	// the rule is the home session's, as Home and the pane jump have
+	// it, not the line agent's alone.
+	managed.Identity = &protocol.Identity{PID: 1, StartUnix: 1}
+	other := protocol.Agent{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/b", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID, Identity: &protocol.Identity{PID: 3, StartUnix: 3}}
+	sibling := protocol.Agent{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "proj/a", Cwd: "/w/a/sub", Liveness: protocol.Alive, WorktreeID: w.ID, Identity: &protocol.Identity{PID: 2, StartUnix: 2}}
 	withB := append(append([]protocol.Session(nil), locals...), protocol.Session{Name: "mac/proj/b-att", Attach: "mac/proj/b", Host: "mac"})
-	two := Input{Hosts: hosts, Agents: []protocol.Agent{managed, other}, Worktrees: []protocol.Worktree{w}, Locals: withB, Current: "mac/proj/a"}
-	nodes := Tree(two)
+	three := Input{Hosts: hosts, Agents: []protocol.Agent{other, sibling, managed}, Worktrees: []protocol.Worktree{w}, Locals: withB, Current: "mac/proj/a"}
+	nodes := Tree(three)
+	if got = treeLines(nodes); len(got) != 1 || got[0].Agent == nil || got[0].Agent.ID != managed.ID {
+		t.Fatalf("the line's agent: %+v", got)
+	}
 	var byID = map[string]string{}
 	for _, n := range nodes {
 		if n.Kind == KindAgent && n.Local != nil {
 			byID[n.Agent.ID] = n.Local.Name
 		}
 	}
-	if byID[managed.ID] != "mac/proj/a" || byID[other.ID] != "mac/proj/b-att" {
-		t.Fatalf("two managed agents at a lost home: %v", byID)
+	if byID[managed.ID] != "mac/proj/a" || byID[sibling.ID] != "mac/proj/a" || byID[other.ID] != "mac/proj/b-att" {
+		t.Fatalf("three managed agents at a lost home: %v", byID)
 	}
+	managed.Identity = nil
 	// With no workspace session yet, the plain attachment to the same
 	// managed session is not the line's either. Build left the viewer in
 	// the attachment off the row; the tree has the line the viewer's

@@ -315,22 +315,33 @@ func (b *builder) worktrees() {
 		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
 		// The line's agent is the one its jump goes through: in the home
-		// session, or with the home lost, the one laatmux made at the
-		// root, whose session the workspace session attaches to (Home).
+		// session; with the home lost, the one laatmux made at the root,
+		// whose session the workspace session attaches to then (Home);
+		// or one on this machine's default server. The home, as Home
+		// has it, is what the children take the workspace session by.
 		line.Agent = rowAgent(agents, w)
+		home := w.Session
+		if home == "" && line.Agent != nil && line.Agent.Server == protocol.ServerLaatmux {
+			home = line.Agent.Session
+		}
 		var children []Row
 		for _, a := range agents {
 			b.used[a] = true
 			// The agent's own local session: the workspace session for
-			// one in the home session, or for the line's agent when the
-			// home is lost, else the attachment to its session, or its
-			// session on this machine's default server.
+			// one in the home session, else the attachment to its
+			// session, or its session on this machine's default server.
+			// A viewer in an attachment to the home session is on the
+			// line all the same, as following wants it.
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
-			if a.Server == protocol.ServerLaatmux && (a.Session == w.Session || w.Session == "" && a == line.Agent) {
+			own := j.agentLocal(host, a)
+			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
 				c.Local = j.byKey[key]
+				if own != nil && own.Name == in.Current {
+					line.Current = true
+				}
 			}
 			if c.Local == nil {
-				c.Local = j.agentLocal(host, a)
+				c.Local = own
 			}
 			if c.Local == nil {
 				c.Local = j.byKey[key]
@@ -369,6 +380,7 @@ func (b *builder) worktrees() {
 			// children; the others follow as lines of their own.
 			owner := &b.taskRows[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
+			owner.Current = line.Current
 			j.finish(owner)
 			for _, k := range idx[1:] {
 				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth = w, line.Local, 1
@@ -596,7 +608,9 @@ func markViewer(out []Row, current string) {
 			if r.Depth == 1 && (r.Kind == KindWorktree || r.Kind == KindTask) {
 				line = i
 			}
-			r.Current = mine
+			// A line may be the viewer's already, through an attachment
+			// to its home session beside its workspace session.
+			r.Current = mine || r.Current
 		case mine && line >= 0:
 			out[line].Current = true
 		}
