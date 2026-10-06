@@ -580,6 +580,11 @@ func (b *builder) otherSessions(out []Row) []Row {
 			}
 			host := j.byEnv[a.EnvironmentID]
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Agent: a, Local: j.agentLocal(host, a), Depth: 1}
+			// An agent observed in a window of a workspace session is one
+			// of that workspace's agents, though no line takes it as a
+			// child (its worktree on another host, say): it shows the
+			// session's settled state as the line's children do.
+			c.Settled = c.Local != nil && c.Local.Workspace() && c.Local.Settled
 			j.finish(&c)
 			others = append(others, c)
 		}

@@ -1,6 +1,7 @@
 package rows
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,85 @@ func TestPressing(t *testing.T) {
 		}
 		if !n.Worst.Wants() {
 			t.Error("a settled working agent does not open the fold")
+		}
+	}
+}
+
+// An agent observed on this machine's default server in a window of a
+// workspace session whose worktree is on another host stands in other
+// sessions, and is one of that workspace's agents all the same: settled
+// as the session is, dim unless pressing, and in the Stale fold unless
+// pressing or the viewer's own; not settled with the session unsettled.
+// One in a plain attachment is not settled by an option set there by
+// hand.
+func TestObservedAgentSettled(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	observed := func(id, session string, act protocol.Activity) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: act, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/Users/u"}
+	}
+	idle := observed("menv/default/%5", "vm/proj/task", protocol.Idle)
+	working := observed("menv/default/%6", "vm/proj/task", protocol.Working)
+	blocked := observed("menv/default/%7", "vm/proj/task", protocol.Blocked)
+	notes := observed("menv/default/%8", "notes", protocol.Idle)
+	input := func(settled bool, current string) Input {
+		return Input{
+			Hosts: []Host{
+				{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+				{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			},
+			Agents: []protocol.Agent{
+				{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/task", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/w/task", WorktreeID: "venv/worktree//w/task"},
+				idle, working, blocked, notes,
+			},
+			Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/task", EnvironmentID: "venv", Repo: "proj", Branch: "task", Root: "/w/task", Session: "proj/task"}},
+			Locals: []protocol.Session{
+				{Name: "vm/proj/task", Key: "venv//w/task", Host: "vm", Settled: settled},
+				{Name: "notes", Attach: "notes", Settled: true},
+			},
+			Current: current,
+			Now:     now,
+		}
+	}
+	type state struct{ settled, dim, stale bool }
+	for _, c := range []struct {
+		settled bool
+		current string
+		want    map[string]state
+	}{
+		{true, "", map[string]state{idle.ID: {true, true, true}, working.ID: {true, true, true}, blocked.ID: {true, false, false}, notes.ID: {}}},
+		{true, "vm/proj/task", map[string]state{idle.ID: {true, true, false}, working.ID: {true, true, false}, blocked.ID: {true, false, false}, notes.ID: {}}},
+		{false, "", map[string]state{idle.ID: {}, working.ID: {}, blocked.ID: {}, notes.ID: {}}},
+	} {
+		in := input(c.settled, c.current)
+		tree := Tree(in)
+		// The nodes in other sessions, and the tiles of the agents there,
+		// which are in the Stale fold or not.
+		nodes, tiles, want := map[string]state{}, map[string]state{}, map[string]state{}
+		for _, n := range tree {
+			if n.Kind == KindAgent && n.Depth == 1 {
+				nodes[n.Agent.ID] = state{settled: n.Settled, dim: n.Dim}
+			}
+		}
+		rs := Agents(in, tree)
+		for _, g := range []struct {
+			tiles []Row
+			stale bool
+		}{{rs.Main, false}, {rs.Stale, true}} {
+			for _, r := range g.tiles {
+				if r.Agent.Server == protocol.ServerDefault {
+					tiles[r.Agent.ID] = state{r.Settled, r.Dim, g.stale}
+				}
+			}
+		}
+		for id, s := range c.want {
+			s.stale = false
+			want[id] = s
+		}
+		if !reflect.DeepEqual(nodes, want) {
+			t.Errorf("settled %v current %q: the nodes %+v, want %+v", c.settled, c.current, nodes, want)
+		}
+		if !reflect.DeepEqual(tiles, c.want) {
+			t.Errorf("settled %v current %q: the tiles %+v, want %+v", c.settled, c.current, tiles, c.want)
 		}
 	}
 }

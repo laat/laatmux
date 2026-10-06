@@ -1233,6 +1233,55 @@ func TestOtherSessionsHost(t *testing.T) {
 	}
 }
 
+// An agent observed on this machine's default server in a window of a
+// settled workspace session, in other sessions as its worktree is on
+// another host: its line is dim with 💤, and its tile, dim with 💤 as
+// well, folds with the stale ones. Unsettled, neither.
+func TestOtherSessionsSettled(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	const id = "menv/default/%6"
+	for _, c := range []struct {
+		settled    bool
+		line, tile string
+		stale      bool
+	}{
+		{true, ".D.|    vm/laatmux/agents-config (mac/default)  ⟨dimmed:💤⟩ codex\n",
+			".D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ vm/laatmux/agents-config @mac/default                                  0:00\n", true},
+		{false, "...|    vm/laatmux/agents-config (mac/default)  ⟨border:  ⟩ codex\n",
+			"...|⟨border:▌⟩ ⟨border:  ⟩ vm/laatmux/agents-config @mac/default                                  0:00\n", false},
+	} {
+		in := treeInput(now)
+		in.Agents = append(in.Agents, protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: "vm/laatmux/agents-config", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/Users/u"})
+		in.Locals[0].Settled = c.settled
+		in.Current = ""
+		m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 80, Height: 30}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		i := m.indexOf(id)
+		if i < 0 || m.Tree[i].Depth != 1 {
+			t.Fatalf("settled %v: %s not in other sessions", c.settled, id)
+		}
+		if got := Debug(m.treeLine(m.Tree[i], 0)); got != c.line {
+			t.Errorf("settled %v: the line %q, want %q", c.settled, got, c.line)
+		}
+		var tile *rows.Row
+		stale := false
+		for fold, g := range [][]rows.Row{m.Rows.Main, m.Rows.Stale} {
+			for k := range g {
+				if g[k].ID() == id {
+					tile, stale = &g[k], fold == 1
+				}
+			}
+		}
+		if tile == nil || stale != c.stale {
+			t.Fatalf("settled %v: the tile %v in the Stale fold %v", c.settled, tile != nil, stale)
+		}
+		if got := Debug(m.compact(*tile, 0)); got != c.tile {
+			t.Errorf("settled %v: the tile %q, want %q", c.settled, got, c.tile)
+		}
+	}
+}
+
 // Switching: the selection follows across Tab, from an agent to its
 // node and back, from a worktree line or a pane to the worktree's first
 // agent, from a repository line to its first worktree's, from a task to

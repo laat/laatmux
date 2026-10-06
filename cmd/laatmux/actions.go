@@ -725,12 +725,13 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": no local workspace session; " + hint
 		return
 	}
-	// The direction is the session's own state, which a line's copy and
-	// its children's are made from. A row no line holds may carry the
-	// session without the state: an observed agent on this machine's
-	// default server in a window of a workspace session whose worktree
-	// does not take it as a child (on another host, say) stands in other
-	// sessions with that session as its own.
+	// The direction is the session's own state, which the rows' copies
+	// are made from: a line's and its children's, and that of an
+	// observed agent on this machine's default server in a window of a
+	// workspace session whose worktree does not take it as a child (on
+	// another host, say), which stands in other sessions with that
+	// session as its own. A task's row carries the session but not the
+	// state.
 	settled := line.Local.Settled
 	if err := workspace.SetSettled(d.ctx, line.Local.Name, !settled); err != nil {
 		m.Message = err.Error()
