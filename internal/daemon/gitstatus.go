@@ -49,6 +49,7 @@ type gitEntry struct {
 	due     bool
 	last    time.Time // when the last refresh began
 	running bool
+	lastErr string // the last error logged, cleared by a read that works
 }
 
 // watched is the files whose mtimes make an entry due.
@@ -213,6 +214,9 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 	if paths.GitDir != "" {
 		e.paths, e.mtimes = paths, before
 	}
+	if err == nil {
+		e.lastErr = ""
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		if w.Git == nil || w.Git.Stale {
@@ -222,7 +226,7 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 		g.Stale, g.ChangedAt = true, time.Now()
 		w.Git = &g
 	case err != nil:
-		d.logOnce(&d.lastGitErr, "git status: %v", fmt.Errorf("%s: %w", root, err))
+		d.logOnce(&e.lastErr, "git status: %v", fmt.Errorf("%s: %w", root, err))
 		return
 	case head != after:
 		e.due = true

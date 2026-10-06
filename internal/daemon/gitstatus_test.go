@@ -2,7 +2,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"log"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,6 +197,56 @@ func TestGitRefreshDrops(t *testing.T) {
 	idle(t, d)
 	if ups := upserts(s); len(ups) != 0 {
 		t.Errorf("a gone worktree was published: %+v", ups)
+	}
+}
+
+// A git error is logged once per worktree while it persists, a timeout
+// between included, and two worktrees' errors apart; a read that works
+// clears it, so the same error coming back is logged again.
+func TestGitErrorLoggedOnce(t *testing.T) {
+	f := installFakeGit(t)
+	var logged strings.Builder
+	d := New(Config{EnvironmentID: "env", Logger: log.New(&logged, "", 0)})
+	d.mu.Lock()
+	for _, r := range []string{"/w/a", "/w/b"} {
+		d.worktrees[r] = protocol.Worktree{ID: d.worktreeID(r), EnvironmentID: "env", Branch: r, Root: r}
+	}
+	d.mu.Unlock()
+	setErr := func(root string, err error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.err[root] = err
+	}
+	rounds := func(n int) {
+		for range n {
+			makeDue(d)
+			refresh(t, d)
+		}
+	}
+	count := func(s string) int {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return strings.Count(logged.String(), s)
+	}
+	setErr("/w/a", errors.New("a broke"))
+	setErr("/w/b", errors.New("b broke"))
+	rounds(3)
+	if a, b := count("a broke"), count("b broke"); a != 1 || b != 1 {
+		t.Fatalf("logged a %d and b %d times over three rounds, want once each; log:\n%s", a, b, logged.String())
+	}
+	setErr("/w/a", context.DeadlineExceeded)
+	rounds(1)
+	setErr("/w/a", errors.New("a broke"))
+	rounds(1)
+	if a := count("a broke"); a != 1 {
+		t.Fatalf("logged a %d times across a timeout, want once; log:\n%s", a, logged.String())
+	}
+	setErr("/w/a", nil)
+	rounds(1)
+	setErr("/w/a", errors.New("a broke"))
+	rounds(2)
+	if a, b := count("a broke"), count("b broke"); a != 2 || b != 1 {
+		t.Fatalf("logged a %d and b %d times after a read of a worked, want 2 and 1; log:\n%s", a, b, logged.String())
 	}
 }
 
