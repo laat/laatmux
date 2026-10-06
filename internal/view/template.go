@@ -818,10 +818,7 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 			it.spans = []Span{m.where(r)}
 			return it
 		}
-		host := r.Host
-		if host == "" {
-			host = "?" // no host record claims the record
-		}
+		host := hostName(r)
 		it.spans = []Span{{Text: host, Dim: host != m.LocalHost}}
 		return it
 	case "session":

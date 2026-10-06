@@ -100,7 +100,7 @@ anki-llm
   ▾ batch-processing (mac)
       💬 claude              Refactoring queue handl…
 other sessions
-    scratch (vm)             💬 claude
+    scratch (vm/default)     💬 claude
 ```
 
 - **Repositories at the top**, one node per source. #53 made the ssh and

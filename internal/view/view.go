@@ -649,21 +649,25 @@ func (m *Model) row(r rows.Row, idx int) []Line {
 }
 
 // where is an agent's host: the host, with the server after it for an
-// agent observed off the managed server, as ls prints it; ? for a host
-// no record claims; dim for every host but this machine. The {host}
-// token draws it on a tile or an agent node, and the other-sessions
-// line in its brackets.
+// agent observed off the managed server, as ls prints it; dim for every
+// host but this machine. The {host} token draws it on a tile or an
+// agent node, and the other-sessions line in its brackets.
 func (m *Model) where(r rows.Row) Span {
-	s := r.Host
-	if s == "" {
-		s = "?"
-	}
+	s := hostName(r)
 	if r.Agent != nil {
 		if srv := r.Agent.Server; srv != protocol.ServerLaatmux {
 			s += "/" + srv
 		}
 	}
 	return Span{Text: s, Dim: r.Host != m.LocalHost}
+}
+
+// hostName is a row's host, ? for one no host record claims.
+func hostName(r rows.Row) string {
+	if r.Host == "" {
+		return "?"
+	}
+	return r.Host
 }
 
 // primary is the primary label as a span: bold, in the current
