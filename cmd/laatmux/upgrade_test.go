@@ -598,7 +598,7 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 		bystander := crashLeft(t)
 		holdLock(t)
 		err := cmdStop(context.Background(), nil)
-		if err == nil || !strings.Contains(err.Error(), "holds the lock") {
+		if err == nil || !strings.Contains(err.Error(), "holds the lock but answers on no socket") {
 			t.Errorf("stop: %v", err)
 		}
 		if err := signalled(bystander); err != nil {

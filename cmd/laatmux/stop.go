@@ -68,6 +68,7 @@ func cmdStop(ctx context.Context, args []string) error {
 	named, why := false, ""
 	answered := false // the round's dial reached a daemon and had its answer
 	var rt home.Runtime
+	lastPID := 0 // the record's pid the round before, for a reason carried over
 	for {
 		if time.Now().After(deadline) {
 			holder, err := lockHolder()
@@ -83,7 +84,7 @@ func cmdStop(ctx context.Context, args []string) error {
 				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, took)
 			}
 			if named && rt.ProcessStart == "" {
-				return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s; its runtime record is from a build before process_start, so stop does not signal it: if ps shows pid %d as laatmux serve, kill %d ends it", holder, why, took, holder, holder)
+				return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s; its runtime record is from a build before process_start, or its daemon could not read its own start, so stop does not signal it: if ps shows pid %d as laatmux serve, kill %d ends it", holder, why, took, holder, holder)
 			}
 			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, took)
 		}
@@ -96,8 +97,8 @@ func cmdStop(ctx context.Context, args []string) error {
 		// record whose daemon is not the one that answers, and a
 		// holder that answers on no socket.
 		named = err == nil // the record stands and names rt.PID
-		last, lastAnswered := why, answered
-		why, answered = "answers on no socket", false
+		last, lastAnswered, samePID := why, answered, rt.PID == lastPID
+		why, answered, lastPID = "answers on no socket", false, rt.PID
 		if named {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
 				err := stopDaemon(ctx, nc, rt, deadline)
@@ -107,10 +108,10 @@ func cmdStop(ctx context.Context, args []string) error {
 				case errors.Is(err, errNoHello) && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
 					// The loop's deadline passed during the hello wait:
 					// reported on the next round for what the round
-					// before found, when it had an answer, or for the
-					// hello that never came.
+					// before found, when it had an answer for the same
+					// record, or for the hello that never came.
 					why = "gives no hello before the wait ran out"
-					if lastAnswered {
+					if lastAnswered && samePID {
 						why = last
 					}
 					continue
@@ -161,10 +162,11 @@ func cmdStop(ctx context.Context, args []string) error {
 // signalDaemon sends SIGTERM to the record's daemon when, on this
 // reading, it holds the lock and the process is identified as it. The
 // signal goes through a handle to the process taken before the identity
-// is checked the last time: on Linux a pidfd, which a reuse of the pid
-// after the check does not reach; on macOS the pid, with nothing
-// narrower on offer. A process gone by the signal is sent, as waitGone
-// finds the lock free.
+// is checked the last time: on Linux a pidfd where the kernel gives one
+// (5.3 and later, os.FindProcess falling back to the pid silently where
+// it does not), which a reuse of the pid after the check does not
+// reach; on macOS the pid, with nothing narrower on offer. A process
+// gone by the signal is sent, as waitGone finds the lock free.
 func signalDaemon(ctx context.Context, rt home.Runtime, why string) (bool, error) {
 	proc, err := os.FindProcess(rt.PID)
 	if err != nil {
