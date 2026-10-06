@@ -559,10 +559,11 @@ func TestSettleGoesByLine(t *testing.T) {
 // plain session or in a window of another worktree's workspace session,
 // enter switches there, and the add line, or for a detached worktree
 // the branch add needs, follows; with the agent on another host's
-// default server, enter refuses, and the add line follows; with no
-// agent, enter refuses with the add line. A done task standing for the
-// worktree goes by the task's target, as enter does; under a task still
-// running, enter on the line waits for it.
+// default server, enter refuses, and the add line follows, or for a
+// host whose entry here has no directories, that add needs them; with
+// no agent, enter refuses with the add line. A done task standing for
+// the worktree goes by the task's target, as enter does; under a task
+// still running, enter on the line waits for it.
 func TestSettleHintGoesByEnter(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tmux.log")
@@ -579,9 +580,12 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	vm := rows.Host{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	a := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "a", Root: "/w/a", Session: "proj/a"}
 	b := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "b", Root: "/w/b"}
-	// B on vm, and a detached worktree on mac.
-	bv, det := b, b
+	// B on vm, B on box, whose entry here has no directories for add,
+	// and a detached worktree on mac.
+	box := rows.Host{Name: "box", EnvironmentID: "benv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	bv, bb, det := b, b, b
 	bv.ID, bv.EnvironmentID = "venv/worktree//w/b", "venv"
+	bb.ID, bb.EnvironmentID = "benv/worktree//w/b", "benv"
 	det.ID, det.Branch, det.Root = "menv/worktree//w/det", "", "/w/det"
 	agent := func(w protocol.Worktree, id, server, session string) protocol.Agent {
 		return protocol.Agent{ID: id, EnvironmentID: w.EnvironmentID, Server: server, Session: session, Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: server == "laatmux", Cwd: w.Root, WorktreeID: w.ID}
@@ -615,6 +619,7 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	}
 	inNotes := agent(b, "menv/default/%1", "default", "notes")
 	onVM := agent(bv, "venv/default/%5", "default", "notes")
+	onBox := agent(bb, "benv/default/%8", "default", "notes")
 	detNotes := agent(det, "menv/default/%6", "default", "notes")
 	// A task for B before the add has a session to report, and the same
 	// done, its session reported, standing for B while its prompt waits.
@@ -643,6 +648,8 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 			b.ID, "menv/laatmux/%3", "new-session -d -s mac/proj/b ", "ENTER creates one"},
 		{"agent on vm's default server", rows.Input{Hosts: []rows.Host{vm}, Worktrees: []protocol.Worktree{bv}, Agents: []protocol.Agent{onVM}},
 			bv.ID, onVM.ID, "", "REFUSED; laatmux add b --repo proj --host vm makes one"},
+		{"agent on box's default server", rows.Input{Hosts: []rows.Host{box}, Worktrees: []protocol.Worktree{bb}, Agents: []protocol.Agent{onBox}},
+			bb.ID, onBox.ID, "", "REFUSED; laatmux add makes one once host box has repos and worktrees directories in the config"},
 		{"detached, agent in notes", rows.Input{Hosts: []rows.Host{mac}, Worktrees: []protocol.Worktree{a, det}, Agents: []protocol.Agent{detNotes}, Locals: locals},
 			det.ID, detNotes.ID, "switch-client -t =notes:", "ENTER jumps to notes, its agent's session; laatmux add makes one once a branch is checked out in /w/det"},
 		{"done task", rows.Input{Hosts: []rows.Host{mac}, Worktrees: []protocol.Worktree{a, b}, Agents: []protocol.Agent{inNotes}, Pendings: []protocol.Pending{done}, Locals: locals},
@@ -678,11 +685,16 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 			}
 		}
 	}
-	// A line no configured host claims: enter's refusal, and no add line
-	// for a host the line is not on.
+	// A line no configured host claims, and one on a host this machine's
+	// config lacks: enter's refusal, and no add line for a host the line
+	// is not on or that add does not know.
 	unclaimed := rows.Row{Kind: rows.KindWorktree, Name: "proj/b", Worktree: &b, Agent: &inNotes}
 	if got := noWorkspaceHint(d.cfg, unclaimed, false); got != "proj/b: no configured host claims this record" {
 		t.Errorf("a line no host claims: %q", got)
+	}
+	unclaimed.Host = "ghost"
+	if got := noWorkspaceHint(d.cfg, unclaimed, false); got != `unknown host "ghost"` {
+		t.Errorf("a line on a host not configured: %q", got)
 	}
 	// An agent of no worktree, in notes, has no line to go by. What z
 	// says of it is not enter's (#192), but z runs nothing.
