@@ -364,10 +364,9 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		}
 	}
 	// new-session expands -c as a format, and a root has the branch in
-	// it: a # is written ##, which tmux expands back to #. A directory
-	// that is not there after expansion would start the pane in $HOME,
-	// with no error.
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", strings.ReplaceAll(o.Cwd, "#", "##"), "-P", "-F", "#{pane_id} #{pid}"}
+	// it. A directory that is not there after expansion would start the
+	// pane in $HOME, with no error.
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", formatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -569,6 +568,31 @@ func shellJoin(argv []string) string {
 // commands, the ssh commands and the daemon's new-session line are
 // built with it.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
+
+// formatLiteral is s as a tmux format that expands to s: a # is
+// written ##, which expands to #, but a run of #s before a [ is left as
+// it is, since tmux keeps such a run, as the start of a style, and
+// would keep ## there too.
+func formatLiteral(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '#' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] == '#' {
+			j++
+		}
+		b.WriteString(s[i:j])
+		if j == len(s) || s[j] != '[' {
+			b.WriteString(s[i:j])
+		}
+		i = j
+	}
+	return b.String()
+}
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
 // tmux does not keep "." or ":" in a session name, new-session expands

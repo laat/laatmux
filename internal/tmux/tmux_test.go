@@ -272,14 +272,16 @@ func TestNewSessionEncodedNames(t *testing.T) {
 }
 
 // A session starts in its root when the root has a # in it, as a
-// branch's root does in the default layout: new-session expands -c as a
-// format, and a directory that is not there starts the pane in $HOME
-// with no error.
+// branch's root does in the default layout, and its pane's tag is the
+// root as given: new-session expands -c as a format, and a directory
+// that is not there starts the pane in $HOME with no error. The
+// worktrees directory, which is the user's, has a #[ in it, which tmux
+// keeps as it is.
 func TestNewSessionRootWithHash(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
 	for _, branch := range []string{"fix#12", "x#{session_id}", "y##"} {
-		root := filepath.Join(t.TempDir(), "proj", branch)
+		root := filepath.Join(t.TempDir(), "#[scratch]", "proj", branch)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -301,6 +303,31 @@ func TestNewSessionRootWithHash(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s: the pane is in %q, want %q", branch, got, want)
+		}
+		if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", "@laatmux_cwd"); err != nil || strings.TrimSpace(string(out)) != root {
+			t.Errorf("%s: @laatmux_cwd %q %v, want %q", branch, out, err, root)
+		}
+	}
+}
+
+// formatLiteral doubles every # but a run of them before a [, which
+// tmux keeps as it is; the new-session test above checks with tmux.
+func TestFormatLiteral(t *testing.T) {
+	cases := map[string]string{
+		"":                 "",
+		"/w/proj/main":     "/w/proj/main",
+		"fix#12":           "fix##12",
+		"x#{session_id}":   "x##{session_id}",
+		"y##":              "y####",
+		"#":                "##",
+		"a#[b":             "a#[b",
+		"a##[b":            "a##[b",
+		"a#[b]#{c}":        "a#[b]##{c}",
+		"/w/#[s]/proj/x#H": "/w/#[s]/proj/x##H",
+	}
+	for in, want := range cases {
+		if got := formatLiteral(in); got != want {
+			t.Errorf("formatLiteral(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
