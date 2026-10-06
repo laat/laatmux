@@ -87,7 +87,7 @@ type branches struct {
 	errs      map[string]bool
 	roundErrs map[string]bool
 	pagedNone map[string]time.Time
-	// cfg is the daemon's: GitHub, Branches, GitHubHosts and Logger.
+	// cfg is the daemon's: GitHub, Branches and Logger.
 	cfg *Config
 	// publish puts a message on the merged stream; called with mu held.
 	publish func(protocol.Message)
