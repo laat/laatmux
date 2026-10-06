@@ -470,7 +470,7 @@ func TestShellGoesByLine(t *testing.T) {
 	// session has that session as its own; S on it does what S on the
 	// line does.
 	b.Session = ""
-	notes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/w/b", WorktreeID: b.ID}
+	notes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/w/b", WorktreeID: b.ID, Identity: &protocol.Identity{PID: 100, StartUnix: 1}}
 	inB := agent
 	inB.Session = "mac/proj/b"
 	in := rows.Input{
@@ -489,7 +489,7 @@ func TestShellGoesByLine(t *testing.T) {
 		if !m.Select(inB.ID) {
 			t.Fatalf("tree %v: no row %s", tree, inB.ID)
 		}
-		if r := m.Selection(); r.Local == nil || r.Local.Name != "mac/proj/b" {
+		if r := m.Selection(); r.Worktree == nil || r.Worktree.ID != b.ID || r.Local == nil || r.Local.Name != "mac/proj/b" {
 			t.Fatalf("tree %v: the agent's row is %+v", tree, r)
 		}
 		if msg, cmds := press(m, inB.ID, 'S'); msg != lineMsg || cmds != lineCmds {
