@@ -785,12 +785,14 @@ func (d *dash) shell(m *view.Model) bool {
 }
 
 // shellRow is the row whose workspace session the shell opens: a tile,
-// an agent, a pane or a run goes by the line holding it, as z does,
-// whatever local session it has of its own: an agent observed in a
-// window of another worktree's workspace session has that session as
-// its own, and the shell belongs to its worktree's. The line's jump
-// agent is what the lost-home case counts on. A task's row goes by the
-// task's own rules for its session.
+// an agent, a pane or a run goes by the line holding it, whatever local
+// session it has of its own, as z does: an agent observed in a window
+// of another worktree's workspace session has that session as its own,
+// and the shell belongs to its worktree's. The line's jump agent is
+// what the lost-home case counts on. The tile of a task standing for a
+// listed worktree goes by the task line holding the worktree, the
+// newest standing task's, which carries the same session; a task's row
+// by the task's own rules for its session.
 func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 	if l := ownerLine(m, row); l != nil {
 		row = *l
