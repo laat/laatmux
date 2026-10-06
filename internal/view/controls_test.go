@@ -827,8 +827,8 @@ func TestStripDimChipAsLine(t *testing.T) {
 	guessed := dark
 	guessed.Guessed = true
 	themes := map[string]palette.Theme{"dark": dark, "light": light, "guessed": guessed, "mono": mono}
-	// The dead agent's icon is blank; the down host's agent spins in a
-	// colour of its own.
+	// The dead agent's icon is blank; the down host's agent shows the
+	// spinner standing still, in the working colour.
 	for _, name := range []string{"dead", "down"} {
 		for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}"} {
 			for _, current := range []bool{false, true} {
