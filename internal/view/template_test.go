@@ -344,6 +344,102 @@ func TestTemplateStyles(t *testing.T) {
 	}
 }
 
+// Dim text with no colour of its own on a template's background is
+// drawn in the dimmed colour that reads on it, not faint in the
+// terminal's: on a light background the dark theme's, on a dark one the
+// light theme's, whatever the theme, for a remote host, a draft's
+// number, dim literal text and a stale token under a chip's colour
+// alike; a palette name through the theme, an indexed colour by
+// xterm's; faint on a colour 0 to 15. Where no template background is
+// drawn, under the selection's band, on a dim line, on a strip chip's
+// band and without colours, the line is drawn as it is without one.
+func TestDimOnBackground(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	m := &Model{Now: now, LocalHost: "mac"}
+	dark, _ := palette.New(true, nil)
+	light, _ := palette.New(false, nil)
+	guessed := dark
+	guessed.Guessed = true
+	darkDim, lightDim := dark.SGR("#565f89", false), dark.SGR("#8990b3", false)
+	yellow, black := dark.SGR("#ffff00", true), dark.SGR("#000000", false)
+	draw := func(r rows.Row, src string, l Line, th palette.Theme) string {
+		t.Helper()
+		l.Spans = m.line(mustParse(t, src), r, 40, 0)
+		return ANSI(l, th)
+	}
+	r := tokenRow(now)
+	r.Branch.PR.Draft = true
+	want := darkDim + yellow + "vm\x1b[0m" + yellow + " \x1b[0m" + darkDim + yellow + "#52\x1b[0m" + yellow + " \x1b[0m" + darkDim + yellow + "x\x1b[0m\x1b[0m"
+	for _, th := range []palette.Theme{dark, light, guessed} {
+		if got := draw(r, "#[bg=#ffff00]{host} {pr_number} #[dim]x", Line{}, th); got != want {
+			t.Errorf("a host, a draft and dim text on yellow:\n%q, want\n%q", got, want)
+		}
+	}
+	// Stale under a chip's colour: the background alone, and the dimmed
+	// colour on it, the mark too.
+	r = tokenRow(now)
+	r.Branch.Stale, r.Worktree.Git.Stale = true, true
+	want = darkDim + yellow + "#52\x1b[0m" + darkDim + yellow + "?\x1b[0m" + black + yellow + " \x1b[0m" + darkDim + yellow + "↑2\x1b[0m\x1b[0m"
+	if got := draw(r, "#[fg=#000000,bg=#ffff00]{pr_number} {git_ahead}", Line{}, dark); got != want {
+		t.Errorf("stale tokens on a chip:\n%q, want\n%q", got, want)
+	}
+	r = tokenRow(now)
+	for _, c := range []struct {
+		src  string
+		th   palette.Theme
+		want string
+	}{
+		{"#[bg=#112233]{host}", dark, lightDim + dark.SGR("#112233", true) + "vm\x1b[0m\x1b[0m"},
+		{"#[bg=#112233]{host}", light, lightDim + dark.SGR("#112233", true) + "vm\x1b[0m\x1b[0m"},
+		{"#[bg=highlight_row_bg]{host}", dark, lightDim + dark.SGR(palette.HighlightRowBg, true) + "vm\x1b[0m\x1b[0m"},
+		{"#[bg=highlight_row_bg]{host}", light, darkDim + light.SGR(palette.HighlightRowBg, true) + "vm\x1b[0m\x1b[0m"},
+		{"#[bg=colour235]{host}", dark, lightDim + "\x1b[48;5;235mvm\x1b[0m\x1b[0m"},
+		{"#[bg=230]{host}", dark, darkDim + "\x1b[48;5;230mvm\x1b[0m\x1b[0m"},
+		{"#[bg=colour3]{host}", dark, "\x1b[2m\x1b[48;5;3mvm\x1b[0m\x1b[0m"},
+		// Bold keeps its bold.
+		{"#[bold,bg=#ffff00]{host}", dark, "\x1b[1m" + darkDim + yellow + "vm\x1b[0m\x1b[0m"},
+		// A colour of the span's own is drawn as it is.
+		{"#[fg=accent,dim,bg=#ffff00]x", dark, dark.SGR(palette.Accent, false) + yellow + "x\x1b[0m\x1b[0m"},
+	} {
+		if got := draw(r, c.src, Line{}, c.th); got != c.want {
+			t.Errorf("%s: %q, want %q", c.src, got, c.want)
+		}
+	}
+	// Off where no template background is drawn: the line as it is
+	// without the background.
+	r.Branch.Stale = true
+	src := "#[bg=#ffff00]{host} {pr_number} #[dim]x"
+	chip := func(l Line) Line {
+		for i := range l.Spans {
+			l.Spans[i].band = true
+		}
+		return l
+	}
+	for _, c := range []struct {
+		name string
+		l    Line
+		band bool
+		th   palette.Theme
+	}{
+		{"under the band", Line{Reverse: true}, false, dark},
+		{"under reverse video", Line{Reverse: true}, false, guessed},
+		{"on a dim line", Line{Dim: true}, false, dark},
+		{"on a chip's band", Line{}, true, dark},
+		{"on a chip's reverse band", Line{}, true, guessed},
+		{"without colours", Line{}, false, palette.Mono()},
+	} {
+		with, without := c.l, c.l
+		with.Spans = m.line(mustParse(t, src), r, 40, 0)
+		without.Spans = m.line(mustParse(t, "{host} {pr_number} #[dim]x"), r, 40, 0)
+		if c.band {
+			with, without = chip(with), chip(without)
+		}
+		if got, want := ANSI(with, c.th), ANSI(without, c.th); got != want {
+			t.Errorf("%s: %q, want %q", c.name, got, want)
+		}
+	}
+}
+
 // Overflow: the stats shrink, then the labels are cut to the floor, the
 // rightmost first, then the fields on the right go, the widest first,
 // and a cut label grows back into the room that leaves; a label cut
@@ -531,7 +627,8 @@ func TestConfiguredTemplates(t *testing.T) {
 		t.Errorf("compiled from the config: %+v", ct)
 	}
 	// The painter draws a background, not under the selection's band,
-	// and dim with a background stays dim.
+	// and dim with a background stays dim, in the dimmed colour that
+	// reads on it (TestDimOnBackground).
 	th, _ := palette.New(true, nil)
 	l := Line{Spans: []Span{{Text: "x", Bg: palette.Accent}}}
 	if s := ANSI(l, th); !strings.Contains(s, th.SGR(palette.Accent, true)) {
@@ -542,7 +639,7 @@ func TestConfiguredTemplates(t *testing.T) {
 		t.Errorf("a background under the band in %q", s)
 	}
 	l = Line{Spans: []Span{{Text: "x", Bg: palette.Accent, Dim: true}}}
-	if s := ANSI(l, th); !strings.Contains(s, "\x1b[2m") || !strings.Contains(s, th.SGR(palette.Accent, true)) {
+	if s := ANSI(l, th); !strings.Contains(s, th.DimmedOn(palette.Accent)+th.SGR(palette.Accent, true)) || strings.Contains(s, "\x1b[2m") {
 		t.Errorf("dim with a background in %q", s)
 	}
 	// A dim line draws no background.

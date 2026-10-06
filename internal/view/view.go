@@ -940,9 +940,11 @@ func Text(lines []Line) string {
 // after it. In a theme with colours a span's colour is drawn, and a dim
 // line is drawn in the dimmed colour throughout, but for the viewer's
 // own row's label; plain text keeps the terminal's own foreground, which
-// is right whatever the background. The selection is the highlight
-// background with the theme's text on it when the theme knows the
-// terminal's background, and reverse video otherwise, as it is without
+// is right whatever the background, and dim text on a template's
+// background is drawn in the dimmed colour that reads on it, not faint
+// in the terminal's. The selection is the highlight background with
+// the theme's text on it when the theme knows the terminal's
+// background, and reverse video otherwise, as it is without
 // colours, where the attributes are all there is: under reverse video
 // a line has no colours and no dimming, which would land in the
 // background.
@@ -1004,6 +1006,15 @@ func ANSI(l Line, th palette.Theme) string {
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.
 		faint := s.Dim && !l.Dim && fg == "" && !(s.band && pre == "\x1b[7m")
+		if faint && bg != "" {
+			// Faint in the terminal's colour can all but vanish on a
+			// template's background, light grey on yellow: the dimmed
+			// colour that reads on it instead, but on a colour 0 to 15,
+			// which the terminal alone knows.
+			if c := th.DimmedOn(s.Bg); c != "" {
+				fg, faint = c, false
+			}
+		}
 		if faint || s.Bold || fg != "" || bg != "" || pre != "" {
 			if current && l.Dim && !band {
 				// The viewer's label is not faint on a dim line.
