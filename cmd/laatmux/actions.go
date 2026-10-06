@@ -741,7 +741,11 @@ func (d *dash) shell(m *view.Model) bool {
 	// environment when the tag named a renamed host; one it could not
 	// name is not the local host, as the CLI has it.
 	h, ok := d.cfg.Find(l.Host)
-	if l.Host == "" || !ok {
+	switch {
+	case l.Host == "":
+		m.Message = fmt.Sprintf("workspace session %s carries no host tag, and no connected host answers as its environment", l.Name)
+		return false
+	case !ok:
 		m.Message = fmt.Sprintf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
 		return false
 	}

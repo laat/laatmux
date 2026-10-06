@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -330,12 +331,71 @@ func TestWorkspaceHostRetags(t *testing.T) {
 	}
 }
 
+// The retag lands on the server TMUX names, by the session's exact
+// name: a session on another server than the default one, with a
+// sibling its name is a prefix of, and a session that is gone by then.
+func TestRetagServerAndExactName(t *testing.T) {
+	isolatedDefault(t)
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status"}},
+			}})
+		}
+		return true
+	})
+	ctx := context.Background()
+	other := tmux.Server{Name: "other"}
+	if out, err := exec.Command("tmux", "-L", "other", "-f", "/dev/null", "new-session", "-d", "-s", "old/proj/x", "sleep 1000").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	t.Cleanup(func() { other.Run(context.Background(), "kill-server") })
+	for _, args := range [][]string{
+		{"set-option", "-t", "=old/proj/x:", "@laatmux_host", "old"},
+		{"new-session", "-d", "-s", "old/proj/x-2", "sleep 1000"},
+		{"set-option", "-t", "=old/proj/x-2:", "@laatmux_host", "old"},
+	} {
+		if _, err := other.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := other.Run(ctx, "display", "-p", "-t", "=old/proj/x:", "#{socket_path},#{pid},#{session_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", strings.TrimSpace(string(out)))
+	tag := func(name string) string {
+		out, _ := other.Run(ctx, "display", "-p", "-t", "="+name+":", "#{@laatmux_host}")
+		return strings.TrimSpace(string(out))
+	}
+	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "box", SSH: "box"}}}}
+	// A session gone by the time of the retag: nothing else is tagged.
+	if _, err := workspaceHost(ctx, cfg, protocol.Session{Name: "old/proj/x-", Key: "benv//r/x", Host: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if tag("old/proj/x") != "old" || tag("old/proj/x-2") != "old" {
+		t.Fatalf("a missing session's retag landed elsewhere: %q %q", tag("old/proj/x"), tag("old/proj/x-2"))
+	}
+	if _, err := workspaceHost(ctx, cfg, protocol.Session{Name: "old/proj/x", Key: "benv//r/x", Host: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if tag("old/proj/x") != "box" || tag("old/proj/x-2") != "old" {
+		t.Fatalf("retag on the TMUX server: %q %q", tag("old/proj/x"), tag("old/proj/x-2"))
+	}
+}
+
 // shell and split run inside a session tagged with a renamed host find
 // the host by the environment and work: the split's new pane and the
 // shell window open at the root, and the session is retagged. The host
-// is this machine in the config, so both open local windows.
+// is this machine in the config, so both open local windows. The
+// pane_start_path format needs tmux 3.3.
 func TestRenamedHostCommands(t *testing.T) {
 	isolatedDefault(t)
+	if out, err := exec.Command("tmux", "-V").Output(); err == nil {
+		if v := strings.TrimPrefix(strings.TrimSpace(string(out)), "tmux "); v < "3.3" {
+			t.Skipf("tmux %s has no pane_start_path", v)
+		}
+	}
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
 		if m.Type == protocol.TypeSubscribe {
 			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
