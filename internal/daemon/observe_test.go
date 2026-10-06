@@ -83,7 +83,7 @@ func run(t *testing.T, fp *fakeProcs, ft *fakeServer, polls int) []protocol.Agen
 	return agents
 }
 
-// Review 2 finding 1: a shell -c wrapper observed before its child must not
+// A shell -c wrapper observed before its child must not
 // be identified; the child is picked up when it appears. A pane with no
 // identified agent is not published at all.
 func TestObserveWrapperBeforeChild(t *testing.T) {
@@ -221,7 +221,7 @@ func TestObserveTentativeReplacedByVerified(t *testing.T) {
 	}
 }
 
-// Review 2 finding 1 (second reproduction): when Claude exits under a
+// When Claude exits under a
 // surviving wrapper the record keeps Claude's pid as gone, and does not
 // become an alive agent at the wrapper's pid.
 func TestObserveExitUnderSurvivingWrapper(t *testing.T) {
@@ -246,7 +246,7 @@ func TestObserveExitUnderSurvivingWrapper(t *testing.T) {
 	}
 }
 
-// Review 2 finding 3: a process-read error is not absence, and the same
+// A process-read error is not absence, and the same
 // instance found again is alive without a reset.
 func TestObserveTransientReadError(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{
@@ -285,7 +285,7 @@ func TestObserveTransientReadError(t *testing.T) {
 	}
 }
 
-// Review 2 finding 5: a failed capture keeps the last activity.
+// A failed capture keeps the last activity.
 func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
 	ft := onePane(pane, blkScr)
@@ -312,7 +312,7 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	}
 }
 
-// Review 2 finding 2: discovery of a managed server reconciles it, once per
+// Discovery of a managed server reconciles it, once per
 // server instance, including a server that appears after startup.
 func TestDiscoveryConfiguresManagedServer(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}

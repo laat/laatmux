@@ -554,7 +554,8 @@ func shellJoin(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-// ShellJoin is exported for the client, which builds ssh commands.
+// ShellJoin is the words as one shell line, each quoted when it needs
+// to be; the sidebar's hooks and the ssh commands are built with it.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:

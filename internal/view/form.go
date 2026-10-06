@@ -7,7 +7,7 @@ import (
 	"github.com/laat/laatmux/internal/term"
 )
 
-// Form is the task form of milestone four: three chips for the
+// Form is the task form: three chips for the
 // repository, the host and the agent, a prompt box, and a branch line
 // after it, filled from the prompt as it is typed until the user edits
 // it. Tab and Shift-Tab move between the fields; on a chip Left and

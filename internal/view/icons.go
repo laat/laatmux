@@ -138,7 +138,7 @@ func (m *Model) stripe(r rows.Row) Span {
 }
 
 // AgentIcon is an agent's icon and its colour, `#rrggbb` or 0 to 255,
-// for the `{agent_icon}` token of step 7's templates.
+// for the `{agent_icon}` template token.
 type AgentIcon struct {
 	Icon, Color string
 }

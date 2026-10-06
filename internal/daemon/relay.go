@@ -67,8 +67,9 @@ type pendingFile struct {
 	// it; a file from before entries has none, and the host resolves
 	// the source against its own config.
 	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
-	// Sent, that the add may have reached the host, is the record's own
-	// field, so the views see it: same key in the file as before.
+	// ReplacedBy is the worktree id the record retired into, and
+	// RetiredAt when. (Sent, that the add may have reached the host, is
+	// the record's own field, so the views see it.)
 	ReplacedBy string    `json:"replaced_by,omitempty"`
 	RetiredAt  time.Time `json:"retired_at,omitzero"`
 }

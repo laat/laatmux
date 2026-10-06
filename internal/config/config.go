@@ -20,6 +20,10 @@
 //	sidebar:
 //	  width: 40               # columns or N%; unset: 10%, clamped to 25..50
 //	  layout: tiles           # tiles or compact; default tiles
+//	  view: agents            # agents or tree, what a pane starts in
+//	  sort: priority          # priority, recency or window
+//	  templates:              # the views' lines, see the README
+//	    compact: "{status_icon} {primary} {pane_suffix}"
 //	icons: emoji              # emoji, nerdfont or ascii; default emoji
 //	status_icons: {waiting: "?"}  # per status: working, waiting, done, stale
 //	agent_icons: {claude: {icon: CC, color: "#d97757"}}
@@ -215,7 +219,7 @@ type Templates struct {
 }
 
 // Lines is a list of template lines that a config may write as one
-// string, as `top` was before it took several.
+// string, which is one line.
 type Lines []string
 
 // UnmarshalYAML reads a list, or a scalar as a list of one.

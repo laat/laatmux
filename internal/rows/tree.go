@@ -9,11 +9,11 @@ import (
 	"github.com/laat/laatmux/internal/source"
 )
 
-// The two views, as milestone five's note settles them: the tree, the
-// repositories with their worktrees and what runs in each, and the agent
-// view, one tile per agent in sort order. Both are built from one join
-// of the same input; a node is a Row with a kind, a depth and an id, so
-// the view's selection, anchors and rendering treat it as one.
+// The two views: the tree, the repositories with their worktrees and
+// what runs in each, and the agent view, one tile per agent in sort
+// order. Both are built from one join of the same input; a node is a
+// Row with a kind, a depth and an id, so the view's selection, anchors
+// and rendering treat it as one.
 
 // Kind is what a row or node is.
 type Kind int

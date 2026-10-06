@@ -97,8 +97,8 @@ const (
 	// config does not list is resolved against that entry, and the
 	// worktree listing covers every checkout under the repos directory.
 	// A repository the config lists is resolved against the config's
-	// entry, as before. A daemon without it ignores the entry and
-	// resolves against its own config.
+	// entry, whatever the add sent. A daemon without it ignores the
+	// entry and resolves against its own config.
 	CapRepoEntry = "repo-entry"
 	// CapAttribution is the host attributing what runs to its worktrees:
 	// every agent record carries the worktree_id of the worktree whose

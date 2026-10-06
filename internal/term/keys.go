@@ -854,7 +854,7 @@ func csi(b []byte) (Key, int, bool) {
 	params := string(b[2:i])
 	n := i + 1
 	// A modified arrow, Ctrl-Right say, is not the plain key and is
-	// dropped as before.
+	// dropped, as every unknown sequence is.
 	plain := params == "" || params == "1"
 	switch final {
 	case 'A', 'B', 'C', 'D', 'H', 'F':
