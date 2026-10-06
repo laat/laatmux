@@ -314,14 +314,19 @@ func (b *builder) worktrees() {
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
 		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
+		// The line's agent is the one its jump goes through: in the home
+		// session, or with the home lost, the one laatmux made at the
+		// root, whose session the workspace session attaches to (Home).
+		line.Agent = rowAgent(agents, w)
 		var children []Row
 		for _, a := range agents {
 			b.used[a] = true
 			// The agent's own local session: the workspace session for
-			// one in the home session, else the attachment to its
-			// session, or its session on this machine's default server.
+			// one in the home session, or for the line's agent when the
+			// home is lost, else the attachment to its session, or its
+			// session on this machine's default server.
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
-			if a.Server == protocol.ServerLaatmux && a.Session == w.Session {
+			if a.Server == protocol.ServerLaatmux && (a.Session == w.Session || w.Session == "" && a == line.Agent) {
 				c.Local = j.byKey[key]
 			}
 			if c.Local == nil {
@@ -336,9 +341,8 @@ func (b *builder) worktrees() {
 		children = append(children, b.runs(w, host)...)
 		// The worktree's own session: the home session's workspace
 		// session, or the one its agent on this machine's default server
-		// stands for. The line's agent is the one its jump goes through;
-		// the most pressing is kept apart, for the folded line's icon.
-		line.Agent = rowAgent(agents, w)
+		// stands for. The most pressing agent is kept apart, for the
+		// folded line's icon.
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
 			line.Local = j.agentLocal(host, line.Agent)
 		}

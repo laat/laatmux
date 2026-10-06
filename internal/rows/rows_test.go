@@ -799,20 +799,36 @@ func TestHomelessLineLocal(t *testing.T) {
 	if len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current {
 		t.Fatalf("managed agent: %+v", got)
 	}
-	// The agent's tile stands for the plain attachment to its session,
-	// not the workspace session the line has: only an agent in the home
-	// session takes that. Build's row, in the dashboard's one list before
-	// the two views, had the workspace session; whether the tile should
-	// is #85.
-	if rs := Agents(first, Tree(first)); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a-old" {
+	// The agent's tile stands for the workspace session the line has,
+	// as the line does: with the home lost, the agent laatmux made at
+	// the root is the one the workspace session attaches to (Home), so
+	// a z on the tile settles that session rather than offering to
+	// create one (#85). The plain attachment to the same managed
+	// session is not preferred over it.
+	if rs := Agents(first, Tree(first)); len(rs.Main) != 1 || !rs.Main[0].Current || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "mac/proj/a" {
 		t.Fatalf("managed agent's tile: %+v", rs)
+	}
+	// Another managed agent at the root, not the line's: it keeps the
+	// attachment to its own session.
+	other := protocol.Agent{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/b", Managed: true, Cwd: "/w/a", Liveness: protocol.Alive, WorktreeID: w.ID, ActivityAt: managed.ActivityAt.Add(time.Second)}
+	withB := append(append([]protocol.Session(nil), locals...), protocol.Session{Name: "mac/proj/b-att", Attach: "mac/proj/b", Host: "mac"})
+	two := Input{Hosts: hosts, Agents: []protocol.Agent{managed, other}, Worktrees: []protocol.Worktree{w}, Locals: withB, Current: "mac/proj/a"}
+	nodes := Tree(two)
+	var byID = map[string]string{}
+	for _, n := range nodes {
+		if n.Kind == KindAgent && n.Local != nil {
+			byID[n.Agent.ID] = n.Local.Name
+		}
+	}
+	if byID[managed.ID] != "mac/proj/a" || byID[other.ID] != "mac/proj/b-att" {
+		t.Fatalf("two managed agents at a lost home: %v", byID)
 	}
 	// With no workspace session yet, the plain attachment to the same
 	// managed session is not the line's either. Build left the viewer in
 	// the attachment off the row; the tree has the line the viewer's
 	// through its agent, whose own session the attachment is, as
 	// following wants it.
-	nodes := Tree(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals[1:], Current: "mac/proj/a-old"})
+	nodes = Tree(Input{Hosts: hosts, Agents: []protocol.Agent{managed}, Worktrees: []protocol.Worktree{w}, Locals: locals[1:], Current: "mac/proj/a-old"})
 	if got = treeLines(nodes); len(got) != 1 || got[0].Local != nil || !got[0].Current {
 		t.Fatalf("managed agent without a workspace session: %+v", got)
 	}
