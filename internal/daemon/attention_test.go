@@ -396,7 +396,13 @@ func TestAttentionSeenLoop(t *testing.T) {
 	var listings atomic.Int32
 	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
 	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"), MergedIdle: time.Hour,
-		Clients: func(context.Context) ([]ClientView, error) { listings.Add(1); return views.Load().([]ClientView), nil }})
+		Clients: func(context.Context) ([]ClientView, error) {
+			// Read, then counted: a listing counted has taken its
+			// views, and a store after that is the next one's.
+			v := views.Load().([]ClientView)
+			listings.Add(1)
+			return v, nil
+		}})
 	go d.runSeen(ctx)
 	wait := func(cond func() bool, what string) {
 		t.Helper()
@@ -445,9 +451,13 @@ func TestAttentionSeenLoop(t *testing.T) {
 	}
 	quiet("with no view open")
 
-	// A view opens: the loop lists, and it sees the user come back.
+	// A view opens: the loop lists, and it sees the user come back. The
+	// poke's listing comes after the tick's has moved what it moves.
 	s, _ := d.mergedSubscribe(ctx, nil)
 	listed("no listing with a view open")
+	n := listings.Load()
+	d.Poke()
+	wait(func() bool { return listings.Load() > n }, "a poke did not list")
 	if !done(d, a.ID) {
 		t.Error("a view opened after the user left saw the finish")
 	}

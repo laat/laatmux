@@ -53,7 +53,8 @@ type ClientView struct {
 }
 
 // seenInterval is how often the clients are listed while an agent is
-// done and not yet seen and a view is open. See seenWanted.
+// done and not yet seen and a view is open or closed within the idle
+// time. See seenWanted.
 const seenInterval = time.Second
 
 // attnEntry is one agent's attention state, as kept on disk. The agent
@@ -426,14 +427,15 @@ func (d *Daemon) runSeen(ctx context.Context) {
 }
 
 // seenWanted is whether the clients are listed on this tick: an agent is
-// done and not yet seen, and a view is open, a merged subscriber, or left
-// less than the idle time ago, which is how long d.mctx outlives the last
-// one. A listing with nothing unseen moves nothing, and one with no view
-// moves a visit no one is shown: a host's daemon, whose agents the
-// laptop's daemon tracks for its own views, would list once a second for
-// as long as one of them stayed done. The idle time covers a dashboard's
-// jump, whose subscriber leaves as the jump lands. A finish lists at
-// once, view or not, through its poke.
+// done and not yet seen, and a view, a merged subscriber, is open or the
+// last one left less than the idle time ago, which is how long d.mctx
+// outlives it. A listing with nothing unseen moves nothing. One with no
+// view open only records a visit for a later view, and on a host's
+// daemon, whose agents the laptop's daemon tracks for its own views, no
+// later view comes: it listed once a second for as long as one of them
+// stayed done. The idle time covers a dashboard's jump, whose subscriber
+// leaves as the jump lands. A finish lists at once, view or not, through
+// its poke.
 func (d *Daemon) seenWanted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()

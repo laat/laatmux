@@ -326,12 +326,20 @@ it.
   #{@laatmux_host} #{@laatmux_attach} #{@laatmux_workspace}`, options
   resolving through the client's current pane and session,
   every second while an entry is unseen and a merged subscriber is
-  there or left less than the idle minute ago, and at once when it
-  records a finish. The idle minute covers a jump from the dashboard,
-  whose subscriber leaves as the jump lands. A host's daemon has no
-  merged subscriber, the laptop following it through a plain
+  there or left less than the idle minute ago, and once, right away,
+  when it records a finish, view or not. The idle minute covers a jump
+  from the dashboard, whose subscriber leaves as the jump lands, so a
+  dashboard-only user's jump is seen. A host's daemon has no merged
+  subscriber, the laptop following it through a plain
   subscription, so it lists only when one of its own agents finishes,
-  not once a second for as long as one stays done. A client *sees* an
+  not once a second for as long as one stays done. The laptop follows
+  the same rule: a visit made while no sidebar or dashboard is open,
+  and none closed in the last minute, is not recorded, and a view
+  opened later records it only if a client still shows the agent then.
+  This reverses the first version of this note, which listed every
+  second while any entry was unseen, subscriber or not, to record such
+  visits, and accepted that cost; #124 found it paid on every host's
+  daemon, for agents only the laptop's views show. A client *sees* an
   agent by the pane it shows:
   - a live attach pane, tagged `@laatmux_attach_pane` and not dead,
     whose target is the agent's managed session and whose session's
@@ -382,12 +390,15 @@ it.
 - **Limits.** A visit made while the laptop was not following the
   agent's host, or before the snapshot that shows the finish arrived,
   is not recorded, since the finish is dated when it is seen: the agent
-  shows ✅ though the user was there. So is a visit made when no view
-  has been open for the idle minute, since no listing runs then. Only this machine's clients count: a session attached
-  directly on a host, not through laatmux, is never seen, so an agent
-  the user works with that way shows ✅ until they visit it through
-  laatmux or it starts working again. An agent the laptop has never
-  seen working shows no ✅.
+  shows ✅ though the user was there. Nor is a visit made while no view
+  is open and none closed in the last minute, a move by tmux's own keys
+  after the dashboard closed or before the first view after a daemon
+  restart say: only a finish or a poke lists the clients then. Only
+  this machine's clients count: a session attached directly on a host,
+  not through laatmux, is never seen, so an agent the user works with
+  that way shows ✅ until they visit it through laatmux or it starts
+  working again. An agent the laptop has never seen working shows no
+  ✅.
 
 This is the laptop's knowledge, not a host's, so no host daemon changes.
 
@@ -1216,8 +1227,10 @@ view and folds step 6 keeps in memory.
   session, one with the user elsewhere, an interrupt followed at once by
   a switch away, a finish across a daemon restart seen in the next
   snapshot, a finish watched with no view open and a view opened after
-  the user left, a cached record replayed on reconnect not counted, a local
-  agent's finish with no subscriber, a new identity in the same pane, a
+  the user left, the listing each second only with an agent done and a
+  view open or closed within the idle minute, a cached record replayed
+  on reconnect not counted, a local agent's finish with no subscriber,
+  a new identity in the same pane, a
   reused pane id after a server restart, an agent on a remote default
   server never done, a client on a workspace session's shell window
   seeing nothing, a dead attach pane seeing nothing after its host
