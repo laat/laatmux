@@ -678,10 +678,7 @@ func (m *Model) treeLine(r rows.Row, idx int) []Line {
 		spans = m.line(t.Worktree, r, w, idx)
 	case rows.KindAgent:
 		if r.Depth == 1 {
-			// A session in other sessions: its name, host, then the
-			// agent; a line of its own, not the agent template's.
-			indent := strings.Repeat("  ", r.Depth)
-			spans = []Span{{Text: indent + "  " + r.Name}, {Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost}, {Text: "  "}, m.iconSpan(r), {Text: " " + r.AgentName()}}
+			spans = m.otherSession(r, w)
 			break
 		}
 		spans = m.line(t.Agent, r, w, idx)
@@ -691,6 +688,28 @@ func (m *Model) treeLine(r rows.Row, idx int) []Line {
 		spans = m.line(t.Run, r, w, idx)
 	}
 	return []Line{{Dim: r.Dim, Spans: clip(spans, w)}}
+}
+
+// otherSession is a session's line in other sessions: its name, the
+// host as the {host} token draws it, then the agent's icon and name; a
+// line of its own, not the agent template's. On a line too narrow the
+// server after the host gives way to the icon, cut with …, down to the
+// host alone; then the line is clipped.
+func (m *Model) otherSession(r rows.Row, w int) []Span {
+	name := Span{Text: strings.Repeat("  ", r.Depth) + "  " + r.Name}
+	icon := m.iconSpan(r)
+	host := m.where(r)
+	// What the name, the brackets, the gap and the icon leave the host.
+	room := w - spansWidth([]Span{name, {Text: " ()  "}, icon})
+	if bare := hostName(r); width(host.Text) > room {
+		if room > width(bare) {
+			host.Text = cutSpans([]Span{{Text: host.Text}}, room)[0].Text
+		} else {
+			host.Text = bare
+		}
+	}
+	host.Text = " (" + host.Text + ")"
+	return []Span{name, host, {Text: "  "}, icon, {Text: " " + r.AgentName()}}
 }
 
 // pinned is the repository line to draw at the top of the body when the

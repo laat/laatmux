@@ -815,15 +815,10 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 		case rows.KindTile, rows.KindAgent:
 			// The agent's server after the host when observed off the
 			// managed server; ? for a host unknown.
-			where := m.where(r)
-			where.Text = strings.TrimPrefix(where.Text, "@")
-			it.spans = []Span{where}
+			it.spans = []Span{m.where(r)}
 			return it
 		}
-		host := r.Host
-		if host == "" {
-			host = "?" // no host record claims the record
-		}
+		host := hostName(r)
 		it.spans = []Span{{Text: host, Dim: host != m.LocalHost}}
 		return it
 	case "session":
