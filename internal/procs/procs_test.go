@@ -1,6 +1,9 @@
 package procs
 
 import (
+	"os"
+	"regexp"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -170,5 +173,22 @@ func TestSameIdentity(t *testing.T) {
 	b := Identity{PID: 1, Start: at(11)}
 	if a.Same(b) {
 		t.Fatal("same pid, different start must differ")
+	}
+}
+
+// StartID's form is persisted by a daemon and compared by the next
+// build's stop, so it is pinned: darwin's microseconds, Linux's boot
+// id and ticks.
+func TestStartIDForm(t *testing.T) {
+	p, ok := Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("no lookup of this process")
+	}
+	form := `^\d+$`
+	if runtime.GOOS == "linux" {
+		form = `^[0-9a-f-]{36}/\d+$`
+	}
+	if !regexp.MustCompile(form).MatchString(p.StartID) {
+		t.Fatalf("StartID %q is not of the form %s", p.StartID, form)
 	}
 }

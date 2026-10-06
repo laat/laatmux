@@ -64,10 +64,9 @@ func cmdStop(ctx context.Context, args []string) error {
 	deadline := start.Add(stopWait)
 	// What the last round found, for the report when the deadline
 	// passes: whether the record stands and names the daemon the loop
-	// is after, why it could not be stopped, and whether what answers
-	// at its address is that daemon, the one the signal may go to.
-	named, why, own := false, "answers on no socket", true
-	asked := false // a dial reached a daemon and had its answer, or none
+	// is after, and why it could not be stopped.
+	named, why := false, ""
+	answered := false // the round's dial reached a daemon and had its answer
 	var rt home.Runtime
 	for {
 		if time.Now().After(deadline) {
@@ -79,10 +78,14 @@ func cmdStop(ctx context.Context, args []string) error {
 				fmt.Println("no daemon running")
 				return nil
 			}
+			took := time.Since(start).Round(time.Second)
 			if named && holder != rt.PID {
-				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, time.Since(start).Round(time.Second))
+				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, took)
 			}
-			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, time.Since(start).Round(time.Second))
+			if named && rt.ProcessStart == "" {
+				return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s; its runtime record is from a build before process_start, so stop does not signal it: if ps shows pid %d as laatmux serve, kill %d ends it", holder, why, took, holder, holder)
+			}
+			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, took)
 		}
 		var err error
 		rt, err = home.ReadRuntime()
@@ -92,26 +95,27 @@ func cmdStop(ctx context.Context, args []string) error {
 		// Every way round the loop is bounded and paced the same: a
 		// record whose daemon is not the one that answers, and a
 		// holder that answers on no socket.
-		wasNamed := named
-		named, own = err == nil, true // the record stands and names rt.PID
+		named = err == nil // the record stands and names rt.PID
+		last, lastAnswered := why, answered
+		why, answered = "answers on no socket", false
 		if named {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
 				err := stopDaemon(ctx, nc, rt, deadline)
 				switch {
 				case errors.Is(err, errMoved):
-					why, asked = "is answered by another daemon", true
-					own = false
+					why, answered = "is answered by another daemon", true
 				case errors.Is(err, errNoHello) && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
 					// The loop's deadline passed during the hello wait:
-					// reported on the next round for what was known, or
-					// for the hello that never came.
-					if !asked {
-						why = "gives no hello before the wait ran out"
+					// reported on the next round for what the round
+					// before found, when it had an answer, or for the
+					// hello that never came.
+					why = "gives no hello before the wait ran out"
+					if lastAnswered {
+						why = last
 					}
-					named = wasNamed || !asked
 					continue
 				case errors.Is(err, errNoHello):
-					why, asked = "gives no hello stop can take ("+strings.TrimPrefix(err.Error(), errNoHello.Error()+": ")+")", true
+					why, answered = "gives no hello stop can take ("+strings.TrimPrefix(err.Error(), errNoHello.Error()+": ")+")", true
 				default:
 					return err
 				}
@@ -124,34 +128,22 @@ func cmdStop(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if named && own && holder == rt.PID && isDaemon(rt) {
+		if named && holder == rt.PID && isDaemon(rt) {
 			// The record's daemon holds the lock and cannot be asked:
 			// read the lock again a moment later, then end it as a
-			// daemon before the shutdown message is. The signal goes
-			// through a handle to the process taken before the identity
-			// is checked the last time: on Linux a pidfd, which a reuse
-			// of the pid after the check does not reach; on macOS the
-			// pid, with nothing narrower on offer.
+			// daemon before the shutdown message is. Another daemon
+			// answering at the record's address changes nothing: the
+			// identified holder of this state directory's lock is the
+			// daemon to end.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(100 * time.Millisecond):
 			}
-			proc, err := os.FindProcess(rt.PID)
-			if err != nil {
+			if sent, err := signalDaemon(ctx, rt, why); err != nil {
 				return err
-			}
-			if again, err := home.Holder(); err != nil {
-				return err
-			} else if again == rt.PID && isDaemon(rt) {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				what := fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID)
-				if err := proc.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-					return fmt.Errorf("stop daemon %s, which %s: %w", what, why, err)
-				}
-				return waitGone(ctx, rt.PID, what)
+			} else if sent {
+				return waitGone(ctx, rt.PID, fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID))
 			}
 		}
 		if holder == 0 {
@@ -164,6 +156,35 @@ func cmdStop(ctx context.Context, args []string) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// signalDaemon sends SIGTERM to the record's daemon when, on this
+// reading, it holds the lock and the process is identified as it. The
+// signal goes through a handle to the process taken before the identity
+// is checked the last time: on Linux a pidfd, which a reuse of the pid
+// after the check does not reach; on macOS the pid, with nothing
+// narrower on offer. A process gone by the signal is sent, as waitGone
+// finds the lock free.
+func signalDaemon(ctx context.Context, rt home.Runtime, why string) (bool, error) {
+	proc, err := os.FindProcess(rt.PID)
+	if err != nil {
+		return false, err
+	}
+	defer proc.Release()
+	again, err := home.Holder()
+	if err != nil {
+		return false, err
+	}
+	if again != rt.PID || !isDaemon(rt) {
+		return false, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return false, fmt.Errorf("stop daemon %s (pid %d), which %s: %w", rt.Version, rt.PID, why, err)
+	}
+	return true, nil
 }
 
 // lockHolder is the pid the startup lock's holder wrote into the lock

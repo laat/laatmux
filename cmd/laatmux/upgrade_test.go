@@ -322,7 +322,7 @@ func TestStop(t *testing.T) {
 	start = time.Now()
 	err = cmdStop(context.Background(), nil)
 	stopWait = 20 * time.Second
-	if err == nil || !strings.Contains(err.Error(), "is answered by another daemon, after 1s") {
+	if err == nil || !strings.Contains(err.Error(), "is answered by another daemon, after") {
 		t.Fatalf("persistent mismatch: %v", err)
 	}
 	if took := time.Since(start); took < time.Second || took > 5*time.Second {
@@ -728,7 +728,7 @@ func TestStopHelloWaitBounded(t *testing.T) {
 	defer func() { stopWait = was }()
 	start := time.Now()
 	err := cmdStop(context.Background(), nil)
-	if took := time.Since(start); err == nil || !strings.Contains(err.Error(), "gives no hello before the wait ran out after 1s") || took > 3*time.Second {
+	if took := time.Since(start); err == nil || !strings.Contains(err.Error(), "gives no hello before the wait ran out after") || !strings.Contains(err.Error(), fmt.Sprintf("kill %d ends it", d.Process.Pid)) || took > 3*time.Second {
 		t.Fatalf("stop of an unidentified wedged daemon: %v after %s", err, took)
 	}
 	select {

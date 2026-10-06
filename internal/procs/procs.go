@@ -28,7 +28,9 @@ type Proc struct {
 	// derived through a clock (Linux's boot time). Darwin's microseconds
 	// since the epoch at the start; Linux's boot id and clock ticks
 	// since the boot, as the ticks alone start over at every boot; ""
-	// when the kernel gives none.
+	// when the kernel gives none. The form is a persisted contract: a
+	// daemon writes it into its runtime record and the next build's
+	// stop compares it, so a change to it needs the old form read too.
 	StartID string
 	Argv    []string // best effort; empty when unreadable
 	Env     []string // best effort; empty when unreadable
