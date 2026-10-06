@@ -325,11 +325,14 @@ it.
   #{@laatmux_sidebar} #{@laatmux_attach_pane} #{@laatmux_attach_target}
   #{@laatmux_host} #{@laatmux_attach} #{@laatmux_workspace}`, options
   resolving through the client's current pane and session,
-  every second while a merged subscriber is there or any
-  entry is unseen, subscriber or not, and at once when it records a
-  finish. With no subscriber that is one `list-clients` a second, which
-  is the cost this rule accepts. A client *sees* an agent by the pane
-  it shows:
+  every second while an entry is unseen and a merged subscriber is
+  there or left less than the idle minute ago, and at once when it
+  records a finish. The idle minute covers a jump from the dashboard,
+  whose subscriber leaves as the jump lands. A host's daemon has no
+  merged subscriber, the laptop following it through a plain
+  subscription, so it lists only when one of its own agents finishes,
+  not once a second for as long as one stays done. A client *sees* an
+  agent by the pane it shows:
   - a live attach pane, tagged `@laatmux_attach_pane` and not dead,
     whose target is the agent's managed session and whose session's
     `@laatmux_host` is the agent's host, in a workspace session or a
@@ -379,7 +382,8 @@ it.
 - **Limits.** A visit made while the laptop was not following the
   agent's host, or before the snapshot that shows the finish arrived,
   is not recorded, since the finish is dated when it is seen: the agent
-  shows ✅ though the user was there. Only this machine's clients count: a session attached
+  shows ✅ though the user was there. So is a visit made when no view
+  has been open for the idle minute, since no listing runs then. Only this machine's clients count: a session attached
   directly on a host, not through laatmux, is never seen, so an agent
   the user works with that way shows ✅ until they visit it through
   laatmux or it starts working again. An agent the laptop has never
