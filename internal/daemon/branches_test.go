@@ -207,25 +207,25 @@ func TestBranchesAgeAndKeep(t *testing.T) {
 	d2, s2 := branchDaemon(t, dir, gh)
 	d2.mu.Lock()
 	snap := d2.mergedSnapshotLocked()
-	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute), d2.hostsListedLocked())
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute))
 	e := d2.branches.entries[branchKeyString(bkey("a"))]
 	stale := e != nil && e.Status.Stale
 	// Before the hosts have listed, an empty set is no proof of
 	// absence: kept however old.
-	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
 	_, kept := d2.branches.entries[branchKeyString(bkey("a"))]
 	// A snapshot from a host whose git listing failed is no listing.
 	d2.mu.Unlock()
 	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, ListingError: "git failed"})
 	d2.mu.Lock()
-	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
 	if _, ok := d2.branches.entries[branchKeyString(bkey("a"))]; !ok {
 		t.Error("dropped after a failed listing")
 	}
 	d2.mu.Unlock()
 	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1}})
 	d2.mu.Lock()
-	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
 	_, still := d2.branches.entries[branchKeyString(bkey("a"))]
 	d2.mu.Unlock()
 	if len(snap.BranchStatuses) != 1 || !stale || !kept || still {

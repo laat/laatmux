@@ -73,14 +73,14 @@ type branches struct {
 	mu      *sync.Mutex             // the daemon's
 	entries map[string]*branchEntry // by key
 	// githubErr is why GitHub cannot be read, joined from hostErrs,
-	// gh's failure by host; lastErr is the file's last write error,
+	// gh's failure by host; saveErr is the file's last write error,
 	// logged once.
 	githubErr string
 	hostErrs  map[string]string
-	lastErr   string
-	// listed is that every host has listed once since the daemon
+	saveErr   string
+	// listedOnce is that every host has listed once since the daemon
 	// started, from when a branch missing from the set is known gone.
-	listed bool
+	listedOnce bool
 	// errs are the per-branch errors of the last round, logged, and
 	// roundErrs those of the round under way; pagedNone is when a
 	// branch's forks' pages held none of its own.
@@ -142,9 +142,9 @@ func (b *branches) saveLocked() {
 		}
 	}
 	if err != nil {
-		logOnce(b.cfg.Logger, &b.lastErr, "branches: %v", err)
+		logOnce(b.cfg.Logger, &b.saveErr, "branches: %v", err)
 	} else {
-		b.lastErr = ""
+		b.saveErr = ""
 	}
 }
 
@@ -157,7 +157,7 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 			return
 		}
 		host, path, ok := source.Forge(w.Source)
-		if !ok || !d.branches.githubHost(host) {
+		if !ok || !githubHost(d.cfg.GitHubHosts, host) {
 			return
 		}
 		owner, repo, ok := strings.Cut(path, "/")
@@ -182,12 +182,12 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 }
 
 // githubHost reports whether a source's host is one gh is asked about:
-// github.com, or a GitHub Enterprise host the config names.
-func (b *branches) githubHost(host string) bool {
+// github.com, or one of the GitHub Enterprise hosts the config names.
+func githubHost(hosts []string, host string) bool {
 	if strings.EqualFold(host, "github.com") {
 		return true
 	}
-	return slices.ContainsFunc(b.cfg.GitHubHosts, func(h string) bool { return strings.EqualFold(h, host) })
+	return slices.ContainsFunc(hosts, func(h string) bool { return strings.EqualFold(h, host) })
 }
 
 // hostsListedLocked reports whether every configured host has a listing
@@ -256,7 +256,7 @@ func (d *Daemon) runBranches(ctx context.Context) {
 		now := time.Now().Round(0) // the wall clock, sleep included
 		d.mu.Lock()
 		set := d.branchSetLocked()
-		d.branches.ageLocked(set, now, d.hostsListedLocked())
+		d.ageBranchesLocked(set, now)
 		due := !running && len(d.msubs) > 0 && (!sameKeys(set, asked) || now.Sub(last) >= branchEvery)
 		d.mu.Unlock()
 		if !due {
@@ -276,6 +276,12 @@ func (d *Daemon) runBranches(ctx context.Context) {
 	}
 }
 
+// ageBranchesLocked ages the records with whether every host has a
+// listing now. Called with d.mu held.
+func (d *Daemon) ageBranchesLocked(set map[string]branchQuery, now time.Time) {
+	d.branches.ageLocked(set, now, d.hostsListedLocked())
+}
+
 // ageLocked marks when each branch was last in the stream, marks
 // answers stale past branchStale, and drops the entries of branches no
 // worktree has had for branchForget. hostsListed is whether every host
@@ -291,9 +297,9 @@ func (b *branches) ageLocked(set map[string]branchQuery, now time.Time, hostsLis
 	// restart, before a subscription has reached them, the set is
 	// empty, and the kept answers stand.
 	if hostsListed {
-		b.listed = true
+		b.listedOnce = true
 	}
-	listed := b.listed
+	listed := b.listedOnce
 	for k, e := range b.entries {
 		switch {
 		case listed && set[k].key == "" && now.Sub(e.LastSeen) > branchForget:
