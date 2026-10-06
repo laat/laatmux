@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -37,16 +40,19 @@ var stopWait = 20 * time.Second
 // socket is starting, the lock comes before the listener, or shutting
 // down, the listener goes before the runs are stopped: stop keeps
 // trying to reach it while that holder has the lock. One that holds
-// the lock and is the daemon the runtime record names, by the pid in
-// both, yet cannot be asked (nothing listens, the hello never comes,
-// or it is of another protocol) is wedged, or shutting down, and gets
-// SIGTERM, which a daemon shutting down ignores: the lock is the
-// kernel's and dies with its holder, so a pid that holds it on two
-// readings a moment apart, equal to the record's, is that daemon and
-// not a pid a crash-left record names since reused. The wait after
-// the request is for the lock to leave the daemon's hands, released
-// when it exits, reaped or not, or taken by a replacement. No daemon
-// running is not an error.
+// the lock and is the daemon the runtime record names, yet cannot be
+// asked (nothing listens, the hello never comes, or it is of another
+// protocol), is wedged, or shutting down, and gets SIGTERM, which this
+// build's daemon ignores while shutting down. That it is the record's
+// daemon is established as an agent's identity is, by pid and start
+// time: the lock file names the pid on two readings a moment apart (a
+// probe holding the free lock for an instant shows the old content on
+// one), and the process with that pid is a laatmux that started before
+// the record was written, which a pid reused since the daemon died
+// cannot be, since the daemon wrote the record before it died. The
+// wait after the request is for the lock to leave the daemon's hands,
+// released when it exits, reaped or not, or taken by a replacement. No
+// daemon running is not an error.
 func cmdStop(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux stop")
@@ -70,28 +76,31 @@ func cmdStop(ctx context.Context, args []string) error {
 					why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
 					named = false
 				case errors.Is(err, errNoHello):
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					why = "answers no hello"
+					why = "gives no hello stop can take (" + errors.Unwrap(err).Error() + ")"
 				default:
 					return err
 				}
 			}
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		holder, err := home.Holder()
 		if err != nil {
 			return err
 		}
-		if named && holder == rt.PID {
+		if named && holder == rt.PID && isDaemon(rt) {
 			// The record's daemon holds the lock and cannot be asked:
-			// read the lock again a moment later, so a probe that held
-			// it for an instant over the old content is told apart,
-			// then end it as a daemon before the shutdown message is.
-			time.Sleep(100 * time.Millisecond)
+			// read the lock again a moment later, then end it as a
+			// daemon before the shutdown message is.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
 			if again, err := home.Holder(); err != nil {
 				return err
-			} else if again == rt.PID {
+			} else if again == rt.PID && isDaemon(rt) {
 				what := fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID)
 				if err := syscall.Kill(rt.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 					return fmt.Errorf("stop daemon %s, which %s: %w", what, why, err)
@@ -122,6 +131,30 @@ func cmdStop(ctx context.Context, args []string) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// isDaemon reports whether the process the runtime record names is the
+// daemon that wrote it: a laatmux, by its comm, that started no later
+// than the record was written. A pid reused since the daemon died
+// belongs to a process started after that, and a record from a build
+// without the start time names no daemon this way.
+func isDaemon(rt home.Runtime) bool {
+	if rt.StartedAt.IsZero() {
+		return false
+	}
+	p, ok := procs.Lookup(rt.PID)
+	return ok && sameBinary(p.Comm) && !p.Start.After(rt.StartedAt)
+}
+
+// sameBinary reports whether a process's comm is this binary's name,
+// which the daemon a client started runs as: the kernel keeps the base
+// name cut to 15 or 16 bytes, so a longer name is matched by its head.
+func sameBinary(comm string) bool {
+	exe, err := os.Executable()
+	if err != nil || comm == "" {
+		return false
+	}
+	return strings.HasPrefix(filepath.Base(exe), comm)
 }
 
 // errMoved is a daemon reached on a record's address that is not the

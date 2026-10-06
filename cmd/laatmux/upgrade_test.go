@@ -18,6 +18,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -275,8 +276,10 @@ func TestStop(t *testing.T) {
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("stop a starting daemon: %v", err)
 	}
-	if took := time.Since(start); took > 5*time.Second {
-		t.Errorf("stop of a starting daemon took %s", took)
+	// Reached once it listens, 800 ms after the lock: a stop any
+	// sooner signalled a daemon it had not asked.
+	if took := time.Since(start); took > 5*time.Second || took < 700*time.Millisecond {
+		t.Errorf("stop of a starting daemon took %s, want after its listener came up", took)
 	}
 	if err := slow.Wait(); err != nil {
 		t.Fatalf("slow daemon: %v", err)
@@ -371,10 +374,11 @@ func TestStop(t *testing.T) {
 	}
 	legacy.Wait()
 	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
-	// A daemon that holds the lock and is the one the record names but
-	// cannot be asked, listening on nothing or accepting without a
-	// hello, is ended with SIGTERM rather than waited out; the hello
-	// wait is shortened so the wedged case does not take 15 s.
+	// A daemon that holds the lock and is the one the record names, by
+	// pid and start time, but cannot be asked, listening on nothing or
+	// accepting without a hello, is ended with SIGTERM rather than
+	// waited out; the hello wait is shortened so the wedged case does
+	// not take 15 s.
 	was := client.HelloTimeout
 	client.HelloTimeout = 300 * time.Millisecond
 	defer func() { client.HelloTimeout = was }()
@@ -491,13 +495,16 @@ func wedgedServe(ctx context.Context, listen bool) error {
 		return err
 	}
 	defer lock.Release()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	addr := "tcp:" + ln.Addr().String()
+	// Nothing listens at a socket path in the state directory; a port
+	// released would be another process's to take.
+	addr := "unix:" + filepath.Join(home.Dir(), "wedged.sock")
 	if listen {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
 		defer ln.Close()
+		addr = "tcp:" + ln.Addr().String()
 		go func() {
 			for {
 				c, err := ln.Accept()
@@ -507,15 +514,44 @@ func wedgedServe(ctx context.Context, listen bool) error {
 				go func() { <-ctx.Done(); c.Close() }()
 			}
 		}()
-	} else {
-		ln.Close()
 	}
-	if err := home.WriteRuntime(home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged"}); err != nil {
+	if err := home.WriteRuntime(home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged", StartedAt: time.Now()}); err != nil {
 		return err
 	}
 	defer home.RemoveRuntime(os.Getpid())
 	<-ctx.Done()
 	return nil
+}
+
+// The record's daemon is told from a pid reused since it died by what
+// the pid is now: a laatmux, started no later than the record was
+// written. The test binary is the laatmux here.
+func TestIsDaemon(t *testing.T) {
+	me := os.Getpid()
+	self, ok := procs.Lookup(me)
+	if !ok {
+		t.Fatal("no lookup of this process")
+	}
+	if !isDaemon(home.Runtime{PID: me, StartedAt: time.Now()}) {
+		t.Error("this process, started before the record: not the daemon")
+	}
+	if isDaemon(home.Runtime{PID: me, StartedAt: self.Start.Add(-time.Hour)}) {
+		t.Error("a process started after the record was written taken as the daemon")
+	}
+	if isDaemon(home.Runtime{PID: me}) {
+		t.Error("a record without a start time taken as naming the daemon")
+	}
+	other := exec.Command("sleep", "100")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer other.Process.Kill()
+	if isDaemon(home.Runtime{PID: other.Process.Pid, StartedAt: time.Now()}) {
+		t.Error("a process of another binary taken as the daemon")
+	}
+	if isDaemon(home.Runtime{PID: 1 << 30, StartedAt: time.Now()}) {
+		t.Error("a pid that is no process taken as the daemon")
+	}
 }
 
 func TestMain(m *testing.M) {
