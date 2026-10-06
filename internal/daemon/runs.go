@@ -346,7 +346,7 @@ func (d *Daemon) terminate(pgid int, waited <-chan error, werr error, exited boo
 		return werr
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	deadline := time.Now().Add(d.killDelay)
+	deadline := time.Now().Add(d.cfg.Timings.KillDelay)
 	for (!exited || groupAlive(pgid)) && time.Now().Before(deadline) {
 		if exited {
 			time.Sleep(20 * time.Millisecond)

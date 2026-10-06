@@ -38,6 +38,57 @@ const (
 	subscriberBuffer  = 256
 )
 
+// Timings are the daemon's waits and intervals; see Config.Timings.
+type Timings struct {
+	// ReadyWait bounds how long a delivery waits for the pane to be
+	// ready, and how long a trust watcher runs; TrustPoll is how often
+	// the watcher looks at the pane for its question.
+	ReadyWait time.Duration
+	TrustPoll time.Duration
+	// JournalRetention is how long a finished journal entry is kept,
+	// and how old a submission may be before it is refused as expired.
+	JournalRetention time.Duration
+	// HandoffRecheck is how often a handoff waiting for the merged
+	// stream to show the worktree looks at the host's listing again,
+	// and bounds each such look; HandoffPatience is how long it waits
+	// for the stream in all before it hands off on the listing alone.
+	HandoffRecheck  time.Duration
+	HandoffPatience time.Duration
+	// CommandTTL is how long a finished command's outcome is kept;
+	// KillDelay how long a cancelled run gets between SIGTERM and
+	// SIGKILL.
+	CommandTTL time.Duration
+	KillDelay  time.Duration
+}
+
+// DefaultTimings are the timings a zero field takes.
+var DefaultTimings = Timings{
+	ReadyWait:        time.Minute,
+	TrustPoll:        500 * time.Millisecond,
+	JournalRetention: 30 * 24 * time.Hour,
+	HandoffRecheck:   3 * time.Second,
+	HandoffPatience:  time.Minute,
+	CommandTTL:       DefaultCommandTTL,
+	KillDelay:        DefaultKillDelay,
+}
+
+// withDefaults is t with every zero field at its default.
+func (t Timings) withDefaults() Timings {
+	def := func(v *time.Duration, d time.Duration) {
+		if *v == 0 {
+			*v = d
+		}
+	}
+	def(&t.ReadyWait, DefaultTimings.ReadyWait)
+	def(&t.TrustPoll, DefaultTimings.TrustPoll)
+	def(&t.JournalRetention, DefaultTimings.JournalRetention)
+	def(&t.HandoffRecheck, DefaultTimings.HandoffRecheck)
+	def(&t.HandoffPatience, DefaultTimings.HandoffPatience)
+	def(&t.CommandTTL, DefaultTimings.CommandTTL)
+	def(&t.KillDelay, DefaultTimings.KillDelay)
+	return t
+}
+
 // Panes is the tmux side of one watched server. tmux.Server implements it;
 // tests supply a fake.
 type Panes interface {
@@ -127,6 +178,12 @@ type Config struct {
 	// Shutdown ends the daemon as SIGTERM does, for the shutdown
 	// message; nil means no shutdown capability.
 	Shutdown func()
+
+	// Timings are the daemon's waits and intervals: delivery and trust,
+	// the journal's retention, the relay's handoff, the command table
+	// and run cancellation; a zero field takes its default. Tests
+	// shorten them.
+	Timings Timings
 
 	// Pending is the directory of the relay's pending files, which with
 	// Hosts is the relay capability; "" means none.
@@ -226,8 +283,7 @@ type Daemon struct {
 	locks map[string]*sync.Mutex // per repository source
 	// repos is held shared by every add for its repository's lock and
 	// alone by rm, which must see every add in flight complete.
-	repos      sync.RWMutex
-	commandTTL time.Duration
+	repos sync.RWMutex
 	// The journal, nil without the task capability; the observation
 	// revision and the daemon generation that stamp listings, the
 	// stamp and error of the last listing, and the lock the poll and
@@ -269,9 +325,8 @@ type Daemon struct {
 	// pasted is when a pane was last pasted into, by pane key: a
 	// delivery needs an observation made after it. waits counts the
 	// deliveries that have begun waiting for a pane, for tests.
-	pasted    map[string]time.Time
-	waits     int
-	killDelay time.Duration
+	pasted map[string]time.Time
+	waits  int
 
 	// The merged stream: its own sequence and subscribers, the hosts by
 	// name and in config order, the local sessions, and the context the
@@ -366,6 +421,7 @@ func New(cfg Config) *Daemon {
 	if cfg.Procs == nil {
 		cfg.Procs = osProcs{}
 	}
+	cfg.Timings = cfg.Timings.withDefaults()
 	if cfg.WorktreeInterval == 0 {
 		cfg.WorktreeInterval = DefaultWorktreeInterval
 	}
@@ -396,11 +452,9 @@ func New(cfg Config) *Daemon {
 		paths:        newResolver(),
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
-		commandTTL:   DefaultCommandTTL,
 		runs:         map[string]map[*runJob]struct{}{},
 		rootGen:      map[string]uint64{},
 		pasted:       map[string]time.Time{},
-		killDelay:    DefaultKillDelay,
 
 		msubs:     map[*subscriber]struct{}{},
 		mhosts:    map[string]*mergedHost{},
@@ -417,7 +471,7 @@ func New(cfg Config) *Daemon {
 		}
 	}
 	if cfg.Commands != "" && cfg.Store != nil && d.managed != nil {
-		j, err := openJournal(cfg.Commands, cfg.Logger)
+		j, err := openJournal(cfg.Commands, cfg.Logger, cfg.Timings.JournalRetention)
 		if err != nil {
 			cfg.Logger.Printf("journal: %v; task capability disabled", err)
 		} else {

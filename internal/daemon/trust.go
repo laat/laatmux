@@ -55,10 +55,6 @@ const (
 	trustCursor   = "❯"
 )
 
-// trustPoll is how often the pane is looked at for the question; a
-// variable for tests.
-var trustPoll = 500 * time.Millisecond
-
 // trustChoice reads a screen for the trust question about root. ok is
 // that the screen ends with the whole question, naming root, the path
 // joined back when the pane wrapped it; moves is the Down presses,
@@ -178,9 +174,9 @@ func (d *Daemon) trustState(t trustTarget) (gone, claude, ready bool, id procs.I
 
 // startTrust starts the watcher for a launch, unless the daemon is
 // stopping; StopRuns cancels the watchers and waits for them. The
-// watcher polls every trustPoll for readyWait.
+// watcher polls every TrustPoll for ReadyWait.
 func (d *Daemon) startTrust(t trustTarget) {
-	wait, poll := readyWait, trustPoll
+	wait, poll := d.cfg.Timings.ReadyWait, d.cfg.Timings.TrustPoll
 	if d.cfg.Store == nil || !d.cfg.Store.Owns(t.root) {
 		return
 	}

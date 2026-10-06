@@ -231,7 +231,7 @@ func (d *Daemon) forgetDone(id string) {
 // not any other command arrives meanwhile. The identity check keeps a
 // timer from evicting a newer command under the same id.
 func (d *Daemon) evict(id string, c *command) {
-	time.AfterFunc(d.commandTTL, func() {
+	time.AfterFunc(d.cfg.Timings.CommandTTL, func() {
 		d.mu.Lock()
 		if d.cmds[id] == c {
 			delete(d.cmds, id)

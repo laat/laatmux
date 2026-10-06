@@ -120,9 +120,7 @@ func TestTrustChoice(t *testing.T) {
 // yes, Enter pressed once it is there, and the typed prompt delivered
 // once the prompt box is up.
 func TestAddAnswersTrust(t *testing.T) {
-	was := trustPoll
-	trustPoll = 20 * time.Millisecond
-	t.Cleanup(func() { trustPoll = was })
+	setTiming(t, &testTimings.TrustPoll, 20*time.Millisecond)
 	shortWait(t, 10*time.Second)
 	d, ft, store, remote := taskDaemon(t, nil, nil)
 	root := store.Dirs.Worktree("proj", "task")
@@ -154,9 +152,7 @@ func TestAddAnswersTrust(t *testing.T) {
 // The question about another folder is not answered: the wait times out
 // as it did, and no key is pressed.
 func TestAddLeavesOtherTrust(t *testing.T) {
-	was := trustPoll
-	trustPoll = 20 * time.Millisecond
-	t.Cleanup(func() { trustPoll = was })
+	setTiming(t, &testTimings.TrustPoll, 20*time.Millisecond)
 	shortWait(t, 500*time.Millisecond)
 	d, ft, _, remote := taskDaemon(t, trustScreen("/somewhere/else", false), nil)
 	pc := conn(t, d)
@@ -178,9 +174,7 @@ func TestAddLeavesOtherTrust(t *testing.T) {
 // session or server instance ends it, an agent that is not a verified
 // Claude gets no key, and StopRuns cancels it and waits for it.
 func TestTrustWatcherBounds(t *testing.T) {
-	was := trustPoll
-	trustPoll = 10 * time.Millisecond
-	t.Cleanup(func() { trustPoll = was })
+	setTiming(t, &testTimings.TrustPoll, 10*time.Millisecond)
 	d, ft, store, _ := taskDaemon(t, nil, nil)
 	root := store.Dirs.Worktree("proj", "w")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -279,9 +273,7 @@ func TestTrustWatcherBounds(t *testing.T) {
 // A screen that does not show the cursor on yes after the move, lagging
 // or with the key gone astray, gets no second move and no Enter.
 func TestTrustNoSecondMove(t *testing.T) {
-	was := trustPoll
-	trustPoll = 10 * time.Millisecond
-	t.Cleanup(func() { trustPoll = was })
+	setTiming(t, &testTimings.TrustPoll, 10*time.Millisecond)
 	shortWait(t, 500*time.Millisecond)
 	d, ft, store, remote := taskDaemon(t, nil, nil)
 	root := store.Dirs.Worktree("proj", "lag")
@@ -303,9 +295,7 @@ func TestTrustNoSecondMove(t *testing.T) {
 // A prompt on the command line waits behind the question too: the
 // watcher answers it after the add has returned delivered.
 func TestAddArgvAnswersTrust(t *testing.T) {
-	was := trustPoll
-	trustPoll = 10 * time.Millisecond
-	t.Cleanup(func() { trustPoll = was })
+	setTiming(t, &testTimings.TrustPoll, 10*time.Millisecond)
 	shortWait(t, 10*time.Second)
 	d, ft, store, remote := taskDaemon(t, nil, map[string][]string{"claude": {"claude", PromptPlaceholder}})
 	root := store.Dirs.Worktree("proj", "argv")

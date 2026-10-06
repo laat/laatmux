@@ -808,15 +808,6 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	}
 }
 
-// handoffRecheck is how often a handoff waiting for the merged stream
-// to show the worktree looks at the host's listing again, and
-// handoffPatience how long it waits for the stream in all before it
-// hands off on the listing alone.
-var (
-	handoffRecheck  = 3 * time.Second
-	handoffPatience = time.Minute
-)
-
 // retire waits for the host's listing to reflect a successful add, on
 // the relay's own connection: plain snapshots and the listing stamps
 // after them until one satisfies the result's barrier, with the host's
@@ -934,7 +925,7 @@ func (d *Daemon) awaitListing(ctx context.Context, c *client.Conn, barrier proto
 func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 	wait := d.cfg.ReconnectMin
 	began := time.Now()
-	recheck := time.Now().Add(handoffRecheck)
+	recheck := time.Now().Add(d.cfg.Timings.HandoffRecheck)
 	for ctx.Err() == nil {
 		// The check, the write and the publication are one step under
 		// the relay's mutex, which a merged subscription takes for its
@@ -959,7 +950,7 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			}
 		}
 		d.mu.Unlock()
-		if watching && configured && !shown && time.Since(began) < handoffPatience {
+		if watching && configured && !shown && time.Since(began) < d.cfg.Timings.HandoffPatience {
 			// The merged stream's own connection to the host may be
 			// down while the relay's is up, or the worktree may be
 			// gone again already: the row stays while the stream is
@@ -968,7 +959,7 @@ func (d *Daemon) handoff(ctx context.Context, id, worktreeID string) {
 			// there any more makes the record gone instead.
 			d.relay.mu.Unlock()
 			if time.Now().After(recheck) {
-				recheck = time.Now().Add(handoffRecheck)
+				recheck = time.Now().Add(d.cfg.Timings.HandoffRecheck)
 				if present, ok := d.listingHas(ctx, id, p); ok && !present {
 					d.persist(ctx, id, func(p *pendingFile) { p.Gone = true })
 					return
@@ -1011,7 +1002,7 @@ func (d *Daemon) listingHas(ctx context.Context, id string, p pendingFile) (pres
 	}
 	// Bounded: a host whose listings fail after a restart would hold
 	// the handoff past its patience otherwise.
-	ctx, cancel := context.WithTimeout(ctx, handoffRecheck)
+	ctx, cancel := context.WithTimeout(ctx, d.cfg.Timings.HandoffRecheck)
 	defer cancel()
 	c, _, err := d.relayConn(ctx, id)
 	if err != nil {

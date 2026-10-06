@@ -45,7 +45,7 @@ func taskDaemon(t *testing.T, screen []string, agents map[string][]string) (*Dae
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   store, Agents: agents,
-		Commands: t.TempDir(),
+		Commands: t.TempDir(), Timings: testTimings,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -69,11 +69,20 @@ func taskDaemon(t *testing.T, screen []string, agents map[string][]string) (*Dae
 	return d, ft, store, remote
 }
 
+// testTimings are the timings the fixtures build their daemons with;
+// shortWait and setTiming shorten one for a test and restore it after.
+var testTimings Timings
+
+func setTiming(t *testing.T, field *time.Duration, d time.Duration) {
+	t.Helper()
+	was := *field
+	*field = d
+	t.Cleanup(func() { *field = was })
+}
+
 func shortWait(t *testing.T, d time.Duration) {
 	t.Helper()
-	was := readyWait
-	readyWait = d
-	t.Cleanup(func() { readyWait = was })
+	setTiming(t, &testTimings.ReadyWait, d)
 }
 
 // readEntry reads the journal file for id.
@@ -404,7 +413,7 @@ func TestResendKeepsRepository(t *testing.T) {
 // entry shares nothing with the copy the change was applied to.
 func TestJournalUpdateIsAtomic(t *testing.T) {
 	dir := t.TempDir()
-	j, err := openJournal(dir, log.New(io.Discard, "", 0))
+	j, err := openJournal(dir, log.New(io.Discard, "", 0), DefaultTimings.JournalRetention)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +631,7 @@ func TestJournalStartup(t *testing.T) {
 	waiting := entry{ID: "w", Source: "s", Repo: "proj", Branch: "b", HasPrompt: true, Attempts: []attempt{{N: 1, State: attemptAttempting}}, FirstSeen: time.Now()}
 	b, _ = json.Marshal(waiting)
 	os.WriteFile(filepath.Join(dir, FileName("w")), b, 0o600)
-	j, err := openJournal(dir, d.cfg.Logger)
+	j, err := openJournal(dir, d.cfg.Logger, d.cfg.Timings.JournalRetention)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -933,7 +942,7 @@ func TestDeliveryNeedsLivenessThisPoll(t *testing.T) {
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: tables},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
-		Commands: t.TempDir(),
+		Commands: t.TempDir(), Timings: testTimings,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -1016,7 +1025,7 @@ func TestDeliveriesDoNotShareObservation(t *testing.T) {
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
-		Commands: t.TempDir(),
+		Commands: t.TempDir(), Timings: testTimings,
 	})
 	ctx := context.Background()
 	pc := conn(t, d)
@@ -1147,7 +1156,7 @@ func TestStopWaitsForPaste(t *testing.T) {
 // the journal opens, and the record it was for is unchanged.
 func TestJournalSweepsTemporaries(t *testing.T) {
 	dir := t.TempDir()
-	j, err := openJournal(dir, log.New(io.Discard, "", 0))
+	j, err := openJournal(dir, log.New(io.Discard, "", 0), DefaultTimings.JournalRetention)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1161,7 +1170,7 @@ func TestJournalSweepsTemporaries(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	j, err = openJournal(dir, log.New(io.Discard, "", 0))
+	j, err = openJournal(dir, log.New(io.Discard, "", 0), DefaultTimings.JournalRetention)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,10 +25,6 @@ import (
 // the pane once the agent is ready.
 const PromptPlaceholder = "{prompt}"
 
-// readyWait bounds how long a delivery waits for the pane to be ready;
-// a variable so tests can shorten it.
-var readyWait = time.Minute
-
 // readyPoll is how often the wait looks at the detector's observation.
 const readyPoll = 50 * time.Millisecond
 
@@ -199,7 +195,7 @@ func (r *addRun) run(ctx context.Context) error {
 				return errRecorded
 			}
 			r.e, known, r.created = cur, true, true
-		} else if expired(m.SubmittedAt, now) {
+		} else if j.expired(m.SubmittedAt, now) {
 			return errors.New(protocol.ErrSubmissionExpired)
 		}
 	} else if m.Prompt != "" || m.Generated {
@@ -610,7 +606,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		}
 	}
 	since := time.Now()
-	deadline := since.Add(readyWait)
+	deadline := since.Add(d.cfg.Timings.ReadyWait)
 	d.mu.Lock()
 	d.waits++
 	d.mu.Unlock()
@@ -620,7 +616,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 			if replaced {
 				return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 			}
-			return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+d.cfg.Timings.ReadyWait.String()+": "+why)
 		}
 		unlock := d.lockDeliveries(e.Root)
 		if why := current(); why != "" {
@@ -642,7 +638,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 		}
 		if time.Now().After(deadline) {
-			return record(protocol.DeliveryNotDelivered, "agent not ready within "+readyWait.String()+": "+why)
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+d.cfg.Timings.ReadyWait.String()+": "+why)
 		}
 	}
 	if e.Identity == nil {
