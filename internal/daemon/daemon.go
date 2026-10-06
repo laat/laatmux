@@ -204,23 +204,15 @@ type Daemon struct {
 	// logged; see gitstatus.go.
 	gits       map[string]*gitEntry
 	lastGitErr string
-	// The branch records, by key, nil without the branches capability;
-	// why GitHub cannot be read; the file's last error. See
-	// branches.go.
-	branches        map[string]*branchEntry
-	githubErr       string
-	lastBranchesErr string
-	branchesListed  bool                 // every host has listed once since start
-	branchErrs      map[string]bool      // per-branch errors of the last round, logged
-	roundErrs       map[string]bool      // and of the round under way
-	hostErrs        map[string]string    // gh's failure by host, what githubErr is joined from
-	pagedNone       map[string]time.Time // when a branch's forks' pages held none of its own
-	ctx             context.Context      // Run's context, for goroutines that outlive a connection
-	generation      int64
-	revision        uint64
-	listing         protocol.Listing
-	listErr         string
-	pollMu          sync.Mutex
+	// The branch records and the state of asking GitHub about them,
+	// nil without the branches capability. See branches.go.
+	branches   *branches
+	ctx        context.Context // Run's context, for goroutines that outlive a connection
+	generation int64
+	revision   uint64
+	listing    protocol.Listing
+	listErr    string
+	pollMu     sync.Mutex
 	// Runs by root, and the removal generation per root that rm bumps
 	// once git has removed the worktree; see runs.go.
 	runs     map[string]map[*runJob]struct{}
@@ -399,12 +391,7 @@ func New(cfg Config) *Daemon {
 		d.attn = a
 	}
 	if cfg.GitHub != nil && cfg.Branches != "" && cfg.Hosts != nil {
-		b, err := openBranches(cfg.Branches)
-		if err != nil {
-			cfg.Logger.Printf("branches: %v; starting over", err)
-			b = map[string]*branchEntry{}
-		}
-		d.branches = b
+		d.branches = newBranches(&d.cfg, &d.mu, d.mbroadcastLocked)
 	}
 	if cfg.Pending != "" && cfg.Hosts != nil {
 		r, err := openRelay(cfg.Pending, cfg.Logger)

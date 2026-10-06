@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -346,7 +347,7 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 	}
 	m.Attentions = d.attentionsLocked()
 	if d.branches != nil {
-		m.BranchStatuses, m.GitHubError = d.branchStatusesLocked(), d.githubErr
+		m.BranchStatuses, m.GitHubError = d.branches.statusesLocked(), d.branches.githubErr
 	}
 	return m
 }
@@ -665,11 +666,17 @@ func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 // last so a repeating failure is one line, and reports whether it logged,
 // for a caller that publishes the change too.
 func (d *Daemon) logOnce(last *string, format string, err error) bool {
+	return logOnce(d.cfg.Logger, last, format, err)
+}
+
+// logOnce is Daemon.logOnce for a part of the daemon with a logger of
+// its own.
+func logOnce(logger *log.Logger, last *string, format string, err error) bool {
 	msg := err.Error()
 	if msg == *last {
 		return false
 	}
-	d.cfg.Logger.Printf(format, err)
+	logger.Printf(format, err)
 	*last = msg
 	return true
 }
