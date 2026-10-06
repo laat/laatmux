@@ -81,6 +81,16 @@ func (s Server) Label() string {
 	return "current"
 }
 
+// args is the argv after "tmux": the server's selector, then the
+// command. tmux takes an argument that ends in ";" as the argument
+// before it followed by a command separator, so a root or an option
+// value that ends in one would be cut there and split the sequence, and
+// it takes a "\;" at the end as a literal ";". Every argument that ends
+// in ";" but a bare ";", which is how callers separate commands, gets a
+// backslash before that last ";"; one that ends in "\;" becomes "\\;",
+// which tmux reads back as "\;". The selector is read by tmux's option
+// parser, which takes it as it is; so is a global flag a caller puts
+// before the command, -f /dev/null, which never ends in ";".
 func (s Server) args(a ...string) []string {
 	var pre []string
 	switch {
@@ -89,7 +99,14 @@ func (s Server) args(a ...string) []string {
 	case s.Name != "":
 		pre = []string{"-L", s.Name}
 	}
-	return append(pre, a...)
+	out := append(make([]string, 0, len(pre)+len(a)), pre...)
+	for _, v := range a {
+		if v != ";" && strings.HasSuffix(v, ";") {
+			v = v[:len(v)-1] + `\;`
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // Run executes a tmux command and returns stdout.
@@ -548,12 +565,15 @@ func (s Server) HasSession(ctx context.Context, name string) bool {
 }
 
 // AttachArgsBare is the argv after "tmux" to attach a terminal to a session
-// on this server, for use locally or after ssh -t.
+// on this server, for use locally or after ssh -t, its arguments escaped
+// as args escapes them.
 func (s Server) AttachArgsBare(session string) []string {
 	return s.args("attach-session", "-t", "="+session)
 }
 
-// ArgsBare prepends this server's -L/-S selection to a tmux command.
+// ArgsBare prepends this server's -L/-S selection to a tmux command, and
+// escapes its arguments as args does: the tmux that runs the line reads
+// them the same way.
 func (s Server) ArgsBare(a ...string) []string { return s.args(a...) }
 
 // shellJoin quotes argv for tmux's shell-command argument.

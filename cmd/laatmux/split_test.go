@@ -58,9 +58,9 @@ func TestSplitArgs(t *testing.T) {
 // and a directory that is not there after expansion starts the pane in
 // $HOME, with no error. The plain split goes by the pane's path as tmux
 // reports it. The worktrees directory, which is the user's, has a #[
-// in it, which tmux keeps as it is. A remote host's split and shell
-// window run ssh with the root as it is: tmux does not expand a pane's
-// command.
+// in it, which tmux keeps as it is. A root that ends in ; is not cut
+// there as a command separator. A remote host's split and shell window
+// run ssh with the root as it is: tmux does not expand a pane's command.
 func TestSplitAndShellRootWithHash(t *testing.T) {
 	// The remote host's ssh, first on the test's PATH, which tmux gives
 	// a pane from the client that made it, logs the command for the
@@ -136,7 +136,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		}
 		return lines[n-1]
 	}
-	for i, branch := range []string{"fix#12", "x#{session_id}", "y##"} {
+	for i, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "z#;"} {
 		root := filepath.Join(t.TempDir(), "#[scratch]", "proj", branch)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
