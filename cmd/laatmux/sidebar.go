@@ -262,10 +262,18 @@ func sidebarSessions(ctx context.Context) ([]string, error) {
 	return strings.Fields(string(out)), nil
 }
 
+// runShellExe is exe as the first word of a run-shell command. tmux
+// expands that command as a format before the shell sees it, so the
+// path is a format literal under the quoting: a # in it, from a
+// worktree's branch, is kept.
+func runShellExe(exe string) string {
+	return tmux.ShellJoin([]string{tmux.FormatLiteral(exe)})
+}
+
 // jumpKeyCmd is the command a jump key runs: the window and the client
 // the key's own, so any number of clients attached tell apart.
 func jumpKeyCmd(exe string, n int) string {
-	return fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + fmt.Sprintf(" sidebar jump %d -t '#{window_id}' -c '#{client_name}'", n)}))
+	return fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{runShellExe(exe) + fmt.Sprintf(" sidebar jump %d -t '#{window_id}' -c '#{client_name}'", n)}))
 }
 
 // bindJumpKeys binds M-1..M-9 in tmux's root table to the sidebar's
@@ -308,7 +316,7 @@ func unbindJumpKeys(ctx context.Context) {
 // of that name there.
 func setSidebarHooks(ctx context.Context, exe string) error {
 	for _, h := range sidebarHooks {
-		cmd := fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{tmux.ShellJoin([]string{exe}) + " " + h.cmd}))
+		cmd := fmt.Sprintf("run-shell -b %s", tmux.ShellJoin([]string{runShellExe(exe) + " " + h.cmd}))
 		if _, err := workspace.Server.Run(ctx, "set-hook", "-g", h.hook, cmd); err != nil {
 			return err
 		}

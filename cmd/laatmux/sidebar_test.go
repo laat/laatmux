@@ -264,6 +264,79 @@ func TestSidebarHooksRun(t *testing.T) {
 	}
 }
 
+// run-shell expands its command as a format, so a hook or a jump key
+// with laatmux's path in it as it is runs another path when the path
+// has a #{ or a ## in it, as a worktree's branch can. The binary here
+// is a script under such a directory, with a #[ that tmux keeps as it
+// is, that records its arguments: the resize hook and a key pressed
+// through a client both run it, with the window and the client still
+// expanded.
+func TestSidebarExeFormat(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	logf := filepath.Join(t.TempDir(), "args")
+	dir := filepath.Join(t.TempDir(), "x#{session_id}y##z#[w")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "laatmux")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+tmux.ShellJoin([]string{logf})+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wait := func(want string) {
+		t.Helper()
+		var got string
+		for i := 0; i < 100; i++ {
+			b, _ := os.ReadFile(logf)
+			if got = string(b); strings.Contains(got, want) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("ran %q, want %q", got, want)
+	}
+	if err := setSidebarHooks(ctx, exe); err != nil {
+		t.Fatal(err)
+	}
+	window := run("display", "-p", "-t", "boot", "#{window_id}")
+	run("resize-window", "-t", window, "-x", "150", "-y", "30")
+	wait("sidebar fit " + window + "\n")
+	// send-keys -K, which looks the key up as if the client typed it,
+	// needs tmux 3.4.
+	if out, err := exec.Command("tmux", "-V").Output(); err == nil {
+		if v := strings.TrimPrefix(strings.TrimSpace(string(out)), "tmux "); v < "3.4" {
+			t.Skipf("tmux %s has no send-keys -K", v)
+		}
+	}
+	if err := bindJumpKeys(ctx, exe); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	client := ""
+	for i := 0; i < 50 && client == ""; i++ {
+		time.Sleep(100 * time.Millisecond)
+		client = run("list-clients", "-F", "#{client_name}")
+	}
+	if client == "" {
+		t.Fatal("no client attached")
+	}
+	run("send-keys", "-K", "-c", client, "M-3")
+	wait("sidebar jump 3 -t " + window + " -c " + client + "\n")
+}
+
 // on --session names the session in the option, twice once, and kills
 // the tagged panes elsewhere; a plain on clears the option; off unsets
 // the option, the hooks and the jump keys.
