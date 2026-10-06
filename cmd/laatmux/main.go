@@ -1,6 +1,6 @@
 // laatmux: git worktrees and coding agents across hosts, from tmux.
-// The commands, thin over the internal packages; docs/architecture.md
-// says what runs where.
+// The commands, and the sidebar's tmux side, over the internal
+// packages; docs/architecture.md says what runs where.
 package main
 
 import (

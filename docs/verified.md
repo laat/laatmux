@@ -43,8 +43,9 @@ tests under `-race`.
 ## Jump and attach spike
 
 Milestone one's jump opened an attach window in whatever session it ran
-from; milestone two replaced that with the workspace session above, and
-the first and sixth findings below describe the old behaviour: jump now
+from; milestone two replaced that with the workspace session (see the
+README's Workspaces, client side), and the first and fifth findings
+below describe the old behaviour: jump now
 switches to the workspace session, and a dead attach stays as a dead pane
 under `remain-on-exit` until the next jump respawns it. The attach command
 and the transport findings, keys, size, two attachments, the preflight and

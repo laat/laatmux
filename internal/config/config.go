@@ -20,8 +20,8 @@
 //	sidebar:
 //	  width: 40               # columns or N%; unset: 10%, clamped to 25..50
 //	  layout: tiles           # tiles or compact; default tiles
-//	  view: agents            # agents or tree, what a pane starts in
-//	  sort: priority          # priority, recency or window
+//	  view: agents            # agents or tree; default agents; a sidebar pane's start view until a key or the CLI picks one
+//	  sort: priority          # priority, recency or window; default priority
 //	  templates:              # the views' lines, see the README
 //	    compact: "{status_icon} {primary} {pane_suffix}"
 //	icons: emoji              # emoji, nerdfont or ascii; default emoji
@@ -218,8 +218,8 @@ type Templates struct {
 	Tree    TreeTemplates `yaml:"tree"`
 }
 
-// Lines is a list of template lines that a config may write as one
-// string, which is one line.
+// Lines is a list of template lines; a config may write one line as a
+// string, and an empty string is the default.
 type Lines []string
 
 // UnmarshalYAML reads a list, or a scalar as a list of one.
@@ -230,7 +230,7 @@ func (l *Lines) UnmarshalYAML(value *yaml.Node) error {
 			return err
 		}
 		if s == "" {
-			// As before it took several lines: the default.
+			// An empty string is the default, not an empty line.
 			*l = nil
 			return nil
 		}

@@ -1311,7 +1311,7 @@ func TestFollowTree(t *testing.T) {
 	}
 }
 
-// Review round 1: a task's first fold is by its agent's status; a task
+// A task's first fold is by its agent's status; a task
 // that handed over passes its fold to the node holding the children,
 // and in the agent view the selection to the worktree's first tile;
 // following survives a switch with the viewer's line folded away; f

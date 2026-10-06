@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Review finding 4: two starters must not both own the lock. A child
+// Two starters must not both own the lock. A child
 // process holds it while the parent tries; flock is per open file
 // description, so the test needs a second process.
 func TestLockExcludesSecondOwner(t *testing.T) {

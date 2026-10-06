@@ -301,7 +301,7 @@ func TestPressing(t *testing.T) {
 	}
 }
 
-// Review round 1: a worktree line's agent is the one its jump goes
+// A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the
 // worktree's agent has that worktree's line and that agent's tile;

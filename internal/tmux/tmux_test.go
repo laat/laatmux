@@ -48,7 +48,7 @@ func TestParseLabelRoundTrip(t *testing.T) {
 	}
 }
 
-// Review: the zero Server follows the inherited TMUX variable, so a daemon
+// The zero Server follows the inherited TMUX variable, so a daemon
 // started from inside a non-default server would poll that server under the
 // label "default". DefaultServer must ignore TMUX.
 func TestDefaultServerIgnoresInheritedTMUX(t *testing.T) {

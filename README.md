@@ -14,7 +14,7 @@ at workmux's level. All of it is built.
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain`, `version` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, pane, run, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -1179,8 +1179,9 @@ laptop providing the UI.
 
 Every client used to dial every host: a sidebar pane per window would be
 an ssh channel per host per window. The daemon on the machine the user
-sits at is the one process there, so it is the merge point. A daemon
-whose config has `hosts` advertises `merged`, and `subscribe` with
+sits at is the one process there, so it is the merge point. Every
+daemon advertises `merged` (a host's merged stream holds its own
+records, its config listing no hosts), and `subscribe` with
 `merged: true` gets one stream with every host's records:
 
 ```
@@ -1366,8 +1367,8 @@ whose config has `hosts` advertises `merged`, and `subscribe` with
   activity is kept. Working to idle
   is debounced (3 confirmations, 700 ms cap); a visible idle prompt bypasses it.
   Fresh processes get a 3 s grace measured from process start.
-- **Agent hooks** are not used: every state comes from the screen and the
-  process table. The tmux hooks laatmux sets are the sidebar's, on the
+- **Agent hooks** are not used: every agent state comes from the pane,
+  its screen and title, and the process table. The tmux hooks laatmux sets are the sidebar's, on the
   user's default server (see Sidebar and dashboard).
 - **Managed server** reconciliation runs on discovery, once per tmux server
   pid: global options, every global hook, session-level overrides of the
