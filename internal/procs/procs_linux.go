@@ -14,10 +14,14 @@ import (
 
 var (
 	bootTime time.Time
+	bootID   string // the kernel's boot id, in StartID: starts count from the boot
 	clkTck   = int64(100)
 )
 
 func init() {
+	if b, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
+		bootID = strings.TrimSpace(string(b))
+	}
 	f, err := os.Open("/proc/stat")
 	if err != nil {
 		return
@@ -98,7 +102,11 @@ func readStat(pid int) (Proc, uint64, bool) {
 	tpgid, _ := strconv.Atoi(fields[5])
 	startTicks, _ := strconv.ParseInt(fields[19], 10, 64)
 	start := bootTime.Add(time.Duration(startTicks*1e9/clkTck) * time.Nanosecond)
-	return Proc{PID: pid, PPID: ppid, PGID: pgid, TPGID: tpgid, Comm: comm, Start: start, StartID: fields[19]}, ttyNr, true
+	startID := ""
+	if bootID != "" {
+		startID = bootID + "/" + fields[19]
+	}
+	return Proc{PID: pid, PPID: ppid, PGID: pgid, TPGID: tpgid, Comm: comm, Start: start, StartID: startID}, ttyNr, true
 }
 
 func readNulFile(path string) []string {

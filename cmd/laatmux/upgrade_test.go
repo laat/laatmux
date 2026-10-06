@@ -630,8 +630,9 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 		if err := twin.Start(); err != nil {
 			t.Fatal(err)
 		}
-		twinDone := make(chan error, 1)
-		go func() { twinDone <- twin.Wait() }()
+		var twinErr error
+		twinDone := make(chan struct{})
+		go func() { twinErr = twin.Wait(); close(twinDone) }()
 		defer func() {
 			twin.Process.Kill()
 			<-twinDone
@@ -662,8 +663,8 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 			t.Errorf("stop: %v", err)
 		}
 		select {
-		case err := <-twinDone:
-			t.Fatalf("the record's process signalled while another holds the lock (exit %v)", err)
+		case <-twinDone:
+			t.Fatalf("the record's process signalled while another holds the lock (exit %v)", twinErr)
 		case <-time.After(300 * time.Millisecond):
 		}
 	})
@@ -805,7 +806,16 @@ func TestIsDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Process.Kill()
-	if isDaemon(home.Runtime{PID: other.Process.Pid, ProcessStart: self.StartID}) {
+	// Linux counts starts in clock ticks: a child started in this
+	// process's tick has its start, and the case is not made then.
+	started := func(p *os.Process) string {
+		lp, ok := procs.Lookup(p.Pid)
+		if !ok || lp.StartID == "" {
+			t.Fatalf("no lookup of pid %d: %+v %v", p.Pid, lp, ok)
+		}
+		return lp.StartID
+	}
+	if started(other.Process) != self.StartID && isDaemon(home.Runtime{PID: other.Process.Pid, ProcessStart: self.StartID}) {
 		t.Error("another process with this one's start taken as the daemon")
 	}
 	other.Process.Kill()
@@ -822,10 +832,13 @@ func TestIsDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { twin.Process.Kill(); twin.Wait() }()
-	if isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: self.StartID}) {
+	if started(twin.Process) != self.StartID && isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: self.StartID}) {
 		t.Error("another laatmux with this one's start taken as the daemon")
 	}
-	if p, ok := procs.Lookup(twin.Process.Pid); !ok || !isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: p.StartID}) {
+	if isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: started(twin.Process) + "1"}) {
+		t.Error("a laatmux with another start taken as the daemon")
+	}
+	if !isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: started(twin.Process)}) {
 		t.Error("a laatmux with its own start not the daemon")
 	}
 }

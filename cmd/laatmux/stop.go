@@ -71,9 +71,13 @@ func cmdStop(ctx context.Context, args []string) error {
 	var rt home.Runtime
 	for {
 		if time.Now().After(deadline) {
-			holder, err := home.Holder()
+			holder, err := lockHolder()
 			if err != nil {
 				return err
+			}
+			if holder == 0 {
+				fmt.Println("no daemon running")
+				return nil
 			}
 			if named && holder != rt.PID {
 				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, time.Since(start).Round(time.Second))
@@ -116,18 +120,26 @@ func cmdStop(ctx context.Context, args []string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		holder, err := home.Holder()
+		holder, err := lockHolder()
 		if err != nil {
 			return err
 		}
 		if named && own && holder == rt.PID && isDaemon(rt) {
 			// The record's daemon holds the lock and cannot be asked:
 			// read the lock again a moment later, then end it as a
-			// daemon before the shutdown message is.
+			// daemon before the shutdown message is. The signal goes
+			// through a handle to the process taken before the identity
+			// is checked the last time: on Linux a pidfd, which a reuse
+			// of the pid after the check does not reach; on macOS the
+			// pid, with nothing narrower on offer.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(100 * time.Millisecond):
+			}
+			proc, err := os.FindProcess(rt.PID)
+			if err != nil {
+				return err
 			}
 			if again, err := home.Holder(); err != nil {
 				return err
@@ -136,20 +148,10 @@ func cmdStop(ctx context.Context, args []string) error {
 					return ctx.Err()
 				}
 				what := fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID)
-				if err := syscall.Kill(rt.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+				if err := proc.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 					return fmt.Errorf("stop daemon %s, which %s: %w", what, why, err)
 				}
 				return waitGone(ctx, rt.PID, what)
-			}
-		}
-		if holder == 0 {
-			// A daemon between taking the lock and writing its pid, or
-			// a lock file being rewritten, reads as no holder for an
-			// instant; a second reading a moment later tells it from a
-			// lock that is free.
-			time.Sleep(100 * time.Millisecond)
-			if holder, err = home.Holder(); err != nil {
-				return err
 			}
 		}
 		if holder == 0 {
@@ -162,6 +164,20 @@ func cmdStop(ctx context.Context, args []string) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// lockHolder is the pid the startup lock's holder wrote into the lock
+// file, 0 when the lock is free. A daemon between taking the lock and
+// writing its pid, or a lock file being rewritten, reads as no holder
+// for an instant; a second reading a moment later tells it from a lock
+// that is free.
+func lockHolder() (int, error) {
+	holder, err := home.Holder()
+	if err == nil && holder == 0 {
+		time.Sleep(100 * time.Millisecond)
+		holder, err = home.Holder()
+	}
+	return holder, err
 }
 
 // isDaemon reports whether the process the runtime record names is the
