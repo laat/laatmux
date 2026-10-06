@@ -763,9 +763,9 @@ func TestTwoAgentsOneSession(t *testing.T) {
 	}
 }
 
-// A worktree line with no home session whose agent is on this machine's
-// default server stands for that session: the viewer in it is on the
-// line, and on the agent's tile.
+// A worktree line with no home session and no workspace session whose
+// agent is on this machine's default server stands for the agent's
+// session: the viewer in it is on the line, and on the agent's tile.
 func TestWorktreeLineTakesAgentSession(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
@@ -926,6 +926,15 @@ func TestHomelessLineLocal(t *testing.T) {
 	rs = Agents(in, Tree(in))
 	if len(rs.Main) != 1 || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || !rs.Main[0].Settled {
 		t.Fatalf("default-server agent's tile, the workspace session left: %+v", rs)
+	}
+	// The viewer in the workspace session, where no agent of the
+	// worktree is, is on the line and its tile, as on a homed line.
+	in.Current = "mac/proj/a"
+	if got = treeLines(Tree(in)); len(got) != 1 || !got[0].Current {
+		t.Fatalf("default-server agent, the viewer in the workspace session: %+v", got)
+	}
+	if rs = Agents(in, Tree(in)); len(rs.Main) != 1 || !rs.Main[0].Current {
+		t.Fatalf("default-server agent's tile, the viewer in the workspace session: %+v", rs)
 	}
 	// The agent in the worktree's workspace session itself: the line is
 	// settled as that session is, and its tile in the Stale fold.
@@ -1102,6 +1111,24 @@ func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
 			}
 			if rs := Agents(in, nodes); len(rs.Main) != 2 || !rs.Main[0].Current || !rs.Main[1].Current {
 				t.Fatalf("settled %v, the viewer in %s: tiles %+v", settled, current, rs)
+			}
+			// Two tasks standing for B carry its workspace session and the
+			// viewer's mark, the older one too, which holds no child to be
+			// marked through.
+			tasks := in
+			tasks.Pendings = []protocol.Pending{
+				{ID: "add-1", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(1, 0)},
+				{ID: "add-2", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(2, 0)},
+			}
+			marked := map[string]bool{}
+			for _, n := range treeLines(Tree(tasks)) {
+				if n.Pending == nil || n.Local == nil || n.Local.Name != "mac/proj/b" {
+					t.Fatalf("settled %v, the viewer in %s: the task line %+v", settled, current, n)
+				}
+				marked[n.ID()] = n.Current
+			}
+			if !reflect.DeepEqual(marked, map[string]bool{"add-1": true, "add-2": true}) {
+				t.Fatalf("settled %v, the viewer in %s: standing tasks marked %v", settled, current, marked)
 			}
 		}
 	}

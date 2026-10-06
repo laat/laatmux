@@ -357,14 +357,21 @@ func (b *builder) worktrees() {
 		// server stands for, unless that is a workspace session, which is
 		// a line's by its key alone: an agent here in a window of another
 		// worktree's workspace session leaves that session to that
-		// worktree's line. The settled state is a workspace session's
-		// only, not one set by hand on a plain session or attachment.
-		// The most pressing agent is kept apart, for the folded line's
-		// icon.
+		// worktree's line. The viewer in the session enter goes to is on
+		// the line either way, and on the standing tasks that take its
+		// place, as through an attachment to the home. The settled state
+		// is a workspace session's only, not one set by hand on a plain
+		// session or attachment. The most pressing agent is kept apart,
+		// for the folded line's icon.
 		line.Local = j.byKey[key]
-		if line.Local == nil && w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
+		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
 			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() {
-				line.Local = l
+				if line.Local == nil {
+					line.Local = l
+				}
+				if in.Current != "" && l.Name == in.Current {
+					line.Current = true
+				}
 			}
 		}
 		line.Settled = line.Local != nil && line.Local.Workspace() && line.Local.Settled
