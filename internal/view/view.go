@@ -385,7 +385,8 @@ type Span struct {
 	// on screen moves every second.
 	tick bool
 	// stale marks a span from an answer gone stale: a template's style
-	// gives it its background alone, so it stays dim and plain.
+	// gives it its background alone, so it stays dim and plain, and ANSI
+	// draws it on that background in the dimmed colour.
 	stale bool
 }
 
@@ -940,7 +941,8 @@ func Text(lines []Line) string {
 // after it. In a theme with colours a span's colour is drawn, and a dim
 // line is drawn in the dimmed colour throughout, but for the viewer's
 // own row's label; plain text keeps the terminal's own foreground, which
-// is right whatever the background. The selection is the highlight
+// is right whatever the background, but for a stale span on a template's
+// background, drawn in the dimmed colour. The selection is the highlight
 // background with the theme's text on it when the theme knows the
 // terminal's background, and reverse video otherwise, as it is without
 // colours, where the attributes are all there is: under reverse video
@@ -988,6 +990,12 @@ func ANSI(l Line, th palette.Theme) string {
 			// the band, so the selected row is told apart, and a dim
 			// line is dim throughout.
 			bg = th.SGR(s.Bg, true)
+		}
+		if s.stale && fg == "" && bg != "" {
+			// A stale span on a template's background: the dimmed
+			// colour, as a dim line's, where the terminal's own
+			// foreground made faint can all but vanish on a light one.
+			fg = th.SGR(palette.Dimmed, false)
 		}
 		pre := ""
 		if s.band {

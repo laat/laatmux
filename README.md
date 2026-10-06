@@ -1103,9 +1103,10 @@ alike; only the lines it leaves differ.
   machine first saw them pending, in purple, ticking under an hour,
   shown whole or dropped; failing: the first failing check's name in
   red, cut like a label; else nothing; on `main` and `master` only the
-  failing name). A stale answer leaves them dim and plain, as a git
-  refresh that timed out leaves the git tokens, whatever style is in
-  force at them; the pending time is then as of the last answer.
+  failing name). A stale answer leaves them dim and plain whatever
+  colour or bold a style gives them, as a refresh that timed out leaves
+  the git stats, sync, counts and marks; the pending time is then as of
+  the last answer.
   Position: `{idx}` (the row's number, as the digits count),
   `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
   (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
@@ -1139,11 +1140,12 @@ alike; only the lines it leaves differ.
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves
-  a token's own colours alone. A stale PR or git token takes only its
-  background: stale wins over the style's colour and bold, so the
-  token reads dim and plain whatever the template says. The padding
-  `{fill}` takes the style in force at the fill, and a background
-  gives way to the selection's band.
+  a token's own colours alone. A token a stale answer leaves dim and
+  plain takes only the style's background, drawn on it in the dimmed
+  colour in a theme with colours: stale wins over the style's colour
+  and bold, so the token reads dim and plain whatever the template
+  says. The padding `{fill}` takes the style in force at the fill, and
+  a background gives way to the selection's band.
 - **Errors.** A template that does not parse is shown in the view in
   its place, `template error: unknown token {x} at column 7 in
   tiles[0]`, rather than failing the pane. The fold row, the

@@ -170,9 +170,8 @@ func TestTokens(t *testing.T) {
 
 // Styles hold until the next one and leave a token's own colours; a
 // stale token takes the background alone; a background is drawn; the
-// fill puts the right part against the edge;
-// an empty token takes its separator with it; a template that did not
-// parse draws its error.
+// fill puts the right part against the edge; an empty token takes its
+// separator with it; a template that did not parse draws its error.
 func TestTemplateStyles(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	m := &Model{Now: now, LocalHost: "mac"}
@@ -276,14 +275,33 @@ func TestTemplateStyles(t *testing.T) {
 	if len(own) != 2 || len(back) != 2 || own[1] != back[1] {
 		t.Errorf("the put-back mark %+v, the number's own %+v", back, own)
 	}
+	// In a theme with colours a stale span on the style's background is
+	// in the dimmed colour, not the terminal's own made faint, which a
+	// light background can all but hide; without a background, or
+	// without colours, it is faint.
+	th, _ := palette.New(true, nil)
+	on := Line{Spans: m.line(mustParse(t, "#[fg=accent,bold,bg=#ffff00]{pr_number}"), r, 4, 0)}
+	if got, want := ANSI(on, th), th.SGR(palette.Dimmed, false)+th.SGR("#ffff00", true)+"#7"; !strings.Contains(got, want) || strings.Contains(got, "\x1b[2m") || strings.Contains(got, "\x1b[1m") {
+		t.Errorf("a stale number on a background: %q", got)
+	}
+	if got := ANSI(on, palette.Mono()); got != "\x1b[2m#7\x1b[0m\x1b[2m?\x1b[0m\x1b[0m" {
+		t.Errorf("a stale number on a background without colours: %q", got)
+	}
+	if got := ANSI(Line{Spans: m.line(mustParse(t, "#[fg=accent,bold]{pr_number}"), r, 4, 0)}, th); got != "\x1b[2m#7\x1b[0m\x1b[2m?\x1b[0m\x1b[0m" {
+		t.Errorf("a stale number without a background: %q", got)
+	}
 	// Every PR token of a stale answer, at every width, the shrunk
 	// checks and the put-back mark among them.
-	for _, ch := range []*protocol.Checks{
-		{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"},
-		{State: protocol.ChecksPending, Passed: 3, Total: 5, PendingSince: now.Add(-5 * time.Minute)},
+	r.Branch.FetchedAt = now.Add(-time.Minute)
+	for _, c := range []struct {
+		ch   *protocol.Checks
+		want string
+	}{
+		{&protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}, "● #7 × 3/5? test (macos-latest)"},
+		{&protocol.Checks{State: protocol.ChecksPending, Passed: 3, Total: 5, PendingSince: now.Add(-5 * time.Minute)}, "● #7 ⠋ 3/5? 4:00"},
 	} {
-		r.Branch.Checks = ch
-		staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{pr_state} {pr_number} {pr_checks} {pr_detail}")
+		r.Branch.Checks = c.ch
+		staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{pr_state} {pr_number} {pr_checks} {pr_detail}", c.want)
 	}
 	r.Branch.PR.Number = 52
 	r.Branch.Checks = nil
@@ -309,7 +327,8 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("#[fg=accent]{git_stats}", 40); got != "...|‹R›‹ ›‹+46›‹ ›‹-11›‹ ›‹✎›‹ ›‹+28›‹ ›‹-3›\n" {
 		t.Errorf("stale stats under a colour: %q", got)
 	}
-	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_stats} {git_sync} {git_rebase} {git_conflict}")
+	r.Worktree.Git.Base = "origin/feature-long-base"
+	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_stats} {git_sync} {git_rebase} {git_conflict}", "R +46 -11 ✎ +28 -3 →feature-lo… ! ↑2 ↓1 R !")
 	r = tokenRow(now)
 	// fg=default clears the colour, as tmux spells it.
 	if got := render("#[fg=accent]a#[fg=default]b", 10); got != "...|⟨accent:a⟩b\n" {
@@ -596,23 +615,20 @@ func mustParse(t *testing.T, src string) Compiled {
 
 // staleStyled draws src, a style with the background #112233 and a
 // colour and bold over stale tokens, at every width up to 60: each span
-// drawn that is not spaces is dim and plain on the background.
-func staleStyled(t *testing.T, m *Model, r rows.Row, src string) {
+// drawn that is not spaces is dim and plain on the background. At 60
+// the line is want, so every token is drawn.
+func staleStyled(t *testing.T, m *Model, r rows.Row, src, want string) {
 	t.Helper()
-	seen := 0
 	for w := 1; w <= 60; w++ {
-		for _, sp := range m.line(mustParse(t, src), r, w, 0) {
-			if strings.TrimSpace(sp.Text) == "" {
-				continue
-			}
-			seen++
-			if !sp.Dim || sp.Bold || sp.Fg != "" || sp.Bg != "#112233" {
+		spans := m.line(mustParse(t, src), r, w, 0)
+		for _, sp := range spans {
+			if strings.TrimSpace(sp.Text) != "" && (!sp.Dim || sp.Bold || sp.Fg != "" || sp.Bg != "#112233") {
 				t.Errorf("%q at %d: %+v not dim and plain on the background", src, w, sp)
 			}
 		}
-	}
-	if seen == 0 {
-		t.Errorf("%q: nothing drawn", src)
+		if got := strings.TrimSpace(Text([]Line{{Spans: spans}})); w == 60 && got != want {
+			t.Errorf("%q at 60: %q, want %q", src, got, want)
+		}
 	}
 }
 
