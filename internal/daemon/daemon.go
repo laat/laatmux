@@ -302,10 +302,8 @@ type Daemon struct {
 	// logged once per change.
 	lastAttnErr    string
 	lastClientsErr string
-	// The worktrees' git status refreshes, by root, and the last error
-	// logged; see gitstatus.go.
-	gits       map[string]*gitEntry
-	lastGitErr string
+	// The worktrees' git status refreshes, by root; see gitstatus.go.
+	gits map[string]*gitEntry
 	// The branch records and the state of asking GitHub about them,
 	// nil without the branches capability. See branches.go.
 	branches   *branches
