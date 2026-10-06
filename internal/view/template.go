@@ -468,10 +468,11 @@ func staleMark(left, right []item, stale, back bool) {
 
 // styled is a span with a style's settings where the span has none of
 // its own. A dim span with no colour of its own, a remote host, a
-// draft's number or a stale answer's token, takes the background alone:
-// dim wins over the style's colour and bold, which would make it read
-// as a local, open or fresh one. A dim span's own colour, a closed PR's
-// say, wins over dim, and the span is styled as any other.
+// draft's number or state, or a stale answer's token, takes the
+// background alone: dim wins over the style's colour and bold, which
+// would make it read as a local, open or fresh one. A dim span's own
+// colour, a closed PR's say, wins over dim, and the span is styled as
+// any other.
 func styled(sp Span, st style) Span {
 	if sp.own {
 		return sp

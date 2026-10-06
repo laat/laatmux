@@ -307,7 +307,7 @@ func TestTemplateStyles(t *testing.T) {
 	// A dim token with no colour of its own takes a style's background
 	// alone, as a stale one does: a remote host and a draft's number on
 	// a chip are not drawn in the chip's colour or bold, which would
-	// read local and fresh; the literal between them is.
+	// read as a local host and an open PR; the literal between them is.
 	r.Branch.PR.Draft = true
 	if got := render("#[fg=#000000,bg=#ffff00]{host} {pr_number}", 40); got != "...|‹⟦#ffff00:vm⟧›⟦#ffff00:⟨#000000: ⟩⟧‹⟦#ffff00:#52⟧›\n" {
 		t.Errorf("a remote host and a draft on a chip: %q", got)
