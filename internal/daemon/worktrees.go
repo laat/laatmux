@@ -118,7 +118,7 @@ func (d *Daemon) pokeWorktrees() {
 // the last git listing, so a session appearing or exiting updates the
 // record without a git call.
 func (d *Daemon) setManagedRoots(panes []tmux.Pane, now time.Time) {
-	roots := homeSessions(panes, d.resolve)
+	roots := homeSessions(panes, d.paths.resolve)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if sameSessions(roots, d.managedRoots) {

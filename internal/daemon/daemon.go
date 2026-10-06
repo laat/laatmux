@@ -173,13 +173,12 @@ type Daemon struct {
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
-	// records by id; and the resolved-path cache. See attribution.go.
-	roots     []root
-	paneRecs  map[string]protocol.Pane
-	runRecs   map[string]protocol.Run
-	resolveMu sync.Mutex
-	resolved  map[string]resolution
-	resolving map[string]bool
+	// records by id; and the resolved-path cache, with a lock of its
+	// own. See attribution.go and resolve.go.
+	roots    []root
+	paneRecs map[string]protocol.Pane
+	runRecs  map[string]protocol.Run
+	paths    *resolver
 
 	cmds  map[string]*command    // recent add, rm and run by id
 	locks map[string]*sync.Mutex // per repository source
@@ -360,8 +359,7 @@ func New(cfg Config) *Daemon {
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
-		resolved:     map[string]resolution{},
-		resolving:    map[string]bool{},
+		paths:        newResolver(),
 		cmds:         map[string]*command{},
 		locks:        map[string]*sync.Mutex{},
 		commandTTL:   DefaultCommandTTL,
@@ -633,7 +631,7 @@ func (d *Daemon) agentID(key string) string { return d.cfg.EnvironmentID + "/" +
 // worktree root.
 func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.Time) {
 	key := paneKey(t.Label, p.ID)
-	path := d.resolve(panePath(p))
+	path := d.paths.resolve(panePath(p))
 	d.mu.Lock()
 	st, ok := d.panes[key]
 	if !ok {

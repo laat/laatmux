@@ -3,7 +3,6 @@ package daemon
 import (
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -26,21 +25,6 @@ import (
 // worktree listed after its pane was seen gains the pane without
 // waiting for the pane to change.
 
-// The resolved-path cache: its size, how many resolutions may be in
-// flight, and how long a resolution stands before it is made again, in
-// the background, the old one standing meanwhile.
-const (
-	maxResolved  = 4096
-	maxResolving = 64
-	resolveTTL   = time.Minute
-)
-
-// resolution is a path with its symlinks resolved, and when that was.
-type resolution struct {
-	real string
-	at   time.Time
-}
-
 // root is a listed worktree root and its path with symlinks resolved.
 type root struct {
 	root string // as git registered it, the worktree record's
@@ -54,75 +38,6 @@ func panePath(p tmux.Pane) string {
 		return p.Cwd
 	}
 	return p.CurrentPath
-}
-
-// resolve is the path with its symlinks resolved as last seen, and the
-// path cleaned until it has been: the file system is asked on a
-// goroutine of its own, so a path on a hung mount costs that goroutine
-// and never the poll, and the answer is there by a later poll. A path
-// that does not resolve, gone or unreadable, is taken as it is.
-func (d *Daemon) resolve(path string) string {
-	if path == "" {
-		return ""
-	}
-	clean := filepath.Clean(path)
-	d.resolveMu.Lock()
-	defer d.resolveMu.Unlock()
-	r, ok := d.resolved[path]
-	if (!ok || time.Since(r.at) > resolveTTL) && !d.resolving[path] && len(d.resolving) < maxResolving {
-		d.resolving[path] = true
-		go func() {
-			real := clean
-			if rr, err := filepath.EvalSymlinks(clean); err == nil {
-				real = rr
-			}
-			d.resolveMu.Lock()
-			defer d.resolveMu.Unlock()
-			delete(d.resolving, path)
-			if _, ok := d.resolved[path]; !ok && len(d.resolved) >= maxResolved {
-				d.evictResolvedLocked()
-			}
-			d.resolved[path] = resolution{real: real, at: time.Now()}
-		}()
-	}
-	if ok {
-		return r.real
-	}
-	return clean
-}
-
-// evictResolvedLocked makes room in the full cache: the entries no poll
-// has asked for in a while go, those of the panes there are now being
-// refreshed within a TTL; failing that, one entry goes. Never all, which
-// would have every path answered cleaned for a poll, and a symlinked
-// pane lose its worktree for it. Called with resolveMu held.
-func (d *Daemon) evictResolvedLocked() {
-	for p, r := range d.resolved {
-		if time.Since(r.at) > 3*resolveTTL {
-			delete(d.resolved, p)
-		}
-	}
-	for p := range d.resolved {
-		if len(d.resolved) < maxResolved {
-			return
-		}
-		delete(d.resolved, p)
-	}
-}
-
-// resolveNow resolves a path on the caller's goroutine: a listed root,
-// which git has just read.
-func resolveNow(path string) string {
-	clean := filepath.Clean(path)
-	if real, err := filepath.EvalSymlinks(clean); err == nil {
-		return real
-	}
-	return clean
-}
-
-// inside reports whether path is dir or below it, on path separators.
-func inside(path, dir string) bool {
-	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // resolveRoots is the roots of a listing with their resolved paths,
@@ -175,7 +90,7 @@ func (d *Daemon) worktreeOfLocked(path string) string {
 }
 
 // within reports whether path is inside root, as written or resolved;
-// resolve is Daemon.resolve.
+// resolve is the daemon's resolver.
 func within(path, root string, resolve func(string) string) bool {
 	p := resolve(path)
 	return inside(p, filepath.Clean(root)) || inside(p, resolve(root))
@@ -189,7 +104,7 @@ func within(path, root string, resolve func(string) string) bool {
 // managed session with a pane made at the root all the same, so no
 // agent is left in a removed directory. Two sessions on one root is not
 // a state add creates; the lexically first name wins so the record is
-// stable. resolve is Daemon.resolve.
+// stable. resolve is the daemon's resolver.
 func homeSessions(panes []tmux.Pane, resolve func(string) string) map[string]string {
 	bySession := map[string][]tmux.Pane{}
 	for _, p := range panes {

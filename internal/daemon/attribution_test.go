@@ -73,7 +73,7 @@ func TestAttributionTable(t *testing.T) {
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.resolve(panePath(c.pane)))
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)))
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -548,36 +548,110 @@ func TestHomeSessionAndRm(t *testing.T) {
 // A full cache loses the entries no poll has asked for in a while, or
 // one entry when all are fresh; never all of them.
 func TestEvictResolved(t *testing.T) {
-	d := New(Config{EnvironmentID: "env"})
+	r := newResolver()
 	old := time.Now().Add(-4 * resolveTTL)
-	d.resolveMu.Lock()
+	r.mu.Lock()
 	for i := 0; i < maxResolved; i++ {
 		at := time.Now()
 		if i%2 == 0 {
 			at = old
 		}
-		d.resolved[fmt.Sprintf("/p/%d", i)] = resolution{real: "/r", at: at}
+		r.resolved[fmt.Sprintf("/p/%d", i)] = resolution{real: "/r", at: at}
 	}
-	d.evictResolvedLocked()
-	n := len(d.resolved)
-	for p, r := range d.resolved {
-		if r.at.Equal(old) {
+	r.evictLocked()
+	n := len(r.resolved)
+	for p, res := range r.resolved {
+		if res.at.Equal(old) {
 			t.Fatalf("stale entry %s kept", p)
 		}
 	}
-	d.resolveMu.Unlock()
+	r.mu.Unlock()
 	if n != maxResolved/2 {
 		t.Fatalf("%d entries left, want the %d fresh ones", n, maxResolved/2)
 	}
-	d.resolveMu.Lock()
-	for i := 0; len(d.resolved) < maxResolved; i++ {
-		d.resolved[fmt.Sprintf("/q/%d", i)] = resolution{real: "/r", at: time.Now()}
+	r.mu.Lock()
+	for i := 0; len(r.resolved) < maxResolved; i++ {
+		r.resolved[fmt.Sprintf("/q/%d", i)] = resolution{real: "/r", at: time.Now()}
 	}
-	d.evictResolvedLocked()
-	n = len(d.resolved)
-	d.resolveMu.Unlock()
+	r.evictLocked()
+	n = len(r.resolved)
+	r.mu.Unlock()
 	if n != maxResolved-1 {
 		t.Fatalf("all fresh: %d entries left, want %d", n, maxResolved-1)
+	}
+}
+
+// A path is answered cleaned until the file system has been asked, off
+// the caller's goroutine, and resolved from then on; one that does not
+// resolve is taken as it is; a resolution stands for its TTL, and at
+// most maxResolving paths are asked for at once.
+func TestResolver(t *testing.T) {
+	dir := realTemp(t)
+	real := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.MkdirAll(filepath.Join(real, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver()
+	if got := r.resolve(link + "/./src/"); got != filepath.Join(link, "src") {
+		t.Fatalf("first answer %q, want the path cleaned", got)
+	}
+	settled := func(path, want string) {
+		t.Helper()
+		for i := 0; i < 100; i++ {
+			if r.resolve(path) == want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("%s resolved as %q, want %q", path, r.resolve(path), want)
+	}
+	settled(link+"/./src/", filepath.Join(real, "src"))
+	settled(filepath.Join(dir, "gone"), filepath.Join(dir, "gone"))
+	if got := r.resolve(""); got != "" {
+		t.Fatalf("empty path resolved as %q", got)
+	}
+	// Within the TTL the answer stands without the file system asked
+	// again: a resolution dated now is not refreshed.
+	r.mu.Lock()
+	r.resolved["/stale"] = resolution{real: "/was", at: time.Now()}
+	r.mu.Unlock()
+	if got := r.resolve("/stale"); got != "/was" {
+		t.Fatalf("a fresh resolution not answered: %q", got)
+	}
+	r.mu.Lock()
+	asked := r.resolving["/stale"]
+	r.mu.Unlock()
+	if asked {
+		t.Fatal("a fresh resolution asked for again")
+	}
+	// Past the TTL the old answer stands while the path is asked for
+	// again.
+	r.mu.Lock()
+	r.resolved[link] = resolution{real: "/was", at: time.Now().Add(-2 * resolveTTL)}
+	r.mu.Unlock()
+	if got := r.resolve(link); got != "/was" {
+		t.Fatalf("a stale resolution not answered meanwhile: %q", got)
+	}
+	settled(link, real)
+	// With maxResolving paths in flight another is answered cleaned and
+	// not asked for.
+	r.mu.Lock()
+	for i := 0; i < maxResolving; i++ {
+		r.resolving[fmt.Sprintf("/busy/%d", i)] = true
+	}
+	r.mu.Unlock()
+	if got := r.resolve(filepath.Join(link, "more")); got != filepath.Join(link, "more") {
+		t.Fatalf("over the in-flight cap: %q", got)
+	}
+	r.mu.Lock()
+	n := len(r.resolving)
+	r.mu.Unlock()
+	if n != maxResolving {
+		t.Fatalf("%d in flight, want the cap %d", n, maxResolving)
 	}
 }
 
