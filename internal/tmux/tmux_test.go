@@ -355,9 +355,17 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 	if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: cwd, Cmd: []string{"sleep", "600"}}); err != nil {
 		t.Fatal(err)
 	}
-	panes, err := s.ListPanes(ctx)
-	if err != nil || len(panes) != 1 || panes[0].Session != name || panes[0].Cwd != cwd {
-		t.Fatalf("listed %+v %v, want session %q with cwd %q", panes, err, name, cwd)
+	// The managed server by name, and the same server by its socket as
+	// a watched one is addressed.
+	sock, err := s.Run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, srv := range []Server{s, {Path: strings.TrimSpace(string(sock))}} {
+		panes, err := srv.ListPanes(ctx)
+		if err != nil || len(panes) != 1 || panes[0].Session != name || panes[0].Cwd != cwd {
+			t.Fatalf("%s listed %+v %v, want session %q with cwd %q", srv.Label(), panes, err, name, cwd)
+		}
 	}
 	if out, err := s.Run(ctx, "show-options", "-p", "-t", "="+name+":", "-v", "@laatmux_cwd"); err != nil || strings.TrimSpace(string(out)) != cwd {
 		t.Fatalf("show-options: %q %v, want %q", out, err, cwd)
@@ -366,11 +374,12 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 		t.Fatalf("a second session of the name: %v", err)
 	}
 	// The same listing without -u is what the test guards against: in
-	// this environment tmux does not take the client for UTF-8.
-	out, err := exec.Command("tmux", s.args("list-panes", "-a", "-F", "#{session_name} #{@laatmux_cwd}")...).Output()
-	want := strings.ReplaceAll(name+" "+cwd, "æøå", "___")
-	if got := strings.TrimSpace(string(out)); err != nil || got != want {
-		t.Fatalf("without -u: %q %v, want %q", got, err, want)
+	// this environment tmux does not take the client for UTF-8. The
+	// session name alone, since the temporary directory may have
+	// non-ASCII characters of its own.
+	out, err := exec.Command("tmux", s.args("list-panes", "-a", "-F", "#{session_name}")...).Output()
+	if got := strings.TrimSpace(string(out)); err != nil || got != "proj/fiks-___" {
+		t.Fatalf("without -u: %q %v, want %q", got, err, "proj/fiks-___")
 	}
 }
 

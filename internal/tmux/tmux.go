@@ -103,10 +103,11 @@ func (s Server) Run(ctx context.Context, a ...string) ([]byte, error) {
 func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte, error) {
 	// -u: tmux writes every non-ASCII character of what it prints, an
 	// expanded format or an error, as _ to a client that is not UTF-8,
-	// and a client is UTF-8 only by -u, a UTF-8 locale or an inherited
-	// TMUX. A daemon started without LANG, or a command run over ssh,
-	// has neither, and would read a session name, root or tag with a
-	// non-ASCII byte in it as another.
+	// and Sep, which takes no column, as nothing; a client is UTF-8
+	// only by -u, a UTF-8 locale or an inherited TMUX. A daemon started
+	// without LANG, or a command run over ssh, can have neither, and
+	// would list no pane at all and read a session name, root or tag
+	// with a non-ASCII byte in it as another.
 	cmd := exec.CommandContext(ctx, "tmux", append([]string{"-u"}, s.args(a...)...)...)
 	cmd.Stdin = in
 	var out, errb bytes.Buffer
