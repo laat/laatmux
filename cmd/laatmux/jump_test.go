@@ -158,6 +158,34 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	}
 }
 
+// A detached worktree whose directory name has a \ gets a workspace
+// session that the name its jump computed finds, made once and reused:
+// tmux stores a \ in a session name doubled, so a session made under
+// the name as given was not found by it, and the tags set in
+// new-session's own sequence found no session.
+func TestEnsureDetachedRootWithBackslash(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	h := config.Host{Host: peer.Host{Name: "mac"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	w := protocol.Worktree{ID: `env/worktree//w/proj/a\b`, EnvironmentID: "env", Repo: "proj", Root: `/w/proj/a\b`}
+	a := protocol.Agent{ID: "env/laatmux/%1", EnvironmentID: "env", Server: "laatmux", Session: "m1", WorktreeID: w.ID}
+	spec, _, err := rowSpec(cfg, h, rows.Row{Host: "mac", Worktree: &w, Agent: &a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, created, err := workspace.Ensure(ctx, spec)
+	if err != nil || !created || name != spec.Name {
+		t.Fatalf("ensure %q: %q %v %v", spec.Name, name, created, err)
+	}
+	if _, err := workspace.Server.Run(ctx, "has-session", "-t", "="+name+":"); err != nil {
+		t.Fatalf("has-session %q: %v", name, err)
+	}
+	if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
+		t.Fatalf("ensure again: %q %v %v", name, created, err)
+	}
+}
+
 // A pane jump: a tile, an agent node and a pane node name their pane; a
 // worktree line, a task and a run do not. A pane on a remote host's
 // default server is refused as jump refuses it.
