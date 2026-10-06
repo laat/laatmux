@@ -1226,6 +1226,11 @@ func TestOtherSessionsHost(t *testing.T) {
 			t.Errorf("at %d: %q, want %q", c.w, got, c.want)
 		}
 	}
+	// Down to the host alone, a host no record claims is ?, not nothing.
+	m.Width = 17
+	if got, want := Debug(m.treeLine(m.Tree[m.indexOf("xenv/work/%4")], 0)), ".D.|    stray‹ (?)›  ⟨border:  ⟩\n"; got != want {
+		t.Errorf("stray at 17: %q, want %q", got, want)
+	}
 }
 
 // Switching: the selection follows across Tab, from an agent to its
