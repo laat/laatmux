@@ -314,18 +314,34 @@ func (b *builder) worktrees() {
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
 		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
+		// The line's agent is the one its jump goes through: in the home
+		// session; with the home lost, the one laatmux made at the root,
+		// whose session the workspace session attaches to then (Home);
+		// or one on a default server. The home, as Home has it, is what
+		// the children take the workspace session by.
+		line.Agent = rowAgent(agents, w)
+		home := w.Session
+		if home == "" && line.Agent != nil && line.Agent.Server == protocol.ServerLaatmux {
+			home = line.Agent.Session
+		}
 		var children []Row
 		for _, a := range agents {
 			b.used[a] = true
 			// The agent's own local session: the workspace session for
 			// one in the home session, else the attachment to its
 			// session, or its session on this machine's default server.
+			// A viewer in an attachment to the home session is on the
+			// line all the same, as following wants it.
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
-			if a.Server == protocol.ServerLaatmux && a.Session == w.Session {
+			own := j.agentLocal(host, a)
+			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
 				c.Local = j.byKey[key]
+				if own != nil && own.Name == in.Current {
+					line.Current = true
+				}
 			}
 			if c.Local == nil {
-				c.Local = j.agentLocal(host, a)
+				c.Local = own
 			}
 			if c.Local == nil {
 				c.Local = j.byKey[key]
@@ -336,9 +352,8 @@ func (b *builder) worktrees() {
 		children = append(children, b.runs(w, host)...)
 		// The worktree's own session: the home session's workspace
 		// session, or the one its agent on this machine's default server
-		// stands for. The line's agent is the one its jump goes through;
-		// the most pressing is kept apart, for the folded line's icon.
-		line.Agent = rowAgent(agents, w)
+		// stands for. The most pressing agent is kept apart, for the
+		// folded line's icon.
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
 			line.Local = j.agentLocal(host, line.Agent)
 		}
@@ -365,9 +380,10 @@ func (b *builder) worktrees() {
 			// children; the others follow as lines of their own.
 			owner := &b.taskRows[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
+			owner.Current = line.Current
 			j.finish(owner)
 			for _, k := range idx[1:] {
-				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth = w, line.Local, 1
+				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current = w, line.Local, 1, line.Current
 				j.finish(&b.taskRows[k])
 			}
 			group := append([]Row{*owner}, children...)
@@ -592,7 +608,9 @@ func markViewer(out []Row, current string) {
 			if r.Depth == 1 && (r.Kind == KindWorktree || r.Kind == KindTask) {
 				line = i
 			}
-			r.Current = mine
+			// A line may be the viewer's already, through an attachment
+			// to its home session beside its workspace session.
+			r.Current = mine || r.Current
 		case mine && line >= 0:
 			out[line].Current = true
 		}
@@ -669,11 +687,11 @@ func (r Row) Home() string {
 // order; the stale agents and those of settled workspaces, unless
 // pressing or the viewer's own, in the Stale fold. Tiles that share a
 // primary label, several agents of one worktree say, are numbered in
-// the tree's order. Of the input it reads the sort order and the stale
-// fold setting.
+// the tree's order. Of the input it reads the viewer's session, the
+// sort order and the stale fold setting.
 func Agents(in Input, tree []Row) Rows {
 	var rows []Row
-	viewer := map[string]bool{} // worktree ids and session names the viewer is in
+	viewer := map[string]bool{} // the worktree and task lines the viewer is on
 	for _, n := range tree {
 		if !n.Current {
 			continue
@@ -683,9 +701,6 @@ func Agents(in Input, tree []Row) Rows {
 		}
 		if n.Pending != nil {
 			viewer["t:"+n.Pending.ID] = true
-		}
-		if n.Local != nil {
-			viewer["s:"+n.Local.Name] = true
 		}
 	}
 	var owner string // the task or worktree line the agents below are under
@@ -712,7 +727,11 @@ func Agents(in Input, tree []Row) Rows {
 			if n.Depth == 2 {
 				t.Current = viewer[owner]
 			}
-			if t.Local != nil && viewer["s:"+t.Local.Name] {
+			// A tile in the viewer's own session is the viewer's wherever
+			// its node sits. Not one in a session a line is marked through:
+			// a line marked through one of its children or an attachment
+			// stands for its own session, which the viewer is not in.
+			if t.Local != nil && in.Current != "" && t.Local.Name == in.Current {
 				t.Current = true
 			}
 			rows = append(rows, t)
