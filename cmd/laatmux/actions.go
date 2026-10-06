@@ -718,11 +718,7 @@ func (d *dash) settle(m *view.Model) {
 		return
 	}
 	if line.Local == nil || !line.Local.Workspace() {
-		hint := "enter creates one"
-		if resolved {
-			hint = "enter on the line creates one"
-		}
-		m.Message = line.Name + ": no local workspace session; " + hint
+		m.Message = line.Name + ": no local workspace session; " + noWorkspaceHint(d.cfg, *line, resolved)
 		return
 	}
 	// The direction is the session's own state, which the rows' copies
@@ -742,6 +738,33 @@ func (d *dash) settle(m *view.Model) {
 	} else {
 		m.Message = "settled " + line.Local.Name
 	}
+}
+
+// noWorkspaceHint says what enter on a line with no local workspace
+// session does about one, by where the line's jump goes: it makes the
+// session; or it switches to the session of the line's agent on this
+// machine's default server, and add, which starts a managed session at
+// the root, is what makes one; or it is refused, and its reason is the
+// hint. A task still running has nothing to jump to yet, the add making
+// the session meanwhile, and keeps the plain hint, as does a row of no
+// worktree.
+func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
+	enter := "enter"
+	if resolved {
+		enter = "enter on the line"
+	}
+	if line.Worktree == nil || line.Pending != nil && !line.Pending.Done {
+		return enter + " creates one"
+	}
+	_, session, err := jumpTarget(cfg, line)
+	switch {
+	case err != nil:
+		return err.Error()
+	case session != "":
+		h, _ := cfg.Find(line.Host)
+		return fmt.Sprintf("%s switches to %s, where its agent runs; %s", enter, session, addHint(cfg, h, *line.Worktree))
+	}
+	return enter + " creates one"
 }
 
 // shell opens the shell window in the selected workspace, creating the

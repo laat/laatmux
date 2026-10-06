@@ -552,6 +552,112 @@ func TestSettleGoesByLine(t *testing.T) {
 	}
 }
 
+// z on a homeless worktree's line with no local workspace session, or
+// on its agent, says what enter on the line does about one, as enter
+// then does it: with the agent laatmux made at the root, enter makes
+// the session; with the agent on this machine's default server, in a
+// plain session or in a window of another worktree's workspace session,
+// enter switches there and add is what makes one; with no agent, enter
+// refuses with the add line. Under a task still running for the
+// worktree, which enter waits for, the hint is the plain one.
+func TestSettleHintGoesByEnter(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tmux.log")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
+	host := rows.Host{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	a := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "a", Root: "/w/a", Session: "proj/a"}
+	b := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "b", Root: "/w/b"}
+	agent := func(id, server, session string) *protocol.Agent {
+		return &protocol.Agent{ID: id, EnvironmentID: "menv", Server: server, Session: session, Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: server == "laatmux", Cwd: "/w/b", WorktreeID: b.ID}
+	}
+	locals := []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "notes"}}
+	show := func(in rows.Input, tree bool) *view.Model {
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		if tree {
+			m.View = view.ViewTree
+		}
+		m.Render()
+		return m
+	}
+	// z, or enter, on the row with the id: the message and the tmux
+	// commands run.
+	press := func(m *view.Model, id string, enter bool) (string, string) {
+		t.Helper()
+		os.Remove(log)
+		if !m.Select(id) {
+			t.Fatalf("no row %s", id)
+		}
+		if enter {
+			d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		} else {
+			d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		}
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got)
+	}
+	add := "mac/proj/b has no managed session; start one with: laatmux add b --repo proj --host mac"
+	for _, c := range []struct {
+		name  string
+		agent *protocol.Agent
+		hint  string // after "enter" or "enter on the line"
+		enter string // what enter on the line does: "create", or the session it switches to; "" for a refusal
+	}{
+		{"no agent", nil, "", ""},
+		{"agent in notes", agent("menv/default/%1", "default", "notes"), " switches to notes, where its agent runs; " + add, "notes"},
+		{"agent in A's workspace session", agent("menv/default/%2", "default", "mac/proj/a"), " switches to mac/proj/a, where its agent runs; " + add, "mac/proj/a"},
+		{"root agent laatmux made", agent("menv/laatmux/%3", "laatmux", "proj/b"), " creates one", "create"},
+	} {
+		in := rows.Input{Hosts: []rows.Host{host}, Worktrees: []protocol.Worktree{a, b}, Locals: locals}
+		if c.agent != nil {
+			in.Agents = []protocol.Agent{*c.agent}
+		}
+		jumped, cmds := press(show(in, true), b.ID, true)
+		switch {
+		case c.enter == "create" && !strings.Contains(cmds, "new-session -d -s mac/proj/b "):
+			t.Errorf("%s: enter on the line: message %q, tmux %q, want mac/proj/b made", c.name, jumped, cmds)
+		case c.enter != "create" && c.enter != "" && (!strings.HasPrefix(jumped, c.enter+" is on the default tmux server") || cmds != ""):
+			t.Errorf("%s: enter on the line: message %q, tmux %q, want a switch to %s", c.name, jumped, cmds, c.enter)
+		case c.enter == "" && (jumped != add || cmds != ""):
+			t.Errorf("%s: enter on the line: message %q, tmux %q, want the add line", c.name, jumped, cmds)
+		}
+		want := "proj/b: no local workspace session; enter" + c.hint
+		if c.enter == "" {
+			// The refusal is enter's own.
+			want = "proj/b: no local workspace session; " + jumped
+		}
+		if got, cmds := press(show(in, true), b.ID, false); got != want || cmds != "" {
+			t.Errorf("%s: z on the line: message %q, tmux %q, want %q", c.name, got, cmds, want)
+		}
+		if c.agent == nil {
+			continue
+		}
+		// The agent, as its node and as its tile, says it of its line.
+		want = "proj/b: no local workspace session; enter on the line" + c.hint
+		for _, tree := range []bool{false, true} {
+			if got, cmds := press(show(in, tree), c.agent.ID, false); got != want || cmds != "" {
+				t.Errorf("%s tree %v: z on the agent: message %q, tmux %q, want %q", c.name, tree, got, cmds, want)
+			}
+		}
+	}
+	// The agent in notes under a task still running for the worktree,
+	// before the add has a session to report: enter on the line does
+	// nothing yet, and the add, not a switch, gives the worktree one.
+	notes := agent("menv/default/%4", "default", "notes")
+	task := protocol.Pending{ID: "add-b", Host: "mac", EnvironmentID: "menv", Source: b.Source, Repo: "proj", Branch: "b", Root: b.Root, Sent: true, Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Now()}
+	in := rows.Input{Hosts: []rows.Host{host}, Worktrees: []protocol.Worktree{a, b}, Agents: []protocol.Agent{*notes}, Pendings: []protocol.Pending{task}, Locals: locals}
+	for _, tree := range []bool{false, true} {
+		if got, cmds := press(show(in, tree), notes.ID, false); got != "proj/b: no local workspace session; enter on the line creates one" || cmds != "" {
+			t.Errorf("tree %v: under a running task, z on the agent: message %q, tmux %q", tree, got, cmds)
+		}
+	}
+}
+
 // An rm whose host side succeeded and whose local cleanup then failed
 // returns the root with the error, so the CLI prints the removal before
 // the error and the dashboard says what was removed.
