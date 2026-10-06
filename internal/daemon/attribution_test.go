@@ -73,7 +73,7 @@ func TestAttributionTable(t *testing.T) {
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.resolve(panePath(c.pane)))
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)))
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -548,37 +548,150 @@ func TestHomeSessionAndRm(t *testing.T) {
 // A full cache loses the entries no poll has asked for in a while, or
 // one entry when all are fresh; never all of them.
 func TestEvictResolved(t *testing.T) {
-	d := New(Config{EnvironmentID: "env"})
+	r := newResolver()
 	old := time.Now().Add(-4 * resolveTTL)
-	d.resolveMu.Lock()
+	r.mu.Lock()
 	for i := 0; i < maxResolved; i++ {
 		at := time.Now()
 		if i%2 == 0 {
 			at = old
 		}
-		d.resolved[fmt.Sprintf("/p/%d", i)] = resolution{real: "/r", at: at}
+		r.resolved[fmt.Sprintf("/p/%d", i)] = resolution{real: "/r", at: at}
 	}
-	d.evictResolvedLocked()
-	n := len(d.resolved)
-	for p, r := range d.resolved {
-		if r.at.Equal(old) {
+	r.evictLocked()
+	n := len(r.resolved)
+	for p, res := range r.resolved {
+		if res.at.Equal(old) {
 			t.Fatalf("stale entry %s kept", p)
 		}
 	}
-	d.resolveMu.Unlock()
+	r.mu.Unlock()
 	if n != maxResolved/2 {
 		t.Fatalf("%d entries left, want the %d fresh ones", n, maxResolved/2)
 	}
-	d.resolveMu.Lock()
-	for i := 0; len(d.resolved) < maxResolved; i++ {
-		d.resolved[fmt.Sprintf("/q/%d", i)] = resolution{real: "/r", at: time.Now()}
+	r.mu.Lock()
+	for i := 0; len(r.resolved) < maxResolved; i++ {
+		r.resolved[fmt.Sprintf("/q/%d", i)] = resolution{real: "/r", at: time.Now()}
 	}
-	d.evictResolvedLocked()
-	n = len(d.resolved)
-	d.resolveMu.Unlock()
+	r.evictLocked()
+	n = len(r.resolved)
+	r.mu.Unlock()
 	if n != maxResolved-1 {
 		t.Fatalf("all fresh: %d entries left, want %d", n, maxResolved-1)
 	}
+}
+
+// A path is answered cleaned until the file system has been asked, off
+// the caller's goroutine, and resolved from then on; one that does not
+// resolve is taken as it is; a resolution stands for its TTL; a full
+// cache makes room; at most maxResolving paths are asked for at once.
+func TestResolver(t *testing.T) {
+	dir := realTemp(t)
+	real := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.MkdirAll(filepath.Join(real, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver()
+	if got := r.resolve(link + "/./src/"); got != filepath.Join(link, "src") {
+		t.Fatalf("first answer %q, want the path cleaned", got)
+	}
+	// cached is the entry for path once the file system has answered.
+	cached := func(path string) resolution {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+			r.mu.Lock()
+			res, ok := r.resolved[path]
+			busy := r.resolving[path]
+			r.mu.Unlock()
+			if ok && !busy {
+				return res
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("%s never resolved", path)
+		return resolution{}
+	}
+	if res := cached(link + "/./src/"); res.real != filepath.Join(real, "src") {
+		t.Fatalf("resolved as %q, want %q", res.real, filepath.Join(real, "src"))
+	}
+	if got := r.resolve(link + "/./src/"); got != filepath.Join(real, "src") {
+		t.Fatalf("answer once resolved %q", got)
+	}
+	gone := filepath.Join(dir, "gone")
+	if got := r.resolve(gone); got != gone {
+		t.Fatalf("a path that is gone answered %q", got)
+	}
+	if res := cached(gone); res.real != gone {
+		t.Fatalf("a path that is gone cached as %q, want it as it is", res.real)
+	}
+	if got := r.resolve(""); got != "" {
+		t.Fatalf("empty path resolved as %q", got)
+	}
+	// unasked is that the file system was not asked about path: it is
+	// not in flight and its entry is as seeded. A worker clears the
+	// one and writes the other in one hold of the lock, so one look
+	// after resolve returns sees either.
+	unasked := func(path string, seeded resolution) {
+		t.Helper()
+		r.mu.Lock()
+		res, busy := r.resolved[path], r.resolving[path]
+		r.mu.Unlock()
+		if busy || res != seeded {
+			t.Fatalf("%s asked for: in flight %v, entry %+v", path, busy, res)
+		}
+	}
+	// Within the TTL the answer stands and the file system is not
+	// asked again.
+	fresh := resolution{real: "/was", at: time.Now()}
+	r.mu.Lock()
+	r.resolved["/stale"] = fresh
+	r.mu.Unlock()
+	if got := r.resolve("/stale"); got != "/was" {
+		t.Fatalf("a fresh resolution not answered: %q", got)
+	}
+	unasked("/stale", fresh)
+	// Past the TTL the old answer stands while the path is asked for
+	// again.
+	r.mu.Lock()
+	r.resolved[link] = resolution{real: "/was", at: time.Now().Add(-2 * resolveTTL)}
+	r.mu.Unlock()
+	if got := r.resolve(link); got != "/was" {
+		t.Fatalf("a stale resolution not answered meanwhile: %q", got)
+	}
+	if res := cached(link); res.real != real {
+		t.Fatalf("refreshed as %q, want %q", res.real, real)
+	}
+	// A full cache makes room for a new path's answer.
+	r = newResolver()
+	r.mu.Lock()
+	for i := 0; i < maxResolved; i++ {
+		r.resolved[fmt.Sprintf("/full/%d", i)] = resolution{real: "/r", at: time.Now()}
+	}
+	r.mu.Unlock()
+	r.resolve(link)
+	cached(link)
+	r.mu.Lock()
+	n := len(r.resolved)
+	r.mu.Unlock()
+	if n != maxResolved {
+		t.Fatalf("%d entries after a resolution into a full cache, want %d", n, maxResolved)
+	}
+	// With maxResolving paths in flight another is answered cleaned and
+	// not asked for: neither in flight nor cached.
+	r = newResolver()
+	r.mu.Lock()
+	for i := 0; i < maxResolving; i++ {
+		r.resolving[fmt.Sprintf("/busy/%d", i)] = true
+	}
+	r.mu.Unlock()
+	if got := r.resolve(link + "/more/"); got != filepath.Join(link, "more") {
+		t.Fatalf("over the in-flight cap: %q", got)
+	}
+	unasked(link+"/more/", resolution{})
 }
 
 // laatmux's own panes, a sidebar pane and a workspace session's attach
