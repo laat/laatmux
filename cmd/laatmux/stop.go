@@ -36,7 +36,14 @@ var stopWait = 20 * time.Second
 // address. A daemon that holds the startup lock but answers on no
 // socket is starting, the lock comes before the listener, or shutting
 // down, the listener goes before the runs are stopped: stop keeps
-// trying to reach it while that holder has the lock. The wait after
+// trying to reach it while that holder has the lock. One that holds
+// the lock and is the daemon the runtime record names, by the pid in
+// both, yet cannot be asked (nothing listens, the hello never comes,
+// or it is of another protocol) is wedged, or shutting down, and gets
+// SIGTERM, which a daemon shutting down ignores: the lock is the
+// kernel's and dies with its holder, so a pid that holds it on two
+// readings a moment apart, equal to the record's, is that daemon and
+// not a pid a crash-left record names since reused. The wait after
 // the request is for the lock to leave the daemon's hands, released
 // when it exits, reaped or not, or taken by a replacement. No daemon
 // running is not an error.
@@ -54,18 +61,43 @@ func cmdStop(ctx context.Context, args []string) error {
 		// record whose daemon is not the one that answers, and a
 		// holder that answers on no socket.
 		why := "answers on no socket"
-		if err == nil {
+		named := err == nil // the record stands and names rt.PID
+		if named {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
 				err := stopDaemon(ctx, nc, rt)
-				if !errors.Is(err, errMoved) {
+				switch {
+				case errors.Is(err, errMoved):
+					why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
+					named = false
+				case errors.Is(err, errNoHello):
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					why = "answers no hello"
+				default:
 					return err
 				}
-				why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
 			}
 		}
 		holder, err := home.Holder()
 		if err != nil {
 			return err
+		}
+		if named && holder == rt.PID {
+			// The record's daemon holds the lock and cannot be asked:
+			// read the lock again a moment later, so a probe that held
+			// it for an instant over the old content is told apart,
+			// then end it as a daemon before the shutdown message is.
+			time.Sleep(100 * time.Millisecond)
+			if again, err := home.Holder(); err != nil {
+				return err
+			} else if again == rt.PID {
+				what := fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID)
+				if err := syscall.Kill(rt.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+					return fmt.Errorf("stop daemon %s, which %s: %w", what, why, err)
+				}
+				return waitGone(ctx, rt.PID, what)
+			}
 		}
 		if holder == 0 {
 			// A daemon between taking the lock and writing its pid, or
@@ -93,8 +125,13 @@ func cmdStop(ctx context.Context, args []string) error {
 }
 
 // errMoved is a daemon reached on a record's address that is not the
-// daemon the record names.
-var errMoved = errors.New("the daemon that answered is not the one the runtime record names")
+// daemon the record names; errNoHello one that accepted the connection
+// but gave no hello stop takes: none within the wait, or one of
+// another protocol.
+var (
+	errMoved   = errors.New("the daemon that answered is not the one the runtime record names")
+	errNoHello = errors.New("no hello")
+)
 
 // stopDaemon ends the daemon on nc, the one the runtime record rt was
 // read for, and waits for it to be gone. A hello whose pid is another
@@ -103,7 +140,7 @@ var errMoved = errors.New("the daemon that answered is not the one the runtime r
 func stopDaemon(ctx context.Context, nc net.Conn, rt home.Runtime) error {
 	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errNoHello, err)
 	}
 	defer c.Close()
 	switch {

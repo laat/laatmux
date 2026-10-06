@@ -118,6 +118,10 @@ func Dial(ctx context.Context, h peer.Host) (*Conn, error) {
 // keepalive that ends a silent connection within about 45 s.
 var bridgeSSH = SSHOptions{KeepAlive: 15 * time.Second, KeepAliveCount: 3}
 
+// HelloTimeout bounds the wait for a daemon's hello once connected; a
+// variable so a test can shorten it.
+var HelloTimeout = 15 * time.Second
+
 // RemoteBin is the configured binary as a word for the remote login
 // shell: a path under ~ is the remote home, spelled so the shell expands
 // it whatever it does with quotes; anything else is quoted as one word,
@@ -196,7 +200,7 @@ func completeHello(ctx context.Context, c *Conn) (*Conn, error) {
 	case <-ctx.Done():
 		c.Close()
 		return nil, ctx.Err()
-	case <-time.After(15 * time.Second):
+	case <-time.After(HelloTimeout):
 		c.Close()
 		return nil, fmt.Errorf("%s: timeout waiting for hello", h.Name)
 	case x := <-ch:

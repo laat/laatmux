@@ -371,6 +371,44 @@ func TestStop(t *testing.T) {
 	}
 	legacy.Wait()
 	os.Remove(filepath.Join(home.Dir(), "runtime.json"))
+	// A daemon that holds the lock and is the one the record names but
+	// cannot be asked, listening on nothing or accepting without a
+	// hello, is ended with SIGTERM rather than waited out; the hello
+	// wait is shortened so the wedged case does not take 15 s.
+	was := client.HelloTimeout
+	client.HelloTimeout = 300 * time.Millisecond
+	defer func() { client.HelloTimeout = was }()
+	for _, mode := range []string{"nolisten", "wedged"} {
+		d := exec.Command(os.Args[0], "-test.run=TestStop")
+		d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON="+mode)
+		if err := d.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			pid, _ := home.Holder()
+			if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				d.Process.Kill()
+				d.Wait()
+				t.Fatalf("%s daemon did not come up", mode)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		start := time.Now()
+		if err := cmdStop(context.Background(), nil); err != nil {
+			d.Process.Kill()
+			d.Wait()
+			t.Fatalf("stop %s: %v", mode, err)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("stop %s took %s", mode, took)
+		}
+		if err := d.Wait(); err != nil {
+			t.Fatalf("%s daemon: %v", mode, err)
+		}
+	}
 	if err := cmdStop(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("arguments accepted")
 	}
@@ -398,6 +436,10 @@ func testDaemon(mode string) {
 	case "slow":
 		// The lock first, the listener a while later, as serve does.
 		err = legacyServeAfter(ctx, 800*time.Millisecond)
+	case "nolisten", "wedged":
+		// The lock and the record, and nothing to ask: no listener at
+		// the record's address, or one that accepts and never answers.
+		err = wedgedServe(ctx, mode == "wedged")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -436,6 +478,42 @@ func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 	// message, answered by hand so this branch's daemon package does
 	// not make it current.
 	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "legacy", Version: "legacy", Capabilities: []string{protocol.CapStatus}}, nil)
+	<-ctx.Done()
+	return nil
+}
+
+// wedgedServe is a daemon that cannot be asked: the lock and the
+// runtime record, then a listener that accepts and says nothing, or
+// none at the record's address. SIGTERM ends it.
+func wedgedServe(ctx context.Context, listen bool) error {
+	lock, err := home.TryLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	addr := "tcp:" + ln.Addr().String()
+	if listen {
+		defer ln.Close()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() { <-ctx.Done(); c.Close() }()
+			}
+		}()
+	} else {
+		ln.Close()
+	}
+	if err := home.WriteRuntime(home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged"}); err != nil {
+		return err
+	}
+	defer home.RemoveRuntime(os.Getpid())
 	<-ctx.Done()
 	return nil
 }
