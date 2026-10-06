@@ -1,0 +1,94 @@
+name: herdr manifests
+
+# Copies the manifests in internal/detect/manifests, and herdr's LICENSE,
+# from herdr's master. When they differ from main, the job pushes the
+# herdr-manifests branch, opens a pull request or updates the open one, and
+# starts CI on the branch: a push made with GITHUB_TOKEN starts no workflow
+# by itself, a dispatch does.
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sync:
+    if: github.repository == 'laat/laatmux'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the branch
+      pull-requests: write # open or edit the pull request
+      actions: write # dispatch CI
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: herdr-manifests
+      DIR: internal/detect/manifests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: copy from herdr
+        id: copy
+        run: |
+          sha=$(gh api repos/herdrdev/herdr/commits/master --jq .sha)
+          get() {
+            gh api "repos/herdrdev/herdr/contents/$1?ref=$sha" -H 'Accept: application/vnd.github.raw'
+          }
+          for f in "$DIR"/*.toml; do
+            get "src/detect/manifests/${f##*/}" > "$f"
+          done
+          get LICENSE > "$DIR/LICENSE"
+          if git diff --quiet; then
+            echo "in sync with herdr $sha"
+            exit 0
+          fi
+          sed -i -E "s/[0-9a-f]{40}/$sha/" "$DIR/NOTICE"
+          git diff --stat
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: pull request
+        if: steps.copy.outputs.sha != ''
+        env:
+          SHA: ${{ steps.copy.outputs.sha }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          gh auth setup-git
+          git commit -qam "detect: the manifests from herdr at ${SHA:0:12}"
+
+          # herdr's master moves daily; a new commit with the same files only
+          # changes the hash in NOTICE and is not worth a push.
+          if git fetch -q --depth=1 origin "$BRANCH" 2>/dev/null &&
+            git diff --quiet FETCH_HEAD HEAD -- "$DIR" ":!$DIR/NOTICE"; then
+            echo "$BRANCH already has these files"
+            exit 0
+          fi
+          git push -qf origin "HEAD:refs/heads/$BRANCH"
+
+          title='detect: the manifests from herdr'
+          body=$(cat <<EOF
+          The detection manifests or LICENSE in \`$DIR\` differ from herdr's master. This copies them verbatim at herdr commit \`$SHA\` and moves the commit in NOTICE.
+
+          The detect tests fail on a manifest with a key the port does not know, a pattern RE2 rejects, a \`min_engine_version\` above 3 or a region selector the port lacks. They do not catch a change in what a rule means; read the diff before merging.
+
+          CI was started by dispatch from the herdr manifests workflow.
+          EOF
+          )
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$BRANCH" --body "$body"
+          else
+            gh pr create --head "$BRANCH" --base main --title "$title" --body "$body"
+          fi
+          gh workflow run ci.yaml --ref "$BRANCH"
