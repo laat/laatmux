@@ -916,8 +916,8 @@ func TestHomelessLineLocal(t *testing.T) {
 	}
 	// With the worktree's workspace session left, the line has that
 	// session, for S and z, and is settled as it is; the viewer in the
-	// agent's session is on the line through the agent, whose tile keeps
-	// its own session (#188).
+	// agent's session is on the line, and the agent's tile keeps its own
+	// session (#188).
 	locals[0].Settled = true
 	in.Locals = locals
 	if got = treeLines(Tree(in)); len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current || !got[0].Settled {
@@ -1103,13 +1103,19 @@ func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
 		if rs := Agents(in, nodes); settled && (len(rs.Main) != 0 || len(rs.Stale) != 2) || !settled && (len(rs.Main) != 2 || len(rs.Stale) != 0) {
 			t.Fatalf("settled %v: tiles %+v", settled, rs)
 		}
-		for _, current := range []string{"notes", "mac/proj/b"} {
+		// The viewer in either session is on the line and both tiles; in
+		// another session, on none of them.
+		in.Locals = append(in.Locals, protocol.Session{Name: "elsewhere"})
+		for _, current := range []string{"notes", "mac/proj/b", "elsewhere"} {
 			in.Current = current
+			mine := current != "elsewhere"
 			nodes := Tree(in)
-			if l := treeLines(nodes); len(l) != 1 || !l[0].Current {
+			if l := treeLines(nodes); len(l) != 1 || l[0].Current != mine {
 				t.Fatalf("settled %v, the viewer in %s: B's line %+v", settled, current, l)
 			}
-			if rs := Agents(in, nodes); len(rs.Main) != 2 || !rs.Main[0].Current || !rs.Main[1].Current {
+			rs := Agents(in, nodes)
+			tiles := append(append([]Row(nil), rs.Main...), rs.Stale...)
+			if len(tiles) != 2 || tiles[0].Current != mine || tiles[1].Current != mine {
 				t.Fatalf("settled %v, the viewer in %s: tiles %+v", settled, current, rs)
 			}
 			// Two tasks standing for B carry its workspace session and the
@@ -1127,7 +1133,7 @@ func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
 				}
 				marked[n.ID()] = n.Current
 			}
-			if !reflect.DeepEqual(marked, map[string]bool{"add-1": true, "add-2": true}) {
+			if !reflect.DeepEqual(marked, map[string]bool{"add-1": mine, "add-2": mine}) {
 				t.Fatalf("settled %v, the viewer in %s: standing tasks marked %v", settled, current, marked)
 			}
 		}
