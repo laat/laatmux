@@ -1181,7 +1181,8 @@ Every client used to dial every host: a sidebar pane per window would be
 an ssh channel per host per window. The daemon on the machine the user
 sits at is the one process there, so it is the merge point. Every
 daemon advertises `merged` (a host's config lists only the host
-itself, so its merged stream holds its own records), and `subscribe`
+itself, as a rule, and then its merged stream holds its own records),
+and `subscribe`
 with `merged: true` gets one stream with every host's records:
 
 ```
