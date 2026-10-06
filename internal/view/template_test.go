@@ -320,6 +320,19 @@ func TestTemplateStyles(t *testing.T) {
 	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_stats} {git_sync} {git_rebase} {git_conflict}", "R +46 -11 ✎ +28 -3 →feature-lo… ! ↑2 ↓1 R !")
 	// The base whole and cut, as {git_sync} draws it on the same row.
 	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_sync} {git_branch}", "→feature-lo… ! ↑2 ↓1 origin/feature-long-base")
+	// Every git token alone, one added later among them.
+	for name := range tokens {
+		if !strings.HasPrefix(name, "git_") {
+			continue
+		}
+		src := "#[fg=accent,bold,bg=#112233]{" + name + "}"
+		want := strings.TrimSpace(Text([]Line{{Spans: m.line(mustParse(t, src), r, 60, 0)}}))
+		if want == "" {
+			t.Errorf("{%s} draws nothing on the token row", name)
+			continue
+		}
+		staleStyled(t, m, r, src, want)
+	}
 	r = tokenRow(now)
 	// fg=default clears the colour, as tmux spells it.
 	if got := render("#[fg=accent]a#[fg=default]b", 10); got != "...|⟨accent:a⟩b\n" {
