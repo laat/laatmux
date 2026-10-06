@@ -1158,10 +1158,10 @@ alike; only the lines it leaves differ.
   lightest backgrounds and the light default's on the darkest, a
   `dimmed` of your own where it reads better than the rest, and the
   background's own lighter or darker half on those between, from about
-  `colour235` up through a mid grey and the light theme's accents, on
-  which neither default's `dimmed` reaches 2:1. An indexed background
-  is measured by xterm's colours; on one of the colours 0 to 15, which
-  the terminal sets, the text stays faint.
+  `colour235` up through a mid grey and the light theme's accents; on
+  the last two neither default's `dimmed` reaches 2:1. An indexed
+  background is measured by xterm's colours; on one of the colours 0
+  to 15, which the terminal sets, the text stays faint.
 - **Errors.** A template that does not parse is shown in the view in
   its place, `template error: unknown token {x} at column 7 in
   tiles[0]`, rather than failing the pane. The fold row, the
