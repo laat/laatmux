@@ -56,12 +56,12 @@ func rmOnHost(t *testing.T, f *relayFixture, id, branch, root string) {
 // stopFollow cancels the laptop daemon's follow of the host, so only the
 // listings the test makes reach the task, and waits for what the follow
 // had started to end. It cancels a connected follow, under the lock the
-// follow says so under: its read then fails and it returns without
-// dialing again, so a test's checks are the host's only dials after. The
-// task is left with no memo, as the follow's latest listing, which shows
-// its worktree, leaves it: one from before the worktree was listed, run
-// late, could have left the memo of an empty listing, which the test's
-// own would then pass over.
+// follow says so under: it then returns without dialing again, so a
+// test's checks are the host's only dials after. The task is left with
+// no memo, as the follow's latest listing, which shows its worktree,
+// leaves it: one from before the worktree was listed, run late, could
+// have left the memo of an empty listing, which the test's own would
+// then pass over.
 func stopFollow(t *testing.T, f *relayFixture, id string) *mergedHost {
 	t.Helper()
 	var mh *mergedHost
