@@ -2,6 +2,8 @@ module github.com/laat/laatmux
 
 go 1.26.3
 
+toolchain go1.26.8
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	golang.org/x/sys v0.48.0
