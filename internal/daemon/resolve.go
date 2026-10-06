@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -11,7 +10,9 @@ import (
 // for attributing panes to worktree roots. The file system is asked on
 // a goroutine of its own per path, so a path on a hung mount costs that
 // goroutine and never the poll; until the answer is there the path is
-// taken cleaned. The cache has its own lock, taken inside no other.
+// taken cleaned. The cache has a lock of its own and takes no other, so
+// resolve may be called with or without d.mu held: the poll calls it
+// before taking d.mu, the attribution test under it.
 type resolver struct {
 	mu        sync.Mutex
 	resolved  map[string]resolution
@@ -89,19 +90,4 @@ func (r *resolver) evictLocked() {
 		}
 		delete(r.resolved, p)
 	}
-}
-
-// resolveNow resolves a path on the caller's goroutine: a listed root,
-// which git has just read.
-func resolveNow(path string) string {
-	clean := filepath.Clean(path)
-	if real, err := filepath.EvalSymlinks(clean); err == nil {
-		return real
-	}
-	return clean
-}
-
-// inside reports whether path is dir or below it, on path separators.
-func inside(path, dir string) bool {
-	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }

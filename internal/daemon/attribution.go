@@ -3,6 +3,7 @@ package daemon
 import (
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -38,6 +39,21 @@ func panePath(p tmux.Pane) string {
 		return p.Cwd
 	}
 	return p.CurrentPath
+}
+
+// resolveNow resolves a path on the caller's goroutine: a listed root,
+// which git has just read.
+func resolveNow(path string) string {
+	clean := filepath.Clean(path)
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		return real
+	}
+	return clean
+}
+
+// inside reports whether path is dir or below it, on path separators.
+func inside(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // resolveRoots is the roots of a listing with their resolved paths,
