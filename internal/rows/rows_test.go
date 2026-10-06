@@ -1,6 +1,7 @@
 package rows
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -818,8 +819,56 @@ func TestHomelessLineLocal(t *testing.T) {
 	if rs := Agents(viewer, Tree(viewer)); len(rs.Main) != 1 || !rs.Main[0].Current {
 		t.Fatalf("viewer in the attachment, the tile: %+v", rs)
 	}
-	// Another managed agent at the root in a session of its own, older
-	// by its identity so the line's agent is still the first: it keeps
+	// With the home known too: the session rule is the home's, not the
+	// lost home's alone.
+	homed := viewer
+	homed.Worktrees = []protocol.Worktree{w}
+	homed.Worktrees[0].Session = "proj/a"
+	if got = treeLines(Tree(homed)); len(got) != 1 || !got[0].Current {
+		t.Fatalf("viewer in the attachment, home known: %+v", got)
+	}
+	if rs := Agents(homed, Tree(homed)); len(rs.Main) != 1 || !rs.Main[0].Current {
+		t.Fatalf("viewer in the attachment, home known, the tile: %+v", rs)
+	}
+	// An agent in the workspace session itself, outside the root, is
+	// not the viewer's for the line being marked through the attachment:
+	// its tile is Current only when the viewer is in that session.
+	stray := protocol.Agent{ID: "menv/default/%8", EnvironmentID: "menv", Server: "default", Session: "mac/proj/a", Cwd: "/elsewhere", Liveness: protocol.Alive}
+	homed.Agents = []protocol.Agent{managed, stray}
+	tileCurrent := func(in Input) map[string]bool {
+		m := map[string]bool{}
+		for _, r := range Agents(in, Tree(in)).Main {
+			m[r.ID()] = r.Current
+		}
+		return m
+	}
+	if got := tileCurrent(homed); !reflect.DeepEqual(got, map[string]bool{managed.ID: true, stray.ID: false}) {
+		t.Fatalf("stray agent in the workspace session, viewer in the attachment: %v", got)
+	}
+	homed.Current = "mac/proj/a"
+	if got := tileCurrent(homed); !reflect.DeepEqual(got, map[string]bool{managed.ID: true, stray.ID: true}) {
+		t.Fatalf("stray agent in the workspace session, viewer there: %v", got)
+	}
+	// Standing tasks take the line's mark, the owner and the others.
+	tasks := viewer
+	tasks.Pendings = []protocol.Pending{
+		{ID: "add-1", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(1, 0)},
+		{ID: "add-2", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(2, 0)},
+	}
+	var current []string
+	for _, n := range Tree(tasks) {
+		if n.Current {
+			current = append(current, n.ID())
+		}
+	}
+	if !reflect.DeepEqual(current, []string{"add-2", "add-1"}) {
+		t.Fatalf("standing tasks, viewer in the attachment: %v", current)
+	}
+	if got := tileCurrent(tasks); !reflect.DeepEqual(got, map[string]bool{"add-2": true, managed.ID: true, "add-1": true}) {
+		t.Fatalf("standing tasks' tiles: %v", got)
+	}
+	// Another managed agent at the root in a session of its own, started
+	// later by its identity so the line's agent is still the first: it keeps
 	// the attachment to its own session. A second agent in the line
 	// agent's session takes the workspace session as that agent does:
 	// the rule is the home session's, as Home and the pane jump have

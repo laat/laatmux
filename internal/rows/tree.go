@@ -317,8 +317,8 @@ func (b *builder) worktrees() {
 		// The line's agent is the one its jump goes through: in the home
 		// session; with the home lost, the one laatmux made at the root,
 		// whose session the workspace session attaches to then (Home);
-		// or one on this machine's default server. The home, as Home
-		// has it, is what the children take the workspace session by.
+		// or one on a default server. The home, as Home has it, is what
+		// the children take the workspace session by.
 		line.Agent = rowAgent(agents, w)
 		home := w.Session
 		if home == "" && line.Agent != nil && line.Agent.Server == protocol.ServerLaatmux {
@@ -383,7 +383,7 @@ func (b *builder) worktrees() {
 			owner.Current = line.Current
 			j.finish(owner)
 			for _, k := range idx[1:] {
-				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth = w, line.Local, 1
+				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current = w, line.Local, 1, line.Current
 				j.finish(&b.taskRows[k])
 			}
 			group := append([]Row{*owner}, children...)
@@ -691,7 +691,7 @@ func (r Row) Home() string {
 // fold setting.
 func Agents(in Input, tree []Row) Rows {
 	var rows []Row
-	viewer := map[string]bool{} // worktree ids and session names the viewer is in
+	viewer := map[string]bool{} // the worktree and task lines the viewer is on
 	for _, n := range tree {
 		if !n.Current {
 			continue
@@ -701,9 +701,6 @@ func Agents(in Input, tree []Row) Rows {
 		}
 		if n.Pending != nil {
 			viewer["t:"+n.Pending.ID] = true
-		}
-		if n.Local != nil {
-			viewer["s:"+n.Local.Name] = true
 		}
 	}
 	var owner string // the task or worktree line the agents below are under
@@ -730,7 +727,11 @@ func Agents(in Input, tree []Row) Rows {
 			if n.Depth == 2 {
 				t.Current = viewer[owner]
 			}
-			if t.Local != nil && viewer["s:"+t.Local.Name] {
+			// A tile in the viewer's own session is the viewer's wherever
+			// its node sits. Not one in a session a line is marked through:
+			// the line marked through an attachment stands for the
+			// workspace session the viewer is not in.
+			if t.Local != nil && in.Current != "" && t.Local.Name == in.Current {
 				t.Current = true
 			}
 			rows = append(rows, t)
