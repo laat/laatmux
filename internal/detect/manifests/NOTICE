@@ -1,6 +1,6 @@
 The files claude.toml and codex.toml in this directory are copied verbatim from
 herdr (https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
-commit 309749ad65f3aa596f077ec23a1bf3ee428b7a04. A daily workflow,
+commit 3d9d2b18dab139ba226ebc5a1c9a9f2c9c3ee4df. A daily workflow,
 .github/workflows/herdr-manifests.yaml, opens a pull request when they change
 upstream.
 
