@@ -729,8 +729,8 @@ func (d *dash) settle(m *view.Model) {
 	// its children's are made from. A row no line holds may carry the
 	// session without the state: an observed agent on this machine's
 	// default server in a window of a workspace session whose worktree
-	// is on another host stands in other sessions with that session as
-	// its own.
+	// does not take it as a child (on another host, say) stands in other
+	// sessions with that session as its own.
 	settled := line.Local.Settled
 	if err := workspace.SetSettled(d.ctx, line.Local.Name, !settled); err != nil {
 		m.Message = err.Error()

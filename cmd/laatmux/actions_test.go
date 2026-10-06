@@ -382,9 +382,11 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 // plain attachment to its session is left, as its tile, as its node,
 // and as a pane or a run, which have none; so it does under a standing
 // task holding the line, whose own row refuses. The add's agent before
-// the host lists the worktree is the task's and refuses as well. An
-// observed agent in a window of the workspace session, which no line
-// holds, toggles the session from the session's own state.
+// the host lists the worktree is the task's and refuses as well. A
+// worktree line and an orphaned line toggle their own session. An
+// observed agent in a window of the workspace session, a row no line
+// holds, toggles the session from the session's own state, also when
+// no line holds the session either.
 func TestSettleGoesByLine(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tmux.log")
@@ -416,15 +418,23 @@ func TestSettleGoesByLine(t *testing.T) {
 	// An agent on this machine's default server in a window of the
 	// workspace session vm/proj/z.
 	observed := protocol.Agent{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/Users/u"}
-	type setup struct{ attached, settled, workspace, task, observed bool }
+	// down: vm is down and lists nothing, so no line holds vm/proj/z.
+	type setup struct{ attached, settled, workspace, task, observed, down bool }
 	model := func(s setup, tree bool) *view.Model {
 		in := rows.Input{Hosts: []rows.Host{host}, Agents: agents, Panes: []protocol.Pane{pane}, Runs: []protocol.Run{run}, Worktrees: []protocol.Worktree{w}}
 		if s.observed {
 			in.Hosts = append(in.Hosts, rows.Host{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true})
 			in.Agents = append(append([]protocol.Agent{}, agents...), observed)
 		}
+		if s.down {
+			in.Hosts[0] = rows.Host{Name: "vm", EnvironmentID: "venv"}
+			in.Agents, in.Panes, in.Runs, in.Worktrees = []protocol.Agent{observed}, nil, nil, nil
+		}
 		if s.workspace {
-			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: s.settled})
+			// And vm/proj/q, whose worktree is gone: an orphaned line.
+			in.Locals = append(in.Locals,
+				protocol.Session{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: s.settled},
+				protocol.Session{Name: "vm/proj/q", Key: "venv//w/proj/q", Host: "vm", Source: w.Source, Settled: s.settled})
 		}
 		if s.attached {
 			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z-2", Attach: "vm/proj/z-2"})
@@ -445,13 +455,13 @@ func TestSettleGoesByLine(t *testing.T) {
 		got, _ := os.ReadFile(log)
 		return m.Message, string(got)
 	}
-	// The tmux command and the message of z toggling vm/proj/z away
+	// The tmux command and the message of z toggling the session away
 	// from the state it has.
-	expect := func(settled bool) (string, string) {
+	expect := func(name string, settled bool) (string, string) {
 		if settled {
-			return "-L default set-option -u -t vm/proj/z @laatmux_settled\n", "unsettled vm/proj/z"
+			return "-L default set-option -u -t " + name + " @laatmux_settled\n", "unsettled " + name
 		}
-		return "-L default set-option -t vm/proj/z @laatmux_settled 1\n", "settled vm/proj/z"
+		return "-L default set-option -t " + name + " @laatmux_settled 1\n", "settled " + name
 	}
 	children := []struct {
 		name string
@@ -463,21 +473,33 @@ func TestSettleGoesByLine(t *testing.T) {
 		{attached: true, settled: false, workspace: true}, {attached: true, settled: true, workspace: true},
 		{attached: true, settled: false, workspace: true, task: true}, {attached: true, settled: true, workspace: true, task: true},
 	} {
-		want, msg := expect(s.settled)
+		want, msg := expect("vm/proj/z", s.settled)
 		for _, c := range children {
 			if got, cmds := press(model(s, c.tree), c.id); got != msg || cmds != want {
 				t.Errorf("%+v: z on the %s: message %q, tmux %q", s, c.name, got, cmds)
 			}
 		}
+		// The line itself, which a standing task takes the place of.
+		if !s.task {
+			if got, cmds := press(model(s, true), w.ID); got != msg || cmds != want {
+				t.Errorf("%+v: z on the line: message %q, tmux %q", s, got, cmds)
+			}
+		}
+		want, msg = expect("vm/proj/q", s.settled)
+		if got, cmds := press(model(s, true), "session/vm/proj/q"); got != msg || cmds != want {
+			t.Errorf("%+v: z on the orphaned line: message %q, tmux %q", s, got, cmds)
+		}
 	}
 	// The observed agent stands in other sessions, not under the
 	// worktree's line, with the workspace session as its own and no
 	// copy of its state: as its tile and as its node it unsettles a
-	// settled session and settles an unsettled one.
+	// settled session and settles an unsettled one, whether the
+	// worktree's line holds the session or no line does.
 	for _, s := range []setup{
 		{settled: false, workspace: true, observed: true}, {settled: true, workspace: true, observed: true},
+		{settled: false, workspace: true, observed: true, down: true}, {settled: true, workspace: true, observed: true, down: true},
 	} {
-		want, msg := expect(s.settled)
+		want, msg := expect("vm/proj/z", s.settled)
 		for _, tree := range []bool{false, true} {
 			m := model(s, tree)
 			if !m.Select(observed.ID) {
@@ -485,6 +507,13 @@ func TestSettleGoesByLine(t *testing.T) {
 			}
 			if r := m.Selection(); r.Worktree != nil || r.Settled || r.Local == nil || r.Local.Name != "vm/proj/z" {
 				t.Fatalf("%+v tree %v: the observed agent's row is %+v", s, tree, r)
+			}
+			held := false
+			for _, n := range m.Tree {
+				held = held || n.Kind == rows.KindWorktree && n.Local != nil && n.Local.Name == "vm/proj/z"
+			}
+			if held == s.down {
+				t.Fatalf("%+v tree %v: a line holds vm/proj/z: %v", s, tree, held)
 			}
 			if got, cmds := press(m, observed.ID); got != msg || cmds != want {
 				t.Errorf("%+v tree %v: z on the observed agent: message %q, tmux %q", s, tree, got, cmds)
