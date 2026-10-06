@@ -681,7 +681,7 @@ func TestResolver(t *testing.T) {
 		t.Fatalf("%d entries after a resolution into a full cache, want %d", n, maxResolved)
 	}
 	// With maxResolving paths in flight another is answered cleaned and
-	// not asked for: no entry appears for it.
+	// not asked for: neither in flight nor cached.
 	r = newResolver()
 	r.mu.Lock()
 	for i := 0; i < maxResolving; i++ {
