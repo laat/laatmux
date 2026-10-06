@@ -376,6 +376,89 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	}
 }
 
+// z toggles the line's settled state from any row the line holds, not
+// by a child's own local session: a second agent at the root in a
+// session of its own settles the workspace session whether or not a
+// plain attachment to its session is left, as its tile, as its node and
+// as a pane; under a standing task, which holds the line until it hands
+// over, it refuses as the task's line does.
+func TestSettleGoesByLine(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tmux.log")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	w := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	agents := []protocol.Agent{
+		{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: w.Root, WorktreeID: w.ID},
+		{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z-2", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: w.Root, WorktreeID: w.ID},
+	}
+	pane := protocol.Pane{ID: "venv/pane/%3", EnvironmentID: "venv", PaneID: "%3", Session: "proj/z-2", Command: "vim", WorktreeID: w.ID}
+	model := func(attached, settled bool, tree bool, pendings ...protocol.Pending) *view.Model {
+		in := rows.Input{
+			Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+			Agents:    agents,
+			Panes:     []protocol.Pane{pane},
+			Worktrees: []protocol.Worktree{w},
+			Locals:    []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: settled}},
+			Pendings:  pendings,
+		}
+		if attached {
+			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z-2", Attach: "vm/proj/z-2"})
+		}
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		if tree {
+			m.View = view.ViewTree
+		}
+		m.Render()
+		return m
+	}
+	for _, attached := range []bool{false, true} {
+		for _, settled := range []bool{false, true} {
+			want, msg := "set-option -t vm/proj/z @laatmux_settled 1", "settled vm/proj/z"
+			if settled {
+				want, msg = "set-option -u -t vm/proj/z @laatmux_settled", "unsettled vm/proj/z"
+			}
+			for _, c := range []struct {
+				name string
+				tree bool
+				id   string
+			}{{"tile", false, agents[1].ID}, {"node", true, agents[1].ID}, {"pane", true, pane.ID}} {
+				os.Remove(log)
+				m := model(attached, settled, c.tree)
+				if !m.Select(c.id) {
+					t.Fatalf("attached %v, settled %v: no %s %s", attached, settled, c.name, c.id)
+				}
+				d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+				got, _ := os.ReadFile(log)
+				if m.Message != msg || !strings.Contains(string(got), want) {
+					t.Errorf("attached %v, settled %v: z on the %s: message %q, tmux %q", attached, settled, c.name, m.Message, got)
+				}
+			}
+		}
+	}
+	// A standing task holding the line: z on its agent refuses as on the
+	// task's line, and leaves the session alone.
+	task := protocol.Pending{ID: "add-z", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "z", Root: w.Root, Session: "proj/z", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: time.Now()}
+	for _, tree := range []bool{false, true} {
+		os.Remove(log)
+		m := model(false, false, tree, task)
+		if !m.Select(agents[1].ID) {
+			t.Fatalf("tree %v: no agent under the task", tree)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		got, _ := os.ReadFile(log)
+		if !strings.Contains(m.Message, "proj/z: a pending task") || len(got) != 0 {
+			t.Errorf("tree %v: z under a standing task: message %q, tmux %q", tree, m.Message, got)
+		}
+	}
+}
+
 // An rm whose host side succeeded and whose local cleanup then failed
 // returns the root with the error, so the CLI prints the removal before
 // the error and the dashboard says what was removed.
