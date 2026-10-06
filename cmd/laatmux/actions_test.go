@@ -513,7 +513,7 @@ func TestSettleGoesByLine(t *testing.T) {
 				held = held || n.Kind == rows.KindWorktree && n.Local != nil && n.Local.Name == "vm/proj/z"
 			}
 			if held == s.down {
-				t.Fatalf("%+v tree %v: a line holds vm/proj/z: %v", s, tree, held)
+				t.Fatalf("%+v tree %v: a line holds vm/proj/z: %v, want %v", s, tree, held, !s.down)
 			}
 			if got, cmds := press(m, observed.ID); got != msg || cmds != want {
 				t.Errorf("%+v tree %v: z on the observed agent: message %q, tmux %q", s, tree, got, cmds)
