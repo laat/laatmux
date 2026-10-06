@@ -338,8 +338,8 @@ func fill(v *view.Model, s merged.Status) {
 // does the same through a plain attachment; an observed agent on this
 // machine's default server is a switch-client; one on a remote host's
 // default server is refused as jump refuses it. A worktree with no
-// session cannot be jumped to: the message is the add line that would
-// start one. A orphaned row's session exists locally and is switched to.
+// session cannot be jumped to: the message says how add would start
+// one. A orphaned row's session exists locally and is switched to.
 // The view is meant to run inside the default tmux server, where
 // switch-client is allowed; run elsewhere, a dashboard in a plain
 // terminal say, the message says how to attach instead.

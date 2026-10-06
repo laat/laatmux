@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
@@ -113,6 +115,74 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	err = jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w})
 	if err == nil || !strings.Contains(err.Error(), "has no managed session") {
 		t.Fatalf("no agent: %v", err)
+	}
+}
+
+// A worktree with no home and no agent: enter on its line refuses with
+// how add makes it a session, z on the line says the same, and so does
+// laatmux jump. The add line comes only when add can run it: on vm, a
+// host whose entry here has the directories, the add line for the
+// branch; a detached worktree, named by its root, needs a branch
+// checked out first; box's entry has no directories, which add needs
+// first.
+func TestAddHintCanRun(t *testing.T) {
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
+	src := "git@github.com:laat/proj.git"
+	bv := protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "b", Root: "/w/b"}
+	bb := bv
+	bb.ID, bb.EnvironmentID = "benv/worktree//w/b", "benv"
+	det := protocol.Worktree{ID: "menv/worktree//w/det", EnvironmentID: "menv", Repo: "proj", Source: src, Root: "/w/det"}
+	host := func(name, env string) rows.Host {
+		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	}
+	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm makes one"
+	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
+	for _, c := range []struct {
+		host rows.Host
+		w    protocol.Worktree
+		want string
+	}{
+		{host("vm", "venv"), bv, onVM},
+		{host("box", "benv"), bb, onBox},
+		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
+	} {
+		in := rows.Input{Hosts: []rows.Host{c.host}, Worktrees: []protocol.Worktree{c.w}}
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(c.w.ID) {
+			t.Fatalf("no line %s", c.w.ID)
+		}
+		d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		if m.Message != c.want {
+			t.Errorf("enter on %s: %q, want %q", c.w.ID, m.Message, c.want)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		if want := m.Selection().Name + ": no local workspace session; " + c.want; m.Message != want {
+			t.Errorf("z on %s: %q, want %q", c.w.ID, m.Message, want)
+		}
+	}
+	// jump, from the hosts' records through the local daemon. A
+	// detached worktree is not matched by jump at all.
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
+				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
+			}, Worktrees: []protocol.Worktree{bv, bb}})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	for target, want := range map[string]string{"vm/proj/b": onVM, "box/proj/b": onBox} {
+		if err := cmdJump(context.Background(), []string{target}); err == nil || err.Error() != want {
+			t.Errorf("jump %s: %v, want %q", target, err, want)
+		}
 	}
 }
 

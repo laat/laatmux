@@ -121,9 +121,16 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 	return spec
 }
 
-// addHint says a worktree has no managed session and how to start one.
+// addHint says a worktree has no managed session and how add makes one,
+// in the words z uses for a homeless worktree's line: the add line only
+// when add can run it. A detached worktree has no <repo>/<branch> and
+// is named by its root.
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: %s", h.Name, w.Repo, w.Branch, addCommand(cfg, h, w))
+	name := h.Name + "/" + w.Repo + "/" + w.Branch
+	if w.Branch == "" {
+		name = w.Root + " on " + h.Name
+	}
+	return name + " has no managed session; " + addsSession(cfg, h, w)
 }
 
 // addCommand is the add line for the worktree's branch on the host. Its
