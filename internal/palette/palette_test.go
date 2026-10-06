@@ -104,25 +104,53 @@ func TestLuminance(t *testing.T) {
 	}
 }
 
-// Dim text on a template's background: the dark default's dimmed on a
-// light background, the light default's on a dark one, whatever the
-// theme; a palette name through the theme, an indexed colour by its
-// xterm colour; nothing on 0 to 15, none, or in a theme without
-// colours. A user's own dimmed where it reads better than both.
+// Dim text on a template's background: the dark default's dimmed on
+// the lightest backgrounds, the light default's on the darkest,
+// whatever the theme, and between them, where a half reads better, the
+// background half way to white or to black; a palette name through the
+// theme, an indexed colour by its xterm colour; nothing on 0 to 15,
+// none, or in a theme without colours. A user's own dimmed where it
+// reads better than the rest.
 func TestDimmedOn(t *testing.T) {
 	dark, _ := New(true, nil)
 	light, _ := New(false, nil)
 	darkDim, lightDim := dark.SGR("#565f89", false), dark.SGR("#8990b3", false)
 	mono := dark
 	mono.Mono = true
+	// The colour drawn and the contrast it reaches, the halves rounded
+	// down.
+	for _, c := range []struct {
+		th    Theme
+		bg    string
+		want  string
+		ratio float64
+	}{
+		{dark, "#ffff00", "#565f89", 5.76}, {dark, "#ffffff", "#565f89", 6.19}, {dark, "230", "#565f89", 6.05},
+		{light, HighlightRowBg, "#565f89", 4.22}, {light, Border, "#565f89", 3.72}, {light, "#ffff00", "#565f89", 5.76},
+		{dark, "#112233", "#8990b3", 5.16}, {light, "#112233", "#8990b3", 5.16},
+		// Between, the background's own half: lighter on the dark ones,
+		// darker or lighter, whichever reads, on the mid tones.
+		{dark, "colour235", "#929292", 4.86}, {dark, HighlightRowBg, "#9399ab", 4.30}, {dark, Border, "#9da0b0", 3.78},
+		{dark, "240", "#ababab", 3.10}, {dark, Dimmed, "#aaafc4", 2.84}, {dark, "#808080", "#404040", 2.63},
+		{light, Dimmed, "#444859", 2.89},
+		{light, Info, "#7fb8cb", 2.53}, {light, Accent, "#bba3de", 2.74}, {light, Success, "#abba9c", 2.55},
+		{light, Warning, "#c5b59e", 2.42}, {light, Danger, "#632121", 2.42}, {light, Header, "#173e74", 2.64},
+		{light, "colour243", "#3b3b3b", 2.47},
+	} {
+		if got, want := c.th.DimmedOn(c.bg), c.th.SGR(c.want, false); got != want {
+			t.Errorf("on %q: %q, want %s's %q", c.bg, got, c.want, want)
+		}
+		bg, _ := c.th.color(c.bg)
+		lb, _ := bg.luminance()
+		lw, _ := hex(c.want).luminance()
+		if got := contrast(lw, lb); math.Abs(got-c.ratio) >= 0.005 {
+			t.Errorf("%s on %q: %.2f, want %.2f", c.want, c.bg, got, c.ratio)
+		}
+	}
 	for _, c := range []struct {
 		th       Theme
 		bg, want string
 	}{
-		{dark, "#ffff00", darkDim}, {dark, "#ffffff", darkDim}, {dark, "#112233", lightDim},
-		{dark, "colour235", lightDim}, {dark, "240", lightDim}, {dark, "230", darkDim}, {dark, "#808080", darkDim},
-		{dark, HighlightRowBg, lightDim}, {dark, Border, lightDim}, {dark, Dimmed, lightDim},
-		{light, HighlightRowBg, darkDim}, {light, Border, darkDim}, {light, "#112233", lightDim}, {light, "#ffff00", darkDim},
 		{dark, "3", ""}, {dark, "colour15", ""}, {dark, "", ""}, {dark, "mauve", ""},
 		{Mono(), "#ffff00", ""}, {mono, "#ffff00", ""}, {Theme{}, "#ffff00", ""},
 	} {
@@ -130,9 +158,9 @@ func TestDimmedOn(t *testing.T) {
 			t.Errorf("on %q: %q, want %q", c.bg, got, c.want)
 		}
 	}
-	// A user's dimmed is drawn where it has more contrast than both
-	// defaults, not where it has less; one of 0 to 15 is not measured;
-	// a user's background colour is the theme's.
+	// A user's dimmed is drawn where it has more contrast than the
+	// defaults and the halves, not where it has less; one of 0 to 15 is
+	// not measured; a user's background colour is the theme's.
 	for _, c := range []struct {
 		custom   map[string]string
 		bg, want string
@@ -140,6 +168,11 @@ func TestDimmedOn(t *testing.T) {
 		{map[string]string{Dimmed: "#444444"}, "#ffff00", dark.SGR("#444444", false)},
 		{map[string]string{Dimmed: "#444444"}, "#112233", lightDim},
 		{map[string]string{Dimmed: "#c0c0c0"}, "#112233", dark.SGR("#c0c0c0", false)},
+		{map[string]string{Dimmed: "#eeeeee"}, "#007197", dark.SGR("#eeeeee", false)},
+		{map[string]string{Dimmed: "#9a9a9a"}, "#007197", dark.SGR("#7fb8cb", false)},
+		// colour246 is #292929's half to white, #949494: a tie, and the
+		// user's own is drawn, as they wrote it.
+		{map[string]string{Dimmed: "246"}, "#292929", "\x1b[38;5;246m"},
 		{map[string]string{Dimmed: "#7f849c"}, "#ffff00", darkDim},
 		{map[string]string{Dimmed: "8"}, "#ffff00", darkDim},
 		{map[string]string{Dimmed: "8"}, "#112233", lightDim},

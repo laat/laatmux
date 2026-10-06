@@ -121,6 +121,16 @@ func contrast(a, b float64) float64 {
 	return (a + 0.05) / (b + 0.05)
 }
 
+// mix is the colour half way between c and d, channel by channel,
+// rounded down where the sum is odd; both must have red, green and
+// blue, as rgb reports.
+func mix(c, d Color) Color {
+	r1, g1, b1, _ := c.rgb()
+	r2, g2, b2, _ := d.rgb()
+	half := func(x, y uint8) uint8 { return uint8((int(x) + int(y)) / 2) }
+	return Color{R: half(r1, r2), G: half(g1, g2), B: half(b1, b2), RGB: true}
+}
+
 // sgr is the escape sequence that sets the colour as the foreground, or
 // with bg the background.
 func (c Color) sgr(bg bool) string {
@@ -250,12 +260,16 @@ func (t Theme) color(name string) (Color, bool) {
 // with no colour of its own on bg, a template's background as a palette
 // name or a colour as Parse reads it. The theme's dimmed is chosen to
 // read on the terminal's background, not on bg, and is gone on a
-// background as dark as itself: of it, a user's own among them, and the
-// dark and light defaults' dimmed, the one with the most contrast
-// against bg is drawn, the dark default's on a light background, the
-// light default's on a dark one, a user's where it reads better than
-// both. "" when the theme is monochrome, or bg is none or a colour 0 to
-// 15, which the terminal defines: such text stays faint.
+// background as dark as itself; on a mid-tone one, such as the light
+// theme's accents, neither default's dimmed reaches 2:1. Of it, a
+// user's own among them, the dark and light defaults' dimmed, and bg
+// itself half way to white and half way to black, the one with the
+// most contrast against bg is drawn: the dark default's on the lightest
+// backgrounds, the light default's on the darkest, a user's where it
+// reads better, and bg's own lighter or darker half on those between,
+// colour235 and the dark highlight row's #283457 among them. "" when
+// the theme is monochrome, or bg is none or a colour 0 to 15, which the
+// terminal defines: such text stays faint.
 func (t Theme) DimmedOn(bg string) string {
 	own, ok := t.colors[Dimmed]
 	if t.Mono || !ok {
@@ -271,7 +285,8 @@ func (t Theme) DimmedOn(bg string) string {
 	}
 	var best Color
 	most := 0.0
-	for _, d := range []Color{own, Dark[Dimmed], Light[Dimmed]} {
+	white, black := Color{R: 255, G: 255, B: 255, RGB: true}, Color{RGB: true}
+	for _, d := range []Color{own, Dark[Dimmed], Light[Dimmed], mix(c, white), mix(c, black)} {
 		l, ok := d.luminance()
 		if r := contrast(l, lb); ok && r > most {
 			best, most = d, r
