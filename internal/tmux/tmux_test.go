@@ -423,7 +423,7 @@ func TestSemicolonArgumentsReachTmux(t *testing.T) {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		want, err := filepath.EvalSymlinks(root)
+		dir, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -434,13 +434,13 @@ func TestSemicolonArgumentsReachTmux(t *testing.T) {
 		// The pane's path is read from its process, which may not have
 		// changed directory yet.
 		var got string
-		for i := 0; i < 200 && got != want; i++ {
+		for j := 0; j < 200 && got != dir; j++ {
 			out, _ := s.Run(ctx, "display-message", "-p", "-t", "="+name+":", "#{pane_current_path}")
 			got = strings.TrimSpace(string(out))
 			time.Sleep(10 * time.Millisecond)
 		}
-		if got != want {
-			t.Errorf("%s: the pane is in %q, want %q", leaf, got, want)
+		if got != dir {
+			t.Errorf("%s: the pane is in %q, want %q", leaf, got, dir)
 		}
 		for opt, want := range map[string]string{"@laatmux_cwd": root, "@laatmux_host": "h" + leaf} {
 			if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", opt); err != nil || strings.TrimSuffix(string(out), "\n") != want {

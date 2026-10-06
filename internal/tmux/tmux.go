@@ -89,7 +89,8 @@ func (s Server) Label() string {
 // in ";" but a bare ";", which is how callers separate commands, gets a
 // backslash before that last ";"; one that ends in "\;" becomes "\\;",
 // which tmux reads back as "\;". The selector is read by tmux's option
-// parser, which takes it as it is.
+// parser, which takes it as it is; so is a global flag a caller puts
+// before the command, -f /dev/null, which never ends in ";".
 func (s Server) args(a ...string) []string {
 	var pre []string
 	switch {
