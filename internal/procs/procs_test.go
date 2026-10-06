@@ -80,6 +80,27 @@ func TestFindInterpreterHosted(t *testing.T) {
 	}
 }
 
+// An interpreter whose argv cannot be read, a zombie node on the tty
+// say, is not an agent, and classifying it does not panic (it sliced
+// a nil argv once, and the poll goroutine with it).
+func TestClassifyInterpreterWithoutArgv(t *testing.T) {
+	for _, comm := range []string{"node", "bun", "deno"} {
+		if ag, score := classify(Proc{Comm: comm}); ag != "" || score != 0 {
+			t.Fatalf("%s without argv classified as %q (%d)", comm, ag, score)
+		}
+		if ag, score := classify(Proc{Comm: comm, Argv: []string{comm}}); ag != "" || score != 0 {
+			t.Fatalf("%s with argv[0] alone classified as %q (%d)", comm, ag, score)
+		}
+	}
+	procs := []Proc{
+		{PID: 10, PPID: 1, PGID: 10, TPGID: 10, Comm: "zsh", Start: at(0)},
+		{PID: 100, PPID: 10, PGID: 100, TPGID: 100, Comm: "node", Start: at(1)},
+	}
+	if id, ok := FindIn(procs); ok {
+		t.Fatalf("argv-less node reported as agent: %+v", id)
+	}
+}
+
 // A tool taking the foreground must not replace the agent.
 func TestFindSurvivesForegroundHandoff(t *testing.T) {
 	procs := []Proc{
