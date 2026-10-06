@@ -506,7 +506,7 @@ func TestShellGoesByLine(t *testing.T) {
 				strings.Contains(cmds, "new-session") || strings.Contains(cmds, "notes") || !strings.HasPrefix(msg, "mac/proj/b is on the default tmux server") {
 				t.Errorf("tree %v: S on %s: message %q, tmux %q", tree, id, msg, cmds)
 			}
-			if msg, cmds := press(m, id, 'z'); msg != "settled mac/proj/b" || cmds != "-L default set-option -t =mac/proj/b: @laatmux_settled 1\n" {
+			if msg, cmds := press(m, id, 'z'); msg != "settled mac/proj/b" || cmds != "-u -L default set-option -t =mac/proj/b: @laatmux_settled 1\n" {
 				t.Errorf("tree %v: z on %s: message %q, tmux %q", tree, id, msg, cmds)
 			}
 		}
