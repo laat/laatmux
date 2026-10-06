@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/github"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -48,7 +49,7 @@ func cmdHosts(ctx context.Context, args []string) error {
 // snapshot: why it cannot read PRs and checks, or that it can. "" when
 // the daemon is not running or has no branches capability.
 func githubLine(ctx context.Context) string {
-	c, ok := dialMerged(ctx)
+	c, ok := merged.Dial(ctx)
 	if !ok {
 		return ""
 	}

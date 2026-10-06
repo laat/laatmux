@@ -10,6 +10,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/term"
@@ -342,7 +343,7 @@ func TestSidebarControl(t *testing.T) {
 		return nil
 	}
 	m := dashModel(dashConfig(t))
-	d.st, d.cfg = newMerged(), dashConfig(t)
+	d.st, d.cfg = merged.New(), dashConfig(t)
 	d.jumpAction(m, view.Action{Kind: view.ActionJump, Row: m.Selection()})
 	if seen != "/dev/ttys004" || d.client != "" {
 		t.Errorf("the client through the jump: %q, kept %q", seen, d.client)

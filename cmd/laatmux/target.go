@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
@@ -166,7 +168,7 @@ func hostFor(cfg config.Config, flag string, repo config.Repo) (config.Host, hom
 // capability, falls back to dialling the host. The connection is closed;
 // commands open their own.
 func snapshot(ctx context.Context, h peer.Host, needCap string) (hello, snap protocol.Message, err error) {
-	if c, ok := dialMerged(ctx); ok {
+	if c, ok := merged.Dial(ctx); ok {
 		hello, snap, ok, err := mergedSnapshot(ctx, c, h, needCap)
 		c.Close()
 		if ok {
@@ -193,20 +195,17 @@ func snapshot(ctx context.Context, h peer.Host, needCap string) (hello, snap pro
 // mergedSnapshot waits on the merged stream for the one host until it is
 // listed or has failed. Not ok when the stream has no such host.
 func mergedSnapshot(ctx context.Context, c *client.Conn, h peer.Host, needCap string) (hello, snap protocol.Message, ok bool, err error) {
-	m := newMerged()
-	pending, err := m.readMerged(ctx, c, snapshotTimeout, func(m *merged) bool {
-		st, ok := m.hosts[h.Name]
-		return !ok || st.ready()
-	})
+	m := merged.New()
+	waiting, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool { return !slices.Contains(waiting, h.Name) })
 	if err != nil {
 		return hello, snap, true, err
 	}
-	for _, n := range pending {
+	for _, n := range waiting {
 		if n == h.Name {
 			return hello, snap, true, fmt.Errorf("%s: no snapshot from the local daemon after %s", h.Name, snapshotTimeout)
 		}
 	}
-	hello, snap, ok, err = m.hostSnapshot(h.Name)
+	hello, snap, ok, err = m.HostSnapshot(h.Name)
 	if !ok || err != nil {
 		return hello, snap, ok, err
 	}

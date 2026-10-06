@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -71,29 +73,27 @@ func listTasks(ctx context.Context) error {
 	if err := needRelay(c); err != nil {
 		return err
 	}
-	m := newMerged()
-	if _, err := m.readMerged(ctx, c, 5*time.Second, func(*merged) bool { return true }); err != nil {
+	m := merged.New()
+	if _, err := m.Read(ctx, c, 5*time.Second, func([]string) bool { return true }); err != nil {
 		return err
 	}
-	fmt.Print(m.taskReport())
+	fmt.Print(taskReport(m.Status("")))
 	return nil
 }
 
 // taskReport is what tasks prints of the merged state: the pending
-// records, oldest first, then the tasks that handed over, by id.
-func (m *merged) taskReport() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ps := make([]protocol.Pending, 0, len(m.pendings))
-	for _, p := range m.pendings {
-		ps = append(ps, p)
-	}
+// records, oldest first, then the tasks that handed over, by id, each
+// named by its worktree when that is listed. tasks configures no
+// labels, so a worktree's repository is the host's name for it.
+func taskReport(s merged.Status) string {
+	ps := append([]protocol.Pending(nil), s.Input.Pendings...)
 	var handed []string
-	for id, h := range m.handoffs {
-		where := h.to
-		if w, ok := m.worktrees[h.to]; ok {
+	for id, to := range s.Handoffs {
+		where := to
+		if i := slices.IndexFunc(s.Input.Worktrees, func(w protocol.Worktree) bool { return w.ID == to }); i >= 0 {
+			w := s.Input.Worktrees[i]
 			where = w.Repo + "/" + w.Branch
-			if host := m.byHost[h.to]; host != "" {
+			if host := s.ByHost[to]; host != "" {
 				where += " on " + host
 			}
 		}
@@ -105,7 +105,7 @@ func (m *merged) taskReport() string {
 	var b strings.Builder
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
-		_, configured := m.hosts[p.Host]
+		_, configured := s.Host(p.Host)
 		fmt.Fprintf(&b, "%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured))
 	}
 	sort.Strings(handed)
