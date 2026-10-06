@@ -80,6 +80,33 @@ func TestFindInterpreterHosted(t *testing.T) {
 	}
 }
 
+// An interpreter whose argv cannot be read, a zombie node on the tty
+// say, is no verified agent, and classifying it does not panic (it
+// sliced a nil argv once, and the poll goroutine with it); an exec with
+// no argv gives an empty, non-nil one on macOS, the same. argv[0] alone
+// never panicked and is here to show nothing changed. An env hint still
+// names the agent tentatively, as it does when comm and argv say
+// nothing.
+func TestClassifyInterpreterWithoutArgv(t *testing.T) {
+	for _, comm := range []string{"node", "bun", "deno"} {
+		for name, argv := range map[string][]string{"nil argv": nil, "empty argv": {}, "argv[0] alone": {comm}} {
+			if ag, score := classify(Proc{Comm: comm, Argv: argv}); ag != "" || score != 0 {
+				t.Fatalf("%s with %s classified as %q (%d)", comm, name, ag, score)
+			}
+		}
+		if ag, score := classify(Proc{Comm: comm, Env: []string{EnvHint + "=claude"}}); ag != "claude" || score != 1 {
+			t.Fatalf("%s without argv but with a hint classified as %q (%d), want claude tentatively", comm, ag, score)
+		}
+	}
+	procs := []Proc{
+		{PID: 10, PPID: 1, PGID: 10, TPGID: 10, Comm: "zsh", Start: at(0)},
+		{PID: 100, PPID: 10, PGID: 100, TPGID: 100, Comm: "node", Start: at(1)},
+	}
+	if id, ok := FindIn(procs); ok {
+		t.Fatalf("argv-less node reported as agent: %+v", id)
+	}
+}
+
 // A tool taking the foreground must not replace the agent.
 func TestFindSurvivesForegroundHandoff(t *testing.T) {
 	procs := []Proc{
