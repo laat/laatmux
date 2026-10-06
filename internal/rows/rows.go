@@ -199,8 +199,8 @@ func (r Row) NeedsUser() bool {
 
 // Rank is the row's sort group in priority order: pending tasks, then
 // blocked, done, working, idle and unknown, stale or settled, then rows
-// without an agent or with a gone one, whose last activity, which the
-// daemon keeps, says nothing now.
+// without an agent or with a gone one: a gone agent's last activity,
+// which the daemon keeps, says nothing now.
 func (r Row) Rank() int {
 	switch {
 	case r.Pending != nil:
