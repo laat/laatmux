@@ -49,12 +49,12 @@ One binary, three roles:
 A daemon's own stream is a snapshot then upserts and removes, numbered
 in one sequence under the daemon's lock, so a snapshot and the changes
 after it never interleave; a subscriber that falls behind (its buffer
-full) is dropped and resnapshots. The record kinds: agents (a pane
-with an identified agent: activity from the screen and the pane's
-title, liveness of the process, the worktree it belongs to), worktrees
-(from `git worktree list` under the configured directories), panes and runs (the tree's
-children beside the agents, on hosts with attribution), and the
-listing stamp.
+full) is dropped and resnapshots. The record kinds: agents (a pane with
+an identified agent: activity from the screen and the pane's title,
+liveness of the process, the worktree it belongs to), worktrees (from
+`git worktree list` under the configured directories), panes and runs
+(the tree's children beside the agents, on hosts with attribution), and
+the listing stamp.
 
 The merged stream is the same shape with every host's records, host
 records, the local workspace sessions, the pending tasks and their
@@ -66,9 +66,9 @@ functions of that.
 Commands are streams too: `add`, `rm`, `run` and `prompt` are numbered
 progress messages then a result, kept for a while so a client that lost
 its connection can `follow` it: by id, or for a prompt by the task's id
-and the attempt number. The relay's own add (`add --detach` and the
-task form) and its prompt without an attempt number are answered with
-one result instead; for the add the file is the acceptance.
+and the attempt number. The relay's own add (`add --detach` and the task
+form) and its prompt without an attempt number are answered with one
+result instead; for the add the file is the acceptance.
 
 ## The daemon's parts
 
