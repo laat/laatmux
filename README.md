@@ -1106,8 +1106,8 @@ alike; only the lines it leaves differ.
   red, cut like a label; else nothing; on `main` and `master` only the
   failing name). A stale answer leaves them dim and plain whatever
   colour or bold a style gives them, as a refresh that timed out leaves
-  the git stats, sync, counts and marks; the pending time is then as of
-  the last answer.
+  the git stats, sync, base, counts and marks; the pending time is then
+  as of the last answer.
   Position: `{idx}` (the row's number, as the digits count),
   `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
   (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),

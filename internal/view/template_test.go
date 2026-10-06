@@ -303,6 +303,10 @@ func TestTemplateStyles(t *testing.T) {
 		t.Errorf("a split run before: %q", got)
 	}
 	r = tokenRow(now)
+	// A fresh base takes a style's colour and bold, as a label does.
+	if got := render("#[fg=accent,bold]{git_branch}", 20); got != "...|«⟨accent:origin/main⟩»\n" {
+		t.Errorf("a fresh base styled: %q", got)
+	}
 	// The single git tokens are stale as the stats are.
 	r.Worktree.Git.Stale = true
 	if got := render("{git_rebase} {git_conflict} {git_ahead}", 20); got != "...|‹R› ‹!› ‹↑2›\n" {
@@ -314,6 +318,8 @@ func TestTemplateStyles(t *testing.T) {
 	}
 	r.Worktree.Git.Base = "origin/feature-long-base"
 	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_stats} {git_sync} {git_rebase} {git_conflict}", "R +46 -11 ✎ +28 -3 →feature-lo… ! ↑2 ↓1 R !")
+	// The base whole and cut, as {git_sync} draws it on the same row.
+	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_sync} {git_branch}", "→feature-lo… ! ↑2 ↓1 origin/feature-long-base")
 	r = tokenRow(now)
 	// fg=default clears the colour, as tmux spells it.
 	if got := render("#[fg=accent]a#[fg=default]b", 10); got != "...|⟨accent:a⟩b\n" {
