@@ -112,7 +112,7 @@ func ReadRuntime() (Runtime, error) {
 }
 
 // ErrStale is a runtime file whose daemon is gone.
-var ErrStale = errors.New("laatmux: runtime file is stale")
+var ErrStale = errors.New("runtime file is stale")
 
 // RemoveRuntime deletes the runtime file if it belongs to pid.
 func RemoveRuntime(pid int) {
@@ -191,7 +191,7 @@ func TryLock() (*Lock, error) {
 		if holder == "" {
 			holder = "unknown"
 		}
-		return nil, fmt.Errorf("laatmux: daemon lock held by pid %s", holder)
+		return nil, fmt.Errorf("daemon lock held by pid %s", holder)
 	}
 	_ = f.Truncate(0)
 	_, _ = f.Seek(0, 0)

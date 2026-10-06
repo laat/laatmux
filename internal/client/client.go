@@ -360,7 +360,7 @@ func DialLocal(ctx context.Context, start bool) (net.Conn, error) {
 		return c, nil
 	}
 	if !start {
-		return nil, errors.New("laatmux: daemon not running")
+		return nil, errors.New("daemon not running")
 	}
 	if err := StartDaemon(ctx); err != nil {
 		return nil, err
@@ -376,7 +376,7 @@ func DialLocal(ctx context.Context, start bool) (net.Conn, error) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return nil, errors.New("laatmux: daemon did not come up")
+	return nil, errors.New("daemon did not come up")
 }
 
 func dialRuntime() (net.Conn, error) {
@@ -393,7 +393,7 @@ func dialRuntime() (net.Conn, error) {
 func DialAddress(address string) (net.Conn, error) {
 	network, addr, ok := strings.Cut(address, ":")
 	if !ok {
-		return nil, fmt.Errorf("laatmux: bad runtime address %q", address)
+		return nil, fmt.Errorf("bad runtime address %q", address)
 	}
 	return net.DialTimeout(network, addr, 2*time.Second)
 }
