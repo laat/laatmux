@@ -12,8 +12,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// sZomb is P_stat of a process that has exited and is not yet reaped,
+// SZOMB in <sys/proc.h>.
+const sZomb = 5
+
 // ListTTY returns the processes whose controlling terminal is tty, via
-// sysctl kern.proc.tty. No ps, no /proc. Works inside sandbox-exec.
+// sysctl kern.proc.tty. No ps, no /proc. Works inside sandbox-exec. A
+// zombie is not listed: it has exited, and only waits for its parent
+// to reap it.
 func ListTTY(tty string) ([]Proc, error) {
 	st, err := os.Stat(tty)
 	if err != nil {
@@ -29,6 +35,9 @@ func ListTTY(tty string) ([]Proc, error) {
 	}
 	out := make([]Proc, 0, len(kps))
 	for _, kp := range kps {
+		if kp.Proc.P_stat == sZomb {
+			continue
+		}
 		p := Proc{
 			PID:   int(kp.Proc.P_pid),
 			PPID:  int(kp.Eproc.Ppid),
@@ -45,7 +54,8 @@ func ListTTY(tty string) ([]Proc, error) {
 
 // Lookup is the process with the pid: its comm, start time and start
 // identity, the last two with the pid identifying it as Identity does
-// an agent; not ok when there is no such process.
+// an agent; not ok when there is no such process. Unlike ListTTY it
+// finds a zombie: the pid names it, and no other, until the reap.
 func Lookup(pid int) (Proc, bool) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil || int(kp.Proc.P_pid) != pid {
@@ -66,12 +76,24 @@ func Lookup(pid int) (Proc, bool) {
 // call is denied inside some sandboxes, in which case both are empty.
 func procArgs(pid int) (argv, env []string) {
 	raw, err := unix.SysctlRaw("kern.procargs2", pid)
-	if err != nil || len(raw) < 4 {
+	if err != nil {
+		return nil, nil
+	}
+	return parseProcArgs(raw)
+}
+
+// parseProcArgs splits kern.procargs2's buffer: argc, the exec path,
+// NUL padding, then argv and env strings, each ended by a NUL. An empty
+// argument is a lone NUL and keeps its place in argv; an empty env
+// string carries nothing and is dropped, as the NULs that pad the env
+// from the strings the kernel adds after it are. An empty argv[0] is
+// taken for padding: nothing tells the two apart.
+func parseProcArgs(raw []byte) (argv, env []string) {
+	if len(raw) < 4 {
 		return nil, nil
 	}
 	argc := int(binary.LittleEndian.Uint32(raw[:4]))
 	rest := raw[4:]
-	// exec path, then NUL padding, then argv strings, then env strings.
 	i := bytes.IndexByte(rest, 0)
 	if i < 0 {
 		return nil, nil
@@ -81,15 +103,19 @@ func procArgs(pid int) (argv, env []string) {
 		rest = rest[1:]
 	}
 	parts := bytes.Split(rest, []byte{0})
-	var strs []string
-	for _, p := range parts {
-		if len(p) == 0 {
-			continue
+	// The last part is what follows the last NUL: no whole string.
+	parts = parts[:len(parts)-1]
+	if argc > len(parts) {
+		argc = len(parts)
+	}
+	argv = make([]string, argc)
+	for i, p := range parts[:argc] {
+		argv[i] = string(p)
+	}
+	for _, p := range parts[argc:] {
+		if len(p) > 0 {
+			env = append(env, string(p))
 		}
-		strs = append(strs, string(p))
 	}
-	if argc > len(strs) {
-		argc = len(strs)
-	}
-	return strs[:argc], strs[argc:]
+	return argv, env
 }

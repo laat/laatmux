@@ -1,11 +1,17 @@
 package procs
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -85,7 +91,7 @@ func TestFindInterpreterHosted(t *testing.T) {
 	}
 }
 
-// An interpreter whose argv cannot be read, a zombie node on the tty
+// An interpreter whose argv cannot be read, a node exiting on the tty
 // say, is no verified agent, and classifying it does not panic (it
 // sliced a nil argv once, and the poll goroutine with it); an exec with
 // no argv gives an empty, non-nil one on macOS, the same. argv[0] alone
@@ -195,6 +201,131 @@ func TestFindEnvHintIsTentative(t *testing.T) {
 	if id, ok := FindIn(procs); !ok || id.PID != 302 || id.Tentative {
 		t.Fatalf("verified did not beat tentative: %+v", id)
 	}
+}
+
+// An agent that exits is gone from its tty at once, though its parent
+// has not reaped it: the zombie, its comm still the agent's, kept the
+// identity alive until the reap. The zombie's parent, a live session
+// leader on a pty, stays listed; Lookup still finds the zombie, whose
+// pid names it until the reap. The parent's argv, an empty argument in
+// it, reads back whole: macOS's parse dropped the empty string and took
+// the first env string into argv.
+func TestListTTYDropsZombies(t *testing.T) {
+	tru, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true:", err)
+	}
+	b, err := os.ReadFile(tru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(claude, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, tty := openPTY(t)
+	slave, err := os.OpenFile(tty, os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slave.Close()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// The empty argument ends the test flags and is read back in its
+	// place, and the env after it whole.
+	parent := exec.Command(os.Args[0], "-test.run=^TestZombieParent$", "", "end")
+	hint := zombieEnv + "=" + claude
+	parent.Env = append(os.Environ(), hint)
+	parent.Stdin = slave
+	parent.ExtraFiles = []*os.File{w}
+	parent.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	err = parent.Start()
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		parent.Process.Kill()
+		parent.Wait()
+	})
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil {
+		t.Fatalf("no pid from the zombie's parent: %v", err)
+	}
+	zombie, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The child runs from the moment its pid is written, so the wait is
+	// for it to exit; a zombie listed stays listed to the deadline.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		list, err := ListTTY(tty)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed, leader := false, false
+		for _, p := range list {
+			listed = listed || p.PID == zombie
+			if p.PID == parent.Process.Pid {
+				leader = true
+				// Not printed: a wrong parse may take env strings into argv.
+				if !slices.Equal(p.Argv, parent.Args) {
+					t.Fatalf("the session leader's argv read as %d strings, not as %q", len(p.Argv), parent.Args)
+				}
+				if !slices.Contains(p.Env, hint) {
+					t.Fatalf("the session leader's env read without %s", zombieEnv)
+				}
+			}
+		}
+		if !leader {
+			t.Fatalf("the live session leader %d is not listed on %s: %s", parent.Process.Pid, tty, pidComms(list))
+		}
+		if !listed {
+			if id, ok := FindIn(list); ok {
+				t.Fatalf("an agent found on %s with its only one exited: %+v", tty, id)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d, exited and not reaped, still listed on %s: %s", zombie, tty, pidComms(list))
+		}
+	}
+	if p, ok := Lookup(zombie); !ok || p.Comm != "claude" {
+		t.Fatalf("Lookup of the zombie %d: %+v ok=%v, want it found as claude", zombie, p, ok)
+	}
+}
+
+// pidComms is a listing's pids and comms, for a failure message: the
+// environment the processes carry stays out of the test's log.
+func pidComms(list []Proc) string {
+	s := make([]string, len(list))
+	for i, p := range list {
+		s[i] = strconv.Itoa(p.PID) + " " + p.Comm
+	}
+	return "[" + strings.Join(s, ", ") + "]"
+}
+
+const zombieEnv = "LAATMUX_PROCS_ZOMBIE"
+
+// TestZombieParent is TestListTTYDropsZombies's session leader on the
+// pty: it starts the program it is given, writes its pid to fd 3 and
+// never reaps it.
+func TestZombieParent(t *testing.T) {
+	prog := os.Getenv(zombieEnv)
+	if prog == "" {
+		t.Skip("run by TestListTTYDropsZombies")
+	}
+	child := exec.Command(prog)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	out := os.NewFile(3, "pid")
+	fmt.Fprintln(out, child.Process.Pid)
+	out.Close()
+	time.Sleep(time.Minute)
 }
 
 func TestSameIdentity(t *testing.T) {
