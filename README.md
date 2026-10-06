@@ -689,13 +689,14 @@ has no identified agent, its agent is gone, its host is down, it is
 orphaned, its workspace is settled and its agent does not want the
 user, or it is stale and `sidebar.dim_stale` is not false. The order,
 `sidebar.sort: priority`, is pending tasks, blocked, done, working, idle
-and unknown, stale or settled, most recent activity first within a
-group; `recency` is most recent activity first, and `window` by session
-and window, tasks first in both. Stale agents, unless
-`sidebar.collapse_stale` is false, and settled workspaces' agents fold
-into `▸ N stale` at the end of the agent view; a settled workspace's
-blocked or done agent stays in place, and so does the viewer's own row,
-whatever it is. Orphaned sessions are lines of the tree.
+and unknown, stale or settled, then gone agents whatever they last did,
+most recent activity first within a group; `recency` is most recent
+activity first, and `window` by session and window, tasks first in
+both. Stale agents, unless `sidebar.collapse_stale` is false, and
+settled workspaces' agents fold into `▸ N stale` at the end of the
+agent view; a settled workspace's live blocked or done agent stays in
+place, and so does the viewer's own row, whatever it is. Orphaned
+sessions are lines of the tree.
 
 **Done and seen.** The local daemon keeps, per agent and its process
 identity, the last activity it saw and two times on this machine's

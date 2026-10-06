@@ -109,10 +109,10 @@ other sessions
 		t.Errorf("tree:\n%s\nwant:\n%s", got, want)
 	}
 	// The agent view's order: blocked, working, idle (most recent first),
-	// ties by host then name; the settled workspace's agent in the Stale
-	// fold. A worktree with no agent has no tile.
+	// ties by host then name, the gone agent last; the settled workspace's
+	// agent in the Stale fold. A worktree with no agent has no tile.
 	rs := Agents(in, Tree(in))
-	if want := "notes proj/down proj/fix proj/dead remote-notes scratch"; names(rs.Main) != want {
+	if want := "notes proj/down proj/fix remote-notes scratch proj/dead"; names(rs.Main) != want {
 		t.Errorf("main = %q\nwant  %q", names(rs.Main), want)
 	}
 	if want := "proj/old"; names(rs.Stale) != want || !rs.Stale[0].Settled || !rs.Stale[0].Dim {
@@ -1093,6 +1093,66 @@ func TestSortOrders(t *testing.T) {
 		if strings.Join(panes, " ") != wantPanes {
 			t.Errorf("%q: panes %v, want %s", order, panes, wantPanes)
 		}
+	}
+}
+
+// A gone agent sorts after every live one of its group in priority
+// order, a stale or settled one too, whatever its last activity: a gone
+// blocked agent does not come before a live working one, nor a gone
+// working one before a live one. So in the main group, the viewer's own
+// gone agent of a settled workspace included, and in the Stale fold.
+func TestGoneSortsLast(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	agent := func(pane, session string, act protocol.Activity, ago time.Duration, live protocol.Liveness) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude",
+			Activity: act, ActivityAt: now.Add(-ago), Liveness: live, Managed: true}
+	}
+	names := func(rs []Row) string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Name)
+		}
+		return strings.Join(out, " ")
+	}
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "a", protocol.Working, time.Minute, protocol.Alive),
+			agent("%2", "b", protocol.Blocked, 0, protocol.Gone),
+			agent("%3", "c", protocol.Idle, 5*time.Hour, protocol.Alive),
+			agent("%4", "d", protocol.Working, 0, protocol.Gone),
+		},
+		Now: now, StaleAfter: time.Hour,
+	}
+	if got, want := names(Agents(in, Tree(in)).Main), "a c b d"; got != want {
+		t.Errorf("main: %s, want %s", got, want)
+	}
+
+	// Two settled workspaces, w's agent gone while blocked, v's live and
+	// idle, and a live idle agent in no workspace.
+	in = Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "proj/w", protocol.Blocked, 0, protocol.Gone),
+			agent("%2", "proj/v", protocol.Idle, time.Minute, protocol.Alive),
+			agent("%3", "other", protocol.Idle, time.Minute, protocol.Alive),
+		},
+		Now: now, StaleAfter: time.Hour, CollapseStale: true,
+	}
+	for i, s := range []string{"w", "v"} {
+		root := "/" + s
+		in.Agents[i].WorktreeID = "venv/worktree/" + root
+		in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "proj", Branch: s, Root: root, Session: "proj/" + s})
+		in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/" + s, Key: protocol.SessionKey("venv", root), Host: "vm", Settled: true})
+	}
+	rs := Agents(in, Tree(in))
+	if got, want := names(rs.Main)+" | "+names(rs.Stale), "other | proj/v proj/w"; got != want {
+		t.Errorf("settled: %s, want %s", got, want)
+	}
+	in.Current = "vm/proj/w"
+	rs = Agents(in, Tree(in))
+	if got, want := names(rs.Main)+" | "+names(rs.Stale), "other proj/w | proj/v"; got != want || !rs.Main[1].Current {
+		t.Errorf("the viewer's own: %s, want %s", got, want)
 	}
 }
 
