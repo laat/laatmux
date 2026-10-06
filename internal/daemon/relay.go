@@ -56,10 +56,10 @@ const (
 )
 
 // pendingFile is what the relay keeps per task: the record as the
-// stream carries it, Sent included, and what the stream must not: the
-// prompt, the listing barrier, the repository entry, and when the
-// record retired (ReplacedBy, which the stream carries as a handoff,
-// and RetiredAt).
+// stream carries it, Sent included, and what the record leaves out:
+// the prompt, the listing barrier, the repository entry, and when it
+// retired (RetiredAt; ReplacedBy, which the stream carries as a
+// handoff).
 type pendingFile struct {
 	protocol.Pending
 	PromptText string            `json:"prompt_text,omitempty"`

@@ -20,7 +20,9 @@
 //	sidebar:
 //	  width: 40               # columns or N%; unset: 10%, clamped to 25..50
 //	  layout: tiles           # tiles or compact; default tiles
-//	  view: agents            # agents or tree; default agents; a sidebar pane's start view until a key or the CLI picks one
+//	  view: agents            # agents or tree; default agents; a side pane's
+//	                          # start view until a key or the CLI picks one;
+//	                          # the top strip is always agents
 //	  sort: priority          # priority, recency or window; default priority
 //	  templates:              # the views' lines, see the README
 //	    compact: "{status_icon} {primary} {pane_suffix}"

@@ -8,17 +8,17 @@ import (
 )
 
 // Form is the task form: three chips for the repository, the host and
-// the agent, a prompt box, and a branch line
-// after it, filled from the prompt as it is typed until the user edits
-// it. Tab and Shift-Tab move between the fields; on a chip Left and
-// Right cycle its candidates and Enter opens the picker with its
-// filter; in the prompt typing edits, Ctrl-J inserts a newline, and
-// Enter submits when the prompt is not empty; on the branch line typing
-// edits it, and Enter submits. Esc cancels the whole form. A field with
-// one candidate is shown, not skipped, so the form reads the same every
-// time. Pasting is text inserted where the cursor is, line breaks
-// included, never a submit and never a tab. The renderer is a pure
-// function of the fields, the cursor and the size.
+// the agent, a prompt box, and a branch line after it, filled from the
+// prompt as it is typed until the user edits it. Tab and Shift-Tab move
+// between the fields; on a chip Left and Right cycle its candidates and
+// Enter opens the picker with its filter; in the prompt typing edits,
+// Ctrl-J inserts a newline, and Enter submits when the prompt is not
+// empty; on the branch line typing edits it, and Enter submits. Esc
+// cancels the whole form. A field with one candidate is shown, not
+// skipped, so the form reads the same every time. Pasting is text
+// inserted where the cursor is, line breaks included, never a submit and
+// never a tab. The renderer is a pure function of the fields, the cursor
+// and the size.
 type Form struct {
 	Title string
 	Hint  string

@@ -14,12 +14,15 @@ One binary, three roles:
   tmux servers and git, derives agent state, runs `add`, `rm`, `run`
   and prompt deliveries there, and serves one JSON-lines stream over a
   local socket. Detection never crosses the network: a daemon only ever
-  looks at its own host's tmux. Every daemon `serve` starts has every
-  part below, the merge, the relay, attention and branches included;
-  what makes the laptop's daemon the merging one is that the laptop's
-  config lists the hosts and the laptop's clients subscribe to the
-  merged stream. On a host the config lists no hosts, so its merged
-  stream holds its own records alone.
+  looks at its own host's tmux. Every daemon `serve` starts has the
+  merge, the relay, attention and branches; the worktree listing, git
+  status and `run` need the host's directories (its own entry in its
+  config, the one without `ssh`), and `add`, `rm` and the journal the
+  managed `laatmux` server too. What makes the laptop's daemon the
+  merging one is that the laptop's config lists the hosts and the
+  laptop's clients subscribe to the merged stream; a host's config
+  lists only the host itself, so its merged stream holds its own
+  records alone.
 - **The merge**, on the laptop: the daemon dials every configured
   remote host (`ssh -T host laatmux bridge`, which relays stdio to that
   host's daemon, starting it on demand) while a merged client is
@@ -28,14 +31,18 @@ One binary, three roles:
   record per host for connectivity. The relay's pending tasks (`add
   --detach` and the task form), the attention records and the PR and
   check state from GitHub are kept there too.
-- **Clients** are the other commands. The listings and views (`ls`,
-  `watch`, the sidebar pane, the dashboard popup, `tasks`, `jump`) dial
-  the local daemon, starting it on demand, and read the merged stream;
-  a command that acts on a host goes through the local daemon's relay
-  or dials the host itself through the bridge; the rest work tmux
-  (`sidebar on|off|attach|reap|fit`, `split`, `settle`, `explain`), ssh
-  (`upgrade`) or the config (`repos`, `version`) directly, and `stop`
-  dials a running daemon without starting one.
+- **Clients** are the other commands. The listings, the views and the
+  commands that find a host through the stream (`ls`, `watch`, the
+  sidebar pane, the dashboard popup, `compose`, `tasks`, `hosts`,
+  `jump`, `path`) dial the local daemon, starting it on demand, and
+  read the merged stream; a command that acts on a host goes through
+  the local daemon's relay or dials the host itself through the bridge
+  (a `jump` to the user's default server switches through tmux alone).
+  `sidebar on|off|attach|reap|fit` and the sidebar's controls, `split`,
+  `settle` and `explain` work tmux directly; `upgrade` builds and
+  installs, locally or over ssh, then dials the daemon it replaced;
+  `repos` reads the config; `version` reads nothing; `stop` and
+  `sidebar seen` dial a running daemon without starting one.
 
 ## Streams
 
@@ -44,8 +51,8 @@ in one sequence under the daemon's lock, so a snapshot and the changes
 after it never interleave; a subscriber that falls behind (its buffer
 full) is dropped and resnapshots. The record kinds: agents (a pane
 with an identified agent: activity from the screen and the pane's
-title, liveness of the process, the worktree it belongs to), worktrees (from `git worktree
-list` under the configured directories), panes and runs (the tree's
+title, liveness of the process, the worktree it belongs to), worktrees
+(from `git worktree list` under the configured directories), panes and runs (the tree's
 children beside the agents, on hosts with attribution), and the
 listing stamp.
 
@@ -59,8 +66,9 @@ functions of that.
 Commands are streams too: `add`, `rm`, `run` and `prompt` are numbered
 progress messages then a result, kept for a while so a client that lost
 its connection can `follow` it: by id, or for a prompt by the task's id
-and the attempt number. The relay's own add (`add --detach`) is
-answered at once instead; the file is the acceptance.
+and the attempt number. The relay's own add (`add --detach` and the
+task form) and its prompt without an attempt number are answered with
+one result instead; for the add the file is the acceptance.
 
 ## The daemon's parts
 
@@ -118,19 +126,22 @@ else `~/.local/state/laatmux`): the daemon's socket (`laatmux.sock`),
 runtime file (`runtime.json`) and startup lock (`daemon.lock`), its log
 (`daemon.log`, appended), `environment-id`, the command journal
 (`commands/`), the relay's pending files (`pending/`),
-`attention.json`, `branches.json`, `last.json` (what every `add` used
-last, per repository: the form's defaults and `add`'s) and
-`sidebar.json` (the views' start settings and folds). The record files
-are written whole through a temporary name (`home.WriteAtomic`); the
-log is appended to, the lock holds a pid, and the environment id is
-made through a link.
+`attention.json`, `branches.json`, `last.json` (the host and named
+agent each repository's last successful or accepted `add` used, the
+form's and `add`'s defaults), `sidebar.json` (the views' start settings
+and folds), `sidebar.lock` (the sidebar's check-and-create) and
+`sidebar/`, one socket per sidebar pane for its controls. The record
+files are written whole through a temporary name (`home.WriteAtomic`);
+the log is appended to, the locks hold a pid or nothing, and the
+environment id is made through a link.
 
 ## tmux
 
 The daemon configures one server, `laatmux`, where it creates
-sessions: its global options, the session overrides of the isolation
-options and both key tables are set, and every global hook removed, on
-discovery once per server pid and before every session it creates.
-Every other server it polls is the user's and is read only. Workspace sessions live on the user's default
-server, tagged with the worktree's key, and the sidebar pane is a pane
+sessions: its global options are set, the session-level overrides of
+the isolation options unset, both key tables emptied and every global
+hook removed, on discovery once per server pid and before every session
+it creates. Every other server it polls is the user's and is read only.
+Workspace sessions live on the user's default server, tagged with the
+worktree's key, and the sidebar pane is a pane
 of the user's window running `laatmux sidebar pane`.

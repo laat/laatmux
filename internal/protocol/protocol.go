@@ -91,7 +91,8 @@ const (
 	// CapMerged is subscribe with merged: one stream with every configured
 	// host's records, a host record per host, and this machine's local
 	// workspace sessions. Every daemon serve starts has it; a host's
-	// config lists no hosts, so its merged stream is its own records.
+	// config lists only the host itself, so its merged stream is its
+	// own records.
 	CapMerged = "merged"
 	// CapRepoEntry is the repository coming from the machine the user
 	// sits at: an add with repo_entry for a repository this host's

@@ -1180,9 +1180,9 @@ laptop providing the UI.
 Every client used to dial every host: a sidebar pane per window would be
 an ssh channel per host per window. The daemon on the machine the user
 sits at is the one process there, so it is the merge point. Every
-daemon advertises `merged` (a host's merged stream holds its own
-records, its config listing no hosts), and `subscribe` with
-`merged: true` gets one stream with every host's records:
+daemon advertises `merged` (a host's config lists only the host
+itself, so its merged stream holds its own records), and `subscribe`
+with `merged: true` gets one stream with every host's records:
 
 ```
 -> {type: subscribe, merged: true}
@@ -1368,8 +1368,9 @@ records, its config listing no hosts), and `subscribe` with
   is debounced (3 confirmations, 700 ms cap); a visible idle prompt bypasses it.
   Fresh processes get a 3 s grace measured from process start.
 - **Agent hooks** are not used: every agent state comes from the pane,
-  its screen and title, and the process table. The tmux hooks laatmux sets are the sidebar's, on the
-  user's default server (see Sidebar and dashboard).
+  its screen and title, and the process table. The tmux hooks laatmux
+  sets are the sidebar's, on the user's default server (see Sidebar
+  and dashboard).
 - **Managed server** reconciliation runs on discovery, once per tmux server
   pid: global options, every global hook, session-level overrides of the
   isolation options, and both key tables. A cold start also passes
