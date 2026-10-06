@@ -50,37 +50,15 @@ func (f *fakeProcs) Exists(tty string, id procs.Identity) (bool, error) {
 	return procs.ExistsIn(t.procs, id), nil
 }
 
-// fakeTmux returns one pane and a scripted screen; records configuration.
-type fakeTmux struct {
-	pane       tmux.Pane
-	screen     []string
-	captureErr error
-	configured int
-	listErr    error
-}
-
-func (f *fakeTmux) ListPanes(context.Context) ([]tmux.Pane, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	return []tmux.Pane{f.pane}, nil
-}
-func (f *fakeTmux) Capture(context.Context, string, int) ([]string, error) {
-	return f.screen, f.captureErr
-}
-func (f *fakeTmux) EnsureConfigured(context.Context) error { f.configured++; return nil }
-func (f *fakeTmux) NewSession(context.Context, tmux.NewSessionOpts) (tmux.Session, error) {
-	return tmux.Session{PaneID: "%0", ServerPID: 1}, nil
-}
-func (f *fakeTmux) KillSession(context.Context, string) error           { return nil }
-func (f *fakeTmux) Paste(context.Context, string, string, string) error { return nil }
-func (f *fakeTmux) DeleteBuffers(context.Context, string) error         { return nil }
-func (f *fakeTmux) SendKeys(context.Context, string, ...string) error   { return nil }
-func (f *fakeTmux) SelectPane(context.Context, string) error            { return nil }
-
 // managed and unmanaged wrap a fake as the daemon's targets.
-func managed(ft *fakeTmux) []Target   { return []Target{{Label: "laatmux", Tmux: ft, Managed: true}} }
-func unmanaged(ft *fakeTmux) []Target { return []Target{{Label: "default", Tmux: ft}} }
+func managed(ft *fakeServer) []Target   { return []Target{{Label: "laatmux", Tmux: ft, Managed: true}} }
+func unmanaged(ft *fakeServer) []Target { return []Target{{Label: "default", Tmux: ft}} }
+
+// onePane is a fake server with the one pane showing screen, as the
+// observation tests drive it.
+func onePane(p tmux.Pane, screen []string) *fakeServer {
+	return &fakeServer{panes: []tmux.Pane{p}, screen: screen}
+}
 
 var (
 	t0      = time.Unix(1_700_000_000, 0)
@@ -93,7 +71,7 @@ var (
 	blkScr  = []string{"────", " Bash command", "   rm -f /tmp/x", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend"}
 )
 
-func run(t *testing.T, fp *fakeProcs, ft *fakeTmux, polls int) []protocol.Agent {
+func run(t *testing.T, fp *fakeProcs, ft *fakeServer, polls int) []protocol.Agent {
 	t.Helper()
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	for i := 0; i < polls; i++ {
@@ -113,7 +91,7 @@ func TestObserveWrapperBeforeChild(t *testing.T) {
 		{procs: []procs.Proc{shell, wrapper}},
 		{procs: []procs.Proc{shell, wrapper, claude}},
 	}}
-	ft := &fakeTmux{pane: pane, screen: idleScr}
+	ft := onePane(pane, idleScr)
 	if ag := run(t, fp, ft, 1); len(ag) != 0 {
 		t.Fatalf("wrapper identified: %+v", ag)
 	}
@@ -134,7 +112,7 @@ func TestObserveWrapperBeforeChild(t *testing.T) {
 // so a shell pane appearing and disappearing produces no traffic at all.
 func TestUnidentifiedPaneIsSilent(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
-	ft := &fakeTmux{pane: pane, screen: idleScr}
+	ft := onePane(pane, idleScr)
 	d := New(Config{EnvironmentID: "env", Targets: unmanaged(ft), Procs: fp})
 	d.poll(context.Background())
 	d.poll(context.Background())
@@ -156,8 +134,8 @@ func TestUnidentifiedPaneIsSilent(t *testing.T) {
 // own agents.
 func TestTwoServers(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
-	m := &fakeTmux{pane: pane, screen: idleScr}
-	u := &fakeTmux{pane: pane, screen: blkScr}
+	m := onePane(pane, idleScr)
+	u := onePane(pane, blkScr)
 	d := New(Config{EnvironmentID: "env", Targets: append(managed(m), unmanaged(u)...), Procs: fp})
 	if got := d.capabilities(); !protocol.Has(got, protocol.CapNew) {
 		t.Fatalf("caps %v", got)
@@ -216,7 +194,7 @@ func TestTwoServers(t *testing.T) {
 
 // A daemon that does not watch the managed server does not offer new.
 func TestNoManagedServerNoNew(t *testing.T) {
-	d := New(Config{EnvironmentID: "env", Targets: unmanaged(&fakeTmux{pane: pane})})
+	d := New(Config{EnvironmentID: "env", Targets: unmanaged(onePane(pane, nil))})
 	if protocol.Has(d.capabilities(), protocol.CapNew) {
 		t.Fatal("new offered without the managed server")
 	}
@@ -230,7 +208,7 @@ func TestObserveTentativeReplacedByVerified(t *testing.T) {
 		{procs: []procs.Proc{shell, hinted}},
 		{procs: []procs.Proc{shell, hinted, child}},
 	}}
-	d := New(Config{EnvironmentID: "env", Targets: managed(&fakeTmux{pane: pane, screen: idleScr}), Procs: fp})
+	d := New(Config{EnvironmentID: "env", Targets: managed(onePane(pane, idleScr)), Procs: fp})
 	d.poll(context.Background())
 	_, ag := d.agentRecords()
 	if ag[0].Identity == nil || ag[0].Identity.PID != 100 {
@@ -253,7 +231,7 @@ func TestObserveExitUnderSurvivingWrapper(t *testing.T) {
 		{procs: []procs.Proc{shell, wrapper}},         // exists: gone
 		{procs: []procs.Proc{shell, wrapper}},         // find: nothing
 	}}
-	ft := &fakeTmux{pane: pane, screen: idleScr}
+	ft := onePane(pane, idleScr)
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	for i := 0; i < 4; i++ {
 		d.poll(context.Background())
@@ -276,7 +254,7 @@ func TestObserveTransientReadError(t *testing.T) {
 		{err: errors.New("sysctl: EAGAIN")},
 		{procs: []procs.Proc{shell, claude}},
 	}}
-	ft := &fakeTmux{pane: pane, screen: idleScr}
+	ft := onePane(pane, idleScr)
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
 	_, ag := d.agentRecords()
@@ -310,7 +288,7 @@ func TestObserveTransientReadError(t *testing.T) {
 // Review 2 finding 5: a failed capture keeps the last activity.
 func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
-	ft := &fakeTmux{pane: pane, screen: blkScr}
+	ft := onePane(pane, blkScr)
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
 	_, ag := d.agentRecords()
@@ -338,7 +316,8 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 // server instance, including a server that appears after startup.
 func TestDiscoveryConfiguresManagedServer(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
-	ft := &fakeTmux{pane: pane, screen: idleScr, listErr: &tmux.Error{Msg: "no server running"}}
+	ft := onePane(pane, idleScr)
+	ft.listErr = &tmux.Error{Msg: "no server running"}
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
 	if ft.configured != 0 {
@@ -350,12 +329,12 @@ func TestDiscoveryConfiguresManagedServer(t *testing.T) {
 	if ft.configured != 1 {
 		t.Fatalf("configured %d times, want 1", ft.configured)
 	}
-	ft.pane.ServerPID = 6 // server restarted by hand
+	ft.panes[0].ServerPID = 6 // server restarted by hand
 	d.poll(context.Background())
 	if ft.configured != 2 {
 		t.Fatalf("restarted server not reconciled: %d", ft.configured)
 	}
-	ftu := &fakeTmux{pane: pane, screen: idleScr}
+	ftu := onePane(pane, idleScr)
 	d = New(Config{EnvironmentID: "env", Targets: unmanaged(ftu), Procs: fp})
 	d.poll(context.Background())
 	if ftu.configured != 0 {
@@ -368,7 +347,7 @@ func TestDiscoveryConfiguresManagedServer(t *testing.T) {
 // same connection, which stays up; a message of no known type is an
 // error with the id, and ping is answered.
 func TestConnRefusals(t *testing.T) {
-	d := New(Config{EnvironmentID: "env", Targets: unmanaged(&fakeTmux{pane: pane})})
+	d := New(Config{EnvironmentID: "env", Targets: unmanaged(onePane(pane, nil))})
 	pc := conn(t, d)
 	for _, c := range []struct {
 		name string
@@ -396,7 +375,7 @@ func TestConnRefusals(t *testing.T) {
 		}
 	}
 	// A store but no managed server: add needs it, run does not.
-	d = New(Config{EnvironmentID: "env", Targets: unmanaged(&fakeTmux{pane: pane}), Store: &worktree.Store{}})
+	d = New(Config{EnvironmentID: "env", Targets: unmanaged(onePane(pane, nil)), Store: &worktree.Store{}})
 	pc = conn(t, d)
 	// alive is that the connection is still answering.
 	alive := func() {
@@ -423,7 +402,7 @@ func TestConnRefusals(t *testing.T) {
 	// A store and the managed server, but no journal: a prompt is
 	// refused for what it lacks, in order, and new answers with the
 	// session and its pane.
-	d = New(Config{EnvironmentID: "env", Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}})
+	d = New(Config{EnvironmentID: "env", Targets: managed(onePane(pane, nil)), Store: &worktree.Store{}})
 	pc = conn(t, d)
 	refused(protocol.Message{Type: protocol.TypePrompt}, "command id required")
 	refused(protocol.Message{Type: protocol.TypePrompt, ID: "p"}, "this daemon has no task capability")
@@ -431,7 +410,7 @@ func TestConnRefusals(t *testing.T) {
 	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.Error != "" || !got.OK || got.ID != "n" || got.Session != "proj/x" || got.PaneID != "%0" {
+	if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.Error != "" || !got.OK || got.ID != "n" || got.Session != "proj/x" || got.PaneID != "%1" {
 		t.Errorf("new: %+v %v", got, err)
 	}
 	alive()

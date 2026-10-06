@@ -46,6 +46,11 @@ type fakeServer struct {
 	// would.
 	keys   [][]string
 	onKeys func(f *fakeServer, keys []string)
+	// listErr fails ListPanes and captureErr Capture when set;
+	// configured counts EnsureConfigured.
+	listErr    error
+	captureErr error
+	configured int
 }
 
 type fakePaste struct{ buffer, pane, text string }
@@ -61,14 +66,22 @@ func (f *fakeServer) set(change func()) {
 func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return append([]tmux.Pane(nil), f.panes...), nil
 }
 func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.screen...), nil
+	return append([]string(nil), f.screen...), f.captureErr
 }
-func (f *fakeServer) EnsureConfigured(context.Context) error { return nil }
+func (f *fakeServer) EnsureConfigured(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.configured++
+	return nil
+}
 func (f *fakeServer) SelectPane(_ context.Context, pane string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -238,16 +251,16 @@ func newAddDaemon(t *testing.T) (*Daemon, *fakeServer, *worktree.Store, string) 
 
 func TestCapabilitiesNeedStoreAndManaged(t *testing.T) {
 	store, _ := newStore(t)
-	d := New(Config{Store: store, Targets: unmanaged(&fakeTmux{})})
+	d := New(Config{Store: store, Targets: unmanaged(onePane(tmux.Pane{}, nil))})
 	caps := d.capabilities()
 	if !protocol.Has(caps, protocol.CapWorktrees) || protocol.Has(caps, protocol.CapAdd) || protocol.Has(caps, protocol.CapRm) {
 		t.Fatalf("caps %v", caps)
 	}
-	d = New(Config{Targets: managed(&fakeTmux{})})
+	d = New(Config{Targets: managed(onePane(tmux.Pane{}, nil))})
 	if caps := d.capabilities(); protocol.Has(caps, protocol.CapWorktrees) || protocol.Has(caps, protocol.CapAdd) {
 		t.Fatalf("caps %v", caps)
 	}
-	d = New(Config{Store: store, Targets: managed(&fakeTmux{})})
+	d = New(Config{Store: store, Targets: managed(onePane(tmux.Pane{}, nil))})
 	if caps := d.capabilities(); !protocol.Has(caps, protocol.CapAdd) || !protocol.Has(caps, protocol.CapRm) {
 		t.Fatalf("caps %v", caps)
 	}

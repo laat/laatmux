@@ -38,26 +38,31 @@ func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, 
 		t.Fatal(err)
 	}
 	f := &fakeDaemon{caps: caps, serve: serve}
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer c.Close()
-				pc := protocol.NewConn(c)
-				pc.Write(protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: f.caps})
-				for {
-					m, err := pc.Read()
-					if err != nil || !f.serve(pc, m) {
-						return
-					}
-				}
-			}()
-		}
-	}()
+	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: f.caps}, f.serve)
 	return f
+}
+
+// serveFake accepts on ln until it closes, answering each connection
+// with hello and then every message through serve, false ending the
+// connection; nil serve reads and ignores.
+func serveFake(ln net.Listener, hello protocol.Message, serve func(pc *protocol.Conn, m protocol.Message) bool) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer c.Close()
+			pc := protocol.NewConn(c)
+			pc.Write(hello)
+			for {
+				m, err := pc.Read()
+				if err != nil || serve != nil && !serve(pc, m) {
+					return
+				}
+			}
+		}()
+	}
 }
 
 // A daemon without the capability sends the client down the direct path,
