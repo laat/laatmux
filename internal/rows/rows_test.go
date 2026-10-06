@@ -109,10 +109,10 @@ other sessions
 		t.Errorf("tree:\n%s\nwant:\n%s", got, want)
 	}
 	// The agent view's order: blocked, working, idle (most recent first),
-	// ties by host then name; the settled workspace's agent in the Stale
-	// fold. A worktree with no agent has no tile.
+	// ties by host then name, the gone agent last; the settled workspace's
+	// agent in the Stale fold. A worktree with no agent has no tile.
 	rs := Agents(in, Tree(in))
-	if want := "notes proj/down proj/fix proj/dead remote-notes scratch"; names(rs.Main) != want {
+	if want := "notes proj/down proj/fix remote-notes scratch proj/dead"; names(rs.Main) != want {
 		t.Errorf("main = %q\nwant  %q", names(rs.Main), want)
 	}
 	if want := "proj/old"; names(rs.Stale) != want || !rs.Stale[0].Settled || !rs.Stale[0].Dim {
@@ -1093,6 +1093,34 @@ func TestSortOrders(t *testing.T) {
 		if strings.Join(panes, " ") != wantPanes {
 			t.Errorf("%q: panes %v, want %s", order, panes, wantPanes)
 		}
+	}
+}
+
+// A gone agent sorts after every live one in priority order, a stale one
+// too, whatever its last activity: a gone blocked agent does not come
+// before a live working one, nor a gone working one before a live one.
+func TestGoneSortsLast(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	agent := func(pane, session string, act protocol.Activity, ago time.Duration, live protocol.Liveness) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude",
+			Activity: act, ActivityAt: now.Add(-ago), Liveness: live, Managed: true}
+	}
+	in := Input{
+		Hosts: []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Agents: []protocol.Agent{
+			agent("%1", "a", protocol.Working, time.Minute, protocol.Alive),
+			agent("%2", "b", protocol.Blocked, 0, protocol.Gone),
+			agent("%3", "c", protocol.Idle, 5*time.Hour, protocol.Alive),
+			agent("%4", "d", protocol.Working, 0, protocol.Gone),
+		},
+		Now: now, StaleAfter: time.Hour,
+	}
+	var got []string
+	for _, r := range Agents(in, Tree(in)).Main {
+		got = append(got, r.Name)
+	}
+	if want := "a c b d"; strings.Join(got, " ") != want {
+		t.Errorf("main: %v, want %s", got, want)
 	}
 }
 
