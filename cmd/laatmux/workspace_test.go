@@ -331,8 +331,8 @@ func TestOriginOfLocale(t *testing.T) {
 	bin := t.TempDir()
 	script := `#!/bin/sh
 case "${LC_ALL:-${LC_MESSAGES:-$LANG}}" in
-C|POSIX) echo "fatal: not a git repository (or any of the parent directories): .git" >&2 ;;
-*) echo "fatal: Kein Git-Repository (oder irgendeines der Elternverzeichnisse): .git" >&2 ;;
+C) echo "fatal: not a git repository: $2/gone" >&2 ;;
+*) echo "fatal: Kein Git-Repository: $2/gone" >&2 ;;
 esac
 exit 128
 `
