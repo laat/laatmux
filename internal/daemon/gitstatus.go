@@ -185,7 +185,8 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 // refreshGit reads one worktree's git state and publishes it when a value
 // changed. The result is dropped when the worktree left the listing, or
 // its HEAD moved, while the refresh ran; the next one reads it again. A
-// refresh that timed out keeps the last object and marks it stale.
+// refresh that timed out keeps the last object and marks it stale. A
+// read that fails is logged once per worktree until a read works.
 func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 	// The watched mtimes before the read are the baseline the loop
 	// compares with: a change during the read, an index staged after

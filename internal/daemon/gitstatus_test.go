@@ -200,9 +200,11 @@ func TestGitRefreshDrops(t *testing.T) {
 	}
 }
 
-// A git error is logged once per worktree while it persists, a timeout
-// between included, and two worktrees' errors apart; a read that works
-// clears it, so the same error coming back is logged again.
+// A git error is logged once per worktree while it persists, and two
+// worktrees' errors apart. A read that works clears it, so the same error
+// coming back is logged again: one that finds the object it last
+// published, and one whose HEAD moved, too. A timeout marking the object
+// stale does not clear it.
 func TestGitErrorLoggedOnce(t *testing.T) {
 	f := installFakeGit(t)
 	var logged strings.Builder
@@ -212,6 +214,7 @@ func TestGitErrorLoggedOnce(t *testing.T) {
 		d.worktrees[r] = protocol.Worktree{ID: d.worktreeID(r), EnvironmentID: "env", Branch: r, Root: r}
 	}
 	d.mu.Unlock()
+	f.head["/w/a"], f.head["/w/b"] = "h1", "h1"
 	setErr := func(root string, err error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -223,31 +226,52 @@ func TestGitErrorLoggedOnce(t *testing.T) {
 			refresh(t, d)
 		}
 	}
-	count := func(s string) int {
+	git := func() protocol.GitStatus {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return strings.Count(logged.String(), s)
+		return *d.worktrees["/w/a"].Git
 	}
+	want := func(a, b int, when string) {
+		t.Helper()
+		d.mu.Lock()
+		got := logged.String()
+		d.mu.Unlock()
+		if n, m := strings.Count(got, "a broke"), strings.Count(got, "b broke"); n != a || m != b {
+			t.Fatalf("%s: a logged %d times and b %d, want %d and %d; log:\n%s", when, n, m, a, b, got)
+		}
+	}
+	rounds(1) // both publish an object
+	published := git()
 	setErr("/w/a", errors.New("a broke"))
 	setErr("/w/b", errors.New("b broke"))
 	rounds(3)
-	if a, b := count("a broke"), count("b broke"); a != 1 || b != 1 {
-		t.Fatalf("logged a %d and b %d times over three rounds, want once each; log:\n%s", a, b, logged.String())
-	}
-	setErr("/w/a", context.DeadlineExceeded)
-	rounds(1)
-	setErr("/w/a", errors.New("a broke"))
-	rounds(1)
-	if a := count("a broke"); a != 1 {
-		t.Fatalf("logged a %d times across a timeout, want once; log:\n%s", a, logged.String())
-	}
+	want(1, 1, "three rounds")
 	setErr("/w/a", nil)
 	rounds(1)
+	if g := git(); !g.ChangedAt.Equal(published.ChangedAt) {
+		t.Fatalf("the read that worked published %+v, want the object it last published", g)
+	}
 	setErr("/w/a", errors.New("a broke"))
 	rounds(2)
-	if a, b := count("a broke"), count("b broke"); a != 2 || b != 1 {
-		t.Fatalf("logged a %d and b %d times after a read of a worked, want 2 and 1; log:\n%s", a, b, logged.String())
+	want(2, 1, "a read that found the object it last published")
+	setErr("/w/a", context.DeadlineExceeded)
+	rounds(1)
+	if !git().Stale {
+		t.Fatal("the timeout did not mark the object stale")
 	}
+	setErr("/w/a", errors.New("a broke"))
+	rounds(1)
+	want(2, 1, "a timeout")
+	f.mu.Lock()
+	f.err["/w/a"], f.after["/w/a"] = nil, "h2"
+	f.mu.Unlock()
+	rounds(1)
+	f.mu.Lock()
+	delete(f.after, "/w/a")
+	f.mu.Unlock()
+	setErr("/w/a", errors.New("a broke"))
+	rounds(1)
+	want(3, 1, "a read whose HEAD moved")
 }
 
 // The listing carries the git object across its rebuild, so a session
