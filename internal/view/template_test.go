@@ -169,9 +169,9 @@ func TestTokens(t *testing.T) {
 }
 
 // Styles hold until the next one and leave a token's own colours; a
-// background is drawn; the fill puts the right part against the edge;
-// an empty token takes its separator with it; a template that did not
-// parse draws its error.
+// stale token takes the background alone; a background is drawn; the
+// fill puts the right part against the edge; an empty token takes its
+// separator with it; a template that did not parse draws its error.
 func TestTemplateStyles(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	m := &Model{Now: now, LocalHost: "mac"}
@@ -234,7 +234,8 @@ func TestTemplateStyles(t *testing.T) {
 		t.Errorf("the number alone with its mark: %q", got)
 	}
 	// Whatever the width, a PR number drawn on a stale row has its mark,
-	// on the checks or on itself; the mark takes the template's style.
+	// on the checks or on itself; the mark takes the template's
+	// background.
 	for _, src := range []string{DefaultTile3, DefaultWorktree, "{fill}{pr_number} {pr_checks}", "#[bg=#112233]{primary}{fill}{pr_number} {pr_checks}", "{host} {pr_number}", "{pr_number} {pr_checks} {host}", "{pr_checks} {pr_number}{fill}{host}"} {
 		for _, st := range []string{protocol.ChecksSuccess, protocol.ChecksFailure, protocol.ChecksPending} {
 			r.Branch.Checks = &protocol.Checks{State: st, Passed: 3, Total: 5}
@@ -256,6 +257,37 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("#[bg=#112233]{pr_number}{fill}{pr_checks} {host}", 4); got != "...|‹⟦#112233:#7⟧›‹⟦#112233:?⟧›\n" {
 		t.Errorf("the mark put back styled: %q", got)
 	}
+	// Stale wins over a style: a stale token takes the style's
+	// background, not its colour or bold, which would make it read
+	// fresh; the put-back ? looks as the number's own.
+	for _, c := range []struct{ src, want string }{
+		{"#[bold]{pr_number}", "...|‹#7›‹?›\n"},
+		{"#[fg=accent]{pr_number}", "...|‹#7›‹?›\n"},
+		{"#[fg=accent,bold,bg=#112233]{pr_number}", "...|‹⟦#112233:#7⟧›‹⟦#112233:?⟧›\n"},
+		{"#[fg=accent,bold,bg=#112233]{pr_number}{fill}{pr_checks} {host}", "...|‹⟦#112233:#7⟧›‹⟦#112233:?⟧›\n"},
+	} {
+		if got := render(c.src, 4); got != c.want {
+			t.Errorf("stale under %q: %q, want %q", c.src, got, c.want)
+		}
+	}
+	own := m.line(mustParse(t, "#[fg=accent,bold,bg=#112233]{pr_number}"), r, 4, 0)
+	back := m.line(mustParse(t, "#[fg=accent,bold,bg=#112233]{pr_number}{fill}{pr_checks} {host}"), r, 4, 0)
+	if len(own) != 2 || len(back) != 2 || own[1] != back[1] {
+		t.Errorf("the put-back mark %+v, the number's own %+v", back, own)
+	}
+	// Every PR token of a stale answer, at every width, the shrunk
+	// checks and the put-back mark among them.
+	r.Branch.FetchedAt = now.Add(-time.Minute)
+	for _, c := range []struct {
+		ch   *protocol.Checks
+		want string
+	}{
+		{&protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}, "● #7 × 3/5? test (macos-latest)"},
+		{&protocol.Checks{State: protocol.ChecksPending, Passed: 3, Total: 5, PendingSince: now.Add(-5 * time.Minute)}, "● #7 ⠋ 3/5? 4:00"},
+	} {
+		r.Branch.Checks = c.ch
+		staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{pr_state} {pr_number} {pr_checks} {pr_detail}", c.want)
+	}
 	r.Branch.PR.Number = 52
 	r.Branch.Checks = nil
 	if got := render("{pr_number} {pr_checks}", 40); got != "...|‹#52›‹?›\n" {
@@ -276,6 +308,12 @@ func TestTemplateStyles(t *testing.T) {
 	if got := render("{git_rebase} {git_conflict} {git_ahead}", 20); got != "...|‹R› ‹!› ‹↑2›\n" {
 		t.Errorf("stale git tokens: %q", got)
 	}
+	// Stale wins over a style, as on the PR tokens.
+	if got := render("#[fg=accent]{git_stats}", 40); got != "...|‹R›‹ ›‹+46›‹ ›‹-11›‹ ›‹✎›‹ ›‹+28›‹ ›‹-3›\n" {
+		t.Errorf("stale stats under a colour: %q", got)
+	}
+	r.Worktree.Git.Base = "origin/feature-long-base"
+	staleStyled(t, m, r, "#[fg=accent,bold,bg=#112233]{git_stats} {git_sync} {git_rebase} {git_conflict}", "R +46 -11 ✎ +28 -3 →feature-lo… ! ↑2 ↓1 R !")
 	r = tokenRow(now)
 	// fg=default clears the colour, as tmux spells it.
 	if got := render("#[fg=accent]a#[fg=default]b", 10); got != "...|⟨accent:a⟩b\n" {
@@ -558,6 +596,25 @@ func mustParse(t *testing.T, src string) Compiled {
 		t.Fatal(err)
 	}
 	return Compiled{Template: tm}
+}
+
+// staleStyled draws src, a style with the background #112233 and a
+// colour and bold over stale tokens, at every width up to 60: each span
+// drawn that is not spaces is dim and plain on the background. At 60
+// the line is want, so every token is drawn.
+func staleStyled(t *testing.T, m *Model, r rows.Row, src, want string) {
+	t.Helper()
+	for w := 1; w <= 60; w++ {
+		spans := m.line(mustParse(t, src), r, w, 0)
+		for _, sp := range spans {
+			if strings.TrimSpace(sp.Text) != "" && (!sp.Dim || sp.Bold || sp.Fg != "" || sp.Bg != "#112233") {
+				t.Errorf("%q at %d: %+v not dim and plain on the background", src, w, sp)
+			}
+		}
+		if got := strings.TrimSpace(Text([]Line{{Spans: spans}})); w == 60 && got != want {
+			t.Errorf("%q at 60: %q, want %q", src, got, want)
+		}
+	}
 }
 
 // The dashboard's columns: {git_sync} is →base off main or master, the
