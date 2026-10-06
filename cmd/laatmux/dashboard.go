@@ -265,8 +265,8 @@ func taskAction(m *view.Model, a view.Action) bool {
 // or one that did not start, and the error says what to do for each:
 // the dial's own reason tells them apart, and nothing here probes the
 // runtime record or the startup lock, since a record a crash left may
-// name a pid since reused and a probe of the lock would cost a serve
-// still starting its lock. One without the capability is an older
+// name a pid since reused, and laatmux stop is the one command that
+// checks a pid is the daemon's. One without the capability is an older
 // build still running, and the error says how to replace it. Every
 // client of the stream, ls and watch among them, refuses rather than
 // dial the hosts itself.

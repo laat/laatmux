@@ -144,7 +144,29 @@ func DefaultSocket() string { return filepath.Join(Dir(), "laatmux.sock") }
 // kernel. The pid inside is diagnostic only.
 type Lock struct{ f *os.File }
 
-// TryLock takes the startup lock or reports who holds it.
+// lockRetry is how long TryLock keeps trying a lock it finds held, and
+// lockPause its pause between tries: Holder's probe holds a free lock
+// for an instant, a daemon holds it for its life.
+const (
+	lockRetry = 100 * time.Millisecond
+	lockPause = 10 * time.Millisecond
+)
+
+// pause is TryLock's wait between tries, and probed is called while
+// Holder's probe holds a free lock: variables so a test can put a start
+// inside a probe.
+var (
+	pause  = time.Sleep
+	probed = func() {}
+)
+
+// TryLock takes the startup lock or reports who holds it. A lock found
+// held is tried again for lockRetry before it is reported: Holder takes
+// a free lock for an instant to see that it is free, and a daemon whose
+// first try falls in that instant, the replacement starting as a stop's
+// last probe finds the old daemon gone, takes it on a later try. A
+// second serve, against a daemon that holds the lock, is told so
+// lockRetry later.
 func TryLock() (*Lock, error) {
 	if err := ensure(); err != nil {
 		return nil, err
@@ -154,7 +176,15 @@ func TryLock() (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	for deadline := time.Now().Add(lockRetry); ; {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if busy(err) && time.Now().Before(deadline) {
+			pause(lockPause)
+			continue
+		}
 		b, _ := io.ReadAll(f)
 		f.Close()
 		holder := strings.TrimSpace(string(b))
@@ -177,9 +207,9 @@ func TryLock() (*Lock, error) {
 // its own: the file keeps its content when a probe holds the lock for an
 // instant, and a daemon between taking the lock and rewriting the file
 // is read as the previous holder, then, between truncating and writing,
-// as none. The probe takes the lock for an instant when it is free;
-// a daemon starting in that instant loses it and its client waits out a
-// start that is not coming, which a stop racing a start is anyway.
+// as none. The probe takes the lock for an instant when it is free, and
+// TryLock tries again for longer than that, so a daemon starting in that
+// instant still takes it.
 func Holder() (int, error) {
 	if err := ensure(); err != nil {
 		return 0, err
@@ -190,15 +220,21 @@ func Holder() (int, error) {
 	}
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		if !busy(err) {
 			return 0, err
 		}
 		b, _ := io.ReadAll(f)
 		pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 		return pid, nil
 	}
+	probed()
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return 0, nil
+}
+
+// busy reports whether a LOCK_NB flock failed for the lock being held.
+func busy(err error) bool {
+	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
 
 func (l *Lock) Release() {
