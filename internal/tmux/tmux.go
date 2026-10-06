@@ -306,8 +306,10 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 				continue
 			}
 			for _, opt := range []string{"prefix", "prefix2", "status", "mouse"} {
-				// set-option does not accept the =name exact-match form.
-				_, _ = s.Run(ctx, "set-option", "-u", "-t", sess, opt)
+				// The session by exact name: a bare 0, the name the
+				// first session of a hand-started server gets, is
+				// pane 0 of the most recent session.
+				_, _ = s.Run(ctx, "set-option", "-u", "-t", "="+sess+":", opt)
 			}
 		}
 	}

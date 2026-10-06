@@ -156,6 +156,38 @@ func TestListPanesEmptyServer(t *testing.T) {
 	}
 }
 
+// A hand-started server's sessions lose their overrides of the
+// isolation options, each named exactly: the first one is called 0,
+// which as a bare target is pane 0 of the most recent session, b here.
+func TestEnsureConfiguredClearsEverySession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	s := LaatmuxServer
+	if _, err := s.Run(ctx, "-f", "/dev/null", "new-session", "-d", "-s", "0", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
+	for _, args := range [][]string{
+		{"set-option", "-t", "=0:", "status", "on"},
+		{"new-session", "-d", "-s", "b", "sleep 600"},
+		{"set-option", "-t", "=b:", "status", "on"},
+	} {
+		if _, err := s.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.EnsureConfigured(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"0", "b"} {
+		if out, err := s.Run(ctx, "show-options", "-t", "="+name+":", "status"); err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Errorf("session %s keeps %q %v", name, out, err)
+		}
+	}
+}
+
 // decodeBranch reverses EncodeBranch, for the round trip. Sequences
 // EncodeBranch never emits are left as they are.
 func decodeBranch(name string) string {
