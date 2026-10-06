@@ -11,8 +11,8 @@ import (
 // a goroutine of its own per path, so a path on a hung mount costs that
 // goroutine and never the poll; until the answer is there the path is
 // taken cleaned. The cache has a lock of its own and takes no other, so
-// resolve may be called with or without d.mu held: the poll calls it
-// before taking d.mu, the attribution test under it.
+// resolve may be called under any of the daemon's locks or none;
+// observe and setManagedRoots call it before taking d.mu.
 type resolver struct {
 	mu        sync.Mutex
 	resolved  map[string]resolution

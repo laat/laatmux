@@ -106,7 +106,7 @@ func (d *Daemon) worktreeOfLocked(path string) string {
 }
 
 // within reports whether path is inside root, as written or resolved;
-// resolve is the daemon's resolver.
+// resolve is d.paths.resolve.
 func within(path, root string, resolve func(string) string) bool {
 	p := resolve(path)
 	return inside(p, filepath.Clean(root)) || inside(p, resolve(root))
@@ -120,7 +120,7 @@ func within(path, root string, resolve func(string) string) bool {
 // managed session with a pane made at the root all the same, so no
 // agent is left in a removed directory. Two sessions on one root is not
 // a state add creates; the lexically first name wins so the record is
-// stable. resolve is the daemon's resolver.
+// stable. resolve is d.paths.resolve.
 func homeSessions(panes []tmux.Pane, resolve func(string) string) map[string]string {
 	bySession := map[string][]tmux.Pane{}
 	for _, p := range panes {

@@ -602,7 +602,7 @@ func TestResolver(t *testing.T) {
 	// cached is the entry for path once the file system has answered.
 	cached := func(path string) resolution {
 		t.Helper()
-		for i := 0; i < 200; i++ {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
 			r.mu.Lock()
 			res, ok := r.resolved[path]
 			busy := r.resolving[path]
@@ -631,18 +631,17 @@ func TestResolver(t *testing.T) {
 	if got := r.resolve(""); got != "" {
 		t.Fatalf("empty path resolved as %q", got)
 	}
-	// unchanged is that the entry for path stays as seeded over a
-	// little while: the file system was not asked about it.
-	unchanged := func(path string, seeded resolution) {
+	// unasked is that the file system was not asked about path: it is
+	// not in flight and its entry is as seeded. A worker clears the
+	// one and writes the other in one hold of the lock, so one look
+	// after resolve returns sees either.
+	unasked := func(path string, seeded resolution) {
 		t.Helper()
-		for i := 0; i < 10; i++ {
-			r.mu.Lock()
-			res := r.resolved[path]
-			r.mu.Unlock()
-			if res != seeded {
-				t.Fatalf("%s asked for again: %+v", path, res)
-			}
-			time.Sleep(5 * time.Millisecond)
+		r.mu.Lock()
+		res, busy := r.resolved[path], r.resolving[path]
+		r.mu.Unlock()
+		if busy || res != seeded {
+			t.Fatalf("%s asked for: in flight %v, entry %+v", path, busy, res)
 		}
 	}
 	// Within the TTL the answer stands and the file system is not
@@ -654,7 +653,7 @@ func TestResolver(t *testing.T) {
 	if got := r.resolve("/stale"); got != "/was" {
 		t.Fatalf("a fresh resolution not answered: %q", got)
 	}
-	unchanged("/stale", fresh)
+	unasked("/stale", fresh)
 	// Past the TTL the old answer stands while the path is asked for
 	// again.
 	r.mu.Lock()
@@ -692,11 +691,29 @@ func TestResolver(t *testing.T) {
 	if got := r.resolve(link + "/more/"); got != filepath.Join(link, "more") {
 		t.Fatalf("over the in-flight cap: %q", got)
 	}
-	unchanged(link+"/more/", resolution{})
-	r.mu.Lock()
-	n = len(r.resolving)
-	r.mu.Unlock()
-	if n != maxResolving {
-		t.Fatalf("%d in flight, want the cap %d", n, maxResolving)
+	unasked(link+"/more/", resolution{})
+}
+
+// laatmux's own panes, a sidebar pane and a workspace session's attach
+// pane, are no pane records, whatever worktree they sit in; one that
+// loses the tag becomes one.
+func TestAttributionOwnPanes(t *testing.T) {
+	f := newAttrFixture(t)
+	f.list(f.foo)
+	f.def.set(func() {
+		f.def.panes = []tmux.Pane{
+			{Session: "work", ID: "%3", TTY: "/dev/s1", CurrentCommand: "laatmux", PID: 30, CurrentPath: f.foo, Own: true},
+			{Session: "work", ID: "%4", TTY: "/dev/s2", CurrentCommand: "ssh", PID: 31, CurrentPath: f.foo, Own: true},
+			{Session: "work", ID: "%5", TTY: "/dev/s3", CurrentCommand: "zsh", PID: 32, CurrentPath: f.foo},
+		}
+	})
+	var ids []string
+	for _, m := range f.poll(t) {
+		if m.Pane != nil {
+			ids = append(ids, m.Pane.PaneID)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "%5" {
+		t.Fatalf("pane records %v, want the shell alone", ids)
 	}
 }
