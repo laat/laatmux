@@ -111,6 +111,8 @@ type hostsList struct {
 	// flip, when positive, answers that many reads with no hosts and
 	// then the list again: a host gone and back between two reads.
 	flip int
+	// reads counts every read, a flipped one included.
+	reads int
 }
 
 // setFlip sets flip under the lock.
@@ -120,9 +122,17 @@ func (h *hostsList) setFlip(n int) {
 	h.mu.Unlock()
 }
 
+// readCount is reads under the lock.
+func (h *hostsList) readCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reads
+}
+
 func (h *hostsList) get() ([]peer.Host, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.reads++
 	if h.flip > 0 {
 		h.flip--
 		return nil, h.err
