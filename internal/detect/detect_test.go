@@ -198,6 +198,27 @@ func TestExplainListsUnsupportedRegions(t *testing.T) {
 	}
 }
 
+// A workflow syncs the manifests from herdr. A manifest that needs a newer
+// herdr engine, or a region selector this port lacks, must fail here rather
+// than load with rules that never match.
+func TestManifestsFitThePort(t *testing.T) {
+	const engineVersion = 3 // herdr's MANIFEST_ENGINE_VERSION the port matches
+	for key, lm := range manifests {
+		if key != lm.ID {
+			continue // an alias
+		}
+		if lm.MinEngineVersion > engineVersion {
+			t.Errorf("%s: min_engine_version %d, the port is engine %d", lm.ID, lm.MinEngineVersion, engineVersion)
+		}
+		for _, r := range lm.rules {
+			spec := strings.TrimSpace(r.Region)
+			if _, ok := regionText(Input{}, "", spec); !ok && spec != "osc_progress" {
+				t.Errorf("%s: rule %s uses region %q, which the port lacks", lm.ID, r.ID, spec)
+			}
+		}
+	}
+}
+
 // A response block marker after the last › prompt makes that prompt
 // stale; one before it does not.
 func TestCodexStalePrompt(t *testing.T) {

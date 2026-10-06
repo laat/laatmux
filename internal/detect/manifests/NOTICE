@@ -1,7 +1,12 @@
 The files claude.toml and codex.toml in this directory are copied verbatim from
 herdr (https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
-commit 309749ad65f3aa596f077ec23a1bf3ee428b7a04.
+commit 309749ad65f3aa596f077ec23a1bf3ee428b7a04. A daily workflow,
+.github/workflows/herdr-manifests.yaml, opens a pull request when they change
+upstream.
 
-herdr is licensed under the Apache License, Version 2.0. You may obtain a copy
-of the License at http://www.apache.org/licenses/LICENSE-2.0. The manifests are
-redistributed here under the same license.
+The rule engine in ../engine.go and ../regions.go is a Go port of herdr's
+src/detect/manifest.rs.
+
+herdr is licensed under the Apache License, Version 2.0. LICENSE in this
+directory is herdr's copy of it. The manifests are redistributed, and the
+engine is ported, under the same license.
