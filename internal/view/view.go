@@ -389,6 +389,21 @@ type Span struct {
 	stale bool
 }
 
+// dimmed is the span as a dim line draws it: dim throughout, without a
+// template's background, and without its colour but for the viewer's
+// own label, which keeps its colour and is not faint. ANSI draws a dim
+// line's spans so off the band, and the strip a dim row's chip, whose
+// line is not dim.
+func (s Span) dimmed() Span {
+	s.Bg = ""
+	if s.Fg != palette.CurrentWorktreeFg {
+		s.Dim, s.Fg = true, ""
+	} else {
+		s.Dim = false
+	}
+	return s
+}
+
 // Spinning reports whether the last Render drew a spinner, so the host
 // ticks the spinner only while one is on screen: a working row that is
 // filtered out, in a collapsed group, or scrolled off with its icon, is
@@ -980,15 +995,19 @@ func ANSI(l Line, th palette.Theme) string {
 	}
 	attrs()
 	for _, s := range l.Spans {
+		if l.Dim && !band {
+			// A dim line is dim throughout; under the band its spans
+			// keep their colour.
+			s = s.dimmed()
+		}
 		fg, bg := "", ""
 		current := s.Fg == palette.CurrentWorktreeFg
-		if colour && s.Fg != "" && (!l.Dim || band || current) {
+		if colour && s.Fg != "" {
 			fg = th.SGR(s.Fg, false)
 		}
-		if colour && s.Bg != "" && !band && !l.Dim && !s.band {
+		if colour && s.Bg != "" && !band && !s.band {
 			// A template's background; the selection's band stays
-			// the band, so the selected row is told apart, and a dim
-			// line is dim throughout.
+			// the band, so the selected row is told apart.
 			bg = th.SGR(s.Bg, true)
 		}
 		pre := ""

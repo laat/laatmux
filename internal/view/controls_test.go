@@ -728,3 +728,58 @@ func TestStrip(t *testing.T) {
 		t.Error("the strip does not name the scope")
 	}
 }
+
+// A dim row's chip is dim throughout, as its line is in the list: faint
+// and without the template's background, which a fresh row's chip
+// keeps; the viewer's own label on a dim chip keeps its colour, not the
+// background, and is not faint where a template makes it dim.
+func TestStripDimChip(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 200, 1, 14
+	m.ShowHidden = true
+	m.SetTemplates(CompileTemplates(nil, "", []string{"#[bg=#ffff00]{primary}"}, "", "", "", "", ""))
+	dark, _ := palette.New(true, nil)
+	yellow := dark.SGR("#ffff00", true)
+	// chipIn is the named chip of the first line, drawn alone on a line
+	// as the strip draws it, in a theme.
+	chipIn := func(name string, th palette.Theme) string {
+		t.Helper()
+		out := m.Render()
+		var chips [][]Span
+		for _, sp := range append([]Span{{Text: stripSep, Fg: palette.Border}}, out[0].Spans...) {
+			if sp.Text == stripSep && sp.Fg == palette.Border {
+				chips = append(chips, nil)
+				continue
+			}
+			chips[len(chips)-1] = append(chips[len(chips)-1], sp)
+		}
+		for _, c := range chips {
+			if l := (Line{Spans: c}); strings.HasPrefix(Text([]Line{l}), name+" ") {
+				return ANSI(l, th)
+			}
+		}
+		t.Fatalf("no chip %s:\n%s", name, Debug(out))
+		return ""
+	}
+	chip := func(name string) string { t.Helper(); return chipIn(name, dark) }
+	if got := chip("remote-notes"); !strings.Contains(got, yellow+"remote-notes") {
+		t.Errorf("a fresh chip lost the template's background: %q", got)
+	}
+	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, "\x1b[2mdead") {
+		t.Errorf("a dim chip not drawn as its line: %q", got)
+	}
+	for _, it := range m.Visible() {
+		if it.Row.Name == "proj/dead" {
+			it.Row.Current = true
+		}
+	}
+	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, dark.SGR(palette.CurrentWorktreeFg, false)+"dead") {
+		t.Errorf("the viewer's label on a dim chip: %q", got)
+	}
+	// Without colours, where faint would show.
+	m.SetTemplates(CompileTemplates(nil, "", []string{"#[dim]{primary}"}, "", "", "", "", ""))
+	if got := chipIn("dead", palette.Mono()); !strings.HasPrefix(got, "\x1b[1mdead") {
+		t.Errorf("the viewer's label made dim on a dim chip: %q", got)
+	}
+}
