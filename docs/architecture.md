@@ -11,44 +11,43 @@ One binary, three roles:
 
 - **A daemon** (`laatmux serve`) on every machine that has worktrees or
   agents: the laptop and each configured host. It polls that machine's
-  tmux servers and git, derives agent state, runs `add`, `rm`, `run`
-  and prompt deliveries there, and serves one JSON-lines stream over a
-  local socket. Detection never crosses the network: a daemon only ever
-  looks at its own host's tmux. Every daemon `serve` starts has the
-  merge, the relay, attention and branches; the worktree listing, git
-  status and `run` need the host's directories (its own entry in its
-  config, the one without `ssh`), and `add`, `rm` and the journal the
-  managed `laatmux` server too. What makes the laptop's daemon the
-  merging one is that the laptop's config lists the hosts and the
-  laptop's clients subscribe to the merged stream; a host's config
-  lists only the host itself, as a rule, and then its merged stream
-  holds its own records alone. A daemon's own records enter its merged
-  stream only through an entry for itself.
-- **The merge**, on the laptop: the daemon dials every configured
-  remote host (`ssh -T host laatmux bridge`, which relays stdio to that
-  host's daemon, starting it on demand) while a merged client is
-  connected and for a minute after, keeps each host's records beside
-  its own (given an entry for itself), and publishes one merged stream
-  to local clients with a host
-  record per host for connectivity. The relay's pending tasks (`add
-  --detach` and the task form), the attention records and the PR and
-  check state from GitHub are kept there too.
+  tmux servers and git, derives agent state, runs `add`, `rm`, `run` and
+  prompt deliveries there, and serves one JSON-lines stream over a local
+  socket. Detection never crosses the network: a daemon only ever looks
+  at its own host's tmux. Every daemon `serve` starts has the merge, the
+  relay, attention and branches; the worktree listing, git status and
+  `run` need the host's directories (its own entry in its config, the
+  one without `ssh`), and `add`, `rm` and the journal the managed
+  `laatmux` server too. What makes the laptop's daemon the merging one
+  is that the laptop's config lists the hosts and the laptop's clients
+  subscribe to the merged stream; a host's config lists only the host
+  itself, as a rule, and then its merged stream holds its own records
+  alone. A daemon's own records enter its merged stream only through an
+  entry for itself.
+- **The merge**, on the laptop: the daemon dials every configured remote
+  host (`ssh -T host laatmux bridge`, which relays stdio to that host's
+  daemon, starting it on demand) while a merged client is connected and
+  for a minute after, keeps each host's records beside its own (given an
+  entry for itself), and publishes one merged stream to local clients
+  with a host record per host for connectivity. The relay's pending
+  tasks (`add --detach` and the task form), the attention records and
+  the PR and check state from GitHub are kept there too.
 - **Clients** are the other commands. The listings, the views and the
   commands that find a host through the stream (`ls`, `watch`, the
-  sidebar pane, the dashboard popup, `compose`, `tasks`, `jump`,
-  `path`; `hosts` for its GitHub line, dialling every host itself for
-  the rest) dial the local daemon, starting it on demand, and read the
-  merged stream; `add`, `rm` and `run` go through the local daemon's
-  relay or dial the host themselves through the bridge (a `jump` to
-  the user's default server switches through tmux alone). `sidebar
-  on|off|attach|reap|fit`, `split`, `settle`, `shell` (an ssh window)
-  and `explain` work tmux directly; the sidebar's controls (`next`,
-  `prev`, `jump`, `view`, `scope`) find the pane through tmux and
-  write to its socket; `upgrade` builds or takes a binary, installs it
-  locally or over ssh, stops the old daemon with it, then dials the
-  host, which starts the new one; `repos` reads the config and
-  `last.json`; `version` reads nothing; `stop` and `sidebar seen` dial
-  a running daemon without starting one.
+  sidebar pane, the dashboard popup, `compose`, `tasks`, `jump`, `path`;
+  `hosts` for its GitHub line, dialling every host itself for the rest)
+  dial the local daemon, starting it on demand, and read the merged
+  stream; `add`, `rm`, `run` and `new` go through the local daemon's
+  relay or dial the host themselves through the bridge (a `jump` to the
+  user's default server switches through tmux alone). `sidebar
+  on|off|attach|reap|fit`, `split`, `settle`, `unsettle`, `shell` (a
+  shell window, local or over ssh) and `explain` work tmux directly; the
+  sidebar's controls (`next`, `prev`, `jump`, `view`, `scope`) find the
+  pane through tmux and write to its socket; `upgrade` builds or takes a
+  binary, installs it locally or over ssh, stops the old daemon, then
+  dials the host, which starts the new one; `repos` reads the config and
+  `last.json`; `version` reads nothing; `stop` and `sidebar seen` dial a
+  running daemon without starting one.
 
 ## Streams
 
@@ -127,15 +126,14 @@ process: the views are tested as functions of records.
 
 ## On disk
 
-Under `home.Dir()` (`LAATMUX_HOME`, else `$XDG_STATE_HOME/laatmux`,
-else `~/.local/state/laatmux`): the daemon's socket (`laatmux.sock`),
-runtime file (`runtime.json`) and startup lock (`daemon.lock`), its log
+Under `home.Dir()` (`LAATMUX_HOME`, else `$XDG_STATE_HOME/laatmux`, else
+`~/.local/state/laatmux`): the daemon's socket (`laatmux.sock`), runtime
+file (`runtime.json`) and startup lock (`daemon.lock`), its log
 (`daemon.log`, appended), `environment-id`, the command journal
-(`commands/`), the relay's pending files (`pending/`),
-`attention.json`, `branches.json`, `last.json` (per repository, the
-host a successful or accepted `add` last used, and the named agent
-when one was named: the form's and `add`'s defaults), `sidebar.json`
-(the views' start settings
+(`commands/`), the relay's pending files (`pending/`), `attention.json`,
+`branches.json`, `last.json` (per repository, the host a successful or
+accepted `add` last used, and the named agent when one was named: the
+form's and `add`'s defaults), `sidebar.json` (the views' start settings
 and folds), `sidebar.lock` (the sidebar's check-and-create) and
 `sidebar/`, one socket per sidebar pane for its controls. The record
 files are written whole through a temporary name (`home.WriteAtomic`);

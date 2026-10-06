@@ -1182,8 +1182,8 @@ an ssh channel per host per window. The daemon on the machine the user
 sits at is the one process there, so it is the merge point. Every
 daemon advertises `merged` (a host's config lists only the host
 itself, as a rule, and then its merged stream holds its own records),
-and `subscribe`
-with `merged: true` gets one stream with every host's records:
+and `subscribe` with `merged: true` gets one stream with every host's
+records:
 
 ```
 -> {type: subscribe, merged: true}
