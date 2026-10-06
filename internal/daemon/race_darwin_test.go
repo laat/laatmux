@@ -14,10 +14,11 @@ import (
 // child can crash in any of those calls (a ThreadSanitizer CHECK and
 // exit 66, or SIGSEGV), which reads as the command failing, or hang.
 // One that hangs before it replaces its stdio holds the test binary's
-// stdout: once the tests pass, go test waits a minute on it and fails
-// the package with "Test I/O incomplete". The toolchain line in go.mod
-// takes a release with the fix; this stops a -race run on darwin under
-// one without it before any test runs, rather than leave it to flake.
+// stdout: once the tests pass, go test waits on it for a tenth of
+// -timeout, a minute by default, and fails the package with "Test I/O
+// incomplete". The toolchain line in go.mod takes a release with the
+// fix; this stops a -race run on darwin under one with the bug before
+// any test runs, rather than leave it to flake.
 // It sits here because go test ./... runs it; other packages fork git
 // too.
 func init() {
