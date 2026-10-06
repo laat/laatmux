@@ -312,6 +312,50 @@ func TestExactSessionTargets(t *testing.T) {
 	}
 }
 
+// A workspace for a branch with a # or a ; is made under the name
+// SessionName computed, tagged, with its attach pane, and reused the
+// next time: new-session expands a # in the name as a format, and an
+// argument that ends in ; splits the sequence, so the tags would target
+// a session that is not there, or nothing would run.
+func TestEnsureEncodedNames(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	host := peer.Host{Name: "mac"}
+	keys := map[string]string{"fix#12": "env//r/fix-12", "x#{session_id}": "env//r/x", "semi;": "env//r/semi"}
+	for branch, key := range keys {
+		spec := Spec{Host: host, Managed: "m1", Name: SessionName("mac", "proj", branch), Key: key}
+		name, created, err := Ensure(ctx, spec)
+		if err != nil || !created || name != spec.Name {
+			t.Fatalf("%s: %q %v %v", branch, name, created, err)
+		}
+		if AttachPane(ctx, name) == "" {
+			t.Errorf("%s: no attach pane in %s", branch, name)
+		}
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Fatalf("%s again: %q %v %v", branch, name, created, err)
+		}
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locals) != len(keys) {
+		t.Fatalf("sessions %+v", locals)
+	}
+	for branch, key := range keys {
+		l, ok := ByName(locals, SessionName("mac", "proj", branch))
+		if !ok || l.Key != key || l.Host != "mac" {
+			t.Errorf("%s: %+v %v", branch, l, ok)
+		}
+	}
+}
+
 // Switching names the session exactly. A name with a %, as an encoded
 // branch has, is one switch-client looks up as a pane, where =name alone
 // is no name at all; a gone one does not switch to a session it is a

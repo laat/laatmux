@@ -363,7 +363,10 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 			return made, err
 		}
 	}
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id} #{pid}"}
+	// new-session expands -c as a format, and a root has the branch in
+	// it. A directory that is not there after expansion would start the
+	// pane in $HOME, with no error.
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", formatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -566,20 +569,52 @@ func shellJoin(argv []string) string {
 // built with it.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
 
+// formatLiteral is s as a tmux format that expands to s: a # is
+// written ##, which expands to #, but a run of #s before a [ is left as
+// it is, since tmux keeps such a run, as the start of a style, and
+// would keep ## there too.
+func formatLiteral(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '#' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] == '#' {
+			j++
+		}
+		b.WriteString(s[i:j])
+		if j == len(s) || s[j] != '[' {
+			b.WriteString(s[i:j])
+		}
+		i = j
+	}
+	return b.String()
+}
+
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux rejects "." and ":" in session names, so "%" becomes "%25", "."
-// becomes "%2e" and ":" becomes "%3a"; nothing else changes. Distinct
-// branches give distinct names and the encoding is exact.
+// tmux does not keep "." or ":" in a session name, new-session expands
+// a "#" in the name as a format, and an argument that ends in ";" is a
+// command separator, so "%" becomes "%25", "#" becomes "%23", "."
+// becomes "%2e", ":" becomes "%3a" and ";" becomes "%3b"; nothing else
+// changes. Distinct branches give distinct names and the encoding is
+// exact.
 func EncodeBranch(branch string) string {
 	var b strings.Builder
 	for i := 0; i < len(branch); i++ {
 		switch c := branch[i]; c {
 		case '%':
 			b.WriteString("%25")
+		case '#':
+			b.WriteString("%23")
 		case '.':
 			b.WriteString("%2e")
 		case ':':
 			b.WriteString("%3a")
+		case ';':
+			b.WriteString("%3b")
 		default:
 			b.WriteByte(c)
 		}

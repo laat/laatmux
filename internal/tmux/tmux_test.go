@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,12 @@ func TestEncodeBranch(t *testing.T) {
 		"a-b":        "a-b",
 		"%2e":        "%252e",
 		"feat/x.y:z": "feat/x%2ey%3az",
+		"fix#12":     "fix%2312",
+		"x#{pid}":    "x%23{pid}",
+		"semi;":      "semi%3b",
+		"a;b":        "a%3bb",
+		"%23":        "%2523",
+		"%3b":        "%253b",
 	}
 	for in, want := range cases {
 		got := EncodeBranch(in)
@@ -107,8 +114,8 @@ func TestEncodeBranch(t *testing.T) {
 		if back := decodeBranch(got); back != in {
 			t.Errorf("decodeBranch(%q) = %q, want %q", got, back, in)
 		}
-		if strings.ContainsAny(got, ".:") {
-			t.Errorf("EncodeBranch(%q) = %q contains a character tmux rejects", in, got)
+		if strings.ContainsAny(got, ".:#;") {
+			t.Errorf("EncodeBranch(%q) = %q contains a character tmux would not keep as given", in, got)
 		}
 	}
 	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
@@ -232,6 +239,99 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
+// A branch with a # or a ; gets a session with the name SessionName
+// computed, its pane tagged: new-session expands a # in the name as a
+// format, and an argument that ends in ; splits the sequence there.
+func TestNewSessionEncodedNames(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	want := map[string]bool{}
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b"} {
+		name := SessionName("proj", branch)
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Fatalf("%s: %v", branch, err)
+		}
+		if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", "@laatmux_managed"); err != nil || strings.TrimSpace(string(out)) != "1" {
+			t.Errorf("%s: session %s pane tag %q %v", branch, name, out, err)
+		}
+		want[name] = true
+	}
+	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(string(out))
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("session %q, not a computed name", name)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("sessions %q, want %d", got, len(want))
+	}
+}
+
+// A session starts in its root when the root has a # in it, as a
+// branch's root does in the default layout, and its pane's tag is the
+// root as given: new-session expands -c as a format, and a directory
+// that is not there starts the pane in $HOME with no error. The
+// worktrees directory, which is the user's, has a #[ in it, which tmux
+// keeps as it is.
+func TestNewSessionRootWithHash(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##"} {
+		root := filepath.Join(t.TempDir(), "#[scratch]", "proj", branch)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := SessionName("proj", branch)
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: root, Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Fatalf("%s: %v", branch, err)
+		}
+		// The pane's path is read from its process, which may not have
+		// changed directory yet.
+		var got string
+		for i := 0; i < 200 && got != want; i++ {
+			out, _ := s.Run(ctx, "display-message", "-p", "-t", "="+name+":", "#{pane_current_path}")
+			got = strings.TrimSpace(string(out))
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got != want {
+			t.Errorf("%s: the pane is in %q, want %q", branch, got, want)
+		}
+		if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", "@laatmux_cwd"); err != nil || strings.TrimSpace(string(out)) != root {
+			t.Errorf("%s: @laatmux_cwd %q %v, want %q", branch, out, err, root)
+		}
+	}
+}
+
+// formatLiteral doubles every # but a run of them before a [, which
+// tmux keeps as it is; the new-session test above checks with tmux.
+func TestFormatLiteral(t *testing.T) {
+	cases := map[string]string{
+		"":                 "",
+		"/w/proj/main":     "/w/proj/main",
+		"fix#12":           "fix##12",
+		"x#{session_id}":   "x##{session_id}",
+		"y##":              "y####",
+		"#":                "##",
+		"a#[b":             "a#[b",
+		"a##[b":            "a##[b",
+		"a#[b]#{c}":        "a#[b]##{c}",
+		"/w/#[s]/proj/x#H": "/w/#[s]/proj/x##H",
+	}
+	for in, want := range cases {
+		if got := formatLiteral(in); got != want {
+			t.Errorf("formatLiteral(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // decodeBranch reverses EncodeBranch, for the round trip. Sequences
 // EncodeBranch never emits are left as they are.
 func decodeBranch(name string) string {
@@ -243,12 +343,20 @@ func decodeBranch(name string) string {
 				b.WriteByte('%')
 				i += 2
 				continue
+			case "23":
+				b.WriteByte('#')
+				i += 2
+				continue
 			case "2e":
 				b.WriteByte('.')
 				i += 2
 				continue
 			case "3a":
 				b.WriteByte(':')
+				i += 2
+				continue
+			case "3b":
+				b.WriteByte(';')
 				i += 2
 				continue
 			}
