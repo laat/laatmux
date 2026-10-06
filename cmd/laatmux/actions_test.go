@@ -349,9 +349,10 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 			t.Errorf("%v: spec %+v, %v", r.Kind, spec, err)
 		}
 	}
-	// A tile with a workspace session of its own keeps it.
+	// So does a tile with a workspace session of its own, which may be
+	// another worktree's (TestShellGoesByLine).
 	own := rows.Row{Kind: rows.KindTile, Host: "vm", Node: second.ID, Worktree: &lost, Agent: &second, Local: &protocol.Session{Name: "vm/proj/z", Key: "venv//w/proj/z"}}
-	if row, err := shellRow(tm, own); err != nil || row.ID() != second.ID {
+	if row, err := shellRow(tm, own); err != nil || row.ID() != lost.ID {
 		t.Errorf("a tile with its own session: %+v, %v", row, err)
 	}
 	// The add's agent before the host lists the worktree, as a node
@@ -373,6 +374,127 @@ func TestShellRoutesByKeyEnvironment(t *testing.T) {
 	observed := protocol.Agent{ID: "venv/default/%10", EnvironmentID: "venv", Server: "default", Session: "proj/y"}
 	if row, err := shellRow(tm, rows.Row{Kind: rows.KindTile, Host: "vm", Node: observed.ID, Name: "proj/y", Agent: &observed}); err != nil || row.ID() != observed.ID {
 		t.Errorf("an observed agent named as the task: %+v, %v", row, err)
+	}
+}
+
+// S on an agent of worktree B observed on this machine's default server
+// in a window of worktree A's workspace session, whose row has A's
+// session as its own, opens the shell in B's workspace session at B's
+// root, as its tile and as its node, whether or not B has a home: the
+// session z toggles from the same row. With no workspace session of B's
+// it makes one from B's home, as enter on the line does, or refuses
+// without a home, as z does; it opens nothing in A's. A child in a
+// window of B's own workspace session, under a line holding a plain
+// session, does what S on the line does.
+func TestShellGoesByLine(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tmux.log")
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	a := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "a", Root: "/w/a", Session: "proj/a"}
+	b := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "b", Root: "/w/b"}
+	agent := protocol.Agent{ID: "menv/default/%5", EnvironmentID: "menv", Server: "default", Session: "mac/proj/a", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/w/b/src", WorktreeID: b.ID}
+	// The key on the row with the id: the message and the tmux commands
+	// run.
+	press := func(m *view.Model, id string, key rune) (string, string) {
+		t.Helper()
+		os.Remove(log)
+		if !m.Select(id) {
+			t.Fatalf("no row %s", id)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: key}})
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got)
+	}
+	host := rows.Host{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	show := func(in rows.Input, tree bool) *view.Model {
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		if tree {
+			m.View = view.ViewTree
+		}
+		m.Render()
+		return m
+	}
+	for _, c := range []struct {
+		home      string
+		workspace bool // B's workspace session exists
+	}{{"", true}, {"proj/b", true}, {"", false}, {"proj/b", false}} {
+		b.Session = c.home
+		in := rows.Input{
+			Hosts:     []rows.Host{host},
+			Agents:    []protocol.Agent{agent},
+			Worktrees: []protocol.Worktree{a, b},
+			Locals:    []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}},
+		}
+		if c.workspace {
+			in.Locals = append(in.Locals, protocol.Session{Name: "mac/proj/b", Key: "menv//w/b", Host: "mac"})
+		}
+		for _, tree := range []bool{false, true} {
+			m := show(in, tree)
+			if !m.Select(agent.ID) {
+				t.Fatalf("%+v tree %v: no row %s", c, tree, agent.ID)
+			}
+			if r := m.Selection(); r.Worktree == nil || r.Worktree.ID != b.ID || r.Local == nil || r.Local.Name != "mac/proj/a" {
+				t.Fatalf("%+v tree %v: the agent's row is %+v", c, tree, r)
+			}
+			msg, cmds := press(m, agent.ID, 'S')
+			opened := strings.Contains(cmds, "-L default new-window -t =mac/proj/b: -n shell -c /w/b ;") && !strings.Contains(cmds, "proj/a") && strings.HasPrefix(msg, "mac/proj/b is on the default tmux server")
+			switch {
+			case c.workspace && (!opened || strings.Contains(cmds, "new-session")):
+				t.Errorf("%+v tree %v: S on B's agent: message %q, tmux %q", c, tree, msg, cmds)
+			case !c.workspace && c.home != "" && (!opened || !strings.Contains(cmds, "-L default new-session -d -s mac/proj/b ")):
+				t.Errorf("%+v tree %v: S on B's agent: message %q, tmux %q", c, tree, msg, cmds)
+			case !c.workspace && c.home == "" && (msg != "proj/b: not a workspace" || cmds != ""):
+				// B's line, whose jump is the agent's window in A's
+				// session, has none to make: S refuses, as on the line.
+				t.Errorf("%+v tree %v: S on B's agent: message %q, tmux %q", c, tree, msg, cmds)
+			}
+			msg, cmds = press(m, agent.ID, 'z')
+			switch {
+			case c.workspace && (msg != "settled mac/proj/b" || cmds != "-L default set-option -t =mac/proj/b: @laatmux_settled 1\n"):
+				t.Errorf("%+v tree %v: z on B's agent: message %q, tmux %q", c, tree, msg, cmds)
+			case !c.workspace && (!strings.HasPrefix(msg, "proj/b: no local workspace session;") || cmds != ""):
+				t.Errorf("%+v tree %v: z on B's agent: message %q, tmux %q", c, tree, msg, cmds)
+			}
+		}
+	}
+	// B without a home whose oldest agent, its line's jump agent, sits in
+	// a plain session on this machine's default server: the line holds
+	// that session. Another agent of B in a window of B's own workspace
+	// session has that session as its own; S on it does what S on the
+	// line does.
+	b.Session = ""
+	notes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/w/b", WorktreeID: b.ID, Identity: &protocol.Identity{PID: 100, StartUnix: 1}}
+	inB := agent
+	inB.Session = "mac/proj/b"
+	in := rows.Input{
+		Hosts:     []rows.Host{host},
+		Agents:    []protocol.Agent{notes, inB},
+		Worktrees: []protocol.Worktree{a, b},
+		Locals:    []protocol.Session{{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac"}, {Name: "mac/proj/b", Key: "menv//w/b", Host: "mac"}},
+	}
+	m := show(in, true)
+	if l := m.OwnerLine(b.ID); l == nil || l.Local == nil || l.Local.Name != "notes" || l.Local.Workspace() {
+		t.Fatalf("B's line is %+v", l)
+	}
+	lineMsg, lineCmds := press(m, b.ID, 'S')
+	for _, tree := range []bool{false, true} {
+		m := show(in, tree)
+		if !m.Select(inB.ID) {
+			t.Fatalf("tree %v: no row %s", tree, inB.ID)
+		}
+		if r := m.Selection(); r.Worktree == nil || r.Worktree.ID != b.ID || r.Local == nil || r.Local.Name != "mac/proj/b" {
+			t.Fatalf("tree %v: the agent's row is %+v", tree, r)
+		}
+		if msg, cmds := press(m, inB.ID, 'S'); msg != lineMsg || cmds != lineCmds {
+			t.Errorf("tree %v: S on B's agent in B's session: message %q, tmux %q; on the line: message %q, tmux %q", tree, msg, cmds, lineMsg, lineCmds)
+		}
 	}
 }
 
