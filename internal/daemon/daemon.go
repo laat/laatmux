@@ -244,9 +244,9 @@ type Config struct {
 //     map alone, never across a lock it hands out; journal.mu,
 //     runJob.mu, command.mu and the resolver's. These are leaves: each
 //     guards its own struct and takes nothing under it but as said.
-//     Nothing enforces that a keyed lock or the table is not taken
-//     under mu any more (repoLock and the table took mu themselves,
-//     so such a call deadlocked at once); the order above is the rule.
+//     Nothing enforces any more that a keyed lock is not taken under
+//     mu (repoLock took mu itself, so such a call deadlocked at once);
+//     the order above is the rule. The table's lock, a leaf, may be.
 //
 // A method with the Locked suffix is called with its receiver's lock
 // held: mu for a Daemon method and for a branches method (its mu is the

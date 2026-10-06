@@ -281,8 +281,9 @@ func (d *Daemon) lockDeliveries(root string) func() {
 
 // repoLock is the keyed lock for key: "repo/<source>", which
 // serializes commands per repository, since fetch and worktree add
-// write to the same main checkout and different repositories proceed
-// in parallel; "name/<name>", "deliver/<root>" and "attempt/<id>".
+// write to the same main checkout, while different repositories
+// proceed in parallel; "name/<name>", "deliver/<root>" and
+// "attempt/<id>".
 func (d *Daemon) repoLock(key string) *sync.Mutex { return d.locks.get(key) }
 
 // runRm removes a worktree, then every managed session whose pane records

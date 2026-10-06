@@ -487,7 +487,7 @@ func TestPromptMessage(t *testing.T) {
 	if len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered || e.Delivery != protocol.DeliveryDelivered {
 		t.Fatalf("entry %+v", e)
 	}
-	// The command is remembered for a while; evict it so the repeat
+	// The command is remembered for a while; forget it so the repeat
 	// reaches the journal.
 	d.cmds.forgetDone(promptKey("c1", 1))
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
