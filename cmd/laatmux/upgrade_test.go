@@ -276,10 +276,10 @@ func TestStop(t *testing.T) {
 	if err := cmdStop(context.Background(), nil); err != nil {
 		t.Fatalf("stop a starting daemon: %v", err)
 	}
-	// Reached once it listens, 800 ms after the lock: a stop any
-	// sooner signalled a daemon it had not asked.
-	if took := time.Since(start); took > 5*time.Second || took < 700*time.Millisecond {
-		t.Errorf("stop of a starting daemon took %s, want after its listener came up", took)
+	// Reached once it listens: the helper exits with an error when
+	// signalled before that.
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("stop of a starting daemon took %s", took)
 	}
 	if err := slow.Wait(); err != nil {
 		t.Fatalf("slow daemon: %v", err)
@@ -515,7 +515,11 @@ func wedgedServe(ctx context.Context, listen bool) error {
 			}
 		}()
 	}
-	if err := home.WriteRuntime(home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged", StartedAt: time.Now()}); err != nil {
+	rt := home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged", StartedAt: time.Now()}
+	if self, ok := procs.Lookup(os.Getpid()); ok {
+		rt.ProcessStart = self.StartID
+	}
+	if err := home.WriteRuntime(rt); err != nil {
 		return err
 	}
 	defer home.RemoveRuntime(os.Getpid())
@@ -541,7 +545,9 @@ func crashLeft(t *testing.T) *exec.Cmd {
 	if err := os.WriteFile(filepath.Join(home.Dir(), "daemon.lock"), []byte(fmt.Sprintf("%d\n", bystander.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "none.sock"), PID: bystander.Process.Pid, Version: "crashed", StartedAt: time.Now()}); err != nil {
+	// The record carries the dead daemon's start, which is not the
+	// bystander's.
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "none.sock"), PID: bystander.Process.Pid, Version: "crashed", StartedAt: time.Now(), ProcessStart: "1"}); err != nil {
 		t.Fatal(err)
 	}
 	return bystander
@@ -681,34 +687,50 @@ func TestStopCancelledSignalsNothing(t *testing.T) {
 	}
 }
 
-// The record's daemon is told from a pid reused since it died by what
-// the pid is now: a laatmux, started no later than the record was
-// written. The test binary is the laatmux here.
+// The record's daemon is told from a pid reused since it died by the
+// start the kernel keeps for the process, which the record carries:
+// the same pid with another start is another process, and a record
+// without the start names no daemon this way.
 func TestIsDaemon(t *testing.T) {
 	me := os.Getpid()
 	self, ok := procs.Lookup(me)
-	if !ok {
-		t.Fatal("no lookup of this process")
+	if !ok || self.StartID == "" {
+		t.Fatalf("no lookup of this process: %+v %v", self, ok)
 	}
-	if !isDaemon(home.Runtime{PID: me, StartedAt: time.Now()}) {
-		t.Error("this process, started before the record: not the daemon")
+	if !isDaemon(home.Runtime{PID: me, ProcessStart: self.StartID}) {
+		t.Error("this process, with its own start: not the daemon")
 	}
-	if isDaemon(home.Runtime{PID: me, StartedAt: self.Start.Add(-time.Hour)}) {
-		t.Error("a process started after the record was written taken as the daemon")
+	if isDaemon(home.Runtime{PID: me, ProcessStart: self.StartID + "1"}) {
+		t.Error("this pid with another start taken as the daemon")
 	}
 	if isDaemon(home.Runtime{PID: me}) {
-		t.Error("a record without a start time taken as naming the daemon")
+		t.Error("a record without the start taken as naming the daemon")
 	}
 	other := exec.Command("sleep", "100")
 	if err := other.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer other.Process.Kill()
-	if isDaemon(home.Runtime{PID: other.Process.Pid, StartedAt: time.Now()}) {
-		t.Error("a process of another binary taken as the daemon")
+	if isDaemon(home.Runtime{PID: other.Process.Pid, ProcessStart: self.StartID}) {
+		t.Error("another process with this one's start taken as the daemon")
 	}
-	if isDaemon(home.Runtime{PID: 1 << 30, StartedAt: time.Now()}) {
+	if isDaemon(home.Runtime{PID: 1 << 30, ProcessStart: self.StartID}) {
 		t.Error("a pid that is no process taken as the daemon")
+	}
+	// A laatmux of the same binary whose record names another start:
+	// the pid reused by a laatmux, or a crash-left record naming the
+	// pid of the daemon that replaced it.
+	twin := exec.Command(os.Args[0], "-test.run=TestStop")
+	twin.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held", "LAATMUX_HOME="+t.TempDir())
+	if err := twin.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { twin.Process.Kill(); twin.Wait() }()
+	if isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: self.StartID}) {
+		t.Error("another laatmux with this one's start taken as the daemon")
+	}
+	if p, ok := procs.Lookup(twin.Process.Pid); !ok || !isDaemon(home.Runtime{PID: twin.Process.Pid, ProcessStart: p.StartID}) {
+		t.Error("a laatmux with its own start not the daemon")
 	}
 }
 

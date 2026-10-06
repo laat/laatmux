@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,14 +45,14 @@ var stopWait = 20 * time.Second
 // record standing). The first is kept being tried while it holds the
 // lock. The second gets SIGTERM, the exception: that the pid is that
 // daemon's process is established as an agent's identity is, by pid
-// and start time, not by the files alone. The lock file names the pid
-// on two readings a moment apart (a probe holding the free lock for an
-// instant, or a daemon between taking the lock and rewriting the file,
-// shows the previous content), and the process with that pid is this
-// binary, started no later than the record was written: a pid reused
-// since the daemon died belongs to a process started after the daemon
-// wrote the record. This build's daemon ignores the SIGTERM while it
-// shuts down, since main keeps the signal caught until serve returns.
+// and the start the kernel keeps for the process, which the daemon
+// wrote into its record; a pid reused since the daemon died is a
+// process with another start, whatever the files say. The lock file
+// naming the pid on two readings a moment apart (a probe holding the
+// free lock for an instant, or a daemon between taking the lock and
+// rewriting the file, shows the previous content) is the cheap check
+// before it. This build's daemon ignores the SIGTERM while it shuts
+// down, since main keeps the signal caught until serve returns.
 // The wait after the request is for the lock to leave the daemon's
 // hands, released when it exits, reaped or not, or taken by a
 // replacement. No daemon running is not an error.
@@ -109,6 +108,9 @@ func cmdStop(ctx context.Context, args []string) error {
 			if again, err := home.Holder(); err != nil {
 				return err
 			} else if again == rt.PID && isDaemon(rt) {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				what := fmt.Sprintf("%s (pid %d)", rt.Version, rt.PID)
 				if err := syscall.Kill(rt.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 					return fmt.Errorf("stop daemon %s, which %s: %w", what, why, err)
@@ -145,29 +147,14 @@ func cmdStop(ctx context.Context, args []string) error {
 }
 
 // isDaemon reports whether the process the runtime record names is the
-// daemon that wrote it: a laatmux, by its comm, that started no later
-// than the record was written. A pid reused since the daemon died
-// belongs to a process started after that, and a record from a build
-// without the start time names no daemon this way.
+// daemon that wrote it: the one with the pid and the start the kernel
+// keeps for it, which the daemon wrote into the record (ProcessStart)
+// as an agent's Identity is its pid and start. A pid reused since the
+// daemon died is a process with another start; a record from a build
+// before the field names no daemon this way, and is waited out.
 func isDaemon(rt home.Runtime) bool {
-	if rt.StartedAt.IsZero() {
-		return false
-	}
-	// A second of slack: Linux gives a process's start from the boot
-	// time, which it keeps in whole seconds.
 	p, ok := procs.Lookup(rt.PID)
-	return ok && sameBinary(p.Comm) && !p.Start.After(rt.StartedAt.Add(time.Second))
-}
-
-// sameBinary reports whether a process's comm is this binary's name,
-// which the daemon a client started runs as: the kernel keeps the base
-// name cut to 15 or 16 bytes, so a longer name is matched by its head.
-func sameBinary(comm string) bool {
-	exe, err := os.Executable()
-	if err != nil || comm == "" {
-		return false
-	}
-	return strings.HasPrefix(filepath.Base(exe), comm)
+	return ok && rt.ProcessStart != "" && p.StartID == rt.ProcessStart
 }
 
 // errMoved is a daemon reached on a record's address that is not the

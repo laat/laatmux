@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -42,21 +43,22 @@ func ListTTY(tty string) ([]Proc, error) {
 	return out, nil
 }
 
-// Lookup is the process with the pid: its comm and start time, which
-// together identify it as Identity does an agent; not ok when there is
-// no such process.
+// Lookup is the process with the pid: its comm, start time and start
+// identity, the last two with the pid identifying it as Identity does
+// an agent; not ok when there is no such process.
 func Lookup(pid int) (Proc, bool) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil || int(kp.Proc.P_pid) != pid {
 		return Proc{}, false
 	}
 	return Proc{
-		PID:   pid,
-		PPID:  int(kp.Eproc.Ppid),
-		PGID:  int(kp.Eproc.Pgid),
-		TPGID: int(kp.Eproc.Tpgid),
-		Comm:  unix.ByteSliceToString(kp.Proc.P_comm[:]),
-		Start: time.Unix(kp.Proc.P_starttime.Sec, int64(kp.Proc.P_starttime.Usec)*1000),
+		PID:     pid,
+		PPID:    int(kp.Eproc.Ppid),
+		PGID:    int(kp.Eproc.Pgid),
+		TPGID:   int(kp.Eproc.Tpgid),
+		Comm:    unix.ByteSliceToString(kp.Proc.P_comm[:]),
+		Start:   time.Unix(kp.Proc.P_starttime.Sec, int64(kp.Proc.P_starttime.Usec)*1000),
+		StartID: strconv.FormatInt(kp.Proc.P_starttime.Sec*1_000_000+int64(kp.Proc.P_starttime.Usec), 10),
 	}, true
 }
 

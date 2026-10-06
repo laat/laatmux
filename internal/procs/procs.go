@@ -23,8 +23,13 @@ type Proc struct {
 	TPGID int // foreground process group of the controlling tty, as seen by this process
 	Comm  string
 	Start time.Time
-	Argv  []string // best effort; empty when unreadable
-	Env   []string // best effort; empty when unreadable
+	// StartID is the process's start as the kernel keeps it, for Lookup:
+	// an exact identity with the pid, with no clock in it, where Start
+	// is derived through one (Linux's boot time). Darwin's microseconds
+	// since the epoch; Linux's clock ticks since boot.
+	StartID string
+	Argv    []string // best effort; empty when unreadable
+	Env     []string // best effort; empty when unreadable
 }
 
 // Identity is a resolved agent instance in a pane.

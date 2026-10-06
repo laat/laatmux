@@ -75,6 +75,10 @@ type Runtime struct {
 	Version       string    `json:"version"`
 	EnvironmentID string    `json:"environment_id"`
 	StartedAt     time.Time `json:"started_at"`
+	// ProcessStart is the daemon's start as the kernel keeps it
+	// (procs.Lookup's StartID), the identity with PID of the process
+	// that wrote the record; "" from a build before it.
+	ProcessStart string `json:"process_start,omitempty"`
 }
 
 func runtimePath() string { return filepath.Join(Dir(), "runtime.json") }
