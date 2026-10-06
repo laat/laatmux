@@ -702,10 +702,10 @@ func (d *dash) settle(m *view.Model) {
 	}
 	// The settled state is the line's, and its children show it: a
 	// tile, an agent, a pane or a run toggles it in the session of the
-	// line holding it, whatever local session it has of its own, in
-	// the direction of its copy of the state. So does one under a task
-	// standing for a listed worktree, whose line carries the workspace
-	// session but, being a task's row, not the state.
+	// line holding it, whatever local session it has of its own. So
+	// does one under a task standing for a listed worktree, whose line
+	// carries the workspace session but, being a task's row, not the
+	// state.
 	line, resolved := r, false
 	if l := ownerLine(m, *r); l != nil && r.Pending == nil {
 		line, resolved = l, true
@@ -725,11 +725,18 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": no local workspace session; " + hint
 		return
 	}
-	if err := workspace.SetSettled(d.ctx, line.Local.Name, !r.Settled); err != nil {
+	// The direction is the session's own state, which a line's copy and
+	// its children's are made from. A row no line holds may carry the
+	// session without the state: an observed agent on this machine's
+	// default server in a window of a workspace session whose worktree
+	// does not take it as a child (on another host, say) stands in other
+	// sessions with that session as its own.
+	settled := line.Local.Settled
+	if err := workspace.SetSettled(d.ctx, line.Local.Name, !settled); err != nil {
 		m.Message = err.Error()
 		return
 	}
-	if r.Settled {
+	if settled {
 		m.Message = "unsettled " + line.Local.Name
 	} else {
 		m.Message = "settled " + line.Local.Name
