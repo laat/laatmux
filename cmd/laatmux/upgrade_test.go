@@ -200,8 +200,8 @@ func TestStop(t *testing.T) {
 		if err := d.Start(); err != nil {
 			t.Fatal(err)
 		}
-		// The output is read once the helper is reaped: the copier that
-		// writes it runs until then.
+		// The output is read only once Wait has returned: exec's copier
+		// writes it until then.
 		for deadline := time.Now().Add(10 * time.Second); ; {
 			if _, err := home.ReadRuntime(); err == nil && heldBy(d.Process.Pid) {
 				break
@@ -591,7 +591,7 @@ func holdLock(t *testing.T) *os.File {
 // and probes the lock only after: home.Holder holds a free lock for an
 // instant, and a helper whose TryLock falls in that instant loses the
 // lock and exits, reporting the lock held by the pid the file still
-// names, the previous holder's.
+// names, the previous holder's, or by "unknown" before the first.
 func heldBy(pid int) bool {
 	b, _ := os.ReadFile(filepath.Join(home.Dir(), "daemon.lock"))
 	if strings.TrimSpace(string(b)) != strconv.Itoa(pid) {
