@@ -8,9 +8,14 @@ on:
 permissions:
   contents: read
 
+# A push to a pull request cancels the run of its previous push. Every
+# other run, each push to main, has a group of its own. In one shared
+# group the next merge would cancel the run in progress, or, without
+# cancel-in-progress, replace the run pending behind it, and that
+# merge commit would get no verdict.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ case(github.event_name == 'pull_request', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
