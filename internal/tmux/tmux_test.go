@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,7 +115,7 @@ func TestEncodeBranch(t *testing.T) {
 			t.Errorf("decodeBranch(%q) = %q, want %q", got, back, in)
 		}
 		if strings.ContainsAny(got, ".:#;") {
-			t.Errorf("EncodeBranch(%q) = %q contains a character tmux rejects, expands or splits on", in, got)
+			t.Errorf("EncodeBranch(%q) = %q contains a character tmux would not keep as given", in, got)
 		}
 	}
 	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
@@ -267,6 +268,40 @@ func TestNewSessionEncodedNames(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("sessions %q, want %d", got, len(want))
+	}
+}
+
+// A session starts in its root when the root has a # in it, as a
+// branch's root does in the default layout: new-session expands -c as a
+// format, and a directory that is not there starts the pane in $HOME
+// with no error.
+func TestNewSessionRootWithHash(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##"} {
+		root := filepath.Join(t.TempDir(), "proj", branch)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := SessionName("proj", branch)
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: root, Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Fatalf("%s: %v", branch, err)
+		}
+		// The pane's path is read from its process, which may not have
+		// changed directory yet.
+		var got string
+		for i := 0; i < 200 && got != want; i++ {
+			out, _ := s.Run(ctx, "display-message", "-p", "-t", "="+name+":", "#{pane_current_path}")
+			got = strings.TrimSpace(string(out))
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got != want {
+			t.Errorf("%s: the pane is in %q, want %q", branch, got, want)
+		}
 	}
 }
 

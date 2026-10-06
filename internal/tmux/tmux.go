@@ -363,7 +363,11 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 			return made, err
 		}
 	}
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", o.Cwd, "-P", "-F", "#{pane_id} #{pid}"}
+	// new-session expands -c as a format, and a root has the branch in
+	// it: a # is written ##, which tmux expands back to #. A directory
+	// that is not there after expansion would start the pane in $HOME,
+	// with no error.
+	args := []string{"new-session", "-d", "-s", o.Name, "-c", strings.ReplaceAll(o.Cwd, "#", "##"), "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}
@@ -567,11 +571,12 @@ func shellJoin(argv []string) string {
 func ShellJoin(argv []string) string { return shellJoin(argv) }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux rejects "." and ":" in session names, new-session expands a "#"
-// in the name as a format, and an argument that ends in ";" is a command
-// separator, so "%" becomes "%25", "#" becomes "%23", "." becomes "%2e",
-// ":" becomes "%3a" and ";" becomes "%3b"; nothing else changes.
-// Distinct branches give distinct names and the encoding is exact.
+// tmux does not keep "." or ":" in a session name, new-session expands
+// a "#" in the name as a format, and an argument that ends in ";" is a
+// command separator, so "%" becomes "%25", "#" becomes "%23", "."
+// becomes "%2e", ":" becomes "%3a" and ";" becomes "%3b"; nothing else
+// changes. Distinct branches give distinct names and the encoding is
+// exact.
 func EncodeBranch(branch string) string {
 	var b strings.Builder
 	for i := 0; i < len(branch); i++ {
