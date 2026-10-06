@@ -380,10 +380,10 @@ type Span struct {
 	Bg   string // a template's #[bg=…]; "" for the line's
 	own  bool   // the look is the span's own: a template's style leaves it
 	band bool   // the selection's band on this span alone: a strip's chip
-	// label marks the viewer's own label, the primary label on the
-	// viewer's own row, which a dim line leaves in its colour and not
-	// faint: the mark, not the colour, which a template can give any
-	// text.
+	// label marks the viewer's own label, what primary builds on the
+	// viewer's own row: the primary label and the pane's suffix, which
+	// a dim line leaves in their colour and not faint. The mark, not
+	// the colour, which a template can give any text.
 	label bool
 	spin  bool
 	// faded marks a span dimmed as a dim line draws it, so on a line
