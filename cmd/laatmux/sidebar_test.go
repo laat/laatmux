@@ -417,7 +417,7 @@ func TestNestedShell(t *testing.T) {
 		t.Fatalf("start the other server: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "other", "kill-server").Run() })
-	sock, err := exec.Command("tmux", "-L", "other", "display", "-p", "#{socket_path}").Output()
+	sock, err := tmux.Server{Name: "other"}.Run(ctx, "display", "-p", "#{socket_path}")
 	if err != nil {
 		t.Fatal(err)
 	}

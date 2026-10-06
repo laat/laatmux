@@ -18,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/term"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 )
 
@@ -581,9 +582,9 @@ func TestSettleGoesByLine(t *testing.T) {
 	// from the state it has.
 	expect := func(name string, settled bool) (string, string) {
 		if settled {
-			return "-L default set-option -u -t =" + name + ": @laatmux_settled\n", "unsettled " + name
+			return "-u -L default set-option -u -t =" + name + ": @laatmux_settled\n", "unsettled " + name
 		}
-		return "-L default set-option -t =" + name + ": @laatmux_settled 1\n", "settled " + name
+		return "-u -L default set-option -t =" + name + ": @laatmux_settled 1\n", "settled " + name
 	}
 	children := []struct {
 		name string
@@ -1441,9 +1442,9 @@ func TestLastPane(t *testing.T) {
 	sock := filepath.Join(dir, "sock")
 	tm := func(args ...string) string {
 		t.Helper()
-		out, err := exec.Command("tmux", append([]string{"-S", sock, "-f", "/dev/null"}, args...)...).CombinedOutput()
+		out, err := tmux.Server{Path: sock}.Run(context.Background(), append([]string{"-f", "/dev/null"}, args...)...)
 		if err != nil {
-			t.Fatalf("%v: %v %s", args, err, out)
+			t.Fatal(err)
 		}
 		return strings.TrimSpace(string(out))
 	}
