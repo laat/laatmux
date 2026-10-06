@@ -647,7 +647,7 @@ func Remove(ctx context.Context, checkout, root string, force bool) (removed boo
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv()
+	cmd.Env = GitEnv()
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -670,9 +670,11 @@ type gitError struct {
 func (e *gitError) Error() string { return "git " + strings.Join(e.args, " ") + ": " + e.msg }
 func (e *gitError) Unwrap() error { return e.err }
 
-// gitEnv is the daemon's environment with prompts disabled: a fetch that
-// needs credentials must fail, not hang the stage.
-func gitEnv() []string {
+// GitEnv is the environment for a git command whose output or error is
+// read: this process's, with prompts disabled, so a fetch that needs
+// credentials fails rather than hangs the stage, and with the C locale,
+// so what is matched is git's English whatever the user's locale.
+func GitEnv() []string {
 	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 }
 
