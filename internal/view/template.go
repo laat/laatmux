@@ -462,7 +462,7 @@ func staleMark(left, right []item, stale, back bool) {
 	case checks && last.Text == "?":
 		number.spans = number.spans[:len(number.spans)-1]
 	case !checks && last.Text != "?" && back:
-		number.spans = append(number.spans, styled(Span{Text: "?", Dim: true}, number.part.st))
+		number.spans = append(number.spans, styled(gitStale([]Span{{Text: "?"}})[0], number.part.st))
 	}
 }
 
@@ -1092,8 +1092,8 @@ func (m *Model) statusLabel(r rows.Row) string {
 }
 
 // prNumber is the branch's PR: #N, green when open, purple when
-// merged, red when closed, dim when a draft, and dim with ? after when
-// the answer is stale; nothing on main or master.
+// merged, red when closed, dim when a draft, and dim and plain with ?
+// after when the answer is stale; nothing on main or master.
 func (m *Model) prNumber(r rows.Row) []Span {
 	b := r.Branch
 	if b == nil || b.PR == nil || mainline(r) {
@@ -1103,13 +1103,9 @@ func (m *Model) prNumber(r rows.Row) []Span {
 	sp.Text = fmt.Sprintf("#%d", b.PR.Number)
 	out := []Span{sp}
 	if b.Stale {
-		// Dim, with ? after; staleMark takes it off when the checks
-		// are drawn with theirs. Not gitStale: an open PR's bold stays
-		// while stale, which is #81, a bug of its own.
-		for i := range out {
-			out[i].Dim, out[i].Fg = true, ""
-		}
-		out = append(out, Span{Text: "?", Dim: true})
+		// Dim and plain, an open PR's bold gone too, with ? after;
+		// staleMark takes it off when the checks are drawn with theirs.
+		out = gitStale(append(out, Span{Text: "?"}))
 	}
 	return out
 }
@@ -1208,7 +1204,7 @@ func (m *Model) prDetail(r rows.Row) (sp Span, kind tokenKind) {
 		return Span{}, tokenFlex
 	}
 	if b.Stale {
-		sp.Dim, sp.Fg = true, ""
+		sp = gitStale([]Span{sp})[0]
 	}
 	return sp, kind
 }
