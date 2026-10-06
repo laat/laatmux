@@ -763,9 +763,9 @@ func TestTwoAgentsOneSession(t *testing.T) {
 	}
 }
 
-// A worktree line with no home session whose agent is on this machine's
-// default server stands for that session: the viewer in it is on the
-// line, and on the agent's tile.
+// A worktree line with no home session and no workspace session whose
+// agent is on this machine's default server stands for the agent's
+// session: the viewer in it is on the line, and on the agent's tile.
 func TestWorktreeLineTakesAgentSession(t *testing.T) {
 	in := Input{
 		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
@@ -785,11 +785,10 @@ func TestWorktreeLineTakesAgentSession(t *testing.T) {
 	}
 }
 
-// A homeless worktree line stands for the session its jump goes to: the
-// worktree's workspace session when its agent is the one laatmux made at
-// the root, never a plain attachment to that session; the agent's own
-// session when the agent is on this machine's default server, whatever
-// workspace session is left.
+// A homeless worktree line stands for the worktree's workspace session
+// when it exists, never a plain attachment to that session; without one,
+// for the session its jump goes to when the agent is on this machine's
+// default server.
 func TestHomelessLineLocal(t *testing.T) {
 	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
 	w := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a"}
@@ -904,17 +903,38 @@ func TestHomelessLineLocal(t *testing.T) {
 	if c := nodes[2]; c.Kind != KindAgent || c.Local == nil || c.Local.Name != "mac/proj/a-old" {
 		t.Fatalf("the agent's own session: %+v", c)
 	}
-	// An agent on the default server: its session, not the workspace
-	// session left, which, settled, does not settle the line.
-	locals[0].Settled = true
+	// An agent on the default server, with no workspace session of the
+	// worktree's: its session, which does not settle the line.
 	notes := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", Liveness: protocol.Alive, WorktreeID: w.ID}
-	in := Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals, Current: "notes"}
+	in := Input{Hosts: hosts, Agents: []protocol.Agent{notes}, Worktrees: []protocol.Worktree{w}, Locals: locals[1:], Current: "notes"}
 	if got = treeLines(Tree(in)); len(got) != 1 || got[0].Worktree == nil || got[0].Local == nil || got[0].Local.Name != "notes" || !got[0].Current || got[0].Settled {
 		t.Fatalf("default-server agent: %+v", got)
 	}
 	rs := Agents(in, Tree(in))
 	if len(rs.Main) != 1 || rs.Main[0].Worktree == nil || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || rs.Main[0].Settled {
 		t.Fatalf("default-server agent's tile: %+v", rs)
+	}
+	// With the worktree's workspace session left, the line has that
+	// session, for S and z, and is settled as it is; the viewer in the
+	// agent's session is on the line, and the agent's tile keeps its own
+	// session (#188).
+	locals[0].Settled = true
+	in.Locals = locals
+	if got = treeLines(Tree(in)); len(got) != 1 || got[0].Local == nil || got[0].Local.Name != "mac/proj/a" || !got[0].Current || !got[0].Settled {
+		t.Fatalf("default-server agent, the workspace session left: %+v", got)
+	}
+	rs = Agents(in, Tree(in))
+	if len(rs.Main) != 1 || rs.Main[0].Local == nil || rs.Main[0].Local.Name != "notes" || !rs.Main[0].Current || !rs.Main[0].Settled {
+		t.Fatalf("default-server agent's tile, the workspace session left: %+v", rs)
+	}
+	// The viewer in the workspace session, where no agent of the
+	// worktree is, is on the line and its tile, as on a homed line.
+	in.Current = "mac/proj/a"
+	if got = treeLines(Tree(in)); len(got) != 1 || !got[0].Current {
+		t.Fatalf("default-server agent, the viewer in the workspace session: %+v", got)
+	}
+	if rs = Agents(in, Tree(in)); len(rs.Main) != 1 || !rs.Main[0].Current {
+		t.Fatalf("default-server agent's tile, the viewer in the workspace session: %+v", rs)
 	}
 	// The agent in the worktree's workspace session itself: the line is
 	// settled as that session is, and its tile in the Stale fold.
@@ -1039,6 +1059,83 @@ func TestHomelessLineInAnotherWorkspace(t *testing.T) {
 		}
 		if r := tileOf(in); r.Settled {
 			t.Fatalf("B's agent's tile in %s, set settled by hand: %+v", plain.Name, r)
+		}
+	}
+}
+
+// A homeless worktree whose oldest agent, the line's jump agent, sits in
+// a plain session on this machine's default server, while the
+// worktree's own workspace session exists, made while it had a home
+// say: the line holds the workspace session, which S and z act on, and
+// is settled as that session is. Each agent's row keeps the session it
+// sits in: the plain one, and for a second agent in a window of the
+// workspace session that session. The viewer in either is on the line
+// and on both tiles (#188).
+func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
+	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	wb := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b"}
+	notes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Cwd: "/w/b",
+		Activity: protocol.Idle, Liveness: protocol.Alive, WorktreeID: wb.ID, Identity: &protocol.Identity{PID: 1, StartUnix: 1}}
+	inB := protocol.Agent{ID: "menv/default/%5", EnvironmentID: "menv", Server: "default", Session: "mac/proj/b", Cwd: "/w/b/src",
+		Activity: protocol.Idle, Liveness: protocol.Alive, WorktreeID: wb.ID, Identity: &protocol.Identity{PID: 5, StartUnix: 5}}
+	for _, settled := range []bool{false, true} {
+		in := Input{Hosts: hosts, Agents: []protocol.Agent{inB, notes}, Worktrees: []protocol.Worktree{wb},
+			Locals: []protocol.Session{{Name: "notes"}, {Name: "mac/proj/b", Key: "menv//w/b", Host: "mac", Settled: settled}}}
+		nodes := Tree(in)
+		lines := treeLines(nodes)
+		if len(lines) != 1 || lines[0].Agent == nil || lines[0].Agent.ID != notes.ID || lines[0].Local == nil || lines[0].Local.Name != "mac/proj/b" || lines[0].Settled != settled {
+			t.Fatalf("settled %v: B's line %+v", settled, lines)
+		}
+		own := map[string]string{}
+		for _, n := range nodes {
+			if n.Kind != KindAgent {
+				continue
+			}
+			if n.Local == nil || n.Settled != settled {
+				t.Fatalf("settled %v: the agent's node %+v", settled, n)
+			}
+			own[n.Agent.ID] = n.Local.Name
+		}
+		if !reflect.DeepEqual(own, map[string]string{notes.ID: "notes", inB.ID: "mac/proj/b"}) {
+			t.Fatalf("settled %v: the agents' sessions %v", settled, own)
+		}
+		// Idle and not the viewer's: in the Stale fold when settled.
+		if rs := Agents(in, nodes); settled && (len(rs.Main) != 0 || len(rs.Stale) != 2) || !settled && (len(rs.Main) != 2 || len(rs.Stale) != 0) {
+			t.Fatalf("settled %v: tiles %+v", settled, rs)
+		}
+		// The viewer in either session is on the line and both tiles; in
+		// another session, on none of them.
+		in.Locals = append(in.Locals, protocol.Session{Name: "elsewhere"})
+		for _, current := range []string{"notes", "mac/proj/b", "elsewhere"} {
+			in.Current = current
+			mine := current != "elsewhere"
+			nodes := Tree(in)
+			if l := treeLines(nodes); len(l) != 1 || l[0].Current != mine {
+				t.Fatalf("settled %v, the viewer in %s: B's line %+v", settled, current, l)
+			}
+			rs := Agents(in, nodes)
+			tiles := append(append([]Row(nil), rs.Main...), rs.Stale...)
+			if len(tiles) != 2 || tiles[0].Current != mine || tiles[1].Current != mine {
+				t.Fatalf("settled %v, the viewer in %s: tiles %+v", settled, current, rs)
+			}
+			// Two tasks standing for B carry its workspace session and the
+			// viewer's mark, the older one too, which holds no child to be
+			// marked through.
+			tasks := in
+			tasks.Pendings = []protocol.Pending{
+				{ID: "add-1", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(1, 0)},
+				{ID: "add-2", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b", Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Unix(2, 0)},
+			}
+			marked := map[string]bool{}
+			for _, n := range treeLines(Tree(tasks)) {
+				if n.Pending == nil || n.Local == nil || n.Local.Name != "mac/proj/b" {
+					t.Fatalf("settled %v, the viewer in %s: the task line %+v", settled, current, n)
+				}
+				marked[n.ID()] = n.Current
+			}
+			if !reflect.DeepEqual(marked, map[string]bool{"add-1": mine, "add-2": mine}) {
+				t.Fatalf("settled %v, the viewer in %s: standing tasks marked %v", settled, current, marked)
+			}
 		}
 	}
 }

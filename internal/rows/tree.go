@@ -350,22 +350,30 @@ func (b *builder) worktrees() {
 		}
 		children = append(children, b.panes(w, host)...)
 		children = append(children, b.runs(w, host)...)
-		// The worktree's own session: the home session's workspace
-		// session, or the one its agent on this machine's default server
-		// stands for. Not when that is a workspace session, which is a
-		// line's by its key alone: an agent here in a window of another
+		// The worktree's own session: its workspace session, the one
+		// with its key, whenever that exists, which S and z act on even
+		// where enter goes to a homeless line's agent in a plain session.
+		// Without one, the session its agent on this machine's default
+		// server stands for, unless that is a workspace session, which is
+		// a line's by its key alone: an agent here in a window of another
 		// worktree's workspace session leaves that session to that
-		// worktree's line. The settled state is a workspace session's
-		// only, not one set by hand on a plain session or attachment.
-		// The most pressing agent is kept apart, for the folded line's
-		// icon.
+		// worktree's line. The viewer in the session enter goes to, when
+		// it is no workspace session, is on the line either way, and on
+		// the standing tasks that take its place, as through an
+		// attachment to the home. The settled state is a workspace
+		// session's only, not one set by hand on a plain session or
+		// attachment. The most pressing agent is kept apart, for the
+		// folded line's icon.
+		line.Local = j.byKey[key]
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
 			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() {
-				line.Local = l
+				if line.Local == nil {
+					line.Local = l
+				}
+				if in.Current != "" && l.Name == in.Current {
+					line.Current = true
+				}
 			}
-		}
-		if line.Local == nil {
-			line.Local = j.byKey[key]
 		}
 		line.Settled = line.Local != nil && line.Local.Workspace() && line.Local.Settled
 		for k := range children {
