@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -87,17 +88,28 @@ func main() {
 		usage()
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
+	if code, exit := report(os.Stderr, err); exit {
+		os.Exit(code)
+	}
+}
+
+// report prints a command's error to w and says the status to exit
+// with; exit is false for no error and for a cancel. This is where the
+// "laatmux: " goes: the packages' errors do not start with it, so the
+// line has it once.
+func report(w io.Writer, err error) (code int, exit bool) {
 	var ee *exitError
 	if errors.As(err, &ee) {
 		if ee.msg != "" {
-			fmt.Fprintln(os.Stderr, "laatmux:", ee.msg)
+			fmt.Fprintln(w, "laatmux:", ee.msg)
 		}
-		os.Exit(ee.code)
+		return ee.code, true
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintln(os.Stderr, "laatmux:", err)
-		os.Exit(1)
+		fmt.Fprintln(w, "laatmux:", err)
+		return 1, true
 	}
+	return 0, false
 }
 
 func usage() {
