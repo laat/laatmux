@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -199,16 +200,15 @@ func TestStop(t *testing.T) {
 		if err := d.Start(); err != nil {
 			t.Fatal(err)
 		}
+		// The output is read only once Wait has returned: exec's copier
+		// writes it until then.
 		for deadline := time.Now().Add(10 * time.Second); ; {
-			pid, err := home.Holder()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, rerr := home.ReadRuntime(); pid == d.Process.Pid && rerr == nil {
+			if _, err := home.ReadRuntime(); err == nil && heldBy(d.Process.Pid) {
 				break
 			}
 			if time.Now().After(deadline) {
 				d.Process.Kill()
+				d.Wait()
 				t.Fatalf("%s daemon did not come up: %s", mode, out)
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -216,6 +216,7 @@ func TestStop(t *testing.T) {
 		start := time.Now()
 		if err := cmdStop(context.Background(), nil); err != nil {
 			d.Process.Kill()
+			d.Wait()
 			t.Fatalf("stop %s: %v\n%s", mode, err, out)
 		}
 		if time.Since(start) > 5*time.Second {
@@ -235,7 +236,7 @@ func TestStop(t *testing.T) {
 	}
 	defer held.Process.Kill()
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if pid, _ := home.Holder(); pid == held.Process.Pid {
+		if heldBy(held.Process.Pid) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -264,7 +265,7 @@ func TestStop(t *testing.T) {
 	}
 	defer slow.Process.Kill()
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if pid, _ := home.Holder(); pid == slow.Process.Pid {
+		if heldBy(slow.Process.Pid) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -389,8 +390,7 @@ func TestStop(t *testing.T) {
 			t.Fatal(err)
 		}
 		for deadline := time.Now().Add(10 * time.Second); ; {
-			pid, _ := home.Holder()
-			if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+			if rt, err := home.ReadRuntime(); err == nil && rt.PID == d.Process.Pid && heldBy(d.Process.Pid) {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -585,6 +585,22 @@ func holdLock(t *testing.T) *os.File {
 	return f
 }
 
+// heldBy reports whether the helper with pid holds the startup lock,
+// for a test waiting for one to start. It reads the lock file first,
+// which TryLock rewrites with the holder's pid once it has the lock,
+// and probes the lock only after: home.Holder holds a free lock for an
+// instant, and a helper whose TryLock falls in that instant loses the
+// lock and exits, reporting the lock held by the pid the file still
+// names, the previous holder's, or by "unknown" before the first.
+func heldBy(pid int) bool {
+	b, _ := os.ReadFile(filepath.Join(home.Dir(), "daemon.lock"))
+	if strings.TrimSpace(string(b)) != strconv.Itoa(pid) {
+		return false
+	}
+	holder, _ := home.Holder()
+	return holder == pid
+}
+
 // A crash-left record names a pid since reused, and the files alone say
 // it holds the lock: stop never signals it. A new daemon stalled
 // between taking the lock and rewriting the file shows the old content
@@ -651,7 +667,7 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 		}
 		defer func() { held.Process.Signal(syscall.SIGTERM); held.Wait() }()
 		for deadline := time.Now().Add(10 * time.Second); ; {
-			if pid, _ := home.Holder(); pid == held.Process.Pid {
+			if heldBy(held.Process.Pid) {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -677,7 +693,7 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 		}
 		defer func() { held.Process.Signal(syscall.SIGTERM); held.Wait() }()
 		for deadline := time.Now().Add(10 * time.Second); ; {
-			if pid, _ := home.Holder(); pid == held.Process.Pid {
+			if heldBy(held.Process.Pid) {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -714,8 +730,7 @@ func TestStopHelloWaitBounded(t *testing.T) {
 		}
 	}()
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		pid, _ := home.Holder()
-		if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+		if rt, err := home.ReadRuntime(); err == nil && rt.PID == d.Process.Pid && heldBy(d.Process.Pid) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -759,8 +774,7 @@ func TestStopCancelledSignalsNothing(t *testing.T) {
 		}
 	}()
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		pid, _ := home.Holder()
-		if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+		if rt, err := home.ReadRuntime(); err == nil && rt.PID == d.Process.Pid && heldBy(d.Process.Pid) {
 			break
 		}
 		if time.Now().After(deadline) {
