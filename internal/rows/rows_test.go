@@ -993,10 +993,26 @@ func TestHomelessLineInAnotherWorkspace(t *testing.T) {
 	if r := tileOf(in); r.Local == nil || r.Local.Name != "mac/proj/a" || r.Settled {
 		t.Fatalf("B's agent's tile, A's session settled: %+v", r)
 	}
-	in.Locals = []protocol.Session{sa, sb}
-	if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != "mac/proj/b" || l.Settled {
+	// A task standing for B carries B's line's session, none, not A's.
+	tasks := in
+	tasks.Pendings = []protocol.Pending{{ID: "add-b", Host: "mac", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b",
+		Taken: true, Stage: protocol.StageSetup}}
+	if l := lineOf(tasks, wb.ID); l.Pending == nil || l.Local != nil {
+		t.Fatalf("task standing for B: %+v", l)
+	}
+	// The viewer in B's own workspace session is on B's line and its
+	// agent's tile, not on A's line.
+	in.Locals, in.Current = []protocol.Session{sa, sb}, sb.Name
+	if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != "mac/proj/b" || l.Settled || !l.Current {
 		t.Fatalf("B with its own workspace session, A's settled: %+v", l)
 	}
+	if l := lineOf(in, wa.ID); l.Current {
+		t.Fatalf("A's line, the viewer in B's session: %+v", l)
+	}
+	if r := tileOf(in); !r.Current {
+		t.Fatalf("B's agent's tile, the viewer in B's session: %+v", r)
+	}
+	in.Current = ""
 	sa.Settled, sb.Settled = false, true
 	in.Locals = []protocol.Session{sa, sb}
 	if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != "mac/proj/b" || !l.Settled {
