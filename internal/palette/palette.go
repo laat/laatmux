@@ -6,6 +6,7 @@ package palette
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,6 +69,69 @@ func hex(s string) Color {
 		panic(err)
 	}
 	return c
+}
+
+// rgb is the colour's red, green and blue: its own, or an indexed
+// colour's from 16 to 255 by xterm's formula, the 6×6×6 cube and then
+// the greys. ok is false for 0 to 15, which the terminal defines.
+func (c Color) rgb() (r, g, b uint8, ok bool) {
+	switch {
+	case c.RGB:
+		return c.R, c.G, c.B, true
+	case c.Index < 16 || c.Index > 255:
+		return 0, 0, 0, false
+	case c.Index < 232:
+		level := func(n int) uint8 {
+			if n == 0 {
+				return 0
+			}
+			return uint8(55 + 40*n)
+		}
+		i := c.Index - 16
+		return level(i / 36), level(i / 6 % 6), level(i % 6), true
+	}
+	v := uint8(8 + 10*(c.Index-232))
+	return v, v, v, true
+}
+
+// Luminance is the colour's relative luminance as WCAG defines it, 0
+// for black to 1 for white; ok is false for colours 0 to 15, which the
+// terminal defines.
+func (c Color) Luminance() (l float64, ok bool) {
+	r, g, b, ok := c.rgb()
+	if !ok {
+		return 0, false
+	}
+	linear := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b), true
+}
+
+// Contrast is WCAG's contrast ratio of two luminances, from 1 for the
+// same to 21 for black on white.
+func Contrast(a, b float64) float64 {
+	if a < b {
+		a, b = b, a
+	}
+	return (a + 0.05) / (b + 0.05)
+}
+
+// sgr is the escape sequence that sets the colour as the foreground, or
+// with bg the background.
+func (c Color) sgr(bg bool) string {
+	layer := 38
+	if bg {
+		layer = 48
+	}
+	if c.RGB {
+		return fmt.Sprintf("\x1b[%d;2;%d;%d;%dm", layer, c.R, c.G, c.B)
+	}
+	return fmt.Sprintf("\x1b[%d;5;%dm", layer, c.Index)
 }
 
 // Dark and Light are the defaults, for a dark and a light terminal
@@ -165,23 +229,55 @@ func (t Theme) SGR(name string, bg bool) string {
 	if t.Mono || name == "" {
 		return ""
 	}
-	c, ok := t.colors[name]
+	c, ok := t.color(name)
 	if !ok {
-		// A colour as the config writes it, an agent's own say.
-		pc, err := Parse(name)
-		if err != nil {
-			return ""
+		return ""
+	}
+	return c.sgr(bg)
+}
+
+// color is name as the theme draws it: a palette name's colour, or a
+// colour as the config writes it, an agent's own say or a template's.
+func (t Theme) color(name string) (Color, bool) {
+	if c, ok := t.colors[name]; ok {
+		return c, true
+	}
+	c, err := Parse(name)
+	return c, err == nil
+}
+
+// DimmedOn is the escape sequence that sets the foreground of dim text
+// with no colour of its own on bg, a template's background as a palette
+// name or a colour as Parse reads it. The theme's dimmed is chosen to
+// read on the terminal's background, not on bg, and is gone on a
+// background as dark as itself: of it, a user's own among them, and the
+// dark and light defaults' dimmed, the one with the most contrast
+// against bg is drawn, the dark default's on a light background, the
+// light default's on a dark one, a user's where it reads better than
+// both. "" when the theme is monochrome, or bg is none or a colour 0 to
+// 15, which the terminal defines: such text stays faint.
+func (t Theme) DimmedOn(bg string) string {
+	own, ok := t.colors[Dimmed]
+	if t.Mono || !ok {
+		return ""
+	}
+	c, ok := t.color(bg)
+	if !ok {
+		return ""
+	}
+	lb, ok := c.Luminance()
+	if !ok {
+		return ""
+	}
+	var best Color
+	most := 0.0
+	for _, d := range []Color{own, Dark[Dimmed], Light[Dimmed]} {
+		l, ok := d.Luminance()
+		if r := Contrast(l, lb); ok && r > most {
+			best, most = d, r
 		}
-		c = pc
 	}
-	layer := 38
-	if bg {
-		layer = 48
-	}
-	if c.RGB {
-		return fmt.Sprintf("\x1b[%d;2;%d;%d;%dm", layer, c.R, c.G, c.B)
-	}
-	return fmt.Sprintf("\x1b[%d;5;%dm", layer, c.Index)
+	return best.sgr(false)
 }
 
 // DarkBackground reads a terminal's answer to OSC 11, `rgb:RRRR/GGGG/BBBB`

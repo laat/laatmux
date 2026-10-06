@@ -1145,7 +1145,17 @@ alike; only the lines it leaves differ.
   plain takes only the style's background: stale wins over the style's
   colour and bold, so the token reads dim and plain whatever the
   template says. The padding `{fill}` takes the style in force at the
-  fill, and a background gives way to the selection's band.
+  fill, and a background gives way to the selection's band. Dim text
+  with no colour of its own on a style's background, a stale token, a
+  remote host, a draft's number or `#[dim]` text, is not faint in the
+  terminal's colour, which can vanish on the background, but drawn in
+  the `dimmed` that reads on it: of the theme's `dimmed` and the dark
+  and light defaults' (`#565f89`, `#8990b3`), the one with the most
+  contrast against the background, so the dark default's on a light
+  background and the light default's on a dark one, and a `dimmed` of
+  your own where it reads better than both. An indexed background is
+  measured by xterm's colours; on one of the colours 0 to 15, which
+  the terminal sets, the text stays faint.
 - **Errors.** A template that does not parse is shown in the view in
   its place, `template error: unknown token {x} at column 7 in
   tiles[0]`, rather than failing the pane. The fold row, the
