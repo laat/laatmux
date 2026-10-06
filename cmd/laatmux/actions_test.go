@@ -491,8 +491,8 @@ func TestSettleGoesByLine(t *testing.T) {
 		}
 	}
 	// The observed agent stands in other sessions, not under the
-	// worktree's line, with the workspace session as its own and no
-	// copy of its state: as its tile and as its node it unsettles a
+	// worktree's line, with the workspace session as its own and that
+	// session's state: as its tile and as its node it unsettles a
 	// settled session and settles an unsettled one, whether the
 	// worktree's line holds the session or no line does.
 	for _, s := range []setup{
@@ -505,7 +505,7 @@ func TestSettleGoesByLine(t *testing.T) {
 			if !m.Select(observed.ID) {
 				t.Fatalf("no row %s", observed.ID)
 			}
-			if r := m.Selection(); r.Worktree != nil || r.Settled || r.Local == nil || r.Local.Name != "vm/proj/z" {
+			if r := m.Selection(); r.Worktree != nil || r.Settled != s.settled || r.Local == nil || r.Local.Name != "vm/proj/z" {
 				t.Fatalf("%+v tree %v: the observed agent's row is %+v", s, tree, r)
 			}
 			held := false

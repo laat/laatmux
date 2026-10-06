@@ -281,9 +281,13 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   most needs, however old. A blocked agent is never stale either.
 - **Settled** is the workspace's, not the agent's: the agents of a
   settled workspace fold with the stale ones and show 💤, unless blocked
-  or done, which stay in place with their own icon. The viewer's own
-  row never folds: settled or stale, it stays in sight, sorted with the
-  stale ones, so `z` in the sidebar can undo itself.
+  or done, which stay in place with their own icon. An agent observed
+  on this machine's default server in a window of the workspace
+  session is one of its agents too, also where it stands in other
+  sessions with its worktree on another host, so `z` on it changes its
+  own row as well as the worktree's line. The viewer's own row never
+  folds: settled or stale, it stays in sight, sorted with the stale
+  ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:
   its most pressing agent's, in the order above; with no agent, none.
 
