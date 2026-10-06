@@ -12,6 +12,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -57,12 +58,23 @@ func TestSplitArgs(t *testing.T) {
 // and a directory that is not there after expansion starts the pane in
 // $HOME, with no error. The plain split goes by the pane's path as tmux
 // reports it. The worktrees directory, which is the user's, has a #[
-// in it, which tmux keeps as it is.
+// in it, which tmux keeps as it is. A remote host's split and shell
+// window run ssh with the root as it is: tmux does not expand a pane's
+// command.
 func TestSplitAndShellRootWithHash(t *testing.T) {
+	// The remote host's ssh, on the server's PATH, logs the command
+	// for the other side and stays up.
+	bin := t.TempDir()
+	sshLog := filepath.Join(bin, "ssh.log")
+	script := "#!/bin/sh\nfor a; do last=$a; done\nprintf '%s\\n' \"$last\" >> '" + sshLog + "'\nexec sleep 1000\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	isolatedDefault(t)
 	ctx := context.Background()
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
@@ -107,6 +119,21 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		}
 		return got
 	}
+	// sshed is the n-th command ssh was given, once it has been.
+	sshed := func(n int) string {
+		t.Helper()
+		var lines []string
+		for i := 0; i < 200 && len(lines) < n; i++ {
+			b, _ := os.ReadFile(sshLog)
+			lines = strings.Split(string(b), "\n")
+			lines = lines[:len(lines)-1]
+			time.Sleep(10 * time.Millisecond)
+		}
+		if len(lines) < n {
+			t.Fatalf("ssh ran %d times, want %d", len(lines), n)
+		}
+		return lines[n-1]
+	}
 	for i, branch := range []string{"fix#12", "x#{session_id}", "y##"} {
 		root := filepath.Join(t.TempDir(), "#[scratch]", "proj", branch)
 		if err := os.MkdirAll(root, 0o755); err != nil {
@@ -148,6 +175,24 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		}
 		if got := in(ws, before, want); got != want {
 			t.Errorf("%s: the shell window is in %q, want %q", branch, got, want)
+		}
+		// A workspace session of the remote host's.
+		remote := tmux.ShellJoin([]string{"cd", root}) + ` && exec "$SHELL" -l`
+		ws = fmt.Sprintf("vm%d", i)
+		pane = run("new-session", "-d", "-s", ws, "-P", "-F", "#{pane_id}", "sleep 1000")
+		run("set-option", "-t", "="+ws+":", "@laatmux_workspace", protocol.SessionKey("venv", root), ";", "set-option", "-t", "="+ws+":", "@laatmux_host", "vm")
+		if err := cmdSplit(ctx, []string{"-h", pane}); err != nil {
+			t.Fatalf("%s: remote split: %v", branch, err)
+		}
+		if got := sshed(2*i + 1); got != remote {
+			t.Errorf("%s: the remote split ran ssh with %q, want %q", branch, got, remote)
+		}
+		t.Setenv("TMUX_PANE", pane)
+		if err := cmdShell(ctx, nil); err != nil {
+			t.Fatalf("%s: remote shell: %v", branch, err)
+		}
+		if got := sshed(2*i + 2); got != remote {
+			t.Errorf("%s: the remote shell window ran ssh with %q, want %q", branch, got, remote)
 		}
 	}
 }
