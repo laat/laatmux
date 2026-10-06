@@ -122,15 +122,20 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 }
 
 // addHint says a worktree has no managed session and how to start one.
-// The hint's --repo is resolved against this machine's config, so it
-// names the source as this machine knows it, not by the host's label;
-// a record without a source leaves it to the reader.
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
+	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: %s", h.Name, w.Repo, w.Branch, addCommand(cfg, h, w))
+}
+
+// addCommand is the add line for the worktree's branch on the host. Its
+// --repo is resolved against this machine's config, so it names the
+// source as this machine knows it, not by the host's label; a record
+// without a source leaves it to the reader.
+func addCommand(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	repo := localRepoArg(cfg, w)
 	if repo == "" {
 		repo = "<repo>"
 	}
-	return fmt.Sprintf("%s/%s/%s has no managed session; start one with: laatmux add %s --repo %s --host %s", h.Name, w.Repo, w.Branch, w.Branch, repo, h.Name)
+	return fmt.Sprintf("laatmux add %s --repo %s --host %s", w.Branch, repo, h.Name)
 }
 
 // localRepoArg is what --repo takes for the record's repository on this

@@ -347,20 +347,7 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Orphaned {
 		return switchTo(ctx, r.Local.Name)
 	}
-	if r.Pending != nil {
-		var err error
-		if r, err = pendingTarget(r); err != nil {
-			return err
-		}
-	}
-	if r.Host == "" {
-		return errors.New(r.Name + ": no configured host claims this record")
-	}
-	h, ok := cfg.Find(r.Host)
-	if !ok {
-		return fmt.Errorf("unknown host %q", r.Host)
-	}
-	spec, session, err := rowSpec(cfg, h, r)
+	spec, session, err := jumpTarget(cfg, r)
 	if err != nil {
 		return err
 	}
@@ -372,6 +359,26 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 		return err
 	}
 	return switchTo(ctx, name)
+}
+
+// jumpTarget is where jumpRow takes a row that is not orphaned: what
+// rowSpec decides on the row's host, for a pending task's row by the
+// task's target.
+func jumpTarget(cfg config.Config, r rows.Row) (workspace.Spec, string, error) {
+	if r.Pending != nil {
+		var err error
+		if r, err = pendingTarget(r); err != nil {
+			return workspace.Spec{}, "", err
+		}
+	}
+	if r.Host == "" {
+		return workspace.Spec{}, "", errors.New(r.Name + ": no configured host claims this record")
+	}
+	h, ok := cfg.Find(r.Host)
+	if !ok {
+		return workspace.Spec{}, "", fmt.Errorf("unknown host %q", r.Host)
+	}
+	return rowSpec(cfg, h, r)
 }
 
 // worktreeSessionName is the workspace session name for a worktree: by
