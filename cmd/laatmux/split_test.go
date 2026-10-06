@@ -62,8 +62,10 @@ func TestSplitArgs(t *testing.T) {
 // window run ssh with the root as it is: tmux does not expand a pane's
 // command.
 func TestSplitAndShellRootWithHash(t *testing.T) {
-	// The remote host's ssh, on the server's PATH, logs the command
-	// for the other side and stays up.
+	// The remote host's ssh, first on the test's PATH, which tmux gives
+	// a pane from the client that made it, logs the command for the
+	// other side and stays up. Its alias does not resolve, should the
+	// real ssh ever run.
 	bin := t.TempDir()
 	sshLog := filepath.Join(bin, "ssh.log")
 	script := "#!/bin/sh\nfor a; do last=$a; done\nprintf '%s\\n' \"$last\" >> '" + sshLog + "'\nexec sleep 1000\n"
@@ -74,7 +76,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: laatmux-test.invalid\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
