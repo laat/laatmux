@@ -181,7 +181,7 @@ func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) 
 // a client that lost its bridge can follow the id and get the result
 // back. Its lock guards the table alone: forgetDone takes command.mu
 // under it and get runs its init under it, and nothing else is taken
-// under it; never rn.mu. rm's forgetDone holds it under repos and the
+// under it; never the daemon's mu. rm's forgetDone holds it under repos and the
 // root's delivery lock.
 type commandTable struct {
 	mu   sync.Mutex

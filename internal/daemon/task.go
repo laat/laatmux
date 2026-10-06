@@ -681,7 +681,7 @@ func (rn *taskRunner) deliver(ctx context.Context, id string, n int, prompt stri
 }
 
 // beginDelivery counts a paste about to start, unless the daemon is
-// stopping; endDelivery counts it done. StopRuns waits for the count.
+// stopping; endDelivery counts it done. stopRuns waits for the count.
 func (rn *taskRunner) beginDelivery() bool {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()

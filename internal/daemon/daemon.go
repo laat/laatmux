@@ -251,12 +251,13 @@ type Config struct {
 //
 // A method with the Locked suffix is called with its receiver's lock
 // held: mu for a Daemon method and for a branches or taskRunner method
-// (their mu is the daemon's), relay.mu for a relay method, journal.mu for a journal
-// method, the resolver's for its own. The exceptions say which lock:
-// runAttemptLocked, the relay's attempt lock; startRunnerLocked and
-// dropRetiredLocked, relay.mu; mergedSnapshotLocked, relay.mu and mu.
-// Called with a lock held but without the suffix: publishPending and
-// publishRemoved, relay.mu, taking mu inside; listSessions, subMu.
+// (their mu is the daemon's), relay.mu for a relay method, journal.mu
+// for a journal method, the resolver's for its own. The exceptions say
+// which lock: runAttemptLocked, the relay's attempt lock;
+// startRunnerLocked and dropRetiredLocked, relay.mu;
+// mergedSnapshotLocked, relay.mu and mu. Called with a lock held but
+// without the suffix: publishPending and publishRemoved, relay.mu,
+// taking mu inside; listSessions, subMu.
 type Daemon struct {
 	cfg     Config
 	targets []*target

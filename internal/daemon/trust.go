@@ -173,7 +173,7 @@ func (rn *taskRunner) trustState(t trustTarget) (gone, claude, ready bool, id pr
 }
 
 // startTrust starts the watcher for a launch, unless the daemon is
-// stopping; StopRuns cancels the watchers and waits for them. The
+// stopping; stopRuns cancels the watchers and waits for them. The
 // watcher polls every TrustPoll for ReadyWait.
 func (rn *taskRunner) startTrust(t trustTarget) {
 	wait, poll := rn.cfg.Timings.ReadyWait, rn.cfg.Timings.TrustPoll

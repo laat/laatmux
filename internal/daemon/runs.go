@@ -65,7 +65,7 @@ func (rn *taskRunner) runGen(root string) uint64 {
 // named was removed meanwhile, whether or not another has been made at
 // the same root since: the request was for the old one. Nothing
 // registers once the daemon is stopping, so a run that resolved while
-// StopRuns took its list cannot start after it.
+// stopRuns took its list cannot start after it.
 func (rn *taskRunner) registerRun(r *runJob, gen uint64) error {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()

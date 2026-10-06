@@ -11,16 +11,18 @@ import (
 
 // taskRunner is the daemon's commands: add, rm, run and the prompt
 // deliveries, with the runs and trust watchers they start. It shares
-// the daemon's lock, mu, under which its own state below is used too,
-// its config, journal, managed target and pane and git tables, and
-// calls back into the core for the rest, through taskCore. See
-// commands.go, task.go, runs.go and trust.go.
+// the daemon's lock, mu, its config, journal, managed target and its
+// pane and git tables. Its own state below is used under mu, except
+// where a field says otherwise. It calls back into the core for the
+// rest, through taskCore. See commands.go, task.go, runs.go and
+// trust.go.
 type taskRunner struct {
 	mu      *sync.Mutex // the daemon's
 	cfg     *Config     // the daemon's
 	journal *journal    // the daemon's, nil without the task capability
 	managed *target     // the daemon's, nil when the laatmux server is not watched
-	// panes and gits are the daemon's tables, read under mu.
+	// panes and gits are the daemon's tables, used under mu (a git
+	// entry's due is set here).
 	panes map[string]*paneState
 	gits  map[string]*gitEntry
 	core  taskCore
