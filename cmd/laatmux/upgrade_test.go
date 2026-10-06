@@ -322,7 +322,7 @@ func TestStop(t *testing.T) {
 	start = time.Now()
 	err = cmdStop(context.Background(), nil)
 	stopWait = 20 * time.Second
-	if err == nil || !strings.Contains(err.Error(), "not the daemon the runtime record names") {
+	if err == nil || !strings.Contains(err.Error(), "is answered by another daemon, after 1s") {
 		t.Fatalf("persistent mismatch: %v", err)
 	}
 	if took := time.Since(start); took < time.Second || took > 5*time.Second {
@@ -440,10 +440,11 @@ func testDaemon(mode string) {
 	case "slow":
 		// The lock first, the listener a while later, as serve does.
 		err = legacyServeAfter(ctx, 800*time.Millisecond)
-	case "nolisten", "wedged":
+	case "nolisten", "wedged", "wedged-old":
 		// The lock and the record, and nothing to ask: no listener at
-		// the record's address, or one that accepts and never answers.
-		err = wedgedServe(ctx, mode == "wedged")
+		// the record's address, or one that accepts and never answers;
+		// -old writes a record without the start, as an older build.
+		err = wedgedServe(ctx, mode != "nolisten", mode == "wedged-old")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -489,7 +490,7 @@ func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 // wedgedServe is a daemon that cannot be asked: the lock and the
 // runtime record, then a listener that accepts and says nothing, or
 // none at the record's address. SIGTERM ends it.
-func wedgedServe(ctx context.Context, listen bool) error {
+func wedgedServe(ctx context.Context, listen, old bool) error {
 	lock, err := home.TryLock()
 	if err != nil {
 		return err
@@ -516,7 +517,7 @@ func wedgedServe(ctx context.Context, listen bool) error {
 		}()
 	}
 	rt := home.Runtime{Address: addr, PID: os.Getpid(), Version: "wedged", StartedAt: time.Now()}
-	if self, ok := procs.Lookup(os.Getpid()); ok {
+	if self, ok := procs.Lookup(os.Getpid()); ok && !old {
 		rt.ProcessStart = self.StartID
 	}
 	if err := home.WriteRuntime(rt); err != nil {
@@ -619,6 +620,53 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 			t.Fatalf("bystander signalled after a short probe: %v", err)
 		}
 	})
+	t.Run("identified, another holder", func(t *testing.T) {
+		// The record names a laatmux by pid and start, which is this
+		// machine's daemon of another state directory; our lock is
+		// another daemon's. The holder check alone keeps it unsignalled.
+		crashLeft(t)
+		twin := exec.Command(os.Args[0], "-test.run=TestStop")
+		twin.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held", "LAATMUX_HOME="+t.TempDir())
+		if err := twin.Start(); err != nil {
+			t.Fatal(err)
+		}
+		twinDone := make(chan error, 1)
+		go func() { twinDone <- twin.Wait() }()
+		defer func() {
+			twin.Process.Kill()
+			<-twinDone
+		}()
+		p, ok := procs.Lookup(twin.Process.Pid)
+		if !ok {
+			t.Fatal("no lookup of the twin")
+		}
+		if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "none.sock"), PID: twin.Process.Pid, Version: "twin", StartedAt: time.Now(), ProcessStart: p.StartID}); err != nil {
+			t.Fatal(err)
+		}
+		held := exec.Command(os.Args[0], "-test.run=TestStop")
+		held.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=held")
+		if err := held.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { held.Process.Signal(syscall.SIGTERM); held.Wait() }()
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			if pid, _ := home.Holder(); pid == held.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("held did not take the lock")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err := cmdStop(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "while the runtime record's") {
+			t.Errorf("stop: %v", err)
+		}
+		select {
+		case err := <-twinDone:
+			t.Fatalf("the record's process signalled while another holds the lock (exit %v)", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
 	t.Run("other holder", func(t *testing.T) {
 		bystander := crashLeft(t)
 		held := exec.Command(os.Args[0], "-test.run=TestStop")
@@ -641,6 +689,52 @@ func TestStopNeverSignalsAReusedPid(t *testing.T) {
 			t.Fatalf("bystander signalled while another daemon holds the lock: %v", err)
 		}
 	})
+}
+
+// The hello wait is bounded by stop's own deadline: a wedged daemon
+// the record does not identify (a build before the start field) is
+// reported when the deadline passes, not after the whole hello wait.
+func TestStopHelloWaitBounded(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	d := exec.Command(os.Args[0], "-test.run=TestStop")
+	d.Env = append(os.Environ(), "LAATMUX_TEST_DAEMON=wedged-old")
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.Wait() }()
+	defer func() {
+		d.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		pid, _ := home.Holder()
+		if rt, err := home.ReadRuntime(); pid == d.Process.Pid && err == nil && rt.PID == d.Process.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("did not come up")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	was := stopWait
+	stopWait = time.Second
+	defer func() { stopWait = was }()
+	start := time.Now()
+	err := cmdStop(context.Background(), nil)
+	if took := time.Since(start); err == nil || !strings.Contains(err.Error(), "gives no hello before the wait ran out after 1s") || took > 3*time.Second {
+		t.Fatalf("stop of an unidentified wedged daemon: %v after %s", err, took)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("an unidentified daemon signalled (exit %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 // A stop whose context is cancelled signals nothing, against a daemon
@@ -714,6 +808,8 @@ func TestIsDaemon(t *testing.T) {
 	if isDaemon(home.Runtime{PID: other.Process.Pid, ProcessStart: self.StartID}) {
 		t.Error("another process with this one's start taken as the daemon")
 	}
+	other.Process.Kill()
+	other.Wait()
 	if isDaemon(home.Runtime{PID: 1 << 30, ProcessStart: self.StartID}) {
 		t.Error("a pid that is no process taken as the daemon")
 	}

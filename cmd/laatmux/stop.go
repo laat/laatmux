@@ -62,28 +62,52 @@ func cmdStop(ctx context.Context, args []string) error {
 	}
 	start := time.Now()
 	deadline := start.Add(stopWait)
-	why := "answers on no socket"
+	// What the last round found, for the report when the deadline
+	// passes: whether the record stands and names the daemon the loop
+	// is after, why it could not be stopped, and whether what answers
+	// at its address is that daemon, the one the signal may go to.
+	named, why, own := false, "answers on no socket", true
+	asked := false // a dial reached a daemon and had its answer, or none
+	var rt home.Runtime
 	for {
-		rt, err := home.ReadRuntime()
+		if time.Now().After(deadline) {
+			holder, err := home.Holder()
+			if err != nil {
+				return err
+			}
+			if named && holder != rt.PID {
+				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, time.Since(start).Round(time.Second))
+			}
+			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, time.Since(start).Round(time.Second))
+		}
+		var err error
+		rt, err = home.ReadRuntime()
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, home.ErrStale) {
 			return err
 		}
 		// Every way round the loop is bounded and paced the same: a
 		// record whose daemon is not the one that answers, and a
 		// holder that answers on no socket.
-		named := err == nil // the record stands and names rt.PID
+		wasNamed := named
+		named, own = err == nil, true // the record stands and names rt.PID
 		if named {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
 				err := stopDaemon(ctx, nc, rt, deadline)
 				switch {
 				case errors.Is(err, errMoved):
-					why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
-					named = false
+					why, asked = "is answered by another daemon", true
+					own = false
 				case errors.Is(err, errNoHello) && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
 					// The loop's deadline passed during the hello wait:
-					// reported for what was known before it.
+					// reported on the next round for what was known, or
+					// for the hello that never came.
+					if !asked {
+						why = "gives no hello before the wait ran out"
+					}
+					named = wasNamed || !asked
+					continue
 				case errors.Is(err, errNoHello):
-					why = "gives no hello stop can take (" + strings.TrimPrefix(err.Error(), errNoHello.Error()+": ") + ")"
+					why, asked = "gives no hello stop can take ("+strings.TrimPrefix(err.Error(), errNoHello.Error()+": ")+")", true
 				default:
 					return err
 				}
@@ -96,7 +120,7 @@ func cmdStop(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if named && holder == rt.PID && isDaemon(rt) {
+		if named && own && holder == rt.PID && isDaemon(rt) {
 			// The record's daemon holds the lock and cannot be asked:
 			// read the lock again a moment later, then end it as a
 			// daemon before the shutdown message is.
@@ -131,12 +155,6 @@ func cmdStop(ctx context.Context, args []string) error {
 		if holder == 0 {
 			fmt.Println("no daemon running")
 			return nil
-		}
-		if time.Now().After(deadline) {
-			if named && holder != rt.PID {
-				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, time.Since(start).Round(time.Second))
-			}
-			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, time.Since(start).Round(time.Second))
 		}
 		select {
 		case <-ctx.Done():
