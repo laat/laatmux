@@ -1051,6 +1051,14 @@ func TestRelayHandoffPatience(t *testing.T) {
 func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
+	// The daemon's first relay sweep reads the hosts once, at start,
+	// before any request: waited for, so it cannot take the gone read
+	// meant for the dismiss below.
+	for deadline := time.Now().Add(10 * time.Second); f.hosts.readCount() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first sweep never read the hosts")
+		}
+	}
 	// Done and OK, prompt not delivered, and the listing still owed
 	// with the host down: settle waits in retire's backoff.
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "stuck", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
@@ -1091,14 +1099,36 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	f.remote.down = nil
 	f.remote.mu.Unlock()
 	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
+	// The add is held at its launch until the dismiss has answered. An
+	// add with its outcome is dismissable, and its settle reads the host
+	// as well and could take the gone read meant for the dismiss; held,
+	// it has no outcome and its runner reads nothing.
+	release := make(chan struct{})
+	f.ft.set(func() { f.ft.newHold = release })
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "back", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
-	f.hosts.setFlip(1) // gone for the first read, back for the next
+	runners := func() []*runner {
+		f.local.relay.mu.Lock()
+		defer f.local.relay.mu.Unlock()
+		return append([]*runner(nil), f.local.relay.runners["s2"]...)
+	}
+	before := runners()
+	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
+	after := runners()
+	close(release)
 	if res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss with the host back %+v", res)
+	}
+	// The follow the dismiss found has ended and one other follows the
+	// add: the dismiss read the host as gone, then as back.
+	if len(before) != 1 || len(after) != 1 {
+		t.Fatalf("runners: %d before the dismiss and %d after, want one each", len(before), len(after))
+	}
+	if after[0] == before[0] {
+		t.Fatal("the follow was not stopped and started again")
 	}
 	if got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.retired() }); !got.OK {
 		t.Fatalf("record after the restart %+v", got)
