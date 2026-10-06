@@ -227,9 +227,14 @@ func TestGitErrorLoggedOnce(t *testing.T) {
 		}
 	}
 	git := func() protocol.GitStatus {
+		t.Helper()
 		d.mu.Lock()
-		defer d.mu.Unlock()
-		return *d.worktrees["/w/a"].Git
+		g := d.worktrees["/w/a"].Git
+		d.mu.Unlock()
+		if g == nil {
+			t.Fatal("no object published for /w/a")
+		}
+		return *g
 	}
 	want := func(a, b int, when string) {
 		t.Helper()
@@ -266,6 +271,9 @@ func TestGitErrorLoggedOnce(t *testing.T) {
 	f.err["/w/a"], f.after["/w/a"] = nil, "h2"
 	f.mu.Unlock()
 	rounds(1)
+	if !git().Stale {
+		t.Fatal("the read whose HEAD moved published its result")
+	}
 	f.mu.Lock()
 	delete(f.after, "/w/a")
 	f.mu.Unlock()
