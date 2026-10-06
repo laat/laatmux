@@ -946,6 +946,87 @@ func TestHomelessLineLocal(t *testing.T) {
 	}
 }
 
+// A homeless worktree's agent on this machine's default server in a
+// window of another worktree's workspace session leaves that session to
+// the other worktree's line: the homeless line has its own workspace
+// session, or none, and is settled as that session is. A plain session
+// or attachment the line does take does not settle it, whatever is set
+// on it by hand.
+func TestHomelessLineInAnotherWorkspace(t *testing.T) {
+	hosts := []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	wa := protocol.Worktree{ID: "menv/worktree//w/a", EnvironmentID: "menv", Repo: "proj", Branch: "a", Root: "/w/a", Session: "proj/a"}
+	wb := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Branch: "b", Root: "/w/b"}
+	// Its directory in B, so attributed to B and B's line agent.
+	agent := protocol.Agent{ID: "menv/default/%5", EnvironmentID: "menv", Server: "default", Session: "mac/proj/a", Cwd: "/w/b",
+		Activity: protocol.Working, Liveness: protocol.Alive, WorktreeID: wb.ID}
+	sa := protocol.Session{Name: "mac/proj/a", Key: "menv//w/a", Host: "mac", Settled: true}
+	sb := protocol.Session{Name: "mac/proj/b", Key: "menv//w/b", Host: "mac"}
+	lineOf := func(in Input, id string) Row {
+		t.Helper()
+		for _, n := range treeLines(Tree(in)) {
+			if n.Worktree != nil && n.Worktree.ID == id {
+				return n
+			}
+		}
+		t.Fatalf("no line for %s", id)
+		return Row{}
+	}
+	tileOf := func(in Input) Row {
+		t.Helper()
+		rs := Agents(in, Tree(in))
+		for _, r := range append(rs.Main, rs.Stale...) {
+			if r.Agent != nil && r.Agent.ID == agent.ID {
+				return r
+			}
+		}
+		t.Fatalf("no tile for %s: %+v", agent.ID, rs)
+		return Row{}
+	}
+	in := Input{Hosts: hosts, Agents: []protocol.Agent{agent}, Worktrees: []protocol.Worktree{wa, wb}, Locals: []protocol.Session{sa}}
+	if l := lineOf(in, wb.ID); l.Agent == nil || l.Agent.ID != agent.ID || l.Local != nil || l.Settled {
+		t.Fatalf("B with no workspace session, A's settled: %+v", l)
+	}
+	if l := lineOf(in, wa.ID); l.Local == nil || l.Local.Name != "mac/proj/a" || !l.Settled {
+		t.Fatalf("A's line: %+v", l)
+	}
+	// The agent's tile keeps the session it runs in, and B's state.
+	if r := tileOf(in); r.Local == nil || r.Local.Name != "mac/proj/a" || r.Settled {
+		t.Fatalf("B's agent's tile, A's session settled: %+v", r)
+	}
+	in.Locals = []protocol.Session{sa, sb}
+	if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != "mac/proj/b" || l.Settled {
+		t.Fatalf("B with its own workspace session, A's settled: %+v", l)
+	}
+	sa.Settled, sb.Settled = false, true
+	in.Locals = []protocol.Session{sa, sb}
+	if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != "mac/proj/b" || !l.Settled {
+		t.Fatalf("B's own workspace session settled: %+v", l)
+	}
+	if l := lineOf(in, wa.ID); l.Settled {
+		t.Fatalf("A's line, B's session settled: %+v", l)
+	}
+	if r := tileOf(in); !r.Settled {
+		t.Fatalf("B's agent's tile, B's session settled: %+v", r)
+	}
+	// A plain attachment, or a plain session, the line takes for its
+	// agent's: @laatmux_settled set on it by hand does not settle the
+	// line, as z on the line refuses it for no workspace session.
+	for _, plain := range []protocol.Session{
+		{Name: "mac/proj/a-att", Attach: "mac/proj/a", Host: "mac", Settled: true},
+		{Name: "notes", Settled: true},
+	} {
+		moved := agent
+		moved.Session = plain.Name
+		in := Input{Hosts: hosts, Agents: []protocol.Agent{moved}, Worktrees: []protocol.Worktree{wa, wb}, Locals: []protocol.Session{sa, plain}}
+		if l := lineOf(in, wb.ID); l.Local == nil || l.Local.Name != plain.Name || l.Settled {
+			t.Fatalf("B's agent in %s, set settled by hand: %+v", plain.Name, l)
+		}
+		if r := tileOf(in); r.Settled {
+			t.Fatalf("B's agent's tile in %s, set settled by hand: %+v", plain.Name, r)
+		}
+	}
+}
+
 // The labels: the branch primary and the repository secondary; on main
 // or master the repository primary; a detached worktree by its root; a
 // task by its branch; a row that is no worktree's by its session alone.
