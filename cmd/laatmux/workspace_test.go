@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -299,6 +300,48 @@ func TestOriginOf(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("missing git read as no origin")
+	}
+}
+
+// git's word that a directory is in no repository is matched in English,
+// so under a translated locale the directory still has no origin rather
+// than an error.
+func TestOriginOfLocale(t *testing.T) {
+	ctx := context.Background()
+	// A worktree whose repository is gone: git reads its .git file and
+	// says the directory is not a repository.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(dir, "gone")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+	// This machine's git, when it has the locale and its translation.
+	out, err := exec.Command("git", "-C", dir, "config", "--get", "remote.origin.url").CombinedOutput()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 128 && !strings.Contains(string(out), "not a git repository") {
+		if o, err := originOf(ctx, dir); err != nil || o != "" {
+			t.Errorf("git in German, no repository: %q %v", o, err)
+		}
+	} else {
+		t.Logf("git does not translate here: %v %q", err, out)
+	}
+	// A git that translates unless its locale is C, on any machine.
+	bin := t.TempDir()
+	script := `#!/bin/sh
+case "${LC_ALL:-${LC_MESSAGES:-$LANG}}" in
+C|POSIX) echo "fatal: not a git repository (or any of the parent directories): .git" >&2 ;;
+*) echo "fatal: Kein Git-Repository (oder irgendeines der Elternverzeichnisse): .git" >&2 ;;
+esac
+exit 128
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if o, err := originOf(ctx, dir); err != nil || o != "" {
+		t.Errorf("translating git, no repository: %q %v", o, err)
 	}
 }
 

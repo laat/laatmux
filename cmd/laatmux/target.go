@@ -18,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // snapshotTimeout bounds a snapshot request: the daemon answers once its
@@ -103,11 +104,13 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 
 // originOf is the git origin of the repository dir is in, "" when git
 // positively reports none: the key is unset (exit 1) or dir is in no
-// repository (exit 128 with git's message). Anything else, git missing or
-// a repository it cannot read, is an error, so a directory whose identity
-// cannot be inspected is never resolved from its label instead.
+// repository (exit 128 with git's message, in the C locale so it is the
+// English one). Anything else, git missing or a repository it cannot
+// read, is an error, so a directory whose identity cannot be inspected is
+// never resolved from its label instead.
 func originOf(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url")
+	cmd.Env = worktree.GitEnv()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

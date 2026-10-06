@@ -113,7 +113,7 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 			return p, fail(stage, err)
 		}
 		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+checkout)
-		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, gitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
+		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, GitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
 			return p, fail(stage, err)
 		}
 		report(stage, protocol.StateDone, "cloned")
@@ -122,7 +122,7 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 	// fetch: never skipped; the branch base must be fresh.
 	stage = protocol.StageFetch
 	report(stage, protocol.StateStart, "git fetch origin")
-	if err := runStreaming(ctx, checkout, report, stage, gitEnv(), "git", "fetch", "origin"); err != nil {
+	if err := runStreaming(ctx, checkout, report, stage, GitEnv(), "git", "fetch", "origin"); err != nil {
 		return p, fail(stage, err)
 	}
 	report(stage, protocol.StateDone, "fetched")

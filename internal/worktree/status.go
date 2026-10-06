@@ -514,7 +514,7 @@ func statusGit(ctx context.Context, dir string, args ...string) (string, error) 
 	// fetch fails rather than connects. What needs the missing blob is
 	// then left out: the committed diff or the conflict, read again
 	// after a minute, or the uncommitted diff, marked a lower bound.
-	cmd.Env = append(gitEnv(), "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
+	cmd.Env = append(GitEnv(), "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none")
 	// Its own process group, killed whole at the timeout: a merge
 	// driver or a hook git started goes with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
