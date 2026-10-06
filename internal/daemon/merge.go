@@ -77,8 +77,9 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 	}
 	sessions, serr := d.listSessions(ctx)
 	// The relay's mutex before the daemon's, the order every publication
-	// of a pending record takes them in, so the snapshot's records and
-	// the upserts after it never interleave.
+	// of a pending record takes them in (see the lock order on Daemon),
+	// so the snapshot's records and the upserts after it never
+	// interleave.
 	if d.relay != nil {
 		d.relay.mu.Lock()
 		defer d.relay.mu.Unlock()
@@ -310,7 +311,8 @@ func (d *Daemon) mbroadcastLocked(m protocol.Message) {
 }
 
 // mergedSnapshotLocked is the merged state: every host's record in config
-// order, all cached records, and the local sessions by name.
+// order, all cached records, and the local sessions by name. Called
+// with relay.mu and d.mu held.
 func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 	m := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.mseq, SessionsError: d.sessionsErr}
 	for _, name := range d.mnames {

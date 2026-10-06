@@ -152,6 +152,48 @@ type Config struct {
 }
 
 // Daemon holds the derived state for every watched tmux server.
+//
+// Locks. mu guards the mutable fields from it down, but for those that
+// say otherwise, and the stream: every record is published under it, so
+// a snapshot and the upserts after it never interleave. The locks
+// outside it, and the order they are taken in, are:
+//
+//   - relay.mu, the pending records, before mu: a record's mutation and
+//     its publication are one step, and the merged snapshot reads the
+//     records the same way. tasksAtLocked and worktreeRemovedLocked,
+//     under mu, read them on a goroutine of their own for that.
+//   - subMu serializes a subscription's config read and session listing
+//     with the poll's, so neither is applied after a newer one; taken
+//     before relay.mu and mu. lastHostsErr is under it.
+//   - pollMu holds the worktree poll and its publication together, so an
+//     older observation never overwrites a newer one; taken before mu.
+//     lastListErr is under it.
+//   - repos, and the keyed locks repoLock hands out, all held across mu
+//     and never taken under it. An add holds repos shared, then its
+//     repository's "repo/" lock, then its "name/" lock (holdRepos,
+//     lockRepo) until its agent is launched; a typed prompt's wait runs
+//     without them. rm holds repos alone (lockRepos). "deliver/<root>"
+//     is held by a delivery's readiness check and paste, by rm from
+//     git's removal on, by an add's result and by a trust step, each
+//     on its own; when nested it is the inner one, under repos (rm) or
+//     under this host's "attempt/<id>" (a prompt's attempts), never
+//     the other way.
+//   - the relay's keyed locks per pending record, "attempt/<id>" for a
+//     delivery attempt or a dismiss and "settle/<id>" for its retiring
+//     and handoff, never nested; taken before relay.mu and mu, never
+//     under them.
+//   - journal.mu, runJob.mu, command.mu (taken under mu by forgetDone)
+//     and the resolver's are leaves: each guards its own struct and
+//     takes nothing under it.
+//
+// A method with the Locked suffix is called with its receiver's lock
+// held: mu for a Daemon method and for a branches method (its mu is the
+// daemon's), relay.mu for a relay method, journal.mu for a journal
+// method, the resolver's for its own. The exceptions say which lock:
+// runAttemptLocked, the relay's attempt lock; startRunnerLocked and
+// dropRetiredLocked, relay.mu; mergedSnapshotLocked, relay.mu and mu.
+// Called with a lock held but without the suffix: publishPending and
+// publishRemoved, relay.mu, taking mu inside; listSessions, subMu.
 type Daemon struct {
 	cfg     Config
 	targets []*target
@@ -169,7 +211,7 @@ type Daemon struct {
 	lastList     []worktree.Record
 	listed       bool
 	managedRoots map[string]string // root -> session
-	lastListErr  string            // logged once per change
+	lastListErr  string            // logged once per change; under pollMu
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
@@ -900,20 +942,19 @@ func (d *Daemon) Serve(ctx context.Context, ln net.Listener) error {
 // must unblock a pending read on rw; it is called when the subscription is
 // dropped or a write fails, so the peer always sees EOF rather than silence.
 func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()) {
-	pc := protocol.NewConn(rw)
+	c := &clientConn{d: d, ctx: ctx, pc: protocol.NewConn(rw), quit: make(chan struct{})}
 	var closeOnce sync.Once
-	drop := func() {
+	c.drop = func() {
 		closeOnce.Do(func() {
 			if closer != nil {
 				closer()
 			}
 		})
 	}
-	defer drop()
+	defer c.drop()
 	// quit closes when this connection is done, so a command stream
 	// waiting for its next event lets go of the connection.
-	quit := make(chan struct{})
-	defer close(quit)
+	defer close(c.quit)
 	hello := protocol.Message{
 		Type:          protocol.TypeHello,
 		Protocol:      protocol.Version,
@@ -923,236 +964,296 @@ func (d *Daemon) HandleConn(ctx context.Context, rw io.ReadWriter, closer func()
 		Capabilities:  d.capabilities(),
 		PID:           os.Getpid(),
 	}
-	if err := pc.Write(hello); err != nil {
+	if err := c.pc.Write(hello); err != nil {
 		return
 	}
-	var sub *subscriber
 	defer func() {
-		if sub != nil {
-			d.unsubscribe(sub)
+		if c.sub != nil {
+			d.unsubscribe(c.sub)
 		}
 	}()
 	for {
-		m, err := pc.Read()
+		m, err := c.pc.Read()
 		if err != nil {
 			return
 		}
-		switch m.Type {
-		case protocol.TypeHello:
-			// Client's hello; nothing to do, capabilities flow daemon -> client.
-		case protocol.TypePing:
-			_ = pc.Write(protocol.Message{Type: protocol.TypePong})
-		case protocol.TypeSubscribe:
-			if sub != nil {
-				continue
-			}
-			if m.Merged && d.cfg.Hosts == nil {
-				_ = pc.Write(protocol.Message{Type: protocol.TypeError, Error: "this daemon has no merged capability; it has no hosts in its config"})
-				continue
-			}
-			var s *subscriber
-			var snap protocol.Message
-			if m.Merged {
-				// The merged snapshot is sent at once with what the
-				// daemon knows; the local host's record says whether
-				// its own records are complete, as a remote host's
-				// does, so a tmux the daemon cannot poll holds up
-				// neither the remote hosts nor the host rows.
-				s, snap = d.mergedSubscribe(ctx, drop)
-			} else {
-				select {
-				case <-d.discovered:
-				case <-ctx.Done():
-					return
-				}
-				s, snap = d.subscribe(drop)
-			}
-			sub = s
-			if err := pc.Write(snap); err != nil {
-				return
-			}
-			go func() {
-				for msg := range s.ch {
-					if err := pc.Write(msg); err != nil {
-						drop()
-						return
-					}
-				}
-			}()
-		case protocol.TypeNew:
-			// Sessions are only ever created on the managed server.
-			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-			if d.managed == nil {
-				res.Error = "this daemon does not watch the managed laatmux tmux server"
-				if err := pc.Write(res); err != nil {
-					return
-				}
-				continue
-			}
-			made, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
-			if err != nil {
-				res.Error = err.Error()
-			} else {
-				res.OK = true
-				res.Session = m.Name
-				res.PaneID = made.PaneID
-			}
-			if err := pc.Write(res); err != nil {
-				return
-			}
-		case protocol.TypeDismiss:
-			// A root names the worktree whose tasks go; the id is then
-			// the request's own, which a client always sets.
-			var res protocol.Message
-			if m.Root != "" {
-				res = d.dismissAt(m.ID, m.EnvironmentID, m.Root, m.Listing)
-			} else {
-				res = d.dismiss(m.ID)
-			}
-			if err := pc.Write(res); err != nil {
-				return
-			}
-		case protocol.TypeAdd, protocol.TypeRm, protocol.TypeRun, protocol.TypePrompt:
-			// The relay's messages: an add naming a host to run it on,
-			// and a prompt without an attempt number.
-			if m.Type == protocol.TypeAdd && m.Relay != "" {
-				// The task runs once the answer has been written, or
-				// could not be: the acceptance is the file, and a
-				// client killed before it read the answer must not
-				// leave its task unrun until the daemon restarts. The
-				// host is contacted after the answer either way.
-				res := d.acceptRelay(m)
-				err := pc.Write(res)
-				if res.OK {
-					d.startPending(d.runCtx(), m.ID)
-				}
-				if err != nil {
-					return
-				}
-				continue
-			}
-			if m.Type == protocol.TypePrompt && m.Attempt == 0 && d.relay != nil {
-				go func() {
-					if err := pc.Write(d.relayPrompt(ctx, m.ID)); err != nil {
-						drop()
-					}
-				}()
-				continue
-			}
-			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-			switch {
-			case d.cfg.Store == nil:
-				res.Error = "this host has no repos and worktrees directories configured"
-			case d.managed == nil && m.Type != protocol.TypeRun:
-				res.Error = "this daemon does not watch the managed laatmux tmux server"
-			case m.ID == "":
-				res.Error = "command id required"
-			case m.Type == protocol.TypePrompt && d.journal == nil:
-				res.Error = "this daemon has no task capability"
-			case m.Type == protocol.TypePrompt && m.Attempt < 1:
-				res.Error = "attempt number required"
-			case m.Type == protocol.TypePrompt && m.Prompt == "":
-				res.Error = "prompt required"
-			}
-			if res.Error != "" {
-				if err := pc.Write(res); err != nil {
-					return
-				}
-				continue
-			}
-			// The command runs under the daemon's context and outlives
-			// this connection. The same id from any connection follows it
-			// rather than starting it again, which is what an older client
-			// relies on after a lost bridge; a client with follow sends
-			// that instead.
-			key := m.ID
-			if m.Type == protocol.TypePrompt {
-				key = promptKey(m.ID, m.Attempt)
-			}
-			c, fresh := d.command(key, func(c *command) {
-				if m.Type == protocol.TypeRun {
-					c.ring = true
-					c.job = newRunJob()
-				}
-			})
-			if fresh {
-				switch m.Type {
-				case protocol.TypeAdd:
-					go d.runAdd(ctx, m, c)
-				case protocol.TypeRm:
-					go d.runRm(ctx, m, c)
-				case protocol.TypePrompt:
-					go d.runPrompt(ctx, m, c)
-				default:
-					go d.runRun(ctx, m, c)
-				}
-			}
-			go func() {
-				if err := c.stream(pc, 0, quit); err != nil {
-					drop()
-				}
-			}()
-		case protocol.TypeFollow:
-			key := m.ID
-			if m.Attempt > 0 {
-				key = promptKey(m.ID, m.Attempt)
-			}
-			c, ok := d.lookup(key)
-			if !ok {
-				// The journal answers for what the memory has let go.
-				res := d.answerFollow(m)
-				if res == nil {
-					res = &protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}
-				}
-				if err := pc.Write(*res); err != nil {
-					return
-				}
-				continue
-			}
-			go func() {
-				if err := c.stream(pc, m.After, quit); err != nil {
-					drop()
-				}
-			}()
-		case protocol.TypeCancel:
-			d.cancelCommand(m.ID)
-		case protocol.TypeSelect:
-			// The pane and its window made current on the managed
-			// server, where the attach shows them.
-			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-			switch {
-			case d.managed == nil:
-				res.Error = "this daemon does not watch the managed laatmux tmux server"
-			case m.PaneID == "":
-				res.Error = "pane id required"
-			default:
-				if err := d.managed.Tmux.SelectPane(ctx, m.PaneID); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.OK = true
-				}
-			}
-			if err := pc.Write(res); err != nil {
-				return
-			}
-		case protocol.TypePoke:
-			// Not answered: the hook that sends it does not wait.
-			d.Poke()
-		case protocol.TypeShutdown:
-			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
-			if d.cfg.Shutdown == nil {
-				res.Error = "this daemon has no shutdown capability"
-			} else {
-				res.OK = true
-			}
-			if err := pc.Write(res); err != nil {
-				return
-			}
-			if res.OK {
-				d.cfg.Shutdown()
-			}
-		default:
-			_ = pc.Write(protocol.Message{Type: protocol.TypeError, ID: m.ID, Error: fmt.Sprintf("unknown message type %q", m.Type)})
+		h, ok := handlers[m.Type]
+		if !ok {
+			_ = c.pc.Write(protocol.Message{Type: protocol.TypeError, ID: m.ID, Error: fmt.Sprintf("unknown message type %q", m.Type)})
+			continue
+		}
+		if err := h(c, m); err != nil {
+			return
 		}
 	}
+}
+
+// clientConn is one client connection as the handlers see it: the
+// protocol connection, drop to close it from any goroutine, quit closed
+// when it is done, and its subscription if it has one.
+type clientConn struct {
+	d    *Daemon
+	ctx  context.Context
+	pc   *protocol.Conn
+	drop func()
+	quit chan struct{}
+	sub  *subscriber
+}
+
+// handlers is the handler by message type. A handler's error ends the
+// connection: a write that failed, or the daemon's context done.
+var handlers = map[string]func(*clientConn, protocol.Message) error{
+	protocol.TypeHello:     (*clientConn).hello,
+	protocol.TypePing:      (*clientConn).ping,
+	protocol.TypeSubscribe: (*clientConn).subscribe,
+	protocol.TypeNew:       (*clientConn).newSession,
+	protocol.TypeDismiss:   (*clientConn).dismiss,
+	protocol.TypeAdd:       (*clientConn).command,
+	protocol.TypeRm:        (*clientConn).command,
+	protocol.TypeRun:       (*clientConn).command,
+	protocol.TypePrompt:    (*clientConn).command,
+	protocol.TypeFollow:    (*clientConn).follow,
+	protocol.TypeCancel:    (*clientConn).cancel,
+	protocol.TypeSelect:    (*clientConn).selectPane,
+	protocol.TypePoke:      (*clientConn).poke,
+	protocol.TypeShutdown:  (*clientConn).shutdown,
+}
+
+// errNoManaged is the answer to a request that needs the managed server
+// on a daemon that does not watch it.
+const errNoManaged = "this daemon does not watch the managed laatmux tmux server"
+
+// hello is the client's hello; nothing to do, capabilities flow daemon
+// -> client.
+func (c *clientConn) hello(protocol.Message) error { return nil }
+
+func (c *clientConn) ping(protocol.Message) error {
+	_ = c.pc.Write(protocol.Message{Type: protocol.TypePong})
+	return nil
+}
+
+func (c *clientConn) subscribe(m protocol.Message) error {
+	d := c.d
+	if c.sub != nil {
+		return nil
+	}
+	if m.Merged && d.cfg.Hosts == nil {
+		_ = c.pc.Write(protocol.Message{Type: protocol.TypeError, Error: "this daemon has no merged capability; it has no hosts in its config"})
+		return nil
+	}
+	var s *subscriber
+	var snap protocol.Message
+	if m.Merged {
+		// The merged snapshot is sent at once with what the daemon
+		// knows; the local host's record says whether its own records
+		// are complete, as a remote host's does, so a tmux the daemon
+		// cannot poll holds up neither the remote hosts nor the host
+		// rows.
+		s, snap = d.mergedSubscribe(c.ctx, c.drop)
+	} else {
+		select {
+		case <-d.discovered:
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		}
+		s, snap = d.subscribe(c.drop)
+	}
+	c.sub = s
+	if err := c.pc.Write(snap); err != nil {
+		return err
+	}
+	go func() {
+		for msg := range s.ch {
+			if err := c.pc.Write(msg); err != nil {
+				c.drop()
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// newSession makes a session on the managed server, the only one
+// sessions are ever created on.
+func (c *clientConn) newSession(m protocol.Message) error {
+	d := c.d
+	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+	if d.managed == nil {
+		res.Error = errNoManaged
+		return c.pc.Write(res)
+	}
+	made, err := d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.OK = true
+		res.Session = m.Name
+		res.PaneID = made.PaneID
+	}
+	return c.pc.Write(res)
+}
+
+// dismiss drops a pending record: a root names the worktree whose
+// tasks go; the id is then the request's own, which a client always
+// sets.
+func (c *clientConn) dismiss(m protocol.Message) error {
+	var res protocol.Message
+	if m.Root != "" {
+		res = c.d.dismissAt(m.ID, m.EnvironmentID, m.Root, m.Listing)
+	} else {
+		res = c.d.dismiss(m.ID)
+	}
+	return c.pc.Write(res)
+}
+
+// command runs add, rm, run or prompt, or the relay's form of the first
+// and last: an add naming a host to run it on, and a prompt without an
+// attempt number.
+func (c *clientConn) command(m protocol.Message) error {
+	d := c.d
+	if m.Type == protocol.TypeAdd && m.Relay != "" {
+		// The task runs once the answer has been written, or could
+		// not be: the acceptance is the file, and a client killed
+		// before it read the answer must not leave its task unrun
+		// until the daemon restarts. The host is contacted after the
+		// answer either way.
+		res := d.acceptRelay(m)
+		err := c.pc.Write(res)
+		if res.OK {
+			d.startPending(d.runCtx(), m.ID)
+		}
+		return err
+	}
+	if m.Type == protocol.TypePrompt && m.Attempt == 0 && d.relay != nil {
+		go func() {
+			if err := c.pc.Write(d.relayPrompt(c.ctx, m.ID)); err != nil {
+				c.drop()
+			}
+		}()
+		return nil
+	}
+	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+	switch {
+	case d.cfg.Store == nil:
+		res.Error = "this host has no repos and worktrees directories configured"
+	case d.managed == nil && m.Type != protocol.TypeRun:
+		res.Error = errNoManaged
+	case m.ID == "":
+		res.Error = "command id required"
+	case m.Type == protocol.TypePrompt && d.journal == nil:
+		res.Error = "this daemon has no task capability"
+	case m.Type == protocol.TypePrompt && m.Attempt < 1:
+		res.Error = "attempt number required"
+	case m.Type == protocol.TypePrompt && m.Prompt == "":
+		res.Error = "prompt required"
+	}
+	if res.Error != "" {
+		return c.pc.Write(res)
+	}
+	// The command runs under the daemon's context and outlives this
+	// connection. The same id from any connection follows it rather
+	// than starting it again, which is what an older client relies on
+	// after a lost bridge; a client with follow sends that instead.
+	key := m.ID
+	if m.Type == protocol.TypePrompt {
+		key = promptKey(m.ID, m.Attempt)
+	}
+	cmd, fresh := d.command(key, func(c *command) {
+		if m.Type == protocol.TypeRun {
+			c.ring = true
+			c.job = newRunJob()
+		}
+	})
+	if fresh {
+		switch m.Type {
+		case protocol.TypeAdd:
+			go d.runAdd(c.ctx, m, cmd)
+		case protocol.TypeRm:
+			go d.runRm(c.ctx, m, cmd)
+		case protocol.TypePrompt:
+			go d.runPrompt(c.ctx, m, cmd)
+		default:
+			go d.runRun(c.ctx, m, cmd)
+		}
+	}
+	c.streamCommand(cmd, 0)
+	return nil
+}
+
+// streamCommand sends the command's events from after on this
+// connection until it is done or the connection is.
+func (c *clientConn) streamCommand(cmd *command, after uint64) {
+	go func() {
+		if err := cmd.stream(c.pc, after, c.quit); err != nil {
+			c.drop()
+		}
+	}()
+}
+
+// follow streams a command the memory or the journal has.
+func (c *clientConn) follow(m protocol.Message) error {
+	d := c.d
+	key := m.ID
+	if m.Attempt > 0 {
+		key = promptKey(m.ID, m.Attempt)
+	}
+	cmd, ok := d.lookup(key)
+	if !ok {
+		// The journal answers for what the memory has let go.
+		res := d.answerFollow(m)
+		if res == nil {
+			res = &protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}
+		}
+		return c.pc.Write(*res)
+	}
+	c.streamCommand(cmd, m.After)
+	return nil
+}
+
+func (c *clientConn) cancel(m protocol.Message) error {
+	c.d.cancelCommand(m.ID)
+	return nil
+}
+
+// selectPane makes the pane and its window current on the managed
+// server, where the attach shows them.
+func (c *clientConn) selectPane(m protocol.Message) error {
+	d := c.d
+	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+	switch {
+	case d.managed == nil:
+		res.Error = errNoManaged
+	case m.PaneID == "":
+		res.Error = "pane id required"
+	default:
+		if err := d.managed.Tmux.SelectPane(c.ctx, m.PaneID); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
+	}
+	return c.pc.Write(res)
+}
+
+// poke is not answered: the hook that sends it does not wait.
+func (c *clientConn) poke(protocol.Message) error {
+	c.d.Poke()
+	return nil
+}
+
+func (c *clientConn) shutdown(m protocol.Message) error {
+	d := c.d
+	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
+	if d.cfg.Shutdown == nil {
+		res.Error = "this daemon has no shutdown capability"
+	} else {
+		res.OK = true
+	}
+	if err := c.pc.Write(res); err != nil {
+		return err
+	}
+	if res.OK {
+		d.cfg.Shutdown()
+	}
+	return nil
 }

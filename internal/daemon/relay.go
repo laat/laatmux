@@ -429,7 +429,7 @@ func (d *Daemon) relayHost(name string) (peer.Host, bool, error) {
 
 // publishPending sends the record into the merged stream. Called with
 // the relay's mutex held, before the daemon's: that is the order the
-// merged snapshot takes them in too.
+// merged snapshot takes them in too (see the lock order on Daemon).
 func (d *Daemon) publishPending(p protocol.Pending) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
