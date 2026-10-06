@@ -1207,21 +1207,22 @@ func TestOtherSessionsHost(t *testing.T) {
 			t.Errorf("%s has no tile", c.id)
 		}
 	}
-	// Narrow: at 25, the sidebar's least width, the icon kept and the
-	// server cut; at 20 the host alone, as the line read before it named
-	// the server.
+	// Narrow: at 28 the host whole, just; at 25, the sidebar's least
+	// width, the icon kept and the server cut; at 20 the host alone, as
+	// the line read before it named the server; dim throughout.
 	scratch := m.Tree[m.indexOf("venv/default/%5")]
 	for _, c := range []struct {
 		w    int
 		want string
 	}{
-		{34, "    scratch (vm/default)  💬 claud\n"},
-		{25, "    scratch (vm/def…)  💬\n"},
-		{21, "    scratch (vm…)  💬\n"},
-		{20, "    scratch (vm)  💬\n"},
+		{34, "...|    scratch‹ (vm/default)›  ⟨accent:💬⟩ claud\n"},
+		{28, "...|    scratch‹ (vm/default)›  ⟨accent:💬⟩\n"},
+		{25, "...|    scratch‹ (vm/def…)›  ⟨accent:💬⟩\n"},
+		{21, "...|    scratch‹ (vm…)›  ⟨accent:💬⟩\n"},
+		{20, "...|    scratch‹ (vm)›  ⟨accent:💬⟩\n"},
 	} {
 		m.Width = c.w
-		if got := Text(m.treeLine(scratch, 0)); got != c.want {
+		if got := Debug(m.treeLine(scratch, 0)); got != c.want {
 			t.Errorf("at %d: %q, want %q", c.w, got, c.want)
 		}
 	}
