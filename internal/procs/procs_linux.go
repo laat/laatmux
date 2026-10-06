@@ -38,7 +38,9 @@ func init() {
 }
 
 // ListTTY returns the processes whose controlling terminal is tty, by
-// scanning /proc/*/stat for a matching tty_nr.
+// scanning /proc/*/stat for a matching tty_nr. A zombie is not listed:
+// it has exited, and only waits for its parent to reap it. A live
+// process whose leader thread has exited is.
 func ListTTY(tty string) ([]Proc, error) {
 	st, err := os.Stat(tty)
 	if err != nil {
@@ -59,8 +61,8 @@ func ListTTY(tty string) ([]Proc, error) {
 		if err != nil {
 			continue
 		}
-		p, tty, ok := readStat(pid)
-		if !ok || tty != want {
+		p, tty, exited, ok := readStat(pid)
+		if !ok || tty != want || exited {
 			continue
 		}
 		p.Argv = readNulFile(filepath.Join("/proc", e.Name(), "cmdline"))
@@ -72,30 +74,41 @@ func ListTTY(tty string) ([]Proc, error) {
 
 // Lookup is the process with the pid: its comm, start time and start
 // identity, the last two with the pid identifying it as Identity does
-// an agent; not ok when there is no such process.
+// an agent; not ok when there is no such process. Unlike ListTTY it
+// finds a zombie: the pid names it, and no other, until the reap.
 func Lookup(pid int) (Proc, bool) {
-	p, _, ok := readStat(pid)
+	p, _, _, ok := readStat(pid)
 	return p, ok
 }
 
-// readStat reads /proc/<pid>/stat: the process, and its tty_nr.
-func readStat(pid int) (Proc, uint64, bool) {
+// readStat reads /proc/<pid>/stat: see parseStat.
+func readStat(pid int) (Proc, uint64, bool, bool) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return Proc{}, 0, false
+		return Proc{}, 0, false, false
 	}
-	// pid (comm) state ppid pgrp session tty_nr tpgid ... starttime(22)
+	return parseStat(pid, b)
+}
+
+// parseStat parses a /proc/<pid>/stat: the process, its tty_nr, and
+// whether it has exited: a zombie, its leader in state Z with no thread
+// left, or being reaped, X. The state is the leader thread's, so a
+// leader that ended with pthread_exit while other threads run shows Z
+// in a live process; the thread count tells the two apart.
+func parseStat(pid int, b []byte) (Proc, uint64, bool, bool) {
+	// pid (comm) state ppid pgrp session tty_nr tpgid ... num_threads(20) ... starttime(22)
 	open := bytes.IndexByte(b, '(')
 	close := bytes.LastIndexByte(b, ')')
 	if open < 0 || close < 0 || close < open {
-		return Proc{}, 0, false
+		return Proc{}, 0, false, false
 	}
 	comm := string(b[open+1 : close])
 	fields := strings.Fields(string(b[close+2:]))
-	// fields[0]=state fields[1]=ppid fields[2]=pgrp fields[3]=session fields[4]=tty_nr fields[5]=tpgid ... fields[19]=starttime
+	// fields[0]=state fields[1]=ppid fields[2]=pgrp fields[3]=session fields[4]=tty_nr fields[5]=tpgid ... fields[17]=num_threads ... fields[19]=starttime
 	if len(fields) < 20 {
-		return Proc{}, 0, false
+		return Proc{}, 0, false, false
 	}
+	exited := fields[0] == "X" || fields[0] == "Z" && fields[17] == "1"
 	ttyNr, _ := strconv.ParseUint(fields[4], 10, 64)
 	ppid, _ := strconv.Atoi(fields[1])
 	pgid, _ := strconv.Atoi(fields[2])
@@ -106,7 +119,7 @@ func readStat(pid int) (Proc, uint64, bool) {
 	if bootID != "" {
 		startID = bootID + "/" + fields[19]
 	}
-	return Proc{PID: pid, PPID: ppid, PGID: pgid, TPGID: tpgid, Comm: comm, Start: start, StartID: startID}, ttyNr, true
+	return Proc{PID: pid, PPID: ppid, PGID: pgid, TPGID: tpgid, Comm: comm, Start: start, StartID: startID}, ttyNr, exited, true
 }
 
 func readNulFile(path string) []string {
