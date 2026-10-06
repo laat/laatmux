@@ -28,36 +28,42 @@ var stopWait = 20 * time.Second
 // the next client starts one again, which after an upgrade is the new
 // build. The daemon is reached over its socket, without starting one,
 // and asked to shut down, so the process that ends is the one that
-// answered the hello: never a pid a file remembers, which a crash can
-// leave for another process to inherit. The runtime record is read once
-// and its address dialled, and the daemon that answers must be the one
-// the record names, which its hello's pid says; a socket path is reused
-// by the next daemon, so a record read just before its daemon left can
-// reach the replacement, and then the record is read again. A daemon
-// from before the shutdown message has no pid in its hello and gets
-// SIGTERM at the record's pid, the daemon that answered on the record's
-// address. A daemon that holds the startup lock but answers on no
-// socket is starting, the lock comes before the listener, or shutting
-// down, the listener goes before the runs are stopped: stop keeps
-// trying to reach it while that holder has the lock. One that holds
-// the lock and is the daemon the runtime record names, yet cannot be
-// asked (nothing listens, the hello never comes, or it is of another
-// protocol), is wedged, or shutting down, and gets SIGTERM, which this
-// build's daemon ignores while shutting down. That it is the record's
-// daemon is established as an agent's identity is, by pid and start
-// time: the lock file names the pid on two readings a moment apart (a
-// probe holding the free lock for an instant shows the old content on
-// one), and the process with that pid is a laatmux that started before
-// the record was written, which a pid reused since the daemon died
-// cannot be, since the daemon wrote the record before it died. The
-// wait after the request is for the lock to leave the daemon's hands,
-// released when it exits, reaped or not, or taken by a replacement. No
-// daemon running is not an error.
+// answered the hello: not a pid a file remembers, which a crash can
+// leave for another process to inherit, but for the one exception
+// below. The runtime record is read once and its address dialled, and
+// the daemon that answers must be the one the record names, which its
+// hello's pid says; a socket path is reused by the next daemon, so a
+// record read just before its daemon left can reach the replacement,
+// and then the record is read again. A daemon from before the shutdown
+// message has no pid in its hello and gets SIGTERM at the record's
+// pid, the daemon that answered on the record's address.
+//
+// A daemon that holds the startup lock but cannot be asked is
+// starting, the lock comes before the listener and the record, or it
+// is the record's daemon and is wedged (nothing listens at the record's
+// address, the hello never comes, or it is of another protocol) or
+// shutting down (its listener goes before its runs are stopped, the
+// record standing). The first is kept being tried while it holds the
+// lock. The second gets SIGTERM, the exception: that the pid is that
+// daemon's process is established as an agent's identity is, by pid
+// and start time, not by the files alone. The lock file names the pid
+// on two readings a moment apart (a probe holding the free lock for an
+// instant, or a daemon between taking the lock and rewriting the file,
+// shows the previous content), and the process with that pid is this
+// binary, started no later than the record was written: a pid reused
+// since the daemon died belongs to a process started after the daemon
+// wrote the record. This build's daemon ignores the SIGTERM while it
+// shuts down, since main keeps the signal caught until serve returns.
+// The wait after the request is for the lock to leave the daemon's
+// hands, released when it exits, reaped or not, or taken by a
+// replacement. No daemon running is not an error.
 func cmdStop(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux stop")
 	}
-	deadline := time.Now().Add(stopWait)
+	start := time.Now()
+	deadline := start.Add(stopWait)
+	why := "answers on no socket"
 	for {
 		rt, err := home.ReadRuntime()
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, home.ErrStale) {
@@ -66,17 +72,19 @@ func cmdStop(ctx context.Context, args []string) error {
 		// Every way round the loop is bounded and paced the same: a
 		// record whose daemon is not the one that answers, and a
 		// holder that answers on no socket.
-		why := "answers on no socket"
 		named := err == nil // the record stands and names rt.PID
 		if named {
 			if nc, err := client.DialAddress(rt.Address); err == nil {
-				err := stopDaemon(ctx, nc, rt)
+				err := stopDaemon(ctx, nc, rt, deadline)
 				switch {
 				case errors.Is(err, errMoved):
 					why = fmt.Sprintf("is not the daemon the runtime record names (pid %d)", rt.PID)
 					named = false
+				case errors.Is(err, errNoHello) && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+					// The loop's deadline passed during the hello wait:
+					// reported for what was known before it.
 				case errors.Is(err, errNoHello):
-					why = "gives no hello stop can take (" + errors.Unwrap(err).Error() + ")"
+					why = "gives no hello stop can take (" + strings.TrimPrefix(err.Error(), errNoHello.Error()+": ") + ")"
 				default:
 					return err
 				}
@@ -123,7 +131,10 @@ func cmdStop(ctx context.Context, args []string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, stopWait)
+			if named && holder != rt.PID {
+				return fmt.Errorf("daemon (pid %d) holds the lock while the runtime record's (pid %d) %s, after %s", holder, rt.PID, why, time.Since(start).Round(time.Second))
+			}
+			return fmt.Errorf("daemon (pid %d) holds the lock but %s after %s", holder, why, time.Since(start).Round(time.Second))
 		}
 		select {
 		case <-ctx.Done():
@@ -142,8 +153,10 @@ func isDaemon(rt home.Runtime) bool {
 	if rt.StartedAt.IsZero() {
 		return false
 	}
+	// A second of slack: Linux gives a process's start from the boot
+	// time, which it keeps in whole seconds.
 	p, ok := procs.Lookup(rt.PID)
-	return ok && sameBinary(p.Comm) && !p.Start.After(rt.StartedAt)
+	return ok && sameBinary(p.Comm) && !p.Start.After(rt.StartedAt.Add(time.Second))
 }
 
 // sameBinary reports whether a process's comm is this binary's name,
@@ -169,11 +182,15 @@ var (
 // stopDaemon ends the daemon on nc, the one the runtime record rt was
 // read for, and waits for it to be gone. A hello whose pid is another
 // daemon's is errMoved; a hello without a pid, from a daemon before the
-// field, is taken as the record's when the record still stands.
-func stopDaemon(ctx context.Context, nc net.Conn, rt home.Runtime) error {
-	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+// field, is taken as the record's when the record still stands. The
+// hello is waited for until deadline at most, the loop's, so a daemon
+// that never sends one does not hold stop past it.
+func stopDaemon(ctx context.Context, nc net.Conn, rt home.Runtime, deadline time.Time) error {
+	hctx, cancel := context.WithDeadline(ctx, deadline)
+	c, err := client.Connect(hctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	cancel()
 	if err != nil {
-		return fmt.Errorf("%w: %v", errNoHello, err)
+		return fmt.Errorf("%w: %w", errNoHello, err)
 	}
 	defer c.Close()
 	switch {

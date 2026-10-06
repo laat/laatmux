@@ -26,6 +26,9 @@ func main() {
 	// SIGHUP too: a view in raw mode whose terminal goes away must run
 	// its deferred restore, and a client that loses its terminal
 	// mid-command stops like one that was interrupted.
+	// The signals stay caught until the command returns: a stop's
+	// SIGTERM to a serve already shutting down must not end it before
+	// its runs are stopped (stop.go).
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 	var err error
