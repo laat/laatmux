@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -50,6 +53,63 @@ func rmOnHost(t *testing.T, f *relayFixture, id, branch, root string) {
 	}
 }
 
+// stopFollow cancels the laptop daemon's follow of the host, so only the
+// listings the test makes reach the task, and waits for what the follow
+// had started to end.
+func stopFollow(t *testing.T, f *relayFixture, id string) *mergedHost {
+	t.Helper()
+	f.local.mu.Lock()
+	mh := f.local.mhosts["vm"]
+	mh.cancel()
+	mh.cancel = func() {}
+	f.local.mu.Unlock()
+	awaitRechecks(t, f, id)
+	return mh
+}
+
+// rechecksCreated is the line a goroutine dump has for each goroutine
+// tasksAtLocked started, named from the method so a rename cannot leave
+// awaitRechecks waiting for nothing.
+var rechecksCreated = []byte("created by " + runtime.FuncForPC(reflect.ValueOf((*Daemon).tasksAtLocked).Pointer()).Name() + " ")
+
+// awaitRechecks waits for every goroutine tasksAtLocked started to have
+// run, and then for the task's check to end. A listing is applied under
+// d.mu and reads the records on a goroutine of its own, with no handle
+// to join: one applied before the follow's cancel still clears the
+// task's memo, or starts its check, whenever that goroutine runs, after
+// a listing the test makes included. Once the follow is cancelled only
+// the test starts them, so a goroutine dump without one is the join.
+func awaitRechecks(t *testing.T, f *relayFixture, id string) {
+	t.Helper()
+	buf := make([]byte, 1<<16)
+	for i := 0; ; i++ {
+		n := runtime.Stack(buf, true)
+		for n == len(buf) {
+			buf = make([]byte, 2*len(buf))
+			n = runtime.Stack(buf, true)
+		}
+		if !bytes.Contains(buf[:n], rechecksCreated) {
+			break
+		}
+		if i > 500 {
+			t.Fatal("a listing's rechecks did not run")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for i := 0; ; i++ {
+		f.local.relay.mu.Lock()
+		busy := f.local.relay.checking[id]
+		f.local.relay.mu.Unlock()
+		if !busy {
+			return
+		}
+		if i > 500 {
+			t.Fatalf("%s's check did not end", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // A task that needs the user, its worktree removed afterwards: the
 // host's report of the removal, which the laptop daemon follows while a
 // view is subscribed, has the host asked again, and the task is gone
@@ -76,10 +136,7 @@ func TestRelayListedTaskGoneOnListing(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	p := notDelivered(t, f, "n2", "missed")
-	f.local.mu.Lock()
-	f.local.mhosts["vm"].cancel()
-	f.local.mhosts["vm"].cancel = func() {}
-	f.local.mu.Unlock()
+	stopFollow(t, f, "n2")
 	rmOnHost(t, f, "rm-n2", "missed", p.Root)
 	time.Sleep(200 * time.Millisecond)
 	if got, _ := f.local.relay.get("n2"); got.Gone {
@@ -144,11 +201,7 @@ func TestRelayGoneOnListingStamp(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	p := notDelivered(t, f, "n4", "stamp")
-	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
-	f.local.mu.Unlock()
+	mh := stopFollow(t, f, "n4")
 	rmOnHost(t, f, "rm-n4", "stamp", p.Root)
 	f.local.mu.Lock()
 	delete(mh.worktrees, p.WorktreeID())
@@ -185,31 +238,26 @@ func TestRelayDismissAtKeepsRunning(t *testing.T) {
 
 // A listing that lacks the worktree while the host still has it, a
 // merged record that fell behind say, is asked about and leaves the
-// task as it was; the same listing again starts no second check.
+// task as it was; the same listing again starts no second check, until
+// a listing that shows the worktree has the task forget it.
 func TestRelayNotGoneWhilePresent(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
 	c, _, _ := f.merged(t)
 	defer c.Close()
-	notDelivered(t, f, "n5", "present")
+	p := notDelivered(t, f, "n5", "present")
+	memo := func() string {
+		f.local.relay.mu.Lock()
+		defer f.local.relay.mu.Unlock()
+		return f.local.relay.checked["n5"]
+	}
 	// Only the listings below reach the task: the host's own polls,
 	// which show the worktree, would clear its memo.
+	mh := stopFollow(t, f, "n5")
 	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
 	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
-	time.Sleep(time.Second)
-	for i := 0; i < 100; i++ {
-		f.local.relay.mu.Lock()
-		busy := f.local.relay.checking["n5"]
-		f.local.relay.mu.Unlock()
-		if !busy {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	awaitRechecks(t, f, "n5")
 	if got, _ := f.local.relay.get("n5"); got.Gone {
 		t.Fatal("gone while the host lists the worktree")
 	}
@@ -228,31 +276,29 @@ func TestRelayNotGoneWhilePresent(t *testing.T) {
 	f.local.mu.Lock()
 	f.local.hostListedLocked("henv", map[string]bool{"henv/worktree//elsewhere": true}, false)
 	f.local.mu.Unlock()
-	for i := 0; ; i++ {
-		f.local.relay.mu.Lock()
-		sig = f.local.relay.checked["n5"]
-		f.local.relay.mu.Unlock()
-		if sig == "henv\x00henv/worktree//elsewhere" {
-			break
-		}
-		if i > 200 {
-			t.Fatalf("a changed listing was not checked: %q", sig)
-		}
-		time.Sleep(10 * time.Millisecond)
+	awaitRechecks(t, f, "n5")
+	if sig := memo(); sig != "henv\x00henv/worktree//elsewhere" {
+		t.Fatalf("a changed listing was not checked: %q", sig)
 	}
-	for i := 0; i < 200; i++ {
-		f.local.relay.mu.Lock()
-		busy := f.local.relay.checking["n5"]
-		f.local.relay.mu.Unlock()
-		if !busy {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// One that shows it has the task forget that, and the same listing
+	// that lacks it is checked again.
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{p.WorktreeID(): true, "henv/worktree//elsewhere": true}, false)
+	f.local.mu.Unlock()
+	awaitRechecks(t, f, "n5")
+	if sig := memo(); sig != "" {
+		t.Fatalf("a listing that shows the worktree kept the memo: %q", sig)
+	}
+	f.local.mu.Lock()
+	f.local.hostListedLocked("henv", map[string]bool{"henv/worktree//elsewhere": true}, false)
+	f.local.mu.Unlock()
+	awaitRechecks(t, f, "n5")
+	if sig := memo(); sig != "henv\x00henv/worktree//elsewhere" {
+		t.Fatalf("the listing was not checked again: %q", sig)
 	}
 	// Then the worktree goes while the connection is down, and the
 	// reconnect's snapshot reads as the listing already checked against:
 	// a fresh listing is checked all the same.
-	p, _ := f.local.relay.get("n5")
 	rmOnHost(t, f, "rm-n5", "present", p.Root)
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1, Revision: 9}, Worktrees: []protocol.Worktree{{ID: "henv/worktree//elsewhere", EnvironmentID: "henv", Root: "/elsewhere"}}})
 	f.awaitRecord(t, "n5", 30*time.Second, func(p pendingFile) bool { return p.Gone })
@@ -267,11 +313,7 @@ func TestRelaySnapshotNeedsListing(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	p := notDelivered(t, f, "n7", "snap")
-	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
-	f.local.mu.Unlock()
+	mh := stopFollow(t, f, "n7")
 	rmOnHost(t, f, "rm-n7", "snap", p.Root)
 	f.local.applyRemote(f.ctx, mh, protocol.Message{Type: protocol.TypeSnapshot})
 	// Nor one with the last good stamp and the current poll's error.
@@ -295,12 +337,10 @@ func TestRelayGoneAgainstSeenListing(t *testing.T) {
 	f.local.mu.Lock()
 	f.local.hostListedLocked("henv", map[string]bool{}, false)
 	f.local.mu.Unlock()
+	// Seen before the task is made: the listing's goroutine has run.
+	awaitRechecks(t, f, "n6")
 	p := notDelivered(t, f, "n6", "seen")
-	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
-	f.local.mu.Unlock()
+	stopFollow(t, f, "n6")
 	rmOnHost(t, f, "rm-n6", "seen", p.Root)
 	f.local.mu.Lock()
 	f.local.hostListedLocked("henv", map[string]bool{}, false)
@@ -356,16 +396,12 @@ func TestRelayFreshStampAfterUnstampedSnapshot(t *testing.T) {
 	c, _, _ := f.merged(t)
 	defer c.Close()
 	p := notDelivered(t, f, "n8", "fresh")
-	f.local.mu.Lock()
-	mh := f.local.mhosts["vm"]
-	mh.cancel()
-	mh.cancel = func() {}
-	f.local.mu.Unlock()
 	// The task was checked against a listing without its worktree, and
-	// found present. A poll's goroutine queued before the cancel could
-	// clear the memo, so they run out first, and the memo is confirmed
-	// set just before the snapshot, or the test would not be about it.
-	time.Sleep(300 * time.Millisecond)
+	// found present. The follow's listings, which show the worktree,
+	// would clear the memo; stopFollow waits for the last of them, and
+	// the memo is confirmed set just before the snapshot, or the test
+	// would not be about it.
+	mh := stopFollow(t, f, "n8")
 	f.local.relay.mu.Lock()
 	f.local.relay.checked["n8"] = "henv\x00"
 	f.local.relay.mu.Unlock()
