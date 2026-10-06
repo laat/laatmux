@@ -1091,14 +1091,27 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	f.remote.down = nil
 	f.remote.mu.Unlock()
 	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
+	// The add is held at its launch until the dismiss has answered. An
+	// add with its outcome is dismissable, and its settle reads the host
+	// as well and could take the gone read meant for the dismiss; held,
+	// it has no outcome and its runner reads nothing.
+	release := make(chan struct{})
+	f.ft.set(func() { f.ft.newHold = release })
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s2", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "back", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
-	f.hosts.setFlip(1) // gone for the first read, back for the next
+	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
+	f.hosts.mu.Lock()
+	flip := f.hosts.flip
+	f.hosts.mu.Unlock()
+	close(release)
 	if res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss with the host back %+v", res)
+	}
+	if flip != 0 {
+		t.Fatal("the dismiss never read the host as gone")
 	}
 	if got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.retired() }); !got.OK {
 		t.Fatalf("record after the restart %+v", got)

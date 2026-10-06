@@ -38,6 +38,7 @@ type fakeServer struct {
 	pasteErr  error
 	pasteHold chan struct{} // when set, Paste blocks until it closes
 	newErr    error
+	newHold   chan struct{} // when set, NewSession blocks until it closes or ctx ends
 	buffers   []string
 	selected  []string   // panes SelectPane was asked for
 	cmds      [][]string // the Cmd of every NewSession
@@ -100,7 +101,17 @@ func (f *fakeServer) SendKeys(_ context.Context, pane string, keys ...string) er
 	}
 	return nil
 }
-func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.Session, error) {
+func (f *fakeServer) NewSession(ctx context.Context, o tmux.NewSessionOpts) (tmux.Session, error) {
+	f.mu.Lock()
+	hold := f.newHold
+	f.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return tmux.Session{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cmds = append(f.cmds, append([]string(nil), o.Cmd...))
