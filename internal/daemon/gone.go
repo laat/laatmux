@@ -26,8 +26,9 @@ import (
 
 // tasksAtLocked schedules the check for every listed task that match
 // selects, against the listing sig names, "" for a reported removal or a
-// fresh listing, which always checks. Called with d.mu held; the relay's mutex comes
-// before d.mu, so the records are read on a goroutine of their own.
+// fresh listing, which always checks. Called with d.mu held; the relay's
+// mutex comes before d.mu (see the lock order on Daemon), so the records
+// are read on a goroutine of their own.
 func (d *Daemon) tasksAtLocked(sig string, match, shown func(protocol.Pending) bool) {
 	if d.relay == nil {
 		return
