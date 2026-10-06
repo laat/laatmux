@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +422,78 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 	err := &Error{Args: []string{"set-option", "@a", ";", Next, "set-option", "@b", "x"}, Msg: "m"}
 	if got, want := err.Error(), "tmux set-option @a ; ; set-option @b x: m"; got != want {
 		t.Errorf("Error = %q, want %q", got, want)
+	}
+}
+
+// No Go file of the module passes a bare ";" where tmux arguments are
+// built: args writes it as the value ";", so a caller that separated
+// two commands with it would give the first an argument too many, which
+// tmux refuses and only a test on a real server running that very
+// sequence notices. A ";" is caught as an argument of Run, RunInput,
+// ArgsBare or append, or as an element of a slice literal; the strings
+// package's Split and the like are not matched. The module's test files
+// are left out, since the tests here pass ";" as a value on purpose.
+func TestNoBareSeparator(t *testing.T) {
+	root := filepath.Join("..", "..")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	bare := func(e ast.Expr) bool {
+		lit, ok := e.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return false
+		}
+		v, err := strconv.Unquote(lit.Value)
+		return err == nil && v == ";"
+	}
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// A dot directory holds other checkouts, .git's and the
+			// agents' worktrees, not this module's code.
+			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			var list []ast.Expr
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				switch fn := n.Fun.(type) {
+				case *ast.Ident:
+					if fn.Name == "append" {
+						list = n.Args
+					}
+				case *ast.SelectorExpr:
+					if fn.Sel.Name == "Run" || fn.Sel.Name == "RunInput" || fn.Sel.Name == "ArgsBare" {
+						list = n.Args
+					}
+				}
+			case *ast.CompositeLit:
+				list = n.Elts
+			}
+			for _, e := range list {
+				if bare(e) {
+					t.Errorf("%s: a bare \";\" passed as a tmux argument; separate commands with tmux.Next", fset.Position(e.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -84,7 +84,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		t.Helper()
 		out, err := workspace.Server.Run(ctx, args...)
 		if err != nil {
-			t.Fatalf("%v: %v", args, err)
+			t.Fatal(err)
 		}
 		return strings.TrimSpace(string(out))
 	}
