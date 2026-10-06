@@ -2,9 +2,8 @@ name: herdr manifests
 
 # Copies the manifests in internal/detect/manifests, and herdr's LICENSE,
 # from herdr's master. When they differ from main, the job pushes the
-# herdr-manifests branch, opens a pull request or updates the open one, and
-# starts CI on the branch: a push made with GITHUB_TOKEN starts no workflow
-# by itself, a dispatch does.
+# herdr-manifests branch and opens a pull request or updates the open one.
+# CI on that pull request waits for a maintainer to approve the run.
 
 on:
   schedule:
@@ -29,7 +28,6 @@ jobs:
     permissions:
       contents: write # push the branch
       pull-requests: write # open or edit the pull request
-      actions: write # dispatch CI
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: herdr-manifests
@@ -83,7 +81,7 @@ jobs:
 
           The detect tests fail on a manifest with a key the port does not know, a pattern RE2 rejects, a \`min_engine_version\` above 3 or a region selector the port lacks. They do not catch a change in what a rule means; read the diff before merging.
 
-          CI was started by dispatch from the herdr manifests workflow.
+          CI on this pull request starts once a maintainer approves the workflow run.
           EOF
           )
           if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
@@ -91,4 +89,3 @@ jobs:
           else
             gh pr create --head "$BRANCH" --base main --title "$title" --body "$body"
           fi
-          gh workflow run ci.yaml --ref "$BRANCH"
