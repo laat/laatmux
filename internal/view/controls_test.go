@@ -783,8 +783,9 @@ func TestStripDimChip(t *testing.T) {
 // colours, dark, light or on a guessed background, and faint without
 // them, a token's colour and a style's dropped, bold kept, no
 // background, and the viewer's own label in its colour, not faint. A
-// fresh row's dim token stays faint in the terminal's colour, on its
-// chip as on its line.
+// template's text in the label's colour is not the label: dimmed as
+// any other. A fresh row's dim token stays faint in the terminal's
+// colour, on its chip as on its line.
 func TestStripDimChipAsLine(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	dark, _ := palette.New(true, nil)
@@ -827,10 +828,11 @@ func TestStripDimChipAsLine(t *testing.T) {
 	guessed := dark
 	guessed.Guessed = true
 	themes := map[string]palette.Theme{"dark": dark, "light": light, "guessed": guessed, "mono": mono}
+	const tinted = "#[fg=current_worktree_fg]x {primary}"
 	// The dead agent's icon is blank; the down host's agent shows the
 	// spinner standing still, in the working colour.
 	for _, name := range []string{"dead", "down"} {
-		for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}"} {
+		for _, src := range []string{"{primary}", "#[bg=#ffff00]{status_icon} #[fg=accent]{primary} #[bold]@{host}", tinted} {
 			for _, current := range []bool{false, true} {
 				line, chip := both(src, name, current)
 				if !line.Dim {
@@ -858,6 +860,26 @@ func TestStripDimChipAsLine(t *testing.T) {
 		}
 		if got := ANSI(chip, c.th); !strings.HasPrefix(got, c.want) {
 			t.Errorf("mono %v: the dim chip %q, want its line's %q", c.th.Mono, got, c.want)
+		}
+	}
+	// The x the template gives the label's colour is dimmed, on a row
+	// not the viewer's and on the viewer's own, where the label alone
+	// keeps the colour and is not faint. The chips draw as these lines,
+	// above.
+	dim, label := dark.SGR(palette.Dimmed, false), dark.SGR(palette.CurrentWorktreeFg, false)
+	for _, c := range []struct {
+		current bool
+		th      palette.Theme
+		want    string
+	}{
+		{false, dark, "\x1b[2m" + dim + "x dead\x1b[0m"},
+		{false, mono, "\x1b[2mx dead\x1b[0m"},
+		{true, dark, "\x1b[2m" + dim + "x \x1b[22m\x1b[1m" + label + "dead\x1b[0m"},
+		{true, mono, "\x1b[2mx \x1b[22m\x1b[1mdead\x1b[0m"},
+	} {
+		line, _ := both(tinted, "dead", c.current)
+		if got := ANSI(line, c.th); !strings.HasPrefix(got, c.want) {
+			t.Errorf("current %v, mono %v: the dim line %q, want %q", c.current, c.th.Mono, got, c.want)
 		}
 	}
 	line, chip = both("{primary} @{host}", "remote-notes", false)

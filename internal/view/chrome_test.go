@@ -69,7 +69,7 @@ func TestAgentIconFor(t *testing.T) {
 	if got := ANSI(Line{Spans: []Span{{Text: "CC", Fg: "#d97757"}}}, th); !strings.Contains(got, "\x1b[38;2;217;119;87mCC") {
 		t.Errorf("an agent's own colour: %q", got)
 	}
-	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg}}}, th); !strings.Contains(got, th.SGR(palette.CurrentWorktreeFg, false)+"me") {
+	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg, label: true}}}, th); !strings.Contains(got, th.SGR(palette.CurrentWorktreeFg, false)+"me") {
 		t.Errorf("the viewer's label on a dim line: %q", got)
 	}
 }
@@ -236,7 +236,7 @@ func TestChromeEdges(t *testing.T) {
 	if got := ANSI(Line{Spans: []Span{{Text: "─", Fg: palette.Border, Dim: true}}}, palette.Mono()); !strings.Contains(got, "\x1b[2m") {
 		t.Errorf("divider without colours not faint: %q", got)
 	}
-	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg}}}, th); !strings.Contains(got, "\x1b[22m\x1b[1m"+th.SGR(palette.CurrentWorktreeFg, false)+"me") {
+	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg, label: true}}}, th); !strings.Contains(got, "\x1b[22m\x1b[1m"+th.SGR(palette.CurrentWorktreeFg, false)+"me") {
 		t.Errorf("the viewer's label on a dim line: %q", got)
 	}
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
