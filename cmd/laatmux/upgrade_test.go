@@ -445,6 +445,8 @@ func testDaemon(mode string) {
 		// the record's address, or one that accepts and never answers;
 		// -old writes a record without the start, as an older build.
 		err = wedgedServe(ctx, mode != "nolisten", mode == "wedged-old")
+	case "absent":
+		// Nothing: a start that never comes up.
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
