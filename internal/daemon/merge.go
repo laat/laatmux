@@ -662,15 +662,14 @@ func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
 	}
 }
 
-// logOnce logs a message once per change of its text, keeping the text in
-// last so a repeating failure is one line, and reports whether it logged,
-// for a caller that publishes the change too.
+// logOnce is logOnce with the daemon's logger.
 func (d *Daemon) logOnce(last *string, format string, err error) bool {
 	return logOnce(d.cfg.Logger, last, format, err)
 }
 
-// logOnce is Daemon.logOnce for a part of the daemon with a logger of
-// its own.
+// logOnce logs a message once per change of its text, keeping the text in
+// last so a repeating failure is one line, and reports whether it logged,
+// for a caller that publishes the change too.
 func logOnce(logger *log.Logger, last *string, format string, err error) bool {
 	msg := err.Error()
 	if msg == *last {
