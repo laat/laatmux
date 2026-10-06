@@ -49,7 +49,7 @@ func TestLockExcludesSecondOwner(t *testing.T) {
 	} else if want := fmt.Sprintf("daemon lock held by pid %d", cmd.Process.Pid); !strings.Contains(err.Error(), want) {
 		t.Fatalf("second owner: %v, want %q", err, want)
 	}
-	if took := time.Since(start); took < lockRetry || took > time.Second {
+	if took := time.Since(start); took < lockTries*lockPause || took > time.Second {
 		t.Errorf("second owner told after %s", took)
 	}
 	cmd.Wait()
@@ -92,7 +92,12 @@ func TestTryLockOutlastsAProbe(t *testing.T) {
 		_, err := Holder()
 		probeDone <- err
 	}()
-	<-inProbe
+	select {
+	case <-inProbe:
+	case err := <-probeDone:
+		probeDone <- err // for the deferred receive
+		t.Fatalf("the probe let go before a start could try: %v", err)
+	}
 	l, err := TryLock()
 	if err != nil {
 		t.Fatalf("a start during a probe of the free lock: %v", err)
