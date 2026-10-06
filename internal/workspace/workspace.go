@@ -223,11 +223,11 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	}
 	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
 	if s.Key != "" {
-		args = append(args, ";", "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", s.Key)
+		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", s.Key)
 	} else {
-		args = append(args, ";", "set-option", "-t", sessionTarget(s.Name), "@laatmux_attach", attach)
+		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_attach", attach)
 	}
-	args = append(args, ";")
+	args = append(args, tmux.Next)
 	args = append(args, tagArgs(s.Name, s)...)
 	out, err := Server.Run(ctx, args...)
 	if err != nil {
@@ -267,7 +267,7 @@ func adopt(ctx context.Context, name string, s Spec) error {
 		}
 	}
 	args := []string{"set-option", "-t", sessionTarget(name), "@laatmux_workspace", s.Key,
-		";", "set-option", "-u", "-t", sessionTarget(name), "@laatmux_attach", ";"}
+		tmux.Next, "set-option", "-u", "-t", sessionTarget(name), "@laatmux_attach", tmux.Next}
 	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
 		return err
 	}
@@ -285,9 +285,9 @@ const placeholder = "sleep 2147483647"
 // command, in one tmux command sequence.
 func startAttach(ctx context.Context, paneID string, s Spec) error {
 	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "remain-on-exit", "on",
-		";", "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
-		";", "set-option", "-p", "-t", paneID, "@laatmux_attach_target", s.Managed,
-		";", "respawn-pane", "-k", "-t", paneID, AttachCommand(s.Host, s.Managed))
+		tmux.Next, "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
+		tmux.Next, "set-option", "-p", "-t", paneID, "@laatmux_attach_target", s.Managed,
+		tmux.Next, "respawn-pane", "-k", "-t", paneID, AttachCommand(s.Host, s.Managed))
 	return err
 }
 
@@ -319,10 +319,10 @@ func tagArgs(name string, s Spec) []string {
 	target := sessionTarget(name)
 	args := []string{"set-option", "-t", target, "@laatmux_host", s.Host.Name}
 	if s.Key != "" && s.Source != "" {
-		args = append(args, ";", "set-option", "-t", target, "@laatmux_repo", s.Source)
+		args = append(args, tmux.Next, "set-option", "-t", target, "@laatmux_repo", s.Source)
 	}
 	if s.Key != "" && s.Branch != "" {
-		args = append(args, ";", "set-option", "-t", target, "@laatmux_branch", s.Branch)
+		args = append(args, tmux.Next, "set-option", "-t", target, "@laatmux_branch", s.Branch)
 	}
 	return args
 }
@@ -347,7 +347,7 @@ func ensureAttach(ctx context.Context, name string, s Spec) error {
 		}
 		if f[1] == "1" || (f[3] != "" && f[3] != s.Managed) {
 			_, err := Server.Run(ctx, "set-option", "-p", "-t", f[0], "@laatmux_attach_target", s.Managed,
-				";", "respawn-pane", "-k", "-t", f[0], AttachCommand(s.Host, s.Managed))
+				tmux.Next, "respawn-pane", "-k", "-t", f[0], AttachCommand(s.Host, s.Managed))
 			return err
 		}
 		return nil

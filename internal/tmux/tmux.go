@@ -81,16 +81,24 @@ func (s Server) Label() string {
 	return "current"
 }
 
+// Next separates two commands of one tmux invocation: callers pass it
+// between them, and args writes it as the bare ";" tmux takes for a
+// command separator. A ";" a caller passes is a value, a branch named
+// ";" say, and is written "\;", which tmux reads as that ";"; so a
+// separator cannot be passed as ";". Next has a NUL byte in it, which
+// no argument of a command can have, so it is never a value.
+const Next = "\x00;"
+
 // args is the argv after "tmux": the server's selector, then the
 // command. tmux takes an argument that ends in ";" as the argument
 // before it followed by a command separator, so a root or an option
 // value that ends in one would be cut there and split the sequence, and
-// it takes a "\;" at the end as a literal ";". Every argument that ends
-// in ";" but a bare ";", which is how callers separate commands, gets a
-// backslash before that last ";"; one that ends in "\;" becomes "\\;",
-// which tmux reads back as "\;". The selector is read by tmux's option
-// parser, which takes it as it is; so is a global flag a caller puts
-// before the command, -f /dev/null, which never ends in ";".
+// it takes a "\;" at the end as a literal ";". Next is written ";";
+// every other argument that ends in ";", a bare ";" included, gets a
+// backslash before that last ";", and one that ends in "\;" becomes
+// "\\;", which tmux reads back as "\;". The selector is read by tmux's
+// option parser, which takes it as it is; so is a global flag a caller
+// puts before the command, -f /dev/null, which never ends in ";".
 func (s Server) args(a ...string) []string {
 	var pre []string
 	switch {
@@ -101,7 +109,10 @@ func (s Server) args(a ...string) []string {
 	}
 	out := append(make([]string, 0, len(pre)+len(a)), pre...)
 	for _, v := range a {
-		if v != ";" && strings.HasSuffix(v, ";") {
+		switch {
+		case v == Next:
+			v = ";"
+		case strings.HasSuffix(v, ";"):
 			v = v[:len(v)-1] + `\;`
 		}
 		out = append(out, v)
@@ -146,7 +157,18 @@ type Error struct {
 	Msg  string
 }
 
-func (e *Error) Error() string { return "tmux " + strings.Join(e.Args, " ") + ": " + e.Msg }
+// Error names the command as the caller gave it, each Next written as
+// the ";" it stands for.
+func (e *Error) Error() string {
+	a := make([]string, len(e.Args))
+	for i, v := range e.Args {
+		if v == Next {
+			v = ";"
+		}
+		a[i] = v
+	}
+	return "tmux " + strings.Join(a, " ") + ": " + e.Msg
+}
 
 // NoServer reports whether the error means the server is not running. tmux
 // says "no server running on <path>" when the socket is missing, and "error
@@ -375,7 +397,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		// as it runs; a new-session that started it would leave the
 		// agent's command, a prompt included, on the process list for
 		// the server's lifetime rather than the agent's.
-		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err != nil {
 			return made, err
 		}
 	}
@@ -406,7 +428,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		opts = append(opts, [2]string{"@laatmux_host", o.Host})
 	}
 	for _, kv := range opts {
-		args = append(args, ";", "set-option", "-p", "-t", target, kv[0], kv[1])
+		args = append(args, Next, "set-option", "-p", "-t", target, kv[0], kv[1])
 	}
 	// From here on the session may exist whatever the error: the
 	// sequence runs to completion once submitted, and the steps after

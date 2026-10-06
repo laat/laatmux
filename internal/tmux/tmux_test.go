@@ -158,7 +158,7 @@ func TestListPanesEmptyServer(t *testing.T) {
 	if _, err := s.ListPanes(ctx); !NoServer(err) {
 		t.Fatalf("not running: %v", err)
 	}
-	if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+	if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Run(ctx, "kill-server") })
@@ -180,7 +180,7 @@ func startManaged(t *testing.T) Server {
 	s := LaatmuxServer
 	var err error
 	for i := 0; i < 50; i++ {
-		if _, err = s.Run(context.Background(), "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err == nil {
+		if _, err = s.Run(context.Background(), "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err == nil {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -392,14 +392,16 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 	}
 }
 
-// Every argument that ends in ; but a bare ;, the separator, gets a
-// backslash before that last ;, the attach and bare lines' arguments
-// as well; the selector does not, and the caller's slice is left as it
-// is. The new-session test below checks with tmux.
+// Next is written as a bare ;, the separator, and every other argument
+// that ends in ;, a bare ; among them, gets a backslash before that
+// last ;, the attach and bare lines' arguments as well; the selector
+// does not, and the caller's slice is left as it is. An error names a
+// Next as the ; it stands for. The new-session test below checks with
+// tmux.
 func TestArgsEscapeTrailingSemicolon(t *testing.T) {
-	in := []string{"set-option", "@a", "x;", ";", "set-option", "@b", `x\;`, ";", "a;b", "x;;", `\;`, ";x", "x"}
+	in := []string{"set-option", "@a", "x;", Next, "set-option", "@b", `x\;`, Next, "set-option", "@c", ";", Next, "a;b", "x;;", `\;`, ";x", "x"}
 	keep := append([]string(nil), in...)
-	want := []string{"-S", "/s;", "set-option", "@a", `x\;`, ";", "set-option", "@b", `x\\;`, ";", "a;b", `x;\;`, `\\;`, ";x", "x"}
+	want := []string{"-S", "/s;", "set-option", "@a", `x\;`, ";", "set-option", "@b", `x\\;`, ";", "set-option", "@c", `\;`, ";", "a;b", `x;\;`, `\\;`, ";x", "x"}
 	if got := (Server{Path: "/s;"}).args(in...); !slices.Equal(got, want) {
 		t.Errorf("args = %q, want %q", got, want)
 	}
@@ -409,8 +411,12 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 	if got := LaatmuxServer.AttachArgsBare("x;"); !slices.Equal(got, []string{"-L", "laatmux", "attach-session", "-t", `=x\;`}) {
 		t.Errorf("AttachArgsBare = %q", got)
 	}
-	if got := (Server{}).ArgsBare("has-session", "-t", "=x;"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`}) {
+	if got := (Server{}).ArgsBare("has-session", "-t", "=x;", Next, "set-option", "@b", ";"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`, ";", "set-option", "@b", `\;`}) {
 		t.Errorf("ArgsBare = %q", got)
+	}
+	err := &Error{Args: []string{"set-option", "@a", ";", Next, "set-option", "@b", "x"}, Msg: "m"}
+	if got, want := err.Error(), "tmux set-option @a ; ; set-option @b x: m"; got != want {
+		t.Errorf("Error = %q, want %q", got, want)
 	}
 }
 
@@ -418,13 +424,15 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 // the sequence goes on past them: tmux takes an argument that ends in ;
 // as the text before it followed by a separator, so new-session -c with
 // such a root failed on the next flag, and an option value was cut with
-// no error. One that ends in \; keeps its backslash, and a root that
-// ends in #; is written ##\; for -c, which tmux reads back as ##; and
-// expands to #;.
+// no error. One that ends in \; keeps its backslash, a root that ends
+// in #; is written ##\; for -c, which tmux reads back as ##; and
+// expands to #;, and a bare ;, a branch named ;, is a value: passed as
+// the separator, it left the branch tag with no value, which tmux
+// refused.
 func TestSemicolonArgumentsReachTmux(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
-	for i, leaf := range []string{"semi;", `bs\;`, "x;;", "x#;"} {
+	for i, leaf := range []string{"semi;", `bs\;`, "x;;", "x#;", ";"} {
 		root := filepath.Join(t.TempDir(), "proj", leaf)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
@@ -457,8 +465,8 @@ func TestSemicolonArgumentsReachTmux(t *testing.T) {
 		// whose last command runs only if the separators still work.
 		target := "=" + name + ":"
 		if _, err := s.Run(ctx, "set-option", "-t", target, "@laatmux_workspace", "env/"+root,
-			";", "set-option", "-t", target, "@laatmux_branch", leaf,
-			";", "set-option", "-t", target, "@laatmux_repo", "after"); err != nil {
+			Next, "set-option", "-t", target, "@laatmux_branch", leaf,
+			Next, "set-option", "-t", target, "@laatmux_repo", "after"); err != nil {
 			t.Fatalf("%s: %v", leaf, err)
 		}
 		for opt, want := range map[string]string{"@laatmux_workspace": "env/" + root, "@laatmux_branch": leaf, "@laatmux_repo": "after"} {

@@ -90,7 +90,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 	}
 	// A pane started without a command runs sleep, not the user's
 	// shell, whose startup could change directory.
-	run("set-option", "-g", "default-shell", "/bin/sh", ";", "set-option", "-g", "default-command", "exec sleep 1000")
+	run("set-option", "-g", "default-shell", "/bin/sh", tmux.Next, "set-option", "-g", "default-command", "exec sleep 1000")
 	t.Setenv("TMUX", run("display-message", "-p", "#{socket_path}")+",0,0")
 	panes := func(session string) map[string]bool {
 		t.Helper()
@@ -162,7 +162,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		// A workspace session of the local host's, its pane anywhere.
 		ws := fmt.Sprintf("ws%d", i)
 		pane = run("new-session", "-d", "-s", ws, "-P", "-F", "#{pane_id}", "sleep 1000")
-		run("set-option", "-t", "="+ws+":", "@laatmux_workspace", protocol.SessionKey("menv", root), ";", "set-option", "-t", "="+ws+":", "@laatmux_host", "mac")
+		run("set-option", "-t", "="+ws+":", "@laatmux_workspace", protocol.SessionKey("menv", root), tmux.Next, "set-option", "-t", "="+ws+":", "@laatmux_host", "mac")
 		before = panes(ws)
 		if err := cmdSplit(ctx, []string{"-v", pane}); err != nil {
 			t.Fatalf("%s: workspace split: %v", branch, err)
@@ -182,7 +182,7 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 		remote := tmux.ShellJoin([]string{"cd", root}) + ` && exec "$SHELL" -l`
 		ws = fmt.Sprintf("vm%d", i)
 		pane = run("new-session", "-d", "-s", ws, "-P", "-F", "#{pane_id}", "sleep 1000")
-		run("set-option", "-t", "="+ws+":", "@laatmux_workspace", protocol.SessionKey("venv", root), ";", "set-option", "-t", "="+ws+":", "@laatmux_host", "vm")
+		run("set-option", "-t", "="+ws+":", "@laatmux_workspace", protocol.SessionKey("venv", root), tmux.Next, "set-option", "-t", "="+ws+":", "@laatmux_host", "vm")
 		if err := cmdSplit(ctx, []string{"-h", pane}); err != nil {
 			t.Fatalf("%s: remote split: %v", branch, err)
 		}

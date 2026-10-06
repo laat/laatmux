@@ -44,7 +44,7 @@ func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	} else {
 		cmd = append(cmd, workspace.ShellCommand(h.Host, root))
 	}
-	cmd = append(cmd, ";", "set-option", "-w", "-t", sessionTarget, "@laatmux_shell", "1")
+	cmd = append(cmd, tmux.Next, "set-option", "-w", "-t", sessionTarget, "@laatmux_shell", "1")
 	_, err = workspace.Server.Run(ctx, cmd...)
 	return err
 }
