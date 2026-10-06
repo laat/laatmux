@@ -467,16 +467,20 @@ func staleMark(left, right []item, stale, back bool) {
 }
 
 // styled is a span with a style's settings where the span has none of
-// its own.
+// its own; a stale span takes the background alone: stale wins over
+// the style's colour and bold.
 func styled(sp Span, st style) Span {
 	if sp.own {
 		return sp
 	}
-	if sp.Fg == "" {
-		sp.Fg = st.fg
-	}
 	if sp.Bg == "" {
 		sp.Bg = st.bg
+	}
+	if sp.stale {
+		return sp
+	}
+	if sp.Fg == "" {
+		sp.Fg = st.fg
 	}
 	sp.Bold = sp.Bold || st.bold
 	sp.Dim = sp.Dim || st.dim
