@@ -377,6 +377,8 @@ func TestDimOnBackground(t *testing.T) {
 		{"#[bg=colour235]{host}", dark, lightDim + "\x1b[48;5;235mvm\x1b[0m\x1b[0m"},
 		{"#[bg=230]{host}", dark, darkDim + "\x1b[48;5;230mvm\x1b[0m\x1b[0m"},
 		{"#[bg=colour3]{host}", dark, "\x1b[2m\x1b[48;5;3mvm\x1b[0m\x1b[0m"},
+		// Bold keeps its bold.
+		{"#[bold,bg=#ffff00]{host}", dark, "\x1b[1m" + darkDim + yellow + "vm\x1b[0m\x1b[0m"},
 		// A colour of the span's own is drawn as it is.
 		{"#[fg=accent,dim,bg=#ffff00]x", dark, dark.SGR(palette.Accent, false) + yellow + "x\x1b[0m\x1b[0m"},
 	} {
@@ -618,7 +620,7 @@ func TestConfiguredTemplates(t *testing.T) {
 		t.Errorf("a background under the band in %q", s)
 	}
 	l = Line{Spans: []Span{{Text: "x", Bg: palette.Accent, Dim: true}}}
-	if s := ANSI(l, th); !strings.Contains(s, th.DimmedOn(palette.Accent)+th.SGR(palette.Accent, true)) {
+	if s := ANSI(l, th); !strings.Contains(s, th.DimmedOn(palette.Accent)+th.SGR(palette.Accent, true)) || strings.Contains(s, "\x1b[2m") {
 		t.Errorf("dim with a background in %q", s)
 	}
 	// A dim line draws no background.

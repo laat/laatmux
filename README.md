@@ -1146,8 +1146,9 @@ alike; only the lines it leaves differ.
   colour and bold, so the token reads dim and plain whatever the
   template says. The padding `{fill}` takes the style in force at the
   fill, and a background gives way to the selection's band. Dim text
-  with no colour of its own on a style's background, a stale token, a
-  remote host, a draft's number or `#[dim]` text, is not faint in the
+  with no colour on a style's background, neither its own nor the
+  style's (a stale token always; a remote host, a draft's number or
+  `#[dim]` text under a style without `fg`), is not faint in the
   terminal's colour, which can vanish on the background, but drawn in
   the `dimmed` that reads on it: of the theme's `dimmed` and the dark
   and light defaults' (`#565f89`, `#8990b3`), the one with the most

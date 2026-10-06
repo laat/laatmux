@@ -56,13 +56,13 @@ func TestTheme(t *testing.T) {
 	}
 }
 
-// Luminance is WCAG's, of a colour's own red, green and blue or an
+// The luminance is WCAG's, of a colour's own red, green and blue or an
 // indexed colour's by xterm's formula: the cube from 16, the greys from
 // 232; none for 0 to 15. The contrast ratios are #152's table.
 func TestLuminance(t *testing.T) {
 	lum := func(s string) float64 {
 		t.Helper()
-		l, ok := hex(s).Luminance()
+		l, ok := hex(s).luminance()
 		if !ok {
 			t.Fatalf("%q: no luminance", s)
 		}
@@ -82,7 +82,7 @@ func TestLuminance(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"0", "7", "15"} {
-		if _, ok := hex(s).Luminance(); ok {
+		if _, ok := hex(s).luminance(); ok {
 			t.Errorf("colour %s has a luminance", s)
 		}
 	}
@@ -95,10 +95,10 @@ func TestLuminance(t *testing.T) {
 		{"#8990b3", "#3b4261", 3.14}, {"#8990b3", "240", 2.27}, {"#8990b3", "#565f89", 1.98},
 		{"#000000", "#ffffff", 21}, {"#565f89", "#565f89", 1},
 	} {
-		if got := Contrast(lum(c.fg), lum(c.bg)); !near(got, c.want) {
+		if got := contrast(lum(c.fg), lum(c.bg)); !near(got, c.want) {
 			t.Errorf("%s on %s: %.2f, want %.2f", c.fg, c.bg, got, c.want)
 		}
-		if Contrast(lum(c.bg), lum(c.fg)) != Contrast(lum(c.fg), lum(c.bg)) {
+		if contrast(lum(c.bg), lum(c.fg)) != contrast(lum(c.fg), lum(c.bg)) {
 			t.Errorf("%s on %s: the ratio depends on the order", c.fg, c.bg)
 		}
 	}

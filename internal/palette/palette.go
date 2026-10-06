@@ -94,10 +94,10 @@ func (c Color) rgb() (r, g, b uint8, ok bool) {
 	return v, v, v, true
 }
 
-// Luminance is the colour's relative luminance as WCAG defines it, 0
+// luminance is the colour's relative luminance as WCAG defines it, 0
 // for black to 1 for white; ok is false for colours 0 to 15, which the
 // terminal defines.
-func (c Color) Luminance() (l float64, ok bool) {
+func (c Color) luminance() (l float64, ok bool) {
 	r, g, b, ok := c.rgb()
 	if !ok {
 		return 0, false
@@ -112,9 +112,9 @@ func (c Color) Luminance() (l float64, ok bool) {
 	return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b), true
 }
 
-// Contrast is WCAG's contrast ratio of two luminances, from 1 for the
+// contrast is WCAG's contrast ratio of two luminances, from 1 for the
 // same to 21 for black on white.
-func Contrast(a, b float64) float64 {
+func contrast(a, b float64) float64 {
 	if a < b {
 		a, b = b, a
 	}
@@ -265,15 +265,15 @@ func (t Theme) DimmedOn(bg string) string {
 	if !ok {
 		return ""
 	}
-	lb, ok := c.Luminance()
+	lb, ok := c.luminance()
 	if !ok {
 		return ""
 	}
 	var best Color
 	most := 0.0
 	for _, d := range []Color{own, Dark[Dimmed], Light[Dimmed]} {
-		l, ok := d.Luminance()
-		if r := Contrast(l, lb); ok && r > most {
+		l, ok := d.luminance()
+		if r := contrast(l, lb); ok && r > most {
 			best, most = d, r
 		}
 	}
