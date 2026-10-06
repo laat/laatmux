@@ -15,6 +15,7 @@ import (
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // startFakeDaemon starts a stand-in for the local daemon: a loopback listener
@@ -239,12 +240,17 @@ func TestHostByEnvironment(t *testing.T) {
 		return true
 	})
 	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "mac"}}, {Host: peer.Host{Name: "box", SSH: "box"}}}}
-	h, hello, snap, err := hostByEnvironment(context.Background(), cfg, "benv")
+	h, hello, snap, err := hostByEnvironment(context.Background(), cfg, "benv", protocol.CapRm)
 	if err != nil || h.Name != "box" || hello.Version != "v2" || len(snap.Worktrees) != 1 {
 		t.Fatalf("box by environment: %+v %+v %+v %v", h, hello, snap, err)
 	}
-	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "nope"); err == nil || !strings.Contains(err.Error(), "no configured host answers as environment nope") {
+	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "nope", protocol.CapRm); err == nil || !strings.Contains(err.Error(), "no configured host answers as environment nope") {
 		t.Fatalf("unknown environment: %v", err)
+	}
+	// A capability the host lacks passes it over, as a host that does
+	// not answer is.
+	if _, _, _, err := hostByEnvironment(context.Background(), cfg, "benv", protocol.CapAdd); err == nil || !strings.Contains(err.Error(), "does not support add") {
+		t.Fatalf("missing capability: %v", err)
 	}
 	// A session's host: the tag when it names a configured host; else,
 	// for a renamed host or a session without the tag, the environment.
@@ -259,5 +265,53 @@ func TestHostByEnvironment(t *testing.T) {
 	}
 	if _, _, _, err := hostForSession(context.Background(), cfg, protocol.Session{Name: "s", Key: "nope//r/x"}); err == nil || !strings.Contains(err.Error(), "carries no host tag") {
 		t.Errorf("no tag, unknown environment: %v", err)
+	}
+	// What shell, run and split run inside a session use: the tag, else
+	// the environment, with no capability asked for; the retag is best
+	// effort (no session s exists here).
+	for _, c := range []struct {
+		host, want string
+	}{{"box", "box"}, {"old", "box"}, {"", "box"}} {
+		h, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "benv//r/x", Host: c.host}, "")
+		if err != nil || h.Name != c.want {
+			t.Errorf("workspaceHost tag %q: %+v %v", c.host, h, err)
+		}
+	}
+	if _, err := workspaceHost(context.Background(), cfg, protocol.Session{Name: "s", Key: "nope//r/x", Host: "old"}, ""); err == nil || !strings.Contains(err.Error(), `is on host "old", which is not configured, and no configured host answers`) {
+		t.Errorf("renamed host, unknown environment: %v", err)
+	}
+}
+
+// A workspace session whose tag names a host since renamed is retagged
+// with the name the config has now, by the key's environment, so the
+// next command inside it finds the host by the tag alone.
+func TestWorkspaceHostRetags(t *testing.T) {
+	isolatedDefault(t)
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status"}},
+			}})
+		}
+		return true
+	})
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"new-session", "-d", "-s", "old/proj/x", "sleep 1000"},
+		{"set-option", "-t", "old/proj/x", "@laatmux_workspace", "benv//r/x"},
+		{"set-option", "-t", "old/proj/x", "@laatmux_host", "old"},
+	} {
+		if _, err := workspace.Server.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "box", SSH: "box"}}}}
+	cur := protocol.Session{Name: "old/proj/x", Key: "benv//r/x", Host: "old"}
+	if h, err := workspaceHost(ctx, cfg, cur, ""); err != nil || h.Name != "box" {
+		t.Fatalf("renamed host: %+v %v", h, err)
+	}
+	out, err := workspace.Server.Run(ctx, "display", "-p", "-t", "old/proj/x", "#{@laatmux_host}")
+	if err != nil || strings.TrimSpace(string(out)) != "box" {
+		t.Fatalf("tag after the lookup: %q %v", out, err)
 	}
 }

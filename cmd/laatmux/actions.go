@@ -737,7 +737,14 @@ func (d *dash) shell(m *view.Model) bool {
 		m.Message = err.Error()
 		return false
 	}
-	if err := command.Shell(d.ctx, d.cfg, l); err != nil {
+	// localFor has put the configured name on the session, by its
+	// environment when the tag named a renamed host.
+	h, ok := d.cfg.Find(l.Host)
+	if !ok {
+		m.Message = fmt.Sprintf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
+		return false
+	}
+	if err := command.Shell(d.ctx, h, l); err != nil {
 		m.Message = err.Error()
 		return false
 	}

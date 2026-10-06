@@ -88,9 +88,9 @@ func cmdRun(ctx context.Context, args []string) error {
 		if !cur.Workspace() {
 			return fmt.Errorf("%s is not a workspace session; name <repo>/<branch>", cur.Name)
 		}
-		h, ok := cfg.Find(cur.Host)
-		if !ok {
-			return fmt.Errorf("workspace session %s is on host %q, which is not configured", cur.Name, cur.Host)
+		h, err := workspaceHost(ctx, cfg, cur, "")
+		if err != nil {
+			return err
 		}
 		run.Host = h
 		_, run.Root = protocol.SplitSessionKey(cur.Key)

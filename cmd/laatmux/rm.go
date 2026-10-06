@@ -123,26 +123,56 @@ func hostForSession(ctx context.Context, cfg config.Config, cur protocol.Session
 		}
 	}
 	env, _ := protocol.SplitSessionKey(cur.Key)
-	h, hello, snap, err := hostByEnvironment(ctx, cfg, env)
+	h, hello, snap, err := hostByEnvironment(ctx, cfg, env, protocol.CapRm)
 	if err != nil {
-		if cur.Host == "" {
-			return h, hello, snap, fmt.Errorf("workspace session %s carries no host tag, and %w", cur.Name, err)
-		}
-		return h, hello, snap, fmt.Errorf("workspace session %s is on host %q, which is not configured, and %w", cur.Name, cur.Host, err)
+		return h, hello, snap, untaggedErr(cur, err)
 	}
 	return h, hello, snap, nil
+}
+
+// untaggedErr says why a session's host could not be found by its tag,
+// with the environment lookup's failure after it.
+func untaggedErr(cur protocol.Session, err error) error {
+	if cur.Host == "" {
+		return fmt.Errorf("workspace session %s carries no host tag, and %w", cur.Name, err)
+	}
+	return fmt.Errorf("workspace session %s is on host %q, which is not configured, and %w", cur.Name, cur.Host, err)
+}
+
+// workspaceHost is the configured host of a workspace session, for a
+// command run inside it that needs no snapshot: the one its tag names,
+// else, after a host rename, the one whose daemon answers as the key's
+// environment, found as hostForSession finds it; the session is then
+// tagged with the name it has now, so the next command finds it by the
+// tag, as a jump does. needCap is what the caller needs of the host,
+// "" for nothing.
+func workspaceHost(ctx context.Context, cfg config.Config, cur protocol.Session, needCap string) (config.Host, error) {
+	if cur.Host != "" {
+		if h, ok := cfg.Find(cur.Host); ok {
+			return h, nil
+		}
+	}
+	env, _ := protocol.SplitSessionKey(cur.Key)
+	h, _, _, err := hostByEnvironment(ctx, cfg, env, needCap)
+	if err != nil {
+		return h, untaggedErr(cur, err)
+	}
+	// Best effort: a session that cannot be retagged is found the same
+	// way next time.
+	_ = workspace.SetHost(ctx, cur.Name, h.Name)
+	return h, nil
 }
 
 // hostByEnvironment finds the configured host whose daemon answers as
 // the environment, with its hello and snapshot: each host is asked in
 // config order, through the merged stream where the local daemon has
 // one, so a host row already there costs nothing, else by dialling.
-// A host that cannot be reached is passed over; none answering is an
-// error naming the environment.
-func hostByEnvironment(ctx context.Context, cfg config.Config, env string) (config.Host, protocol.Message, protocol.Message, error) {
+// A host that cannot be reached, or without needCap, is passed over;
+// none answering is an error naming the environment.
+func hostByEnvironment(ctx context.Context, cfg config.Config, env, needCap string) (config.Host, protocol.Message, protocol.Message, error) {
 	var errs []string
 	for _, h := range cfg.Hosts {
-		hello, snap, err := snapshot(ctx, h.Host, protocol.CapRm)
+		hello, snap, err := snapshot(ctx, h.Host, needCap)
 		if err != nil {
 			errs = append(errs, err.Error())
 			continue

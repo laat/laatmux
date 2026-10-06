@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 
 	"github.com/laat/laatmux/internal/config"
@@ -60,9 +59,8 @@ func cmdSplit(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		var ok bool
-		if h, ok = cfg.Find(l.Host); !ok {
-			return fmt.Errorf("workspace session %s is on host %q, which is not configured", l.Name, l.Host)
+		if h, err = workspaceHost(ctx, cfg, l, ""); err != nil {
+			return err
 		}
 	}
 	// The split runs on the server the lookup used, the one TMUX names:
