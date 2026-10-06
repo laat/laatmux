@@ -381,6 +381,11 @@ type Span struct {
 	own  bool   // the look is the span's own: a template's style leaves it
 	band bool   // the selection's band on this span alone: a strip's chip
 	spin bool
+	// faded marks a span dimmed as a dim line draws it, so on a line
+	// that is not dim, a dim row's chip in the strip, it is drawn as
+	// that line would draw it: faint, and in a theme with colours in
+	// the dimmed colour.
+	faded bool
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.
 	tick bool
@@ -390,11 +395,12 @@ type Span struct {
 // template's background, and without its colour but for the viewer's
 // own label, which keeps its colour and is not faint. ANSI draws a dim
 // line's spans so off the band, and the strip a dim row's chip, whose
-// line is not dim.
+// line is not dim: the span is faded, so there too it is drawn in the
+// dimmed colour the line would give it.
 func (s Span) dimmed() Span {
 	s.Bg = ""
 	if s.Fg != palette.CurrentWorktreeFg {
-		s.Dim, s.Fg = true, ""
+		s.Dim, s.Fg, s.faded = true, "", true
 	} else {
 		s.Dim = false
 	}
@@ -951,8 +957,9 @@ func Text(lines []Line) string {
 // ANSI encodes a line for the terminal in a theme, ending with a reset.
 // A span's own attributes are set for the span and the line's restored
 // after it. In a theme with colours a span's colour is drawn, and a dim
-// line is drawn in the dimmed colour throughout, but for the viewer's
-// own row's label; plain text keeps the terminal's own foreground, which
+// line is drawn in the dimmed colour throughout, as are a dim row's
+// faded spans on a line that is not dim, but for the viewer's own
+// row's label; plain text keeps the terminal's own foreground, which
 // is right whatever the background, and dim text on a template's
 // background is drawn in the dim colour that reads on it, not faint
 // in the terminal's. The selection is the highlight background with
@@ -1023,6 +1030,11 @@ func ANSI(l Line, th palette.Theme) string {
 		// A span's faint is for a theme without colours; with them its
 		// colour, the border's say, is faint enough.
 		faint := s.Dim && !l.Dim && fg == "" && !(s.band && pre == "\x1b[7m")
+		if faint && s.faded && colour {
+			// A dim row's span on a line that is not dim, its chip in
+			// the strip: faint in the dimmed colour, as its line is.
+			fg = th.SGR(palette.Dimmed, false)
+		}
 		if faint && bg != "" {
 			// Faint in the terminal's colour can all but vanish on a
 			// template's background, light grey on yellow: the dim
