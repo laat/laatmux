@@ -724,6 +724,16 @@ func TestColumns(t *testing.T) {
 	if got := render("{pr_detail}", 40); got != "...|‹2h›\n" {
 		t.Errorf("pr_detail stale: %q", got)
 	}
+	// A stale failing name: dim and plain, and cut as a label still.
+	pending := r.Branch.Checks
+	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
+	if got := render("{pr_detail}", 40); got != "...|‹test (macos-latest)›\n" {
+		t.Errorf("pr_detail failing stale: %q", got)
+	}
+	if got := render("{host} {pr_detail}", 12); got != "...|‹vm› ‹test (ma…›\n" {
+		t.Errorf("pr_detail failing stale cut: %q", got)
+	}
+	r.Branch.Checks = pending
 	r.Branch.Stale = false
 	r.Branch.Checks.PendingSince = time.Time{}
 	if got := plain("{pr_detail}", 40); got != "" {

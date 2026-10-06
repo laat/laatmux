@@ -462,7 +462,7 @@ func staleMark(left, right []item, stale, back bool) {
 	case checks && last.Text == "?":
 		number.spans = number.spans[:len(number.spans)-1]
 	case !checks && last.Text != "?" && back:
-		number.spans = append(number.spans, styled(Span{Text: "?", Dim: true}, number.part.st))
+		number.spans = append(number.spans, styled(gitStale([]Span{{Text: "?"}})[0], number.part.st))
 	}
 }
 
