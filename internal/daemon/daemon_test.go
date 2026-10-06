@@ -222,7 +222,7 @@ func TestTimingsDefaults(t *testing.T) {
 		t.Fatalf("zero timings = %+v, want the defaults %+v", d.cfg.Timings, DefaultTimings)
 	}
 	want := Timings{ReadyWait: 1, TrustPoll: 2, JournalRetention: 3, HandoffRecheck: 4, HandoffPatience: 5, CommandTTL: 6, KillDelay: 7}
-	d = New(Config{EnvironmentID: "env", Timings: want, Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}, Commands: t.TempDir()})
+	d = New(Config{EnvironmentID: "env", Timings: want, Targets: managed(onePane(pane, nil)), Store: &worktree.Store{}, Commands: t.TempDir()})
 	if d.cfg.Timings != want {
 		t.Fatalf("set timings = %+v, want %+v", d.cfg.Timings, want)
 	}

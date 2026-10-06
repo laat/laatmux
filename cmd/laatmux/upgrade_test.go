@@ -435,24 +435,7 @@ func legacyServeAfter(ctx context.Context, pause time.Duration) error {
 	// The hello of a daemon before the pid field and the shutdown
 	// message, answered by hand so this branch's daemon package does
 	// not make it current.
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer c.Close()
-				pc := protocol.NewConn(c)
-				pc.Write(protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "legacy", Version: "legacy", Capabilities: []string{protocol.CapStatus}})
-				for {
-					if _, err := pc.Read(); err != nil {
-						return
-					}
-				}
-			}()
-		}
-	}()
+	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "legacy", Version: "legacy", Capabilities: []string{protocol.CapStatus}}, nil)
 	<-ctx.Done()
 	return nil
 }
