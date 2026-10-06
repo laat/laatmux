@@ -363,7 +363,7 @@ func TestRelayResumesFiles(t *testing.T) {
 	// A new daemon on the same files.
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -545,7 +545,7 @@ func TestRelaySettleAndFailedAdd(t *testing.T) {
 	os.WriteFile(filepath.Join(f.dir, FileName("s1")), b, 0o600)
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -643,7 +643,7 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	p.Done, p.OK, p.Listed, p.ReplacedBy, p.RetiredAt, p.Sent, p.Taken = false, false, false, "", time.Time{}, false, true
 	b, _ := json.Marshal(p)
 	os.WriteFile(filepath.Join(f.dir, FileName("c1")), b, 0o600)
-	bare := New(Config{EnvironmentID: "henv", Host: "vm", Version: "bare", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store})
+	bare := New(Config{EnvironmentID: "henv", Host: "vm", Version: "bare", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Timings: testTimings})
 	discovered(bare)
 	bareRemote := newFakeRemote(t, f.ctx, bare)
 	var mu sync.Mutex
@@ -656,7 +656,7 @@ func TestRelayRefusalAfterSend(t *testing.T) {
 	}
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -731,13 +731,13 @@ func TestRelayHostRestartMidAdd(t *testing.T) {
 		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}},
 		Procs:   &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}},
 		Store:   f.store, Agents: map[string][]string{"argv": {"claude", PromptPlaceholder}},
-		Commands: f.host.journal.dir, WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond,
+		Commands: f.host.journal.dir, WorktreeInterval: 50 * time.Millisecond, Interval: 30 * time.Millisecond, Timings: testTimings,
 	})
 	go host2.Run(f.ctx)
 	remote2 := newFakeRemote(t, f.ctx, host2)
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: remote2.dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -755,7 +755,7 @@ func TestRelayHostRestartMidAdd(t *testing.T) {
 // waits, done false, and runs once the right machine answers.
 func TestRelayEnvironmentMismatchWaits(t *testing.T) {
 	f := newRelayFixture(t, nil)
-	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir()})
+	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir(), Timings: testTimings})
 	discovered(other)
 	otherRemote := newFakeRemote(t, f.ctx, other)
 	var mu sync.Mutex
@@ -768,7 +768,7 @@ func TestRelayEnvironmentMismatchWaits(t *testing.T) {
 	}
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -1110,7 +1110,7 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 // then dismissable.
 func TestRelayMismatchDismissable(t *testing.T) {
 	f := newRelayFixture(t, nil)
-	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir()})
+	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir(), Timings: testTimings})
 	discovered(other)
 	otherRemote := newFakeRemote(t, f.ctx, other)
 	var mu sync.Mutex
@@ -1123,7 +1123,7 @@ func TestRelayMismatchDismissable(t *testing.T) {
 	}
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: dial, Pending: f.dir,
-		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -1222,7 +1222,7 @@ func TestRelayDirectoryFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}}}
-	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending")})
+	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending"), Timings: testTimings})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := d.Err(); err == nil || !strings.Contains(err.Error(), "pending:") {

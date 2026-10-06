@@ -38,11 +38,11 @@ const (
 	subscriberBuffer  = 256
 )
 
-// Timings are the task runner's and the relay's waits and intervals.
+// Timings are the daemon's waits and intervals; see Config.Timings.
 type Timings struct {
 	// ReadyWait bounds how long a delivery waits for the pane to be
-	// ready; TrustPoll is how often a trust watcher looks at the pane
-	// for its question.
+	// ready, and how long a trust watcher runs; TrustPoll is how often
+	// the watcher looks at the pane for its question.
 	ReadyWait time.Duration
 	TrustPoll time.Duration
 	// JournalRetention is how long a finished journal entry is kept,
@@ -50,8 +50,8 @@ type Timings struct {
 	JournalRetention time.Duration
 	// HandoffRecheck is how often a handoff waiting for the merged
 	// stream to show the worktree looks at the host's listing again,
-	// and HandoffPatience how long it waits for the stream in all
-	// before it hands off on the listing alone.
+	// and bounds each such look; HandoffPatience is how long it waits
+	// for the stream in all before it hands off on the listing alone.
 	HandoffRecheck  time.Duration
 	HandoffPatience time.Duration
 	// CommandTTL is how long a finished command's outcome is kept;
@@ -179,8 +179,10 @@ type Config struct {
 	// message; nil means no shutdown capability.
 	Shutdown func()
 
-	// Timings are the waits and intervals of the task runner and the
-	// relay; a zero field takes its default. Tests shorten them.
+	// Timings are the daemon's waits and intervals: delivery and trust,
+	// the journal's retention, the relay's handoff, the command table
+	// and run cancellation; a zero field takes its default. Tests
+	// shorten them.
 	Timings Timings
 
 	// Pending is the directory of the relay's pending files, which with

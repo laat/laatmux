@@ -511,8 +511,8 @@ func TestRmLeavesExternalWorktree(t *testing.T) {
 // A finished command is forgotten after its TTL without another command
 // arriving, and the id is then fresh again.
 func TestCommandEviction(t *testing.T) {
+	setTiming(t, &testTimings.CommandTTL, 50*time.Millisecond)
 	d, _, _, remote := newAddDaemon(t)
-	d.cfg.Timings.CommandTTL = 50 * time.Millisecond
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
 	if res, _ := result(t, pc, "c1"); !res.OK {

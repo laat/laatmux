@@ -24,9 +24,9 @@ import (
 // The journal's clock contract, from the milestone-four note. Retention
 // is how long an entry outlives the moment it became terminal, by this
 // host's clock; an add whose submission is older than that, or more than
-// a day in this host's future, is refused, so a sender's seven-day
-// lifetime reaches a tombstone unless the clocks disagree by more than
-// three weeks.
+// a day in this host's future, is refused, so with DefaultTimings'
+// retention of thirty days a sender's seven-day lifetime reaches a
+// tombstone unless the clocks disagree by more than three weeks.
 const (
 	journalFuture = 24 * time.Hour
 	journalSweep  = time.Hour

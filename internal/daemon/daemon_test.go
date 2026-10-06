@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/detect"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 func newTestDaemon() *Daemon {
@@ -205,4 +206,30 @@ func TestBroadcastNumbers(t *testing.T) {
 		}
 	}
 	d.unsubscribe(s)
+}
+
+// A zero timing takes its default and a set one is kept; the journal
+// keeps for the retention it was given.
+func TestTimingsDefaults(t *testing.T) {
+	// The defaults are what the package variables held.
+	old := Timings{ReadyWait: time.Minute, TrustPoll: 500 * time.Millisecond, JournalRetention: 30 * 24 * time.Hour,
+		HandoffRecheck: 3 * time.Second, HandoffPatience: time.Minute, CommandTTL: DefaultCommandTTL, KillDelay: DefaultKillDelay}
+	if DefaultTimings != old {
+		t.Fatalf("DefaultTimings = %+v, want %+v", DefaultTimings, old)
+	}
+	d := New(Config{EnvironmentID: "env"})
+	if d.cfg.Timings != DefaultTimings {
+		t.Fatalf("zero timings = %+v, want the defaults %+v", d.cfg.Timings, DefaultTimings)
+	}
+	want := Timings{ReadyWait: 1, TrustPoll: 2, JournalRetention: 3, HandoffRecheck: 4, HandoffPatience: 5, CommandTTL: 6, KillDelay: 7}
+	d = New(Config{EnvironmentID: "env", Timings: want, Targets: managed(&fakeTmux{pane: pane}), Store: &worktree.Store{}, Commands: t.TempDir()})
+	if d.cfg.Timings != want {
+		t.Fatalf("set timings = %+v, want %+v", d.cfg.Timings, want)
+	}
+	if d.journal == nil {
+		t.Fatal("no journal")
+	}
+	if d.journal.retention != 3 {
+		t.Fatalf("journal retention = %v, want 3", d.journal.retention)
+	}
 }
