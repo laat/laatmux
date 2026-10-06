@@ -708,9 +708,10 @@ host's next snapshot against the state kept in `attention.json` under
 `$LAATMUX_HOME`. A client shows an agent through a live attach pane to
 the agent's managed session on the agent's host, or as the agent's own
 pane on this machine's default server; a focused sidebar pane stands for
-the pane beside it. The daemon lists the clients once a second while a
-view is open or an agent is done, and at once on `laatmux sidebar
-seen`, which the sidebar's hooks on `client-session-changed`,
+the pane beside it. The daemon lists the clients once a second while an
+agent is done and a view is open or closed less than a minute ago, at
+once when an agent finishes, and at once on `laatmux sidebar seen`,
+which the sidebar's hooks on `client-session-changed`,
 `session-window-changed` and `window-pane-changed` run. An agent on a
 remote host's default server or another observed server is never done:
 no view can take the user there.

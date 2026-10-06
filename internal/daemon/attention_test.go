@@ -381,19 +381,28 @@ func TestAttentionStream(t *testing.T) {
 	}
 }
 
-// The seen loop: with no view open it lists only while an agent is done,
-// and the listing a finish pokes decides it. A finish watched with no
-// view open is seen; one after the user left stays done, and a view
-// opened later does not see it.
+// The seen loop lists once a second only while an agent is done and a
+// view is open or left less than the idle time ago, and a finish lists at
+// once, view or not, the listing that decides it. A finish watched with
+// no view open is seen; one after the user left stays done, and a view
+// opened later does not see it. A host's daemon, which no view of its
+// own subscribes to, lists only on its finishes.
 func TestAttentionSeenLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	here, elsewhere := []ClientView{attachTo("mac", "s")}, []ClientView{attachTo("mac", "elsewhere")}
 	var views atomic.Value
-	views.Store([]ClientView{attachTo("mac", "s")})
+	views.Store(here)
 	var listings atomic.Int32
 	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
-	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"),
-		Clients: func(context.Context) ([]ClientView, error) { listings.Add(1); return views.Load().([]ClientView), nil }})
+	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"), MergedIdle: time.Hour,
+		Clients: func(context.Context) ([]ClientView, error) {
+			// Read, then counted: a listing counted has taken its
+			// views, and a store after that is the next one's.
+			v := views.Load().([]ClientView)
+			listings.Add(1)
+			return v, nil
+		}})
 	go d.runSeen(ctx)
 	wait := func(cond func() bool, what string) {
 		t.Helper()
@@ -405,38 +414,73 @@ func TestAttentionSeenLoop(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+	listed := func(what string) {
+		t.Helper()
+		n := listings.Load()
+		wait(func() bool { return listings.Load() > n }, what)
+	}
+	// quiet is no listing for longer than a tick.
+	quiet := func(what string) {
+		t.Helper()
+		n := listings.Load()
+		time.Sleep(seenInterval + seenInterval/2)
+		if m := listings.Load(); m != n {
+			t.Fatalf("%d listings %s", m-n, what)
+		}
+	}
 	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
 	publish(d, "laatmux/%1", a)
-	time.Sleep(2 * seenInterval)
-	if n := listings.Load(); n != 0 {
-		t.Fatalf("%d listings with no view and nothing done", n)
+	finish := func() {
+		t.Helper()
+		a.Activity, a.ActivityAt = protocol.Working, a.ActivityAt.Add(time.Second)
+		publish(d, "laatmux/%1", a)
+		n := listings.Load()
+		a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
+		publish(d, "laatmux/%1", a)
+		wait(func() bool { return listings.Load() > n }, "the finish did not list")
 	}
-	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
-	publish(d, "laatmux/%1", a)
+	finish()
 	wait(func() bool { x, _ := attnOf(d, a.ID); return !x.FinishedAt.IsZero() && !x.Done() }, "a watched finish not seen")
 
-	// The user leaves, the agent works and finishes again.
-	views.Store([]ClientView{attachTo("mac", "elsewhere")})
-	a.Activity, a.ActivityAt = protocol.Working, a.ActivityAt.Add(time.Second)
-	publish(d, "laatmux/%1", a)
-	n := listings.Load()
-	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
-	publish(d, "laatmux/%1", a)
-	wait(func() bool { return listings.Load() > n }, "the finish did not list")
+	// The user leaves, the agent works and finishes again: done, and
+	// with no view open nothing lists after the finish's own listing.
+	views.Store(elsewhere)
+	finish()
 	if !done(d, a.ID) {
 		t.Fatal("a finish after the user left is not done")
 	}
-	// Done and unseen: the loop lists every second, subscriber or not.
-	n = listings.Load()
-	wait(func() bool { return listings.Load() > n }, "no listing while done")
-	s := &subscriber{ch: make(chan protocol.Message, 16), merged: true}
-	d.mu.Lock()
-	d.msubs[s] = struct{}{}
-	d.mu.Unlock()
-	n = listings.Load()
-	wait(func() bool { return listings.Load() > n+1 }, "no listing with a view open")
+	quiet("with no view open")
+
+	// A view opens: the loop lists, and it sees the user come back. The
+	// poke's listing comes after the tick's has moved what it moves.
+	s, _ := d.mergedSubscribe(ctx, nil)
+	listed("no listing with a view open")
+	n := listings.Load()
+	d.Poke()
+	wait(func() bool { return listings.Load() > n }, "a poke did not list")
 	if !done(d, a.ID) {
 		t.Error("a view opened after the user left saw the finish")
+	}
+	views.Store(here)
+	wait(func() bool { return !done(d, a.ID) }, "a visit with a view open not seen")
+	quiet("with a view open and nothing done")
+
+	// Done again, and the view closes: the loop lists through the idle
+	// time, so a dashboard's jump is seen.
+	views.Store(elsewhere)
+	finish()
+	d.mergedUnsubscribe(s)
+	listed("no listing in the idle time after the view closed")
+	// After it, nothing lists, and a visit then is not recorded.
+	d.mu.Lock()
+	d.midle.Stop()
+	gen := d.midleGen
+	d.mu.Unlock()
+	d.mergedIdle(gen)
+	views.Store(here)
+	quiet("after the idle time")
+	if !done(d, a.ID) {
+		t.Error("a visit with no view open for the idle time was seen")
 	}
 }
 

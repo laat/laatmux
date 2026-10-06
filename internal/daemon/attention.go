@@ -52,8 +52,9 @@ type ClientView struct {
 	Workspace  string
 }
 
-// seenInterval is how often the clients are listed while a merged
-// subscriber is there or an agent is done and not yet seen.
+// seenInterval is how often the clients are listed while an agent is
+// done and not yet seen and a view is open or closed within the idle
+// time. See seenWanted.
 const seenInterval = time.Second
 
 // attnEntry is one agent's attention state, as kept on disk. The agent
@@ -387,9 +388,9 @@ func (d *Daemon) shownLocked(views []ClientView, id string, e *attnEntry) bool {
 	return false
 }
 
-// runSeen lists the clients once a second while a merged subscriber is
-// there or an agent is done and unseen, and at once when poked, and moves
-// the visit of every done agent a client shows to now.
+// runSeen lists the clients once a second while seenWanted, and at once
+// when poked, and moves the visit of every done agent a client shows to
+// now.
 func (d *Daemon) runSeen(ctx context.Context) {
 	t := time.NewTicker(seenInterval)
 	defer t.Stop()
@@ -425,12 +426,21 @@ func (d *Daemon) runSeen(ctx context.Context) {
 	}
 }
 
-// seenWanted is whether the clients are listed on this tick.
+// seenWanted is whether the clients are listed on this tick: an agent is
+// done and not yet seen, and a view, a merged subscriber, is open or the
+// last one left less than the idle time ago, which is how long d.mctx
+// outlives it. A listing with nothing unseen moves nothing. One with no
+// view open only records a visit for a later view, and on a host's
+// daemon, whose agents the laptop's daemon tracks for its own views, no
+// later view comes, and a listing each second for as long as one of them
+// stays done would be for nothing. The idle time covers a dashboard's
+// jump, whose subscriber leaves as the jump lands. A finish lists at
+// once, view or not, through its poke.
 func (d *Daemon) seenWanted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.msubs) > 0 {
-		return true
+	if d.mctx == nil {
+		return false
 	}
 	for _, e := range d.attn.entries {
 		if e.unseen() {
