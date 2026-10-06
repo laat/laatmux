@@ -1165,6 +1165,47 @@ func TestRenderTree(t *testing.T) {
 	golden(t, "tree-agents", Debug(m.Render()))
 }
 
+// A line in other sessions shows the host as the {host} token draws it
+// on the agent's tile: the server after it for an agent observed off
+// the managed server, none for a managed agent in no worktree, ? for a
+// host no record claims; dim off this machine.
+func TestOtherSessionsHost(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	in := treeInput(now)
+	in.Agents = append(in.Agents,
+		protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "loose", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true},
+		protocol.Agent{ID: "xenv/work/%4", EnvironmentID: "xenv", Server: "work", Session: "stray", Agent: "claude", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive})
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 80, Height: 30}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	host, _ := ParseTemplate("{host}")
+	for _, c := range []struct{ id, line, tile string }{
+		{"venv/default/%5", "...|    scratch‹ (vm/default)›  ⟨accent:💬⟩ claude\n", "vm/default"},
+		{"venv/laatmux/%9", "...|    loose‹ (vm)›  ⟨border:  ⟩ codex\n", "vm"},
+		{"xenv/work/%4", ".D.|    stray‹ (?/work)›  ⟨border:  ⟩ claude\n", "?/work"},
+	} {
+		i := m.indexOf(c.id)
+		if i < 0 || m.Tree[i].Depth != 1 {
+			t.Fatalf("%s not in other sessions", c.id)
+		}
+		if got := Debug(m.treeLine(m.Tree[i], 0)); got != c.line {
+			t.Errorf("%s's line: %q, want %q", c.id, got, c.line)
+		}
+		tile := false
+		for _, r := range m.Rows.Main {
+			if r.ID() == c.id {
+				tile = true
+				if got := Text([]Line{{Spans: m.line(Compiled{Template: host}, r, 80, 0)}}); got != c.tile+"\n" {
+					t.Errorf("%s's tile host: %q, want %q", c.id, got, c.tile)
+				}
+			}
+		}
+		if !tile {
+			t.Errorf("%s has no tile", c.id)
+		}
+	}
+}
+
 // Switching: the selection follows across Tab, from an agent to its
 // node and back, from a worktree line or a pane to the worktree's first
 // agent, from a repository line to its first worktree's, from a task to

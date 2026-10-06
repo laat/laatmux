@@ -678,10 +678,13 @@ func (m *Model) treeLine(r rows.Row, idx int) []Line {
 		spans = m.line(t.Worktree, r, w, idx)
 	case rows.KindAgent:
 		if r.Depth == 1 {
-			// A session in other sessions: its name, host, then the
-			// agent; a line of its own, not the agent template's.
+			// A session in other sessions: its name, the host as the
+			// {host} token draws it, then the agent; a line of its own,
+			// not the agent template's.
 			indent := strings.Repeat("  ", r.Depth)
-			spans = []Span{{Text: indent + "  " + r.Name}, {Text: " (" + r.Host + ")", Dim: r.Host != m.LocalHost}, {Text: "  "}, m.iconSpan(r), {Text: " " + r.AgentName()}}
+			host := m.where(r)
+			host.Text = " (" + host.Text + ")"
+			spans = []Span{{Text: indent + "  " + r.Name}, host, {Text: "  "}, m.iconSpan(r), {Text: " " + r.AgentName()}}
 			break
 		}
 		spans = m.line(t.Agent, r, w, idx)

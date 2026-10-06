@@ -13,7 +13,7 @@ S..|  ▾ «⟨current_worktree_fg:agents-config⟩» (‹vm›)               �
 .D.|    fix-sidebar (mac)                                ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
 .D.|    mac/laatmux/gone (mac)                     ‹worktree gone›
 ...|‹⟨header:other sessions⟩›
-...|    scratch‹ (vm)›  ⟨accent:💬⟩ claude
+...|    scratch‹ (vm/default)›  ⟨accent:💬⟩ claude
 ...|
 ...|
 ...|
