@@ -437,8 +437,8 @@ func TestLsWatchNeedTheDaemon(t *testing.T) {
 	// does not answer does. The log made a directory keeps the dial's
 	// start from running anything. Neither names the pid nor suggests
 	// a kill: a record is no proof of a daemon, and the lock is not
-	// probed, since a probe of it when free costs a serve still
-	// starting its own. The path is taken out of the message before
+	// probed, laatmux stop being the one command that checks a pid is
+	// the daemon's. The path is taken out of the message before
 	// the pid is looked for, its random part being digits too.
 	home2 := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home2, "daemon.log"), 0o700); err != nil {

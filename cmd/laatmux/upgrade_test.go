@@ -588,10 +588,10 @@ func holdLock(t *testing.T) *os.File {
 // heldBy reports whether the helper with pid holds the startup lock,
 // for a test waiting for one to start. It reads the lock file first,
 // which TryLock rewrites with the holder's pid once it has the lock,
-// and probes the lock only after: home.Holder holds a free lock for an
-// instant, and a helper whose TryLock falls in that instant loses the
-// lock and exits, reporting the lock held by the pid the file still
-// names, the previous holder's, or by "unknown" before the first.
+// and probes the lock only after, so the wait's probes do not take a
+// free lock for an instant while the helper starts: TryLock tries again
+// past such a probe (home's TestTryLockOutlastsAProbe), and the waits
+// do not lean on that.
 func heldBy(pid int) bool {
 	b, _ := os.ReadFile(filepath.Join(home.Dir(), "daemon.lock"))
 	if strings.TrimSpace(string(b)) != strconv.Itoa(pid) {
