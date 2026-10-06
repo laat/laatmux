@@ -717,6 +717,18 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
+	if r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
+		// A row of no worktree, which no line holds but the add's agent
+		// refused above, and of no workspace session: a repository line,
+		// the stale fold, or an agent in other sessions, in a plain
+		// session or a managed one. It is not a workspace, as S says,
+		// whatever enter on it does: enter folds the line and the fold,
+		// and takes the agent's pane jump, which for a managed agent in a
+		// line's home session lands in that line's workspace session, to
+		// be settled from the line.
+		m.Message = r.Name + ": not a workspace"
+		return
+	}
 	if line.Local == nil || !line.Local.Workspace() {
 		m.Message = line.Name + ": no local workspace session; " + noWorkspaceHint(d.cfg, *line, resolved)
 		return
@@ -748,16 +760,14 @@ func (d *dash) settle(m *view.Model) {
 // one on another host's default server, gets its workspace session from
 // add, which starts a managed session at the root: the hint ends with
 // the add line. A task still running has nothing to jump to until it is
-// done; a row of no worktree keeps the plain hint.
+// done. The line is a worktree's: settle says a row of none is not a
+// workspace before asking.
 func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
 		enter = "enter on the line"
 	}
-	switch {
-	case line.Worktree == nil:
-		return enter + " creates one"
-	case line.Pending != nil && !line.Pending.Done:
+	if line.Pending != nil && !line.Pending.Done {
 		return enter + " creates one once the task is done"
 	}
 	var hint string
