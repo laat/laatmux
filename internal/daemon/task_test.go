@@ -150,7 +150,7 @@ func TestAddArgvPrompt(t *testing.T) {
 	}
 	// A resend under the id, once the memory has let it go, is answered
 	// from the journal: nothing runs.
-	d.cmds.forgetDone("c1")
+	d.tasks.cmds.forgetDone("c1")
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude", Prompt: secret, SubmittedAt: time.Now()})
 	again, ps := result(t, pc, "c1")
 	if !again.OK || again.Prompt != protocol.DeliveryDelivered || len(ps) != 0 || len(ft.cmds) != 1 {
@@ -454,7 +454,7 @@ func TestSubmissionExpired(t *testing.T) {
 		if res, ps := result(t, pc, "old"); res.OK || res.Error != protocol.ErrSubmissionExpired || len(ps) != 0 {
 			t.Fatalf("%s: %+v", at, res)
 		}
-		d.cmds.forgetDone("old")
+		d.tasks.cmds.forgetDone("old")
 	}
 	if _, ok := d.journal.get("old"); ok {
 		t.Fatal("a refused add was journaled")
@@ -489,7 +489,7 @@ func TestPromptMessage(t *testing.T) {
 	}
 	// The command is remembered for a while; forget it so the repeat
 	// reaches the journal.
-	d.cmds.forgetDone(promptKey("c1", 1))
+	d.tasks.cmds.forgetDone(promptKey("c1", 1))
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
 	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 {
 		t.Fatalf("repeat: %+v pastes %d", res, len(ft.pastes))
@@ -840,7 +840,7 @@ func TestDeliveryRereadsAfterLock(t *testing.T) {
 	}
 	// The lock is held while the attempt arrives, and the entry is
 	// tombstoned meanwhile, as rm would under the same lock.
-	unlock := d.lockDeliveries(first.Root)
+	unlock := d.tasks.lockDeliveries(first.Root)
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c2", Attempt: 1, Prompt: "p"})
 	time.Sleep(200 * time.Millisecond)
 	if _, err := d.journal.markRemoved(first.Root, time.Now()); err != nil {
@@ -984,26 +984,26 @@ func TestReadyJudgesObservationTime(t *testing.T) {
 	st := &paneState{target: d.managed, obs: observation{at: start.Add(time.Second), session: "s", serverPID: 5, verified: true, identity: id, idle: true}}
 	d.panes[paneKey("laatmux", "%1")] = st
 	e := &entry{Session: "s", PaneID: "%1", ServerPID: 5}
-	if _, why, _ := d.ready(e, since); !strings.Contains(why, "startup grace") {
+	if _, why, _ := d.tasks.ready(e, since); !strings.Contains(why, "startup grace") {
 		t.Fatalf("pre-grace observation: %q", why)
 	}
 	st.obs.at = start.Add(startupGrace + time.Second)
-	if _, why, _ := d.ready(e, since); why != "" {
+	if _, why, _ := d.tasks.ready(e, since); why != "" {
 		t.Fatalf("post-grace observation: %q", why)
 	}
 	st.obs.at = since
-	if _, why, _ := d.ready(e, since); !strings.Contains(why, "since the wait began") {
+	if _, why, _ := d.tasks.ready(e, since); !strings.Contains(why, "since the wait began") {
 		t.Fatalf("stale observation: %q", why)
 	}
 	// One observation serves one paste: after a paste into the pane the
 	// next delivery needs a newer one.
 	st.obs.at = start.Add(startupGrace + time.Second)
-	d.pasted[paneKey("laatmux", "%1")] = st.obs.at.Add(time.Millisecond)
-	if _, why, _ := d.ready(e, since); !strings.Contains(why, "since the last paste") {
+	d.tasks.pasted[paneKey("laatmux", "%1")] = st.obs.at.Add(time.Millisecond)
+	if _, why, _ := d.tasks.ready(e, since); !strings.Contains(why, "since the last paste") {
 		t.Fatalf("observation before the paste: %q", why)
 	}
 	st.obs.at = st.obs.at.Add(time.Second)
-	if _, why, _ := d.ready(e, since); why != "" {
+	if _, why, _ := d.tasks.ready(e, since); why != "" {
 		t.Fatalf("observation after the paste: %q", why)
 	}
 }
@@ -1049,7 +1049,7 @@ func TestDeliveriesDoNotShareObservation(t *testing.T) {
 		t.Helper()
 		for deadline := time.Now().Add(5 * time.Second); ; {
 			d.mu.Lock()
-			w := d.waits
+			w := d.tasks.waits
 			d.mu.Unlock()
 			if w >= n {
 				return
@@ -1119,7 +1119,7 @@ func TestStopWaitsForPaste(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		d.mu.Lock()
-		n := d.pasting
+		n := d.tasks.pasting
 		d.mu.Unlock()
 		if n == 1 || time.Now().After(deadline) {
 			break

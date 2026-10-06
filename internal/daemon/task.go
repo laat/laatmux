@@ -59,8 +59,8 @@ func withPrompt(cmd []string, prompt string) (argv []string, placeholder bool) {
 // connection that sent it, so a client that lost its bridge can repeat
 // the id and pick the stream up, and a relay can resend it after a
 // daemon restart and have it resumed.
-func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
-	r := &addRun{d: d, m: m, c: c, res: protocol.Message{Type: protocol.TypeResult, ID: m.ID}}
+func (rn *taskRunner) runAdd(ctx context.Context, m protocol.Message, c *command) {
+	r := &addRun{rn: rn, m: m, c: c, res: protocol.Message{Type: protocol.TypeResult, ID: m.ID}}
 	err := r.run(ctx)
 	r.unlock()
 	if errors.Is(err, errRecorded) {
@@ -69,8 +69,8 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		// read and this point has made it removed, and the memory must
 		// not cache the success it replaced.
 		if r.e.Root != "" {
-			unlock := d.lockDeliveries(r.e.Root)
-			if cur, ok := d.journal.get(m.ID); ok && cur.terminal() {
+			unlock := rn.lockDeliveries(r.e.Root)
+			if cur, ok := rn.journal.get(m.ID); ok && cur.terminal() {
 				r.res = cur.recorded()
 			}
 			c.emit(r.res)
@@ -78,17 +78,17 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		} else {
 			c.emit(r.res)
 		}
-		d.cmds.evict(m.ID, c)
+		rn.cmds.evict(m.ID, c)
 		return
 	}
 	res := resultOf(r.res, err)
 	if res.OK {
 		// The mutation is done: a listing read from here on reflects
 		// it, and the result says which one that is.
-		l := d.stepRevision()
+		l := rn.core.stepRevision()
 		res.Listing = &l
 		// Its git object is read at once, not at the next due time.
-		d.gitDue(res.Root)
+		rn.core.gitDue(res.Root)
 	}
 	if r.created {
 		now := time.Now()
@@ -101,7 +101,7 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 		// command from memory, so the result the memory keeps is never
 		// a success published after the tombstone.
 		if r.root != "" {
-			defer d.lockDeliveries(r.root)()
+			defer rn.lockDeliveries(r.root)()
 		}
 		err := r.set(func(e *entry) {
 			if e.Removed {
@@ -115,15 +115,15 @@ func (d *Daemon) runAdd(ctx context.Context, m protocol.Message, c *command) {
 			res = r.e.recorded()
 		}
 	}
-	d.pokeWorktrees()
+	rn.core.pokeWorktrees()
 	c.emit(res)
-	d.cmds.evict(m.ID, c)
+	rn.cmds.evict(m.ID, c)
 }
 
 // addRun is one add in flight: the request, its journal entry as the
 // daemon last wrote it, and what the stages have decided so far.
 type addRun struct {
-	d          *Daemon
+	rn         *taskRunner
 	m          protocol.Message
 	c          *command
 	e          entry
@@ -144,9 +144,9 @@ func (r *addRun) set(change func(*entry)) error {
 	if !r.created {
 		return nil
 	}
-	e, err := r.d.journal.update(r.m.ID, change)
+	e, err := r.rn.journal.update(r.m.ID, change)
 	if err != nil {
-		r.d.cfg.Logger.Printf("journal: %s: %v", r.m.ID, err)
+		r.rn.cfg.Logger.Printf("journal: %s: %v", r.m.ID, err)
 		return err
 	}
 	r.e = e
@@ -184,8 +184,8 @@ func (r *addRun) unlock() {
 // and nothing runs; one that is not terminal is resumed, the steps by
 // inspection and the allocation and the launch by what was recorded.
 func (r *addRun) run(ctx context.Context) error {
-	d, m := r.d, r.m
-	j := d.journal
+	rn, m := r.rn, r.m
+	j := rn.journal
 	now := time.Now()
 	known := false
 	if j != nil {
@@ -205,9 +205,9 @@ func (r *addRun) run(ctx context.Context) error {
 	// resolve, under the shared hold on every repository from here: an
 	// rm that comes now waits for this add to finish rather than
 	// looking for a checkout it has not made yet.
-	r.unhold = d.holdRepos()
+	r.unhold = rn.holdRepos()
 	stage := protocol.StageResolve
-	repo, err := d.addRepo(m)
+	repo, err := rn.addRepo(m)
 	if err != nil {
 		return stageErr(stage, err)
 	}
@@ -219,7 +219,7 @@ func (r *addRun) run(ctx context.Context) error {
 	r.cmd = m.Cmd
 	if len(r.cmd) == 0 {
 		var ok bool
-		if r.cmd, ok = d.cfg.Agents[m.AgentName]; !ok {
+		if r.cmd, ok = rn.cfg.Agents[m.AgentName]; !ok {
 			return stageErr(stage, fmt.Errorf("unknown agent %q: not in this host's config", m.AgentName))
 		}
 	}
@@ -252,7 +252,7 @@ func (r *addRun) run(ctx context.Context) error {
 	}
 	r.branch = branch
 
-	r.unlockRepo = d.lockRepo(repo.Source, repo.Name)
+	r.unlockRepo = rn.lockRepo(repo.Source, repo.Name)
 	// The journal is read again under the lock: an rm that held it
 	// meanwhile may have removed the worktree this add was resuming,
 	// and the entry with it, which no stage may then remake.
@@ -267,7 +267,7 @@ func (r *addRun) run(ctx context.Context) error {
 		}
 		r.e = cur
 	}
-	p, err := d.cfg.Store.Prepare(ctx, repo, r.report)
+	p, err := rn.cfg.Store.Prepare(ctx, repo, r.report)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func (r *addRun) run(ctx context.Context) error {
 		}
 		state = protocol.StateDone
 	}
-	root, err := d.cfg.Store.Place(ctx, p, repo, branch)
+	root, err := rn.cfg.Store.Place(ctx, p, repo, branch)
 	if err != nil {
 		return stageErr(stage, err)
 	}
@@ -326,7 +326,7 @@ func (r *addRun) run(ctx context.Context) error {
 	r.res.Branch = branch
 	r.emit(protocol.Message{Stage: stage, State: state, Detail: detail, Branch: branch, Root: root})
 
-	added, err := d.cfg.Store.Materialize(ctx, p.Checkout, repo, branch, root, r.report)
+	added, err := rn.cfg.Store.Materialize(ctx, p.Checkout, repo, branch, root, r.report)
 	if err != nil {
 		return err
 	}
@@ -358,7 +358,7 @@ func (r *addRun) run(ctx context.Context) error {
 // existence: a session found in the root by an add that did not launch
 // it is session existed for the prompt.
 func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error) {
-	d, m := r.d, r.m
+	rn, m := r.rn, r.m
 	stage := protocol.StageAgent
 	prompt := m.Prompt
 	argv, placeholder := withPrompt(r.cmd, prompt)
@@ -371,7 +371,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		}
 		// A daemon restarted before the typed prompt was delivered: the
 		// agent may still be at its trust question.
-		d.startTrust(trustTarget{pane: r.e.PaneID, session: r.e.Session, root: r.root, serverPID: r.e.ServerPID})
+		rn.startTrust(trustTarget{pane: r.e.PaneID, session: r.e.Session, root: r.root, serverPID: r.e.ServerPID})
 		return r.typed(ctx)
 	case r.created && r.e.Launch == launchLaunching:
 		// new-session may have been submitted: an agent may be there,
@@ -394,7 +394,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	// intended name whose pane records another root, or that is not a
 	// single managed pane, is a name in use; nothing is adopted.
 	name := tmux.SessionName(r.repo.Name, r.branch)
-	panes, err := d.managed.Tmux.ListPanes(ctx)
+	panes, err := rn.managed.Tmux.ListPanes(ctx)
 	if err != nil && !tmux.NoServer(err) {
 		return r.failed(prompt, "listing panes failed", err)
 	}
@@ -440,7 +440,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	}); err != nil {
 		return r.failed(prompt, "launch refused", fmt.Errorf("journal: %w", err))
 	}
-	made, err := d.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: r.root, Cmd: argv, Host: d.cfg.Host})
+	made, err := rn.managed.Tmux.NewSession(ctx, tmux.NewSessionOpts{Name: name, Cwd: r.root, Cmd: argv, Host: rn.cfg.Host})
 	if err != nil {
 		submitted := tmux.Submitted(err)
 		err = tmux.Redact(err, prompt, PromptPlaceholder)
@@ -461,11 +461,11 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	// directory is a folder the agent may not have seen: its trust
 	// question, when it asks one, is answered for it, whether the prompt
 	// is typed or on the command line.
-	d.startTrust(trustTarget{pane: paneID, session: name, root: r.root, serverPID: made.ServerPID})
+	rn.startTrust(trustTarget{pane: paneID, session: name, root: r.root, serverPID: made.ServerPID})
 	// Refresh the session join now, so the record the poke publishes
 	// names the session rather than waiting for the next pane poll.
-	if panes, err := d.managed.Tmux.ListPanes(ctx); err == nil {
-		d.setManagedRoots(panes, time.Now())
+	if panes, err := rn.managed.Tmux.ListPanes(ctx); err == nil {
+		rn.core.setManagedRoots(panes, time.Now())
 	}
 	err = r.set(func(e *entry) {
 		e.Launch, e.PaneID, e.ServerPID = launchLaunched, paneID, made.ServerPID
@@ -514,7 +514,7 @@ func (r *addRun) typed(ctx context.Context) (string, string, error) {
 	r.unlock()
 	stage := protocol.StageAgent
 	r.report(stage, protocol.StateStart, "typing the prompt into pane "+r.e.PaneID+" once the agent is ready")
-	state, reason := r.d.deliver(ctx, r.m.ID, 0, r.m.Prompt)
+	state, reason := r.rn.deliver(ctx, r.m.ID, 0, r.m.Prompt)
 	switch state {
 	case protocol.DeliveryDelivered:
 		r.report(stage, protocol.StateDone, "prompt delivered")
@@ -541,8 +541,8 @@ func (r *addRun) typed(ctx context.Context) (string, string, error) {
 // root checked and the readiness confirmed on the latest observation,
 // so nothing is pasted into a root rm has taken or beside another
 // delivery's paste, and rm is never held up by a wait.
-func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (state, reason string) {
-	j := d.journal
+func (rn *taskRunner) deliver(ctx context.Context, id string, n int, prompt string) (state, reason string) {
+	j := rn.journal
 	e, ok := j.get(id)
 	if !ok {
 		return protocol.DeliveryNotDelivered, "no journal entry"
@@ -550,7 +550,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	set := func(change func(*entry)) error {
 		ne, err := j.update(id, change)
 		if err != nil {
-			d.cfg.Logger.Printf("journal: %s: %v", id, err)
+			rn.cfg.Logger.Printf("journal: %s: %v", id, err)
 			return err
 		}
 		e = ne
@@ -584,15 +584,15 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		if e.Removed {
 			return "worktree removed"
 		}
-		return d.worktreeReplaced(ctx, e)
+		return rn.worktreeReplaced(ctx, e)
 	}
 	if e.PaneID == "" {
-		unlock := d.lockDeliveries(e.Root)
+		unlock := rn.lockDeliveries(e.Root)
 		if why := current(); why != "" {
 			unlock()
 			return record(protocol.DeliveryNotDelivered, why)
 		}
-		target, why := d.adopt(ctx, e.Root)
+		target, why := rn.adopt(ctx, e.Root)
 		if why == "" {
 			if err := set(func(e *entry) {
 				e.Launch, e.Session, e.PaneID, e.ServerPID = launchLaunched, target.Session, target.ID, target.ServerPID
@@ -606,26 +606,26 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 		}
 	}
 	since := time.Now()
-	deadline := since.Add(d.cfg.Timings.ReadyWait)
-	d.mu.Lock()
-	d.waits++
-	d.mu.Unlock()
+	deadline := since.Add(rn.cfg.Timings.ReadyWait)
+	rn.mu.Lock()
+	rn.waits++
+	rn.mu.Unlock()
 	var identity procs.Identity
 	for {
-		if _, why, replaced := d.awaitReady(ctx, &e, since, deadline); why != "" {
+		if _, why, replaced := rn.awaitReady(ctx, &e, since, deadline); why != "" {
 			if replaced {
 				return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 			}
-			return record(protocol.DeliveryNotDelivered, "agent not ready within "+d.cfg.Timings.ReadyWait.String()+": "+why)
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+rn.cfg.Timings.ReadyWait.String()+": "+why)
 		}
-		unlock := d.lockDeliveries(e.Root)
+		unlock := rn.lockDeliveries(e.Root)
 		if why := current(); why != "" {
 			unlock()
 			return record(protocol.DeliveryNotDelivered, why)
 		}
 		var why string
 		var replaced bool
-		identity, why, replaced = d.ready(&e, since)
+		identity, why, replaced = rn.ready(&e, since)
 		if why == "" {
 			defer unlock()
 			break
@@ -638,7 +638,7 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 			return record(protocol.DeliveryNotDelivered, "session replaced: "+why)
 		}
 		if time.Now().After(deadline) {
-			return record(protocol.DeliveryNotDelivered, "agent not ready within "+d.cfg.Timings.ReadyWait.String()+": "+why)
+			return record(protocol.DeliveryNotDelivered, "agent not ready within "+rn.cfg.Timings.ReadyWait.String()+": "+why)
 		}
 	}
 	if e.Identity == nil {
@@ -649,22 +649,22 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 	}
 	// A daemon shutting down starts no paste, and waits for one it has
 	// started, so the buffer is deleted before the process ends.
-	if !d.beginDelivery() {
+	if !rn.beginDelivery() {
 		return record(protocol.DeliveryNotDelivered, "daemon shutting down")
 	}
-	defer d.endDelivery()
+	defer rn.endDelivery()
 	// The paste is on disk before it happens, or it does not happen: a
 	// daemon that dies in it leaves unknown, never a second paste.
 	if err := set(func(e *entry) { e.Typing = true }); err != nil {
 		return record(protocol.DeliveryNotDelivered, "journal: "+err.Error())
 	}
 	buffer := attemptBufferPrefix + FileName(id) + "-" + strconv.Itoa(n)
-	err := d.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
+	err := rn.managed.Tmux.Paste(ctx, buffer, e.PaneID, prompt)
 	// Whatever the paste did, the pane's observation is spent: the next
 	// delivery to it needs one made after this moment.
-	d.mu.Lock()
-	d.pasted[paneKey(d.managed.Label, e.PaneID)] = time.Now()
-	d.mu.Unlock()
+	rn.mu.Lock()
+	rn.pasted[paneKey(rn.managed.Label, e.PaneID)] = time.Now()
+	rn.mu.Unlock()
 	if err == nil {
 		return record(protocol.DeliveryDelivered, "")
 	}
@@ -682,28 +682,28 @@ func (d *Daemon) deliver(ctx context.Context, id string, n int, prompt string) (
 
 // beginDelivery counts a paste about to start, unless the daemon is
 // stopping; endDelivery counts it done. StopRuns waits for the count.
-func (d *Daemon) beginDelivery() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.stopping {
+func (rn *taskRunner) beginDelivery() bool {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	if rn.stopping {
 		return false
 	}
-	d.pasting++
+	rn.pasting++
 	return true
 }
 
-func (d *Daemon) endDelivery() {
-	d.mu.Lock()
-	d.pasting--
-	d.mu.Unlock()
+func (rn *taskRunner) endDelivery() {
+	rn.mu.Lock()
+	rn.pasting--
+	rn.mu.Unlock()
 }
 
 // worktreeReplaced says why the entry's root is no longer the worktree
 // the add made, or "" when it still is: the same repository, and the
 // branch when git still has one there. A root taken by another
 // worktree since is not a target, and its agent is not adopted.
-func (d *Daemon) worktreeReplaced(ctx context.Context, e entry) string {
-	rec, _, found, err := d.cfg.Store.Find(ctx, e.Root)
+func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
+	rec, _, found, err := rn.cfg.Store.Find(ctx, e.Root)
 	switch {
 	case err != nil:
 		return "worktree " + e.Root + " could not be checked: " + err.Error()
@@ -720,8 +720,8 @@ func (d *Daemon) worktreeReplaced(ctx context.Context, e entry) string {
 // adopt finds the target for an entry without one: the managed session
 // in root, when there is exactly one and its single pane has a verified
 // live agent. The reason it cannot is returned otherwise.
-func (d *Daemon) adopt(ctx context.Context, root string) (tmux.Pane, string) {
-	panes, err := d.managed.Tmux.ListPanes(ctx)
+func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string) {
+	panes, err := rn.managed.Tmux.ListPanes(ctx)
 	if err != nil {
 		if tmux.NoServer(err) {
 			return tmux.Pane{}, "no agent to deliver to: no managed session in " + root
@@ -746,10 +746,10 @@ func (d *Daemon) adopt(ctx context.Context, root string) (tmux.Pane, string) {
 		return tmux.Pane{}, fmt.Sprintf("no agent to deliver to: %d managed sessions in %s", len(found), root)
 	}
 	p := found[0]
-	d.mu.Lock()
-	st, ok := d.panes[paneKey(d.managed.Label, p.ID)]
+	rn.mu.Lock()
+	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
 	verified := ok && st.obs.verified
-	d.mu.Unlock()
+	rn.mu.Unlock()
 	if !verified {
 		return tmux.Pane{}, "no agent to deliver to: no verified agent in session " + p.Session
 	}
@@ -765,11 +765,11 @@ func (d *Daemon) adopt(ctx context.Context, root string) (tmux.Pane, string) {
 // startup grace, by its own time: a fresh look is what says the agent
 // is ready, not time having passed since an older one, and one look
 // serves one paste.
-func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool) {
-	key := paneKey(d.managed.Label, e.PaneID)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	st, ok := d.panes[key]
+func (rn *taskRunner) ready(e *entry, since time.Time) (procs.Identity, string, bool) {
+	key := paneKey(rn.managed.Label, e.PaneID)
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	st, ok := rn.panes[key]
 	if !ok {
 		return procs.Identity{}, "pane " + e.PaneID + " not seen", false
 	}
@@ -777,12 +777,12 @@ func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool)
 	switch {
 	case !obs.at.After(since):
 		return obs.identity, "no observation since the wait began", false
-	case !obs.at.After(d.pasted[key]):
+	case !obs.at.After(rn.pasted[key]):
 		return obs.identity, "no observation since the last paste into the pane", false
 	case obs.session != e.Session || obs.serverPID != e.ServerPID:
 		return obs.identity, fmt.Sprintf("pane %s is in session %s on server %d, not %s on %d", e.PaneID, obs.session, obs.serverPID, e.Session, e.ServerPID), true
-	case d.sessionPanesLocked(e.Session) != 1:
-		return obs.identity, fmt.Sprintf("session %s has %d panes", e.Session, d.sessionPanesLocked(e.Session)), true
+	case rn.sessionPanesLocked(e.Session) != 1:
+		return obs.identity, fmt.Sprintf("session %s has %d panes", e.Session, rn.sessionPanesLocked(e.Session)), true
 	case !obs.verified:
 		return obs.identity, "no verified agent in the pane", false
 	case e.Identity != nil && (obs.identity.PID != e.Identity.PID || obs.identity.Start.Unix() != e.Identity.StartUnix):
@@ -797,9 +797,9 @@ func (d *Daemon) ready(e *entry, since time.Time) (procs.Identity, string, bool)
 
 // awaitReady polls ready until it is, the target is gone for good, or
 // the deadline is past.
-func (d *Daemon) awaitReady(ctx context.Context, e *entry, since, deadline time.Time) (procs.Identity, string, bool) {
+func (rn *taskRunner) awaitReady(ctx context.Context, e *entry, since, deadline time.Time) (procs.Identity, string, bool) {
 	for {
-		identity, why, replaced := d.ready(e, since)
+		identity, why, replaced := rn.ready(e, since)
 		if why == "" || replaced || time.Now().After(deadline) {
 			return identity, why, replaced
 		}
@@ -812,11 +812,11 @@ func (d *Daemon) awaitReady(ctx context.Context, e *entry, since, deadline time.
 }
 
 // sessionPanesLocked counts the managed server's panes observed in the
-// session. Called with d.mu held.
-func (d *Daemon) sessionPanesLocked(session string) int {
+// session. Called with rn.mu held.
+func (rn *taskRunner) sessionPanesLocked(session string) int {
 	n := 0
-	for _, st := range d.panes {
-		if st.target == d.managed && st.obs.session == session {
+	for _, st := range rn.panes {
+		if st.target == rn.managed && st.obs.session == session {
 			n++
 		}
 	}
@@ -831,9 +831,9 @@ func (d *Daemon) sessionPanesLocked(session string) int {
 // prompt that could not be delivered is an outcome, not a failure of
 // the message; the failures are an id the journal no longer holds,
 // which is recovery expired, and an add that is not finished.
-func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) {
+func (rn *taskRunner) runPrompt(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt}
-	j := d.journal
+	j := rn.journal
 	err := func() error {
 		e, ok := j.get(m.ID)
 		if !ok {
@@ -849,7 +849,7 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		case m.Attempt < 1:
 			return errors.New("attempt number required")
 		}
-		l := d.attemptLock(m.ID)
+		l := rn.attemptLock(m.ID)
 		l.Lock()
 		defer l.Unlock()
 		e, _ = j.get(m.ID)
@@ -873,7 +873,7 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 		}); err != nil {
 			return fmt.Errorf("%s: %w", protocol.ErrAttemptNotRecorded, err)
 		}
-		res.Prompt, res.Error = d.deliver(ctx, m.ID, m.Attempt, m.Prompt)
+		res.Prompt, res.Error = rn.deliver(ctx, m.ID, m.Attempt, m.Prompt)
 		return nil
 	}()
 	if err != nil {
@@ -885,10 +885,10 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 	if strings.HasPrefix(res.Error, protocol.ErrAttemptNotRecorded) {
 		// Nothing was done for the number: the sender retries it, and
 		// the retry must run, not replay this answer.
-		d.cmds.forgetDone(promptKey(m.ID, m.Attempt))
+		rn.cmds.forgetDone(promptKey(m.ID, m.Attempt))
 		return
 	}
-	d.cmds.evict(promptKey(m.ID, m.Attempt), c)
+	rn.cmds.evict(promptKey(m.ID, m.Attempt), c)
 }
 
 // promptKey is the command key of one attempt, so a follow with the
@@ -896,7 +896,7 @@ func (d *Daemon) runPrompt(ctx context.Context, m protocol.Message, c *command) 
 func promptKey(id string, attempt int) string { return id + "#" + strconv.Itoa(attempt) }
 
 // attemptLock serializes deliveries per add.
-func (d *Daemon) attemptLock(id string) *sync.Mutex { return d.repoLock("attempt/" + id) }
+func (rn *taskRunner) attemptLock(id string) *sync.Mutex { return rn.repoLock("attempt/" + id) }
 
 // answerFollow is what a follow gets for an id the daemon has no command
 // for, from the journal: the recorded result of a terminal entry,
@@ -904,11 +904,11 @@ func (d *Daemon) attemptLock(id string) *sync.Mutex { return d.repoLock("attempt
 // recorded outcome of an attempt, or the errors that say the journal
 // has nothing. nil when there is no journal, which is unknown command
 // as before.
-func (d *Daemon) answerFollow(m protocol.Message) *protocol.Message {
-	if d.journal == nil {
+func (rn *taskRunner) answerFollow(m protocol.Message) *protocol.Message {
+	if rn.journal == nil {
 		return nil
 	}
-	e, ok := d.journal.get(m.ID)
+	e, ok := rn.journal.get(m.ID)
 	if m.Attempt > 0 {
 		res := protocol.Message{Type: protocol.TypeResult, ID: m.ID, Attempt: m.Attempt}
 		switch {
@@ -938,21 +938,21 @@ func (d *Daemon) answerFollow(m protocol.Message) *protocol.Message {
 
 // sweepBuffers deletes the paste buffers a delivery interrupted between
 // loading and deleting left on the managed server.
-func (d *Daemon) sweepBuffers(ctx context.Context) {
-	if d.managed == nil {
+func (rn *taskRunner) sweepBuffers(ctx context.Context) {
+	if rn.managed == nil {
 		return
 	}
-	if err := d.managed.Tmux.DeleteBuffers(ctx, attemptBufferPrefix); err != nil {
-		d.cfg.Logger.Printf("sweep buffers: %v", err)
+	if err := rn.managed.Tmux.DeleteBuffers(ctx, attemptBufferPrefix); err != nil {
+		rn.cfg.Logger.Printf("sweep buffers: %v", err)
 	}
 }
 
 // runJournal sweeps the journal at start and hourly until ctx is done.
-func (d *Daemon) runJournal(ctx context.Context) {
+func (rn *taskRunner) runJournal(ctx context.Context) {
 	t := time.NewTicker(journalSweep)
 	defer t.Stop()
 	for {
-		d.journal.sweep(time.Now())
+		rn.journal.sweep(time.Now())
 		select {
 		case <-ctx.Done():
 			return
@@ -969,10 +969,10 @@ func (d *Daemon) runJournal(ctx context.Context) {
 // config checks its own: a name that places directories and is not
 // this host's name for another repository, copy rules that stay inside
 // the worktree, no empty setup command.
-func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
+func (rn *taskRunner) addRepo(m protocol.Message) (worktree.Repo, error) {
 	e := m.RepoEntry
 	if e == nil {
-		repo, ok := d.cfg.Store.Repo(m.Repo)
+		repo, ok := rn.cfg.Store.Repo(m.Repo)
 		if !ok {
 			return worktree.Repo{}, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
 		}
@@ -981,13 +981,13 @@ func (d *Daemon) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if e.Source == "" || !source.Same(e.Source, m.Repo) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
 	}
-	if repo, ok := d.cfg.Store.BySource(e.Source); ok {
+	if repo, ok := rn.cfg.Store.BySource(e.Source); ok {
 		return repo, nil
 	}
 	if !config.ValidLabel(e.Name) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label", e.Name)
 	}
-	for _, other := range d.cfg.Store.Repos {
+	for _, other := range rn.cfg.Store.Repos {
 		if other.Name == e.Name {
 			return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
 		}

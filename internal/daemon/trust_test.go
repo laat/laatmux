@@ -186,7 +186,7 @@ func TestTrustWatcherBounds(t *testing.T) {
 	})
 	// Wait for the poll to identify the pane.
 	for i := 0; ; i++ {
-		if _, claude, _, _ := d.trustState(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}); claude {
+		if _, claude, _, _ := d.tasks.trustState(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}); claude {
 			break
 		}
 		if i > 200 {
@@ -204,10 +204,10 @@ func TestTrustWatcherBounds(t *testing.T) {
 		{pane: "%9", session: "proj/other", root: root, serverPID: 5},
 		{pane: "%9", session: "proj/w", root: root, serverPID: 6},
 	} {
-		if gone, _, _, _ := d.trustState(target); !gone {
+		if gone, _, _, _ := d.tasks.trustState(target); !gone {
 			t.Fatalf("%+v: not gone", target)
 		}
-		d.answerTrust(context.Background(), target, 10*time.Millisecond)
+		d.tasks.answerTrust(context.Background(), target, 10*time.Millisecond)
 		if keys() != 0 {
 			t.Fatalf("%+v: pressed keys", target)
 		}
@@ -217,53 +217,53 @@ func TestTrustWatcherBounds(t *testing.T) {
 	// it on another server instance, or a Claude other than the one
 	// bound, ends the watcher.
 	target := trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}
-	_, _, _, id := d.trustState(target)
+	_, _, _, id := d.tasks.trustState(target)
 	moved := false
 	ft.set(func() { ft.panes[len(ft.panes)-1].CurrentPath = "/elsewhere" })
-	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
 		t.Fatalf("elsewhere: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() {
 		ft.panes[len(ft.panes)-1].CurrentPath = root
 		ft.panes[len(ft.panes)-1].InMode = true
 	})
-	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
 		t.Fatalf("in a mode: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() {
 		ft.panes[len(ft.panes)-1].InMode = false
 		ft.panes[len(ft.panes)-1].ServerPID = 6
 	})
-	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || !stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || !stop || keys() != 0 {
 		t.Fatalf("another server: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() { ft.panes[len(ft.panes)-1].ServerPID = 5 })
 	other := id
 	other.PID++
-	if done, stop := d.trustStep(context.Background(), target, other, &moved); done || !stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, other, &moved); done || !stop || keys() != 0 {
 		t.Fatalf("another Claude: done %v stop %v keys %d", done, stop, keys())
 	}
 	// With all of it as launched, the cursor already on yes: Enter.
-	if done, stop := d.trustStep(context.Background(), target, id, &moved); !done || stop || keys() != 1 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); !done || stop || keys() != 1 {
 		t.Fatalf("as launched: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() { ft.keys = nil })
 	// A root outside the worktrees directory starts nothing.
-	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5})
+	d.tasks.startTrust(trustTarget{pane: "%9", session: "proj/w", root: t.TempDir(), serverPID: 5})
 	d.mu.Lock()
-	n := d.trusting
+	n := d.tasks.trusting
 	d.mu.Unlock()
 	if n != 0 {
 		t.Fatal("a watcher for a root outside the worktrees directory")
 	}
 	// StopRuns cancels a watcher still waiting for the question.
 	ft.set(func() { ft.screen = []string{"loading"} })
-	d.startTrust(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5})
+	d.tasks.startTrust(trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	d.StopRuns(ctx)
 	d.mu.Lock()
-	n = d.trusting
+	n = d.tasks.trusting
 	d.mu.Unlock()
 	if n != 0 || ctx.Err() != nil {
 		t.Fatalf("StopRuns left %d watchers", n)
@@ -346,14 +346,14 @@ func TestTrustNeedsVerifiedClaude(t *testing.T) {
 		d.mu.Lock()
 		d.panes[key] = &paneState{obs: obs}
 		d.mu.Unlock()
-		if _, claude, _, _ := d.trustState(target); claude {
+		if _, claude, _, _ := d.tasks.trustState(target); claude {
 			t.Errorf("%s: read as a verified Claude", name)
 		}
 	}
 	d.mu.Lock()
 	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: procs.Identity{Agent: "claude"}}}
 	d.mu.Unlock()
-	if _, claude, _, _ := d.trustState(target); !claude {
+	if _, claude, _, _ := d.tasks.trustState(target); !claude {
 		t.Error("a verified Claude not read as one")
 	}
 }
@@ -379,12 +379,12 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 		ft.screen = trustScreen(real, true)
 	})
 	target := trustTarget{pane: "%1", session: "s", root: link, real: real, serverPID: 5}
-	unlock := d.lockDeliveries(link)
+	unlock := d.tasks.lockDeliveries(link)
 	type step struct{ done, stop bool }
 	got := make(chan step, 1)
 	go func() {
 		moved := false
-		done, stop := d.trustStep(context.Background(), target, id, &moved)
+		done, stop := d.tasks.trustStep(context.Background(), target, id, &moved)
 		got <- step{done, stop}
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -410,7 +410,7 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 	// saw: nothing is pressed and the watcher stops.
 	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
 	moved := false
-	if done, stop := d.trustStep(context.Background(), target, id, &moved); done || !stop {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || !stop {
 		t.Fatalf("replaced: done %v stop %v", done, stop)
 	}
 	ft.mu.Lock()
@@ -438,7 +438,7 @@ func TestTrustEndsOnAnyReplacement(t *testing.T) {
 	d.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
-		d.answerTrust(context.Background(), target, 10*time.Millisecond)
+		d.tasks.answerTrust(context.Background(), target, 10*time.Millisecond)
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)

@@ -211,9 +211,10 @@ type Config struct {
 // Daemon holds the derived state for every watched tmux server.
 //
 // Locks. mu guards the mutable fields from it down, but for those that
-// say otherwise, and the stream: every record is published under it, so
-// a snapshot and the upserts after it never interleave. The locks
-// outside it, and the order they are taken in, are:
+// say otherwise, the runner's state (tasks, which holds mu by pointer),
+// and the stream: every record is published under it, so a snapshot
+// and the upserts after it never interleave. The locks outside it, and
+// the order they are taken in, are:
 //
 //   - relay.mu, the pending records, before mu: a record's mutation and
 //     its publication are one step, and the merged snapshot reads the
@@ -249,8 +250,8 @@ type Config struct {
 //     the order above is the rule. The table's lock, a leaf, may be.
 //
 // A method with the Locked suffix is called with its receiver's lock
-// held: mu for a Daemon method and for a branches method (its mu is the
-// daemon's), relay.mu for a relay method, journal.mu for a journal
+// held: mu for a Daemon method and for a branches or taskRunner method
+// (their mu is the daemon's), relay.mu for a relay method, journal.mu for a journal
 // method, the resolver's for its own. The exceptions say which lock:
 // runAttemptLocked, the relay's attempt lock; startRunnerLocked and
 // dropRetiredLocked, relay.mu; mergedSnapshotLocked, relay.mu and mu.
@@ -284,11 +285,8 @@ type Daemon struct {
 	runRecs  map[string]protocol.Run
 	paths    *resolver
 
-	cmds  *commandTable // recent add, rm, run and prompt by key, with a lock of its own
-	locks *keyedLocks   // the repository, name, delivery and attempt locks, with a lock of its own
-	// repos is held shared by every add for its repository's lock and
-	// alone by rm, which must see every add in flight complete.
-	repos sync.RWMutex
+	// The commands and what they start, sharing mu; see runner.go.
+	tasks *taskRunner
 	// The journal, nil without the task capability; the observation
 	// revision and the daemon generation that stamp listings, the
 	// stamp and error of the last listing, and the lock the poll and
@@ -316,22 +314,6 @@ type Daemon struct {
 	listing    protocol.Listing
 	listErr    string
 	pollMu     sync.Mutex
-	// Runs by root, and the removal generation per root that rm bumps
-	// once git has removed the worktree; see runs.go.
-	runs     map[string]map[*runJob]struct{}
-	rootGen  map[string]uint64
-	stopping bool // StopRuns has begun; no run registers and no paste starts after it
-	// The trust watchers: their shared context, cancelled by StopRuns,
-	// and how many run, which StopRuns waits for; see trust.go.
-	trustCtx    context.Context
-	trustCancel context.CancelFunc
-	trusting    int
-	pasting     int // pastes in flight, which StopRuns waits for
-	// pasted is when a pane was last pasted into, by pane key: a
-	// delivery needs an observation made after it. waits counts the
-	// deliveries that have begun waiting for a pane, for tests.
-	pasted map[string]time.Time
-	waits  int
 
 	// The merged stream: its own sequence and subscribers, the hosts by
 	// name and in config order, the local sessions, and the context the
@@ -455,11 +437,6 @@ func New(cfg Config) *Daemon {
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
 		paths:        newResolver(),
-		cmds:         newCommandTable(cfg.Timings.CommandTTL),
-		locks:        newKeyedLocks(),
-		runs:         map[string]map[*runJob]struct{}{},
-		rootGen:      map[string]uint64{},
-		pasted:       map[string]time.Time{},
 
 		msubs:     map[*subscriber]struct{}{},
 		mhosts:    map[string]*mergedHost{},
@@ -483,6 +460,7 @@ func New(cfg Config) *Daemon {
 			d.journal = j
 		}
 	}
+	d.tasks = newRunner(d)
 	if cfg.Attention != "" && cfg.Hosts != nil {
 		a, err := openAttention(cfg.Attention)
 		if err != nil {
@@ -574,8 +552,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.markDiscovered(&d.worktreesDiscovered)
 	}
 	if d.journal != nil {
-		d.sweepBuffers(ctx)
-		go d.runJournal(ctx)
+		d.tasks.sweepBuffers(ctx)
+		go d.tasks.runJournal(ctx)
 	}
 	if d.relay != nil {
 		d.startRelays(ctx)
@@ -1217,7 +1195,7 @@ func (c *clientConn) command(m protocol.Message) error {
 	if m.Type == protocol.TypePrompt {
 		key = promptKey(m.ID, m.Attempt)
 	}
-	cmd, fresh := d.cmds.get(key, func(c *command) {
+	cmd, fresh := d.tasks.cmds.get(key, func(c *command) {
 		if m.Type == protocol.TypeRun {
 			c.ring = true
 			c.job = newRunJob()
@@ -1226,13 +1204,13 @@ func (c *clientConn) command(m protocol.Message) error {
 	if fresh {
 		switch m.Type {
 		case protocol.TypeAdd:
-			go d.runAdd(c.ctx, m, cmd)
+			go d.tasks.runAdd(c.ctx, m, cmd)
 		case protocol.TypeRm:
-			go d.runRm(c.ctx, m, cmd)
+			go d.tasks.runRm(c.ctx, m, cmd)
 		case protocol.TypePrompt:
-			go d.runPrompt(c.ctx, m, cmd)
+			go d.tasks.runPrompt(c.ctx, m, cmd)
 		default:
-			go d.runRun(c.ctx, m, cmd)
+			go d.tasks.runRun(c.ctx, m, cmd)
 		}
 	}
 	c.streamCommand(cmd, 0)
@@ -1256,10 +1234,10 @@ func (c *clientConn) follow(m protocol.Message) error {
 	if m.Attempt > 0 {
 		key = promptKey(m.ID, m.Attempt)
 	}
-	cmd, ok := d.cmds.lookup(key)
+	cmd, ok := d.tasks.cmds.lookup(key)
 	if !ok {
 		// The journal answers for what the memory has let go.
-		res := d.answerFollow(m)
+		res := d.tasks.answerFollow(m)
 		if res == nil {
 			res = &protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: protocol.ErrUnknownCommand}
 		}
@@ -1270,7 +1248,7 @@ func (c *clientConn) follow(m protocol.Message) error {
 }
 
 func (c *clientConn) cancel(m protocol.Message) error {
-	c.d.cancelCommand(m.ID)
+	c.d.tasks.cancelCommand(m.ID)
 	return nil
 }
 

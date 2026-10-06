@@ -520,7 +520,7 @@ func TestCommandEviction(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		_, kept := d.cmds.lookup("c1")
+		_, kept := d.tasks.cmds.lookup("c1")
 		if !kept {
 			break
 		}
@@ -529,7 +529,7 @@ func TestCommandEviction(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, fresh := d.cmds.get("c1", nil); !fresh {
+	if _, fresh := d.tasks.cmds.get("c1", nil); !fresh {
 		t.Fatal("evicted id not fresh")
 	}
 }
@@ -695,8 +695,8 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
 	// An add holds another repository's lock, one no config lists, as
 	// an add from a repository entry does.
-	unhold := d.holdRepos()
-	unlockRepo := d.lockRepo("/nowhere/other.git", "other")
+	unhold := d.tasks.holdRepos()
+	unlockRepo := d.tasks.lockRepo("/nowhere/other.git", "other")
 	unlockOther := func() { unlockRepo(); unhold() }
 	pc := conn(t, d)
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: store.Dirs.Worktree("proj", "task")})

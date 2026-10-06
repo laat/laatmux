@@ -54,10 +54,10 @@ func (r *runJob) requestCancel() {
 // runGen is the removal generation of a root: bumped by rm once git has
 // removed the worktree, so a run that resolved before the removal cannot
 // register after it.
-func (d *Daemon) runGen(root string) uint64 {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.rootGen[root]
+func (rn *taskRunner) runGen(root string) uint64 {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	return rn.rootGen[root]
 }
 
 // registerRun adds r to the root's runs when the generation it resolved
@@ -66,34 +66,34 @@ func (d *Daemon) runGen(root string) uint64 {
 // the same root since: the request was for the old one. Nothing
 // registers once the daemon is stopping, so a run that resolved while
 // StopRuns took its list cannot start after it.
-func (d *Daemon) registerRun(r *runJob, gen uint64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.stopping {
+func (rn *taskRunner) registerRun(r *runJob, gen uint64) error {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	if rn.stopping {
 		return errors.New("daemon shutting down")
 	}
-	if d.rootGen[r.root] != gen {
+	if rn.rootGen[r.root] != gen {
 		return errors.New("worktree removed; retry")
 	}
-	if d.runs[r.root] == nil {
-		d.runs[r.root] = map[*runJob]struct{}{}
+	if rn.runs[r.root] == nil {
+		rn.runs[r.root] = map[*runJob]struct{}{}
 	}
-	d.runs[r.root][r] = struct{}{}
+	rn.runs[r.root][r] = struct{}{}
 	return nil
 }
 
-func (d *Daemon) unregisterRun(r *runJob) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.runEndedLocked(r)
+func (rn *taskRunner) unregisterRun(r *runJob) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.core.runEndedLocked(r)
 	// What the run did to the worktree shows at once.
-	if e := d.gits[r.root]; e != nil {
+	if e := rn.gits[r.root]; e != nil {
 		e.due = true
 	}
-	if rs := d.runs[r.root]; rs != nil {
+	if rs := rn.runs[r.root]; rs != nil {
 		delete(rs, r)
 		if len(rs) == 0 {
-			delete(d.runs, r.root)
+			delete(rn.runs, r.root)
 		}
 	}
 }
@@ -101,14 +101,14 @@ func (d *Daemon) unregisterRun(r *runJob) {
 // cancelRunsIn bumps the root's generation and stops every run in it,
 // waiting for each to finish. Called by rm once git has removed the
 // worktree; the mutex is held only to take the list.
-func (d *Daemon) cancelRunsIn(root string) {
-	d.mu.Lock()
-	d.rootGen[root]++
+func (rn *taskRunner) cancelRunsIn(root string) {
+	rn.mu.Lock()
+	rn.rootGen[root]++
 	var rs []*runJob
-	for r := range d.runs[root] {
+	for r := range rn.runs[root] {
 		rs = append(rs, r)
 	}
-	d.mu.Unlock()
+	rn.mu.Unlock()
 	for _, r := range rs {
 		r.requestCancel()
 		<-r.done
@@ -117,31 +117,28 @@ func (d *Daemon) cancelRunsIn(root string) {
 
 // cancelCommand stops the run under id, if there is one and it has not
 // finished. A cancel for an add, an rm or an unknown id does nothing.
-func (d *Daemon) cancelCommand(id string) {
-	c, ok := d.cmds.lookup(id)
+func (rn *taskRunner) cancelCommand(id string) {
+	c, ok := rn.cmds.lookup(id)
 	if !ok || c.job == nil {
 		return
 	}
 	c.job.requestCancel()
 }
 
-// StopRuns closes the registry, cancels every run and waits for them,
-// and waits for every paste in flight, all bounded by ctx: what a
-// clean shutdown does, so a restart for an upgrade leaves no orphan
-// and no prompt in a buffer on the server.
-func (d *Daemon) StopRuns(ctx context.Context) {
-	d.mu.Lock()
-	d.stopping = true
-	if d.trustCancel != nil {
-		d.trustCancel()
+// stopRuns is Daemon.StopRuns.
+func (rn *taskRunner) stopRuns(ctx context.Context) {
+	rn.mu.Lock()
+	rn.stopping = true
+	if rn.trustCancel != nil {
+		rn.trustCancel()
 	}
 	var rs []*runJob
-	for _, m := range d.runs {
+	for _, m := range rn.runs {
 		for r := range m {
 			rs = append(rs, r)
 		}
 	}
-	d.mu.Unlock()
+	rn.mu.Unlock()
 	for _, r := range rs {
 		r.requestCancel()
 	}
@@ -153,9 +150,9 @@ func (d *Daemon) StopRuns(ctx context.Context) {
 		}
 	}
 	for {
-		d.mu.Lock()
-		n := d.pasting + d.trusting
-		d.mu.Unlock()
+		rn.mu.Lock()
+		n := rn.pasting + rn.trusting
+		rn.mu.Unlock()
 		if n == 0 {
 			return
 		}
@@ -174,7 +171,7 @@ func (d *Daemon) StopRuns(ctx context.Context) {
 // /dev/null and no tty, and its output is streamed one line per message
 // with the stream it came from. A run takes no repository lock: it does
 // not touch the main checkout, and a long one must not block add.
-func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
+func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command) {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	r := c.job
 	defer close(r.done)
@@ -186,14 +183,14 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 			return errors.New("run needs the worktree root")
 		}
 		root := filepath.Clean(m.Root)
-		if !d.cfg.Store.Owns(root) {
-			return fmt.Errorf("%s is not under the worktrees directory %s", root, d.cfg.Store.Dirs.Worktrees)
+		if !rn.cfg.Store.Owns(root) {
+			return fmt.Errorf("%s is not under the worktrees directory %s", root, rn.cfg.Store.Dirs.Worktrees)
 		}
 		r.id, r.argv, r.root = m.ID, m.Cmd, root
 		// The generation is read before git is asked, so a removal
 		// between the two is seen at registration.
-		gen := d.runGen(root)
-		rec, _, found, err := d.cfg.Store.Find(ctx, root)
+		gen := rn.runGen(root)
+		rec, _, found, err := rn.cfg.Store.Find(ctx, root)
 		if err != nil {
 			return err
 		}
@@ -206,7 +203,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 			// it. A bare source equal to another entry's label is the
 			// record's own source first, so it is never taken for the
 			// other entry.
-			repo, ok, err := d.cfg.Store.Known(ctx, m.Repo)
+			repo, ok, err := rn.cfg.Store.Known(ctx, m.Repo)
 			if err != nil {
 				return err
 			}
@@ -220,12 +217,12 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		if m.Branch != "" && rec.Branch != m.Branch {
 			return fmt.Errorf("%s is the worktree for %s, not %s", root, branchOrDetached(rec.Branch), m.Branch)
 		}
-		if err := d.registerRun(r, gen); err != nil {
+		if err := rn.registerRun(r, gen); err != nil {
 			return err
 		}
-		defer d.unregisterRun(r)
+		defer rn.unregisterRun(r)
 		c.emit(protocol.Message{Type: protocol.TypeProgress, ID: m.ID, Stage: protocol.StageRun, State: protocol.StateStart, Detail: root})
-		exit, err := d.runProcess(ctx, r, m.Cmd, func(fd int, line string) {
+		exit, err := rn.runProcess(ctx, r, m.Cmd, func(fd int, line string) {
 			c.emit(protocol.Message{Type: protocol.TypeProgress, ID: m.ID, Stage: protocol.StageRun, State: protocol.StateOutput, FD: fd, Detail: line})
 		})
 		if err != nil {
@@ -245,7 +242,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 		res.OK = true
 	}
 	c.emit(res)
-	d.cmds.evict(res.ID, c)
+	rn.cmds.evict(res.ID, c)
 }
 
 // runProcess starts the command in the run's root and waits for it,
@@ -255,7 +252,7 @@ func (d *Daemon) runRun(ctx context.Context, m protocol.Message, c *command) {
 // cancelled whatever the process then exits with. The exit status is the
 // process's; a process killed by a signal reports 128 plus the signal, as
 // a shell would.
-func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out func(fd int, line string)) (int, error) {
+func (rn *taskRunner) runProcess(ctx context.Context, r *runJob, argv []string, out func(fd int, line string)) (int, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = r.root
 	cmd.Env = os.Environ()
@@ -284,7 +281,7 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 	if err != nil {
 		return 0, err
 	}
-	d.runStarted(r, time.Now())
+	rn.core.runStarted(r, time.Now())
 	var wg sync.WaitGroup
 	for i, pr := range pipes {
 		wg.Add(1)
@@ -303,14 +300,14 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 		// The process is done; what it left in its group is laatmux's
 		// own, in a root rm may remove next, and goes with it. Its exit
 		// status stands.
-		werr = d.terminate(pgid, waited, werr, true)
+		werr = rn.terminate(pgid, waited, werr, true)
 	case <-r.cancel:
 		cancelled = true
-		werr = d.terminate(pgid, waited, nil, false)
+		werr = rn.terminate(pgid, waited, nil, false)
 	case <-ctx.Done():
 		cancelled = true
 		r.requestCancel()
-		werr = d.terminate(pgid, waited, nil, false)
+		werr = rn.terminate(pgid, waited, nil, false)
 	}
 	// Wait closes the pipe writers once the copying is done or the
 	// delay has passed, which ends the readers.
@@ -341,12 +338,12 @@ func (d *Daemon) runProcess(ctx context.Context, r *runJob, argv []string, out f
 // has returned already, with werr; otherwise it is read from waited.
 // Returns what Wait said. A group with nothing left in it returns at
 // once.
-func (d *Daemon) terminate(pgid int, waited <-chan error, werr error, exited bool) error {
+func (rn *taskRunner) terminate(pgid int, waited <-chan error, werr error, exited bool) error {
 	if exited && !groupAlive(pgid) {
 		return werr
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	deadline := time.Now().Add(d.cfg.Timings.KillDelay)
+	deadline := time.Now().Add(rn.cfg.Timings.KillDelay)
 	for (!exited || groupAlive(pgid)) && time.Now().Before(deadline) {
 		if exited {
 			time.Sleep(20 * time.Millisecond)

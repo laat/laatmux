@@ -133,7 +133,7 @@ func TestRunCancelledWhileResolving(t *testing.T) {
 	cancel()
 	c := newCommand("r1")
 	c.job = newRunJob()
-	d.runRun(ctx, protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"true"}}, c)
+	d.tasks.runRun(ctx, protocol.Message{Type: protocol.TypeRun, ID: "r1", Root: root, Cmd: []string{"true"}}, c)
 	if c.result.OK || c.result.Error != protocol.ErrCancelled {
 		t.Fatalf("result %+v", c.result)
 	}
@@ -176,7 +176,7 @@ func TestRunCancel(t *testing.T) {
 		t.Fatalf("after stray cancels: %+v %v", m, err)
 	}
 	d.mu.Lock()
-	n := len(d.runs)
+	n := len(d.tasks.runs)
 	d.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("runs still registered: %d", n)
@@ -210,15 +210,15 @@ func TestRmCancelsRuns(t *testing.T) {
 	// the removal is refused, one that reads it afresh is not.
 	stale := newRunJob()
 	stale.root = root
-	if err := d.registerRun(stale, 0); err == nil || !strings.Contains(err.Error(), "worktree removed") {
+	if err := d.tasks.registerRun(stale, 0); err == nil || !strings.Contains(err.Error(), "worktree removed") {
 		t.Fatalf("stale registration: %v", err)
 	}
 	r := newRunJob()
 	r.root = root
-	if err := d.registerRun(r, d.runGen(root)); err != nil {
+	if err := d.tasks.registerRun(r, d.tasks.runGen(root)); err != nil {
 		t.Fatalf("fresh registration: %v", err)
 	}
-	d.unregisterRun(r)
+	d.tasks.unregisterRun(r)
 }
 
 // A cancel that lands after registration and before the start means
@@ -231,7 +231,7 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 	r.root = root
 	r.requestCancel()
 	marker := root + "/started"
-	if _, err := d.runProcess(context.Background(), r, []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
+	if _, err := d.tasks.runProcess(context.Background(), r, []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
 		t.Fatalf("err %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -240,7 +240,7 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 	// The daemon's own context ending before the start is the same.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := d.runProcess(ctx, newRunJob(), []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
+	if _, err := d.tasks.runProcess(ctx, newRunJob(), []string{"touch", marker}, func(int, string) {}); err == nil || err.Error() != protocol.ErrCancelled {
 		t.Fatalf("err %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -328,7 +328,7 @@ func TestFollowerReleasedOnDisconnect(t *testing.T) {
 			break
 		}
 	}
-	c, _ := d.cmds.lookup("r1")
+	c, _ := d.tasks.cmds.lookup("r1")
 	server, client := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	go d.HandleConn(ctx, server, func() { server.Close() })
@@ -384,7 +384,7 @@ func TestStopRunsClosesRegistry(t *testing.T) {
 	d.StopRuns(context.Background())
 	r := newRunJob()
 	r.root = "/r"
-	if err := d.registerRun(r, 0); err == nil || !strings.Contains(err.Error(), "shutting down") {
+	if err := d.tasks.registerRun(r, 0); err == nil || !strings.Contains(err.Error(), "shutting down") {
 		t.Fatalf("registration after stop: %v", err)
 	}
 }
