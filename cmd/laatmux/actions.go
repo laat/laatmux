@@ -790,13 +790,22 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // addsSession says how add makes a workspace session for a worktree
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, on a host this machine's config gives the
-// directories add needs.
+// directories add needs, for a repository that config lists, which
+// --repo takes. Until add can run, it names everything add still
+// needs, not only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	switch {
-	case w.Branch == "":
-		return "laatmux add makes one once a branch is checked out in " + w.Root
-	case !h.CanAdd():
-		return "laatmux add makes one once host " + h.Name + " has repos and worktrees directories in the config"
+	var needs []string
+	if w.Branch == "" {
+		needs = append(needs, "a branch is checked out in "+w.Root)
+	}
+	if !h.CanAdd() {
+		needs = append(needs, "host "+h.Name+" has repos and worktrees directories in the config")
+	}
+	if _, ok := cfg.RepoBySource(w.Source); w.Source != "" && !ok {
+		needs = append(needs, w.Source+" is a repository in the config")
+	}
+	if len(needs) > 0 {
+		return "laatmux add makes one once " + strings.Join(needs, " and ")
 	}
 	return addCommand(cfg, h, w) + " makes one"
 }

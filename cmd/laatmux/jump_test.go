@@ -124,7 +124,9 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // host whose entry here has the directories, the add line for the
 // branch; a detached worktree, named by its root, needs a branch
 // checked out first; box's entry has no directories, which add needs
-// first.
+// first; a repository this machine's config does not list is one
+// --repo refuses. A worktree that lacks more than one is told all of
+// them.
 func TestAddHintCanRun(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	src := "git@github.com:laat/proj.git"
@@ -132,11 +134,15 @@ func TestAddHintCanRun(t *testing.T) {
 	bb := bv
 	bb.ID, bb.EnvironmentID = "benv/worktree//w/b", "benv"
 	det := protocol.Worktree{ID: "menv/worktree//w/det", EnvironmentID: "menv", Repo: "proj", Source: src, Root: "/w/det"}
+	detBox := det
+	detBox.ID, detBox.EnvironmentID = "benv/worktree//w/det", "benv"
+	other := protocol.Worktree{ID: "venv/worktree//w/o", EnvironmentID: "venv", Repo: "other", Source: "git@github.com:laat/other.git", Branch: "b", Root: "/w/o"}
 	host := func(name, env string) rows.Host {
 		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	}
 	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm makes one"
 	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
+	onOther := "vm/other/b has no managed session; laatmux add makes one once git@github.com:laat/other.git is a repository in the config"
 	for _, c := range []struct {
 		host rows.Host
 		w    protocol.Worktree
@@ -144,7 +150,9 @@ func TestAddHintCanRun(t *testing.T) {
 	}{
 		{host("vm", "venv"), bv, onVM},
 		{host("box", "benv"), bb, onBox},
+		{host("vm", "venv"), other, onOther},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
+		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
 	} {
 		in := rows.Input{Hosts: []rows.Host{c.host}, Worktrees: []protocol.Worktree{c.w}}
 		m := &view.Model{Width: 100, Height: 20, ShowHidden: true, View: view.ViewTree}
@@ -170,7 +178,7 @@ func TestAddHintCanRun(t *testing.T) {
 			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
 				{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
 				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
-			}, Worktrees: []protocol.Worktree{bv, bb}})
+			}, Worktrees: []protocol.Worktree{bv, bb, other}})
 		}
 		return true
 	})
@@ -179,7 +187,7 @@ func TestAddHintCanRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	for target, want := range map[string]string{"vm/proj/b": onVM, "box/proj/b": onBox} {
+	for target, want := range map[string]string{"vm/proj/b": onVM, "box/proj/b": onBox, "vm/other/b": onOther} {
 		if err := cmdJump(context.Background(), []string{target}); err == nil || err.Error() != want {
 			t.Errorf("jump %s: %v, want %q", target, err, want)
 		}

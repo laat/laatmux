@@ -122,9 +122,9 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 }
 
 // addHint says a worktree has no managed session and how add makes one,
-// in the words z uses for a homeless worktree's line: the add line only
-// when add can run it. A detached worktree has no <repo>/<branch> and
-// is named by its root.
+// in the words z uses for a homeless worktree's line: the add line when
+// add can run it, else what add needs first. A detached worktree has no
+// <repo>/<branch> and is named by its root.
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	name := h.Name + "/" + w.Repo + "/" + w.Branch
 	if w.Branch == "" {
@@ -145,9 +145,10 @@ func addCommand(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	return fmt.Sprintf("laatmux add %s --repo %s --host %s", w.Branch, repo, h.Name)
 }
 
-// localRepoArg is what --repo takes for the record's repository on this
-// machine: its label here when the source is known, else the source
-// itself, which --repo also accepts.
+// localRepoArg is the record's repository as this machine names it: its
+// label here when the source is known, else the source itself, which
+// the add form matches against the config's sources. --repo takes either
+// only for a repository the config lists.
 func localRepoArg(cfg config.Config, w protocol.Worktree) string {
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		return r.Name

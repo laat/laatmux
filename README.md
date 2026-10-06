@@ -788,9 +788,9 @@ records: a workspace row switches to its local session, creating it from
 the record when missing; a `new` session's row does the same through a
 plain attachment; an observed agent on this machine's default server is
 a `switch-client`; one on a remote host's default server is refused with
-`jump`'s message; a worktree with no session shows the `add` line that
-would start one in the footer. An orphaned row's session exists locally and
-is switched to.
+`jump`'s message; a worktree with no session says in the footer how `add`
+would start one: its command line, or what add needs first. An orphaned
+row's session exists locally and is switched to.
 
 - **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
   eight server hooks at indexes laatmux owns, `after-new-window[9101]`
