@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/laat/laatmux/internal/github"
@@ -63,6 +64,46 @@ type branchQuery struct {
 
 func branchKeyString(k protocol.BranchKey) string { return k.Source + "\n" + k.Branch }
 
+// branches is the merging daemon's branch records and the state of
+// asking GitHub about them. It is used under the daemon's lock, mu,
+// which the records are published under: the methods with the Locked
+// suffix are called with it held, the others take it. fetch runs a
+// round beside the daemon's loop and takes the lock around each step.
+type branches struct {
+	mu      *sync.Mutex             // the daemon's
+	entries map[string]*branchEntry // by key
+	// githubErr is why GitHub cannot be read, joined from hostErrs,
+	// gh's failure by host; lastErr is the file's last write error,
+	// logged once.
+	githubErr string
+	hostErrs  map[string]string
+	lastErr   string
+	// listed is that every host has listed once since the daemon
+	// started, from when a branch missing from the set is known gone.
+	listed bool
+	// errs are the per-branch errors of the last round, logged, and
+	// roundErrs those of the round under way; pagedNone is when a
+	// branch's forks' pages held none of its own.
+	errs      map[string]bool
+	roundErrs map[string]bool
+	pagedNone map[string]time.Time
+	// cfg is the daemon's: GitHub, Branches, GitHubHosts and Logger.
+	cfg *Config
+	// publish puts a message on the merged stream; called with mu held.
+	publish func(protocol.Message)
+}
+
+// newBranches is the tracker over the kept answers in cfg.Branches; a
+// file that does not read starts over.
+func newBranches(cfg *Config, mu *sync.Mutex, publish func(protocol.Message)) *branches {
+	entries, err := openBranches(cfg.Branches)
+	if err != nil {
+		cfg.Logger.Printf("branches: %v; starting over", err)
+		entries = map[string]*branchEntry{}
+	}
+	return &branches{mu: mu, entries: entries, cfg: cfg, publish: publish}
+}
+
 // openBranches reads the kept answers; a missing file is none.
 func openBranches(path string) (map[string]*branchEntry, error) {
 	out := map[string]*branchEntry{}
@@ -90,21 +131,20 @@ func openBranches(path string) (map[string]*branchEntry, error) {
 	return out, nil
 }
 
-// saveBranchesLocked writes the kept answers whole, through a temporary
-// file.
-func (d *Daemon) saveBranchesLocked() {
-	b, err := json.Marshal(struct {
+// saveLocked writes the kept answers whole, through a temporary file.
+func (b *branches) saveLocked() {
+	data, err := json.Marshal(struct {
 		Entries map[string]*branchEntry `json:"entries"`
-	}{d.branches})
+	}{b.entries})
 	if err == nil {
-		if err = os.MkdirAll(filepath.Dir(d.cfg.Branches), 0o700); err == nil {
-			err = home.WriteAtomic(d.cfg.Branches, b)
+		if err = os.MkdirAll(filepath.Dir(b.cfg.Branches), 0o700); err == nil {
+			err = home.WriteAtomic(b.cfg.Branches, data)
 		}
 	}
 	if err != nil {
-		d.logOnce(&d.lastBranchesErr, "branches: %v", err)
+		logOnce(b.cfg.Logger, &b.lastErr, "branches: %v", err)
 	} else {
-		d.lastBranchesErr = ""
+		b.lastErr = ""
 	}
 }
 
@@ -117,7 +157,7 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 			return
 		}
 		host, path, ok := source.Forge(w.Source)
-		if !ok || !d.githubHost(host) {
+		if !ok || !d.branches.githubHost(host) {
 			return
 		}
 		owner, repo, ok := strings.Cut(path, "/")
@@ -143,11 +183,11 @@ func (d *Daemon) branchSetLocked() map[string]branchQuery {
 
 // githubHost reports whether a source's host is one gh is asked about:
 // github.com, or a GitHub Enterprise host the config names.
-func (d *Daemon) githubHost(host string) bool {
+func (b *branches) githubHost(host string) bool {
 	if strings.EqualFold(host, "github.com") {
 		return true
 	}
-	return slices.ContainsFunc(d.cfg.GitHubHosts, func(h string) bool { return strings.EqualFold(h, host) })
+	return slices.ContainsFunc(b.cfg.GitHubHosts, func(h string) bool { return strings.EqualFold(h, host) })
 }
 
 // hostsListedLocked reports whether every configured host has a listing
@@ -216,7 +256,7 @@ func (d *Daemon) runBranches(ctx context.Context) {
 		now := time.Now().Round(0) // the wall clock, sleep included
 		d.mu.Lock()
 		set := d.branchSetLocked()
-		d.ageBranchesLocked(set, now)
+		d.branches.ageLocked(set, now, d.hostsListedLocked())
 		due := !running && len(d.msubs) > 0 && (!sameKeys(set, asked) || now.Sub(last) >= branchEvery)
 		d.mu.Unlock()
 		if !due {
@@ -230,51 +270,52 @@ func (d *Daemon) runBranches(ctx context.Context) {
 		go func() {
 			rctx, cancel := context.WithTimeout(ctx, branchRound)
 			defer cancel()
-			d.fetchBranches(rctx, set)
+			d.branches.fetch(rctx, set)
 			done <- struct{}{}
 		}()
 	}
 }
 
-// ageBranchesLocked marks when each branch was last in the stream, marks
+// ageLocked marks when each branch was last in the stream, marks
 // answers stale past branchStale, and drops the entries of branches no
-// worktree has had for branchForget.
-func (d *Daemon) ageBranchesLocked(set map[string]branchQuery, now time.Time) {
+// worktree has had for branchForget. hostsListed is whether every host
+// has a listing now.
+func (b *branches) ageLocked(set map[string]branchQuery, now time.Time, hostsListed bool) {
 	changed := false
 	for k := range set {
-		if e := d.branches[k]; e != nil {
+		if e := b.entries[k]; e != nil {
 			e.LastSeen = now
 		}
 	}
 	// A branch is known gone only once every host has listed: after a
 	// restart, before a subscription has reached them, the set is
 	// empty, and the kept answers stand.
-	if d.hostsListedLocked() {
-		d.branchesListed = true
+	if hostsListed {
+		b.listed = true
 	}
-	listed := d.branchesListed
-	for k, e := range d.branches {
+	listed := b.listed
+	for k, e := range b.entries {
 		switch {
 		case listed && set[k].key == "" && now.Sub(e.LastSeen) > branchForget:
 			bk := e.Status.BranchKey
-			delete(d.branches, k)
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
+			delete(b.entries, k)
+			b.publish(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
 			changed = true
 		case !e.Status.Stale && now.Sub(e.Status.FetchedAt) > branchStale:
 			e.Status.Stale = true
 			st := e.Status
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
+			b.publish(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
 			changed = true
 		}
 	}
 	if changed {
-		d.saveBranchesLocked()
+		b.saveLocked()
 	}
 }
 
-// fetchBranches asks GitHub about the set, host by host, and applies the
+// fetch asks GitHub about the set, host by host, and applies the
 // answers.
-func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) {
+func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 	byHost := map[string][]branchQuery{}
 	for _, q := range set {
 		byHost[q.host] = append(byHost[q.host], q)
@@ -285,13 +326,13 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 	}
 	sort.Strings(hosts)
 	// A host no branch is on any more has no failure to say.
-	d.mu.Lock()
-	for h := range d.hostErrs {
+	b.mu.Lock()
+	for h := range b.hostErrs {
 		if _, asked := byHost[h]; !asked {
-			delete(d.hostErrs, h)
+			delete(b.hostErrs, h)
 		}
 	}
-	d.mu.Unlock()
+	b.mu.Unlock()
 	// Every host's status first, each within its share of the round,
 	// so a slow host starves no other; the failing checks' names after.
 	type answer struct {
@@ -301,32 +342,32 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 	answers := make([]answer, 0, len(hosts))
 	// gh's own failures by host, "" for a host that answered.
 	hostErrs := map[string]string{}
-	d.mu.Lock()
-	d.roundErrs = map[string]bool{}
-	d.mu.Unlock()
+	b.mu.Lock()
+	b.roundErrs = map[string]bool{}
+	b.mu.Unlock()
 	defer func() {
-		d.mu.Lock()
-		d.branchErrs, d.roundErrs = d.roundErrs, nil
-		d.mu.Unlock()
+		b.mu.Lock()
+		b.errs, b.roundErrs = b.roundErrs, nil
+		b.mu.Unlock()
 	}()
 	deadline, bounded := ctx.Deadline()
 	for n, host := range hosts {
 		qs := byHost[host]
 		sort.Slice(qs, func(i, j int) bool { return qs[i].key < qs[j].key })
 		bs := make([]github.Branch, len(qs))
-		d.mu.Lock()
+		b.mu.Lock()
 		for i, q := range qs {
 			bs[i] = q.b
-			if time.Since(d.pagedNone[q.key]) < branchPaging {
+			if time.Since(b.pagedNone[q.key]) < branchPaging {
 				bs[i].NoPaging = true
 			}
 		}
-		d.mu.Unlock()
+		b.mu.Unlock()
 		hctx, cancel := ctx, context.CancelFunc(func() {})
 		if bounded {
 			hctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(hosts)-n))
 		}
-		results, err := github.Fetch(hctx, d.cfg.GitHub, host, bs)
+		results, err := github.Fetch(hctx, b.cfg.GitHub, host, bs)
 		cancel()
 		if ctx.Err() != nil {
 			// The round is out of time: what it has is applied, the
@@ -342,13 +383,13 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 			}
 			for _, a := range answers {
 				// The names kept are filled in; none is looked up.
-				known := d.knownFailing(a.qs)
-				github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
-				d.applyBranches(a.qs, a.results, known)
+				known := b.knownFailing(a.qs)
+				github.FillFailing(ctx, b.cfg.GitHub, a.qs[0].host, a.results, known)
+				b.apply(a.qs, a.results, known)
 			}
 			// The login failures of the hosts asked are said; the hosts
 			// not reached keep what was said of them.
-			d.publishGitHubErr(hostErrs)
+			b.publishGitHubErr(hostErrs)
 			return
 		}
 		hostErrs[host] = ""
@@ -360,57 +401,57 @@ func (d *Daemon) fetchBranches(ctx context.Context, set map[string]branchQuery) 
 		answers = append(answers, answer{qs, results})
 	}
 	for _, a := range answers {
-		known := d.knownFailing(a.qs)
-		github.FillFailing(ctx, d.cfg.GitHub, a.qs[0].host, a.results, known)
-		d.applyBranches(a.qs, a.results, known)
+		known := b.knownFailing(a.qs)
+		github.FillFailing(ctx, b.cfg.GitHub, a.qs[0].host, a.results, known)
+		b.apply(a.qs, a.results, known)
 	}
-	d.publishGitHubErr(hostErrs)
+	b.publishGitHubErr(hostErrs)
 }
 
 // publishGitHubErr takes the hosts asked this round, with gh's failure
 // for each or "", and says the failures of every host, or clears them
 // with github_ok. A host not asked keeps its last.
-func (d *Daemon) publishGitHubErr(hostErrs map[string]string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.hostErrs == nil {
-		d.hostErrs = map[string]string{}
+func (b *branches) publishGitHubErr(hostErrs map[string]string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.hostErrs == nil {
+		b.hostErrs = map[string]string{}
 	}
 	for h, e := range hostErrs {
 		if e == "" {
-			delete(d.hostErrs, h)
+			delete(b.hostErrs, h)
 		} else {
-			d.hostErrs[h] = e
+			b.hostErrs[h] = e
 		}
 	}
 	var msgs []string
-	for _, e := range d.hostErrs {
+	for _, e := range b.hostErrs {
 		msgs = append(msgs, e)
 	}
 	sort.Strings(msgs)
 	msgs = slices.Compact(msgs) // gh missing names no host: once
 	ghErr := strings.Join(msgs, "; ")
 	switch {
-	case ghErr != "" && ghErr != d.githubErr:
-		d.githubErr = ghErr
-		d.cfg.Logger.Printf("github: %s", ghErr)
-		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubError: ghErr})
-	case ghErr == "" && d.githubErr != "":
-		d.githubErr = ""
-		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
+	case ghErr != "" && ghErr != b.githubErr:
+		b.githubErr = ghErr
+		b.cfg.Logger.Printf("github: %s", ghErr)
+		b.publish(protocol.Message{Type: protocol.TypeUpsert, GitHubError: ghErr})
+	case ghErr == "" && b.githubErr != "":
+		b.githubErr = ""
+		b.publish(protocol.Message{Type: protocol.TypeUpsert, GitHubOK: true})
 	}
 }
 
 // knownFailing is the failing names found for the branches' rollups
 // within branchStale: a rollup's failing check can change on the same
 // commit, a rerun say, so a name is asked for again once it is old.
-func (d *Daemon) knownFailing(qs []branchQuery) map[string]string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (b *branches) knownFailing(qs []branchQuery) map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	known := map[string]string{}
 	now := time.Now().Round(0)
 	for _, q := range qs {
-		e := d.branches[q.key]
+		e := b.entries[q.key]
 		if e != nil && e.FailingKey != "" && e.Status.Checks != nil && e.Status.Checks.Failing != "" && now.Sub(e.FailingAt) < branchStale {
 			known[e.FailingKey] = e.Status.Checks.Failing
 		}
@@ -418,36 +459,36 @@ func (d *Daemon) knownFailing(qs []branchQuery) map[string]string {
 	return known
 }
 
-// applyBranches takes one host's answers: a branch GitHub does not have
-// drops its entry; a failed answer keeps the last one, marked stale; an
+// apply takes one host's answers: a branch GitHub does not have drops
+// its entry; a failed answer keeps the last one, marked stale; an
 // answer upserts the record when a value changed.
-func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known map[string]string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (b *branches) apply(qs []branchQuery, results []github.Result, known map[string]string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	// The wall clock: a laptop that slept has its answers aged by the
 	// sleep too.
 	now := time.Now().Round(0)
 	for i, q := range qs {
 		r := results[i]
-		e := d.branches[q.key]
+		e := b.entries[q.key]
 		// The pages held none of the branch's own PR: not paged again
 		// for a while, whether the branch is there or not; one found
 		// ends that, so a PR pushed off the first page is still found.
 		switch {
 		case r.PagedNone:
-			if d.pagedNone == nil {
-				d.pagedNone = map[string]time.Time{}
+			if b.pagedNone == nil {
+				b.pagedNone = map[string]time.Time{}
 			}
-			d.pagedNone[q.key] = now
+			b.pagedNone[q.key] = now
 		case r.Err == nil && r.PR != nil:
-			delete(d.pagedNone, q.key)
+			delete(b.pagedNone, q.key)
 		}
 		switch {
 		case r.NoRef:
 			if e != nil {
-				delete(d.branches, q.key)
+				delete(b.entries, q.key)
 				bk := q.bk
-				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
+				b.publish(protocol.Message{Type: protocol.TypeRemove, BranchStatusKey: &bk})
 			}
 		case r.Err != nil:
 			// A branch GitHub answered with an error, a repository it
@@ -456,22 +497,22 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 			// are github_error's.
 			if !errors.Is(r.Err, github.ErrNoGH) && !errors.Is(r.Err, github.ErrLoggedOut) {
 				msg := q.host + ": " + r.Err.Error()
-				if !d.branchErrs[msg] {
-					d.cfg.Logger.Printf("github: %s", msg)
+				if !b.errs[msg] {
+					b.cfg.Logger.Printf("github: %s", msg)
 				}
-				if d.roundErrs != nil {
-					d.roundErrs[msg] = true
+				if b.roundErrs != nil {
+					b.roundErrs[msg] = true
 				}
 			}
 			if e != nil && !e.Status.Stale {
 				e.Status.Stale = true
 				st := e.Status
-				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
+				b.publish(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
 			}
 		default:
 			if e == nil {
 				e = &branchEntry{}
-				d.branches[q.key] = e
+				b.entries[q.key] = e
 			}
 			if _, cached := known[r.FailingKey()]; !cached {
 				e.FailingAt = now // a name found now, or none needed
@@ -489,11 +530,11 @@ func (d *Daemon) applyBranches(qs []branchQuery, results []github.Result, known 
 			same := sameBranchStatus(e.Status, st)
 			e.Status = st
 			if !same {
-				d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
+				b.publish(protocol.Message{Type: protocol.TypeUpsert, BranchStatus: &st})
 			}
 		}
 	}
-	d.saveBranchesLocked()
+	b.saveLocked()
 }
 
 // sameBranchStatus compares two records but for when they were fetched.
@@ -504,10 +545,10 @@ func sameBranchStatus(a, b protocol.BranchStatus) bool {
 	return string(ja) == string(jb)
 }
 
-// branchStatusesLocked is every kept record, for a merged snapshot.
-func (d *Daemon) branchStatusesLocked() []protocol.BranchStatus {
-	out := make([]protocol.BranchStatus, 0, len(d.branches))
-	for _, e := range d.branches {
+// statusesLocked is every kept record, for a merged snapshot.
+func (b *branches) statusesLocked() []protocol.BranchStatus {
+	out := make([]protocol.BranchStatus, 0, len(b.entries))
+	for _, e := range b.entries {
 		out = append(out, e.Status)
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -79,7 +79,7 @@ func (d *Daemon) fetchNow(t *testing.T) {
 	d.mu.Lock()
 	set := d.branchSetLocked()
 	d.mu.Unlock()
-	d.fetchBranches(context.Background(), set)
+	d.branches.fetch(context.Background(), set)
 }
 
 func drainBranches(s *subscriber) (ups []protocol.BranchStatus, removes []protocol.BranchKey, msgs []protocol.Message) {
@@ -141,7 +141,7 @@ func TestBranchesFetch(t *testing.T) {
 		t.Errorf("a failed answer: %+v", ups)
 	}
 	d.mu.Lock()
-	b := d.branches[branchKeyString(bkey("b"))]
+	b := d.branches.entries[branchKeyString(bkey("b"))]
 	d.mu.Unlock()
 	if !b.Status.Checks.PendingSince.Equal(since) {
 		t.Error("pending_since moved for the same head")
@@ -207,26 +207,26 @@ func TestBranchesAgeAndKeep(t *testing.T) {
 	d2, s2 := branchDaemon(t, dir, gh)
 	d2.mu.Lock()
 	snap := d2.mergedSnapshotLocked()
-	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute))
-	e := d2.branches[branchKeyString(bkey("a"))]
+	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute), d2.hostsListedLocked())
+	e := d2.branches.entries[branchKeyString(bkey("a"))]
 	stale := e != nil && e.Status.Stale
 	// Before the hosts have listed, an empty set is no proof of
 	// absence: kept however old.
-	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
-	_, kept := d2.branches[branchKeyString(bkey("a"))]
+	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	_, kept := d2.branches.entries[branchKeyString(bkey("a"))]
 	// A snapshot from a host whose git listing failed is no listing.
 	d2.mu.Unlock()
 	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, ListingError: "git failed"})
 	d2.mu.Lock()
-	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
-	if _, ok := d2.branches[branchKeyString(bkey("a"))]; !ok {
+	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	if _, ok := d2.branches.entries[branchKeyString(bkey("a"))]; !ok {
 		t.Error("dropped after a failed listing")
 	}
 	d2.mu.Unlock()
 	d2.applyRemote(context.Background(), d2.mhosts["vm"], protocol.Message{Type: protocol.TypeSnapshot, Listing: &protocol.Listing{Generation: 1}})
 	d2.mu.Lock()
-	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour))
-	_, still := d2.branches[branchKeyString(bkey("a"))]
+	d2.branches.ageLocked(map[string]branchQuery{}, time.Now().Add(25*time.Hour), d2.hostsListedLocked())
+	_, still := d2.branches.entries[branchKeyString(bkey("a"))]
 	d2.mu.Unlock()
 	if len(snap.BranchStatuses) != 1 || !stale || !kept || still {
 		t.Errorf("kept %d, stale %v, kept before the listing %v, still there after a day %v", len(snap.BranchStatuses), stale, kept, still)
@@ -305,7 +305,7 @@ func TestBranchesSlowRound(t *testing.T) {
 	d.cfg.GitHub = slow
 	// Stale a little after the first tick, which starts the round: only
 	// a loop not held by the round marks it.
-	for _, e := range d.branches {
+	for _, e := range d.branches.entries {
 		e.Status.FetchedAt = time.Now().Add(-branchStale + branchTick + branchTick/2)
 	}
 	d.mu.Unlock()
@@ -323,7 +323,7 @@ func TestBranchesSlowRound(t *testing.T) {
 	deadline := time.Now().Add(4 * branchTick)
 	for {
 		d.mu.Lock()
-		stale := d.branches[branchKeyString(bkey("a"))].Status.Stale
+		stale := d.branches.entries[branchKeyString(bkey("a"))].Status.Stale
 		d.mu.Unlock()
 		if stale {
 			break
@@ -344,10 +344,10 @@ func TestBranchesStaleAfterRestart(t *testing.T) {
 	d, _ := branchDaemon(t, dir, gh, "a")
 	d.fetchNow(t)
 	d.mu.Lock()
-	for _, e := range d.branches {
+	for _, e := range d.branches.entries {
 		e.Status.FetchedAt = time.Now().Add(-time.Hour)
 	}
-	d.saveBranchesLocked()
+	d.branches.saveLocked()
 	d.mu.Unlock()
 	d2, _ := branchDaemon(t, dir, gh)
 	d2.mu.Lock()
@@ -364,17 +364,17 @@ func TestBranchesFailingNameLifetime(t *testing.T) {
 	d, _ := branchDaemon(t, t.TempDir(), &fakeGH{})
 	k := branchKeyString(bkey("a"))
 	d.mu.Lock()
-	d.branches[k] = &branchEntry{FailingKey: "R x", FailingAt: time.Now().Add(-time.Minute),
+	d.branches.entries[k] = &branchEntry{FailingKey: "R x", FailingAt: time.Now().Add(-time.Minute),
 		Status: protocol.BranchStatus{BranchKey: bkey("a"), Checks: &protocol.Checks{State: protocol.ChecksFailure, Failing: "lint"}}}
 	d.mu.Unlock()
 	q := []branchQuery{{key: k}}
-	if known := d.knownFailing(q); known["R x"] != "lint" {
+	if known := d.branches.knownFailing(q); known["R x"] != "lint" {
 		t.Errorf("a recent name not known: %v", known)
 	}
 	d.mu.Lock()
-	d.branches[k].FailingAt = time.Now().Add(-2 * branchStale)
+	d.branches.entries[k].FailingAt = time.Now().Add(-2 * branchStale)
 	d.mu.Unlock()
-	if known := d.knownFailing(q); len(known) != 0 {
+	if known := d.branches.knownFailing(q); len(known) != 0 {
 		t.Errorf("an old name still known: %v", known)
 	}
 }
@@ -400,7 +400,7 @@ func TestBranchesSlowHostShare(t *testing.T) {
 	d.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
-	d.fetchBranches(ctx, set)
+	d.branches.fetch(ctx, set)
 	ups, _, _ := drainBranches(s)
 	if len(ups) != 1 || ups[0].BranchKey != bkey("b") {
 		t.Errorf("the second host: %+v", ups)
@@ -428,7 +428,7 @@ func TestBranchesSlowHostLast(t *testing.T) {
 	d.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	d.fetchBranches(ctx, set)
+	d.branches.fetch(ctx, set)
 	ups, _, _ := drainBranches(s)
 	if len(ups) != 1 || ups[0].BranchKey != bkey("b") {
 		t.Errorf("the host answered before the slow one: %+v", ups)
@@ -440,7 +440,7 @@ func TestBranchesSlowHostLast(t *testing.T) {
 	gh.mu.Unlock()
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel2()
-	d.fetchBranches(ctx2, set)
+	d.branches.fetch(ctx2, set)
 	_, _, msgs := drainBranches(s)
 	said := false
 	for _, m := range msgs {
@@ -479,9 +479,9 @@ func TestBranchesTimeoutKeepsNames(t *testing.T) {
 	d.fetchNow(t)
 	drainBranches(s)
 	d.mu.Lock()
-	e := d.branches[branchKeyString(bkey("c"))]
+	e := d.branches.entries[branchKeyString(bkey("c"))]
 	e.Status.Checks.Failing, e.FailingAt = "lint", time.Now()
-	d.pagedNone = map[string]time.Time{branchKeyString(bkey("c")): time.Now()}
+	d.branches.pagedNone = map[string]time.Time{branchKeyString(bkey("c")): time.Now()}
 	d.mu.Unlock()
 	var paging bool
 	slow := func(ctx context.Context, host, q string, vars map[string]string) ([]byte, error) {
@@ -500,9 +500,9 @@ func TestBranchesTimeoutKeepsNames(t *testing.T) {
 	d.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	d.fetchBranches(ctx, set)
+	d.branches.fetch(ctx, set)
 	d.mu.Lock()
-	failing := d.branches[branchKeyString(bkey("c"))].Status.Checks.Failing
+	failing := d.branches.entries[branchKeyString(bkey("c"))].Status.Checks.Failing
 	d.mu.Unlock()
 	if failing != "lint" || paging {
 		t.Errorf("failing %q, paged %v", failing, paging)
@@ -515,16 +515,16 @@ func TestBranchesTimeoutKeepsNames(t *testing.T) {
 func TestBranchesPagingMemory(t *testing.T) {
 	d, _ := branchDaemon(t, t.TempDir(), &fakeGH{})
 	q := []branchQuery{{key: "k", bk: bkey("patch-1"), host: "github.com"}}
-	d.applyBranches(q, []github.Result{{NoRef: true, PagedNone: true}}, nil)
+	d.branches.apply(q, []github.Result{{NoRef: true, PagedNone: true}}, nil)
 	d.mu.Lock()
-	_, kept := d.pagedNone["k"]
+	_, kept := d.branches.pagedNone["k"]
 	d.mu.Unlock()
 	if !kept {
 		t.Fatal("no ref lost the paging memory")
 	}
-	d.applyBranches(q, []github.Result{{HeadOID: "h", PR: &protocol.PullRequest{Number: 1, State: "open"}}}, nil)
+	d.branches.apply(q, []github.Result{{HeadOID: "h", PR: &protocol.PullRequest{Number: 1, State: "open"}}}, nil)
 	d.mu.Lock()
-	_, still := d.pagedNone["k"]
+	_, still := d.branches.pagedNone["k"]
 	d.mu.Unlock()
 	if still {
 		t.Error("a PR found did not end the paging memory")
@@ -535,8 +535,8 @@ func TestBranchesPagingMemory(t *testing.T) {
 // keeps that failure said, while a host asked and fine clears its own.
 func TestBranchesHostErrorsKept(t *testing.T) {
 	d, s := branchDaemon(t, t.TempDir(), &fakeGH{})
-	d.publishGitHubErr(map[string]string{"github.com": "gh is not logged in to github.com", "ghe.example.com": "gh is not logged in to ghe.example.com"})
-	d.publishGitHubErr(map[string]string{"github.com": ""})
+	d.branches.publishGitHubErr(map[string]string{"github.com": "gh is not logged in to github.com", "ghe.example.com": "gh is not logged in to ghe.example.com"})
+	d.branches.publishGitHubErr(map[string]string{"github.com": ""})
 	_, _, msgs := drainBranches(s)
 	last := ""
 	for _, m := range msgs {
@@ -548,12 +548,12 @@ func TestBranchesHostErrorsKept(t *testing.T) {
 		t.Errorf("after github.com answered: %q", last)
 	}
 	// gh missing names no host: said once for two.
-	d.publishGitHubErr(map[string]string{"github.com": github.ErrNoGH.Error(), "ghe.example.com": github.ErrNoGH.Error()})
+	d.branches.publishGitHubErr(map[string]string{"github.com": github.ErrNoGH.Error(), "ghe.example.com": github.ErrNoGH.Error()})
 	_, _, msgs = drainBranches(s)
 	if n := len(msgs); n == 0 || msgs[n-1].GitHubError != github.ErrNoGH.Error() {
 		t.Errorf("gh missing on two hosts: %+v", msgs)
 	}
-	d.publishGitHubErr(map[string]string{"github.com": "", "ghe.example.com": "gh is not logged in to ghe.example.com"})
+	d.branches.publishGitHubErr(map[string]string{"github.com": "", "ghe.example.com": "gh is not logged in to ghe.example.com"})
 	drainBranches(s)
 	// The enterprise host's last worktree goes: its failure goes with
 	// it at the next round, which asks nothing of it.
