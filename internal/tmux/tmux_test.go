@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -156,20 +157,38 @@ func TestListPanesEmptyServer(t *testing.T) {
 	}
 }
 
+// startManaged starts the managed server without the user's config and
+// keeps it up with no session; it is killed at the end. A server the
+// previous test killed may still be going: a start that reaches it is
+// tried again.
+func startManaged(t *testing.T) Server {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	s := LaatmuxServer
+	var err error
+	for i := 0; i < 50; i++ {
+		if _, err = s.Run(context.Background(), "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
+	return s
+}
+
 // A hand-started server's sessions lose their overrides of the
 // isolation options, each named exactly: the first one is called 0,
 // which as a bare target is pane 0 of the most recent session, b here.
 func TestEnsureConfiguredClearsEverySession(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	s := startManaged(t)
 	ctx := context.Background()
-	s := LaatmuxServer
-	if _, err := s.Run(ctx, "-f", "/dev/null", "new-session", "-d", "-s", "0", "sleep 600"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
 	for _, args := range [][]string{
+		{"new-session", "-d", "-s", "0", "sleep 600"},
 		{"set-option", "-t", "=0:", "status", "on"},
 		{"new-session", "-d", "-s", "b", "sleep 600"},
 		{"set-option", "-t", "=b:", "status", "on"},
@@ -185,6 +204,31 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 		if out, err := s.Run(ctx, "show-options", "-t", "="+name+":", "status"); err != nil || strings.TrimSpace(string(out)) != "" {
 			t.Errorf("session %s keeps %q %v", name, out, err)
 		}
+	}
+}
+
+// NewSession counts the panes of the session it made, named exactly. A
+// caller whose TMUX_PANE names a pane on the managed server, as a pane
+// id of the user's own server can, has that pane's session as current,
+// and =proj/z alone is a window of it before it is a session: other's
+// two panes were counted and the new session killed.
+func TestNewSessionCountsItsOwnPanes(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	out, err := s.Run(ctx, "new-session", "-d", "-s", "other", "-n", "proj/z", "-P", "-F", "#{pane_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := strings.TrimSpace(string(out))
+	if _, err := s.Run(ctx, "split-window", "-d", "-t", pane, "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_PANE", pane)
+	if _, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/z", Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasSession(ctx, "proj/z") {
+		t.Fatal("the new session is gone")
 	}
 }
 

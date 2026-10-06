@@ -308,7 +308,7 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 			for _, opt := range []string{"prefix", "prefix2", "status", "mouse"} {
 				// The session by exact name: a bare 0, the name the
 				// first session of a hand-started server gets, is
-				// pane 0 of the most recent session.
+				// pane 0 of the current session.
 				_, _ = s.Run(ctx, "set-option", "-u", "-t", "="+sess+":", opt)
 			}
 		}
@@ -398,7 +398,11 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		// The invariant is one session, one window, one pane. Anything
 		// else means something outside laatmux acted on the session;
 		// refuse it rather than report a topology that jump cannot use.
-		if pout, err := s.Run(ctx, "list-panes", "-s", "-t", "="+o.Name, "-F", "#{pane_id}"); err == nil {
+		// The session is named exactly here as well: =name alone is
+		// taken as a window of the current session first, and for a
+		// caller whose TMUX_PANE names a pane on this server the
+		// current session is that pane's.
+		if pout, err := s.Run(ctx, "list-panes", "-s", "-t", target, "-F", "#{pane_id}"); err == nil {
 			if n := len(strings.Fields(string(pout))); n != 1 {
 				_, _ = s.Run(ctx, "kill-session", "-t", "="+o.Name)
 				return Session{}, &SubmittedError{Err: fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)}

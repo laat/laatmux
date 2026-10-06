@@ -293,12 +293,14 @@ func startAttach(ctx context.Context, paneID string, s Spec) error {
 
 // sessionTarget is the target of a window or pane command for the
 // session with exactly this name, and a session gone is an error. A bare
-// name may be taken as a pane or window of the current session, the most
-// recent one outside tmux, before it is a session, and as a session it
-// is a prefix of after; =name without the colon still falls back to a
-// session prefix where a window is wanted, and set-option refuses it.
-// kill-session and switch-client take a session target, for which =name
-// alone is exact.
+// name may be taken as a pane or window of the current session before it
+// is a session, and as a session it is a prefix of after; the current
+// session is the one with the pane TMUX_PANE names on that server, else
+// the most recently active. =name without the colon still falls back to
+// a session prefix where a window is wanted, set-option refuses it, and
+// switch-client looks it up as a pane when the name has a %, as an
+// encoded branch does. kill-session takes only a session target, for
+// which =name alone is exact.
 func sessionTarget(name string) string { return "=" + name + ":" }
 
 // SetHost tags the session with the host's name, for one whose tag
@@ -399,13 +401,13 @@ func Inside(ctx context.Context) bool {
 
 // Switch makes the session current for the calling client.
 func Switch(ctx context.Context, name string) error {
-	_, err := Server.Run(ctx, "switch-client", "-t", "="+name)
+	_, err := Server.Run(ctx, "switch-client", "-t", sessionTarget(name))
 	return err
 }
 
 // SwitchClient makes the session current for the named client.
 func SwitchClient(ctx context.Context, client, name string) error {
-	_, err := Server.Run(ctx, "switch-client", "-c", client, "-t", "="+name)
+	_, err := Server.Run(ctx, "switch-client", "-c", client, "-t", sessionTarget(name))
 	return err
 }
 

@@ -186,9 +186,10 @@ func TestPaneJumpSteps(t *testing.T) {
 // Every write names its session exactly. A session gone, whose name is
 // a prefix of another's, is an error that touches nothing: its settled
 // tag, attach pane and adoption do not land on the other. A session
-// that is there is the one written even when the most recent session,
-// the current one to a tmux command from outside, has a window named
-// after it, which a bare target would take first.
+// that is there is the one written even when the current session has a
+// window named after it, which a bare target would take first: the most
+// recently active session for a command run outside any pane, and the
+// pane's for one run from a pane, whatever was made after it.
 func TestExactSessionTargets(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -277,6 +278,93 @@ func TestExactSessionTargets(t *testing.T) {
 	}
 	if opt("mac/proj/y", "@laatmux_workspace") != "env//r/y" || opt("mac/proj/y", "@laatmux_attach") != "" || opt("notes", "@laatmux_workspace") != "" {
 		t.Fatalf("the adoption keyed %q, attach %q, notes %q", opt("mac/proj/y", "@laatmux_workspace"), opt("mac/proj/y", "@laatmux_attach"), opt("notes", "@laatmux_workspace"))
+	}
+	// From a pane of notes, as the sidebar runs, notes stays current
+	// while the sessions made from it are newer; it has windows named
+	// after them. The new sessions are tagged, not notes.
+	out, err := Server.Run(ctx, "new-window", "-d", "-t", "=notes:", "-n", "mac/proj/k-scratch", "-P", "-F", "#{pane_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Server.Run(ctx, "new-window", "-d", "-t", "=notes:", "-n", "mac/proj/k", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_PANE", strings.TrimSpace(string(out)))
+	keyed := Spec{Host: host, Managed: "m1", Name: "mac/proj/k", Key: "env//r/k", Branch: "k"}
+	if _, created, err := Ensure(ctx, keyed); err != nil || !created {
+		t.Fatalf("the workspace from a pane: %v %v", created, err)
+	}
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "m1", Name: "mac/proj/k-s"}); err != nil || !created {
+		t.Fatalf("the plain attachment from a pane: %v %v", created, err)
+	}
+	if opt("mac/proj/k", "@laatmux_workspace") != "env//r/k" || opt("mac/proj/k-s", "@laatmux_attach") != "mac/m1" || opt("notes", "@laatmux_workspace") != "" || opt("notes", "@laatmux_attach") != "" {
+		t.Fatalf("made from a pane: key %q, attach %q, notes %q %q", opt("mac/proj/k", "@laatmux_workspace"), opt("mac/proj/k-s", "@laatmux_attach"), opt("notes", "@laatmux_workspace"), opt("notes", "@laatmux_attach"))
+	}
+	// Its attach window closed, the workspace gets a new one, in it.
+	if _, err := Server.Run(ctx, "new-window", "-d", "-t", "=mac/proj/k:", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Server.Run(ctx, "kill-pane", "-t", AttachPane(ctx, "mac/proj/k")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Ensure(ctx, keyed); err != nil || AttachPane(ctx, "mac/proj/k") == "" {
+		t.Fatalf("the attach window remade: %v, pane %q", err, AttachPane(ctx, "mac/proj/k"))
+	}
+}
+
+// Switching names the session exactly. A name with a %, as an encoded
+// branch has, is one switch-client looks up as a pane, where =name alone
+// is no name at all; a gone one does not switch to a session it is a
+// prefix of.
+func TestSwitchExactName(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	for _, name := range []string{"home", "vm/proj/release-1%2e2", "vm/proj/v1%2e3"} {
+		if _, err := Server.Run(ctx, "new-session", "-d", "-s", name, "sleep 600"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A control-mode client stands in for the user's terminal.
+	cmd := exec.Command("tmux", "-L", "default", "-C", "attach-session", "-t", "=home")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); cmd.Process.Kill(); cmd.Wait() })
+	var client string
+	for i := 0; i < 100 && client == ""; i++ {
+		out, _ := Server.Run(ctx, "list-clients", "-F", "#{client_name}")
+		client = strings.TrimSpace(string(out))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if client == "" {
+		t.Fatal("no client")
+	}
+	session := func() string {
+		t.Helper()
+		out, err := Server.Run(ctx, "list-clients", "-F", "#{client_session}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := SwitchClient(ctx, client, "vm/proj/release-1%2e2"); err != nil || session() != "vm/proj/release-1%2e2" {
+		t.Fatalf("switch the client: %v, on %q", err, session())
+	}
+	if err := Switch(ctx, "vm/proj/v1%2e3"); err != nil || session() != "vm/proj/v1%2e3" {
+		t.Fatalf("switch: %v, on %q", err, session())
+	}
+	if err := SwitchClient(ctx, client, "vm/proj/release-1"); err == nil || session() != "vm/proj/v1%2e3" {
+		t.Fatalf("the client switched to a gone session: %v, on %q", err, session())
+	}
+	if err := Switch(ctx, "vm/proj/v1"); err == nil || session() != "vm/proj/v1%2e3" {
+		t.Fatalf("switched to a gone session: %v, on %q", err, session())
 	}
 }
 
