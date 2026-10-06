@@ -17,7 +17,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 )
 
-// startFakeDaemon stands in for the local daemon: a loopback listener
+// startFakeDaemon starts a stand-in for the local daemon: a loopback listener
 // the runtime file under a scratch LAATMUX_HOME points at, answering
 // the hello with the given capabilities and every later message
 // through serve, false ending the connection. Dial finds it as it

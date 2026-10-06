@@ -107,8 +107,9 @@ func (f *fakeServer) NewSession(_ context.Context, o tmux.NewSessionOpts) (tmux.
 	if f.newErr != nil {
 		return tmux.Session{}, f.newErr
 	}
-	id := ""
-	for id == "" || slices.ContainsFunc(f.panes, func(p tmux.Pane) bool { return p.ID == id }) {
+	f.next++
+	id := "%" + strconv.Itoa(f.next)
+	for slices.ContainsFunc(f.panes, func(p tmux.Pane) bool { return p.ID == id }) {
 		f.next++
 		id = "%" + strconv.Itoa(f.next)
 	}
