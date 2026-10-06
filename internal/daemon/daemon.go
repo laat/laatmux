@@ -239,11 +239,14 @@ type Config struct {
 //     delivery attempt or a dismiss and "settle/<id>" for its retiring
 //     and handoff, never nested; taken before relay.mu and mu, never
 //     under them.
-//   - the command table's lock (taken by nothing else; it takes
-//     command.mu inside, in forgetDone), the keyed locks' own lock
-//     (holding only the map), journal.mu, runJob.mu, command.mu and
-//     the resolver's are leaves: each guards its own struct and takes
-//     nothing under it but as said.
+//   - the command table's lock, under which forgetDone takes command.mu
+//     and get runs its init; the keyed locks' own lock, held across the
+//     map alone, never across a lock it hands out; journal.mu,
+//     runJob.mu, command.mu and the resolver's. These are leaves: each
+//     guards its own struct and takes nothing under it but as said.
+//     Nothing enforces that a keyed lock or the table is not taken
+//     under mu any more (repoLock and the table took mu themselves,
+//     so such a call deadlocked at once); the order above is the rule.
 //
 // A method with the Locked suffix is called with its receiver's lock
 // held: mu for a Daemon method and for a branches method (its mu is the
@@ -281,7 +284,7 @@ type Daemon struct {
 	runRecs  map[string]protocol.Run
 	paths    *resolver
 
-	cmds  *commandTable // recent add, rm and run by id, with a lock of its own
+	cmds  *commandTable // recent add, rm, run and prompt by key, with a lock of its own
 	locks *keyedLocks   // the repository, name, delivery and attempt locks, with a lock of its own
 	// repos is held shared by every add for its repository's lock and
 	// alone by rm, which must see every add in flight complete.

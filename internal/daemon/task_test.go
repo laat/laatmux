@@ -454,9 +454,7 @@ func TestSubmissionExpired(t *testing.T) {
 		if res, ps := result(t, pc, "old"); res.OK || res.Error != protocol.ErrSubmissionExpired || len(ps) != 0 {
 			t.Fatalf("%s: %+v", at, res)
 		}
-		d.cmds.mu.Lock()
-		delete(d.cmds.byID, "old")
-		d.cmds.mu.Unlock()
+		d.cmds.forgetDone("old")
 	}
 	if _, ok := d.journal.get("old"); ok {
 		t.Fatal("a refused add was journaled")
@@ -491,9 +489,7 @@ func TestPromptMessage(t *testing.T) {
 	}
 	// The command is remembered for a while; evict it so the repeat
 	// reaches the journal.
-	d.cmds.mu.Lock()
-	delete(d.cmds.byID, promptKey("c1", 1))
-	d.cmds.mu.Unlock()
+	d.cmds.forgetDone(promptKey("c1", 1))
 	pc.Write(protocol.Message{Type: protocol.TypePrompt, ID: "c1", Attempt: 1, Prompt: "do it"})
 	if res, _ := result(t, pc, "c1"); !res.OK || res.Prompt != protocol.DeliveryDelivered || len(ft.pastes) != 1 {
 		t.Fatalf("repeat: %+v pastes %d", res, len(ft.pastes))

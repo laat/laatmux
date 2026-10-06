@@ -176,10 +176,13 @@ func (c *command) stream(pc *protocol.Conn, after uint64, quit <-chan struct{}) 
 	}
 }
 
-// commandTable is the recent commands by id: those in flight, and
-// those finished within the TTL, so a client that lost its bridge can
-// follow the id and get the result back. Its lock is a leaf, taken
-// under no other and holding only the table.
+// commandTable is the recent commands by key (an id, or a prompt's id
+// and attempt): those in flight, and those finished within the TTL, so
+// a client that lost its bridge can follow the id and get the result
+// back. Its lock guards the table alone: forgetDone takes command.mu
+// under it and get runs its init under it, and nothing else is taken
+// under it; never d.mu. rm's forgetDone holds it under repos and the
+// root's delivery lock.
 type commandTable struct {
 	mu   sync.Mutex
 	byID map[string]*command
@@ -249,20 +252,20 @@ func (t *commandTable) evict(id string, c *command) {
 // repository, name, delivery and attempt locks the commands serialize
 // on. Its own lock holds only the map, never a lock handed out.
 type keyedLocks struct {
-	mu   sync.Mutex
-	byID map[string]*sync.Mutex
+	mu    sync.Mutex
+	byKey map[string]*sync.Mutex
 }
 
-func newKeyedLocks() *keyedLocks { return &keyedLocks{byID: map[string]*sync.Mutex{}} }
+func newKeyedLocks() *keyedLocks { return &keyedLocks{byKey: map[string]*sync.Mutex{}} }
 
 // get is the lock for key.
 func (k *keyedLocks) get(key string) *sync.Mutex {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	l, ok := k.byID[key]
+	l, ok := k.byKey[key]
 	if !ok {
 		l = &sync.Mutex{}
-		k.byID[key] = l
+		k.byKey[key] = l
 	}
 	return l
 }
@@ -271,14 +274,15 @@ func (k *keyedLocks) get(key string) *sync.Mutex {
 // the root hold across their readiness check and paste, and an add
 // across the publication of its result; the returned func releases it.
 func (d *Daemon) lockDeliveries(root string) func() {
-	l := d.locks.get("deliver/" + root)
+	l := d.repoLock("deliver/" + root)
 	l.Lock()
 	return l.Unlock
 }
 
-// repoLock serializes commands per repository: fetch and worktree add
-// write to the same main checkout, so that is the grain. Different
-// repositories proceed in parallel.
+// repoLock is the keyed lock for key: "repo/<source>", which
+// serializes commands per repository, since fetch and worktree add
+// write to the same main checkout and different repositories proceed
+// in parallel; "name/<name>", "deliver/<root>" and "attempt/<id>".
 func (d *Daemon) repoLock(key string) *sync.Mutex { return d.locks.get(key) }
 
 // runRm removes a worktree, then every managed session whose pane records
