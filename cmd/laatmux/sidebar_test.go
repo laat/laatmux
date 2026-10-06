@@ -267,9 +267,10 @@ func TestSidebarHooksRun(t *testing.T) {
 // run-shell expands its command as a format, so a hook or a jump key
 // with laatmux's path in it as it is runs another path when the path
 // has a #{ or a ## in it, as a worktree's branch can. The binary here
-// is a script under such a directory that records its arguments: the
-// resize hook and a key pressed through a client both run it, with the
-// window and the client still expanded.
+// is a script under such a directory, with a #[ that tmux keeps as it
+// is, that records its arguments: the resize hook and a key pressed
+// through a client both run it, with the window and the client still
+// expanded.
 func TestSidebarExeFormat(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -278,12 +279,12 @@ func TestSidebarExeFormat(t *testing.T) {
 		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
 	}
 	logf := filepath.Join(t.TempDir(), "args")
-	dir := filepath.Join(t.TempDir(), "x#{session_id}y##z")
+	dir := filepath.Join(t.TempDir(), "x#{session_id}y##z#[w")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	exe := filepath.Join(dir, "laatmux")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+logf+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" >> "+tmux.ShellJoin([]string{logf})+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	wait := func(want string) {
@@ -304,6 +305,13 @@ func TestSidebarExeFormat(t *testing.T) {
 	window := run("display", "-p", "-t", "boot", "#{window_id}")
 	run("resize-window", "-t", window, "-x", "150", "-y", "30")
 	wait("sidebar fit " + window + "\n")
+	// send-keys -K, which looks the key up as if the client typed it,
+	// needs tmux 3.4.
+	if out, err := exec.Command("tmux", "-V").Output(); err == nil {
+		if v := strings.TrimPrefix(strings.TrimSpace(string(out)), "tmux "); v < "3.4" {
+			t.Skipf("tmux %s has no send-keys -K", v)
+		}
+	}
 	if err := bindJumpKeys(ctx, exe); err != nil {
 		t.Fatal(err)
 	}
@@ -325,13 +333,7 @@ func TestSidebarExeFormat(t *testing.T) {
 	if client == "" {
 		t.Fatal("no client attached")
 	}
-	// send-keys -K, tmux 3.4 on, looks the key up as if the client typed it.
-	if _, err := workspace.Server.Run(ctx, "send-keys", "-K", "-c", client, "M-3"); err != nil {
-		if strings.Contains(err.Error(), "-K") {
-			t.Skipf("this tmux has no send-keys -K: %v", err)
-		}
-		t.Fatal(err)
-	}
+	run("send-keys", "-K", "-c", client, "M-3")
 	wait("sidebar jump 3 -t " + window + " -c " + client + "\n")
 }
 
