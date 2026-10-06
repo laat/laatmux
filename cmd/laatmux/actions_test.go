@@ -509,7 +509,8 @@ func TestShellGoesByLine(t *testing.T) {
 // worktree line and an orphaned line toggle their own session. An
 // observed agent in a window of the workspace session, a row no line
 // holds, toggles the session from the session's own state, also when
-// no line holds the session either.
+// no line holds the session either. A row of no worktree and no
+// workspace session, which no line holds, is not a workspace.
 func TestSettleGoesByLine(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tmux.log")
@@ -701,19 +702,27 @@ func TestSettleGoesByLine(t *testing.T) {
 		}
 	}
 	// The add's agent before the host lists the worktree, as its node
-	// and as its tile, with the task's workspace session settled: the
-	// task's, refused.
+	// and as its tile, with the task's workspace session settled, with
+	// none, as a background add leaves it, and with only a plain
+	// attachment to the agent's session: the task's, refused, though its
+	// row has no worktree.
 	add := protocol.Agent{ID: "venv/laatmux/%9", EnvironmentID: "venv", Server: "laatmux", Session: "proj/y", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/w/proj/y"}
 	loose := protocol.Pending{ID: "add-y", Host: "vm", EnvironmentID: "venv", Source: w.Source, Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y", Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered, SubmittedAt: time.Now()}
-	in := rows.Input{
-		Hosts:    []rows.Host{host},
-		Agents:   []protocol.Agent{add},
-		Locals:   []protocol.Session{{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm", Settled: true}},
-		Pendings: []protocol.Pending{loose},
-	}
-	for _, tree := range []bool{false, true} {
-		if got, cmds := press(show(in, tree), add.ID); !strings.HasPrefix(got, "proj/y: a pending task") || cmds != "" {
-			t.Errorf("tree %v: z on the add's agent: message %q, tmux %q", tree, got, cmds)
+	for _, locals := range [][]protocol.Session{
+		{{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm", Settled: true}},
+		nil,
+		{{Name: "vm/proj/y", Attach: "vm/proj/y"}},
+	} {
+		in := rows.Input{
+			Hosts:    []rows.Host{host},
+			Agents:   []protocol.Agent{add},
+			Locals:   locals,
+			Pendings: []protocol.Pending{loose},
+		}
+		for _, tree := range []bool{false, true} {
+			if got, cmds := press(show(in, tree), add.ID); !strings.HasPrefix(got, "proj/y: a pending task") || cmds != "" {
+				t.Errorf("%v tree %v: z on the add's agent: message %q, tmux %q", locals, tree, got, cmds)
+			}
 		}
 	}
 }
@@ -862,12 +871,12 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	if got := noWorkspaceHint(d.cfg, unclaimed, false); got != `unknown host "ghost"` {
 		t.Errorf("a line on a host not configured: %q", got)
 	}
-	// An agent of no worktree, in notes, has no line to go by. What z
-	// says of it is not enter's (#192), but z runs nothing.
+	// An agent of no worktree, in notes, has no line to go by: it is not
+	// a workspace, whatever enter on it does, and z runs nothing.
 	loose := protocol.Agent{ID: "menv/default/%7", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Cwd: "/Users/u"}
 	in := rows.Input{Hosts: []rows.Host{mac}, Agents: []protocol.Agent{loose}, Locals: locals}
 	for _, tree := range []bool{false, true} {
-		if got, cmds := press(show(in, tree), loose.ID, false); !strings.HasPrefix(got, "notes: no local workspace session; ") || cmds != "" {
+		if got, cmds := press(show(in, tree), loose.ID, false); got != "notes: not a workspace" || cmds != "" {
 			t.Errorf("tree %v: z on an agent of no worktree: message %q, tmux %q", tree, got, cmds)
 		}
 	}
