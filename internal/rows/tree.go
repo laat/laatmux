@@ -687,8 +687,8 @@ func (r Row) Home() string {
 // order; the stale agents and those of settled workspaces, unless
 // pressing or the viewer's own, in the Stale fold. Tiles that share a
 // primary label, several agents of one worktree say, are numbered in
-// the tree's order. Of the input it reads the sort order and the stale
-// fold setting.
+// the tree's order. Of the input it reads the viewer's session, the
+// sort order and the stale fold setting.
 func Agents(in Input, tree []Row) Rows {
 	var rows []Row
 	viewer := map[string]bool{} // the worktree and task lines the viewer is on
@@ -729,8 +729,8 @@ func Agents(in Input, tree []Row) Rows {
 			}
 			// A tile in the viewer's own session is the viewer's wherever
 			// its node sits. Not one in a session a line is marked through:
-			// the line marked through an attachment stands for the
-			// workspace session the viewer is not in.
+			// a line marked through one of its children or an attachment
+			// stands for its own session, which the viewer is not in.
 			if t.Local != nil && in.Current != "" && t.Local.Name == in.Current {
 				t.Current = true
 			}
