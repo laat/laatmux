@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +383,83 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 	out, err := exec.Command("tmux", s.args("list-panes", "-a", "-F", "#{session_name}")...).Output()
 	if got := strings.TrimSpace(string(out)); err != nil || got != "proj/fiks-___" {
 		t.Fatalf("without -u: %q %v, want %q", got, err, "proj/fiks-___")
+	}
+}
+
+// Every argument that ends in ; but a bare ;, the separator, gets a
+// backslash before that last ;, the attach and bare lines' arguments
+// as well; the selector does not, and the caller's slice is left as it
+// is. The new-session test below checks with tmux.
+func TestArgsEscapeTrailingSemicolon(t *testing.T) {
+	in := []string{"set-option", "@a", "x;", ";", "set-option", "@b", `x\;`, ";", "a;b", "x;;", `\;`, ";x", "x"}
+	keep := append([]string(nil), in...)
+	want := []string{"-S", "/s;", "set-option", "@a", `x\;`, ";", "set-option", "@b", `x\\;`, ";", "a;b", `x;\;`, `\\;`, ";x", "x"}
+	if got := (Server{Path: "/s;"}).args(in...); !slices.Equal(got, want) {
+		t.Errorf("args = %q, want %q", got, want)
+	}
+	if !slices.Equal(in, keep) {
+		t.Errorf("args changed its argument: %q", in)
+	}
+	if got := LaatmuxServer.AttachArgsBare("x;"); !slices.Equal(got, []string{"-L", "laatmux", "attach-session", "-t", `=x\;`}) {
+		t.Errorf("AttachArgsBare = %q", got)
+	}
+	if got := (Server{}).ArgsBare("has-session", "-t", "=x;"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`}) {
+		t.Errorf("ArgsBare = %q", got)
+	}
+}
+
+// A root, a host and option values that end in ; reach tmux whole, and
+// the sequence goes on past them: tmux takes an argument that ends in ;
+// as the text before it followed by a separator, so new-session -c with
+// such a root failed on the next flag, and an option value was cut with
+// no error. One that ends in \; keeps its backslash, and a root that
+// ends in #; is written ##\; for -c, which tmux reads back as ##; and
+// expands to #;.
+func TestSemicolonArgumentsReachTmux(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	for i, leaf := range []string{"semi;", `bs\;`, "x;;", "x#;"} {
+		root := filepath.Join(t.TempDir(), "proj", leaf)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := fmt.Sprintf("s%d", i)
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: root, Host: "h" + leaf, Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Fatalf("%s: %v", leaf, err)
+		}
+		// The pane's path is read from its process, which may not have
+		// changed directory yet.
+		var got string
+		for i := 0; i < 200 && got != want; i++ {
+			out, _ := s.Run(ctx, "display-message", "-p", "-t", "="+name+":", "#{pane_current_path}")
+			got = strings.TrimSpace(string(out))
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got != want {
+			t.Errorf("%s: the pane is in %q, want %q", leaf, got, want)
+		}
+		for opt, want := range map[string]string{"@laatmux_cwd": root, "@laatmux_host": "h" + leaf} {
+			if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", opt); err != nil || strings.TrimSuffix(string(out), "\n") != want {
+				t.Errorf("%s: %s %q %v, want %q", leaf, opt, out, err, want)
+			}
+		}
+		// A key and a branch tag that end in ;, set in one sequence
+		// whose last command runs only if the separators still work.
+		target := "=" + name + ":"
+		if _, err := s.Run(ctx, "set-option", "-t", target, "@laatmux_workspace", "env/"+root,
+			";", "set-option", "-t", target, "@laatmux_branch", leaf,
+			";", "set-option", "-t", target, "@laatmux_repo", "after"); err != nil {
+			t.Fatalf("%s: %v", leaf, err)
+		}
+		for opt, want := range map[string]string{"@laatmux_workspace": "env/" + root, "@laatmux_branch": leaf, "@laatmux_repo": "after"} {
+			if out, err := s.Run(ctx, "show-options", "-qv", "-t", target, opt); err != nil || strings.TrimSuffix(string(out), "\n") != want {
+				t.Errorf("%s: %s %q %v, want %q", leaf, opt, out, err, want)
+			}
+		}
 	}
 }
 

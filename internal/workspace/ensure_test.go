@@ -513,3 +513,37 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Fatalf("another session's attachment adopted: %v", err)
 	}
 }
+
+// A worktree whose root and branch end in ; gets a workspace keyed and
+// tagged with them whole, found by key the next time and by its branch:
+// tmux took the ; at the end of each as a separator, so the key and the
+// branch were set without it, and the second Ensure, not finding the
+// key, refused the session as another root's workspace.
+func TestEnsureKeyEndsInSemicolon(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/proj/semi", Key: "env//w/proj/semi;", Source: "/src/proj;", Branch: "semi;"}
+	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+		t.Fatalf("first ensure: %q %v %v", name, created, err)
+	}
+	if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+		t.Fatalf("second ensure: %q %v %v", name, created, err)
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, ok := Find(locals, spec.Key, "")
+	if !ok || l.Name != spec.Name || l.Host != "mac" || l.Source != spec.Source || l.Branch != spec.Branch {
+		t.Fatalf("by key: %+v %v", l, ok)
+	}
+	if l, ok := FindWorktree(locals, "env", spec.Source, spec.Branch); !ok || l.Name != spec.Name {
+		t.Fatalf("by branch: %+v %v", l, ok)
+	}
+}
