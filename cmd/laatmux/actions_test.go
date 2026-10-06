@@ -458,7 +458,7 @@ func TestShellGoesByLine(t *testing.T) {
 			}
 			msg, cmds = press(m, agent.ID, 'z')
 			switch {
-			case c.workspace && (msg != "settled mac/proj/b" || cmds != "-L default set-option -t =mac/proj/b: @laatmux_settled 1\n"):
+			case c.workspace && (msg != "settled mac/proj/b" || cmds != "-u -L default set-option -t =mac/proj/b: @laatmux_settled 1\n"):
 				t.Errorf("%+v tree %v: z on B's agent: message %q, tmux %q", c, tree, msg, cmds)
 			case !c.workspace && (!strings.HasPrefix(msg, "proj/b: no local workspace session;") || cmds != ""):
 				t.Errorf("%+v tree %v: z on B's agent: message %q, tmux %q", c, tree, msg, cmds)
