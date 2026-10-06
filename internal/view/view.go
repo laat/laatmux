@@ -380,7 +380,12 @@ type Span struct {
 	Bg   string // a template's #[bg=…]; "" for the line's
 	own  bool   // the look is the span's own: a template's style leaves it
 	band bool   // the selection's band on this span alone: a strip's chip
-	spin bool
+	// label marks the viewer's own label, what primary builds on the
+	// viewer's own row: the primary label and the pane's suffix, which
+	// a dim line leaves in their colour and not faint. The mark, not
+	// the colour, which a template can give any text.
+	label bool
+	spin  bool
 	// faded marks a span dimmed as a dim line draws it, so on a line
 	// that is not dim, a dim row's chip in the strip, it is drawn as
 	// that line would draw it: faint, and in a theme with colours in
@@ -399,7 +404,7 @@ type Span struct {
 // dimmed colour the line would give it.
 func (s Span) dimmed() Span {
 	s.Bg = ""
-	if s.Fg != palette.CurrentWorktreeFg {
+	if !s.label {
 		s.Dim, s.Fg, s.faded = true, "", true
 	} else {
 		s.Dim = false
@@ -684,12 +689,12 @@ func (m *Model) where(r rows.Row) Span {
 }
 
 // primary is the primary label as a span: bold, in the current
-// worktree's colour, on the viewer's own row, which the gutter's `>`
-// marked before.
+// worktree's colour, and marked the viewer's label, on the viewer's own
+// row, which the gutter's `>` marked before.
 func (m *Model) primary(r rows.Row, p string) Span {
 	sp := Span{Text: p}
 	if r.Current {
-		sp.Bold, sp.Fg = true, palette.CurrentWorktreeFg
+		sp.Bold, sp.Fg, sp.label = true, palette.CurrentWorktreeFg, true
 	}
 	return sp
 }
@@ -1006,7 +1011,6 @@ func ANSI(l Line, th palette.Theme) string {
 			s = s.dimmed()
 		}
 		fg, bg := "", ""
-		current := s.Fg == palette.CurrentWorktreeFg
 		if colour && s.Fg != "" {
 			fg = th.SGR(s.Fg, false)
 		}
@@ -1045,7 +1049,7 @@ func ANSI(l Line, th palette.Theme) string {
 			}
 		}
 		if faint || s.Bold || fg != "" || bg != "" || pre != "" {
-			if current && l.Dim && !band {
+			if s.label && l.Dim && !band {
 				// The viewer's label is not faint on a dim line.
 				b.WriteString("\x1b[22m")
 			}
