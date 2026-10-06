@@ -384,9 +384,6 @@ type Span struct {
 	// tick marks a time in seconds, `m:ss`, so Render knows the clock
 	// on screen moves every second.
 	tick bool
-	// stale marks a span from an answer gone stale: a template's style
-	// gives it its background alone, so it stays dim and plain.
-	stale bool
 }
 
 // dimmed is the span as a dim line draws it: dim throughout, without a
@@ -867,11 +864,12 @@ func joinSpans(parts ...[]Span) []Span {
 
 // gitStale makes spans from an answer that is stale dim and plain: the
 // git stats of a refresh that timed out, a PR's number, state, checks
-// or detail from a query that failed or an answer gone old. They are
-// marked, so a template's style does not colour or embolden them again.
+// or detail from a query that failed or an answer gone old. Dim with no
+// colour, they take a template style's background alone (styled), so a
+// style does not colour or embolden them again.
 func gitStale(spans []Span) []Span {
 	for i := range spans {
-		spans[i].Dim, spans[i].Bold, spans[i].Fg, spans[i].stale = true, false, "", true
+		spans[i].Dim, spans[i].Bold, spans[i].Fg = true, false, ""
 	}
 	return spans
 }

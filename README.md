@@ -1104,10 +1104,9 @@ alike; only the lines it leaves differ.
   machine first saw them pending, in purple, ticking under an hour,
   shown whole or dropped; failing: the first failing check's name in
   red, cut like a label; else nothing; on `main` and `master` only the
-  failing name). A stale answer leaves them dim and plain whatever
-  colour or bold a style gives them, as a refresh that timed out leaves
-  the git stats, sync, base, counts and marks; the pending time is then
-  as of the last answer.
+  failing name). A stale answer leaves them dim and plain, as a refresh
+  that timed out leaves the git stats, sync, base, counts and marks;
+  the pending time is then as of the last answer.
   Position: `{idx}` (the row's number, as the digits count),
   `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
   (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
@@ -1141,15 +1140,18 @@ alike; only the lines it leaves differ.
 - **Styles** are tmux's: `#[fg=accent,bg=#112233,bold,dim]`, undone by
   `nobold`, `nodim` and `default`, with a palette name or a colour as
   the config writes them. A style holds until the next one and leaves
-  a token's own colours alone. A token a stale answer leaves dim and
-  plain takes only the style's background: stale wins over the style's
-  colour and bold, so the token reads dim and plain whatever the
-  template says. The padding `{fill}` takes the style in force at the
-  fill, and a background gives way to the selection's band and is not
-  drawn on a dim row, in the list or the strip. Dim text
-  with no colour on a style's background, neither its own nor the
-  style's (a stale token always; a remote host, a draft's number or
-  `#[dim]` text under a style without `fg`), is not faint in the
+  a token's own colours alone. A dim token with no colour of its
+  own, a remote host, a draft's number or state, or a token a stale
+  answer leaves dim and plain, takes only the style's background:
+  dim wins over the style's colour and bold, so the token reads dim
+  whatever the template says. A dim token in a colour of its own, a
+  closed PR's red or the committed counts' green and red, keeps it:
+  the colour wins over dim, and the style applies as to any coloured
+  token. The padding `{fill}` takes the style in force at the fill,
+  and a background gives way to the selection's band and is not
+  drawn on a dim row, in the list or the strip. Dim text with no
+  colour on a style's background (a colourless dim token always,
+  `#[dim]` text under a style without `fg`) is not faint in the
   terminal's colour, which can vanish on the background, but drawn in
   the dim colour that reads on it: of the theme's `dimmed`, the dark
   and light defaults' (`#565f89`, `#8990b3`) and the background itself
