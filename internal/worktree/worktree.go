@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/gitenv"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 )
@@ -799,9 +800,19 @@ func (e *gitError) Unwrap() error { return e.err }
 // GitEnv is the environment for a git command whose output or error is
 // read: this process's, with prompts disabled, so a fetch that needs
 // credentials fails rather than hangs the stage, and with the C locale,
-// so what is matched is git's English whatever the user's locale.
+// so what is matched is git's English whatever the user's locale. The
+// variables of gitenv.Local are dropped: an exported GIT_DIR, or what a
+// hook's environment has, would have git act on that repository and not
+// on the one of the directory it is given. The config the environment
+// gives every git is kept, GIT_CONFIG_PARAMETERS (git -c) and
+// GIT_CONFIG_COUNT with its keys and values, as git keeps it when it
+// starts a git for another repository.
 func GitEnv() []string {
-	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(gitenv.Local, k) && k != "GIT_CONFIG_PARAMETERS" && k != "GIT_CONFIG_COUNT"
+	})
+	return append(env, "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 }
 
 // hash is the marker suffix for a setup command: a changed command has a

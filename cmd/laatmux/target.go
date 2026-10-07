@@ -131,7 +131,7 @@ func originOf(ctx context.Context, dir string) (string, error) {
 		switch {
 		case exit.ExitCode() == 1:
 			return "", nil
-		case exit.ExitCode() == 128 && (goneGitfile(dir, cmd.Env) || strings.Contains(stderr.String(), "not a git repository")):
+		case exit.ExitCode() == 128 && (goneGitfile(dir) || strings.Contains(stderr.String(), "not a git repository")):
 			return "", nil
 		}
 	}
@@ -151,17 +151,13 @@ func originOf(ctx context.Context, dir string) (string, error) {
 // file: at a .git that is not a regular file (git moves past a directory
 // that is no repository, which this does not tell), or at a level with
 // a HEAD of its own, which git may take for a bare repository. A dir
-// that does not exist is undecided too, git failed to enter it, and so
-// is any dir when env, git's environment, sets GIT_DIR, as git then
-// searches nothing. The file is read as git reads it: "gitdir: " and a
-// path, relative to the file's directory, trailing line ends dropped, at
-// most 1 MiB.
-func goneGitfile(dir string, env []string) bool {
-	for _, e := range env {
-		if strings.HasPrefix(e, "GIT_DIR=") {
-			return false
-		}
-	}
+// that does not exist is undecided too, git failed to enter it. git
+// searches from dir whatever this process's environment names, as
+// worktree.GitEnv gives it no GIT_DIR or other variable naming a
+// repository. The file is read as git reads it: "gitdir: " and a path,
+// relative to the file's directory, trailing line ends dropped, at most
+// 1 MiB.
+func goneGitfile(dir string) bool {
 	d, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return false
