@@ -1046,8 +1046,10 @@ func TestRelayHandoffPatience(t *testing.T) {
 
 // A dismiss of a record whose host left the config returns promptly
 // with every goroutine ended, even while a settle waits on the host in
-// its backoff and an attempt is open; and a host that is back between
-// the dismiss's checks keeps its record with its goroutines restarted.
+// its backoff and an attempt is open; a host that is back between the
+// dismiss's checks keeps its record with its goroutines restarted; and
+// an add still running whose host has left for good is removed with its
+// follow ended.
 func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
@@ -1132,6 +1134,34 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	}
 	if got := f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.retired() }); !got.OK {
 		t.Fatalf("record after the restart %+v", got)
+	}
+	// A sent add with no outcome whose host has left for good: the
+	// dismiss ends its follow and removes the record. Held at its launch
+	// until the dismiss has answered, so it has no outcome to be
+	// dismissed on.
+	release = make(chan struct{})
+	f.ft.set(func() { f.ft.newHold = release })
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s3", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "left", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "s3", 30*time.Second, func(p pendingFile) bool { return p.Taken })
+	f.hosts.set()
+	res = f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s3"})
+	f.local.relay.mu.Lock()
+	n = len(f.local.relay.runners["s3"])
+	f.local.relay.mu.Unlock()
+	close(release)
+	if !res.OK {
+		t.Fatalf("dismiss with the host gone for good %+v", res)
+	}
+	if n != 0 {
+		t.Fatalf("%d runners after the dismiss with the host gone for good", n)
+	}
+	if _, ok := f.local.relay.get("s3"); ok {
+		t.Fatal("record kept")
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("s3"))); !os.IsNotExist(err) {
+		t.Fatalf("file kept: %v", err)
 	}
 }
 
