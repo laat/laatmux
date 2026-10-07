@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -512,6 +514,44 @@ func TestRunStreamingLongLine(t *testing.T) {
 	}
 	if len(lines) != 2 || len(lines[0]) != maxLine+3 || !strings.HasSuffix(lines[0], "...") || lines[1] != "tail" {
 		t.Fatalf("lines: %d, first %d bytes, last %q", len(lines), len(lines[0]), lines[len(lines)-1])
+	}
+}
+
+// A root with a tab and an ESC in it is in the worktree stage's errors,
+// in git's command line and in a failed read of its .git as
+// tmux.Printable shows it: raw, the tab would break the line and the
+// ESC reach the terminal of the client that prints it.
+func TestRootWithControlBytesQuoted(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	raw := func(err error) bool { return strings.ContainsAny(err.Error(), "\t\x1b") }
+	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "else\twhere\x1b[31m")
+	run(t, c, "git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
+	if _, _, err := f.add("outside"); err == nil || !strings.Contains(err.Error(), "branch outside is checked out at "+strconv.Quote(elsewhere)) || raw(err) {
+		t.Errorf("add outside: %v", err)
+	}
+	// git refuses to remove a worktree with an untracked file in it, and
+	// the error names the command with the root quoted; git's own
+	// message after it is git's.
+	write(t, filepath.Join(elsewhere, "dirt"), "x")
+	if _, err := Remove(f.ctx, c, elsewhere, false); err == nil || !strings.HasPrefix(err.Error(), "git worktree remove "+strconv.Quote(elsewhere)+": ") {
+		t.Errorf("remove: %v", err)
+	}
+	if os.Getuid() == 0 {
+		return // root reads the .git whatever its mode
+	}
+	odd := filepath.Join(f.store.Dirs.Worktrees, "proj", "de\ttached\x1b[1m")
+	run(t, c, "git", "worktree", "add", "-q", "--detach", odd, "main")
+	dotgit := filepath.Join(odd, ".git")
+	if err := os.Chmod(dotgit, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dotgit, 0o644) })
+	if _, _, _, err := f.store.Find(f.ctx, odd); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(dotgit)+": open "+strconv.Quote(dotgit)+": ") || raw(err) || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("find: %v", err)
 	}
 }
 

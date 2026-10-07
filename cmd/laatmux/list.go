@@ -10,6 +10,7 @@ import (
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // render is ls's listing of the merged state: the local daemon's line
@@ -90,10 +91,14 @@ func where(n rows.Row) string {
 // renderLine is a worktree or task line: its label, host, and what it
 // is instead of stats, a task's state say.
 func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
+	// A detached worktree's label is its directory's name and a gone
+	// one's note has its root, either of which can hold any byte; both
+	// are printed as tmux.Printable shows them.
 	label, _ := n.Labels()
 	if n.Orphaned {
 		label = n.Name
 	}
+	label = tmux.Printable(label)
 	note := ""
 	switch {
 	case n.Pending != nil:
@@ -103,7 +108,7 @@ func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
 		}
 	case n.Orphaned:
 		_, root := protocol.SplitSessionKey(n.Local.Key)
-		note = "worktree gone " + root
+		note = "worktree gone " + tmux.Printable(root)
 	case n.Worktree != nil && n.Children == 0:
 		note = n.State()
 	}
@@ -130,6 +135,8 @@ func agentText(n rows.Row, now time.Time) string {
 		// By rune: a cut in the middle of one prints as garbage.
 		title = string(r[:48])
 	}
+	// A program in the pane sets its title.
+	title = tmux.Printable(title)
 	return fmt.Sprintf("%s %-8s %-6s %s  %s", n.Mark(), state, n.AgentName(), rows.Ago(now.Sub(a.ActivityAt)), title)
 }
 

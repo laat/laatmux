@@ -327,7 +327,7 @@ func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.
 	if err := rn.managed.Tmux.SendKeys(ctx, t.pane, "Enter"); err != nil {
 		return false, true
 	}
-	rn.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", t.root, t.pane)
+	rn.cfg.Logger.Printf("agent: answered the folder trust question for %s in pane %s", tmux.Printable(t.root), t.pane)
 	return true, false
 }
 

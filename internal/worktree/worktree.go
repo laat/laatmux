@@ -28,6 +28,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Repo is a known repository: its source, the identity, and its label,
@@ -254,7 +255,7 @@ func (s *Store) origin(ctx context.Context, dir string) (string, bool, error) {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("%s: %w", dir, err)
+		return "", false, fmt.Errorf("%s: %w", tmux.Printable(dir), tmux.PrintablePath(err))
 	}
 	s.mu.Lock()
 	c, cached := s.origins[dir]
@@ -269,7 +270,7 @@ func (s *Store) origin(ctx context.Context, dir string) (string, bool, error) {
 		// origin. Anything else is a real failure, reported once.
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
-			return "", false, fmt.Errorf("%s: %w", dir, err)
+			return "", false, fmt.Errorf("%s: %w", tmux.Printable(dir), err)
 		}
 		url = ""
 	}
@@ -375,7 +376,7 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 		}
 		entries, err := ListWorktrees(ctx, co.dir)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", co.dir, err))
+			errs = append(errs, fmt.Errorf("%s: %w", tmux.Printable(co.dir), err))
 			continue
 		}
 		r := s.label(co)
@@ -477,11 +478,11 @@ func pointsBack(root, checkout string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			return true, nil
 		}
-		return false, fmt.Errorf("%s: %w", dotgit, err)
+		return false, fmt.Errorf("%s: %w", tmux.Printable(dotgit), tmux.PrintablePath(err))
 	}
 	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
 	if !ok {
-		return false, fmt.Errorf("%s is not a worktree's .git file", dotgit)
+		return false, fmt.Errorf("%s is not a worktree's .git file", tmux.Printable(dotgit))
 	}
 	gitdir = strings.TrimSpace(gitdir)
 	if !filepath.IsAbs(gitdir) {
@@ -492,7 +493,7 @@ func pointsBack(root, checkout string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("%s: %w", dotgit, err)
+		return false, fmt.Errorf("%s: %w", tmux.Printable(dotgit), tmux.PrintablePath(err))
 	}
 	want, err := filepath.EvalSymlinks(filepath.Join(checkout, ".git", "worktrees"))
 	if err != nil {
@@ -608,7 +609,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 	case 1:
 		return matches[0].rec, matches[0].checkout, true, nil
 	}
-	return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, matches[0].rec.Root, matches[1].rec.Root)
+	return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, tmux.Printable(matches[0].rec.Root), tmux.Printable(matches[1].rec.Root))
 }
 
 // Remove unregisters and deletes a worktree through git, which is the
@@ -667,7 +668,15 @@ type gitError struct {
 	err  error
 }
 
-func (e *gitError) Error() string { return "git " + strings.Join(e.args, " ") + ": " + e.msg }
+// Error names the command with each argument as tmux.Printable shows
+// it: a root goes into the arguments as it is.
+func (e *gitError) Error() string {
+	a := make([]string, len(e.args))
+	for i, v := range e.args {
+		a[i] = tmux.Printable(v)
+	}
+	return "git " + strings.Join(a, " ") + ": " + e.msg
+}
 func (e *gitError) Unwrap() error { return e.err }
 
 // GitEnv is the environment for a git command whose output or error is

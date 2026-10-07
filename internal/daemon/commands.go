@@ -338,7 +338,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 			// new with any cwd, are not rm's to kill.
 			root = filepath.Clean(root)
 			if !rn.cfg.Store.Owns(root) {
-				return fmt.Errorf("%s is not under the worktrees directory %s", root, rn.cfg.Store.Dirs.Worktrees)
+				return fmt.Errorf("%s is not under the worktrees directory %s", tmux.Printable(root), tmux.Printable(rn.cfg.Store.Dirs.Worktrees))
 			}
 		}
 		switch {
@@ -352,10 +352,10 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 			}
 			if found {
 				if repo.Source != "" && !source.Same(rec.Source, repo.Source) {
-					return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
+					return fmt.Errorf("%s is a worktree of %s, not %s", tmux.Printable(root), rec.Repo, repo.Name)
 				}
 				if m.Branch != "" && rec.Branch != m.Branch {
-					return fmt.Errorf("%s is the worktree for %s of %s, not %s", root, branchOrDetached(rec.Branch), rec.Repo, m.Branch)
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, m.Branch)
 				}
 				checkout = co
 				break
@@ -369,7 +369,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 					return err
 				}
 				if moved {
-					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, rec.Root, root)
+					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, tmux.Printable(rec.Root), tmux.Printable(root))
 				}
 			}
 		default:

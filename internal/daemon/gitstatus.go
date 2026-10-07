@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -227,7 +228,7 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 		g.Stale, g.ChangedAt = true, time.Now()
 		w.Git = &g
 	case err != nil:
-		d.logOnce(&e.lastErr, "git status: %v", fmt.Errorf("%s: %w", root, err))
+		d.logOnce(&e.lastErr, "git status: %v", fmt.Errorf("%s: %w", tmux.Printable(root), err))
 		return
 	case head != after:
 		e.due = true

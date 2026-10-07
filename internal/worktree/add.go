@@ -19,6 +19,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Reporter receives one call per step of add: the stage, a
@@ -93,7 +94,7 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 		checkout = s.Dirs.Checkout(repo.Name)
 	}
 	p.Checkout, p.Found = checkout, found
-	report(stage, protocol.StateDone, "checkout "+checkout)
+	report(stage, protocol.StateDone, "checkout "+tmux.Printable(checkout))
 
 	// clone
 	stage = protocol.StageClone
@@ -104,15 +105,15 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 			url, hasOrigin, _ := s.origin(ctx, checkout)
 			switch {
 			case hasOrigin:
-				return p, fail(stage, fmt.Errorf("%s exists with origin %s, not %s", checkout, url, repo.Source))
+				return p, fail(stage, fmt.Errorf("%s exists with origin %s, not %s", tmux.Printable(checkout), url, repo.Source))
 			default:
-				return p, fail(stage, fmt.Errorf("%s exists and is not a checkout of %s", checkout, repo.Source))
+				return p, fail(stage, fmt.Errorf("%s exists and is not a checkout of %s", tmux.Printable(checkout), repo.Source))
 			}
 		}
 		if err := os.MkdirAll(s.Dirs.Repos, 0o755); err != nil {
 			return p, fail(stage, err)
 		}
-		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+checkout)
+		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+tmux.Printable(checkout))
 		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, GitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
 			return p, fail(stage, err)
 		}
@@ -199,7 +200,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	for _, e := range entries {
 		if e.Root == checkout {
 			if e.Branch == branch {
-				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s", branch, checkout))
+				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s", branch, tmux.Printable(checkout)))
 			}
 			continue
 		}
@@ -207,24 +208,24 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 		case e.Root == a.Root && e.Branch == branch:
 			registered = true
 		case e.Root == a.Root:
-			return a, fail(stage, fmt.Errorf("%s is a worktree on %s, not %s", a.Root, branchOrDetached(e), branch))
+			return a, fail(stage, fmt.Errorf("%s is a worktree on %s, not %s", tmux.Printable(a.Root), branchOrDetached(e), branch))
 		case e.Branch == branch:
-			return a, fail(stage, fmt.Errorf("branch %s is checked out at %s", branch, e.Root))
+			return a, fail(stage, fmt.Errorf("branch %s is checked out at %s", branch, tmux.Printable(e.Root)))
 		}
 	}
 	if registered {
-		report(stage, protocol.StateSkip, "worktree registered at "+a.Root)
+		report(stage, protocol.StateSkip, "worktree registered at "+tmux.Printable(a.Root))
 	} else {
 		// A symlink already at <worktrees>/<name> could carry the new
 		// worktree outside the directory, where it would never be
 		// published or removable; Owns resolves the existing prefix.
 		if !s.Owns(a.Root) {
-			return a, fail(stage, fmt.Errorf("%s resolves outside the worktrees directory %s", a.Root, s.Dirs.Worktrees))
+			return a, fail(stage, fmt.Errorf("%s resolves outside the worktrees directory %s", tmux.Printable(a.Root), tmux.Printable(s.Dirs.Worktrees)))
 		}
 		if err := os.MkdirAll(filepath.Dir(a.Root), 0o755); err != nil {
 			return a, fail(stage, err)
 		}
-		report(stage, protocol.StateStart, "git worktree add "+a.Root+" "+branch)
+		report(stage, protocol.StateStart, "git worktree add "+tmux.Printable(a.Root)+" "+branch)
 		if _, err := git(ctx, checkout, "worktree", "add", "--", a.Root, branch); err != nil {
 			return a, fail(stage, err)
 		}
@@ -241,9 +242,9 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			}
 		}
 		if !placed {
-			return a, fail(stage, fmt.Errorf("git registered no worktree for %s under %s", branch, s.Dirs.Worktrees))
+			return a, fail(stage, fmt.Errorf("git registered no worktree for %s under %s", branch, tmux.Printable(s.Dirs.Worktrees)))
 		}
-		report(stage, protocol.StateDone, "worktree at "+a.Root)
+		report(stage, protocol.StateDone, "worktree at "+tmux.Printable(a.Root))
 	}
 
 	// copy and setup read the worktree's own .laatmux.yaml, so a branch
@@ -308,7 +309,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			}
 		}
 		if matched == 0 {
-			report(stage, protocol.StateSkip, entry+" matches nothing in "+checkout)
+			report(stage, protocol.StateSkip, entry+" matches nothing in "+tmux.Printable(checkout))
 		}
 	}
 
@@ -493,7 +494,7 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	}
 	defer wt.Close()
 	if _, err := wt.Lstat(rel); err == nil {
-		report(stage, protocol.StateSkip, rel+" exists")
+		report(stage, protocol.StateSkip, tmux.Printable(rel)+" exists")
 		return nil
 	}
 	// Nonblocking, so a source that is a pipe with no writer does not
@@ -503,10 +504,10 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 	if err != nil {
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			report(stage, protocol.StateSkip, rel+" not in "+checkout)
+			report(stage, protocol.StateSkip, tmux.Printable(rel)+" not in "+tmux.Printable(checkout))
 			return nil
 		case isEscape(err):
-			return fmt.Errorf("%s resolves outside the checkout %s", rel, checkout)
+			return fmt.Errorf("%s resolves outside the checkout %s", tmux.Printable(rel), tmux.Printable(checkout))
 		}
 		return err
 	}
@@ -516,12 +517,12 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 		return err
 	}
 	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s: not a regular file", filepath.Join(checkout, rel))
+		return fmt.Errorf("%s: not a regular file", tmux.Printable(filepath.Join(checkout, rel)))
 	}
 	dir := filepath.Dir(rel)
 	if err := wt.MkdirAll(dir, 0o755); err != nil {
 		if isEscape(err) {
-			return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+			return fmt.Errorf("%s: its directory resolves outside the worktree %s", tmux.Printable(rel), tmux.Printable(root))
 		}
 		return err
 	}
@@ -542,7 +543,7 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 		}
 		if !errors.Is(err, os.ErrExist) || i >= 100 {
 			if isEscape(err) {
-				return fmt.Errorf("%s: its directory resolves outside the worktree %s", rel, root)
+				return fmt.Errorf("%s: its directory resolves outside the worktree %s", tmux.Printable(rel), tmux.Printable(root))
 			}
 			return err
 		}
@@ -566,7 +567,7 @@ func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) 
 		wt.Remove(tmp)
 		return err
 	}
-	report(stage, protocol.StateDone, rel)
+	report(stage, protocol.StateDone, tmux.Printable(rel))
 	return nil
 }
 
