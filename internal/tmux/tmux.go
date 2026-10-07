@@ -296,6 +296,20 @@ func Printable(s string) string {
 	return s
 }
 
+// PrintableLines is s with each of its lines as Printable shows it and
+// the newlines between them kept: a message of several lines, git's
+// with its hints, reads as it did, and a line with a control character
+// is quoted on its own. Printable of the whole would make it one line
+// with \n in it. A newline inside a path the message repeats is a line
+// break like any other.
+func PrintableLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = Printable(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // PrintablePath is err with its path as Printable shows it when err is
 // a bare *fs.PathError, as os's functions return, which names the path
 // as it is, and err otherwise: one that wraps a *fs.PathError is left

@@ -530,6 +530,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	quoted := func(err error, want string) bool {
 		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
 	}
+	open := openQuote
 	// A copy pattern, which a repository's .laatmux.yaml may spell with
 	// any byte, is named quoted when it matches nothing.
 	pattern := "no\tsuch*\x1b.env"
@@ -623,7 +624,8 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A checkout whose config git cannot read; git's message after the
-	// quoted checkout is git's (#275).
+	// quoted checkout is git's, and names the file relative to the
+	// checkout it ran in.
 	cfgFile := filepath.Join(c, ".git", "config")
 	cfg, err := os.ReadFile(cfgFile)
 	if err != nil {
@@ -631,7 +633,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	}
 	write(t, cfgFile, "[core\n")
 	f.store.origins = map[string]originEntry{}
-	if _, _, err := f.store.Checkout(f.ctx, f.repo); err == nil || !strings.Contains(err.Error(), qc+": git config --get remote.origin.url: ") {
+	if _, _, err := f.store.Checkout(f.ctx, f.repo); !quoted(err, qc+": git config --get remote.origin.url: fatal: bad config line 1 in file .git/config") {
 		t.Errorf("checkout with a bad config: %v", err)
 	}
 	write(t, cfgFile, string(cfg))
@@ -658,9 +660,10 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	}
 	// git refuses to remove a worktree with an untracked file in it, and
 	// the error names the command with the root quoted; git's own
-	// message after it is git's.
+	// message after it names the root too, and its line is quoted. git
+	// itself turns the ESC into ?, and keeps the tab.
 	write(t, filepath.Join(elsewhere, "dirt"), "x")
-	if _, err := Remove(f.ctx, c, elsewhere, false); err == nil || !strings.HasPrefix(err.Error(), "git worktree remove "+strconv.Quote(elsewhere)+": ") {
+	if _, err := Remove(f.ctx, c, elsewhere, false); !quoted(err, "git worktree remove "+strconv.Quote(elsewhere)+": "+open("fatal: '"+filepath.Join(base, "else\twhere"))) || !strings.Contains(err.Error(), "contains modified or untracked files") || strings.Contains(err.Error(), "\n") {
 		t.Errorf("remove: %v", err)
 	}
 	// A root under the worktrees directory whose .git is not a worktree's.
@@ -693,6 +696,131 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	f.store.origins = map[string]originEntry{}
 	if _, _, err := f.store.Checkout(f.ctx, f.repo); !quoted(err, qc+": stat "+strconv.Quote(cfgFile)+": ") || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("checkout with an unreadable .git: %v", err)
+	}
+}
+
+// openQuote is s as strconv.Quote quotes it without the closing quote:
+// how a quoted line that starts with s starts.
+func openQuote(s string) string {
+	q := strconv.Quote(s)
+	return q[:len(q)-1]
+}
+
+// Errors whose text is git's or os's name a root, the checkout or the
+// directories as tmux.Printable shows them: git's message line by line,
+// its lines kept, and an os error with its path quoted.
+func TestGitAndOSErrorsQuoted(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.store.Dirs.Repos)
+	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
+	f.repo = f.store.Repos[0]
+	a, _, err := f.add("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	quoted := func(err error, want string) bool {
+		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
+	}
+
+	// git's message of two lines, the first with a tab: that line is
+	// quoted, the second is as git wrote it, and the newline stays.
+	run(t, c, "git", "worktree", "lock", "--reason", "lo\tck", a.Root)
+	_, err = Remove(f.ctx, c, a.Root, false)
+	lines := strings.Split(fmt.Sprint(err), "\n")
+	if !quoted(err, "git worktree remove "+strconv.Quote(a.Root)+": "+openQuote("fatal: ")) || len(lines) != 2 || !strings.Contains(lines[0], `lock reason: lo\tck`) || !strings.Contains(lines[1], "remove -f -f") || strings.HasPrefix(lines[1], `"`) {
+		t.Errorf("remove of a locked worktree: %v", err)
+	}
+	run(t, c, "git", "worktree", "unlock", a.Root)
+
+	// A directory that is gone: git cannot be run in it, and os's error
+	// names it.
+	gone := filepath.Join(base, "go\tne\x1b[33m")
+	if _, err := git(f.ctx, gone, "status"); !quoted(err, "git status: "+openQuote("chdir "+gone+": ")) {
+		t.Errorf("git in a directory gone: %v", err)
+	}
+	var out []string
+	report := func(_, state, detail string) {
+		if state == protocol.StateOutput {
+			out = append(out, detail)
+		}
+	}
+	if err := runStreaming(f.ctx, gone, report, protocol.StageSetup, os.Environ(), "true"); !quoted(err, "chdir "+strconv.Quote(gone)+": ") {
+		t.Errorf("a command in a directory gone: %v", err)
+	}
+	// A failed command's last lines are each quoted in its error, and
+	// reported as the command wrote them.
+	line := "Cloning into '" + a.Root + "'..."
+	err = runStreaming(f.ctx, a.Root, report, protocol.StageSetup, os.Environ(), "sh", "-c", `printf '%s\nplain\n' "$1"; exit 3`, "sh", line)
+	if !quoted(err, "exit status 3: "+strconv.Quote(line)+" | plain") || len(out) != 2 || out[0] != line || out[1] != "plain" {
+		t.Errorf("a failed command's lines: %v %q", err, out)
+	}
+	// The checkout or the worktree gone when a file is copied.
+	for _, dirs := range [][2]string{{gone, a.Root}, {c, gone}} {
+		if err := copyFile(f.ctx, dirs[0], dirs[1], ".envrc", report); !quoted(err, "open "+strconv.Quote(gone)+": ") || !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("copy from %q to %q: %v", dirs[0], dirs[1], err)
+		}
+	}
+
+	// A new worktree's directory that cannot be made, a file in the way.
+	in := filepath.Join(f.store.Dirs.Worktrees, "proj", "in")
+	write(t, in, "")
+	if _, _, err := f.add("in/file"); !quoted(err, "mkdir "+strconv.Quote(in)+": ") {
+		t.Errorf("add under a file: %v", err)
+	}
+	// A file git lists under a directory that a file has replaced since:
+	// the lookup's error is not "gone", and fails the copy.
+	write(t, filepath.Join(c, "sub", "f"), "x")
+	run(t, c, "git", "add", "sub/f")
+	if err := os.RemoveAll(filepath.Join(c, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(c, "sub"), "")
+	f.repo.Copy = []string{"sub/*"}
+	if _, _, err := f.add("first"); !quoted(err, "lstat "+strconv.Quote(filepath.Join(c, "sub", "f"))+": ") || stageOf(t, err) != protocol.StageCopy {
+		t.Errorf("copy of a file under a file: %v", err)
+	}
+	f.repo.Copy = nil
+	// The setup markers' directory, under the checkout's .git, with a
+	// file in its way.
+	markers := filepath.Join(strings.TrimSpace(run(t, a.Root, "git", "rev-parse", "--absolute-git-dir")), "laatmux")
+	if err := os.RemoveAll(markers); err != nil {
+		t.Fatal(err)
+	}
+	write(t, markers, "")
+	if _, _, err := f.add("first"); !quoted(err, "mkdir "+strconv.Quote(markers)+": ") || stageOf(t, err) != protocol.StageSetup {
+		t.Errorf("add with the markers' directory a file: %v", err)
+	}
+	if err := os.Remove(markers); err != nil {
+		t.Fatal(err)
+	}
+	// A repos directory that cannot be read, a file.
+	file := filepath.Join(base, "fi\tle\x1b[34m")
+	write(t, file, "")
+	if _, err := New(config.Dirs{Repos: file, Worktrees: f.store.Dirs.Worktrees}, nil).List(f.ctx); !quoted(err, strconv.Quote(file)+": ") {
+		t.Errorf("list with the repos directory a file: %v", err)
+	}
+
+	if os.Getuid() == 0 {
+		return // root writes where it likes whatever the mode
+	}
+	// A repos directory that cannot be made, its parent read-only.
+	ro := filepath.Join(base, "read\tonly\x1b[35m")
+	if err := os.Mkdir(ro, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+	repos := filepath.Join(ro, "repos")
+	if _, err := New(config.Dirs{Repos: repos, Worktrees: f.store.Dirs.Worktrees}, nil).Prepare(f.ctx, f.repo, nil); !quoted(err, "mkdir "+strconv.Quote(repos)+": ") || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("prepare with a repos directory that cannot be made: %v", err)
+	}
+	// A setup marker that cannot be written, its directory read-only.
+	if err := os.Mkdir(markers, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(markers, 0o755) })
+	if _, _, err := f.add("first"); !quoted(err, "open "+openQuote(markers+"/setup-")) || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("add with a marker that cannot be written: %v", err)
 	}
 }
 

@@ -776,6 +776,22 @@ func TestPrintablePath(t *testing.T) {
 	}
 }
 
+// Each line is as Printable shows it, and the newlines between the lines
+// stay, empty lines and a last newline included.
+func TestPrintableLines(t *testing.T) {
+	for _, c := range [][2]string{
+		{"", ""},
+		{"plain\nlines", "plain\nlines"},
+		{"fatal: '/w/a\tb' is dirty\nhint: use --force\n\nlast\n", strconv.Quote("fatal: '/w/a\tb' is dirty") + "\nhint: use --force\n\nlast\n"},
+		{"one\n\x1b[31mtwo\u009b", "one\n" + strconv.Quote("\x1b[31mtwo\u009b")},
+		{"bad \xff\r\nok", strconv.Quote("bad \xff\r") + "\nok"},
+	} {
+		if got := PrintableLines(c[0]); got != c[1] {
+			t.Errorf("PrintableLines(%q) = %q, want %q", c[0], got, c[1])
+		}
+	}
+}
+
 // A failure on a real server for a target with an ESC and a tab: tmux
 // repeats the target in its message, and the error prints both quoted,
 // with no control byte in it, while the fields keep them as they are.

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,31 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
+
+// A state directory that cannot be made, or whose daemon.log cannot be
+// opened, fails the start with os's error, the path in it as
+// tmux.Printable shows it: the dashboard prints it after "local
+// daemon:". Neither gets as far as starting a daemon.
+func TestStartDaemonStateDirQuoted(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "fi\tle\x1b[31m")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "st\tate\x1b[31m")
+	if err := os.MkdirAll(filepath.Join(dir, "daemon.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for home, want := range map[string]string{
+		filepath.Join(file, "state"): "mkdir " + strconv.Quote(file) + ": ",
+		dir:                          "open " + strconv.Quote(filepath.Join(dir, "daemon.log")) + ": ",
+	} {
+		t.Setenv("LAATMUX_HOME", home)
+		if err := StartDaemon(context.Background()); err == nil || !strings.Contains(err.Error(), want) || strings.ContainsAny(err.Error(), "\t\x1b") {
+			t.Errorf("state directory %q: %v, want %s", home, err, want)
+		}
+	}
+}
 
 // A pending Request returns when its context is cancelled.
 func TestRequestHonoursCancel(t *testing.T) {

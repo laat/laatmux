@@ -50,7 +50,8 @@ func LoadSetup(root string) (Setup, error) {
 		if os.IsNotExist(err) {
 			return s, nil
 		}
-		return s, err
+		// os's error names the file under root as it is.
+		return s, tmux.PrintablePath(err)
 	}
 	if err := yaml.Unmarshal(b, &s); err != nil {
 		return s, fmt.Errorf("%s: %w", SetupFile, err)

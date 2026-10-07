@@ -187,7 +187,7 @@ func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	var out []checkout
 	for _, e := range entries {
@@ -500,7 +500,7 @@ func pointsBack(root, checkout string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, err
+		return false, tmux.PrintablePath(err)
 	}
 	return admin == want, nil
 }
@@ -669,13 +669,17 @@ type gitError struct {
 }
 
 // Error names the command with each argument as tmux.Printable shows
-// it: a root goes into the arguments as it is.
+// it, and git's message with each of its lines so: a root goes into
+// the arguments as it is, and git's message can repeat it or the
+// directory git ran in. git turns most control bytes in its fatal and
+// error lines into ?, but not a tab or a C1 character, and not in its
+// hints; a message of several lines keeps them.
 func (e *gitError) Error() string {
 	a := make([]string, len(e.args))
 	for i, v := range e.args {
 		a[i] = tmux.Printable(v)
 	}
-	return "git " + strings.Join(a, " ") + ": " + e.msg
+	return "git " + strings.Join(a, " ") + ": " + tmux.PrintableLines(e.msg)
 }
 func (e *gitError) Unwrap() error { return e.err }
 

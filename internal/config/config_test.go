@@ -511,6 +511,15 @@ func TestLoadSetup(t *testing.T) {
 			t.Errorf("CheckCopy(%q) = %v", p, err)
 		}
 	}
+	// A file that cannot be read, a directory here, is os's error, with
+	// the path under the root as tmux.Printable shows it.
+	root := filepath.Join(t.TempDir(), "ro\tot\x1b[31m")
+	if err := os.MkdirAll(filepath.Join(root, SetupFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSetup(root); err == nil || !strings.Contains(err.Error(), strconv.Quote(filepath.Join(root, SetupFile))+": ") || strings.ContainsAny(err.Error(), "\t\x1b") {
+		t.Errorf("a setup file that cannot be read: %v", err)
+	}
 }
 
 // The sidebar section: defaults when absent, validated when present.
