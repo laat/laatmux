@@ -31,12 +31,14 @@ import (
 // The set is spelled out here rather than read from the code, so a
 // character dropped from the code fails the test.
 func shellWords() (quoted, bare []string) {
-	for _, c := range " \t\n'\"\\$`!*?[]{}()<>|&;#~=" {
+	for _, c := range " \t\n'\"\\$`!*?[]{}()<>|&;#~=^" {
 		quoted = append(quoted, "a"+string(c)+"b")
 	}
 	// Under zsh's magic_equal_subst an unquoted a==ls is a=/bin/ls, a
-	// branch add would then make; =lcl is zsh's equals expansion.
-	quoted = append(quoted, "a==ls", "a/==ls", "=lcl", "")
+	// branch add would then make; =lcl is zsh's equals expansion. Under
+	// extended_glob ^missing is every file but missing, and HEAD^ is an
+	// agent's argument.
+	quoted = append(quoted, "a==ls", "a/==ls", "=lcl", "^missing", "HEAD^", "")
 	bare = []string{"a%b", "a+b", "a,b", "a@b", "feature/x-1_2.3", "ABCXYZabcxyz0123456789", "blåbær"}
 	return quoted, bare
 }
@@ -61,7 +63,8 @@ func TestShellJoin(t *testing.T) {
 
 // The joined words reach a command as they were, through sh and through
 // zsh with magic_equal_subst, which expands the value of any unquoted
-// word with an =.
+// word with an =, and with extended_glob, which makes a word with a ^ a
+// pattern that matches files or aborts the line.
 func TestShellJoinRoundTrip(t *testing.T) {
 	quoted, bare := shellWords()
 	words := append(quoted, bare...)
@@ -70,22 +73,25 @@ func TestShellJoinRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("zsh"); err == nil {
 		// -f reads none of the user's startup files, so their options
 		// stay out; only the system's zshenv is read.
-		shells = append(shells, []string{"zsh", "-f", "-o", "magic_equal_subst", "-c", line})
+		shells = append(shells,
+			[]string{"zsh", "-f", "-o", "magic_equal_subst", "-c", line},
+			[]string{"zsh", "-f", "-o", "extended_glob", "-c", line})
 	} else {
 		t.Log("no zsh on PATH; the round trip runs through sh only")
 	}
 	for _, sh := range shells {
+		name := strings.Join(sh[:len(sh)-2], " ")
 		cmd := exec.Command(sh[0], sh[1:]...)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			t.Errorf("%s: %v: %s", sh[0], err, stderr.String())
+			t.Errorf("%s: %v: %s", name, err, stderr.String())
 			continue
 		}
 		got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
 		if !slices.Equal(got, words) {
-			t.Errorf("%s printed %q, want %q", sh[0], got, words)
+			t.Errorf("%s printed %q, want %q", name, got, words)
 		}
 	}
 }
@@ -677,6 +683,55 @@ func TestNewSessionRootWithHash(t *testing.T) {
 		if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", "@laatmux_cwd"); err != nil || strings.TrimSpace(string(out)) != root {
 			t.Errorf("%s: @laatmux_cwd %q %v, want %q", branch, out, err, root)
 		}
+	}
+}
+
+// An agent's arguments reach it as they were when the server's default
+// shell is a zsh with extended_glob, as a ~/.zshenv may set: HEAD^ is
+// an argument an agent may take, a bare a^b is every file in the root
+// that starts with a and is not ab and aborts the line when there is
+// none, and a bare ^missing is every file in the root but missing.
+func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("no zsh on PATH")
+	}
+	s := startManaged(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	// The pane runs its command as the default shell's -c; -f keeps
+	// the user's startup files out. The wrapper leaves a mark, so the
+	// test fails rather than passes when another shell read the line:
+	// tmux runs /bin/sh in place of a default shell it cannot execute,
+	// and a server started anew has the shell SHELL names. zsh's errors
+	// go to a file: the pane of a line zsh refused is gone with them.
+	shell := filepath.Join(dir, "zsh-extended-glob")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\n: > \"$0.ran\"\nexec "+shellJoin([]string{zsh})+" -f -o extended_glob \"$@\" 2>> \"$0.err\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Run(ctx, "set-option", "-g", "default-shell", shell); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "argv")
+	words := []string{"HEAD^", "a^b", "^missing"}
+	cmd := append([]string{"sh", "-c", `printf '%s\0' "$@" > "$0.tmp" && mv "$0.tmp" "$0"; exec sleep 600`, file}, words...)
+	if _, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/caret", Cwd: dir, Cmd: cmd}); err != nil {
+		t.Fatal(err)
+	}
+	var out []byte
+	for i := 0; i < 500 && out == nil; i++ {
+		out, _ = os.ReadFile(file)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if out == nil {
+		msg, _ := os.ReadFile(shell + ".err")
+		t.Fatalf("the pane wrote no arguments: the shell refused the line: %s", msg)
+	}
+	if _, err := os.Stat(shell + ".ran"); err != nil {
+		t.Fatalf("the default shell was not the wrapper: %v", err)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"); !slices.Equal(got, words) {
+		t.Errorf("the agent got %q, want %q", got, words)
 	}
 }
 
