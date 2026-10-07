@@ -610,12 +610,16 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	// Its agent moved to a session with a U+2063 in its name: refused
 	// before the attach pane is pointed at it, which keeps its target.
 	moved := keyed
-	moved.Managed = "proj/w\u2063\u2063x"
-	if _, _, err := Ensure(ctx, moved); err == nil || !strings.Contains(err.Error(), "U+2063") {
-		t.Fatalf("the moved agent's session: %v, want a refusal", err)
-	}
-	if _, target, _, _ := pane("mac/proj/w"); target != "proj/w" {
-		t.Fatalf("the attach pane's target after the refusal: %q", target)
+	// So with one whose name starts with a $, which the target reads as
+	// a session id.
+	for m, want := range map[string]string{"proj/w\u2063\u2063x": "U+2063", "$0": "starts with a $"} {
+		moved.Managed = m
+		if _, _, err := Ensure(ctx, moved); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("the moved agent's session %q: %v, want a refusal", m, err)
+		}
+		if _, target, _, _ := pane("mac/proj/w"); target != "proj/w" {
+			t.Fatalf("the attach pane's target after the refusal for %q: %q", m, target)
+		}
 	}
 	// One an older build named after a managed session with a $ in it,
 	// as listed, which AttachName now encodes, is adopted under its own
@@ -638,6 +642,23 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		}
 		if l, ok := ByName(locals, legacy.Name); ok {
 			t.Fatalf("a session made under the spec's name: %+v", l)
+		}
+	}
+	// A session of the older build's name without its tag, the user's
+	// own say, is not adopted: the workspace is made beside it.
+	other := Spec{Host: host, Managed: "proj/v$2", Name: AttachName("mac", "proj/v$2"), Key: "env//r/v$2", Branch: "v$2"}
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/proj/v$2", "sleep 600", tmux.Next, "has-session", "-t", "=mac/proj/v$2:"); err != nil {
+		t.Logf("no session of the older build's name: %v", err)
+	} else {
+		if name, created, err := Ensure(ctx, other); err != nil || !created || name != "mac/proj/v%242" {
+			t.Fatalf("the workspace beside the untagged session: %q %v %v", name, created, err)
+		}
+		locals, err = List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l, ok := ByName(locals, "mac/proj/v$2"); !ok || l.Key != "" || l.Attach != "" {
+			t.Fatalf("the untagged session after: %+v %v", l, ok)
 		}
 	}
 	// One under another name, renamed by hand say, is not adopted by a
