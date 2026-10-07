@@ -378,10 +378,11 @@ func PrintablePath(err error) error {
 }
 
 // NoServer reports whether the error means the server is not running. tmux
-// says "no server running on <path>" when the socket is missing, and "error
-// connecting to <path> (<reason>)" when it exists but cannot be used. Only a
-// stale socket counts as absent; "Permission denied" and other reasons are
-// failures to observe, not an empty server.
+// says "no server running on <path>" when nothing listens on the socket,
+// the stale one a server that exited leaves, and "error connecting to
+// <path> (<reason>)" when it cannot connect for another reason. Of those
+// only a missing socket or a refused connection counts; "Permission
+// denied" and other reasons are failures to observe, not an empty server.
 func NoServer(err error) bool {
 	var te *Error
 	if !errors.As(err, &te) {
@@ -626,6 +627,27 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	if !s.Managed() {
 		return fmt.Errorf("tmux: refusing to configure unmanaged server %s", s.Label())
 	}
+	// A hand-started server may carry global hooks from the user's config,
+	// such as a split on new-session. They are removed before any command
+	// they could follow: an after-hook that fails makes the command it
+	// follows exit 1 though the command did its work, and a failing
+	// after-set-option would stop every reconciliation before the removal.
+	// set-hook runs after-set-hook, which goes before the others, and not
+	// for its own removal; show-hooks has no hook. Remove every global hook
+	// that has a value; tmux 3.5 lists all hook names, set or not.
+	_, _ = s.Run(ctx, "set-hook", "-gu", "after-set-hook")
+	if out, err := s.Run(ctx, "show-hooks", "-g"); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			name, _, ok := strings.Cut(line, " ")
+			if !ok || name == "" {
+				continue
+			}
+			if idx := strings.IndexByte(name, '['); idx > 0 {
+				name = name[:idx]
+			}
+			_, _ = s.Run(ctx, "set-hook", "-gu", name)
+		}
+	}
 	cmds := [][]string{
 		{"set-option", "-g", "prefix", "None"},
 		{"set-option", "-g", "prefix2", "None"},
@@ -657,21 +679,6 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	for _, c := range cmds {
 		if _, err := s.Run(ctx, c...); err != nil {
 			return err
-		}
-	}
-	// A hand-started server may carry global hooks from the user's config,
-	// such as a split on new-session. Remove every global hook that has a
-	// value; tmux 3.5 lists all hook names, set or not.
-	if out, err := s.Run(ctx, "show-hooks", "-g"); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			name, _, ok := strings.Cut(line, " ")
-			if !ok || name == "" {
-				continue
-			}
-			if idx := strings.IndexByte(name, '['); idx > 0 {
-				name = name[:idx]
-			}
-			_, _ = s.Run(ctx, "set-hook", "-gu", name)
 		}
 	}
 	// Session-level overrides of the isolation options shadow the globals.
@@ -784,15 +791,21 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	if _, err := os.Stat(o.Cwd); err != nil {
 		return made, fmt.Errorf("tmux: cwd: %w", PrintablePath(err))
 	}
-	_, notRunning := s.Run(ctx, "list-sessions")
-	if notRunning != nil && s.Managed() {
+	_, listErr := s.Run(ctx, "list-sessions")
+	if NoServer(listErr) && s.Managed() {
 		// Cold start: the server is started on its own, with no config
 		// file and told to stay without sessions, and the session is
 		// made in a second invocation. The process that starts a tmux
 		// server is the server, and keeps its command line for as long
 		// as it runs; a new-session that started it would leave the
 		// agent's command, a prompt included, on the process list for
-		// the server's lifetime rather than the agent's.
+		// the server's lifetime rather than the agent's. Only a server
+		// that is not there is started: a running one fails list-sessions
+		// too when the user's after-list-sessions hook fails, and its
+		// after-set-option hook would then fail the set-option here,
+		// before EnsureConfigured removes the hooks. A server that fails
+		// list-sessions for another reason fails EnsureConfigured, none of
+		// whose commands starts one.
 		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err != nil {
 			return made, err
 		}

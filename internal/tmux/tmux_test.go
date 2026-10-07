@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1147,6 +1148,74 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 	}
 }
 
+// A hand-started server whose user config has after-hooks that fail is
+// reconciled on the first try: the hooks go before the commands they
+// follow, set-option, unbind-key, show-environment and list-sessions,
+// each of which would otherwise exit 1 with the hook's error. tmux runs
+// an after-hook only on a server with a session. The user's
+// after-set-hook, which appends to @laatmux_hooked here, is removed
+// before the other hooks, so it never runs for their removal.
+func TestEnsureConfiguredRemovesHooksFirst(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	out, err := s.Run(ctx, "new-session", "-d", "-s", "a", "-P", "-F", "#{session_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	if _, err := s.Run(ctx, "set-option", "-t", id, "status", "on"); err != nil {
+		t.Fatal(err)
+	}
+	fail := "select-window -t nosuch:9"
+	for _, hook := range []string{"after-set-option", "after-unbind-key", "after-show-environment", "after-list-sessions"} {
+		if _, err := s.Run(ctx, "set-hook", "-g", hook, fail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Last, as it runs for its own setting.
+	if _, err := s.Run(ctx, "set-hook", "-g", "after-set-hook", "set-option -ga @laatmux_hooked x"); err != nil {
+		t.Fatal(err)
+	}
+	marked := func() string {
+		out, err := s.Run(ctx, "show-options", "-gqv", "@laatmux_hooked")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	before := marked()
+	if before == "" {
+		t.Fatal("after-set-hook did not run for its own setting; tmux runs no after-hook here")
+	}
+	if _, err := s.Run(ctx, "set-option", "-g", "mouse", "on"); err == nil || !strings.Contains(err.Error(), "nosuch") {
+		t.Fatalf("set-option with a failing after-set-option: %v, want the hook's error", err)
+	}
+
+	if err := s.EnsureConfigured(ctx); err != nil {
+		t.Fatalf("first EnsureConfigured: %v", err)
+	}
+	if got := marked(); got != before {
+		t.Errorf("@laatmux_hooked went from %q to %q: after-set-hook ran for another hook's removal", before, got)
+	}
+	out, err = s.Run(ctx, "show-hooks", "-g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.Contains(line, " ") {
+			t.Errorf("hook kept: %s", line)
+		}
+	}
+	for opt, want := range map[string]string{"prefix": "None", "mouse": "off"} {
+		if out, err := s.Run(ctx, "show-options", "-gv", opt); err != nil || strings.TrimSpace(string(out)) != want {
+			t.Errorf("%s is %q %v, want %s", opt, out, err, want)
+		}
+	}
+	if out, err := s.Run(ctx, "show-options", "-t", id, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
+		t.Errorf("session %s keeps %q %v", id, out, err)
+	}
+}
+
 // A session is reached by its exact name as SessionTarget writes it
 // when the name has a ., which tmux 3.7 keeps: =a.b alone is pane b of
 // window a, and has-session, the attach and kill-session found no
@@ -1339,6 +1408,105 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 	if !s.HasSession(ctx, "proj/z") {
 		t.Fatal("the new session is gone")
+	}
+}
+
+// A hand-started server whose user config has an after-list-sessions
+// hook that fails is not taken for one that is not running: list-sessions
+// fails on it, and a cold start's set-option would run the failing
+// after-set-option before EnsureConfigured removes the hooks.
+func TestNewSessionHandStartedHooks(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	if _, err := s.Run(ctx, "new-session", "-d", "-s", "hand", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range []string{"after-list-sessions", "after-set-option"} {
+		if _, err := s.Run(ctx, "set-hook", "-g", hook, "select-window -t nosuch:9"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Run(ctx, "list-sessions"); err == nil || NoServer(err) {
+		t.Fatalf("list-sessions with a failing after-list-sessions: %v, want the hook's error", err)
+	}
+	if _, err := s.NewSession(ctx, NewSessionOpts{Name: "made", Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasSession(ctx, "made") {
+		t.Fatal("the new session is gone")
+	}
+}
+
+// NewSession starts the managed server when it is not there, both with
+// no socket and over the socket a killed server left: tmux says "error
+// connecting to" for the first and "no server running" for the second,
+// and none of EnsureConfigured's commands would start one. tmux leaves
+// its socket on kill-server too, so it is removed for the first. The
+// server is started with no config file: HOME and XDG_CONFIG_HOME point
+// at configs that set @laatmux_conf, which must not be there, and keep a
+// developer's own config out of the test server.
+func TestNewSessionColdStart(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	home := t.TempDir()
+	for _, conf := range []string{".tmux.conf", ".config/tmux/tmux.conf"} {
+		p := filepath.Join(home, conf)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("set-option -g @laatmux_conf loaded\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	s := LaatmuxServer
+	ctx := context.Background()
+	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
+	path, ok := s.socket()
+	if !ok {
+		t.Fatal("no socket path")
+	}
+	// gone waits for nothing to listen on the socket: a server the
+	// previous test killed may still be going. It does not ask tmux, so
+	// what NoServer makes of each case is left to NewSession.
+	gone := func() {
+		t.Helper()
+		for i := 0; i < 50; i++ {
+			c, err := net.Dial("unix", path)
+			if err != nil {
+				return
+			}
+			c.Close()
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("the managed server is still running")
+	}
+	s.Run(ctx, "kill-server")
+	gone()
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cold", "stale"} {
+		if s.NoSocket() != (name == "cold") {
+			t.Fatalf("%s: NoSocket is %v", name, s.NoSocket())
+		}
+		made, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if out, err := s.Run(ctx, "show-options", "-sv", "exit-empty"); err != nil || strings.TrimSpace(string(out)) != "off" {
+			t.Errorf("%s: exit-empty is %q %v, want off", name, out, err)
+		}
+		if out, err := s.Run(ctx, "show-options", "-gqv", "@laatmux_conf"); err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Errorf("%s: the server loaded a config: @laatmux_conf is %q %v", name, out, err)
+		}
+		// SIGKILL leaves the socket, and the pane's sleep is hung up.
+		if err := syscall.Kill(made.ServerPID, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		gone()
 	}
 }
 
