@@ -17,10 +17,11 @@ import (
 // worktree. One in other sessions has none: an agent observed in a
 // window of the viewer's workspace session, or a managed agent of no
 // worktree in the home session of the viewer's line. Another worktree's
-// line is the viewer's, with its children, when the viewer's session
-// holds one of its agents. With no worktree, session and project are
-// the viewer's line alone, and a pane in a session that is no row's
-// shows the empty state under both.
+// line is the viewer's, with its children, when one of its agents is
+// observed in a window of the viewer's session, or runs in the managed
+// session a plain attachment the viewer is in shows. With no worktree,
+// session and project are the viewer's line alone, and a pane in a
+// session that is no row's shows the empty state under both.
 type Scope string
 
 const (

@@ -324,36 +324,54 @@ func TestScopeViewerRow(t *testing.T) {
 	if got, want := ids(m), rows.RepoNode(src)+"\nvenv/worktree//w/proj/y\nvenv/laatmux/%2\nvenv/laatmux/%9"; got != want {
 		t.Errorf("session tree in vm/proj/y:\n%s\nwant:\n%s", got, want)
 	}
-	// Back in vm/proj/z, claude in another window there in a worktree of
-	// proj on mac, beside its own agent in its home session: that line is
-	// the viewer's too, so the scope keeps it with its children, and in
-	// the agent view its agents, beside proj/z's, whether it sorts before
-	// proj/z, which the scope's worktree then is, or after.
+	// Back in vm/proj/z, claude in another window there in a worktree on
+	// mac, beside its own agent in its home session: that line is the
+	// viewer's too, so the scope keeps it with its children, and in the
+	// agent view its agents, beside proj/z's: a worktree of proj that
+	// sorts before proj/z, which the scope's worktree then is, or after;
+	// and one of a third repository, which project keeps with its
+	// repository line beside proj's lines.
 	base := in
-	for _, branch := range []string{"a", "zz"} {
+	third := "git@github.com:u/third.git"
+	for _, c := range []struct{ repo, source, branch string }{{"proj", src, "a"}, {"proj", src, "zz"}, {"third", third, "b"}} {
 		in = base
-		wt := "menv/worktree//m/proj/" + branch
+		root := "/m/" + c.repo + "/" + c.branch
+		wt := "menv/worktree/" + root
 		visiting := observed("menv/default/%10", "vm/proj/z")
-		visiting.Cwd, visiting.WorktreeID = "/m/proj/"+branch, wt
-		home := protocol.Agent{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "proj/" + branch, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/m/proj/" + branch, WorktreeID: wt}
+		visiting.Cwd, visiting.WorktreeID = root, wt
+		home := protocol.Agent{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: c.repo + "/" + c.branch, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: root, WorktreeID: wt}
 		in.Agents = append(slices.Clone(base.Agents), visiting, home)
-		in.Worktrees = append(slices.Clone(base.Worktrees), protocol.Worktree{ID: wt, EnvironmentID: "menv", Repo: "proj", Source: src, Branch: branch, Root: "/m/proj/" + branch, Session: "proj/" + branch})
-		in.Locals = append(slices.Clone(base.Locals), protocol.Session{Name: "mac/proj/" + branch, Key: "menv//m/proj/" + branch, Host: "mac"})
+		in.Worktrees = append(slices.Clone(base.Worktrees), protocol.Worktree{ID: wt, EnvironmentID: "menv", Repo: c.repo, Source: c.source, Branch: c.branch, Root: root, Session: c.repo + "/" + c.branch})
+		in.Locals = append(slices.Clone(base.Locals), protocol.Session{Name: "mac/" + c.repo + "/" + c.branch, Key: "menv/" + root, Host: "mac"})
 		in.Current = "vm/proj/z"
-		m.View = ViewAgents
+		m.View, m.Scope = ViewAgents, ScopeSession
 		set()
 		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%5"; got != want {
-			t.Errorf("%s: session tiles: %s, want %s", branch, got, want)
+			t.Errorf("%s: session tiles: %s, want %s", c.branch, got, want)
 		}
 		m.View = ViewTree
 		mac := "\n" + wt + "\nmenv/default/%10\nmenv/laatmux/%4"
 		vm := "\nvenv/worktree//w/proj/z\nvenv/laatmux/%1"
-		want := rows.RepoNode(src) + mac + vm + "\nvenv/laatmux/%5\nmenv/default/%6"
-		if branch == "zz" {
-			want = rows.RepoNode(src) + vm + mac + "\nvenv/laatmux/%5\nmenv/default/%6"
-		}
+		others := "\nvenv/laatmux/%5\nmenv/default/%6"
+		want := map[string]string{
+			"a":  rows.RepoNode(src) + mac + vm + others,
+			"zz": rows.RepoNode(src) + vm + mac + others,
+			"b":  rows.RepoNode(src) + vm + "\n" + rows.RepoNode(third) + mac + others,
+		}[c.branch]
 		if got := ids(m); got != want {
-			t.Errorf("%s: session tree:\n%s\nwant:\n%s", branch, got, want)
+			t.Errorf("%s: session tree:\n%s\nwant:\n%s", c.branch, got, want)
+		}
+		if c.repo != "third" {
+			continue
+		}
+		m.Scope = ScopeProject
+		want = rows.RepoNode(src) + "\nvenv/worktree//w/proj/y\nvenv/laatmux/%2" + vm + "\n" + rows.RepoNode(third) + mac + others
+		if got := ids(m); got != want {
+			t.Errorf("%s: project tree:\n%s\nwant:\n%s", c.branch, got, want)
+		}
+		m.View = ViewAgents
+		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%2 venv/laatmux/%5"; got != want {
+			t.Errorf("%s: project tiles: %s, want %s", c.branch, got, want)
 		}
 	}
 }

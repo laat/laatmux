@@ -956,11 +956,12 @@ Five settlements differ from the plan in #52:
   session the viewer is in. The tree shows such a row under the
   other-sessions header, after the viewer's line. With a task standing
   for the line, the managed one is the task's, as `z` refuses it, and
-  not the viewer's. Another worktree's line is the viewer's when the
-  viewer's session holds one of its agents, one observed in a window
-  there with its directory in that worktree, say: the scope keeps that
-  line with its children, and in the agent view its agents, beside the
-  viewer's worktree.
+  not the viewer's. Another worktree's line is the viewer's when one of
+  its agents is observed in a window of the viewer's session with its
+  directory in that worktree, or runs in the managed session a plain
+  attachment the viewer is in shows: the scope keeps that line with its
+  children, and in the agent view its agents, beside the viewer's
+  worktree.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The
