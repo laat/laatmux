@@ -59,7 +59,7 @@ jobs:
         if: runner.os == 'Linux'
         run: command -v zsh >/dev/null || { sudo apt-get update && sudo apt-get install -y zsh; }
 
-      # A tmux or zsh version changed by the runner image or by apt
+      # A tmux or zsh version changed by the runner image, apt or brew
       # shows here, and a runner without zsh fails here. On Linux, a
       # tmux other than 3.4 also puts a warning on the run: no job
       # then runs the tests of the 3.2-3.4 facts on 3.4.
