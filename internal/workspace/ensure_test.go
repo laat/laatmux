@@ -21,7 +21,7 @@ func startServers(t *testing.T) {
 	for _, s := range []tmux.Server{tmux.LaatmuxServer, tmux.DefaultServer} {
 		var err error
 		for i := 0; i < 50; i++ {
-			if _, err = s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err == nil {
+			if _, err = s.Run(ctx, "-f", "/dev/null", "start-server", tmux.Next, "set-option", "-s", "exit-empty", "off"); err == nil {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -518,7 +518,10 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 // tagged with them whole, found by key the next time and by its branch:
 // tmux took the ; at the end of each as a separator, so the key and the
 // branch were set without it, and the second Ensure, not finding the
-// key, refused the session as another root's workspace.
+// key, refused the session as another root's workspace. A branch that
+// is ; alone, which git takes, was passed as a bare ;, the separator
+// callers passed, so the branch tag had no value: tmux refused it, and
+// every Ensure of the worktree failed.
 func TestEnsureKeyEndsInSemicolon(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -528,22 +531,26 @@ func TestEnsureKeyEndsInSemicolon(t *testing.T) {
 	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
 		t.Fatal(err)
 	}
-	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/proj/semi", Key: "env//w/proj/semi;", Source: "/src/proj;", Branch: "semi;"}
-	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
-		t.Fatalf("first ensure: %q %v %v", name, created, err)
-	}
-	if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
-		t.Fatalf("second ensure: %q %v %v", name, created, err)
-	}
-	locals, err := List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, ok := Find(locals, spec.Key, "")
-	if !ok || l.Name != spec.Name || l.Host != "mac" || l.Source != spec.Source || l.Branch != spec.Branch {
-		t.Fatalf("by key: %+v %v", l, ok)
-	}
-	if l, ok := FindWorktree(locals, "env", spec.Source, spec.Branch); !ok || l.Name != spec.Name {
-		t.Fatalf("by branch: %+v %v", l, ok)
+	for _, spec := range []Spec{
+		{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/proj/semi", Key: "env//w/proj/semi;", Source: "/src/proj;", Branch: "semi;"},
+		{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: SessionName("mac", "proj", ";"), Key: "env//w/proj/;", Source: "/src/proj", Branch: ";"},
+	} {
+		if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+			t.Fatalf("%s: first ensure: %q %v %v", spec.Branch, name, created, err)
+		}
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Fatalf("%s: second ensure: %q %v %v", spec.Branch, name, created, err)
+		}
+		locals, err := List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, ok := Find(locals, spec.Key, "")
+		if !ok || l.Name != spec.Name || l.Host != "mac" || l.Source != spec.Source || l.Branch != spec.Branch {
+			t.Fatalf("%s: by key: %+v %v", spec.Branch, l, ok)
+		}
+		if l, ok := FindWorktree(locals, "env", spec.Source, spec.Branch); !ok || l.Name != spec.Name {
+			t.Fatalf("%s: by branch: %+v %v", spec.Branch, l, ok)
+		}
 	}
 }

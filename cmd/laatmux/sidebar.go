@@ -398,7 +398,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	// sidebar that exited as a dead tagged pane, which attach would take
 	// for a live one.
 	_, err = workspace.Server.Run(ctx, "set-option", "-p", "-t", id, sidebarTag, "1",
-		";", "set-option", "-p", "-t", id, "remain-on-exit", "off")
+		tmux.Next, "set-option", "-p", "-t", id, "remain-on-exit", "off")
 	return err
 }
 
@@ -516,7 +516,7 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 	}
 	args := []string{"resize-pane", "-t", sidebar, axis, want}
 	if zoomed != "" {
-		args = append(args, ";", "resize-pane", "-Z", "-t", zoomed)
+		args = append(args, tmux.Next, "resize-pane", "-Z", "-t", zoomed)
 	}
 	_, err = workspace.Server.Run(ctx, args...)
 	return err

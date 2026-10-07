@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +163,7 @@ func TestListPanesEmptyServer(t *testing.T) {
 	if _, err := s.ListPanes(ctx); !NoServer(err) {
 		t.Fatalf("not running: %v", err)
 	}
-	if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err != nil {
+	if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Run(ctx, "kill-server") })
@@ -180,7 +185,7 @@ func startManaged(t *testing.T) Server {
 	s := LaatmuxServer
 	var err error
 	for i := 0; i < 50; i++ {
-		if _, err = s.Run(context.Background(), "-f", "/dev/null", "start-server", ";", "set-option", "-s", "exit-empty", "off"); err == nil {
+		if _, err = s.Run(context.Background(), "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err == nil {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -392,14 +397,16 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 	}
 }
 
-// Every argument that ends in ; but a bare ;, the separator, gets a
-// backslash before that last ;, the attach and bare lines' arguments
-// as well; the selector does not, and the caller's slice is left as it
-// is. The new-session test below checks with tmux.
+// Next is written as a bare ;, the separator, and every other argument
+// that ends in ;, a bare ; among them, gets a backslash before that
+// last ;, the attach and bare lines' arguments as well; the selector
+// does not, and the caller's slice is left as it is. An error names a
+// Next as the ; it stands for. The new-session test below checks with
+// tmux.
 func TestArgsEscapeTrailingSemicolon(t *testing.T) {
-	in := []string{"set-option", "@a", "x;", ";", "set-option", "@b", `x\;`, ";", "a;b", "x;;", `\;`, ";x", "x"}
+	in := []string{"set-option", "@a", "x;", Next, "set-option", "@b", `x\;`, Next, "set-option", "@c", ";", Next, "a;b", "x;;", `\;`, ";x", "x"}
 	keep := append([]string(nil), in...)
-	want := []string{"-S", "/s;", "set-option", "@a", `x\;`, ";", "set-option", "@b", `x\\;`, ";", "a;b", `x;\;`, `\\;`, ";x", "x"}
+	want := []string{"-S", "/s;", "set-option", "@a", `x\;`, ";", "set-option", "@b", `x\\;`, ";", "set-option", "@c", `\;`, ";", "a;b", `x;\;`, `\\;`, ";x", "x"}
 	if got := (Server{Path: "/s;"}).args(in...); !slices.Equal(got, want) {
 		t.Errorf("args = %q, want %q", got, want)
 	}
@@ -409,8 +416,152 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 	if got := LaatmuxServer.AttachArgsBare("x;"); !slices.Equal(got, []string{"-L", "laatmux", "attach-session", "-t", `=x\;`}) {
 		t.Errorf("AttachArgsBare = %q", got)
 	}
-	if got := (Server{}).ArgsBare("has-session", "-t", "=x;"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`}) {
+	if got := (Server{}).ArgsBare("has-session", "-t", "=x;", Next, "set-option", "@b", ";"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`, ";", "set-option", "@b", `\;`}) {
 		t.Errorf("ArgsBare = %q", got)
+	}
+	err := &Error{Args: []string{"set-option", "@a", ";", Next, "set-option", "@b", "x"}, Msg: "m"}
+	if got, want := err.Error(), "tmux set-option @a ; ; set-option @b x: m"; got != want {
+		t.Errorf("Error = %q, want %q", got, want)
+	}
+}
+
+// No Go file of the module passes a bare ";" where tmux arguments are
+// built: args writes it as the value ";", so a caller that separated
+// two commands with it would give the first an argument too many, which
+// tmux refuses and only a test on a real server running that very
+// sequence notices. A ";" literal, in parentheses or not, is caught as
+// an argument of Run, RunInput, ArgsBare or append, as an element of a
+// slice or array literal, keyed or not, the inner []string of a
+// [][]string or a map of them included, and as the value of a const or
+// var, which could then be passed as the separator. The strings
+// package's Split and the like, append(b, ";"...) on bytes, map values
+// and struct literals are not matched; a ";" that is a value, or not
+// tmux's, is written string(';'). The walk skips what the go tool
+// skips by name, so it reads this module's code and no other's, and it
+// must see a Next among what it checks, so a walk that read nothing
+// cannot pass. The module's test files are left out, since the tests
+// here pass ";" as a value on purpose.
+func TestNoBareSeparator(t *testing.T) {
+	root := filepath.Join("..", "..")
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(strings.Split(string(mod), "\n"), func(l string) bool {
+		f := strings.Fields(l)
+		return len(f) >= 2 && f[0] == "module" && f[1] == "github.com/laat/laatmux"
+	}) {
+		t.Fatalf("%s is not this module's root", root)
+	}
+	fset := token.NewFileSet()
+	seen := 0
+	check := func(e ast.Expr) {
+		switch x := ast.Unparen(e).(type) {
+		case *ast.BasicLit:
+			if v, err := strconv.Unquote(x.Value); x.Kind == token.STRING && err == nil && v == ";" {
+				t.Errorf("%s: a bare \";\" goes to tmux as the value ;: separate commands with tmux.Next, and write a ; that is a value, or not tmux's, as string(';')", fset.Position(e.Pos()))
+			}
+		case *ast.Ident:
+			if x.Name == "Next" {
+				seen++
+			}
+		case *ast.SelectorExpr:
+			if x.Sel.Name == "Next" {
+				seen++
+			}
+		}
+	}
+	// elems checks the elements of a literal of type typ: a slice's or
+	// an array's, and those of an inner literal whose type is elided
+	// when the element or map value type is a slice or array too.
+	var elems func(lit *ast.CompositeLit, typ ast.Expr)
+	elems = func(lit *ast.CompositeLit, typ ast.Expr) {
+		var elt ast.Expr
+		switch t := typ.(type) {
+		case *ast.ArrayType:
+			elt = t.Elt
+		case *ast.MapType:
+			elt = t.Value
+		default:
+			return
+		}
+		_, slice := typ.(*ast.ArrayType)
+		for _, e := range lit.Elts {
+			if kv, ok := e.(*ast.KeyValueExpr); ok {
+				e = kv.Value
+			}
+			if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+				elems(inner, elt)
+			} else if slice {
+				check(e)
+			}
+		}
+	}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != root && (strings.HasPrefix(d.Name(), ".") || strings.HasPrefix(d.Name(), "_")) {
+			// The go tool ignores these: .git, the agents'
+			// worktrees, an editor's lock or an AppleDouble file.
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if path != root {
+				if d.Name() == "testdata" || d.Name() == "vendor" {
+					return filepath.SkipDir
+				}
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			var list []ast.Expr
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				switch fn := n.Fun.(type) {
+				case *ast.Ident:
+					if fn.Name == "append" && !n.Ellipsis.IsValid() {
+						list = n.Args
+					}
+				case *ast.SelectorExpr:
+					if fn.Sel.Name == "Run" || fn.Sel.Name == "RunInput" || fn.Sel.Name == "ArgsBare" {
+						list = n.Args
+					}
+				}
+			case *ast.CompositeLit:
+				// An elided literal is checked from the one it is in,
+				// which knows its type.
+				if n.Type != nil {
+					elems(n, n.Type)
+				}
+			case *ast.ValueSpec:
+				list = n.Values
+			}
+			for _, e := range list {
+				check(e)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen == 0 {
+		t.Fatal("the walk saw no Next: it read none of the module's callers")
 	}
 }
 
@@ -418,13 +569,15 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 // the sequence goes on past them: tmux takes an argument that ends in ;
 // as the text before it followed by a separator, so new-session -c with
 // such a root failed on the next flag, and an option value was cut with
-// no error. One that ends in \; keeps its backslash, and a root that
-// ends in #; is written ##\; for -c, which tmux reads back as ##; and
-// expands to #;.
+// no error. One that ends in \; keeps its backslash, a root that ends
+// in #; is written ##\; for -c, which tmux reads back as ##; and
+// expands to #;, and a bare ;, a branch named ;, is a value: passed as
+// the separator, it left the branch tag with no value, which tmux
+// refused.
 func TestSemicolonArgumentsReachTmux(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
-	for i, leaf := range []string{"semi;", `bs\;`, "x;;", "x#;"} {
+	for i, leaf := range []string{"semi;", `bs\;`, "x;;", "x#;", ";"} {
 		root := filepath.Join(t.TempDir(), "proj", leaf)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
@@ -457,8 +610,8 @@ func TestSemicolonArgumentsReachTmux(t *testing.T) {
 		// whose last command runs only if the separators still work.
 		target := "=" + name + ":"
 		if _, err := s.Run(ctx, "set-option", "-t", target, "@laatmux_workspace", "env/"+root,
-			";", "set-option", "-t", target, "@laatmux_branch", leaf,
-			";", "set-option", "-t", target, "@laatmux_repo", "after"); err != nil {
+			Next, "set-option", "-t", target, "@laatmux_branch", leaf,
+			Next, "set-option", "-t", target, "@laatmux_repo", "after"); err != nil {
 			t.Fatalf("%s: %v", leaf, err)
 		}
 		for opt, want := range map[string]string{"@laatmux_workspace": "env/" + root, "@laatmux_branch": leaf, "@laatmux_repo": "after"} {

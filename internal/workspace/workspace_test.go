@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,18 +84,22 @@ func TestShellCommand(t *testing.T) {
 }
 
 // A reuse that does not know the source or branch leaves the session's
-// tags alone rather than clearing them.
+// tags alone rather than clearing them. The tags are one sequence, its
+// commands separated by tmux.Next, so a branch that is ; is a value.
 func TestTagArgsPreserveUnknownIdentity(t *testing.T) {
-	full := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Key: "k", Source: "src", Branch: "b"}), " ")
-	if !strings.Contains(full, "@laatmux_repo src") || !strings.Contains(full, "@laatmux_branch b") {
-		t.Errorf("full spec did not tag identity: %s", full)
+	full := tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Key: "k", Source: "src", Branch: ";"})
+	want := []string{"set-option", "-t", "=s:", "@laatmux_host", "vm",
+		tmux.Next, "set-option", "-t", "=s:", "@laatmux_repo", "src",
+		tmux.Next, "set-option", "-t", "=s:", "@laatmux_branch", ";"}
+	if !slices.Equal(full, want) {
+		t.Errorf("full spec: %q, want %q", full, want)
 	}
 	partial := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Key: "k", Branch: "b"}), " ")
 	if strings.Contains(partial, "@laatmux_repo") || !strings.Contains(partial, "@laatmux_branch b") || !strings.Contains(partial, "@laatmux_host vm") {
-		t.Errorf("partial spec wrote an empty source or dropped the rest: %s", partial)
+		t.Errorf("partial spec wrote an empty source or dropped the rest: %q", partial)
 	}
 	if plain := strings.Join(tagArgs("s", Spec{Host: peer.Host{Name: "vm"}, Source: "src"}), " "); strings.Contains(plain, "@laatmux_repo") {
-		t.Errorf("plain attachment got identity tags: %s", plain)
+		t.Errorf("plain attachment got identity tags: %q", plain)
 	}
 }
 
