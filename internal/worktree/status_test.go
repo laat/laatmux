@@ -157,9 +157,14 @@ func TestStatusRepoEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, head, paths, err := Status(f.ctx, a.Root, "feature", &StatusCache{})
-	if err != nil {
+	// Without the setup's untracked log the worktree is clean, so
+	// another repository's index would make it dirty.
+	if err := os.Remove(filepath.Join(a.Root, "log")); err != nil {
 		t.Fatal(err)
+	}
+	want, head, paths, err := Status(f.ctx, a.Root, "feature", &StatusCache{})
+	if err != nil || want.Dirty {
+		t.Fatalf("status %+v %v", want, err)
 	}
 	// Another clone, a commit ahead and with a change of its own.
 	other := filepath.Join(t.TempDir(), "other")
