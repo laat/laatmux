@@ -1636,13 +1636,23 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	// follows proj/z's line; the agent view, with no tile of proj/z,
 	// follows the visitor's tile, the one in the viewer's session, not
 	// the other worktree's own agent, which its line being the viewer's
-	// makes the viewer's too and sorts first.
+	// makes the viewer's too and sorts first. A blocked `cd ~ && claude`
+	// in a split of proj/z, in other sessions, is in the viewer's
+	// session through proj/z's workspace session as much as an idle
+	// claude observed in a window of it, and sorts first.
 	busy := home
 	busy.Activity, busy.ActivityAt = protocol.Working, now.Add(-time.Minute)
+	stray := agent("venv/laatmux/%5", "proj/z", "/home/u", "", protocol.Blocked, time.Minute)
+	idle := protocol.Agent{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/z", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-10 * time.Minute), Liveness: protocol.Alive, Cwd: "/Users/u"}
 	for _, c := range []struct {
 		visitor protocol.Agent
 		in      rows.Input
 	}{
+		{stray, rows.Input{
+			Agents:    []protocol.Agent{stray, idle},
+			Worktrees: []protocol.Worktree{z},
+			Locals:    []protocol.Session{zLocal},
+		}},
 		{split, rows.Input{
 			Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", y.Root, y.ID, protocol.Working, time.Minute), split},
 			Worktrees: []protocol.Worktree{z, y},
@@ -1668,6 +1678,20 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 			}
 		}
 	}
+	// The viewer in the plain session notes on mac's default server, with
+	// claude observed there in mac's worktree proj/a, beside proj/a's own
+	// working agent in its home: nothing is the viewer's by its own
+	// session, so the tree follows proj/a's line, marked through the
+	// visitor, and the agent view the visitor's tile, in the viewer's
+	// session, not proj/a's own agent, which sorts first.
+	inNotes := visiting
+	inNotes.Session = "notes"
+	follows("a visitor in a plain session", rows.Input{
+		Agents:    []protocol.Agent{inNotes, busy},
+		Worktrees: []protocol.Worktree{a},
+		Locals:    []protocol.Session{{Name: "notes"}, {Name: "mac/proj/a", Key: "menv//m/proj/a", Host: "mac"}},
+		Current:   "notes",
+	}, inNotes.ID, a.ID)
 	// The viewer in a plain attachment to the task's session, with and
 	// without its workspace session, and a working `cd ~ && claude` in a
 	// split of it, in other sessions in the viewer's session: the task's

@@ -329,32 +329,41 @@ func (m *Model) followed(vis []Item) int {
 // whole tree. In the agent view it is the first of the viewer's
 // tiles of what the tree follows (treeFollowed): of the worktree of the
 // viewer's line, its tasks among them, or the node's own tile in other
-// sessions; when none of those is shown, the first of the viewer's
-// tiles in the viewer's session, else the first of the viewer's tiles
-// (viewerRank). So a visitor's tile is followed before its worktree's
-// other agents in their own sessions, which its line being the
-// viewer's makes the viewer's too. So the two views agree
+// sessions; of a line the viewer's only through a visitor, the first of
+// those in the viewer's session; when none of those is shown, the first
+// of the viewer's tiles in the viewer's session, else the first of the
+// viewer's tiles (viewerRank). So a visitor's tile is followed before
+// its worktree's other agents in their own sessions, which its line
+// being the viewer's makes the viewer's too. So the two views agree
 // whenever the tree's choice and a tile of it are shown. A tile in
 // other sessions can be the viewer's beside the worktree's and sort
 // before them, an agent started outside any worktree from a split of
 // the viewer's session or observed in a window of it, and the keys that
 // read the row's worktree, o, O, x and a, would find none there.
 func (m *Model) followRow(n int, row func(int) *rows.Row) int {
-	id, w := "", ""
+	id, w, visited := "", "", false
 	if t := m.treeFollowed(); t != nil {
 		// The line's worktree as the scope's viewerWorktree has it.
-		id, w = t.ID(), worktreeOf(t)
+		id, w, visited = t.ID(), worktreeOf(t), !t.Own
 	}
-	best := -1
+	best, of := -1, -1
 	for i := 0; i < n; i++ {
 		r := row(i)
 		switch {
 		case !r.Current:
 		case r.Kind == rows.KindTile && (r.ID() == id || w != "" && m.tileWorktree(r) == w):
-			return i
+			if !visited || r.Own {
+				return i
+			}
+			if of < 0 {
+				of = i
+			}
 		case best < 0 || viewerRank(r) > viewerRank(row(best)):
 			best = i
 		}
+	}
+	if of >= 0 {
+		return of
 	}
 	return best
 }

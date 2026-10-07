@@ -481,6 +481,11 @@ func TestHomeAgentSettled(t *testing.T) {
 			for _, r := range g.tiles {
 				if r.Agent != nil && r.Pending == nil && r.Worktree == nil {
 					tiles[r.Agent.ID] = state{r.Settled, r.Dim, g.stale, r.Current}
+					// The viewer's tile is in the viewer's session, through
+					// the line's workspace session: Own.
+					if r.Own != r.Current {
+						t.Errorf("home %q current %q: the tile %s Own %v Current %v", c.home, c.current, r.ID(), r.Own, r.Current)
+					}
 				}
 			}
 		}

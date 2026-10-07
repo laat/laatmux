@@ -885,11 +885,14 @@ func Agents(in Input, tree []Row) Rows {
 				t.Current = viewer[owner]
 			}
 			// A tile in the viewer's own session is the viewer's wherever
-			// its node sits, and Own. Not one in a session a line is
-			// marked through: a line marked through one of its children
-			// or an attachment stands for its own session, which the
-			// viewer is not in.
-			t.Own = t.Local != nil && in.Current != "" && t.Local.Name == in.Current
+			// its node sits, and Own, as is a node's in other sessions
+			// that is the viewer's, which is in the viewer's session by
+			// its own or through the workspace session of the line whose
+			// home its session is. Not one in a session a line is marked
+			// through: a line marked through one of its children or an
+			// attachment stands for its own session, which the viewer is
+			// not in.
+			t.Own = n.Depth == 1 && n.Current || t.Local != nil && in.Current != "" && t.Local.Name == in.Current
 			t.Current = t.Current || t.Own
 			rows = append(rows, t)
 		}

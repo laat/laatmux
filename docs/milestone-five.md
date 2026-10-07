@@ -257,11 +257,13 @@ session, as is an agent of no worktree that is the viewer's through
 the line whose home its session is. In the agent view it follows the
 first tile, in sort order, of what the tree follows: the agents and
 tasks of that line's worktree, or the tile of the agent the tree
-follows in other sessions; with none of those shown, the first tile
-in the viewer's session, else the first that is the viewer's. So with
-the viewer's line showing no tile, a visitor's tile there is followed,
-not an agent of the visitor's worktree in that worktree's own session,
-which the visitor makes the viewer's too; and an orphaned session's
+follows in other sessions; of a line followed through a visitor, the
+first of those in the viewer's session; with none of those shown, the
+first tile in the viewer's session, else the first that is the
+viewer's. So a visitor's tile is followed, not an agent of the
+visitor's worktree in that worktree's own session, which the visitor
+makes the viewer's too, whether the tree follows the visited line or
+the viewer's own line shows no tile; and an orphaned session's
 line, which has no tile, gives the tile of an agent observed in a
 window of the session. So the two views agree
 whenever the tree's choice and a tile of it are shown. A tile in
