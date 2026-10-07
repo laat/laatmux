@@ -520,16 +520,14 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		}
 	}
 	// Session-level overrides of the isolation options shadow the globals.
-	if out, err := s.Query(ctx, "#{session_name}", "list-sessions"); err == nil {
-		for _, sess := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if sess == "" {
-				continue
-			}
+	// Each session is named by its id, which reaches it whatever its
+	// name: a hand-made session can have a name no target reaches
+	// (CheckTarget), c:d say on tmux 3.7, which =c:d: takes for window
+	// d: of session c.
+	if out, err := s.Query(ctx, "#{session_id}", "list-sessions"); err == nil {
+		for _, id := range strings.Fields(string(out)) {
 			for _, opt := range []string{"prefix", "prefix2", "status", "mouse"} {
-				// The session by exact name: a bare 0, the name the
-				// first session of a hand-started server gets, is
-				// pane 0 of the current session.
-				_, _ = s.Run(ctx, "set-option", "-u", "-t", "="+sess+":", opt)
+				_, _ = s.Run(ctx, "set-option", "-u", "-t", id, opt)
 			}
 		}
 	}
@@ -540,7 +538,8 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 // given, or could not find by its name once made, and says which
 // character is the reason. tmux rewrites a name after expanding it as a
 // format, so no escape gets these through:
-//   - a . or a : is stored as _, and a \ doubled;
+//   - a . or a : is stored as _ by tmux before 3.7, and no target
+//     reaches a session with a : (CheckTarget); a \ is stored doubled;
 //   - a byte that is not UTF-8 and a control character are stored
 //     escaped, a C1 one by tmux 3.3 (U+0085 as \302\205);
 //   - tmux 3.3 built without utf8proc stores escaped a character its C
@@ -573,8 +572,10 @@ func CheckSessionName(name string) error {
 			why = fmt.Sprintf("the control character %U, which tmux stores escaped", r)
 		case widthless(r):
 			why = fmt.Sprintf("the character %U, which tmux 3.3 stores escaped", r)
-		case r == '.' || r == ':':
-			why = fmt.Sprintf("a %c, which tmux stores as _", r)
+		case r == '.':
+			why = "a ., which tmux before 3.7 stores as _"
+		case r == ':':
+			why = "a :, which tmux before 3.7 stores as _ and a target splits at"
 		case r == '\\':
 			why = `a \, which tmux stores doubled`
 		case r == '$':
@@ -669,7 +670,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	// The pane target is the session by exact name: a session target with
 	// a trailing colon resolves to its current window's active pane, and
 	// the session has exactly one.
-	target := "=" + o.Name + ":"
+	target := SessionTarget(o.Name)
 	opts := [][2]string{{"@laatmux_managed", "1"}, {"@laatmux_cwd", o.Cwd}}
 	if o.Host != "" {
 		opts = append(opts, [2]string{"@laatmux_host", o.Host})
@@ -700,7 +701,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		// current session is that pane's.
 		if pout, err := s.Run(ctx, "list-panes", "-s", "-t", target, "-F", "#{pane_id}"); err == nil {
 			if n := len(strings.Fields(string(pout))); n != 1 {
-				_, _ = s.Run(ctx, "kill-session", "-t", "="+o.Name)
+				_, _ = s.Run(ctx, "kill-session", "-t", target)
 				return Session{}, &SubmittedError{Err: fmt.Errorf("tmux: session %q came up with %d panes, expected 1; server config interfered", o.Name, n)}
 			}
 		}
@@ -881,15 +882,60 @@ func cover(hide []bool, msg, f string) {
 	}
 }
 
-// KillSession kills the session with exactly this name.
+// SessionTarget is the target of any command for the session with
+// exactly this name, and a session gone is an error rather than one its
+// name is a prefix of. The = asks for the session by its exact name and
+// the : ends the session's part of the target. Without the colon tmux
+// reads a . in the name as the separator of a window and a pane: tmux
+// 3.7 keeps a . in a session name, and a session named a.b is reached
+// by =a.b: and not by =a.b, which looks for pane b of window a. A bare
+// name may be taken as a pane or window of the current session before
+// it is taken as a session, and then for a session whose name starts
+// with it; the current session is the one with the pane TMUX_PANE
+// names on that server, else the most recently active. =name without
+// the colon still falls back to a session prefix where a window is
+// wanted, set-option refuses it, and switch-client looks it up as a
+// pane when the name has a %, as an encoded branch does. A name no
+// session has but a client does, its tty without /dev/ say, is that
+// client's session even so. A name CheckTarget refuses is reached by
+// no target by name.
+func SessionTarget(name string) string { return "=" + name + ":" }
+
+// CheckTarget refuses a session name that SessionTarget does not reach,
+// and says why: no name, since =: is the current session; one with a :,
+// which tmux 3.7 keeps in a session name, since a target's session part
+// ends at its first :, so =c:d: is a window of session c, its window
+// named d:x say; and one that starts with a $, which =$0: reads as the
+// session id $0, another session's.
+func CheckTarget(name string) error {
+	switch {
+	case name == "":
+		return errors.New("session name required")
+	case strings.Contains(name, ":"):
+		return fmt.Errorf("session %q has a :, at which tmux splits a target, so no target reaches it by name", name)
+	case strings.HasPrefix(name, "$"):
+		return fmt.Errorf("session %q starts with a $, which a target reads as a session id", name)
+	}
+	return nil
+}
+
+// KillSession kills the session with exactly this name; one no target
+// reaches is refused, not another session killed.
 func (s Server) KillSession(ctx context.Context, name string) error {
-	_, err := s.Run(ctx, "kill-session", "-t", "="+name)
+	if err := CheckTarget(name); err != nil {
+		return err
+	}
+	_, err := s.Run(ctx, "kill-session", "-t", SessionTarget(name))
 	return err
 }
 
-// HasSession reports whether a session exists on the server.
+// HasSession reports whether a session with exactly this name exists on
+// the server; one no target reaches is not found.
 func (s Server) HasSession(ctx context.Context, name string) bool {
-	_, err := s.Run(ctx, "has-session", "-t", "="+name)
+	if CheckTarget(name) != nil {
+		return false
+	}
+	_, err := s.Run(ctx, "has-session", "-t", SessionTarget(name))
 	return err == nil
 }
 
@@ -897,7 +943,7 @@ func (s Server) HasSession(ctx context.Context, name string) bool {
 // on this server, for use locally or after ssh -t, its arguments escaped
 // as args escapes them.
 func (s Server) AttachArgsBare(session string) []string {
-	return s.args("attach-session", "-t", "="+session)
+	return s.args("attach-session", "-t", SessionTarget(session))
 }
 
 // ArgsBare prepends this server's -L/-S selection to a tmux command, and
@@ -960,7 +1006,8 @@ func FormatLiteral(s string) string {
 }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux does not keep "." or ":" in a session name, stores a "\" in one
+// tmux before 3.7 does not keep "." or ":" in a session name, no target
+// reaches a session with a ":" (CheckTarget), tmux stores a "\" in one
 // doubled and a control byte, DEL or a byte that is not part of a valid
 // UTF-8 sequence escaped by vis(3), tmux 3.3 a C1 control character
 // too, tmux 3.2 to 3.4 store a "$" before a letter, "_" or "{" as "\$",
@@ -1045,16 +1092,16 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // workspace sessions are named after them as they are; a "#" since
 // new-session is given the name as FormatLiteral writes it; a ";" since
 // args writes a last one "\;". tmux before 3.7 lists no "." or ":",
-// storing them as "_"; tmux 3.7 lists them as given, but a target
-// splits there, so such a session cannot be attached by its listed
-// name, and they are kept for CheckSessionName to refuse a plain
-// attachment to it. Two sessions on a host, a\b and a%5cb, can so get
-// one local name; the second's jump is then refused as a name in use,
-// since the local session is found by its attach tag, which is exact.
-// tmux 3.2 to 3.4 store a "$" before a letter with a "\" before it,
-// so c$xd is listed as c\$xd, which does not decode: tmux 3.4 prints it
-// with one more "\", as c\\$xd, which Query undoes. Either becomes
-// c%5c%24xd, a name kept as given.
+// storing them as "_"; tmux 3.7 lists them as given. Both are kept for
+// CheckSessionName to refuse a plain attachment to such a session: no
+// target reaches one with a ":" (CheckTarget), and a local tmux before
+// 3.7 would store a "." in the local name as "_". Two sessions on a
+// host, a\b and a%5cb, can so get one local name; the second's jump is
+// then refused as a name in use, since the local session is found by
+// its attach tag, which is exact. tmux 3.2 to 3.4 store a "$" before a
+// letter with a "\" before it, so c$xd is listed as c\$xd, which does
+// not decode: tmux 3.4 prints it with one more "\", as c\\$xd, which
+// Query undoes. Either becomes c%5c%24xd, a name kept as given.
 func EncodeListed(name string) string {
 	if d := unvisName(name); visName(d) == name {
 		name = d

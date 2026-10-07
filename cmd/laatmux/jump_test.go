@@ -73,32 +73,57 @@ func TestCheckSessionTimesOut(t *testing.T) {
 	_ = errors.New
 }
 
+// The preflight names the session as the attach does, =name:, so a
+// session a.b on a host's tmux 3.7 is found, where =a.b looked for pane
+// b of window a.
+func TestCheckSessionNamesExactly(t *testing.T) {
+	argv := filepath.Join(t.TempDir(), "argv")
+	fakeSSH(t, `printf '%s\n' "$@" > '`+argv+`'`)
+	if err := checkSession(context.Background(), peer.Host{Name: "vm", SSH: "vm"}, "a.b"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(argv)
+	if err != nil || !strings.HasSuffix(string(got), "\ntmux -L laatmux has-session -t '=a.b:'\n") {
+		t.Fatalf("ssh got %q %v", got, err)
+	}
+}
+
 // Issue 3, option B: only the managed server is attached; the local default
 // server is switched to; a remote default server or any other server is
-// refused as unmanaged.
+// refused as unmanaged. A session no target reaches, one with a : that
+// tmux 3.7 keeps or one whose name starts with a $, is refused on a
+// server that would be attached or switched to.
 func TestJumpMode(t *testing.T) {
 	mac := peer.Host{Name: "mac"}
 	vm := peer.Host{Name: "vm", SSH: "vm"}
 	cases := []struct {
-		h    peer.Host
-		srv  string
-		want jumpKind
-		err  string
+		h       peer.Host
+		srv     string
+		session string
+		want    jumpKind
+		err     string
 	}{
-		{mac, "laatmux", jumpAttach, ""},
-		{vm, "laatmux", jumpAttach, ""},
-		{mac, "default", jumpSwitch, ""},
-		{vm, "default", 0, "vm/x: on vm's default tmux server"},
-		{mac, "work", 0, "tmux server work is not managed"},
-		{vm, "/tmp/sock", 0, "tmux server /tmp/sock is not managed"},
+		{mac, "laatmux", "x", jumpAttach, ""},
+		{vm, "laatmux", "x", jumpAttach, ""},
+		{mac, "default", "x", jumpSwitch, ""},
+		{vm, "default", "x", 0, "vm/x: on vm's default tmux server"},
+		{mac, "work", "x", 0, "tmux server work is not managed"},
+		{vm, "/tmp/sock", "x", 0, "tmux server /tmp/sock is not managed"},
+		{vm, "laatmux", "a.b", jumpAttach, ""},
+		{mac, "default", "a.b", jumpSwitch, ""},
+		{vm, "laatmux", "c:d", 0, `vm: session "c:d" has a :`},
+		{mac, "default", "c:d", 0, `mac: session "c:d" has a :`},
+		{mac, "default", "$0", 0, `mac: session "$0" starts with a $`},
+		{mac, "laatmux", "", 0, "mac: session name required"},
+		{vm, "default", "c:d", 0, "vm/c:d: on vm's default tmux server"},
 	}
 	for _, c := range cases {
-		got, err := jumpMode(c.h, tmux.Parse(c.srv), "x")
+		got, err := jumpMode(c.h, tmux.Parse(c.srv), c.session)
 		switch {
 		case c.err == "" && (err != nil || got != c.want):
-			t.Errorf("%s --server %s: got %v, %v", c.h.Name, c.srv, got, err)
+			t.Errorf("%s --server %s %s: got %v, %v", c.h.Name, c.srv, c.session, got, err)
 		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
-			t.Errorf("%s --server %s: got %v, want %q", c.h.Name, c.srv, err, c.err)
+			t.Errorf("%s --server %s %s: got %v, want %q", c.h.Name, c.srv, c.session, err, c.err)
 		}
 	}
 }

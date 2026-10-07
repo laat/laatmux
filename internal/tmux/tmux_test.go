@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -816,38 +817,113 @@ func startManaged(t *testing.T) Server {
 }
 
 // A hand-started server's sessions lose their overrides of the
-// isolation options, each named exactly: the first one is called 0,
-// which as a bare target is pane 0 of the most recent session, b here.
-// The third is named n$m, which tmux 3.2 to 3.4 store as n\$m and tmux
-// 3.4 lists as n\\$m; the test names it by its id.
+// isolation options, each reached by its id whatever its name: the
+// first one is called 0, which as a bare target is pane 0 of the most
+// recent session; tmux 3.7 keeps c:d, which =c:d: takes for a window of
+// a session c; =$1: is the session with the id $1, b here; and n$m is
+// stored as n\$m by tmux 3.2 to 3.4, and listed as n\\$m by 3.4. The
+// test sets and reads each by its id too.
 func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
+	names := []string{"0", "b", "c:d", "$1", "n$m"}
+	var ids []string
+	for _, name := range names {
+		out, err := s.Run(ctx, "new-session", "-d", "-s", name, "-P", "-F", "#{session_id}", "sleep 600")
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := strings.TrimSpace(string(out))
+		if _, err := s.Run(ctx, "set-option", "-t", id, "status", "on"); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := s.EnsureConfigured(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		if out, err := s.Run(ctx, "show-options", "-t", id, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Errorf("session %s (%s) keeps %q %v", names[i], id, out, err)
+		}
+	}
+}
+
+// A session is reached by its exact name as SessionTarget writes it
+// when the name has a ., which tmux 3.7 keeps: =a.b alone is pane b of
+// window a, and has-session, the attach and kill-session found no
+// session a.b. A name with a : no target reaches: =c:d: is a window of
+// session c, which c's window d:x is, so HasSession does not find c:d
+// and KillSession refuses it rather than kill c; so for $1, which as
+// =$1: is the session with the id $1, c:d here, and for no name, which
+// as =: is the most recent session. That part runs on every version,
+// where tmux before 3.7 stores c:d as c_d; the rest is skipped there,
+// a.b being stored as a_b.
+func TestSessionTargets(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
 	for _, args := range [][]string{
-		{"new-session", "-d", "-s", "0", "sleep 600"},
-		{"set-option", "-t", "=0:", "status", "on"},
-		{"new-session", "-d", "-s", "b", "sleep 600"},
-		{"set-option", "-t", "=b:", "status", "on"},
+		{"new-session", "-d", "-s", "c", "sleep 600"},
+		{"new-window", "-d", "-t", "=c:", "-n", "d:x", "sleep 600"},
+		{"new-session", "-d", "-s", "c:d", "sleep 600"},
+		{"new-session", "-d", "-s", "a.b", "sleep 600"},
+		{"new-session", "-d", "-s", "$1", "sleep 600"},
 	} {
 		if _, err := s.Run(ctx, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	out, err := s.Run(ctx, "new-session", "-d", "-s", "n$m", "-P", "-F", "#{session_id}", "sleep 600")
+	for name, want := range map[string]string{"c:d": "has a :", "$1": "starts with a $", "": "session name required"} {
+		if s.HasSession(ctx, name) {
+			t.Errorf("HasSession found %q", name)
+		}
+		if err := s.KillSession(ctx, name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("KillSession %q: %v, want a refusal", name, err)
+		}
+	}
+	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := strings.TrimSpace(string(out))
-	if _, err := s.Run(ctx, "set-option", "-t", id, "status", "on"); err != nil {
-		t.Fatal(err)
+	if n := strings.Count(string(out), "\n"); n != 4 {
+		t.Fatalf("%d sessions left of 4: %q", n, out)
 	}
-	if err := s.EnsureConfigured(ctx); err != nil {
-		t.Fatal(err)
+	if !slices.Contains(strings.Split(strings.TrimSpace(string(out)), "\n"), "a.b") {
+		t.Skipf("tmux before 3.7 stores a . in a session name as _: %q", out)
 	}
-	for _, target := range []string{"=0:", "=b:", id} {
-		if out, err := s.Run(ctx, "show-options", "-t", target, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
-			t.Errorf("session %s keeps %q %v", target, out, err)
+	if !s.HasSession(ctx, "a.b") {
+		t.Error("HasSession did not find a.b")
+	}
+	// The attach line as the attach window runs it: a control-mode
+	// client with nothing to read attaches, says to which session, and
+	// exits.
+	out, err = exec.Command("tmux", append([]string{"-u", "-C"}, s.AttachArgsBare("a.b")...)...).CombinedOutput()
+	if err != nil || !regexp.MustCompile(`(?m)^%session-changed \$\d+ a\.b$`).Match(out) {
+		t.Errorf("attach to a.b: %v\n%s", err, out)
+	}
+	if err := s.KillSession(ctx, "a.b"); err != nil || s.HasSession(ctx, "a.b") {
+		t.Errorf("KillSession a.b: %v", err)
+	}
+	if !s.HasSession(ctx, "c") {
+		t.Error("session c is gone")
+	}
+}
+
+// CheckTarget refuses no name, a name with a : wherever it is, and one
+// that starts with a $; a . and a $ or % elsewhere are reached.
+func TestCheckTarget(t *testing.T) {
+	for name, want := range map[string]string{
+		"": "session name required", "a.b": "", "proj/v1%2e2": "", "a$b": "", "%pct": "", "=eq": "", "semi;": "", "x.": "",
+		"c:d": "has a :", ":x": "has a :", "x:": "has a :", "a.b:c": "has a :",
+		"$0": "starts with a $", "$x": "starts with a $",
+	} {
+		err := CheckTarget(name)
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%q: %v, want %q", name, err, want)
 		}
+	}
+	if got := SessionTarget("a.b"); got != "=a.b:" {
+		t.Errorf("SessionTarget(a.b) = %q", got)
 	}
 }
 
@@ -925,8 +1001,8 @@ func TestNewSessionEncodedNames(t *testing.T) {
 func TestCheckSessionName(t *testing.T) {
 	for name, want := range map[string]string{
 		"":             "session name required",
-		"a.b":          `session name "a.b" has a ., which tmux stores as _`,
-		"a:b":          `has a :, which tmux stores as _`,
+		"a.b":          `session name "a.b" has a ., which tmux before 3.7 stores as _`,
+		"a:b":          `has a :, which tmux before 3.7 stores as _ and a target splits at`,
 		`a\b`:          `has a \, which tmux stores doubled`,
 		"nul\x00":      "has the control character U+0000",
 		"tab\tx":       "has the control character U+0009",
@@ -1791,10 +1867,10 @@ func TestRunReadsUTF8WithoutLocale(t *testing.T) {
 
 // Next is written as a bare ;, the separator, and every other argument
 // that ends in ;, a bare ; among them, gets a backslash before that
-// last ;, the attach and bare lines' arguments as well; the selector
-// does not, and the caller's slice is left as it is. An error names a
-// Next as the ; it stands for. The new-session test below checks with
-// tmux.
+// last ;, the bare line's arguments as well; the attach line's target
+// ends in : whatever the name, and the selector gets none either, and
+// the caller's slice is left as it is. An error names a Next as the ;
+// it stands for. The new-session test below checks with tmux.
 func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 	in := []string{"set-option", "@a", "x;", Next, "set-option", "@b", `x\;`, Next, "set-option", "@c", ";", Next, "a;b", "x;;", `\;`, ";x", "x"}
 	keep := append([]string(nil), in...)
@@ -1805,7 +1881,7 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 	if !slices.Equal(in, keep) {
 		t.Errorf("args changed its argument: %q", in)
 	}
-	if got := LaatmuxServer.AttachArgsBare("x;"); !slices.Equal(got, []string{"-L", "laatmux", "attach-session", "-t", `=x\;`}) {
+	if got := LaatmuxServer.AttachArgsBare("x;"); !slices.Equal(got, []string{"-L", "laatmux", "attach-session", "-t", `=x;:`}) {
 		t.Errorf("AttachArgsBare = %q", got)
 	}
 	if got := (Server{}).ArgsBare("has-session", "-t", "=x;", Next, "set-option", "@b", ";"); !slices.Equal(got, []string{"has-session", "-t", `=x\;`, ";", "set-option", "@b", `\;`}) {
