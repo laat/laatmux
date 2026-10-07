@@ -19,6 +19,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/gittest"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
@@ -907,6 +908,9 @@ func TestMain(m *testing.M) {
 	os.Setenv("TMUX_TMPDIR", dir)
 	os.Unsetenv("TMUX")
 	os.Unsetenv("TMUX_PANE")
+	// Nor the user's git config: a commit in a test's repository is not
+	// signed, runs no hook of theirs and takes the repository's identity.
+	gittest.Isolate()
 	// Nor the user's laatmux, whatever the environment names: the state
 	// directory, with last.json and the runtime file that names their
 	// daemon, and the config, a file that is not there, are the run's
