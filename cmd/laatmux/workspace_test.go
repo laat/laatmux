@@ -293,10 +293,13 @@ func TestLocalRepoArg(t *testing.T) {
 
 // add with a last.json it cannot parse says which file, as the add
 // form does: the decoder's error alone names none. It fails there,
-// before anything reaches a daemon.
+// before anything reaches a daemon, with --host given too: add takes
+// the last-used agent from the file and writes it back after. The
+// stand-in daemon answers an add that got past the file, so it fails
+// on another error rather than starting a real daemon.
 func TestAddBadLastNamesFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAATMUX_HOME", dir)
+	startFakeDaemon(t, nil, nil)
+	dir := os.Getenv("LAATMUX_HOME")
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - git@x:o/proj.git\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -310,6 +313,53 @@ func TestAddBadLastNamesFile(t *testing.T) {
 	report(&b, cmdAdd(context.Background(), []string{"b", "--repo", "proj", "--host", "mac"}))
 	if want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"; b.String() != want {
 		t.Errorf("printed %q, want %q", b.String(), want)
+	}
+}
+
+// rm, path and run take only the host from last.json, so with --host
+// given one they cannot parse does not stop them; without the flag
+// they need the last-used host and say which file they could not read.
+func TestExplicitHostSkipsBadLast(t *testing.T) {
+	const src, root = "git@x:o/proj.git", "/w/proj/b"
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm, protocol.CapRun}, func(pc *protocol.Conn, m protocol.Message) bool {
+		switch m.Type {
+		case protocol.TypeSubscribe:
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRm}},
+			}, Worktrees: []protocol.Worktree{{ID: "lenv/worktree/" + root, EnvironmentID: "lenv", Repo: "proj", Branch: "b", Root: root, Source: src}}})
+		case protocol.TypeRm, protocol.TypeRun:
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: root})
+		}
+		return true
+	})
+	dir := os.Getenv("LAATMUX_HOME")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	path := filepath.Join(dir, "last.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error()
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		cmd  func(context.Context, []string) error
+		args []string
+	}{
+		{"rm", cmdRm, []string{"proj/b"}},
+		{"path", cmdPath, []string{"proj/b"}},
+		{"run", cmdRun, []string{"proj/b", "--", "true"}},
+	} {
+		withHost := append([]string{"proj/b", "--host", "mac"}, c.args[1:]...)
+		if err := c.cmd(ctx, withHost); err != nil {
+			t.Errorf("%s %v: %v", c.name, withHost, err)
+		}
+		if err := c.cmd(ctx, c.args); err == nil || err.Error() != want {
+			t.Errorf("%s %v: %v, want %q", c.name, c.args, err, want)
+		}
 	}
 }
 

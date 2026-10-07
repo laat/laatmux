@@ -37,7 +37,7 @@ func cmdPath(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
 	}
-	h, _, err := hostFor(cfg, *hostFlag, repo)
+	h, _, err := hostFor(cfg, *hostFlag, repo, false)
 	if err != nil {
 		return err
 	}

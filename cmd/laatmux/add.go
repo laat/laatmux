@@ -37,7 +37,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	h, lr, err := hostFor(cfg, a.host, repo)
+	h, lr, err := hostFor(cfg, a.host, repo, true)
 	if err != nil {
 		return err
 	}

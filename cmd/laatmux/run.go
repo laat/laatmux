@@ -62,7 +62,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
 		}
-		if run.Host, _, err = hostFor(cfg, *hostFlag, repo); err != nil {
+		if run.Host, _, err = hostFor(cfg, *hostFlag, repo, false); err != nil {
 			return err
 		}
 		_, snap, err := snapshot(ctx, run.Host.Host, protocol.CapWorktrees)
