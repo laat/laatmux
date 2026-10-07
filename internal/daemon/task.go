@@ -224,9 +224,13 @@ func (r *addRun) run(ctx context.Context) error {
 		}
 	}
 	// The command a client sent is checked here as well: an older
-	// client, or an add the relay queued before an upgrade, did not.
-	if err := config.CheckCmd(r.cmd); err != nil {
-		return stageErr(stage, err)
+	// client, or an add the relay queued before an upgrade, did not. A
+	// resend of an add whose launch is recorded launches nothing, and
+	// keeps the recovery the agent stage gives it.
+	if !known || r.e.Launch == "" {
+		if err := config.CheckCmd(r.cmd); err != nil {
+			return stageErr(stage, err)
+		}
 	}
 	branch, generated := m.Branch, m.Generated
 	if known {

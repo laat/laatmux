@@ -408,7 +408,7 @@ func TestConnRefusals(t *testing.T) {
 	refused(protocol.Message{Type: protocol.TypePrompt}, "command id required")
 	refused(protocol.Message{Type: protocol.TypePrompt, ID: "p"}, "this daemon has no task capability")
 	refused(protocol.Message{Type: protocol.TypeSelect, ID: "s"}, "pane id required")
-	refused(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x", Cmd: []string{"FOO=1", "claude"}}, "FOO=1 is an environment assignment, not a command; put env before it to set the variable")
+	refused(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x", Cmd: []string{"FOO=1", "claude"}}, "FOO=1 is an environment assignment, not a command; put env before it to set the variable, or ./ if it is a program's path")
 	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x"}); err != nil {
 		t.Fatal(err)
 	}

@@ -583,9 +583,9 @@ func CheckCmd(cmd []string) error {
 		}
 	}
 	if appends {
-		return fmt.Errorf("%s is an append assignment, not a command; env cannot append, so put env before the whole value or run the command through sh -c", cmd[0])
+		return fmt.Errorf("%s is an append assignment, not a command; env cannot append, so put env before the variable with its whole value", cmd[0])
 	}
-	return fmt.Errorf("%s is an environment assignment, not a command; put env before it to set the variable", cmd[0])
+	return fmt.Errorf("%s is an environment assignment, not a command; put env before it to set the variable, or ./ if it is a program's path", cmd[0])
 }
 
 // AgentNames lists configured agents, sorted.
