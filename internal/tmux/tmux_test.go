@@ -410,6 +410,92 @@ func TestNewSessionEncodedNames(t *testing.T) {
 	}
 }
 
+// CheckSessionName names the character tmux would not store as given,
+// or Sep is made of, and takes every other one, a # and a ; at the end
+// included; the names SessionName computes for branches with a #, ., :,
+// \, ;, a control byte or a byte that is not UTF-8 pass it.
+func TestCheckSessionName(t *testing.T) {
+	for name, want := range map[string]string{
+		"":             "session name required",
+		"a.b":          `session name "a.b" has a ., which tmux stores as _`,
+		"a:b":          `has a :, which tmux stores as _`,
+		`a\b`:          `has a \, which tmux stores doubled`,
+		"nul\x00":      "has the control character U+0000",
+		"tab\tx":       "has the control character U+0009",
+		"nl\nx":        "has the control character U+000A",
+		"esc\x1bx":     "has the control character U+001B",
+		"us\x1fx":      "has the control character U+001F",
+		"del\x7fx":     "has the control character U+007F",
+		"c1\u0085x":    "has the control character U+0085",
+		"c1\u009fx":    "has the control character U+009F",
+		"bad\xffx":     "has the byte 0xff, which is not UTF-8",
+		"$x":           `"$x" has a $`,
+		"a$b":          "has a $",
+		"a$1":          "has a $",
+		"a\u2063b":     "has the character U+2063",
+		"a\u2028b":     "has the character U+2028, which tmux 3.3",
+		"a\u2029b":     "has the character U+2029",
+		"a\ufdd0b":     "has the character U+FDD0",
+		"a\ufffeb":     "has the character U+FFFE",
+		"a\U0010ffffb": "has the character U+10FFFF",
+	} {
+		if err := CheckSessionName(name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("CheckSessionName(%q) = %v, want %q", name, err, want)
+		}
+	}
+	for _, name := range []string{"work", "notes draft", "notes##draft", "x#{session_id}y", "a#b", "#[fg=red]x", "semi;", ";", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x", "100%", "a\uFFFDb", "a\u00a0b", "a\u200bb", "a\ue000b", "a\U0001F600b", "cafe\u0301", "\u2764\ufe0f", "fix-\U0001FAE9", "a\u0378b"} {
+		if err := CheckSessionName(name); err != nil {
+			t.Errorf("CheckSessionName(%q) = %v", name, err)
+		}
+	}
+	for _, branch := range []string{"fix#12", "x#{session_id}", "v1.2:rc", `a\b`, "semi;", "a\tb", "del\x7f", "bad\xffx"} {
+		if err := CheckSessionName(SessionName("proj", branch)); err != nil {
+			t.Errorf("branch %q: %v", branch, err)
+		}
+	}
+}
+
+// A name laatmux new takes is the name of the session made, its pane
+// tagged, and the name the commands after it find and kill it by: a #
+// anywhere, which new-session expands as a format, so notes##draft was
+// made as notes#draft and x#{session_id}y as xy, their tags finding no
+// session; a space, a ; inside or at the end, a leading =, % or @,
+// quotes and a letter that is not ASCII.
+func TestNewSessionNamesAsGiven(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	names := []string{"notes draft", "notes##draft", "x#{session_id}y", "a#hb", "#[fg=red]x", "y##", "semi;", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x"}
+	for _, name := range names {
+		if err := CheckSessionName(name); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Errorf("%q: %v", name, err)
+			continue
+		}
+		if out, err := s.Run(ctx, "show-options", "-pqv", "-t", "="+name+":", "@laatmux_managed"); err != nil || strings.TrimSpace(string(out)) != "1" {
+			t.Errorf("%q: pane tag %q %v", name, out, err)
+		}
+	}
+	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	slices.Sort(got)
+	if want := slices.Sorted(slices.Values(names)); !slices.Equal(got, want) {
+		t.Errorf("sessions %q, want %q", got, want)
+	}
+	for _, name := range names {
+		if !s.HasSession(ctx, name) {
+			t.Errorf("%q: not found by its name", name)
+		}
+		if err := s.KillSession(ctx, name); err != nil || s.HasSession(ctx, name) {
+			t.Errorf("%q: kill %v, or still there", name, err)
+		}
+	}
+}
+
 // A session starts in its root when the root has a # in it, as a
 // branch's root does in the default layout, and its pane's tag is the
 // root as given: new-session expands -c as a format, and a directory

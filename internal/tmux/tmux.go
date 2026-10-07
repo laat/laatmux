@@ -370,6 +370,60 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	return s.ensureLocale(ctx)
 }
 
+// CheckSessionName refuses a session name that tmux would not store as
+// given, or could not find by its name once made, and says which
+// character is the reason. tmux rewrites a name after expanding it as a
+// format, so no escape gets these through:
+//   - a . or a : is stored as _, and a \ doubled;
+//   - a byte that is not UTF-8 and a control character are stored
+//     escaped, a C1 one by tmux 3.3 (U+0085 as \302\205);
+//   - tmux 3.3 built without utf8proc stores escaped a character its C
+//     library has no width for: a line or paragraph separator, a
+//     noncharacter, and a code point the library's tables do not have,
+//     unassigned or a recent emoji on an older glibc; that last one
+//     cannot be told from here, since Go's tables are not the host's;
+//   - a $ before a letter, _ or { is stored as \$ by tmux 3.2 to 3.4,
+//     whatever the host's isalpha takes for a letter, and every version
+//     reads the target =$name as the session id $name, so a $ is
+//     refused wherever it is.
+//
+// tmux keeps a U+2063, but Sep is made of it, and a name with one would
+// split or shift the fields laatmux reads the name in. A # is not
+// refused: new-session is given the name as FormatLiteral writes it. A
+// ; is kept, at the end too, since args writes that one \;. A name the
+// user chose is the name laatmux reports and targets, so it is refused
+// rather than changed; a branch is made safe by EncodeBranch instead.
+func CheckSessionName(name string) error {
+	if name == "" {
+		return errors.New("session name required")
+	}
+	for i := 0; i < len(name); {
+		r, size := utf8.DecodeRuneInString(name[i:])
+		var why string
+		switch {
+		case r == utf8.RuneError && size == 1:
+			why = fmt.Sprintf("the byte 0x%02x, which is not UTF-8 and which tmux stores escaped", name[i])
+		case unicode.IsControl(r):
+			why = fmt.Sprintf("the control character %U, which tmux stores escaped", r)
+		case unicode.In(r, unicode.Zl, unicode.Zp) || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe:
+			why = fmt.Sprintf("the character %U, which tmux 3.3 stores escaped", r)
+		case r == '.' || r == ':':
+			why = fmt.Sprintf("a %c, which tmux stores as _", r)
+		case r == '\\':
+			why = `a \, which tmux stores doubled`
+		case r == '$':
+			why = `a $, which tmux before 3.5 stores as \$ before a letter, and which a target reads as a session id when the name starts with it`
+		case strings.ContainsRune(Sep, r):
+			why = fmt.Sprintf("the character %U, which laatmux separates the fields of tmux's listings with", r)
+		}
+		if why != "" {
+			return fmt.Errorf("session name %q has %s", name, why)
+		}
+		i += size
+	}
+	return nil
+}
+
 // NewSessionOpts describes a managed session.
 type NewSessionOpts struct {
 	Name string
@@ -385,7 +439,9 @@ type NewSessionOpts struct {
 // submitted, so the session is never observable without its options.
 // Returns the pane id and the server's pid, the instance the pane is
 // on. If the server is not running it is started first, empty, and
-// configured, then the session is made.
+// configured, then the session is made. The name is not checked here:
+// a worktree's comes from SessionName, and a name new was given has
+// passed CheckSessionName in the daemon.
 func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session, err error) {
 	if o.Name == "" {
 		return made, fmt.Errorf("tmux: session name required")
@@ -419,8 +475,9 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	}
 	// new-session expands -c as a format, and a root has the branch in
 	// it. A directory that is not there after expansion would start the
-	// pane in $HOME, with no error.
-	args := []string{"new-session", "-d", "-s", o.Name, "-c", FormatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
+	// pane in $HOME, with no error. It expands -s too, and a name new
+	// was given may have a # in it.
+	args := []string{"new-session", "-d", "-s", FormatLiteral(o.Name), "-c", FormatLiteral(o.Cwd), "-P", "-F", "#{pane_id} #{pid}"}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
 	}

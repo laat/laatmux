@@ -356,6 +356,91 @@ func TestEnsureEncodedNames(t *testing.T) {
 	}
 }
 
+// A plain attachment to a session laatmux new made is made under
+// <host>/<session>, tagged, found again, and its attach pane reaches
+// the managed session, for names with what new takes: a #, which
+// new-session expands as a format, so x#{session_id}y was made as
+// mac/xy and untagged, and a run of them before a [, which it keeps; a
+// space, a ; at the end, a leading = or %, a letter that is not ASCII.
+// A managed session from an older laatmux new or made by hand can have
+// a character tmux would not store as given, a\\b or a$b say: its
+// attachment is refused before new-session, as mac/a\\b was made as
+// mac/a\\\\b, untagged, and nothing is made; one that is there
+// already, under any name, is reused. Neither a worktree's managed
+// session nor its workspace is checked, the branch being SessionName's
+// to encode: v$1, which every tmux keeps, gets both.
+func TestEnsureAttachmentNames(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	host := peer.Host{Name: "mac"}
+	// attached waits for the attach pane to be a client of the managed
+	// session, once its tmux has started.
+	attached := func(m string) {
+		t.Helper()
+		var clients string
+		for i := 0; i < 250 && clients == ""; i++ {
+			out, _ := tmux.LaatmuxServer.Run(ctx, "list-clients", "-t", "="+m, "-F", "#{client_session}")
+			clients = strings.TrimSpace(string(out))
+			if clients == "" {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		if clients != m {
+			t.Errorf("%q: clients of the managed session %q", m, clients)
+		}
+	}
+	names := []string{"notes draft", "notes#draft", "x#{session_id}y", "a##[b", "semi;", "=eq", "%pct", "ø-norsk"}
+	for _, m := range names {
+		if _, err := tmux.LaatmuxServer.NewSession(ctx, tmux.NewSessionOpts{Name: m, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Errorf("%q: %v", m, err)
+			continue
+		}
+		spec := Spec{Host: host, Managed: m, Name: "mac/" + m}
+		if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+			t.Errorf("%q: %q %v %v", m, name, created, err)
+			continue
+		}
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Errorf("%q again: %q %v %v", m, name, created, err)
+		}
+		attached(m)
+	}
+	for m, want := range map[string]string{`a\\b`: `has a \`, "a$b": "has a $"} {
+		if _, _, err := Ensure(ctx, Spec{Host: host, Managed: m, Name: "mac/" + m}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want a refusal with %q", m, err, want)
+		}
+	}
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "legacy", "sleep 600", tmux.Next, "set-option", "-t", "=legacy:", "@laatmux_attach", "mac/a$1"); err != nil {
+		t.Fatal(err)
+	}
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "a$1", Name: "mac/a$1"}); err != nil || created || name != "legacy" {
+		t.Fatalf("the attachment there already: %q %v %v", name, created, err)
+	}
+	keyed := Spec{Host: host, Managed: tmux.SessionName("proj", "v$1"), Name: SessionName("mac", "proj", "v$1"), Key: "env//r/v$1", Branch: "v$1"}
+	if _, err := tmux.LaatmuxServer.NewSession(ctx, tmux.NewSessionOpts{Name: keyed.Managed, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+		t.Fatalf("the managed session for v$1: %v", err)
+	}
+	if name, created, err := Ensure(ctx, keyed); err != nil || !created || name != keyed.Name {
+		t.Fatalf("the workspace for v$1: %q %v %v", name, created, err)
+	}
+	attached(keyed.Managed)
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locals) != len(names)+2 {
+		t.Errorf("sessions %+v, want %d", locals, len(names)+2)
+	}
+	for _, m := range names {
+		if l, ok := ByName(locals, "mac/"+m); !ok || l.Attach != "mac/"+m || l.Host != "mac" {
+			t.Errorf("%q: %+v %v", m, l, ok)
+		}
+	}
+}
+
 // Switching names the session exactly. A name with a %, as an encoded
 // branch has, is one switch-client looks up as a pane, where =name alone
 // is no name at all; a gone one does not switch to a session it is a
