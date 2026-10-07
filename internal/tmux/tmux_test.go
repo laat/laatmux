@@ -803,6 +803,39 @@ func TestPrintablePath(t *testing.T) {
 	if got := PrintablePath(nil); got != nil {
 		t.Errorf("PrintablePath(nil) = %v", got)
 	}
+	// A listen on a unix socket whose directory is gone: net's error
+	// names the socket's path in its address, rebuilt quoted, with the
+	// op and the cause kept and the original untouched.
+	sock := filepath.Join(t.TempDir(), "go\tne\x1b[31m", "s.sock")
+	_, err := net.Listen("unix", sock)
+	var oe *net.OpError
+	if !errors.As(err, &oe) {
+		t.Fatalf("listen: %#v", err)
+	}
+	got = PrintablePath(err)
+	var goe *net.OpError
+	if !errors.As(got, &goe) || !strings.HasPrefix(got.Error(), "listen unix "+strconv.Quote(sock)+": ") || goe.Err != oe.Err {
+		t.Errorf("PrintablePath = %v", got)
+	}
+	if oe.Addr.String() != sock {
+		t.Errorf("the original's address changed: %q", oe.Addr)
+	}
+	tcp := &net.OpError{Op: "listen", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}, Err: syscall.EADDRINUSE}
+	if got := PrintablePath(tcp); got != tcp {
+		t.Errorf("a tcp error rebuilt: %v", got)
+	}
+	// A read on a connection the daemon accepted names the listener's
+	// socket as its source, and a client's names it as the address.
+	for _, c := range []struct{ src, addr net.Addr }{
+		{&net.UnixAddr{Name: sock, Net: "unix"}, &net.UnixAddr{Net: "unix"}},
+		{&net.UnixAddr{Net: "unix"}, &net.UnixAddr{Name: sock, Net: "unix"}},
+	} {
+		rw := &net.OpError{Op: "read", Net: "unix", Source: c.src, Addr: c.addr, Err: syscall.ECONNRESET}
+		got := PrintablePath(rw)
+		if !strings.Contains(got.Error(), strconv.Quote(sock)) || strings.ContainsAny(got.Error(), "\t\x1b") || !errors.Is(got, syscall.ECONNRESET) {
+			t.Errorf("PrintablePath = %v", got)
+		}
+	}
 }
 
 // Each line is as Printable shows it, and the newlines between the lines

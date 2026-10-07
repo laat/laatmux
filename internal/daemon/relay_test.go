@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,12 +40,18 @@ type relayFixture struct {
 
 func newRelayFixture(t *testing.T, screen []string) *relayFixture {
 	t.Helper()
+	return newRelayFixtureIn(t, screen, t.TempDir(), t.TempDir())
+}
+
+// newRelayFixtureIn is newRelayFixture with the laptop's pending
+// directory dir and the host's journal in hostCommands, both made by
+// the daemons when missing.
+func newRelayFixtureIn(t *testing.T, screen []string, dir, hostCommands string) *relayFixture {
+	t.Helper()
 	// The store's directories and the pending directory are made before
 	// the context, so the cleanup cancels the daemons and waits for the
 	// relay's goroutines before the directories go.
 	store, remote := newStore(t)
-	dir := t.TempDir()
-	hostCommands := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &relayFixture{store: store, dir: dir, ctx: ctx}
 	t.Cleanup(func() {
@@ -1413,9 +1420,11 @@ func TestRelayRepoEntry(t *testing.T) {
 
 // A merging daemon whose pending directory cannot be made does not run
 // without its relay: Err carries the error, Run ends at once with it,
-// and the relay capability is not in the list.
+// and the relay capability is not in the list. The error names the
+// state directory, here a file with a tab and an ESC in its name, as
+// tmux.Printable shows it: serve run by hand prints it.
 func TestRelayDirectoryFatal(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "file")
+	file := filepath.Join(t.TempDir(), "fi\tle\x1b[31m")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1423,7 +1432,7 @@ func TestRelayDirectoryFatal(t *testing.T) {
 	d := New(Config{EnvironmentID: "lenv", Version: "local", Hosts: hosts.get, Pending: filepath.Join(file, "pending"), Timings: testTimings})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := d.Err(); err == nil || !strings.Contains(err.Error(), "pending:") {
+	if err := d.Err(); err == nil || err.Error() != "pending: mkdir "+strconv.Quote(file)+": not a directory" {
 		t.Fatalf("Err with no pending directory: %v", err)
 	}
 	err := d.Run(ctx)
@@ -1432,6 +1441,50 @@ func TestRelayDirectoryFatal(t *testing.T) {
 	}
 	if protocol.Has(d.capabilities(), protocol.CapRelay) {
 		t.Error("the relay capability advertised without a relay")
+	}
+}
+
+// A state directory with a tab and an ESC in its name, its journal
+// made unwritable: an add fails at resolve with the journal's file
+// named as tmux.Printable shows it, and so does a relayed add's
+// record, which laatmux tasks prints; with the pending directory
+// unwritable too, a dismiss that cannot remove the record names its
+// file the same way.
+func TestRelayStateDirQuoted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a directory without write permission")
+	}
+	base := filepath.Join(t.TempDir(), "st\tate\x1b[31m")
+	pending, commands := filepath.Join(base, "pending"), filepath.Join(base, "commands")
+	f := newRelayFixtureIn(t, nil, pending, commands)
+	for _, dir := range []string{commands, pending} {
+		t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	}
+	if err := os.Chmod(commands, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	denied := func(id string) string {
+		tmp := filepath.Join(commands, FileName(id)) + ".tmp." + strconv.Itoa(os.Getpid())
+		return "open " + strconv.Quote(tmp) + ": permission denied"
+	}
+	pc := conn(t, f.host)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "d1", Repo: f.source(), Branch: "direct", AgentName: "argv", Prompt: "p", SubmittedAt: time.Now()})
+	if res, _ := result(t, pc, "d1"); res.OK || res.Stage != protocol.StageResolve || res.Error != denied("d1") {
+		t.Fatalf("add %+v, want at resolve %s", res, denied("d1"))
+	}
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "q1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "relayed", AgentName: "argv", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	got := f.awaitRecord(t, "q1", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if want := "failed at resolve: " + denied("q1"); got.OK || got.Error != want {
+		t.Fatalf("record %+v, want %s", got, want)
+	}
+	if err := os.Chmod(pending, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	want := "remove " + strconv.Quote(filepath.Join(pending, FileName("q1"))) + ": permission denied"
+	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "q1"}); res.OK || res.Error != want {
+		t.Fatalf("dismiss %+v, want %s", res, want)
 	}
 }
 

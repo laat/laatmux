@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Last is the last-used host and agent per repository: state, not config,
@@ -49,10 +51,10 @@ func ReadLast() (Last, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return l, nil
 		}
-		return l, err
+		return l, tmux.PrintablePath(err)
 	}
 	if err := json.Unmarshal(b, &l); err != nil {
-		return l, fmt.Errorf("%s: %w", p, err)
+		return l, fmt.Errorf("%s: %w", tmux.Printable(p), err)
 	}
 	return l, nil
 }
@@ -69,7 +71,7 @@ func UpdateLast(fn func(*Last)) error {
 	}
 	lock, err := os.OpenFile(LastPath()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return err
+		return tmux.PrintablePath(err)
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {

@@ -552,14 +552,15 @@ func sidebarHooksSet(ctx context.Context) (bool, error) {
 }
 
 // sidebarLock takes the exclusive lock every check-and-create runs
-// under.
+// under. os's errors name the state directory as it is; the sidebar's
+// commands print them.
 func sidebarLock() (func(), error) {
 	if err := os.MkdirAll(home.Dir(), 0o700); err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	f, err := os.OpenFile(filepath.Join(home.Dir(), "sidebar.lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		f.Close()

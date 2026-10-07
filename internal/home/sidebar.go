@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Sidebar is sidebar.json under the state directory: what the sidebar
@@ -64,16 +66,16 @@ func ReadSidebar() (Sidebar, time.Time, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, time.Time{}, nil
 		}
-		return s, time.Time{}, err
+		return s, time.Time{}, tmux.PrintablePath(err)
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return s, time.Time{}, err
+		return s, time.Time{}, tmux.PrintablePath(err)
 	}
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return s, time.Time{}, err
+		return s, time.Time{}, tmux.PrintablePath(err)
 	}
 	if err := json.Unmarshal(b, &s); err != nil {
 		return s, time.Time{}, err
@@ -102,7 +104,7 @@ func UpdateSidebar(now time.Time, fn func(*Sidebar)) error {
 	}
 	lock, err := os.OpenFile(SidebarPath()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return err
+		return tmux.PrintablePath(err)
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {

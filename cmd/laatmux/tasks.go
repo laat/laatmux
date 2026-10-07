@@ -172,7 +172,7 @@ func showTask(id string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("no pending record %s", id)
 		}
-		return err
+		return tmux.PrintablePath(err)
 	}
 	var p struct {
 		PromptText string `json:"prompt_text"`

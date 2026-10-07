@@ -833,7 +833,7 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	}
 	last, err := home.ReadLast()
 	if err != nil {
-		needs = append(needs, home.LastPath()+" is readable JSON")
+		needs = append(needs, tmux.Printable(home.LastPath())+" is readable JSON")
 	}
 	switch n := len(needs); {
 	case n == 0:

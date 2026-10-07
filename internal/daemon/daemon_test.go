@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,31 @@ import (
 
 func newTestDaemon() *Daemon {
 	return New(Config{EnvironmentID: "env", Version: "test"})
+}
+
+// A listener that fails while the daemon is not shutting down ends
+// Serve with its error, which names the socket, under the state
+// directory, as tmux.Printable shows it: serve run by hand prints it.
+// The directory is under /tmp, as the other socket tests' are: a
+// t.TempDir on macOS makes a socket path too long.
+func TestServeAcceptErrorQuoted(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "st\tate\x1b[31m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = newTestDaemon().Serve(ctx, ln)
+	if err == nil || !strings.HasPrefix(err.Error(), "accept unix "+strconv.Quote(sock)+": ") {
+		t.Fatalf("Serve: %v", err)
+	}
 }
 
 // A subscriber that falls behind must be disconnected, not
