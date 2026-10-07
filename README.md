@@ -254,7 +254,12 @@ truth; labels only place new things.
   host's config with a `name` settles it. The laptop's views show the
   laptop's own name for a source it knows. Prunable entries, whose
   directory is gone, are not published; a detached worktree has an
-  empty branch. The record's
+  empty branch. A branch checked out by hand that laatmux cannot carry,
+  one with a byte that is not UTF-8 or with U+FFFD (JSON writes U+FFFD
+  for such a byte), is published as laatmux prints it, quoted as Go
+  quotes it when it has a byte that is not UTF-8 (`"a\xffb"`), with
+  `branch_display_only`: no command names the worktree by it, and `rm`
+  and `run` take it only with that worktree's `root`. The record's
   `session` is the worktree's home session: the managed session with a
   pane that records the root in `@laatmux_cwd`, all of whose panes are
   inside the root, joined from the pane poll, so an agent exiting updates
@@ -316,7 +321,10 @@ truth; labels only place new things.
   daemon with `repo-entry` resolves the add against. Without an entry
   `repo` is the source or the label as the daemon's own config knows it.
   The key is `agent_name` because `agent` is the upsert's record in the
-  same envelope.
+  same envelope. A branch that is not valid UTF-8, or has U+FFFD, is
+  refused: the connection turns such a byte into U+FFFD, so the daemon
+  cannot know the branch meant. Clients refuse it before they send, and
+  on macOS git could not make its ref or root in any case.
 - **`rm`** `{type: rm, id, repo, branch, root, force}` removes the worktree
   through git, which refuses a dirty or locked one without `force` and
   says why, then kills every managed session whose pane records the
@@ -330,10 +338,17 @@ truth; labels only place new things.
   user made elsewhere is left alone, as is the branch. Send `root` from
   the record whenever it is known: it is what reaches a session whose
   worktree is already gone, since a branch alone maps to no root then.
+  Without `root`, a `branch` that is not valid UTF-8 or has U+FFFD is
+  refused, as add refuses it, and so is one with a `\`, which git takes
+  in no branch: it can only be a record's quoted form, which names its
+  worktree with the root alone. With `root`, `branch` must be the
+  root's: its name, or for a record with `branch_display_only`, the
+  quoted form the record carries.
 - **`run`** `{type: run, id, repo, branch, root, cmd}`, capability `run`,
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
-  `repo` and `branch` are given, theirs. No shell, no tty, stdin at
+  `repo` and `branch` are given, theirs, `branch` as `rm` takes it with a
+  `root`. No shell, no tty, stdin at
   `/dev/null`, the daemon's environment, its own process group. When
   the process exits, whatever it left in its group is laatmux's own and
   is stopped the way a cancel stops it, so a background child of a run
@@ -558,7 +573,14 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
 - **`path <repo>/<branch>`** prints the root from the host's records.
   Records are matched by source, since the host's label for a source may
-  differ from this machine's. `rm` finds its record the same way.
+  differ from this machine's. `rm` finds its record the same way. A
+  branch that is not valid UTF-8 is refused before any daemon is asked,
+  by `path`, `rm` and `run` alike, naming the quoted form a host lists a
+  worktree on it under. That form, and a branch with U+FFFD, `ls` can
+  show for one checked out by hand; neither is a name: they say so,
+  with the worktree's root, which `rm --root` takes. A branch with
+  U+FFFD that no record has is looked up like any other, and the daemon
+  refuses an rm of it without a root.
 - **`jump <host>/<repo>/<branch>`** switches to the workspace session,
   creating it from the record when missing, respawning a dead attach pane,
   and opening a new attach window when the pane is gone altogether. An

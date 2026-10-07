@@ -285,6 +285,20 @@ func TestBranchesHostAllowList(t *testing.T) {
 	}
 }
 
+// A branch a host only shows, one laatmux cannot carry, is not asked
+// about: the shown name is not one GitHub has.
+func TestBranchesSkipDisplayOnly(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{}}
+	d, _ := branchDaemon(t, t.TempDir(), gh, "b")
+	d.mu.Lock()
+	d.mhosts["vm"].worktrees["venv/worktree//w/hand"] = protocol.Worktree{ID: "venv/worktree//w/hand", EnvironmentID: "venv", Source: ghSource, Branch: `"a\xffb"`, BranchDisplayOnly: true, Root: "/w/hand"}
+	set := d.branchSetLocked()
+	d.mu.Unlock()
+	if _, ok := set[branchKeyString(bkey("b"))]; len(set) != 1 || !ok {
+		t.Fatalf("asked %+v", set)
+	}
+}
+
 // A round of queries that waits on GitHub does not hold the aging: the
 // loop marks answers stale while the round runs.
 func TestBranchesSlowRound(t *testing.T) {

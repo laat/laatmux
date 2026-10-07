@@ -5,6 +5,7 @@
   "source": "source",
   "branch": "branch",
   "root": "root",
+  "branch_display_only": true,
   "session": "session",
   "git": {
     "base": "base",

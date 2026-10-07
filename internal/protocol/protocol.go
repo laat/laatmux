@@ -507,6 +507,13 @@ type Worktree struct {
 	Source        string `json:"source,omitempty"` // repository source, the identity; "" from older daemons
 	Branch        string `json:"branch"`           // "" for a detached worktree
 	Root          string `json:"root"`             // absolute path as git registered it
+	// BranchDisplayOnly is that Branch is the branch as tmux.Printable
+	// shows it, not its name: the name, checked out by hand, is one
+	// laatmux cannot carry between client and daemon (worktree.CheckWire),
+	// with a byte that is not UTF-8 or with U+FFFD. No command names the
+	// worktree by it; one that names the worktree's root may send it as
+	// the branch there, which the daemon takes for that root alone.
+	BranchDisplayOnly bool `json:"branch_display_only,omitempty"`
 	// Session is the worktree's home session: the managed session with
 	// a pane laatmux made at Root, all of whose panes are inside Root;
 	// jump attaches to it. "" when there is none. A daemon without

@@ -307,6 +307,54 @@ func output(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
+// HandMadeWorktree makes a worktree at root in the checkout on branch,
+// at the checkout's HEAD, as one checked out by hand: the branch can be
+// a name git takes and the filesystem may not, one that is not UTF-8,
+// which macOS refuses as a file name. In a files ref store the ref goes
+// into packed-refs, and the worktree is made on a branch of its own
+// whose name its HEAD then trades for the branch, so no file is named
+// after it; a reftable store names no file after a ref, and git makes
+// both itself.
+func HandMadeWorktree(t *testing.T, checkout, root, branch string) {
+	t.Helper()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(output(t, dir, args...))
+	}
+	head := git(checkout, "rev-parse", "HEAD")
+	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A git before 2.45 has no --show-ref-format, nor reftable.
+	format := exec.Command("git", "rev-parse", "--show-ref-format")
+	format.Dir = checkout
+	if out, err := format.Output(); err == nil && strings.TrimSpace(string(out)) == "reftable" {
+		git(checkout, "update-ref", "refs/heads/"+branch, head)
+		git(checkout, "worktree", "add", "-q", root, branch)
+	} else {
+		// Appended, the line is out of order, so the header's sorted,
+		// which would have git search the file, goes.
+		packed := filepath.Join(git(checkout, "rev-parse", "--absolute-git-dir"), "packed-refs")
+		b, err := os.ReadFile(packed)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		refs := string(b)
+		if header, rest, ok := strings.Cut(refs, "\n"); ok && strings.HasPrefix(header, "# pack-refs with:") {
+			refs = strings.Replace(header, " sorted", "", 1) + "\n" + rest
+		}
+		write(t, packed, refs+head+" refs/heads/"+branch+"\n", 0o644)
+		const scaffold = "laatmux-test-hand-made"
+		git(checkout, "worktree", "add", "-q", "-b", scaffold, root, head)
+		write(t, filepath.Join(git(root, "rev-parse", "--absolute-git-dir"), "HEAD"), "ref: refs/heads/"+branch+"\n", 0o644)
+		git(checkout, "branch", "-q", "-D", scaffold)
+	}
+	// The branch resolves: HEAD is the commit, not an unborn branch.
+	if got := git(root, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the worktree's HEAD is %s, not %s", got, head)
+	}
+}
+
 // sq quotes s for GIT_CONFIG_PARAMETERS, as a shell would in single
 // quotes.
 func sq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

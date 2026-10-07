@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
@@ -31,11 +32,20 @@ const snapshotTimeout = 20 * time.Second
 
 // splitRepoBranch parses <repo>/<branch>. Labels cannot contain "/", so
 // the first component is the repository and the rest is the branch,
-// slashes included.
+// slashes included. A branch that is not UTF-8 is refused here, before
+// any daemon is asked: rm and run would send another name, and no
+// record path finds has it, since a host lists a worktree checked out on
+// one with the branch quoted. The refusal names that listed form, which
+// findWorktree answers with the root. A branch with U+FFFD goes on: a
+// record of a real one has that name, and findWorktree answers it the
+// same way; without a record, the daemon refuses it.
 func splitRepoBranch(target string) (repo, branch string, err error) {
 	repo, branch, ok := strings.Cut(target, "/")
 	if !ok || repo == "" || branch == "" {
 		return "", "", fmt.Errorf("%q is not <repo>/<branch>", target)
+	}
+	if err := worktree.CheckWire(branch); err != nil && !utf8.ValidString(branch) {
+		return "", "", fmt.Errorf("%w; a worktree checked out on it is listed as %s, which rm, run and path take to say its root", err, repo+"/"+tmux.Printable(branch))
 	}
 	return repo, branch, nil
 }
@@ -308,12 +318,21 @@ func needCaps(h peer.Host, hello protocol.Message, needCap string) error {
 // the record carries the daemon's label, which may differ from this
 // machine's for the same source. Two clones of one repository can each
 // have a worktree for the branch; that is an error naming both roots
-// rather than a guess.
+// rather than a guess. A record whose branch is only shown, one laatmux
+// cannot carry checked out by hand, is no branch to name: what matches
+// it is the shown form, and that is an error naming the root, which rm
+// --root takes. So is a record with U+FFFD in its branch from an older
+// daemon, which sends no flag: it is such a branch, mangled.
 func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool, error) {
 	var found []protocol.Worktree
 	for _, w := range ws {
 		if w.Branch == branch && branch != "" && source.Same(w.Source, repo.Source) {
 			found = append(found, w)
+		}
+	}
+	for _, w := range found {
+		if w.BranchDisplayOnly || worktree.CheckWire(w.Branch) != nil {
+			return protocol.Worktree{}, false, fmt.Errorf("%s is how the host shows the branch of the worktree at %s; laatmux cannot carry the branch's name, which is not valid UTF-8 or has U+FFFD, so no command names the worktree by it: rm takes the root with --root", tmux.Printable(repo.Name+"/"+branch), tmux.Printable(w.Root))
 		}
 	}
 	switch len(found) {

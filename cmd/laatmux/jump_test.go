@@ -258,6 +258,8 @@ func TestAddHintCanRun(t *testing.T) {
 	ctl.ID, ctl.Branch, ctl.Root = "venv/worktree//w/c", "it's\u009b31m\\x", "/w/c"
 	noSrc := bv
 	noSrc.Source = ""
+	shown := bv
+	shown.ID, shown.Branch, shown.BranchDisplayOnly, shown.Root = "venv/worktree//w/hand", `"a\xffb"`, true, "/w/hand"
 	host := func(name, env string) rows.Host {
 		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	}
@@ -300,6 +302,8 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("vm", "venv"), eq, "vm/proj/a==ls has no managed session; laatmux add 'a==ls' --repo proj --host vm --agent claude makes one"},
 		{host("vm", "venv"), ctl, `"vm/proj/it's\u009b31m\\x" has no managed session; laatmux add $'it\047s\302\23331m\134x' --repo proj --host vm --agent claude makes one`},
 		{host("vm", "venv"), noSrc, "vm/proj/b has no managed session; laatmux add b --repo <repo> --host vm makes one"},
+		// A branch only shown is no branch add can name (#304).
+		{host("vm", "venv"), shown, `vm/proj/"a\xffb" has no managed session; laatmux add makes one once a branch laatmux can carry, valid UTF-8 without U+FFFD, is checked out in /w/hand instead of "a\xffb"`},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},

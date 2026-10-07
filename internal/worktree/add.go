@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -362,15 +363,20 @@ func setBase(ctx context.Context, checkout, branch string, report Reporter) {
 	}
 }
 
-// CheckBranch rejects names git would refuse, before anything is touched.
-// The dashboard runs it on the laptop before sending an add; the daemon
-// runs it again on the host. git refuses a C0 control character and DEL;
-// a C1 control character and a byte that is not UTF-8 it takes, and a
+// CheckBranch rejects names git would refuse, before anything is touched,
+// and names CheckWire refuses. The dashboard runs it on the laptop before
+// sending an add; the daemon runs it again on the host. git refuses a C0
+// control character and DEL; a C1 control character it takes, and a
 // branch someone pushed can have one, so such a name is not refused here
-// but printed as tmux.Printable shows it wherever a message names it.
+// but printed as tmux.Printable shows it wherever a message names it. A
+// byte that is not UTF-8 git takes as well, but laatmux cannot carry it,
+// and CheckWire refuses it.
 func CheckBranch(ctx context.Context, branch string) error {
 	if branch == "" {
 		return errors.New("branch required")
+	}
+	if err := CheckWire(branch); err != nil {
+		return err
 	}
 	if strings.HasPrefix(branch, "-") {
 		return fmt.Errorf("branch %q must not start with -", branch)
@@ -379,6 +385,34 @@ func CheckBranch(ctx context.Context, branch string) error {
 		return fmt.Errorf("%q is not a valid branch name", branch)
 	}
 	return nil
+}
+
+// CheckWire refuses a branch laatmux cannot carry between a client and
+// a daemon. Their connection is JSON, which writes U+FFFD for every
+// byte that is not part of valid UTF-8, so such a branch would arrive
+// as another name: add would make that branch, and rm and run would
+// look for one no worktree is on. git takes such a name; on macOS the
+// filesystem refuses it, as a ref and as a worktree root. A branch with
+// U+FFFD in it is refused too, since a daemon cannot tell it from one
+// an older client sent with such a byte. A client runs it before it
+// sends a branch, the daemon on every branch it receives.
+func CheckWire(branch string) error {
+	switch {
+	case !utf8.ValidString(branch):
+		return fmt.Errorf("branch %q is not valid UTF-8; laatmux cannot carry it between client and daemon", branch)
+	case strings.ContainsRune(branch, utf8.RuneError):
+		return fmt.Errorf("branch %q has U+FFFD, which a byte that is not UTF-8 becomes between laatmux's client and daemon; laatmux takes neither", branch)
+	}
+	return nil
+}
+
+// BranchIs reports whether a client's branch names got, a branch as git
+// has it: the name, or for a branch CheckWire refuses, the name a
+// listing shows for it (tmux.Printable), which is what a client has for
+// it. That form is the name itself or a quoted one with a \ in it, which
+// no branch git takes has, so it names no other branch.
+func BranchIs(got, branch string) bool {
+	return got == branch || CheckWire(got) != nil && branch == tmux.Printable(got)
 }
 
 func refExists(ctx context.Context, checkout, ref string) bool {

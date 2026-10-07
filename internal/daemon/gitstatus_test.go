@@ -24,15 +24,17 @@ type fakeGit struct {
 	err    map[string]error
 	block  chan struct{} // reads wait on it when set
 	reads  int
+	branch map[string]string // the branch each root's last read was given
 }
 
 func installFakeGit(t *testing.T) *fakeGit {
-	f := &fakeGit{status: map[string]protocol.GitStatus{}, head: map[string]string{}, after: map[string]string{}, err: map[string]error{}}
+	f := &fakeGit{status: map[string]protocol.GitStatus{}, head: map[string]string{}, after: map[string]string{}, err: map[string]error{}, branch: map[string]string{}}
 	oldS, oldH := gitStatusRead, gitHeadRead
 	gitStatusRead = func(ctx context.Context, root, branch string, c *worktree.StatusCache) (protocol.GitStatus, string, worktree.Paths, error) {
 		f.mu.Lock()
 		block := f.block
 		f.reads++
+		f.branch[root] = branch
 		f.mu.Unlock()
 		if block != nil {
 			<-block
@@ -143,6 +145,40 @@ func TestGitRefreshPublishes(t *testing.T) {
 	refresh(t, d)
 	if ups := upserts(s); len(ups) != 1 || !ups[0].Git.Dirty || !ups[0].Git.ChangedAt.After(first) {
 		t.Errorf("a change: %+v", ups)
+	}
+}
+
+// A worktree on a branch laatmux cannot carry is published with the
+// branch as shown (#304), and its git status is read with the branch as
+// git has it, which the base lookup and the ref watched need; the
+// refresh's object is published on the shown record.
+func TestGitReadsBranchAsGitHasIt(t *testing.T) {
+	f := installFakeGit(t)
+	d := New(Config{EnvironmentID: "env"})
+	s := &subscriber{ch: make(chan protocol.Message, 64)}
+	f.status["/w/h"] = protocol.GitStatus{Base: "origin/main", Ahead: 1}
+	f.head["/w/h"], f.head["/w/a"] = "h1", "h2"
+	d.mu.Lock()
+	d.subs[s] = struct{}{}
+	d.lastList = []worktree.Record{{Repo: "proj", Branch: "a\xffb", Root: "/w/h"}, {Repo: "proj", Branch: "a", Root: "/w/a"}}
+	d.publishWorktreesLocked(time.Now())
+	d.mu.Unlock()
+	upserts(s)
+	refresh(t, d)
+	f.mu.Lock()
+	hand, plain := f.branch["/w/h"], f.branch["/w/a"]
+	f.mu.Unlock()
+	if hand != "a\xffb" || plain != "a" {
+		t.Fatalf("read with %q and %q", hand, plain)
+	}
+	var shown *protocol.Worktree
+	for _, w := range upserts(s) {
+		if w.Root == "/w/h" {
+			shown = &w
+		}
+	}
+	if shown == nil || shown.Branch != `"a\xffb"` || !shown.BranchDisplayOnly || shown.Git == nil || shown.Git.Ahead != 1 {
+		t.Fatalf("published %+v", shown)
 	}
 }
 

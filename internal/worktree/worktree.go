@@ -659,7 +659,9 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 // included, does not count. A prunable registration, whose directory was
 // deleted by hand, does: it is what rm prunes, and its root is what finds
 // the orphaned session. Not found is (Record{}, checkout, false, nil) with
-// the checkout still reported when it exists.
+// the checkout still reported when it exists. The branch is matched as
+// BranchIs matches it, so a branch laatmux cannot carry is found by the
+// name a listing shows for it.
 //
 // Every checkout of the repository is asked: two clones of one
 // repository each have worktrees, and each is listed. When both have
@@ -692,7 +694,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 			return Record{}, co.dir, false, err
 		}
 		for _, e := range entries {
-			if e.Branch != branch || e.Root == co.dir || !s.Owns(e.Root) {
+			if !BranchIs(e.Branch, branch) || e.Root == co.dir || !s.Owns(e.Root) {
 				continue
 			}
 			mine, err := pointsBack(e.Root, co.dir)

@@ -21,6 +21,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // The relay: the background add, living in the daemon on the machine
@@ -296,6 +297,8 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = "this daemon has no relay capability"
 		return res
 	}
+	// An older client sends a branch it cannot carry, mangled.
+	wireErr := worktree.CheckWire(m.Branch)
 	switch {
 	case m.ID == "":
 		res.Error = "command id required"
@@ -303,6 +306,8 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = "repository required"
 	case m.Branch == "":
 		res.Error = "branch required"
+	case wireErr != nil:
+		res.Error = wireErr.Error()
 	case m.RepoEntry != nil && !source.Same(m.RepoEntry.Source, m.Repo):
 		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
 	}
@@ -664,6 +669,15 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 			// or to one that never will: the outcome is unknown.
 			d.persist(ctx, id, func(p *pendingFile) {
 				p.Done, p.OK, p.Error, p.Reachable, p.Mismatch = true, false, relayOutcomeUnknown+": the submission is older than seven days and is not sent again", true, ""
+			})
+			return
+		}
+		// A record an older daemon accepted can hold a branch with
+		// U+FFFD for a byte that was not UTF-8: an older host would add
+		// that branch. One the host has never seen is refused here.
+		if err := worktree.CheckWire(p.Branch); err != nil && !p.Sent && !p.Taken {
+			d.persist(ctx, id, func(p *pendingFile) {
+				p.Done, p.OK, p.Error, p.Reachable, p.Mismatch = true, false, err.Error(), true, ""
 			})
 			return
 		}

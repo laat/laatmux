@@ -338,7 +338,10 @@ func (e *Error) Error() string {
 // character, C0, DEL or C1, or a byte that is not UTF-8. A worktree's
 // directory name can have any of them; printed raw, a tab or a newline
 // breaks the line and an ESC starts an escape sequence the terminal
-// acts on.
+// acts on. The form is on the wire too: a host lists a branch laatmux
+// cannot carry in it, session tags keep it, and the daemon takes it back
+// as that branch's name (worktree.BranchIs), so a change here is a
+// change of the protocol.
 func Printable(s string) string {
 	if !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
 		return strconv.Quote(s)

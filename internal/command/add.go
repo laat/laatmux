@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // Add is one add: a worktree for the branch on the host, an agent
@@ -75,8 +76,8 @@ type Added struct {
 // failed, the result carries the root and managed session with the
 // error, so the caller can say what exists.
 func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
-	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
-		return Added{}, errors.New("add needs a host, a repository and a branch")
+	if err := a.check(); err != nil {
+		return Added{}, err
 	}
 	id := a.ID
 	if id == "" {
@@ -115,6 +116,16 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 		Source: a.Repo.Source, Branch: out.Branch,
 	})
 	return out, err
+}
+
+// check refuses an add before any daemon is dialled: one that lacks a
+// host, a repository or a branch, and one whose branch the connection
+// cannot carry, which would reach the host as another name.
+func (a Add) check() error {
+	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
+		return errors.New("add needs a host, a repository and a branch")
+	}
+	return worktree.CheckWire(a.Branch)
 }
 
 // Request is the add message under id, as the daemon takes it. The
@@ -180,8 +191,8 @@ func (a Add) Describe() string {
 // choice. A daemon without the relay capability is an error saying so,
 // not a foreground add in disguise.
 func (a Add) Submit(ctx context.Context) (string, error) {
-	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
-		return "", errors.New("add needs a host, a repository and a branch")
+	if err := a.check(); err != nil {
+		return "", err
 	}
 	id := a.ID
 	if id == "" {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // DefaultWorktreeInterval is how often the daemon asks git for worktrees.
@@ -158,8 +159,15 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			Session:       d.managedRoots[r.Root],
 			UpdatedAt:     now,
 		}
+		// A branch checked out by hand that the connection cannot carry
+		// is sent as it is shown, and marked: no command names the
+		// worktree by it, and it is taken back with this root alone
+		// (worktree.BranchIs).
+		if worktree.CheckWire(r.Branch) != nil {
+			w.Branch, w.BranchDisplayOnly = tmux.Printable(r.Branch), true
+		}
 		prev, had := d.worktrees[r.Root]
-		if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.Session == w.Session {
+		if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.BranchDisplayOnly == w.BranchDisplayOnly && prev.Session == w.Session {
 			continue
 		}
 		if had && prev.Branch == w.Branch {
@@ -182,6 +190,21 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root), RemovedIn: &l})
 		d.worktreeRemovedLocked(d.worktreeID(root), &l)
 	}
+}
+
+// branchNameLocked is the branch of a published record as git has it:
+// its Branch, or for one only shown, the last listing's for its root.
+// Called with d.mu held.
+func (d *Daemon) branchNameLocked(w protocol.Worktree) string {
+	if !w.BranchDisplayOnly {
+		return w.Branch
+	}
+	for _, r := range d.lastList {
+		if r.Root == w.Root {
+			return r.Branch
+		}
+	}
+	return w.Branch
 }
 
 // worktreeID is <environment_id>/worktree/<root>: the root is absolute
