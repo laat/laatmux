@@ -193,8 +193,9 @@ func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, 
 // letter, so a last value that ends in "$" has a backslash only the Sep
 // after it accounts for. A line that does not end in the probe is left
 // as printed: a line a user's after-hook printed after the records, or
-// part of one whose value has a newline in it, which no reader parses
-// as a record.
+// the part of a record before a newline in one of its values, which
+// ListPanes and the readers that parse line by line drop, and which
+// PaneSession reads with its \$ kept.
 func unframe(out string) string {
 	var b strings.Builder
 	for _, l := range strings.SplitAfter(out, "\n") {
