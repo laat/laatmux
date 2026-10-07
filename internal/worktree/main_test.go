@@ -21,5 +21,5 @@ func TestMain(m *testing.M) {
 // config alone, and leaves alone the repository and index the
 // environment names as well.
 func TestGitIsolated(t *testing.T) {
-	gittest.CheckIsolated(t, func(t *testing.T) { newFixture(t) })
+	gittest.CheckIsolated(t, func(t *testing.T) string { return newFixture(t).remote })
 }

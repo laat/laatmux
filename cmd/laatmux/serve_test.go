@@ -153,7 +153,7 @@ func seedRemote(t *testing.T, base string) string {
 // repository's config alone, and leaves alone the repository and index
 // the environment names as well.
 func TestGitIsolated(t *testing.T) {
-	gittest.CheckIsolated(t, func(t *testing.T) { seedRemote(t, t.TempDir()) })
+	gittest.CheckIsolated(t, func(t *testing.T) string { return seedRemote(t, t.TempDir()) })
 }
 
 // serve's own shutdown, the context ending as a signal ends it, stops
