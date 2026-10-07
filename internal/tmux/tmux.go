@@ -180,7 +180,9 @@ func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, 
 	out, err := s.Run(ctx, append(slices.Clip(a), "-F", format+Sep+probe)...)
 	var te *Error
 	if errors.As(err, &te) {
-		err = &Error{Args: append(slices.Clip(a), "-F", format), Msg: te.Msg}
+		e := *te
+		e.Args = append(slices.Clip(a), "-F", format)
+		err = &e
 	}
 	return []byte(unframe(string(out))), err
 }
