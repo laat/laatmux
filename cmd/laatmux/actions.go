@@ -114,8 +114,18 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	}
 	if p, ok := paneOf(r); ok && d.jumper == nil {
 		// A tile, or an agent or a pane in the tree: to the pane, the
-		// session reached whatever the pane's fate.
-		msg, err := jumpPane(d.ctx, d.cfg, m.LineFor(r.Host, p.session), r, p)
+		// session reached whatever the pane's fate. A worktree's row goes
+		// by its own line when that line attaches the pane's session, as
+		// z and S on it do, though another line attaches the session
+		// too: one whose root agent was moved into it, or into whose
+		// session this worktree's root agent was moved.
+		line := m.LineFor(r.Host, p.session)
+		if r.Worktree != nil {
+			if l := m.OwnerLine(r.Worktree.ID); l != nil && l.Home() == p.session {
+				line = l
+			}
+		}
+		msg, err := jumpPane(d.ctx, d.cfg, line, r, p)
 		if err != nil {
 			m.Message = err.Error()
 			return false, false

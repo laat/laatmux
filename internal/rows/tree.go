@@ -7,6 +7,7 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // The two views: the tree, the repositories with their worktrees and
@@ -609,12 +610,14 @@ func (b *builder) otherSessions(out []Row) []Row {
 			// line carries the session but not the state, and z refuses
 			// its agent of no worktree as the task's: none.
 			ws := c.Local
-			if l := HomeLine(out, host, a.Session); managed && l >= 0 {
-				ws = out[l].Local
-				if out[l].Pending != nil {
-					ws = nil
+			if managed {
+				if l := HomeLine(out, host, a.Session); l >= 0 {
+					ws = out[l].Local
+					if out[l].Pending != nil {
+						ws = nil
+					}
+					c.Current = ws != nil && in.Current != "" && ws.Name == in.Current
 				}
-				c.Current = ws != nil && in.Current != "" && ws.Name == in.Current
 			}
 			c.Settled = ws != nil && ws.Workspace() && ws.Settled
 			j.finish(&c)
@@ -720,7 +723,9 @@ func (r Row) home() (session string, own bool) {
 	case r.Worktree != nil && r.Worktree.Session != "":
 		return r.Worktree.Session, true
 	case r.Worktree != nil && r.Agent != nil && r.Agent.Server == protocol.ServerLaatmux:
-		return r.Agent.Session, false
+		// A standing task's root agent in the task's session leaves
+		// the session the task's own.
+		return r.Agent.Session, r.stands() && r.Pending.Session == r.Agent.Session
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
 		// A task's session, before the host lists the worktree or
 		// while it lists one without a home.
@@ -731,30 +736,39 @@ func (r Row) home() (session string, own bool) {
 
 // HomeLine is the index in the tree of the depth-1 line on a host whose
 // workspace session attaches to a managed session, the line whose Home
-// it is: of several, the first in the tree's order whose own session it
-// is, before any whose root agent is in it with the home lost, as when
-// that agent was moved by hand into another worktree's home; -1 for
-// none, and for no host: records no configured host claims may be of
-// different machines whose sessions share a name. The view's LineFor
-// finds the line by it, and a managed agent of no worktree in other
-// sessions takes the line's state by it.
+// it is. Of several, the first in the tree's order whose own session it
+// is; then the first whose root agent is in it with the home lost, of a
+// worktree the session is named after, as add names the session it
+// makes; then the first. A worktree's root agent moved by hand into
+// another worktree's session takes the home from both, the session's
+// panes no longer all in one root, and the session stays the one it is
+// named after. -1 for none, and for no host: records no configured host
+// claims may be of different machines whose sessions share a name. The
+// view's LineFor finds the line by it, and a managed agent of no
+// worktree in other sessions takes the line's state by it.
 func HomeLine(tree []Row, host, session string) int {
 	if host == "" || session == "" {
 		return -1
 	}
-	first := -1
+	named, first := -1, -1
 	for i := range tree {
 		n := &tree[i]
 		if n.Depth != 1 || n.Host != host {
 			continue
 		}
 		home, own := n.home()
-		if home == session && own {
+		switch {
+		case home != session:
+		case own:
 			return i
-		}
-		if home == session && first < 0 {
+		case named < 0 && n.Worktree != nil && n.Worktree.Branch != "" && tmux.SessionName(n.Worktree.Repo, n.Worktree.Branch) == session:
+			named = i
+		case first < 0:
 			first = i
 		}
+	}
+	if named >= 0 {
+		return named
 	}
 	return first
 }
