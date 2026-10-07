@@ -230,6 +230,152 @@ func TestScopes(t *testing.T) {
 	}
 }
 
+// The viewer's own row is in the scope whatever its worktree. vm lists
+// proj/z homed in proj/z; the user runs `cd ~ && claude` in a split of
+// proj/z, a managed agent of no worktree, and claude in a window of the
+// workspace session vm/proj/z on this machine's default server, an
+// observed one; both stand in other sessions with no worktree, and with
+// the viewer in vm/proj/z both are the viewer's. Under session the
+// agent view shows them beside proj/z's own agent, and the tree shows
+// them under the other-sessions header after proj/z's line; under
+// project beside the repository's. Other agents of no worktree, the
+// split of proj/y's home, one in another managed session and one
+// observed in another session, stay hidden, as do the other worktrees;
+// with the viewer in vm/proj/y the split of proj/y is the viewer's and
+// proj/z's two are not.
+func TestScopeViewerRow(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	src, other := "git@github.com:u/proj.git", "git@github.com:u/other.git"
+	agent := func(id, session, cwd, wt string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: cwd, WorktreeID: wt}
+	}
+	observed := func(id, session string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/Users/u"}
+	}
+	in := rows.Input{
+		Hosts: []rows.Host{
+			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+		},
+		Agents: []protocol.Agent{
+			agent("venv/laatmux/%1", "proj/z", "/w/proj/z", "venv/worktree//w/proj/z"),
+			agent("venv/laatmux/%5", "proj/z", "/home/u", ""),
+			agent("venv/laatmux/%2", "proj/y", "/w/proj/y", "venv/worktree//w/proj/y"),
+			agent("venv/laatmux/%9", "proj/y", "/home/u", ""),
+			agent("venv/laatmux/%3", "other/x", "/w/other/x", "venv/worktree//w/other/x"),
+			agent("venv/laatmux/%8", "scratch", "/home/u", ""),
+			observed("menv/default/%6", "vm/proj/z"),
+			observed("menv/default/%7", "notes"),
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "z", Root: "/w/proj/z", Session: "proj/z"},
+			{ID: "venv/worktree//w/proj/y", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "y", Root: "/w/proj/y", Session: "proj/y"},
+			{ID: "venv/worktree//w/other/x", EnvironmentID: "venv", Repo: "other", Source: other, Branch: "x", Root: "/w/other/x", Session: "other/x"},
+		},
+		Locals: []protocol.Session{
+			{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"},
+			{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"},
+			{Name: "vm/other/x", Key: "venv//w/other/x", Host: "vm"},
+		},
+		Current: "vm/proj/z",
+		Now:     now,
+	}
+	m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 40, Follow: true, Scope: ScopeSession}
+	set := func() {
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+	}
+	sortedIDs := func() string {
+		got := strings.Split(ids(m), "\n")
+		slices.Sort(got)
+		return strings.Join(got, " ")
+	}
+	set()
+	if got, want := sortedIDs(), "menv/default/%6 venv/laatmux/%1 venv/laatmux/%5"; got != want {
+		t.Errorf("session tiles: %s, want %s", got, want)
+	}
+	m.View = ViewTree
+	if got, want := ids(m), rows.RepoNode(src)+"\nvenv/worktree//w/proj/z\nvenv/laatmux/%1\nvenv/laatmux/%5\nmenv/default/%6"; got != want {
+		t.Errorf("session tree:\n%s\nwant:\n%s", got, want)
+	}
+	if !strings.Contains(Text(m.Render()), "other sessions") {
+		t.Errorf("session tree without the other-sessions header:\n%s", Text(m.Render()))
+	}
+	m.Scope = ScopeProject
+	if got, want := ids(m), rows.RepoNode(src)+"\nvenv/worktree//w/proj/y\nvenv/laatmux/%2\nvenv/worktree//w/proj/z\nvenv/laatmux/%1\nvenv/laatmux/%5\nmenv/default/%6"; got != want {
+		t.Errorf("project tree:\n%s\nwant:\n%s", got, want)
+	}
+	if !strings.Contains(Text(m.Render()), "other sessions") {
+		t.Errorf("project tree without the other-sessions header:\n%s", Text(m.Render()))
+	}
+	m.View = ViewAgents
+	if got, want := sortedIDs(), "menv/default/%6 venv/laatmux/%1 venv/laatmux/%2 venv/laatmux/%5"; got != want {
+		t.Errorf("project tiles: %s, want %s", got, want)
+	}
+	// The viewer in proj/y's workspace session.
+	in.Current = "vm/proj/y"
+	m.Scope = ScopeSession
+	set()
+	if got, want := sortedIDs(), "venv/laatmux/%2 venv/laatmux/%9"; got != want {
+		t.Errorf("session tiles in vm/proj/y: %s, want %s", got, want)
+	}
+	m.View = ViewTree
+	if got, want := ids(m), rows.RepoNode(src)+"\nvenv/worktree//w/proj/y\nvenv/laatmux/%2\nvenv/laatmux/%9"; got != want {
+		t.Errorf("session tree in vm/proj/y:\n%s\nwant:\n%s", got, want)
+	}
+	// Back in vm/proj/z, claude in another window there in a worktree on
+	// mac, beside its own agent in its home session: that line is the
+	// viewer's too, so the scope keeps it with its children, and in the
+	// agent view its agents, beside proj/z's: a worktree of proj that
+	// sorts before proj/z, which the scope's worktree then is, or after;
+	// and one of a third repository, which project keeps with its
+	// repository line beside proj's lines.
+	base := in
+	third := "git@github.com:u/third.git"
+	for _, c := range []struct{ repo, source, branch string }{{"proj", src, "a"}, {"proj", src, "zz"}, {"third", third, "b"}} {
+		in = base
+		root := "/m/" + c.repo + "/" + c.branch
+		wt := "menv/worktree/" + root
+		visiting := observed("menv/default/%10", "vm/proj/z")
+		visiting.Cwd, visiting.WorktreeID = root, wt
+		home := protocol.Agent{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: c.repo + "/" + c.branch, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: root, WorktreeID: wt}
+		in.Agents = append(slices.Clone(base.Agents), visiting, home)
+		in.Worktrees = append(slices.Clone(base.Worktrees), protocol.Worktree{ID: wt, EnvironmentID: "menv", Repo: c.repo, Source: c.source, Branch: c.branch, Root: root, Session: c.repo + "/" + c.branch})
+		in.Locals = append(slices.Clone(base.Locals), protocol.Session{Name: "mac/" + c.repo + "/" + c.branch, Key: "menv/" + root, Host: "mac"})
+		in.Current = "vm/proj/z"
+		m.View, m.Scope = ViewAgents, ScopeSession
+		set()
+		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%5"; got != want {
+			t.Errorf("%s: session tiles: %s, want %s", c.branch, got, want)
+		}
+		m.View = ViewTree
+		mac := "\n" + wt + "\nmenv/default/%10\nmenv/laatmux/%4"
+		vm := "\nvenv/worktree//w/proj/z\nvenv/laatmux/%1"
+		others := "\nvenv/laatmux/%5\nmenv/default/%6"
+		want := map[string]string{
+			"a":  rows.RepoNode(src) + mac + vm + others,
+			"zz": rows.RepoNode(src) + vm + mac + others,
+			"b":  rows.RepoNode(src) + vm + "\n" + rows.RepoNode(third) + mac + others,
+		}[c.branch]
+		if got := ids(m); got != want {
+			t.Errorf("%s: session tree:\n%s\nwant:\n%s", c.branch, got, want)
+		}
+		if c.repo != "third" {
+			continue
+		}
+		m.Scope = ScopeProject
+		want = rows.RepoNode(src) + "\nvenv/worktree//w/proj/y\nvenv/laatmux/%2" + vm + "\n" + rows.RepoNode(third) + mac + others
+		if got := ids(m); got != want {
+			t.Errorf("%s: project tree:\n%s\nwant:\n%s", c.branch, got, want)
+		}
+		m.View = ViewAgents
+		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%2 venv/laatmux/%5"; got != want {
+			t.Errorf("%s: project tiles: %s, want %s", c.branch, got, want)
+		}
+	}
+}
+
 // A chip's band: the highlight background under the span's own colour
 // with the background known; reverse video and no colour without, as
 // the list's band.

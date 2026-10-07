@@ -858,8 +858,14 @@ row's session exists locally and is switched to.
   its root, in the tree its line or the task standing for it with its
   children under its repository, and with no worktree the viewer's
   line alone; `project`, every line under the viewer's worktree's
-  repository. A pane in a session that is no row's shows the empty
-  state under `session` and `project`. `F` switches the pane to
+  repository. `session` and `project` also keep every row that is the
+  viewer's, whatever its worktree: an agent started outside any
+  worktree from a split of the viewer's session, or observed in a
+  window of the viewer's session, which stands in other sessions; and
+  another worktree's line with its children, such as the line of an
+  agent observed in a window of the viewer's session with its
+  directory in that worktree. A pane in a session that is no row's shows
+  the empty state under `session` and `project`. `F` switches the pane to
   `session` and, pressed again, back to the scope the pane had before,
   whatever set it; on `session` already it goes to `all`. `F` acts on
   that pane alone and is not kept. The footer names a scope in force:
