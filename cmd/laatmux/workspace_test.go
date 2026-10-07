@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -267,6 +268,7 @@ func TestLabelUnderNested(t *testing.T) {
 }
 
 func TestLocalRepoArg(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}, Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}}
 	cases := []struct {
 		w    protocol.Worktree
@@ -286,6 +288,28 @@ func TestLocalRepoArg(t *testing.T) {
 	h := config.Host{Host: peer.Host{Name: "vm"}, Repos: "/r", Worktrees: "/w"}
 	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; laatmux add fix --repo <repo> --host vm makes one"; got != want {
 		t.Errorf("addHint = %q, want %q", got, want)
+	}
+}
+
+// add with a last.json it cannot parse says which file, as the add
+// form does: the decoder's error alone names none. It fails there,
+// before anything reaches a daemon.
+func TestAddBadLastNamesFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LAATMUX_HOME", dir)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - git@x:o/proj.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	path := filepath.Join(dir, "last.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	report(&b, cmdAdd(context.Background(), []string{"b", "--repo", "proj", "--host", "mac"}))
+	if want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"; b.String() != want {
+		t.Errorf("printed %q, want %q", b.String(), want)
 	}
 }
 

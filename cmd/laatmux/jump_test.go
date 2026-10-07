@@ -220,6 +220,35 @@ func TestAddHintCanRun(t *testing.T) {
 	last("")
 	d.cfg.DefaultAgentName = "codex"
 	check(host("vm", "venv"), bv, plain)
+	// A last.json add cannot read or parse is a need too, as the add form
+	// refuses on it: add reads it before it picks the host, and the line
+	// would fail there. It is the one under LAATMUX_HOME as it is then,
+	// which the fake daemon below moves.
+	badLast := func() string {
+		t.Helper()
+		p := filepath.Join(os.Getenv("LAATMUX_HOME"), "last.json")
+		if err := os.WriteFile(p, []byte("not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	onBadLast := func(p string) string {
+		return "vm/proj/b has no managed session; laatmux add makes one once " + p + " is readable JSON"
+	}
+	lastFile := badLast()
+	check(host("vm", "venv"), bv, onBadLast(lastFile))
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, "+other.Source+" is a repository in the config, and "+lastFile+" is readable JSON")
+	// One that is not a file cannot be read at all.
+	if err := os.Remove(lastFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lastFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	check(host("vm", "venv"), bv, onBadLast(lastFile))
+	if err := os.Remove(lastFile); err != nil {
+		t.Fatal(err)
+	}
 	d.cfg.DefaultAgentName, d.cfg.Agents = "", nil
 	check(host("vm", "venv"), bv, "vm/proj/b has no managed session; laatmux add makes one once an agent is in the config")
 	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, git@github.com:laat/other.git is a repository in the config, and an agent is in the config")
@@ -243,6 +272,10 @@ func TestAddHintCanRun(t *testing.T) {
 		if err := cmdJump(context.Background(), []string{target}); err == nil || err.Error() != want {
 			t.Errorf("jump %s: %v, want %q", target, err, want)
 		}
+	}
+	want := onBadLast(badLast())
+	if err := cmdJump(context.Background(), []string{"vm/proj/b"}); err == nil || err.Error() != want {
+		t.Errorf("jump vm/proj/b with last.json unreadable: %v, want %q", err, want)
 	}
 }
 
