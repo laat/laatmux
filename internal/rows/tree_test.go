@@ -598,15 +598,18 @@ func TestHomeAgentSettled(t *testing.T) {
 // made at its root, and in a standing task's session, through the
 // task's workspace session. The viewer in a plain attachment to proj/z
 // is on proj/y's line all the same, and on proj/z's by its own session,
-// with or without an agent of proj/z in its home; the visitor's tile is
-// in the viewer's session either way. With a plain attachment there the
-// viewer elsewhere is not; the viewer in vm/proj/y is not on proj/z's. Without vm/proj/z the agent keeps proj/y's workspace
-// session; so does one in a session of proj/z's name on vm's default
-// server, and one in the session of a task whose line holds a plain
-// session. The root agent of homeless worktree proj/a, moved by hand
-// into proj/z, is in its own line's home and keeps proj/a's workspace
-// session, where its jump goes. A line the viewer is on through the
-// visitor is not Own; the line whose session the viewer is in is.
+// with or without an agent of proj/z in its home, and with only shells
+// there; the visitor's tile is in the viewer's session. With a plain
+// attachment there the viewer elsewhere is not; the viewer in vm/proj/y
+// is not on proj/z's, nor, with no host claiming proj/z, the viewer in
+// an attachment tagged for none. Without vm/proj/z the agent keeps
+// proj/y's workspace session; so does one in a session of proj/z's name
+// on vm's default server, and one in the session of a task whose line
+// holds a plain session. The root agent of homeless worktree proj/a,
+// moved by hand into proj/z, is in its own line's home and keeps
+// proj/a's workspace session, where its jump goes. A line the viewer is
+// on through the visitor is not Own; the line whose session the viewer
+// is in is.
 func TestVisitorTakesHomeSession(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	managed := func(id, session, root string) protocol.Agent {
@@ -684,6 +687,10 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 			in.Agents = in.Agents[1:]
 			in.Locals = append(in.Locals, att)
 		}, att.Name, seen{"vm/proj/z", both, onZ, true, true}},
+		{"the viewer in an attachment to proj/z, only shells there", func(in *Input) {
+			in.Agents = in.Agents[1:2]
+			in.Locals = append(in.Locals, att)
+		}, att.Name, seen{"", onZ, onZ, false, false}},
 		{"proj/z's home lost, the viewer in an attachment to proj/z", func(in *Input) {
 			in.Worktrees[0].Session = ""
 			in.Locals = append(in.Locals, att)
@@ -696,6 +703,10 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		}, "vm/proj/t", seen{"vm/proj/t", []string{task.ID, y.ID}, []string{task.ID}, true, true}},
 		{"no vm/proj/z", func(in *Input) { in.Locals = in.Locals[1:2] }, "vm/proj/y", seen{"vm/proj/y", onY, onY, true, true}},
 		{"on vm's default server", func(in *Input) { in.Agents[2].Server = "default" }, "vm/proj/z", seen{"vm/proj/y", onZ, onZ, false, false}},
+		{"no host claims proj/z, an attachment tagged for none", func(in *Input) {
+			in.Hosts, in.Agents = nil, in.Agents[1:2]
+			in.Locals = append(in.Locals, protocol.Session{Name: "proj/z-att", Attach: "/proj/z"})
+		}, "proj/z-att", seen{"", nil, nil, false, false}},
 	} {
 		in := base
 		in.Agents, in.Worktrees, in.Locals = append([]protocol.Agent(nil), base.Agents...), append([]protocol.Worktree(nil), base.Worktrees...), append([]protocol.Session(nil), base.Locals...)

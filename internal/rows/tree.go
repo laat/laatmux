@@ -328,8 +328,9 @@ func (b *builder) worktrees() {
 		}
 		// A viewer in a plain attachment to the home session is on the
 		// line by its own session, as following wants it, whatever runs
-		// there: an agent of the worktree, a visitor, or none.
-		if att := j.byAttach[host+"/"+home]; home != "" && att != nil && in.Current != "" && att.Name == in.Current {
+		// there: an agent of the worktree, a visitor, or none. Not for no
+		// host, as HomeLine has it.
+		if att := j.byAttach[host+"/"+home]; host != "" && home != "" && att != nil && in.Current != "" && att.Name == in.Current {
 			line.Current, line.Own = true, true
 		}
 		var children []Row
