@@ -572,6 +572,40 @@ func TestShellGoesByLine(t *testing.T) {
 			}
 		}
 	}
+	// The homeless worktree proj/a, whose root agent was moved by hand
+	// into proj/z, has proj/z as its home too, and comes first in the
+	// tree's order. The session is proj/z's, whose home it is: enter on
+	// proj/z's root agent, a child of proj/z's line, and on the agent of
+	// no worktree lands in vm/proj/z, not in vm/proj/a, as its tile and
+	// as its node, and S and z on the agent act on vm/proj/z.
+	z.Session = "proj/z"
+	pa := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "proj", Source: z.Source, Branch: "a", Root: "/w/proj/a"}
+	moved := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: pa.Root, WorktreeID: pa.ID}
+	in = rows.Input{Hosts: []rows.Host{vm}, Agents: []protocol.Agent{root, moved, stray}, Worktrees: []protocol.Worktree{pa, z},
+		Locals: []protocol.Session{{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"}, {Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}}}
+	for _, tree := range []bool{false, true} {
+		m := show(in, tree)
+		if l := m.OwnerLine(pa.ID); l == nil || l.Home() != "proj/z" {
+			t.Fatalf("tree %v: proj/a's line is %+v", tree, l)
+		}
+		for _, id := range []string{root.ID, stray.ID} {
+			if !m.Select(id) {
+				t.Fatalf("tree %v: no row %s", tree, id)
+			}
+			os.Remove(log)
+			d.jumpRow(m, *m.Selection())
+			if !strings.HasPrefix(m.Message, "vm/proj/z is on the default tmux server") {
+				got, _ := os.ReadFile(log)
+				t.Errorf("tree %v: enter on %s beside proj/a's moved root agent: message %q, tmux %q", tree, id, m.Message, got)
+			}
+		}
+		if msg, cmds := press(m, stray.ID, 'S'); !strings.Contains(cmds, "-L default new-window -t =vm/proj/z: -n shell ") || !strings.HasPrefix(msg, "vm/proj/z is on the default tmux server") {
+			t.Errorf("tree %v: S on the agent beside proj/a's moved root agent: message %q, tmux %q", tree, msg, cmds)
+		}
+		if msg, cmds := press(m, stray.ID, 'z'); msg != "settled vm/proj/z" || cmds != "-u -L default set-option -t =vm/proj/z: @laatmux_settled 1\n" {
+			t.Errorf("tree %v: z on the agent beside proj/a's moved root agent: message %q, tmux %q", tree, msg, cmds)
+		}
+	}
 }
 
 // z toggles the line's settled state from any row the line holds, not

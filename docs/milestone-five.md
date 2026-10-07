@@ -295,7 +295,10 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   worktree's workspace session, where `Enter` on it lands; `z` and `S`
   on it act on that session, and with the viewer there it is the
   viewer's. Under a task standing for the worktree it shows no state,
-  and `z` refuses it as the task's. The viewer's own
+  and `z` refuses it as the task's. A session that is one worktree's
+  home and holds another homeless worktree's root agent, moved there
+  by hand, is the first worktree's, for this agent and for `Enter` on
+  that worktree's own agents. The viewer's own
   row never folds: settled or stale, it stays in sight, sorted with
   the stale ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:

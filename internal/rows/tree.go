@@ -585,21 +585,6 @@ func (b *builder) repoLines() []Row {
 // source tag; nothing when there are none.
 func (b *builder) otherSessions(out []Row) []Row {
 	in, j := b.in, b.j
-	// The workspace session of the depth-1 line with each home on each
-	// host, the first in the tree's order, as the view's LineFor finds
-	// the line, and as it does none on no host; none for a task's line,
-	// which carries the session but not the state, and whose agent of no
-	// worktree z refuses as the task's.
-	homes := map[[2]string]*protocol.Session{}
-	for i := range out {
-		k := [2]string{out[i].Host, out[i].Home()}
-		if _, ok := homes[k]; k[0] != "" && k[1] != "" && !ok {
-			homes[k] = out[i].Local
-			if out[i].Pending != nil {
-				homes[k] = nil
-			}
-		}
-	}
 	var others []Row
 	for pass := 0; pass < 2; pass++ {
 		for i := range in.Agents {
@@ -619,11 +604,17 @@ func (b *builder) otherSessions(out []Row) []Row {
 			// session: it shows that session's state, which z on it
 			// toggles, and the viewer in that session sits with it, as
 			// with the line's children in the home session, so its row
-			// stays in sight when settled and z can undo itself.
+			// stays in sight when settled and z can undo itself. The line
+			// is the one the view's LineFor finds (HomeLine). A task's
+			// line carries the session but not the state, and z refuses
+			// its agent of no worktree as the task's: none.
 			ws := c.Local
-			if l, ok := homes[[2]string{host, a.Session}]; managed && ok {
-				ws = l
-				c.Current = l != nil && in.Current != "" && l.Name == in.Current
+			if l := HomeLine(out, host, a.Session); managed && l >= 0 {
+				ws = out[l].Local
+				if out[l].Pending != nil {
+					ws = nil
+				}
+				c.Current = ws != nil && in.Current != "" && ws.Name == in.Current
 			}
 			c.Settled = ws != nil && ws.Workspace() && ws.Settled
 			j.finish(&c)
@@ -714,19 +705,58 @@ func (r Row) Wants() bool {
 // host lists the worktree, or while it lists it without a home; "" for
 // a line with none.
 func (r Row) Home() string {
+	home, _ := r.home()
+	return home
+}
+
+// home is Home, and whether the session is the line's own: the
+// worktree's home or the task's session, not the one the agent laatmux
+// made at the root is in with the home lost, which may be another
+// line's own.
+func (r Row) home() (session string, own bool) {
 	switch {
 	case r.Depth != 1:
-		return ""
+		return "", false
 	case r.Worktree != nil && r.Worktree.Session != "":
-		return r.Worktree.Session
+		return r.Worktree.Session, true
 	case r.Worktree != nil && r.Agent != nil && r.Agent.Server == protocol.ServerLaatmux:
-		return r.Agent.Session
+		return r.Agent.Session, false
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
 		// A task's session, before the host lists the worktree or
 		// while it lists one without a home.
-		return r.Pending.Session
+		return r.Pending.Session, true
 	}
-	return ""
+	return "", false
+}
+
+// HomeLine is the index in the tree of the depth-1 line on a host whose
+// workspace session attaches to a managed session, the line whose Home
+// it is: of several, the first in the tree's order whose own session it
+// is, before any whose root agent is in it with the home lost, as when
+// that agent was moved by hand into another worktree's home; -1 for
+// none, and for no host: records no configured host claims may be of
+// different machines whose sessions share a name. The view's LineFor
+// finds the line by it, and a managed agent of no worktree in other
+// sessions takes the line's state by it.
+func HomeLine(tree []Row, host, session string) int {
+	if host == "" || session == "" {
+		return -1
+	}
+	first := -1
+	for i := range tree {
+		n := &tree[i]
+		if n.Depth != 1 || n.Host != host {
+			continue
+		}
+		home, own := n.home()
+		if home == session && own {
+			return i
+		}
+		if home == session && first < 0 {
+			first = i
+		}
+	}
+	return first
 }
 
 // Agents is the agent view, from the tree Tree built of the input: the
