@@ -915,6 +915,110 @@ func TestRecordsError(t *testing.T) {
 	}
 }
 
+// A user's after-list-panes hook that fails makes tmux exit 1 after it
+// printed every pane: ListPanes returns the panes with a *HookError,
+// which has the hook's message and names the command with Sep for each
+// separator, and Query returns the lines with one that names the format
+// as given. A hook whose message says "no current target", as an empty
+// server's listing does, still has its panes kept. A listing that
+// printed no record fails with the plain *Error, as before: list-panes
+// on a session not there fails before the hook would run, and
+// list-clients with no client prints nothing before its failing
+// after-list-clients hook.
+func TestListPanesHookFails(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	var ids []string
+	for range 2 {
+		out, err := s.Run(ctx, "new-session", "-d", "-P", "-F", "#{pane_id}", "sleep 600")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, strings.TrimSpace(string(out)))
+	}
+	if _, err := s.Run(ctx, "set-hook", "-g", "after-list-panes", "select-window -t nosuch:9",
+		Next, "set-hook", "-g", "after-list-clients", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	hook := func(err error) bool {
+		var he *HookError
+		return errors.As(err, &he)
+	}
+	const msg = "can't find session: nosuch"
+	panes, err := s.ListPanes(ctx)
+	var te *Error
+	if !hook(err) || !errors.As(err, &te) || te.Msg != msg || !strings.HasPrefix(err.Error(), "tmux list-panes -a -F #{session_name}"+Sep+"#{window_index}"+Sep) {
+		t.Fatalf("ListPanes with the hook: %v, want a HookError naming the format with Sep and saying %q", err, msg)
+	}
+	var got []string
+	for _, p := range panes {
+		got = append(got, p.ID)
+	}
+	slices.Sort(ids)
+	if slices.Sort(got); !slices.Equal(got, ids) {
+		t.Errorf("ListPanes with the hook listed %q, want %q", got, ids)
+	}
+	// The hook's message is told by where it came from, not by what it
+	// says: one that says "no current target", which an empty server's
+	// listing does, is still a hook's.
+	if _, err := s.Run(ctx, "set-hook", "-g", "after-list-panes", "select-window -t 'no current target'"); err != nil {
+		t.Fatal(err)
+	}
+	if panes, err := s.ListPanes(ctx); !hook(err) || len(panes) != len(ids) {
+		t.Errorf("ListPanes with a hook saying no current target: %d panes, %v; want %d and a HookError", len(panes), err, len(ids))
+	}
+	if _, err := s.Run(ctx, "set-hook", "-g", "after-list-panes", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Query(ctx, "#{pane_id}", "list-panes", "-a")
+	if want := strings.Join(ids, "\n") + "\n"; !hook(err) || !strings.HasPrefix(err.Error(), "tmux list-panes -a -F #{pane_id}: "+msg) || string(out) != want {
+		t.Errorf("Query with the hook: %q %v, want %q and a HookError", out, err, want)
+	}
+	if _, err := s.Records(ctx, NewFields("#{pane_id}"), "list-panes", "-t", "=nosuch:"); err == nil || hook(err) {
+		t.Errorf("list-panes on no session: %v, want a plain error", err)
+	}
+	recs, err := s.Records(ctx, NewFields("#{client_name}"), "list-clients")
+	if err == nil || hook(err) || !strings.HasSuffix(err.Error(), ": "+msg) || len(recs) != 0 {
+		t.Errorf("list-clients with no client: %q %v, want a plain error saying %q", recs, err, msg)
+	}
+}
+
+// hookFailed takes a failed Query for one whose records were printed
+// only when out holds a record that ends in the Query's end and tmux
+// exited with a status of its own, 1, or 3 here, the shell's status a
+// failed run-shell hook makes tmux exit with: not when nothing was
+// printed whole, a record cut before its newline or one that ends in
+// another Query's end, not when tmux was killed, as ctx kills it, and
+// not when its server went away, which can cut the listing between two
+// records, as the last line of the message says. A hook's message that
+// only ends in the same words is still a hook's.
+func TestHookFailed(t *testing.T) {
+	exited := exec.Command("sh", "-c", "exit 1").Run()
+	exited3 := exec.Command("sh", "-c", "exit 3").Run()
+	killed := exec.Command("sh", "-c", "kill -9 $$").Run()
+	end := probe + "TAIL"
+	rec := "%0" + Sep + end + "\n"
+	for _, c := range []struct {
+		out, msg string
+		err      error
+		want     bool
+	}{
+		{rec + "%1" + Sep + end + "\n", "can't find session: nosuch", exited, true},
+		{rec + "RS\n", "'echo RS; exit 3' returned 3", exited3, true},
+		{rec, "can't find window: server exited unexpectedly", exited, true},
+		{"", "can't find session: nosuch", exited, false},
+		{"%0" + Sep + end, "can't find session: nosuch", exited, false},
+		{"%0" + Sep + probe + "OTHER\n", "can't find session: nosuch", exited, false},
+		{rec, "signal: killed", killed, false},
+		{rec, "server exited unexpectedly", exited, false},
+		{rec, "can't find session: nosuch\nserver exited unexpectedly", exited, false},
+	} {
+		if got := hookFailed(&Error{Msg: c.msg, err: c.err}, c.out, end); got != c.want {
+			t.Errorf("%q, %q, %v: %v, want %v", c.out, c.msg, c.err, got, c.want)
+		}
+	}
+}
+
 // A pane whose directory and @laatmux_cwd have Sep and a newline in
 // them, and whose title and window name have Sep, is listed with each
 // value in its own field, and so is the pane listed after it. Split at

@@ -179,16 +179,65 @@ const probe = "$_"
 // a byte that is not part of valid UTF-8 as vis(3) does, \001 say, and
 // those are left as printed: it writes a backslash of the value as it
 // is, so such an escape cannot be told from the same text in the value.
+// A command that printed its records and then failed, as it does when a
+// user's after-list-panes hook fails, returns them with a *HookError.
 func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, error) {
+	return s.query(ctx, format, format, a...)
+}
+
+// query is Query, a failed command named with shown for the format.
+func (s Server) query(ctx context.Context, format, shown string, a ...string) ([]byte, error) {
 	end := probe + rand.Text()
 	out, err := s.Run(ctx, append(slices.Clip(a), "-F", format+Sep+end)...)
 	var te *Error
 	if errors.As(err, &te) {
 		e := *te
-		e.Args = append(slices.Clip(a), "-F", format)
+		e.Args = append(slices.Clip(a), "-F", shown)
 		err = &e
+		if hookFailed(&e, string(out), end) {
+			err = &HookError{Err: &e}
+		}
 	}
 	return []byte(unframe(string(out), end)), err
+}
+
+// HookError is a listing that printed its records and then failed: a
+// command tmux runs after the listing's, a user's after-list-panes,
+// after-list-sessions, after-list-clients or after-display-message hook
+// say, failed, and tmux exits with its error. A listing command never
+// fails after it printed: list-panes, list-sessions and list-clients
+// fail before they print, on a target they cannot find, and
+// display-message on tmux 3.2 and later prints its format with no
+// values for one rather than failing. So what fails after a record was
+// printed is a command run after it. Query and Records return it with
+// the records, each whole: it ends in what Query framed it with. A
+// caller that wants the listing keeps them and reports the error; one
+// that fails on any error fails on this one too.
+type HookError struct{ Err *Error }
+
+func (e *HookError) Error() string {
+	return e.Err.Error() + " (after the listing printed its records: a hook's error)"
+}
+func (e *HookError) Unwrap() error { return e.Err }
+
+// lostServer is the line tmux ends its message with when its server
+// went away before the command finished.
+const lostServer = "server exited unexpectedly"
+
+// hookFailed reports whether a Query's failed command, named in e,
+// printed whole records first: out holds one that ends in end and the
+// newline after it, and tmux exited with a status of its own, whatever
+// it is, since a failed run-shell hook makes it the shell's. A tmux
+// killed by ctx exited with none, and one whose server went away ends
+// its message with lostServer: either may have printed a part of the
+// listing, and fails as any other run does. A tmux stopped by SIGTERM,
+// which it catches, exits with the status it has and may have cut the
+// listing as well; it does so for a listing with no hook failing too,
+// exiting 0 there, so neither case is told from a whole listing.
+func hookFailed(e *Error, out, end string) bool {
+	var ee *exec.ExitError
+	return strings.Contains(out, end+"\n") && errors.As(e.err, &ee) && ee.Exited() &&
+		e.Msg[strings.LastIndexByte(e.Msg, '\n')+1:] != lostServer
 }
 
 // unframe is what a Query's command printed, as the server holds the
@@ -469,18 +518,11 @@ func NewFields(vars ...string) Fields {
 // format of f, and returns what Parse reads from its output: the
 // values as the server holds them. A failed command is named with Sep
 // where each separator was: the daemon logs a failed listing at every
-// poll, and the line then reads the same each time.
+// poll, and the line then reads the same each time. A command that
+// printed its records and then failed returns them with a *HookError,
+// as Query does.
 func (s Server) Records(ctx context.Context, f Fields, a ...string) ([][]string, error) {
-	out, err := s.Query(ctx, f.format, a...)
-	var te *Error
-	if errors.As(err, &te) {
-		named := *te
-		named.Args = make([]string, len(te.Args))
-		for i, v := range te.Args {
-			named.Args[i] = strings.ReplaceAll(v, f.sep, Sep)
-		}
-		err = &named
-	}
+	out, err := s.query(ctx, f.format, strings.ReplaceAll(f.format, f.sep, Sep), a...)
 	return f.Parse(out), err
 }
 
@@ -515,10 +557,14 @@ var paneVars = []string{
 // and that is an empty listing, not a failure to observe. A pane's
 // directory and its @laatmux_cwd can have a newline or Sep in them, and
 // its title and its window's name Sep, so the panes are read through
-// Fields, as the server holds them.
+// Fields, as the server holds them. A listing a user's after-list-panes
+// hook failed after is every pane, returned with the *HookError.
 func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 	recs, err := s.Records(ctx, NewFields(paneVars...), "list-panes", "-a")
-	if err != nil {
+	// A HookError is told first: the hook's own message, which the
+	// *Error in it has, can say anything, "no current target" too.
+	var he *HookError
+	if err != nil && !errors.As(err, &he) {
 		var te *Error
 		if errors.As(err, &te) && strings.Contains(te.Msg, "no current target") {
 			return nil, nil
@@ -543,7 +589,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.SessionID = f[18]
 		panes = append(panes, p)
 	}
-	return panes, nil
+	return panes, err
 }
 
 // Capture returns the pane's visible screen, oldest line first, as

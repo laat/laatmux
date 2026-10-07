@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,6 +56,34 @@ func TestListWithoutTmux(t *testing.T) {
 	}
 	if _, err := List(ctx); !tmux.NotInstalled(err) {
 		t.Errorf("no tmux, socket there: %v, want the not-found error", err)
+	}
+}
+
+// A user's after-list-sessions hook that fails after list-sessions
+// printed every session: List returns the sessions with the
+// *tmux.HookError, which the daemon's sessions listing keeps.
+func TestListHookFails(t *testing.T) {
+	startServers(t)
+	ctx := context.Background()
+	for _, name := range []string{"a", "b"} {
+		if _, err := Server.Run(ctx, "new-session", "-d", "-s", name, "sleep 600"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Server.Run(ctx, "set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	locals, err := List(ctx)
+	var he *tmux.HookError
+	if !errors.As(err, &he) || he.Err.Msg != "can't find session: nosuch" {
+		t.Fatalf("List with the hook: %v, want a HookError", err)
+	}
+	var names []string
+	for _, l := range locals {
+		names = append(names, l.Name)
+	}
+	if slices.Sort(names); !slices.Equal(names, []string{"a", "b"}) {
+		t.Errorf("List with the hook listed %q, want a and b", names)
 	}
 }
 

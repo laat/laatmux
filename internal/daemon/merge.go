@@ -634,8 +634,11 @@ func (d *Daemon) runSessions(ctx context.Context) {
 // and this one. A listing that fails is an unavailable observation: the
 // records are kept, and the failure is published once, as its recovery
 // is, so a subscriber knows its sessions are the last listed rather than
-// the current ones.
+// the current ones. A listing a hook failed after is whole, and applied.
 func (d *Daemon) applySessionsLocked(recs []protocol.Session, err error) {
+	if d.hookOnce(&d.sessionsHookErr, err, "sessions") {
+		err = nil
+	}
 	if err != nil {
 		if d.logOnce(&d.sessionsErr, "sessions: %v", err) {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, SessionsError: d.sessionsErr})

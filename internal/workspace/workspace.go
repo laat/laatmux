@@ -87,16 +87,19 @@ var sessionVars = []string{
 // socket, which a tmux that ran would call no server: rm on a machine
 // without tmux has nothing local to clean up. No tmux with the socket
 // there is an error, since a server may be running that cannot be
-// reached, during a tmux upgrade say.
+// reached, during a tmux upgrade say. A listing a user's
+// after-list-sessions hook failed after is every session, returned with
+// the *tmux.HookError.
 func List(ctx context.Context) ([]protocol.Session, error) {
 	recs, err := Server.Records(ctx, tmux.NewFields(sessionVars...), "list-sessions")
-	if err != nil {
+	var he *tmux.HookError
+	if err != nil && !errors.As(err, &he) {
 		if tmux.NoServer(err) || tmux.NotInstalled(err) && Server.NoSocket() {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return parseSessions(recs), nil
+	return parseSessions(recs), err
 }
 
 // parseSessions is the sessions of records of sessionVars' values.
