@@ -453,7 +453,9 @@ func Bridge(ctx context.Context, r io.Reader, w io.Writer) error {
 		return nil
 	case err := <-errc:
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
-			return err
+			// The connection's error names the daemon's socket, under
+			// the state directory.
+			return tmux.PrintablePath(err)
 		}
 		return nil
 	}

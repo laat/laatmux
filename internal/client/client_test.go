@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -45,11 +47,13 @@ func TestStartDaemonStateDirQuoted(t *testing.T) {
 
 // A local connection's errors name the daemon's socket, under the
 // state directory, as tmux.Printable shows it: the hello's write and a
-// Conn's write to a daemon that has closed the connection. The
-// directory is under the system's temporary directory, not t.TempDir,
-// which on macOS makes a socket path too long.
+// Conn's write to a daemon that has closed the connection; the hello's
+// read and Snapshot's write and read, on a transport that gives the
+// errors a reset connection does. The directory is under /tmp, as the
+// other socket tests' are: a t.TempDir on macOS makes a socket path
+// too long.
 func TestLocalConnErrorsQuoted(t *testing.T) {
-	dir, err := os.MkdirTemp("", "st\tate\x1b[31m")
+	dir, err := os.MkdirTemp("/tmp", "st\tate\x1b[31m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +90,81 @@ func TestLocalConnErrorsQuoted(t *testing.T) {
 	defer nc.Close()
 	c := &Conn{Host: peer.Host{Name: "local"}, pc: protocol.NewConn(nc), close: func() { nc.Close() }}
 	check("write", c.Write(protocol.Message{Type: protocol.TypePing}))
+	reset := func(op string) *net.OpError {
+		return &net.OpError{Op: op, Net: "unix", Source: &net.UnixAddr{Net: "unix"}, Addr: &net.UnixAddr{Name: sock, Net: "unix"}, Err: syscall.ECONNRESET}
+	}
+	failing := failingRW{read: reset("read"), write: reset("write")}
+	_, err = Connect(context.Background(), peer.Host{Name: "local"}, failing, io.Discard, func() {})
+	check("hello read", err)
+	c = &Conn{Host: peer.Host{Name: "local"}, pc: protocol.NewConnRW(failing, failing), close: func() {}}
+	_, err = c.Snapshot(context.Background())
+	check("snapshot write", err)
+	c = &Conn{Host: peer.Host{Name: "local"}, pc: protocol.NewConnRW(failing, io.Discard), close: func() {}}
+	_, err = c.Snapshot(context.Background())
+	check("snapshot read", err)
 }
+
+// failingRW's reads and writes fail with its errors.
+type failingRW struct{ read, write error }
+
+func (f failingRW) Read([]byte) (int, error)  { return 0, f.read }
+func (f failingRW) Write([]byte) (int, error) { return 0, f.write }
+
+// Bridge's error from a daemon that has closed the connection names
+// its socket as tmux.Printable shows it. The daemon sends a byte and
+// closes; the output's copy is held writing that byte, so the input's
+// copy, writing to the closed connection, fails first.
+func TestBridgeErrorQuoted(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "st\tate\x1b[31m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("LAATMUX_HOME", dir)
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + sock, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		sc, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		sc.Write([]byte("x"))
+		sc.Close()
+	}()
+	out := &heldWriter{release: make(chan struct{})}
+	defer close(out.release)
+	in := readerFunc(func(p []byte) (int, error) {
+		<-closed
+		return copy(p, "y\n"), nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = Bridge(ctx, in, out)
+	if err == nil || !strings.Contains(err.Error(), strconv.Quote(sock)) || strings.ContainsAny(err.Error(), "\t\x1b") {
+		t.Fatalf("Bridge: %v, want %s in it", err, strconv.Quote(sock))
+	}
+}
+
+// heldWriter's writes wait for release.
+type heldWriter struct{ release chan struct{} }
+
+func (w *heldWriter) Write(p []byte) (int, error) {
+	<-w.release
+	return len(p), nil
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
 // A pending Request returns when its context is cancelled.
 func TestRequestHonoursCancel(t *testing.T) {

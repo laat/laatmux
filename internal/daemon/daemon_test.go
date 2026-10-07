@@ -23,10 +23,10 @@ func newTestDaemon() *Daemon {
 // A listener that fails while the daemon is not shutting down ends
 // Serve with its error, which names the socket, under the state
 // directory, as tmux.Printable shows it: serve run by hand prints it.
-// The directory is under the system's temporary directory, not
-// t.TempDir, which on macOS makes a socket path too long.
+// The directory is under /tmp, as the other socket tests' are: a
+// t.TempDir on macOS makes a socket path too long.
 func TestServeAcceptErrorQuoted(t *testing.T) {
-	dir, err := os.MkdirTemp("", "st\tate\x1b[31m")
+	dir, err := os.MkdirTemp("/tmp", "st\tate\x1b[31m")
 	if err != nil {
 		t.Fatal(err)
 	}
