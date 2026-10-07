@@ -24,8 +24,10 @@ type SSHOptions struct {
 }
 
 // SSH is the argv of ssh to the alias running command: the options in a
-// fixed order, the alias, the command as one argument for the remote
-// shell.
+// fixed order, --, the alias, the command as one argument for the remote
+// shell. ssh reads no option after --, so neither the alias nor the
+// command is read as one; without it ssh reads options after the alias
+// as well as before.
 func SSH(alias string, o SSHOptions, command string) []string {
 	argv := []string{"ssh"}
 	if o.TTY {
@@ -42,7 +44,7 @@ func SSH(alias string, o SSHOptions, command string) []string {
 			argv = append(argv, "-o", "ServerAliveCountMax="+strconv.Itoa(o.KeepAliveCount))
 		}
 	}
-	return append(argv, alias, command)
+	return append(argv, "--", alias, command)
 }
 
 // seconds is a positive duration as ssh takes it: whole seconds,
