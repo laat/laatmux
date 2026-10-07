@@ -899,8 +899,8 @@ var runDir string
 
 // A test that sets no LAATMUX_HOME or LAATMUX_CONFIG, as this one, has
 // the run's. Run again under a state directory whose runtime file names
-// a live daemon at a socket that is not there, and a config that does
-// not parse, it reads neither.
+// a live daemon at a socket that is not there, and a config file, it
+// reads neither.
 func TestRunStateIsItsOwn(t *testing.T) {
 	if runDir == "" {
 		t.Fatal("TestMain gave the run no directory")
