@@ -1342,10 +1342,11 @@ func TestUnlistedCheckoutNotALabel(t *testing.T) {
 // Two checkouts the config does not list whose names make one label,
 // of two repositories, do not share it: the first in directory order
 // keeps it, or the one whose directory is named so, and the other's
-// label has a hash of its name after it, logged once, its directory
+// label has a hash of its origin after it, logged once, its directory
 // quoted. Nothing is left out of the listing, so the worktrees of a
-// checkout a collision appears next to stay listed. A clone of the
-// repository that keeps the label shares it.
+// checkout a collision appears next to stay listed. Clones of one
+// repository share a label, plain or hashed. A made label that is the
+// config's name for another repository is hashed too.
 func TestUnlistedLabelCollision(t *testing.T) {
 	f := newFixture(t)
 	var logged bytes.Buffer
@@ -1381,36 +1382,55 @@ func TestUnlistedLabelCollision(t *testing.T) {
 	dot, one := clone("a.b", "/elsewhere/one.git", "one")
 	del, two := clone("a\x7fb", "/elsewhere/two.git", "two")
 	oneRec := Record{Repo: "a_b", Source: "/elsewhere/one.git", Branch: "one", Root: one}
-	twoRec := Record{Repo: "a_b-4ef992", Source: "/elsewhere/two.git", Branch: "two", Root: two}
+	twoRec := Record{Repo: "a_b-f16526", Source: "/elsewhere/two.git", Branch: "two", Root: two}
 	for range 2 {
 		list(oneRec, twoRec)
 	}
-	line := strconv.Quote(del) + " is labelled a_b-4ef992: the label its name makes is " + dot + "'s"
+	line := strconv.Quote(del) + " is labelled a_b-f16526: the label its name makes is " + dot + "'s"
 	if lines() != 1 || !strings.Contains(logged.String(), line) || !strings.Contains(logged.String(), "name") || strings.Contains(logged.String(), "\x7f") {
 		t.Fatalf("logged %q, want once %q", logged.String(), line)
 	}
 	known("a_b", "a_b", "/elsewhere/one.git")
-	known("a_b-4ef992", "a_b-4ef992", "/elsewhere/two.git")
-	known("/elsewhere/two.git", "a_b-4ef992", "/elsewhere/two.git")
+	known("a_b-f16526", "a_b-f16526", "/elsewhere/two.git")
+	known("/elsewhere/two.git", "a_b-f16526", "/elsewhere/two.git")
 	if rec, co, ok, err := f.store.Find(f.ctx, two); err != nil || !ok || co != del || rec != twoRec {
 		t.Fatalf("find the second checkout's worktree: %+v %q %v %v", rec, co, ok, err)
 	}
+	// Another clone of the second repository that loses the label gets
+	// the same hash, which is of the origin.
+	_, again := clone("a;b", "/elsewhere/two.git", "again")
+	againRec := Record{Repo: "a_b-f16526", Source: "/elsewhere/two.git", Branch: "again", Root: again}
+	list(againRec, oneRec, twoRec)
+	if lines() != 2 {
+		t.Fatalf("logged %q", logged.String())
+	}
 
 	// A directory named a_b, of a third repository, keeps the label from
-	// both, and each of them is listed under a label of its own.
+	// all of them, and each is listed under a label of its own.
 	clone("a_b", "/elsewhere/three.git", "")
-	oneRec.Repo = "a_b-2e7336"
-	list(oneRec, twoRec)
-	if lines() != 3 || !strings.Contains(logged.String(), dot+" is labelled a_b-2e7336") {
+	oneRec.Repo = "a_b-caef38"
+	list(againRec, oneRec, twoRec)
+	if lines() != 5 || !strings.Contains(logged.String(), dot+" is labelled a_b-caef38") {
 		t.Fatalf("logged %q", logged.String())
 	}
 	known("a_b", "a_b", "/elsewhere/three.git")
 	// A clone of the third repository under another name shares it.
 	_, three := clone("a+b", "/elsewhere/three.git", "three")
-	list(oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
-	if lines() != 3 {
+	list(againRec, oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
+	if lines() != 5 {
 		t.Fatalf("logged %q", logged.String())
 	}
+
+	// A made label that is the config's name for another repository,
+	// which has no checkout here, gets the hash too, and Known by that
+	// name is the config's.
+	f.store.Repos = append(f.store.Repos, Repo{Source: "/elsewhere/four.git", Name: "c_d"})
+	_, cd := clone("c.d", "/elsewhere/hand.git", "cd")
+	list(againRec, Record{Repo: "c_d-06a376", Source: "/elsewhere/hand.git", Branch: "cd", Root: cd}, oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
+	if lines() != 6 || !strings.Contains(logged.String(), " is labelled c_d-06a376: the label its name makes is this host's config's name for /elsewhere/four.git") {
+		t.Fatalf("logged %q", logged.String())
+	}
+	known("c_d", "c_d", "/elsewhere/four.git")
 }
 
 // The ssh and https forms of one hosted repository are one repository:

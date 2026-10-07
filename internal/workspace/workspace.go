@@ -352,9 +352,10 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// Named after its home session, it is that session's name as
 	// AttachName encodes it; named after its worktree, its branch is
 	// encoded by SessionName, but its repository is the host's label,
-	// which for a checkout the host's config does not list is the
-	// directory's name as it is, and the check would refuse a workspace
-	// with a "." there, which a local tmux 3.7 keeps. new-session expands
+	// which a host on an older build gives a checkout its config does not
+	// list as the directory's name as it is, and the check would refuse
+	// a workspace with a "." there, which a local tmux 3.7 keeps. A host
+	// on this build makes that name a label. new-session expands
 	// the name as a format, so it is given as FormatLiteral writes it: a
 	// name new took can have a # in it.
 	if s.Key == "" {

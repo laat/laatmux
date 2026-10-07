@@ -241,23 +241,27 @@ func dirLabel(name string) string {
 // labels is the repository each checkout of a scan holds, by directory,
 // as List, Find and Known name it: the config's entry for its origin,
 // else the origin under the label dirLabel makes of its directory's
-// name. Two checkouts the config does not list whose names make one
-// label, of two repositories, next.js and next_js say, or next.js and
-// next:js, do not share it: the one whose directory is named so keeps
-// it, else the first in directory order, and the other's label has a -
-// and a hash of its directory's name after it, next_js-0d857f; held
-// names, by the directory of each such, the checkout that has its
-// plain label. Every checkout is labelled, so a collision that appears
+// name. A label made of a name that is not one, next_js of next.js,
+// does not take one another repository has: the config's name for it,
+// or the label of a checkout the config does not list, whose directory
+// is named so or which comes first in directory order, next_js or
+// next:js say. The made label then has a - and a hash of its origin
+// after it, so every clone of one repository that loses the plain
+// label gets the same one; held names, by the directory of each such,
+// the holder of its plain label, a checkout, or the config's entry with
+// no directory. Every checkout is labelled, so a collision that appears
 // next to a checkout with worktrees never takes them out of the
-// listing, which the daemon would take for their removal. Two clones of
-// one repository share their label. A checkout whose label is the
-// config's name for another repository keeps it: Known refuses that
-// label, naming both sources.
+// listing, which the daemon would take for their removal. A directory
+// whose own name is the config's name for another repository keeps it,
+// as the user named it: Known refuses that label, naming both sources.
 func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]checkout) {
 	out = make(map[string]Repo, len(cos))
 	held = map[string]checkout{}
-	holders := map[string]checkout{} // by label, the unlisted checkout that has it
-	var made []checkout              // unlisted checkouts whose name is not a label
+	holders := map[string]checkout{} // by label, what has it
+	for _, r := range s.Repos {
+		holders[r.Name] = checkout{origin: r.Source}
+	}
+	var made []checkout // unlisted checkouts whose name is not a label
 	for _, co := range cos {
 		if r, listed := s.BySource(co.origin); listed {
 			out[co.dir] = r
@@ -269,18 +273,19 @@ func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]che
 			continue
 		}
 		out[co.dir] = Repo{Source: co.origin, Name: name}
-		holders[name] = co
+		if _, taken := holders[name]; !taken {
+			holders[name] = co
+		}
 	}
 	for _, co := range made {
-		name := filepath.Base(co.dir)
-		label := dirLabel(name)
+		label := dirLabel(filepath.Base(co.dir))
 		h, taken := holders[label]
 		switch {
 		case !taken:
 			holders[label] = co
 		case !source.Same(h.origin, co.origin):
 			held[co.dir] = h
-			sum := sha256.Sum256([]byte(name))
+			sum := sha256.Sum256([]byte(source.Key(co.origin)))
 			label += "-" + hex.EncodeToString(sum[:3])
 		}
 		out[co.dir] = Repo{Source: co.origin, Name: label}
@@ -289,10 +294,9 @@ func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]che
 }
 
 // collided logs, once per pair, that a checkout's label has a hash
-// because a checkout of another repository has its plain label, and
-// what settles it.
+// because another repository has its plain label, and what settles it.
 func (s *Store) collided(co, holder checkout, label string) {
-	key := co.dir + "\x00" + holder.dir
+	key := co.dir + "\x00" + holder.dir + "\x00" + holder.origin
 	s.mu.Lock()
 	seen := s.logged[key]
 	if !seen {
@@ -302,9 +306,14 @@ func (s *Store) collided(co, holder checkout, label string) {
 		s.logged[key] = true
 	}
 	s.mu.Unlock()
-	if !seen && s.Log != nil {
-		s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is %s's, of another repository; a name for either in this host's config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.dir))
+	if seen || s.Log == nil {
+		return
 	}
+	if holder.dir == "" {
+		s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is this host's config's name for %s; a name for it in the config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.origin))
+		return
+	}
+	s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is %s's, of another repository; a name for either in this host's config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.dir))
 }
 
 // linked reports whether git must be asked for a main checkout's

@@ -3,6 +3,8 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // notDelivered makes a task that ends needing the user: the add done,
@@ -709,7 +712,7 @@ func (f *relayFixture) awaitGone(t *testing.T, id string) {
 // and found by its origin for adds through a repository entry, keeps
 // its worktrees listed when a checkout named se_nt, of another
 // repository, appears and takes their label: they are listed under a
-// label with a hash, so a task that needs the user does not go and one
+// label with a hash of their origin, so a task that needs the user does not go and one
 // that handed over keeps its record, prompt and all. Left out of the
 // listing, the worktrees would read as removed.
 func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
@@ -727,6 +730,8 @@ func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 	git("clone", "-q", "--bare", f.source(), other)
 	git("clone", "-q", other, filepath.Join(f.store.Dirs.Repos, "se.nt"))
 	entry := &protocol.RepoEntry{Source: other, Name: "sent"}
+	sum := sha256.Sum256([]byte(source.Key(other)))
+	hashed := "se_nt-" + hex.EncodeToString(sum[:3])
 	for id, agent := range map[string]string{"n1": "claude", "h1": "argv"} {
 		if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: id, Relay: "vm", Repo: other, Name: "sent", Branch: id, RepoEntry: entry, AgentName: agent, Prompt: "made for " + id, SubmittedAt: time.Now()}); !res.OK {
 			t.Fatal(res.Error)
@@ -749,7 +754,7 @@ func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 		f.host.mu.Lock()
 		w, listed := f.host.worktrees[n.Root]
 		f.host.mu.Unlock()
-		if !listed || w.Repo == "se_nt-944a10" {
+		if !listed || w.Repo == hashed {
 			break
 		}
 		if i > 500 {
@@ -772,7 +777,7 @@ func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 	f.host.mu.Lock()
 	w := f.host.worktrees[h.Root]
 	f.host.mu.Unlock()
-	if w.Repo != "se_nt-944a10" {
+	if w.Repo != hashed {
 		t.Fatalf("the host lists the handed-over task's worktree as %+v", w)
 	}
 }

@@ -244,15 +244,17 @@ truth; labels only place new things.
   name that is not a label, from a clone made by hand say, is made one:
   each character a label cannot have, and a leading `-`, becomes `_`,
   so `next.js` is labelled `next_js`, and a jump target names it by
-  that label, as `ls` shows it. Two checkouts the config does not list,
-  of different repositories, whose names make one label, `next.js` and
-  `next_js` say, do not share it: the one named so keeps it, else the
-  first by name, and the other's label has a `-` and a hash of its name
-  after it, `next_js-0d857f`, which the daemon logs once. Listing
-  either repository in the host's config with a `name` settles it. The
-  laptop's views show the laptop's own name for a source it knows.
-  Prunable entries, whose directory is gone, are not published; a
-  detached worktree has an empty branch. The record's
+  that label, as `ls` shows it. Such a label does not take one another
+  repository has, the config's name for it or the label of another
+  checkout the config does not list, `next_js` or `next:js` say: the
+  config's name, or the checkout named so, keeps it, else the first by
+  name, and the made label gets a `-` and six hex digits of a hash of
+  its origin after it, which the daemon logs once. Clones of one
+  repository share their label. Listing either repository in the
+  host's config with a `name` settles it. The laptop's views show the
+  laptop's own name for a source it knows. Prunable entries, whose
+  directory is gone, are not published; a detached worktree has an
+  empty branch. The record's
   `session` is the worktree's home session: the managed session with a
   pane that records the root in `@laatmux_cwd`, all of whose panes are
   inside the root, joined from the pane poll, so an agent exiting updates
