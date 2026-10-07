@@ -923,7 +923,8 @@ func TestMain(m *testing.M) {
 	// for, such as a detached daemon after a cancelled dial, can come
 	// later, and a pane or hook start dies unrecorded when its server is
 	// killed first, as isolatedDefault kills its own at the end of the
-	// test. The guard ends those all the same.
+	// test. Those run no test all the same: the guard or the kill ends
+	// them.
 	marks := filepath.Join(dir, "refused")
 	if err := os.Mkdir(marks, 0o700); err != nil {
 		panic(err)
@@ -983,9 +984,9 @@ const (
 // a live daemon at a socket that is not there, and a config file, it
 // reads neither. The binary started as laatmux, by client.StartDaemon,
 // the sidebar or anything else that puts an argument other than a
-// -test. flag first, runs no test: as "serve" it runs the stand-in
-// LAATMUX_TEST_DAEMON names, and otherwise it leaves a marker that
-// fails the run that started it.
+// -test. flag first, runs no test: as "serve" with a stand-in named in
+// LAATMUX_TEST_DAEMON it runs that stand-in, and otherwise it leaves a
+// marker that fails the run that started it.
 func TestRunStateIsItsOwn(t *testing.T) {
 	if runDir == "" {
 		t.Fatal("TestMain gave the run no directory")
