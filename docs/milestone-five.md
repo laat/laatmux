@@ -947,13 +947,20 @@ Five settlements differ from the plan in #52:
   may be in, and one whose prompt was not delivered because the session
   existed needs them there.
 
-  The viewer's own row is in the scope under `session` and `project`
-  whatever its worktree. A managed agent of no worktree in the home
-  session of the viewer's line, `cd ~ && claude` in a split, and an
-  agent observed in a window of the viewer's workspace session stand in
-  other sessions with no worktree, yet they are the viewer's: `z`, `S`
-  and enter on them act on the session the viewer is in. The tree shows
-  such a row under the other-sessions header, after the viewer's line.
+  Every row that is the viewer's, as Following marks it, is in the
+  scope under `session` and `project` whatever its worktree. A managed
+  agent of no worktree in the home session of the viewer's line, `cd ~
+  && claude` in a split, and an agent observed in a window of the
+  viewer's workspace session stand in other sessions with no worktree,
+  yet they are the viewer's: `z`, `S` and enter on them act on the
+  session the viewer is in. The tree shows such a row under the
+  other-sessions header, after the viewer's line. With a task standing
+  for the line, the managed one is the task's, as `z` refuses it, and
+  not the viewer's. Another worktree's line is the viewer's when the
+  viewer's session holds one of its agents, one observed in a window
+  there with its directory in that worktree, say: the scope keeps that
+  line with its children, and in the agent view its agents, beside the
+  viewer's worktree.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The

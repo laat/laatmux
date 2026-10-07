@@ -12,13 +12,15 @@ import (
 // root, in the tree its line, or the task standing for it, with its
 // children and any other task at its root beside it, under its
 // repository; or every line under the viewer's worktree's repository,
-// and in the agent view that repository's agents and tasks. The
-// viewer's own row is in both whatever its worktree: one in other
-// sessions has none, an agent observed in a window of the viewer's
-// workspace session or a managed agent of no worktree in its home
-// session. With no worktree, session and project are the viewer's line
-// alone, and a pane in a session that is no row's shows the empty state
-// under both.
+// and in the agent view that repository's agents and tasks. Session and
+// project also keep every row that is the viewer's, whatever its
+// worktree. One in other sessions has none: an agent observed in a
+// window of the viewer's workspace session, or a managed agent of no
+// worktree in the home session of the viewer's line. Another worktree's
+// line is the viewer's, with its children, when the viewer's session
+// holds one of its agents. With no worktree, session and project are
+// the viewer's line alone, and a pane in a session that is no row's
+// shows the empty state under both.
 type Scope string
 
 const (
@@ -104,7 +106,8 @@ func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
 
 // inScope reports whether a tile is in the scope: under all, every
 // one; under session, the viewer's worktree's agents and tasks; under
-// project, its repository's; under both, the viewer's own tile.
+// project, its repository's; under both, every tile that is the
+// viewer's.
 func (m *Model) inScope(r *rows.Row) bool {
 	if m.scope() == ScopeAll {
 		return true
@@ -114,9 +117,10 @@ func (m *Model) inScope(r *rows.Row) bool {
 		return false
 	}
 	if r.Current || w == "" {
-		// The viewer's own tile whatever its worktree, which a tile in
-		// other sessions lacks; with no worktree, project is session,
-		// the viewer's tile alone.
+		// A tile that is the viewer's whatever its worktree: one in
+		// other sessions has none, and one of another worktree is the
+		// viewer's through its line, as treeScoped keeps the line. With
+		// no worktree, project is session, the viewer's tile alone.
 		return r.Current
 	}
 	if m.scope() == ScopeProject && repo != "" {
@@ -205,9 +209,9 @@ func scopeWorktree(r *rows.Row) string {
 // treeScoped is which tree nodes the scope leaves: under session the
 // lines of the viewer's worktree with their children and the repository
 // over them; under project every node under the viewer's repository
-// line; under both the viewer's own line with its children, one in
-// other sessions say, and the node over it; the other-sessions header
-// only with a line under it.
+// line; under both every line that is the viewer's with its children,
+// one in other sessions or another worktree's, and the node over it;
+// the other-sessions header only with a line under it.
 func (m *Model) treeScoped() []bool {
 	keep := make([]bool, len(m.Tree))
 	if m.scope() == ScopeAll {
@@ -240,9 +244,9 @@ func (m *Model) treeScoped() []bool {
 			case w != "":
 				keep[i] = scopeWorktree(r) == w
 			}
-			// The viewer's own line whatever its worktree, as the agent
-			// view keeps its tile; the node over it is kept for it, not
-			// for the lines beside it.
+			// A line that is the viewer's whatever its worktree, as the
+			// agent view keeps its tiles; the node over it is kept for
+			// it, not for the lines beside it.
 			keep[i] = keep[i] || r.Current
 			if keep[i] && parent >= 0 {
 				keep[parent] = true
