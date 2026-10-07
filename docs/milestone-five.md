@@ -240,7 +240,8 @@ following it in the new view. In the tree it follows, of the nodes
 that are the viewer's, the first in the tree's order of the first kind
 there is: a worktree, task or orphaned session's line that is the
 viewer's by its own session, the workspace session the viewer is in,
-an attachment to its home, or the plain session its jump goes to; an
+an attachment to its home (with none, to the session add made for
+it, as Precedence has it), or the plain session its jump goes to; an
 agent in other sessions in the viewer's session, the attachment to a
 `new` session say; any other. That is usually the worktree line of the
 viewer's worktree, or the task line standing for it or at its
@@ -329,7 +330,16 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   stays the worktree's it is named after, as add names it, by the
   host's label and the branch: this agent goes there. When the name
   fits neither (the label or the branch renamed since, or a detached
-  worktree), the first of the two in the tree's order has it. `Enter`
+  worktree), the first of the two in the tree's order has it. A
+  session whose panes all belong to other worktrees, `cd ../y &&
+  claude` in a split after claude exited at the root, is no home on the
+  host either, and the worktree's line has none at all; the session add
+  made for the worktree, by that name, is still its home for the
+  viewer, unless it is another worktree's own home: the viewer in the
+  worktree's workspace session sits with an agent there, which takes
+  that session as its own, and a plain attachment to the session marks
+  the worktree's line. The host's home, every pane inside the root,
+  stays as it is, and so does the worktree line's own jump. `Enter`
   on a worktree's own agent or pane goes to its own workspace session
   whenever that attaches the agent's session, as `z` and `S` on it do.
   The viewer's own row never folds: settled or stale, it stays in

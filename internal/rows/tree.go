@@ -183,6 +183,7 @@ func Tree(in Input) []Row {
 	b.orphans()
 	b.nameRepos()
 	out := b.repoLines()
+	b.namedHomes(out)
 	b.visitors(out)
 	out = b.otherSessions(out)
 	markViewer(out, in.Current)
@@ -329,7 +330,9 @@ func (b *builder) worktrees() {
 		// A viewer in a plain attachment to the home session is on the
 		// line by its own session, as following wants it, whatever runs
 		// there: an agent of the worktree, a visitor, or none. Not for no
-		// host, as HomeLine has it.
+		// host, as HomeLine has it. With no home, the session the
+		// worktree is named after stands in once the tree is in order
+		// (namedHomes).
 		if att := j.byAttach[host+"/"+home]; host != "" && home != "" && att != nil && in.Current != "" && att.Name == in.Current {
 			line.Current, line.Own = true, true
 		}
@@ -607,8 +610,12 @@ func (b *builder) repoLines() []Row {
 // leaves the agent the session worktrees gave it, also where the line
 // holds a plain session instead: a task standing for a homeless
 // worktree carries the session of the worktree's agent on this
-// machine's default server, which the agent's pane is not in. HomeLine
-// wants the lines in the tree's order, so this runs once they are.
+// machine's default server, which the agent's pane is not in. An agent
+// of the line's own worktree in the session its line has by name alone
+// (HomeLine) is no visitor: it takes the workspace session as one in
+// the home does, and the viewer in an attachment to the session is on
+// the line by that (namedHomes), not through the agent. HomeLine wants
+// the lines in the tree's order, so this runs once they are.
 func (b *builder) visitors(out []Row) {
 	line := -1
 	for i := range out {
@@ -628,10 +635,35 @@ func (b *builder) visitors(out []Row) {
 		if l < 0 || out[l].Local == nil || !out[l].Local.Workspace() {
 			continue
 		}
-		if own := b.j.agentLocal(c.Host, a); own != nil && own.Name == b.in.Current {
+		if own := b.j.agentLocal(c.Host, a); l != line && own != nil && own.Name == b.in.Current {
 			out[line].Current, c.attached = true, true
 		}
 		c.Local = out[l].Local
+	}
+}
+
+// namedHomes marks a line with no home as the viewer's, and Own, with
+// the viewer in a plain attachment to the session the line's worktree
+// is named after, while that session is no other line's (HomeLine):
+// the session add made for the worktree, which the host stops calling
+// its home once a pane of another worktree is in it, is still the
+// worktree's for the viewer, as an attachment to the home is in
+// worktrees. Not for no host, as HomeLine has it. HomeLine wants the
+// lines in the tree's order, so this runs once they are.
+func (b *builder) namedHomes(out []Row) {
+	if b.in.Current == "" {
+		return
+	}
+	for i := range out {
+		r := &out[i]
+		if r.Depth != 1 || r.Host == "" || r.Home() != "" {
+			continue
+		}
+		if s := r.named(); s != "" {
+			if att := b.j.byAttach[r.Host+"/"+s]; att != nil && att.Name == b.in.Current && HomeLine(out, r.Host, s) == i {
+				r.Current, r.Own = true, true
+			}
+		}
 	}
 }
 
@@ -793,12 +825,16 @@ func (r Row) home() (session string, own bool) {
 // HomeLine is the index in the tree of the depth-1 line on a host whose
 // workspace session attaches to a managed session, the line whose Home
 // it is. Of several, the first in the tree's order whose own session it
-// is; then the first whose root agent is in it with the home lost, of a
-// worktree the session is named after (namedAfter); then the first. A
-// worktree's root agent moved by hand into another worktree's session
-// takes the home from both, the session's panes no longer all in one
-// root, and the session stays the one it is named after. -1 for none,
-// and for no host: records no configured host claims may be of
+// is; then the first of a worktree the session is named after
+// (namedAfter), whose root agent is in it with the home lost or which
+// has no home at all; then the first. A worktree's root agent moved by
+// hand into another worktree's session takes the home from both, the
+// session's panes no longer all in one root, and the session stays the
+// one it is named after. So does a pane of another worktree alone, `cd
+// ../y && claude` in a split with claude gone from the root: the
+// session add made for the worktree is still its home for the viewer,
+// though the host's home, every pane inside the root, is gone. -1 for
+// none, and for no host: records no configured host claims may be of
 // different machines whose sessions share a name. The view's LineFor
 // finds the line by it, a managed agent of no worktree in other
 // sessions takes the line's state by it, and one of another worktree
@@ -815,12 +851,12 @@ func HomeLine(tree []Row, host, session string) int {
 		}
 		home, own := n.home()
 		switch {
-		case home != session:
-		case own:
+		case home != session && home != "":
+		case home == session && own:
 			return i
 		case named < 0 && n.namedAfter(session):
 			named = i
-		case first < 0:
+		case home == session && first < 0:
 			first = i
 		}
 	}
@@ -831,12 +867,21 @@ func HomeLine(tree []Row, host, session string) int {
 }
 
 // namedAfter reports whether a managed session has the name add gives
-// the line's worktree's, tmux.SessionName of the host's label, which
-// this machine's configuration may name otherwise, and the branch.
-// Never for a detached worktree, which add does not make.
+// the line's worktree's (named).
 func (r Row) namedAfter(session string) bool {
+	return session != "" && session == r.named()
+}
+
+// named is the name add gives the managed session of the line's
+// worktree, tmux.SessionName of the host's label, which this machine's
+// configuration may name otherwise, and the branch. "" for a detached
+// worktree, which add does not make, and for a line of none.
+func (r Row) named() string {
 	w := r.Worktree
-	return w != nil && w.Branch != "" && session == tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)
+	if w == nil || w.Branch == "" {
+		return ""
+	}
+	return tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)
 }
 
 // Agents is the agent view, from the tree Tree built of the input: the

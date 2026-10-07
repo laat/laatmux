@@ -104,7 +104,8 @@ const selectTimeout = 5 * time.Second
 // workspace session of the line whose home the session is, or whose
 // agent laatmux made at the root is in it with the home lost, or the
 // task's before the host lists the worktree, as those lines' own jumps
-// attach it; or the plain attachment to the pane's managed session. A
+// attach it, or of the worktree with no home at all the session is
+// named after; or the plain attachment to the pane's managed session. A
 // pane of one worktree in another's session so goes to the other's
 // workspace session, and a plain attachment takes no workspace
 // session's name, unless a pane was left in a session a worktree's
@@ -144,7 +145,8 @@ func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p pa
 	}
 	// The pane's session, the one the line resolved to: its home, or
 	// the root agent's when the home is lost or the task's session is
-	// not where the agent went, and then the session named after the
+	// not where the agent went, or the one named after the worktree with
+	// no home at all, and then the local session named after the
 	// worktree, as the line's jump names it.
 	w.Session = p.session
 	spec := worktreeSpec(h, w)
