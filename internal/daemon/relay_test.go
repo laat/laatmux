@@ -1145,7 +1145,7 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	// Awaited at the launch's start, the last progress before the hold:
-	// Taken comes with the first progress, the fetch's, and with an
+	// Taken comes with the first progress, the resolve's, and with an
 	// outcome as well.
 	held := f.awaitRecord(t, "s3", 30*time.Second, func(p pendingFile) bool {
 		return p.Stage == protocol.StageAgent && p.State == protocol.StateStart
