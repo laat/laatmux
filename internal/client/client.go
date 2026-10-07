@@ -444,6 +444,12 @@ func Bridge(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return bridge(ctx, nc, r, w)
+}
+
+// bridge copies between r and w and the daemon's connection nc, which
+// it closes, until either side ends.
+func bridge(ctx context.Context, nc net.Conn, r io.Reader, w io.Writer) error {
 	defer nc.Close()
 	errc := make(chan error, 2)
 	go func() { _, err := io.Copy(nc, r); errc <- err }()

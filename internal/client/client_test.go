@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -110,24 +109,26 @@ type failingRW struct{ read, write error }
 func (f failingRW) Read([]byte) (int, error)  { return 0, f.read }
 func (f failingRW) Write([]byte) (int, error) { return 0, f.write }
 
-// Bridge's error from a daemon that has closed the connection names
-// its socket as tmux.Printable shows it. The daemon sends a byte and
-// closes; the output's copy is held writing that byte, so the input's
-// copy, writing to the closed connection, fails first.
+// The bridge's error from a daemon that has closed the connection
+// names its socket as tmux.Printable shows it. The daemon sends a byte
+// and closes; the output's copy is held writing that byte, so the
+// input's copy, writing to the closed connection, fails first. The
+// test dials the socket itself, so a dial that fails cannot reach
+// StartDaemon.
 func TestBridgeErrorQuoted(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "st\tate\x1b[31m")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("LAATMUX_HOME", dir)
 	sock := filepath.Join(dir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + sock, PID: os.Getpid()}); err != nil {
+	nc, err := net.Dial("unix", sock)
+	if err != nil {
 		t.Fatal(err)
 	}
 	closed := make(chan struct{})
@@ -148,9 +149,9 @@ func TestBridgeErrorQuoted(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err = Bridge(ctx, in, out)
+	err = bridge(ctx, nc, in, out)
 	if err == nil || !strings.Contains(err.Error(), strconv.Quote(sock)) || strings.ContainsAny(err.Error(), "\t\x1b") {
-		t.Fatalf("Bridge: %v, want %s in it", err, strconv.Quote(sock))
+		t.Fatalf("bridge: %v, want %s in it", err, strconv.Quote(sock))
 	}
 }
 
