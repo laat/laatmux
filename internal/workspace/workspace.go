@@ -54,7 +54,9 @@ func SessionName(host, repo, branch string) string {
 // by the session's name as the host's tmux lists it: <host>/<session>,
 // the session's part made one tmux stores as given (tmux.EncodeListed).
 // A session made with a "\" or a tab in its name is listed escaped, and
-// as it is listed would be escaped again in the local name.
+// as it is listed would be escaped again in the local name; one made
+// with a "." on a host's tmux 3.7 is listed with it, which a local tmux
+// before 3.7 would store as "_", and CheckSessionName refuses.
 func AttachName(host, session string) string {
 	return host + "/" + tmux.EncodeListed(session)
 }
@@ -330,8 +332,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	}
 	// A workspace named after its managed session, as worktreeSpec names
 	// one after the worktree's home, adopts the plain attachment an
-	// older build named after the session as listed, a $ in it kept,
-	// which AttachName encodes now: the name its tag has. One named
+	// older build named after the session as listed, a $ in it kept, or
+	// a . a host's tmux 3.7 keeps, which AttachName encodes now: the name
+	// its tag has. One named
 	// otherwise, after a worktree whose root agent is in a session that
 	// is not its home, leaves a plain attachment to that session alone.
 	if s.Key != "" && s.Name != attach && s.Name == AttachName(s.Host.Name, s.Managed) {
@@ -344,13 +347,16 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// in that tmux would not store as given: the session made would have
 	// another name, and the tags in its own sequence would find no
 	// session, leaving it untagged. AttachName encodes every character
-	// CheckSessionName refuses but a "." or ":", which tmux 3.7 lists as
-	// given: it keeps those, a ":" being refused above, and a "." being
-	// one a local tmux before 3.7 would store as _. A workspace's name is
-	// not checked: it has a worktree's session name in it, which
-	// SessionName encoded from the branch, or new took for a session
-	// started at the root. new-session expands the name as a
-	// format, and a name new took can have a # in it.
+	// CheckSessionName refuses but a ":", which tmux 3.7 lists as given
+	// and which is refused above. A workspace's name is not checked.
+	// Named after its home session, it is that session's name as
+	// AttachName encodes it; named after its worktree, its branch is
+	// encoded by SessionName, but its repository is the host's label,
+	// which for a checkout the host's config does not list is the
+	// directory's name as it is, and the check would refuse a workspace
+	// with a "." there, which a local tmux 3.7 keeps. new-session expands
+	// the name as a format, so it is given as FormatLiteral writes it: a
+	// name new took can have a # in it.
 	if s.Key == "" {
 		if err := tmux.CheckSessionName(s.Name); err != nil {
 			return "", false, err

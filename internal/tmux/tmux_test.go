@@ -423,12 +423,13 @@ func keptByTmux(name string) bool {
 }
 
 // A session name as tmux lists it, escaped by vis(3), is decoded and
-// the bytes EncodeBranch encodes, but for %, #, ;, . and :, written as
-// it writes them; a name that is not one tmux could have stored is
+// the bytes EncodeBranch encodes, but for %, #, ; and :, written as it
+// writes them; a name that is not one tmux could have stored is
 // encoded as it is; a name with nothing to encode, a managed session's
-// encoded one say, is kept. Every result without a . or a :, under a
-// host's name, is one CheckSessionName lets a plain attachment be made
-// under.
+// encoded one say, is kept. Every result without a :, under a host's
+// name, is one CheckSessionName lets a plain attachment be made under:
+// a . that tmux 3.7 lists as given among them, which a tmux before 3.7
+// would store as _.
 func TestEncodeListed(t *testing.T) {
 	cases := map[string]string{
 		"notes":          "notes",
@@ -465,10 +466,13 @@ func TestEncodeListed(t *testing.T) {
 		"nc\ufffex":     "nc%ef%bf%bex",
 		"pu\U000ffdd0x": "pu\U000ffdd0x",
 
-		// A # and a ; are kept, and a . and a :, which tmux 3.7 lists
-		// as given, are kept for CheckSessionName to refuse.
+		// A # and a ; are kept. A . and a :, which tmux 3.7 lists as
+		// given: the . encoded, as a tmux before 3.7 would store it as
+		// _, and the : kept, as no target reaches the session.
 		"a#{b};": "a#{b};",
-		"a.b:c":  "a.b:c",
+		"a.b":    "a%2eb",
+		"x.":     "x%2e",
+		"a.b:c":  "a%2eb:c",
 
 		// A $ tmux 3.2 to 3.4 store escaped, one they keep, which is
 		// encoded all the same, and c$xd as tmux 3.2 and 3.4 list it.
@@ -505,7 +509,7 @@ func TestEncodeListed(t *testing.T) {
 		if got != want {
 			t.Errorf("EncodeListed(%q) = %q, want %q", in, got, want)
 		}
-		if err := CheckSessionName("mac/" + got); err != nil && !strings.ContainsAny(got, ".:") {
+		if err := CheckSessionName("mac/" + got); err != nil && !strings.Contains(got, ":") {
 			t.Errorf("EncodeListed(%q) = %q: %v", in, got, err)
 		}
 	}
@@ -514,7 +518,7 @@ func TestEncodeListed(t *testing.T) {
 	// but for the characters only EncodeBranch writes.
 	for c := 1; c < 256; c++ {
 		for _, name := range []string{string([]byte{byte(c)}), "a" + string([]byte{byte(c)}) + "z"} {
-			if strings.ContainsAny(name, "%#;.:") {
+			if strings.ContainsAny(name, "%#;:") {
 				continue
 			}
 			if got, want := EncodeListed(visName(name)), EncodeBranch(name); got != want {

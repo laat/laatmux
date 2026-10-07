@@ -559,15 +559,16 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. A session name the host's tmux lists escaped, one
   made with a `\` or a tab in it, is decoded first, and in the local
-  name each character the branch encoding encodes but `%`, `#`, `;`, `.`
-  and `:` (a `\`, a control character, DEL, a byte that is not UTF-8,
-  a `$`) is written as `%` and two hex digits, so tmux keeps the local
-  name as given: `a\b` gives `<host>/a%5cb`. When that session later
+  name each character the branch encoding encodes but `%`, `#`, `;` and
+  `:` (a `\`, a control character, DEL, a byte that is not UTF-8, a `$`,
+  a `.`) is written as `%` and two hex digits, so tmux keeps the local
+  name as given: `a\b` gives `<host>/a%5cb`, and `a.b`, which tmux 3.7
+  keeps, gives `<host>/a%2eb`. When that session later
   becomes a worktree's home, `new work --cwd <root>` say, or an older
   build left one named as the worktree's workspace would be, the
   worktree's jump adopts it as the workspace, keyed and tagged, rather
   than refuse its name as in use, also under the name an older build
-  gave it before the `$` in it was encoded; an attachment to another
+  gave it before the `$` or `.` in it was encoded; an attachment to another
   managed session is still a name in use. The
   repository in the target is read as this
   machine's label first, then the host's, and the target after the host

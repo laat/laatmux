@@ -1165,32 +1165,40 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // what it decodes to gives it back; a name that is not, a\q say, is
 // taken as it is. Then each byte EncodeBranch encodes becomes "%" and
 // its two lowercase hex digits, as EncodeBranch writes them, but for
-// "%", "#", ";", "." and ":": a "\", a control character, DEL, a byte
-// that is not part of a valid UTF-8 sequence, a "$", a U+2063, a line
-// or paragraph separator and a noncharacter. So a\\b becomes a%5cb and
-// tab\tx becomes tab%09x, as EncodeBranch writes a\b and the tab, and a
-// name with none of these is kept as it is. A "%" is kept since the
-// names listed are mostly managed sessions', encoded already, whose
-// workspace sessions are named after them as they are; a "#" since
-// new-session is given the name as FormatLiteral writes it; a ";" since
-// args writes a last one "\;". tmux before 3.7 lists no "." or ":",
-// storing them as "_"; tmux 3.7 lists them as given. Both are kept for
-// CheckSessionName to refuse a plain attachment to such a session: no
-// target reaches one with a ":" (CheckTarget), and a local tmux before
-// 3.7 would store a "." in the local name as "_". Two sessions on a
-// host, a\b and a%5cb, can so get one local name; the second's jump is
-// then refused as a name in use, since the local session is found by
-// its attach tag, which is exact. tmux 3.2 to 3.4 store a "$" before a
-// letter with a "\" before it, so c$xd is listed as c\$xd, which does
-// not decode: tmux 3.4 prints it with one more "\", as c\\$xd, which
-// Query undoes. Either becomes c%5c%24xd, a name kept as given.
+// "%", "#", ";" and ":": a "\", a control character, DEL, a byte that
+// is not part of a valid UTF-8 sequence, a "$", a ".", a U+2063, a line
+// or paragraph separator and a noncharacter. So a\\b becomes a%5cb,
+// tab\tx becomes tab%09x and a.b becomes a%2eb, as EncodeBranch writes
+// a\b, the tab and the ".", and a name with none of these is kept as it
+// is. A "%" is kept since the names listed are mostly managed
+// sessions', encoded already, whose workspace sessions are named after
+// them as they are; a "#" since new-session is given the name as
+// FormatLiteral writes it; a ";" since args writes a last one "\;".
+// tmux before 3.7 lists no "." or ":", storing them as "_", so encoding
+// the "." changes no name a host there lists; tmux 3.7 lists them as
+// given. A "." is encoded since a local tmux before 3.7 would store it
+// as "_", and the set-option calls in new-session's own sequence would
+// then find no session by the name; CheckSessionName refuses one for
+// that, whatever the local tmux. The attach target and the attach tag
+// keep the name as listed, which =a.b: reaches on the host. A ":" is
+// kept: no target reaches a session with one (CheckTarget), so its
+// attachment is refused whatever the local name. Two sessions on a
+// host, a\b and a%5cb, or a.b and a%2eb, can so get one local name, and
+// a session made by hand, proj/fix.bar or proj/fix$x, the name of the
+// workspace of the worktree whose branch is fix.bar or fix$x; the
+// second's jump is then refused as a name in use, since the local
+// session is found by its attach tag or key, which is exact. tmux 3.2
+// to 3.4 store a "$" before a letter with a "\" before it, so c$xd is
+// listed as c\$xd, which does not decode: tmux 3.4 prints it with one
+// more "\", as c\\$xd, which Query undoes. Either becomes c%5c%24xd, a
+// name kept as given.
 func EncodeListed(name string) string {
 	if d := unvisName(name); visName(d) == name {
 		name = d
 	}
 	return encodeBytes(name, func(i int) bool {
 		c := name[i]
-		return c < 0x20 || c >= 0x7f || c == '\\' || c == '$'
+		return c < 0x20 || c >= 0x7f || c == '\\' || c == '$' || c == '.'
 	})
 }
 

@@ -414,7 +414,8 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 // A session on a host made as a\b or with a tab, whose name tmux lists
 // escaped, is attached from a local session made under the name the
 // jump computes, which has-session finds by that name, tagged with the
-// session's name as the host lists it, and found by the tag again. An
+// session's name as the host lists it, whose attach pane becomes a
+// client of the session, and found by the tag again. An
 // agent's row, a pane in it, a jump by the session's name and a
 // worktree whose home it is name the local session alike. The host is
 // this machine, its managed server as isolated as the default one, and
@@ -423,19 +424,25 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 // ListPanes reads as stored, and its local name then needs the $
 // encoded too; its attach tag reads back as written, through Query.
 // h\##{x} is stored, and listed, as h\\#{x}: its local name keeps the
-// #, which new-session is given as FormatLiteral writes it.
+// #, which new-session is given as FormatLiteral writes it. a.b, which
+// tmux 3.7 keeps, has its local name with the . encoded, mac/a%2eb,
+// which every tmux stores as given, where mac/a.b was refused as a
+// plain attachment's name; the attach target =a.b: and the attach tag
+// have it as listed. A tmux before 3.7 stores it as a_b, and it is left
+// out there.
 func TestEnsureListedHostSessionName(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
 	host := tmux.LaatmuxServer
 	t.Cleanup(func() { _, _ = host.Run(context.Background(), "kill-server") })
 	made := 0
-	for i, name := range []string{`a\b`, "tab\tx", "c$xd", `h\##{x}`} {
-		args := []string{"new-session", "-d", "-s", name, "sleep 1000"}
+	for i, name := range []string{`a\b`, "tab\tx", "c$xd", `h\##{x}`, "a.b"} {
+		args := []string{"new-session", "-d", "-s", name, "-P", "-F", "#{session_id}" + tmux.Sep + "#{session_name}", "sleep 1000"}
 		if i == 0 {
 			args = append([]string{"-f", "/dev/null"}, args...)
 		}
-		if _, err := host.Run(ctx, args...); err != nil {
+		out, err := host.Run(ctx, args...)
+		if err != nil {
 			// tmux 3.7 refuses a control byte in a session name, so a
 			// host there has no session with a tab.
 			if name == "tab\tx" && strings.Contains(err.Error(), "invalid session name") {
@@ -443,6 +450,13 @@ func TestEnsureListedHostSessionName(t *testing.T) {
 				continue
 			}
 			t.Fatal(err)
+		}
+		if id, stored, _ := strings.Cut(strings.TrimSpace(string(out)), tmux.Sep); name == "a.b" && stored != name {
+			t.Logf("%q stored as %q, by a tmux before 3.7", name, stored)
+			if _, err := host.Run(ctx, "kill-session", "-t", id); err != nil {
+				t.Fatal(err)
+			}
+			continue
 		}
 		made++
 	}
@@ -484,6 +498,18 @@ func TestEnsureListedHostSessionName(t *testing.T) {
 		out, err = workspace.Server.Query(ctx, "#{@laatmux_attach}", "display-message", "-p", "-t", "="+name+":")
 		if tag := strings.TrimSpace(string(out)); err != nil || tag != "mac/"+listed {
 			t.Errorf("%q: %s attach tag %q %v", listed, name, out, err)
+		}
+		// The attach pane becomes a client of the session on the host.
+		var clients string
+		for i := 0; i < 250 && clients == ""; i++ {
+			out, _ := host.Run(ctx, "list-clients", "-t", p.ID, "-F", "#{client_name}")
+			clients = strings.TrimSpace(string(out))
+			if clients == "" {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		if clients == "" {
+			t.Errorf("%q: %s attached no client to it", listed, name)
 		}
 		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
 			t.Errorf("%q: ensure again: %q %v %v", listed, name, created, err)
