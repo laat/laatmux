@@ -1917,3 +1917,84 @@ func TestUnreadableDotGitIsAnError(t *testing.T) {
 		t.Fatalf("find a root that is gone: %s %v %v", co, ok, err)
 	}
 }
+
+// GitEnv drops every variable this machine's git rev-parse
+// --local-env-vars prints, and GIT_INTERNAL_SUPER_PREFIX, which gits
+// before 2.40 print, except GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT,
+// and keeps every other variable of the process. A variable a later git
+// adds fails it until gitenv.Local has it.
+func TestGitEnv(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	cmd := exec.Command("git", "rev-parse", "--local-env-vars")
+	cmd.Dir = t.TempDir()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := append(strings.Fields(string(out)), "GIT_INTERNAL_SUPER_PREFIX")
+	if !slices.Contains(local, "GIT_DIR") {
+		t.Fatalf("git rev-parse --local-env-vars: %q", out)
+	}
+	for _, k := range local {
+		t.Setenv(k, "x")
+	}
+	t.Setenv("GIT_CONFIG_KEY_0", "a.b")
+	t.Setenv("GIT_CONFIG_VALUE_0", "c")
+	t.Setenv("GIT_CEILING_DIRECTORIES", "/x")
+	got := map[string]string{}
+	for _, kv := range GitEnv() {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	for _, k := range local {
+		_, ok := got[k]
+		if kept := k == "GIT_CONFIG_PARAMETERS" || k == "GIT_CONFIG_COUNT"; ok != kept {
+			t.Errorf("%s in the environment: %v", k, ok)
+		}
+	}
+	for k, v := range map[string]string{"GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "c", "GIT_CEILING_DIRECTORIES": "/x", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"} {
+		if got[k] != v {
+			t.Errorf("%s=%q in the environment, want %q", k, got[k], v)
+		}
+	}
+}
+
+// An add run with another repository's GIT_DIR, work tree and index in
+// its environment, as a hook's or a shell's can have them, clones,
+// branches and adds the worktree in the store's checkout, and leaves the
+// other repository as it was.
+func TestAddRepoEnv(t *testing.T) {
+	f := newFixture(t)
+	// A clone of the same remote, so each step would succeed there too.
+	other := filepath.Join(t.TempDir(), "other")
+	run(t, "", "git", "clone", "-q", f.remote, other)
+	state := func() string {
+		return run(t, other, "git", "for-each-ref") + run(t, other, "git", "worktree", "list", "--porcelain") + run(t, other, "git", "status", "--porcelain")
+	}
+	before := state()
+	var a Added
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+		t.Setenv("GIT_WORK_TREE", other)
+		t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+		var err error
+		if a, _, err = f.add("task"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if after := state(); after != before {
+		t.Errorf("the other repository changed:\n%s\nnow:\n%s", before, after)
+	}
+	if a.Checkout != f.store.Dirs.Checkout("proj") || a.Root != f.store.Dirs.Worktree("proj", "task") {
+		t.Fatalf("added %+v", a)
+	}
+	entries, err := ListWorktrees(f.ctx, a.Checkout)
+	if err != nil || !slices.ContainsFunc(entries, func(e Entry) bool { return e.Root == a.Root && e.Branch == "task" }) {
+		t.Fatalf("the checkout's worktrees: %+v %v", entries, err)
+	}
+	if st := run(t, a.Root, "git", "status", "--porcelain", "--untracked-files=no"); st != "" {
+		t.Errorf("the worktree's status: %q", st)
+	}
+}

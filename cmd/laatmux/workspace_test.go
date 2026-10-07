@@ -602,14 +602,6 @@ func TestOriginOf(t *testing.T) {
 	if _, err := originOf(ctx, nopath); err == nil {
 		t.Error("a .git file with no path read as no origin")
 	}
-	// With GIT_DIR set git reads that repository and searches nothing, so
-	// a gone worktree's .git file says nothing of git's failure.
-	t.Run("GIT_DIR", func(t *testing.T) {
-		t.Setenv("GIT_DIR", filepath.Join(dir, ".git"))
-		if _, err := originOf(ctx, gone[0]); err == nil {
-			t.Error("broken config of GIT_DIR read as no origin in a gone worktree")
-		}
-	})
 	// A directory gone, with a tab and an ESC in its name, is named
 	// quoted, and so is git's message that repeats it.
 	missing := filepath.Join(t.TempDir(), "a\tb\x1b]0;x\x07c")
@@ -695,6 +687,49 @@ exit 128
 `)
 	if o, err := originOf(ctx, dir); err != nil || o != "" {
 		t.Errorf("translating git, no repository: %q %v", o, err)
+	}
+}
+
+// The origin is the directory's own, or none outside a repository or in
+// a worktree whose repository is gone, whatever other repository or
+// config file an exported GIT_DIR, GIT_COMMON_DIR or GIT_CONFIG names,
+// one git cannot read too: git searches from the directory.
+func TestOriginOfRepoEnv(t *testing.T) {
+	ctx := context.Background()
+	mine, other, broken, plain := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	for dir, origin := range map[string]string{mine: "git@x:o/mine.git", other: "git@x:o/other.git", broken: "git@x:o/broken.git"} {
+		for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", origin}} {
+			if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(broken, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(file, []byte("[remote \"origin\"]\n\turl = git@x:o/file.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := goneWorktrees(t)[0]
+	for _, c := range []struct{ name, k, v string }{
+		{"GIT_DIR", "GIT_DIR", filepath.Join(other, ".git")},
+		{"GIT_DIR unreadable", "GIT_DIR", filepath.Join(broken, ".git")},
+		{"GIT_COMMON_DIR", "GIT_COMMON_DIR", filepath.Join(other, ".git")},
+		{"GIT_CONFIG", "GIT_CONFIG", file},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(c.k, c.v)
+			if o, err := originOf(ctx, mine); err != nil || o != "git@x:o/mine.git" {
+				t.Errorf("a repository: %q %v", o, err)
+			}
+			if o, err := originOf(ctx, plain); err != nil || o != "" {
+				t.Errorf("no repository: %q %v", o, err)
+			}
+			if o, err := originOf(ctx, gone); err != nil || o != "" {
+				t.Errorf("repository gone: %q %v", o, err)
+			}
+		})
 	}
 }
 

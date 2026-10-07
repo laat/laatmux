@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/laat/laatmux/internal/gitenv"
 )
 
 // Isolate makes every git this process starts, and every git those
@@ -48,10 +50,11 @@ func Isolate() {
 
 // repoEnv returns the variables git clears when it starts a git for
 // another repository, the ones that name a repository, its work tree,
-// index and objects and config that goes with them: knownRepoEnv, and
-// what git rev-parse --local-env-vars prints on the machine, which has
-// any variable a later git adds. Every git the tests run with prints
-// that outside a repository: git 2.8.2 made it work there, and Isolate's
+// index and objects and config that goes with them: gitenv.Local, which
+// Isolate unsets whatever the git on the machine prints, and what git
+// rev-parse --local-env-vars prints on the machine, which has any
+// variable a later git adds. Every git the tests run with prints that
+// outside a repository: git 2.8.2 made it work there, and Isolate's
 // GIT_CONFIG_GLOBAL takes 2.32.
 func repoEnv() []string {
 	// Isolate runs before m.Run starts the test timeout, so the deadline
@@ -64,20 +67,9 @@ func repoEnv() []string {
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if err != nil {
-		return knownRepoEnv
+		return gitenv.Local
 	}
-	return slices.Concat(knownRepoEnv, strings.Fields(string(out)))
-}
-
-// knownRepoEnv is what git 2.54 prints for git rev-parse
-// --local-env-vars: Isolate unsets these whatever the git on the machine
-// prints, and CheckIsolated's child run starts with each of them set.
-var knownRepoEnv = []string{
-	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
-	"GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
-	"GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
-	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
-	"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+	return slices.Concat(gitenv.Local, strings.Fields(string(out)))
 }
 
 // runConfig is the config Isolate gives every git of the run, in the
@@ -107,7 +99,7 @@ const child = "LAATMUX_TEST_GIT_ISOLATED"
 // that each run a pre-commit hook that fails; a GIT_CONFIG file, which
 // git config reads and writes in place of the repository's config, so
 // the commit's identity would land there; and a global ignore file that
-// ignores everything. It sets every other variable of knownRepoEnv too,
+// ignores everything. It sets every other variable of gitenv.Local too,
 // as a hook's environment can carry them, each to a path in a directory
 // of their own where nothing is: none of them is left in the
 // environment there, and the commit leaves that directory empty. All of
@@ -118,7 +110,7 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 	t.Helper()
 	if os.Getenv(child) != "" {
 		// GIT_CONFIG_COUNT is set again, for runConfig.
-		for _, k := range knownRepoEnv {
+		for _, k := range gitenv.Local {
 			if v, ok := os.LookupEnv(k); ok && k != "GIT_CONFIG_COUNT" {
 				t.Errorf("%s=%s is in the environment", k, v)
 			}
@@ -206,7 +198,7 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 		t.Fatal(err)
 	}
 	var hook []string
-	for _, k := range knownRepoEnv {
+	for _, k := range gitenv.Local {
 		if !strings.HasPrefix(k, "GIT_CONFIG") {
 			hook = append(hook, k+"="+filepath.Join(other, k))
 		}

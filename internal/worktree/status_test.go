@@ -148,6 +148,40 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// Status reads the worktree it is given when the environment names
+// another repository, its work tree and index, as the daemon's can for
+// its whole life when the client that started it had them.
+func TestStatusRepoEnv(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without the setup's untracked log the worktree is clean, so
+	// another repository's index would make it dirty.
+	if err := os.Remove(filepath.Join(a.Root, "log")); err != nil {
+		t.Fatal(err)
+	}
+	want, head, paths, err := Status(f.ctx, a.Root, "feature", &StatusCache{})
+	if err != nil || want.Dirty {
+		t.Fatalf("status %+v %v", want, err)
+	}
+	// Another clone, a commit ahead and with a change of its own.
+	other := filepath.Join(t.TempDir(), "other")
+	run(t, "", "git", "clone", "-q", f.remote, other)
+	gitCfg(t, other)
+	write(t, filepath.Join(other, "README"), "changed\n")
+	run(t, other, "git", "commit", "-q", "-am", "other")
+	write(t, filepath.Join(other, "README"), "changed again\n")
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	st, h, p, err := Status(f.ctx, a.Root, "feature", &StatusCache{})
+	if err != nil || !st.Same(want) || h != head || p.GitDir != paths.GitDir || p.CommonDir != paths.CommonDir {
+		t.Errorf("status %+v head %s paths %+v %v, want %+v head %s paths %+v", st, h, p, err, want, head, paths)
+	}
+}
+
 // On the base branch only the uncommitted side is read; a branch with no
 // key compares with origin/HEAD's branch.
 func TestStatusOnBase(t *testing.T) {
