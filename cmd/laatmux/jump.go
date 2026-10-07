@@ -135,13 +135,17 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 // addCommand is the add line for the worktree's branch on the host. Its
 // --repo is resolved against this machine's config, so it names the
 // source as this machine knows it, not by the host's label; a record
-// without a source leaves it to the reader.
+// without a source leaves it to the reader. The line is for pasting
+// into a shell, and git takes branches such as it's and a$(x): each
+// word is quoted as ShellJoin quotes it, only when it needs to be, and
+// the placeholder the reader replaces is left as it is.
 func addCommand(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	repo := localRepoArg(cfg, w)
-	if repo == "" {
-		repo = "<repo>"
+	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
+	repo := "<repo>"
+	if r := localRepoArg(cfg, w); r != "" {
+		repo = quote(r)
 	}
-	return fmt.Sprintf("laatmux add %s --repo %s --host %s", w.Branch, repo, h.Name)
+	return fmt.Sprintf("laatmux add %s --repo %s --host %s", quote(w.Branch), repo, quote(h.Name))
 }
 
 // localRepoArg is the record's repository as this machine names it: its

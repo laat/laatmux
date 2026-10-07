@@ -127,7 +127,9 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // first; a repository this machine's config does not list is one
 // --repo refuses, while one it lists under another form of the source
 // is named by its label here. A worktree that lacks more than one is
-// told all of them.
+// told all of them. The add line pastes into a shell: a branch git
+// takes with a ' or a $( in it is quoted, an ordinary one is not, and
+// a record without a source leaves the <repo> placeholder bare.
 func TestAddHintCanRun(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	src := "git@github.com:laat/proj.git"
@@ -142,12 +144,20 @@ func TestAddHintCanRun(t *testing.T) {
 	https.Source = "https://github.com/laat/proj"
 	detOther := other
 	detOther.ID, detOther.EnvironmentID, detOther.Branch = "benv/worktree//w/o", "benv", ""
+	apos := bv
+	apos.ID, apos.Branch, apos.Root = "venv/worktree//w/q", "it's", "/w/q"
+	subst := bv
+	subst.ID, subst.Branch, subst.Root = "venv/worktree//w/s", "a$(x)", "/w/s"
+	noSrc := bv
+	noSrc.Source = ""
 	host := func(name, env string) rows.Host {
 		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	}
 	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm makes one"
 	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
 	onOther := "vm/other/b has no managed session; laatmux add makes one once git@github.com:laat/other.git is a repository in the config"
+	onApos := `vm/proj/it's has no managed session; laatmux add 'it'\''s' --repo proj --host vm makes one`
+	onSubst := "vm/proj/a$(x) has no managed session; laatmux add 'a$(x)' --repo proj --host vm makes one"
 	for _, c := range []struct {
 		host rows.Host
 		w    protocol.Worktree
@@ -157,6 +167,9 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("box", "benv"), bb, onBox},
 		{host("vm", "venv"), https, onVM},
 		{host("vm", "venv"), other, onOther},
+		{host("vm", "venv"), apos, onApos},
+		{host("vm", "venv"), subst, onSubst},
+		{host("vm", "venv"), noSrc, "vm/proj/b has no managed session; laatmux add b --repo <repo> --host vm makes one"},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
 		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
@@ -185,7 +198,7 @@ func TestAddHintCanRun(t *testing.T) {
 			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
 				{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
 				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: []string{"status", "worktrees"}},
-			}, Worktrees: []protocol.Worktree{bv, bb, other}})
+			}, Worktrees: []protocol.Worktree{bv, bb, other, apos, subst}})
 		}
 		return true
 	})
@@ -194,7 +207,7 @@ func TestAddHintCanRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	for target, want := range map[string]string{"vm/proj/b": onVM, "box/proj/b": onBox, "vm/other/b": onOther} {
+	for target, want := range map[string]string{"vm/proj/b": onVM, "box/proj/b": onBox, "vm/other/b": onOther, "vm/proj/it's": onApos, "vm/proj/a$(x)": onSubst} {
 		if err := cmdJump(context.Background(), []string{target}); err == nil || err.Error() != want {
 			t.Errorf("jump %s: %v, want %q", target, err, want)
 		}
