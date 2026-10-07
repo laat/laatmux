@@ -3,6 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -191,6 +195,61 @@ func TestTwoServers(t *testing.T) {
 	if _, ag = d.agentRecords(); len(ag) != 1 {
 		t.Fatalf("managed server not polled past the failing one: %+v", ag)
 	}
+}
+
+// A user's after-list-panes hook that fails at every listing does not
+// fail the poll of their server: its panes are tracked, the poll counts
+// as complete, and the hook's error is logged once while it fails, and
+// once more when it fails again after a listing that works.
+func TestPollHookFails(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	s := tmux.Server{Name: fmt.Sprintf("laatmux-hook-%d", os.Getpid())}
+	if _, err := s.Run(ctx, "-f", "/dev/null", "new-session", "-d", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
+	hook := func(set bool) {
+		t.Helper()
+		args := []string{"set-hook", "-gu", "after-list-panes"}
+		if set {
+			args = []string{"set-hook", "-g", "after-list-panes", "select-window -t nosuch:9"}
+		}
+		if _, err := s.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logged strings.Builder
+	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
+	d := New(Config{EnvironmentID: "env", Targets: Targets(s), Procs: fp, Logger: log.New(&logged, "", 0)})
+	polls := func(n int) {
+		t.Helper()
+		for range n {
+			if err := d.poll(ctx); err != nil {
+				t.Fatalf("poll: %v", err)
+			}
+		}
+	}
+	want := func(n int, when string) {
+		t.Helper()
+		if got := strings.Count(logged.String(), "poll: "+s.Label()+": tmux list-panes -a"); got != n || strings.Count(logged.String(), "can't find session: nosuch (after") != n {
+			t.Fatalf("%s: the hook's error logged %d times, want %d; log:\n%s", when, got, n, logged.String())
+		}
+	}
+	hook(true)
+	polls(3)
+	want(1, "three polls")
+	if len(d.panes) != 1 {
+		t.Fatalf("%d panes tracked, want the server's one", len(d.panes))
+	}
+	hook(false)
+	polls(1)
+	want(1, "a listing without the hook")
+	hook(true)
+	polls(2)
+	want(2, "the hook failing again")
 }
 
 // A daemon that does not watch the managed server does not offer new.

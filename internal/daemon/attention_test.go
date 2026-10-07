@@ -2,15 +2,18 @@ package daemon
 
 import (
 	"context"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // attnDaemon is a merging daemon with attention, this machine mac and a
@@ -378,6 +381,76 @@ func TestAttentionStream(t *testing.T) {
 	}
 	if listings.Load() == n {
 		t.Error("a poke did not list the clients at once")
+	}
+}
+
+// A clients listing that a user's hook failed after has its views: a
+// finish the client shows is seen all the same. The hook's error is
+// logged once while it fails, not as a failed listing, and once more
+// when it fails again after a listing that works.
+func TestAttentionSeenHookError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logged strings.Builder
+	var listings atomic.Int32
+	var fails atomic.Bool
+	fails.Store(true)
+	hook := &tmux.HookError{Err: &tmux.Error{Args: []string{"list-clients", "-F", "#{client_name}"}, Msg: "can't find session: nosuch"}}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "mac"}}}
+	d := New(Config{EnvironmentID: "menv", Host: "mac", Hosts: hosts.get, Attention: filepath.Join(t.TempDir(), "a.json"), Logger: log.New(&logged, "", 0),
+		Clients: func(context.Context) ([]ClientView, error) {
+			defer listings.Add(1)
+			if fails.Load() {
+				return []ClientView{attachTo("mac", "s")}, hook
+			}
+			return []ClientView{attachTo("mac", "s")}, nil
+		}})
+	go d.runSeen(ctx)
+	wait := func(cond func() bool, what string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	// list has the clients listed n times; the loop takes a listing's
+	// result before it starts the next, so every listing but the last
+	// has been taken when it returns, and list(n+1) takes n.
+	list := func(n int) {
+		t.Helper()
+		for range n {
+			m := listings.Load()
+			d.Poke()
+			wait(func() bool { return listings.Load() > m }, "a poke did not list")
+		}
+	}
+	logs := func(what string) int {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return strings.Count(logged.String(), what)
+	}
+	a := protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "s", Activity: protocol.Working, ActivityAt: time.Now(), Identity: &protocol.Identity{PID: 1}}
+	publish(d, "laatmux/%1", a)
+	a.Activity, a.ActivityAt = protocol.Idle, a.ActivityAt.Add(time.Second)
+	publish(d, "laatmux/%1", a)
+	wait(func() bool { x, _ := attnOf(d, a.ID); return !x.FinishedAt.IsZero() && !x.Done() }, "a finish the client shows not seen")
+	const logged1 = "clients: tmux list-clients -F #{client_name}: can't find session: nosuch (after"
+	list(3)
+	if n := logs(logged1); n != 1 {
+		t.Fatalf("the hook's error logged %d times over four listings, want 1; log:\n%s", n, logged.String())
+	}
+	fails.Store(false)
+	list(2)
+	fails.Store(true)
+	list(2)
+	if n := logs(logged1); n != 2 {
+		t.Fatalf("the hook's error logged %d times after a listing that works, want 2; log:\n%s", n, logged.String())
+	}
+	if n := logs("clients: "); n != 2 {
+		t.Fatalf("%d clients lines, want the hook's two; log:\n%s", n, logged.String())
 	}
 }
 

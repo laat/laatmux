@@ -140,13 +140,7 @@ func cmdServe(ctx context.Context, args []string) error {
 			}
 			return hosts, nil
 		},
-		Sessions: func(ctx context.Context) ([]protocol.Session, error) {
-			locals, err := workspace.List(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return workspace.Records(locals), nil
-		},
+		Sessions: localSessions,
 	})
 	// A daemon New could not finish, its pending directory unopenable
 	// say, ends here, before it is announced: the runtime file is not
@@ -179,4 +173,13 @@ func cmdServe(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+}
+
+// localSessions is the daemon's listing of this machine's workspace
+// sessions and plain attachments, on the default server. A listing a
+// user's after-list-sessions hook failed after has its sessions, with
+// the *tmux.HookError; any other failure has none.
+func localSessions(ctx context.Context) ([]protocol.Session, error) {
+	locals, err := workspace.List(ctx)
+	return workspace.Records(locals), err
 }

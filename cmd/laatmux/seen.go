@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/daemon"
@@ -22,10 +23,16 @@ var clientVars = []string{
 
 // listClients is what each client of the default server shows, for the
 // daemon's seen rule. No server is no clients. The clients are read
-// through tmux.Fields, so a tag is read whole whatever it holds.
+// through tmux.Fields, so a tag is read whole whatever it holds. A
+// listing a user's hook failed after, list-clients' or a sidebar's
+// list-panes, returns the views with the *tmux.HookError, list-clients'
+// first. A sidebar's comes only with a listing that has a sidebar in
+// focus, so the daemon logs it again when one does after a listing
+// without.
 func listClients(ctx context.Context) ([]daemon.ClientView, error) {
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields(clientVars...), "list-clients")
-	if err != nil {
+	var he *tmux.HookError
+	if err != nil && !errors.As(err, &he) {
 		if tmux.NoServer(err) {
 			return nil, nil
 		}
@@ -42,29 +49,45 @@ func listClients(ctx context.Context) ([]daemon.ClientView, error) {
 			// A focused sidebar pane stands for the pane beside it: the
 			// user reading the sidebar is looking at the attach or the
 			// agent next to it.
-			beside, err := besideSidebar(ctx, f[1])
-			if err != nil {
-				return nil, err
+			beside, berr := besideSidebar(ctx, f[1])
+			if err == nil {
+				err = berr
 			}
 			v.Pane, v.Dead, v.AttachPane, v.Target = beside.Pane, beside.Dead, beside.AttachPane, beside.Target
 		}
 		views = append(views, v)
 	}
-	return views, nil
+	return views, err
 }
 
 // besideSidebar is the pane a window's sidebar stands for: its live
-// attach pane, or its one other pane. None is a view of nothing.
+// attach pane, or its one other pane. None is a view of nothing. The
+// error is a *tmux.HookError, the panes read all the same, or nil.
 func besideSidebar(ctx context.Context, window string) (daemon.ClientView, error) {
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields(
 		"#{pane_id}", "#{pane_dead}", "#{"+sidebarTag+"}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}",
 	), "list-panes", "-t", window)
-	if err != nil {
+	var he *tmux.HookError
+	if err != nil && !errors.As(err, &he) {
 		// The window or the server went between the two commands:
 		// nothing is shown.
 		return daemon.ClientView{}, nil
 	}
-	return pickBeside(recs), nil
+	if he != nil {
+		// The command is named with <window> for the window, so the
+		// daemon logs the hook's error once whichever sidebar is in
+		// focus.
+		e := *he.Err
+		e.Args = make([]string, len(he.Err.Args))
+		for i, v := range he.Err.Args {
+			if v == window {
+				v = "<window>"
+			}
+			e.Args[i] = v
+		}
+		err = &tmux.HookError{Err: &e}
+	}
+	return pickBeside(recs), err
 }
 
 // pickBeside chooses from the window's panes, records of besideSidebar's

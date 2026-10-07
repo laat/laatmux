@@ -416,6 +416,9 @@ func (d *Daemon) runSeen(ctx context.Context) {
 			return
 		}
 		d.mu.Lock()
+		if d.hookOnce(&d.clientsHookErr, err, "clients") {
+			err = nil
+		}
 		if err != nil {
 			d.logOnce(&d.lastClientsErr, "clients: %v", err)
 		} else {

@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // A merging daemon under test dials a second daemon in-process over
@@ -804,4 +805,48 @@ func TestSessionsErrorOnce(t *testing.T) {
 	if got := logged.String(); strings.Count(got, "permission denied") != 1 || strings.Count(got, "no server") != 1 || strings.Count(got, "listed again") != 1 {
 		t.Fatalf("log:\n%s", got)
 	}
+}
+
+// A sessions listing that a user's hook failed after is applied: its
+// sessions are published and no error is, and after a failed listing it
+// is the one listed again. The hook's error is logged once while it
+// fails, and once more when it fails again after a listing that works,
+// not after one that failed.
+func TestSessionsHookError(t *testing.T) {
+	var logged strings.Builder
+	d := New(Config{EnvironmentID: "lenv", Version: "local", Logger: log.New(&logged, "", 0)})
+	apply := func(recs []protocol.Session, err error) {
+		d.mu.Lock()
+		d.applySessionsLocked(recs, err)
+		d.mu.Unlock()
+	}
+	hook := &tmux.HookError{Err: &tmux.Error{Args: []string{"list-sessions", "-F", "#{session_name}"}, Msg: "can't find session: nosuch"}}
+	ws := []protocol.Session{{Name: "vm/proj/x", Key: "env1/w/x", Host: "vm"}}
+	want := func(n int, when string) {
+		t.Helper()
+		if got := logged.String(); strings.Count(got, "sessions: tmux list-sessions -F #{session_name}: can't find session: nosuch (after") != n {
+			t.Fatalf("%s: the hook's error not logged %d times; log:\n%s", when, n, got)
+		}
+	}
+	apply(nil, errors.New("tmux: permission denied"))
+	apply(ws, hook)
+	apply(ws, hook)
+	d.mu.Lock()
+	seq, s, serr := d.mseq, d.msessions["vm/proj/x"], d.sessionsErr
+	d.mu.Unlock()
+	// The failure, its recovery and the session: three messages.
+	if seq != 3 || s != ws[0] || serr != "" {
+		t.Fatalf("after the hook's listings: %d messages, session %+v, error %q; want 3, %+v and none", seq, s, serr, ws[0])
+	}
+	if strings.Count(logged.String(), "listed again") != 1 {
+		t.Fatalf("the hook's listing not the one listed again; log:\n%s", logged.String())
+	}
+	want(1, "two listings")
+	apply(ws, nil)
+	want(1, "a listing that works")
+	apply(ws, hook)
+	want(2, "the hook failing again")
+	apply(nil, errors.New("tmux: permission denied"))
+	apply(ws, hook)
+	want(2, "a failed listing between")
 }

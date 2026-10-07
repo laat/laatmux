@@ -10,6 +10,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -170,8 +171,10 @@ type Config struct {
 	// The merged stream. Hosts reads the configured hosts, on every
 	// merged subscription; nil means no merged capability. Dial connects
 	// to a remote host, client.Dial by default. Sessions lists this
-	// machine's local workspace sessions; nil means none. The durations
-	// default to the constants in merge.go.
+	// machine's local workspace sessions; nil means none. A listing
+	// that a user's hook failed after returns its sessions with the
+	// *tmux.HookError. The durations default to the constants in
+	// merge.go.
 	Hosts           func() ([]peer.Host, error)
 	Dial            func(ctx context.Context, h peer.Host) (*client.Conn, error)
 	Sessions        func(ctx context.Context) ([]protocol.Session, error)
@@ -196,7 +199,8 @@ type Config struct {
 	// Attention is the file the attention state is kept in, which with
 	// Hosts is the attention capability; "" means none. Clients lists
 	// what this machine's tmux clients show; nil means no agent is ever
-	// seen. See attention.go.
+	// seen. A listing that a user's hook failed after returns its views
+	// with the *tmux.HookError. See attention.go.
 	Attention string
 	Clients   func(ctx context.Context) ([]ClientView, error)
 
@@ -303,9 +307,12 @@ type Daemon struct {
 	fatal error
 	attn  *attention // nil without the attention capability
 	// The last errors of the attention file and the clients listing,
-	// logged once per change.
-	lastAttnErr    string
-	lastClientsErr string
+	// logged once per change, and the last hook error of the clients
+	// listing and of the sessions listing (hookOnce).
+	lastAttnErr     string
+	lastClientsErr  string
+	clientsHookErr  string
+	sessionsHookErr string
 	// The worktrees' git status refreshes, by root; see gitstatus.go.
 	gits map[string]*gitEntry
 	// The branch records and the state of asking GitHub about them,
@@ -349,6 +356,29 @@ type target struct {
 	// last applied to. A different pid is a new server, started by hand or
 	// by new-session, and gets reconciled on discovery.
 	configuredServer int
+	// lastHookErr is the hook error last logged for the server's pane
+	// listing; see hookOnce.
+	lastHookErr string
+}
+
+// hookOnce reports whether err, a tmux listing's error, is a
+// *tmux.HookError: the listing's records are whole, and the caller
+// keeps them. The hook is the user's, from their config, and fails at
+// every listing until they fix it, and the pane poll, the sessions and
+// the clients list at every tick. So its error is logged once in last,
+// the field of the listing and its server, after what; a listing that
+// works clears last, and the hook failing again after one is logged
+// again.
+func (d *Daemon) hookOnce(last *string, err error, what string) bool {
+	var he *tmux.HookError
+	if errors.As(err, &he) {
+		d.logOnce(last, "%v", fmt.Errorf("%s: %w", what, err))
+		return true
+	}
+	if err == nil {
+		*last = ""
+	}
+	return false
 }
 
 // paneKey identifies a pane across servers. Pane ids are per server, so
@@ -640,6 +670,9 @@ func (d *Daemon) poll(ctx context.Context) error {
 
 func (d *Daemon) pollTarget(ctx context.Context, t *target, now time.Time) error {
 	panes, err := t.Tmux.ListPanes(ctx)
+	if d.hookOnce(&t.lastHookErr, err, "poll: "+t.Label) {
+		err = nil
+	}
 	if err != nil {
 		if tmux.NoServer(err) {
 			d.removeUnseen(t, nil)

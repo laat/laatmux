@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"slices"
@@ -113,6 +114,88 @@ func TestListClients(t *testing.T) {
 	slices.SortFunc(want, func(a, b daemon.ClientView) int { return strings.Compare(a.Client, b.Client) })
 	if !slices.Equal(views, want) {
 		t.Errorf("clients:\n%+v\nwant\n%+v", views, want)
+	}
+}
+
+// A user's after-list-clients and after-list-panes hooks that fail
+// after their listings printed: listClients returns the client's view
+// with the *tmux.HookError, list-clients' or, with that hook gone, the
+// sidebar's list-panes', and the focused sidebar still stands for the
+// pane beside it, read from the list-panes its hook failed after. The
+// sidebar's error names no window, so a sidebar in another window gives
+// the same one. With no client attached, list-clients prints nothing
+// before its hook fails, and that fails as any listing does.
+func TestListClientsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	side := run("display", "-p", "-t", "boot", "#{pane_id}")
+	beside := run("split-window", "-d", "-t", side, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", side, sidebarTag, "1")
+	run("set-hook", "-g", "after-list-clients", "select-window -t nosuch:9")
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	// Gone before isolatedDefault's check lists the panes.
+	t.Cleanup(func() {
+		workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-panes", tmux.Next, "set-hook", "-gu", "after-list-clients")
+	})
+	hook := func(err error) bool {
+		var he *tmux.HookError
+		return errors.As(err, &he)
+	}
+	if views, err := listClients(ctx); err == nil || hook(err) || len(views) != 0 {
+		t.Fatalf("no client: %+v %v, want a plain error", views, err)
+	}
+	c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	var views []daemon.ClientView
+	for i := 0; i < 50 && len(views) == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+		views, err = listClients(ctx)
+	}
+	if len(views) != 1 || views[0].Pane != beside || !hook(err) || !strings.HasPrefix(err.Error(), "tmux list-clients -F ") {
+		t.Fatalf("a client on the sidebar: %+v %v, want the view of %s and list-clients' HookError", views, err, beside)
+	}
+	run("set-hook", "-gu", "after-list-clients")
+	views, err = listClients(ctx)
+	if len(views) != 1 || views[0].Pane != beside || !hook(err) || !strings.HasPrefix(err.Error(), "tmux list-panes -t <window> -F ") {
+		t.Fatalf("the sidebar's hook alone: %+v %v, want the view of %s and list-panes' HookError naming no window", views, err, beside)
+	}
+	// A sidebar in focus in another window gives the same error, which
+	// the daemon then logs once.
+	side2 := run("new-window", "-t", "boot", "-P", "-F", "#{pane_id}", "sleep 1000")
+	beside2 := run("split-window", "-d", "-t", side2, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", side2, sidebarTag, "1")
+	views, err2 := listClients(ctx)
+	if len(views) != 1 || views[0].Pane != beside2 || err2 == nil || err2.Error() != err.Error() {
+		t.Fatalf("a sidebar in another window: %+v %v, want the view of %s and %v", views, err2, beside2, err)
+	}
+}
+
+// The daemon's sessions listing keeps the workspace sessions and plain
+// attachments list-sessions printed before a user's after-list-sessions
+// hook failed, with the *tmux.HookError.
+func TestLocalSessionsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	if _, err := workspace.Server.Run(ctx, "set-option", "-t", "boot", "@laatmux_attach", "vm/proj/x",
+		tmux.Next, "set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	locals, err := localSessions(ctx)
+	var he *tmux.HookError
+	if len(locals) != 1 || locals[0].Name != "boot" || locals[0].Attach != "vm/proj/x" || !errors.As(err, &he) {
+		t.Fatalf("localSessions with the hook: %+v %v, want boot and a HookError", locals, err)
 	}
 }
 
