@@ -51,17 +51,18 @@ jobs:
         if: runner.os == 'Linux'
         run: command -v tmux >/dev/null || { sudo apt-get update && sudo apt-get install -y tmux; }
 
-      # TestShellJoinRoundTrip runs the words shellJoin quotes through
-      # zsh as well as sh, and through sh alone when zsh is not on
-      # PATH. macOS has zsh. The ubuntu-24.04 image has none, so apt
+      # The tests that run shellJoin's words through zsh need it on
+      # PATH; without it TestShellJoinRoundTrip runs them through sh
+      # alone. macOS has zsh. The ubuntu-24.04 image has none, so apt
       # installs it, and a Linux run needs the mirror for it.
       - name: zsh (Linux)
         if: runner.os == 'Linux'
         run: command -v zsh >/dev/null || { sudo apt-get update && sudo apt-get install -y zsh; }
 
-      # A runner image that changes the tmux or zsh version shows here.
-      # On Linux, a tmux other than 3.4 also puts a warning on the run:
-      # no job then runs the tests of the 3.2-3.4 facts on 3.4.
+      # A tmux or zsh version changed by the runner image or by apt
+      # shows here, and a runner without zsh fails here. On Linux, a
+      # tmux other than 3.4 also puts a warning on the run: no job
+      # then runs the tests of the 3.2-3.4 facts on 3.4.
       - name: tmux and zsh versions
         run: |
           v=$(tmux -V)
