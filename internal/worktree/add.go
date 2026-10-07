@@ -111,7 +111,7 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 			}
 		}
 		if err := os.MkdirAll(s.Dirs.Repos, 0o755); err != nil {
-			return p, fail(stage, err)
+			return p, fail(stage, tmux.PrintablePath(err))
 		}
 		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+tmux.Printable(checkout))
 		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, GitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
@@ -223,7 +223,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			return a, fail(stage, fmt.Errorf("%s resolves outside the worktrees directory %s", tmux.Printable(a.Root), tmux.Printable(s.Dirs.Worktrees)))
 		}
 		if err := os.MkdirAll(filepath.Dir(a.Root), 0o755); err != nil {
-			return a, fail(stage, err)
+			return a, fail(stage, tmux.PrintablePath(err))
 		}
 		report(stage, protocol.StateStart, "git worktree add "+tmux.Printable(a.Root)+" "+branch)
 		if _, err := git(ctx, checkout, "worktree", "add", "--", a.Root, branch); err != nil {
@@ -298,7 +298,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
-				return a, fail(stage, err)
+				return a, fail(stage, tmux.PrintablePath(err))
 			}
 			if !fi.Mode().IsRegular() {
 				continue
@@ -342,7 +342,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 				return a, fail(stage, fmt.Errorf("%s: %w", cmd, err))
 			}
 			if err := os.WriteFile(marker, []byte(cmd+"\n"), 0o644); err != nil {
-				return a, fail(stage, err)
+				return a, fail(stage, tmux.PrintablePath(err))
 			}
 			report(stage, protocol.StateDone, cmd)
 		}
@@ -479,8 +479,11 @@ func branchOrDetached(e Entry) string {
 // the moment of the operation rather than in a check before it: a
 // symlink to a file elsewhere is not read, since the file was never the
 // repository's, and no symlink in the worktree leads a directory or a
-// write out of it.
-func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) error {
+// write out of it. An os error it returns as it is names the checkout,
+// the worktree or rel, and is returned with that path as tmux.Printable
+// shows it.
+func copyFile(ctx context.Context, checkout, root, rel string, report Reporter) (err error) {
+	defer func() { err = tmux.PrintablePath(err) }()
 	stage := protocol.StageCopy
 	rel = filepath.Clean(rel)
 	co, err := os.OpenRoot(checkout)
@@ -615,7 +618,7 @@ func markerDir(ctx context.Context, root string) (string, error) {
 	}
 	dir := filepath.Join(strings.TrimSpace(out), "laatmux")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", tmux.PrintablePath(err)
 	}
 	return dir, nil
 }
@@ -633,7 +636,8 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 	cmd.Stderr = pw
 	if err := cmd.Start(); err != nil {
 		pw.Close()
-		return err
+		// A dir that cannot be entered is named in the error.
+		return tmux.PrintablePath(err)
 	}
 	var tail []string
 	done := make(chan struct{})
@@ -656,6 +660,13 @@ func runStreaming(ctx context.Context, dir string, report Reporter, stage string
 		}
 		msg := werr.Error()
 		if len(tail) > 0 {
+			// The output lines went on as they are; in the error, one
+			// line, each is as tmux.Printable shows it: clone's and
+			// fetch's can name the checkout, and a setup command's can
+			// be anything.
+			for i, line := range tail {
+				tail[i] = tmux.Printable(line)
+			}
 			msg += ": " + strings.Join(tail, " | ")
 		}
 		return errors.New(msg)

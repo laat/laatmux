@@ -476,6 +476,15 @@ func TestOriginOf(t *testing.T) {
 	if _, err := originOf(ctx, gone); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(gone)+": cannot read git origin: \"") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
 		t.Errorf("a directory gone: %v", err)
 	}
+	// git's message of two lines keeps them, each quoted on its own.
+	fake := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fake, "git"), []byte("#!/bin/sh\nprintf 'fatal: a\\tb\\nhint: plain\\n' >&2\nexit 2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fake)
+	if _, err := originOf(ctx, dir); err == nil || err.Error() != dir+": cannot read git origin: "+strconv.Quote("fatal: a\tb")+"\nhint: plain" {
+		t.Errorf("git's message of two lines: %v", err)
+	}
 	t.Setenv("PATH", t.TempDir())
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("missing git read as no origin")

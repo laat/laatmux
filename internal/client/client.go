@@ -409,12 +409,14 @@ func StartDaemon(ctx context.Context) error {
 	if v := os.Getenv("LAATMUX_SERVE_ARGS"); v != "" {
 		args = append(args, strings.Fields(v)...)
 	}
+	// os's errors name the state directory as it is; a client prints
+	// them.
 	if err := os.MkdirAll(home.Dir(), 0o700); err != nil {
-		return err
+		return tmux.PrintablePath(err)
 	}
 	logf, err := os.OpenFile(home.Dir()+"/daemon.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return err
+		return tmux.PrintablePath(err)
 	}
 	defer logf.Close()
 	cmd := exec.Command(self, args...)

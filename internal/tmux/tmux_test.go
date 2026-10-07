@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode"
@@ -759,9 +760,10 @@ func TestErrorPrintable(t *testing.T) {
 	}
 }
 
-// PrintablePath quotes the path of a *fs.PathError and keeps its op and
-// cause; any other error, one that wraps a *fs.PathError among them, is
-// returned as it is, since rebuilding it would drop what wraps it.
+// PrintablePath quotes the path of a *fs.PathError and both of an
+// *os.LinkError, and keeps the op and the cause; any other error, one
+// that wraps either among them, is returned as it is, since rebuilding
+// it would drop what wraps it.
 func TestPrintablePath(t *testing.T) {
 	pe := &fs.PathError{Op: "open", Path: "/w/a\tb\x1b[31m/.git", Err: fs.ErrPermission}
 	got := PrintablePath(pe)
@@ -771,12 +773,50 @@ func TestPrintablePath(t *testing.T) {
 	if pe.Path != "/w/a\tb\x1b[31m/.git" {
 		t.Errorf("the original's path changed: %q", pe.Path)
 	}
+	le := &os.LinkError{Op: "renameat", Old: "d\tir/.tmp", New: "d\tir/f\x1b[1m", Err: fs.ErrExist}
+	got = PrintablePath(le)
+	if want := "renameat " + strconv.Quote(le.Old) + " " + strconv.Quote(le.New) + ": file already exists"; got.Error() != want || !errors.Is(got, fs.ErrExist) {
+		t.Errorf("PrintablePath = %v, want %s", got, want)
+	}
+	if le.Old != "d\tir/.tmp" || le.New != "d\tir/f\x1b[1m" {
+		t.Errorf("the original's paths changed: %q %q", le.Old, le.New)
+	}
+	if wrapped := fmt.Errorf("x: %w", le); PrintablePath(wrapped) != wrapped {
+		t.Errorf("a wrapping error rebuilt")
+	}
+	// A cause that is itself a *fs.PathError, as os.Root's MkdirAll
+	// gives, is quoted too.
+	nested := &fs.PathError{Op: "mkdirat", Path: "d\tir", Err: &fs.PathError{Op: "statat", Path: "d\tir\x1b[1m", Err: syscall.ELOOP}}
+	got = PrintablePath(nested)
+	if want := "mkdirat " + strconv.Quote("d\tir") + ": statat " + strconv.Quote("d\tir\x1b[1m") + ": " + syscall.ELOOP.Error(); got.Error() != want || !errors.Is(got, syscall.ELOOP) {
+		t.Errorf("PrintablePath = %v, want %s", got, want)
+	}
+	got = PrintablePath(&os.LinkError{Op: "renameat", Old: "a", New: "b", Err: nested.Err})
+	if want := "renameat a b: statat " + strconv.Quote("d\tir\x1b[1m") + ": " + syscall.ELOOP.Error(); got.Error() != want {
+		t.Errorf("PrintablePath = %v, want %s", got, want)
+	}
 	wrapped := fmt.Errorf("x: %w", pe)
 	if got := PrintablePath(wrapped); got != wrapped {
 		t.Errorf("a wrapping error rebuilt: %v", got)
 	}
 	if got := PrintablePath(nil); got != nil {
 		t.Errorf("PrintablePath(nil) = %v", got)
+	}
+}
+
+// Each line is as Printable shows it, and the newlines between the lines
+// stay, empty lines and a last newline included.
+func TestPrintableLines(t *testing.T) {
+	for _, c := range [][2]string{
+		{"", ""},
+		{"plain\nlines", "plain\nlines"},
+		{"fatal: '/w/a\tb' is dirty\nhint: use --force\n\nlast\n", strconv.Quote("fatal: '/w/a\tb' is dirty") + "\nhint: use --force\n\nlast\n"},
+		{"one\n\x1b[31mtwo\u009b", "one\n" + strconv.Quote("\x1b[31mtwo\u009b")},
+		{"bad \xff\r\nok", strconv.Quote("bad \xff\r") + "\nok"},
+	} {
+		if got := PrintableLines(c[0]); got != c[1] {
+			t.Errorf("PrintableLines(%q) = %q, want %q", c[0], got, c[1])
+		}
 	}
 }
 

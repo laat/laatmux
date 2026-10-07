@@ -296,15 +296,34 @@ func Printable(s string) string {
 	return s
 }
 
+// PrintableLines is s with each of its lines as Printable shows it and
+// the newlines between them kept: a message of several lines, git's
+// with its hints, reads as it did, and a line with a control character
+// is quoted on its own. Printable of the whole would make it one line
+// with \n in it. A newline inside a path the message repeats is a line
+// break like any other.
+func PrintableLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = Printable(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // PrintablePath is err with its path as Printable shows it when err is
 // a bare *fs.PathError, as os's functions return, which names the path
-// as it is, and err otherwise: one that wraps a *fs.PathError is left
-// as it is, since rebuilding it would drop what wraps it. The rebuilt
-// error keeps the op and the cause, so errors.Is still finds
-// fs.ErrNotExist and the like.
+// as it is, or with both paths so when it is a bare *os.LinkError, as a
+// rename returns; err otherwise: one that wraps either is left as it
+// is, since rebuilding it would drop what wraps it. A cause that is
+// itself one, as os.Root's MkdirAll nests a failed stat in its error,
+// is rebuilt the same way. The rebuilt error keeps the op and the
+// cause, so errors.Is still finds fs.ErrNotExist and the like.
 func PrintablePath(err error) error {
-	if pe, ok := err.(*fs.PathError); ok {
-		return &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
+	switch e := err.(type) {
+	case *fs.PathError:
+		return &fs.PathError{Op: e.Op, Path: Printable(e.Path), Err: PrintablePath(e.Err)}
+	case *os.LinkError:
+		return &os.LinkError{Op: e.Op, Old: Printable(e.Old), New: Printable(e.New), Err: PrintablePath(e.Err)}
 	}
 	return err
 }
