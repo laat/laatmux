@@ -62,7 +62,7 @@ func cmdRm(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
 		}
-		if rm.Host, _, err = hostFor(cfg, a.host, repo); err != nil {
+		if rm.Host, _, err = hostFor(cfg, a.host, repo, false); err != nil {
 			return err
 		}
 		rm.Repo, rm.Branch = repo, branch

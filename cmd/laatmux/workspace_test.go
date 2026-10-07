@@ -293,10 +293,15 @@ func TestLocalRepoArg(t *testing.T) {
 
 // add with a last.json it cannot parse says which file, as the add
 // form does: the decoder's error alone names none. It fails there,
-// before anything reaches a daemon.
+// before anything reaches a daemon, with --host given too, and with
+// the agent given or a command in its place: add writes the file back
+// after the host's work, so a file it cannot read must stop it first.
+// An add that got past the file would reach the stand-in daemon, whose
+// hello has no capabilities, and fail on another error rather than
+// start a real daemon.
 func TestAddBadLastNamesFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAATMUX_HOME", dir)
+	startFakeDaemon(t, nil, nil)
+	dir := os.Getenv("LAATMUX_HOME")
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - git@x:o/proj.git\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -306,10 +311,97 @@ func TestAddBadLastNamesFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var b strings.Builder
-	report(&b, cmdAdd(context.Background(), []string{"b", "--repo", "proj", "--host", "mac"}))
-	if want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"; b.String() != want {
-		t.Errorf("printed %q, want %q", b.String(), want)
+	want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"
+	for _, args := range [][]string{
+		{"b", "--repo", "proj", "--host", "mac"},
+		{"b", "--repo", "proj", "--host", "mac", "--agent", "claude"},
+		{"b", "--repo", "proj", "--host", "mac", "--", "true"},
+	} {
+		var b strings.Builder
+		report(&b, cmdAdd(context.Background(), args))
+		if b.String() != want {
+			t.Errorf("add %v printed %q, want %q", args, b.String(), want)
+		}
+	}
+}
+
+// hostFor takes the last-used host without the flag, and gives the
+// repository's defaults back with withLast whether or not the flag is
+// given; with the flag and without withLast it gives no defaults back
+// (TestExplicitHostSkipsBadLast shows it does not read the file then).
+func TestHostFor(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	const src = "git@x:o/proj.git"
+	cfg := config.Config{Hosts: []config.Host{
+		{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"},
+		{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
+	}}
+	repo := config.Repo{Name: "proj", Source: src}
+	used := home.LastRepo{Host: "vm", Agent: "codex"}
+	if err := home.UpdateLast(func(l *home.Last) { l.Set(src, used) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		flag     string
+		withLast bool
+		host     string
+		lr       home.LastRepo
+	}{
+		{"", false, "vm", used},
+		{"", true, "vm", used},
+		{"mac", true, "mac", used},
+		{"mac", false, "mac", home.LastRepo{}},
+	} {
+		if h, lr, err := hostFor(cfg, c.flag, repo, c.withLast); err != nil || h.Name != c.host || lr != c.lr {
+			t.Errorf("hostFor(%q, %v) = %s %+v %v, want %s %+v", c.flag, c.withLast, h.Name, lr, err, c.host, c.lr)
+		}
+	}
+}
+
+// rm, path and run take only the host from last.json, so with --host
+// given one they cannot parse does not stop them; without the flag
+// they need the last-used host and say which file they could not read.
+func TestExplicitHostSkipsBadLast(t *testing.T) {
+	const src, root = "git@x:o/proj.git", "/w/proj/b"
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm, protocol.CapRun}, func(pc *protocol.Conn, m protocol.Message) bool {
+		switch m.Type {
+		case protocol.TypeSubscribe:
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRm}},
+			}, Worktrees: []protocol.Worktree{{ID: "lenv/worktree/" + root, EnvironmentID: "lenv", Repo: "proj", Branch: "b", Root: root, Source: src}}})
+		case protocol.TypeRm, protocol.TypeRun:
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: root})
+		}
+		return true
+	})
+	dir := os.Getenv("LAATMUX_HOME")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	path := filepath.Join(dir, "last.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error()
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		cmd  func(context.Context, []string) error
+		args []string
+	}{
+		{"rm", cmdRm, []string{"proj/b"}},
+		{"path", cmdPath, []string{"proj/b"}},
+		{"run", cmdRun, []string{"proj/b", "--", "true"}},
+	} {
+		withHost := append([]string{"proj/b", "--host", "mac"}, c.args[1:]...)
+		if err := c.cmd(ctx, withHost); err != nil {
+			t.Errorf("%s %v: %v", c.name, withHost, err)
+		}
+		if err := c.cmd(ctx, c.args); err == nil || err.Error() != want {
+			t.Errorf("%s %v: %v, want %q", c.name, c.args, err, want)
+		}
 	}
 }
 
