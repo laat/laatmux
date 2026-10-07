@@ -1678,6 +1678,17 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 			}
 		}
 	}
+	// The viewer in vm/proj/z, its root agent idle there and another of
+	// its agents working in the managed session scratch, which has a plain
+	// attachment: the viewer's own line is followed, and in the agent view
+	// its first tile in sort order, the one in scratch, whichever is in
+	// the viewer's session.
+	follows("the viewer's worktree in two sessions", rows.Input{
+		Agents:    []protocol.Agent{agent("venv/laatmux/%1", "proj/z", "/w/proj/z", z.ID, protocol.Idle, 10*time.Minute), agent("venv/laatmux/%9", "scratch", "/w/proj/z/sub", z.ID, protocol.Working, time.Minute)},
+		Worktrees: []protocol.Worktree{z},
+		Locals:    []protocol.Session{zLocal, {Name: "vm/scratch", Attach: "vm/scratch", Host: "vm"}},
+		Current:   "vm/proj/z",
+	}, "venv/laatmux/%9", z.ID)
 	// The viewer in the plain session notes on mac's default server, with
 	// claude observed there in mac's worktree proj/a, beside proj/a's own
 	// working agent in its home: nothing is the viewer's by its own
