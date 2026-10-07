@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -252,19 +253,22 @@ func TestAddFlowDefaults(t *testing.T) {
 
 // last.json that cannot be read refuses the add before any picker,
 // since the add would otherwise fail on it after the host's side is
-// done.
+// done. The message names the file once, as the error from reading it
+// does.
 func TestAddFlowRefusesBadLast(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("LAATMUX_HOME", dir)
-	if err := os.WriteFile(filepath.Join(dir, "last.json"), []byte("{not json"), 0o600); err != nil {
+	path := filepath.Join(dir, "last.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	m := dashModel(cfg)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
-	if m.Overlay != nil || d.add != nil || !strings.HasPrefix(m.Message, "last.json: ") {
-		t.Errorf("overlay=%v add=%v message=%q", m.Overlay, d.add, m.Message)
+	want := path + ": " + json.Unmarshal([]byte("{not json"), &home.Last{}).Error()
+	if m.Overlay != nil || d.add != nil || m.Message != want {
+		t.Errorf("overlay=%v add=%v message=%q, want %q", m.Overlay, d.add, m.Message, want)
 	}
 }
 

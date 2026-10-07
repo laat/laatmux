@@ -1,8 +1,11 @@
 package home
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -59,14 +62,27 @@ func TestLastConcurrentUpdatesKeepEachOther(t *testing.T) {
 	}
 }
 
+// The error names the file, once: the decoder's error says nothing of
+// where its bytes came from, and the read's own has the path already.
 func TestLastCorruptFileIsAnError(t *testing.T) {
-	t.Setenv("LAATMUX_HOME", t.TempDir())
-	os.MkdirAll(Dir(), 0o700)
-	os.WriteFile(filepath.Join(Dir(), "last.json"), []byte("{"), 0o600)
+	dir := t.TempDir()
+	t.Setenv("LAATMUX_HOME", dir)
+	path := filepath.Join(dir, "last.json")
+	os.WriteFile(path, []byte("{"), 0o600)
+	var syntax *json.SyntaxError
 	if _, err := ReadLast(); err == nil {
 		t.Fatal("corrupt file read as empty")
+	} else if !strings.HasPrefix(err.Error(), path+": ") || strings.Count(err.Error(), path) != 1 || !errors.As(err, &syntax) {
+		t.Errorf("read: %v, want the decoder's error after %s", err, path)
 	}
 	if err := UpdateLast(func(l *Last) {}); err == nil {
 		t.Fatal("corrupt file overwritten")
+	} else if !strings.HasPrefix(err.Error(), path+": ") {
+		t.Errorf("update: %v, want it after %s", err, path)
+	}
+	os.Remove(path)
+	os.Mkdir(path, 0o700)
+	if _, err := ReadLast(); err == nil || strings.Count(err.Error(), path) != 1 {
+		t.Errorf("a directory: %v, want the path in it once", err)
 	}
 }

@@ -227,7 +227,8 @@ func (d *dash) startAdd(m *view.Model) {
 	}
 	// A field with nothing to choose from refuses before the form is
 	// up. So does last.json that cannot be read: the submit's own
-	// update of it would fail after the daemon has the task.
+	// update of it would fail after the daemon has the task. The error
+	// names the file.
 	switch {
 	case len(f.repos) == 0:
 		m.Message = "no repositories configured"
@@ -241,7 +242,7 @@ func (d *dash) startAdd(m *view.Model) {
 	}
 	last, err := home.ReadLast()
 	if err != nil {
-		m.Message = "last.json: " + err.Error()
+		m.Message = err.Error()
 		return
 	}
 	// The repository and host of the selected row's worktree, from a
@@ -792,8 +793,9 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, on a host this machine's config gives the
 // directories add needs, for a repository that config lists, which
-// --repo takes, with an agent in that config for add to start. It
-// names every one of these the worktree lacks, not only the first.
+// --repo takes, with an agent in that config for add to start, and
+// last.json readable, which add reads before anything else. It names
+// every one of these the worktree lacks, not only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
 	if w.Branch == "" {
@@ -808,9 +810,13 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	if len(cfg.Agents) == 0 {
 		needs = append(needs, "an agent is in the config")
 	}
+	last, err := home.ReadLast()
+	if err != nil {
+		needs = append(needs, home.LastPath()+" is readable")
+	}
 	switch n := len(needs); {
 	case n == 0:
-		return addCommand(cfg, h, w) + " makes one"
+		return addCommand(cfg, h, w, last) + " makes one"
 	case n > 2:
 		// A list: the directories' own "and" would run into the joins.
 		needs[n-1] = "and " + needs[n-1]

@@ -3,6 +3,7 @@ package home
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -34,12 +35,15 @@ func (l *Last) Set(source string, r LastRepo) {
 	l.Repos[source] = r
 }
 
-func lastPath() string { return filepath.Join(Dir(), "last.json") }
+// LastPath is last.json's path.
+func LastPath() string { return filepath.Join(Dir(), "last.json") }
 
-// ReadLast reads last.json. A missing file is empty state.
+// ReadLast reads last.json. A missing file is empty state. An error
+// names the file once: the read's own error has the path already, and
+// the decoder's is given it.
 func ReadLast() (Last, error) {
 	var l Last
-	b, err := os.ReadFile(lastPath())
+	b, err := os.ReadFile(LastPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return l, nil
@@ -47,7 +51,7 @@ func ReadLast() (Last, error) {
 		return l, err
 	}
 	if err := json.Unmarshal(b, &l); err != nil {
-		return l, err
+		return l, fmt.Errorf("%s: %w", LastPath(), err)
 	}
 	return l, nil
 }
@@ -62,7 +66,7 @@ func UpdateLast(fn func(*Last)) error {
 	if err := ensure(); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(lastPath()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	lock, err := os.OpenFile(LastPath()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
@@ -80,5 +84,5 @@ func UpdateLast(fn func(*Last)) error {
 	if err != nil {
 		return err
 	}
-	return WriteAtomic(lastPath(), append(b, '\n'))
+	return WriteAtomic(LastPath(), append(b, '\n'))
 }
