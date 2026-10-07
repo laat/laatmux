@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -124,11 +126,36 @@ func TestRemoteBin(t *testing.T) {
 		"/opt/a=b/laatmux":     `'/opt/a=b/laatmux'`,
 		"/opt/a^b/laatmux":     `'/opt/a^b/laatmux'`,
 		"laat mux":             `'laat mux'`,
+		"+x/laatmux":           `'+x/laatmux'`,
+		"+it's":                `'+it'\''s'`,
+		"~/+x/laatmux":         `"$HOME"/+x/laatmux`,
 	}
 	for in, want := range cases {
 		if got := RemoteBin(in); got != want {
 			t.Errorf("%q: got %s want %s", in, got, want)
 		}
+	}
+}
+
+// The bridge's command, run as sshd runs it, $SHELL -c with the line,
+// runs a binary whose path starts with +, which unquoted the shell
+// would read as its own options. The binary is echo under that path.
+func TestRemoteBinPlusRuns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "+x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	echo, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := os.Symlink(echo, filepath.Join(dir, "+x", "laatmux")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", RemoteBin("+x/laatmux")+" bridge")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "bridge\n" {
+		t.Errorf("%v: %q", err, out)
 	}
 }
 
