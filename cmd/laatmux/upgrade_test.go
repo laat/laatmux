@@ -933,13 +933,16 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("LAATMUX_TEST_REFUSED", marks)
 	code := m.Run()
-	if starts := selfStarts(context.Background()); len(starts) > 0 {
-		for _, l := range starts {
-			fmt.Fprintln(os.Stderr, selfStartRun, l)
-		}
-		if code == 0 {
-			code = 1
-		}
+	// m.Run's timeout is over: a tmux that hangs is ended, and its error
+	// fails the run.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	starts := selfStarts(ctx)
+	cancel()
+	for _, l := range starts {
+		fmt.Fprintln(os.Stderr, selfStartRun, l)
+	}
+	if len(starts) > 0 && code == 0 {
+		code = 1
 	}
 	exec.Command("tmux", "-L", "default", "kill-server").Run()
 	if refusedStarts(marks) && code == 0 {

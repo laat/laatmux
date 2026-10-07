@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -59,9 +61,11 @@ func isolatedDefault(t *testing.T) {
 // marker fails the run, but only a start that gets that far: one in a
 // pane or a hook's job dies unrecorded when its server is killed first.
 // These lines are there before the kill, and a hook or a key that never
-// fired is a start waiting to happen. A server that is not running, or
-// no tmux at all, starts nothing; any other error is a line too, since
-// the server was not seen.
+// fired is a start waiting to happen. No tmux at all, or no server,
+// starts nothing: the first listing that finds no server ends the look.
+// Any other error is a line, since the server was not seen. -N on each:
+// list-keys would start a server where none runs, and with it read the
+// config under HOME, the user's in TestMain.
 func selfStarts(ctx context.Context) []string {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return nil
@@ -77,21 +81,38 @@ func selfStarts(ctx context.Context) []string {
 		{"show-hooks", "-gw"},
 		{"list-keys"},
 	} {
-		out, err := workspace.Server.Run(ctx, args...)
+		out, err := workspace.Server.Run(ctx, append([]string{"-N"}, args...)...)
+		if tmux.NoServer(err) {
+			return found
+		}
 		if err != nil {
-			if !tmux.NoServer(err) {
-				found = append(found, err.Error())
-			}
+			found = append(found, err.Error())
 			continue
 		}
 		for _, l := range strings.Split(string(out), "\n") {
-			if strings.Contains(l, self) {
+			if namesPath(l, self) {
 				found = append(found, l)
 			}
 		}
 	}
 	return found
 }
+
+// namesPath reports whether a line tmux printed names path. Both are
+// compared bare of what the quoting adds: tmux prints a value in double
+// quotes with a \ before a ", \ or $, ShellJoin closes its single quote
+// before a ' and escapes it with a \, and the sidebar's hooks and keys
+// have the path as a format literal, each # doubled but before a [.
+func namesPath(l, path string) bool {
+	return strings.Contains(bare(l), bare(path))
+}
+
+// bare is s without a \, ' or ", and with each run of # as one #.
+func bare(s string) string {
+	return hashRun.ReplaceAllLiteralString(strings.NewReplacer(`\`, "", `'`, "", `"`, "").Replace(s), "#")
+}
+
+var hashRun = regexp.MustCompile(`#+`)
 
 // selfStartTest is what a test says, failed by isolatedDefault for a
 // line selfStarts found; selfStartRun is what the run says, failed by
@@ -103,13 +124,16 @@ const (
 
 // A test whose server can still start this binary fails, whether or
 // not the start reaches TestMain's guard before the server is killed:
-// for a pane's start command, here the sidebar's, in a pane that
-// remain-on-exit keeps once the guard has ended the start, so the
-// check finds it however fast the guard is; for the sidebar's hooks,
-// session and window; and for its jump keys. The hooks and the keys
-// never fire. A run whose own default server, one started without
-// isolatedDefault, has the jump keys fails after its tests pass. Each
-// in a run of its own, so the failure is that run's.
+// for a pane's start command, the sidebar's, in a window that is not
+// the current one, and once the guard has ended the start, in a pane
+// remain-on-exit keeps; for the sidebar's hooks, session and window;
+// and for its jump keys and a key of the prefix table. The hooks and
+// the keys never fire. A run whose own default server, one started
+// without isolatedDefault, has the jump keys fails after its tests
+// pass. Hooks and keys that name another binary of the same name pass.
+// A copy of the binary under a directory with a #, a quote, a \ and a
+// $ in its name is found as its pane and its keys print it. Each in a
+// run of its own, so the failure is that run's.
 func TestSelfStarts(t *testing.T) {
 	ctx := context.Background()
 	if mode := os.Getenv("LAATMUX_TEST_SELF_START"); mode != "" {
@@ -121,7 +145,11 @@ func TestSelfStarts(t *testing.T) {
 		case "pane":
 			isolatedDefault(t)
 			must(workspace.Server.Run(ctx, "set-option", "-gw", "remain-on-exit", "on"))
-			must(workspace.Server.Run(ctx, "split-window", "-d", "-t", "boot:", tmux.ShellJoin([]string{self, "sidebar", "pane"})))
+			w := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+			id := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "split-window", "-d", "-t", w, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{self, "sidebar", "pane"})))))
+			for i := 0; i < 500 && strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", id, "#{pane_dead}")))) != "1"; i++ {
+				time.Sleep(20 * time.Millisecond)
+			}
 		case "hooks":
 			isolatedDefault(t)
 			if err := setSidebarHooks(ctx, self); err != nil {
@@ -132,12 +160,22 @@ func TestSelfStarts(t *testing.T) {
 			if err := bindJumpKeys(ctx, self); err != nil {
 				t.Fatal(err)
 			}
+			must(workspace.Server.Run(ctx, "bind-key", "-T", "prefix", "F12", jumpKeyCmd(self, 1)))
 		case "run":
 			// Under the run's TMUX_TMPDIR, which TestMain set.
 			if out, err := exec.Command("tmux", "-L", "default", "-f", "/dev/null", "new-session", "-d", "-s", "boot", "sleep 1000").CombinedOutput(); err != nil {
 				t.Fatalf("start tmux: %v: %s", err, out)
 			}
 			if err := bindJumpKeys(ctx, self); err != nil {
+				t.Fatal(err)
+			}
+		case "other":
+			isolatedDefault(t)
+			other := filepath.Join(t.TempDir(), filepath.Base(self))
+			if err := setSidebarHooks(ctx, other); err != nil {
+				t.Fatal(err)
+			}
+			if err := bindJumpKeys(ctx, other); err != nil {
 				t.Fatal(err)
 			}
 		default:
@@ -152,23 +190,54 @@ func TestSelfStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A copy of this binary under a directory whose name has what the
+	// shell's and tmux's quoting, and a format literal, write otherwise.
+	odd := filepath.Join(t.TempDir(), `a#b##c#[d'e"f\g$h`, filepath.Base(self))
+	if err := os.Mkdir(filepath.Dir(odd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(odd, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
-		mode string
-		// Each a line of the failure, with the binary's path in it.
+		mode, exe string
+		// Each a line of the failure, with the binary's path in it; none
+		// for a run that passes.
 		want []string
 	}{
-		{"pane", []string{"sidebar pane"}},
-		{"hooks", []string{"after-new-window[9101]", "window-resized[9105]"}},
-		{"keys", []string{"M-1 ", "M-9 "}},
-		{"run", []string{"M-1 ", "M-9 "}},
+		{"pane", self, []string{"sidebar pane"}},
+		{"hooks", self, []string{"after-new-window[9101]", "window-resized[9105]"}},
+		{"keys", self, []string{"-T root ", "-T prefix ", "M-1 ", "M-9 ", "F12 "}},
+		{"run", self, []string{"M-1 ", "M-9 "}},
+		{"other", self, nil},
+		{"pane", odd, []string{"sidebar pane"}},
+		{"keys", odd, []string{"-T root ", "-T prefix "}},
 	} {
-		run := exec.Command(os.Args[0], "-test.run=^TestSelfStarts$")
+		run := exec.Command(c.exe, "-test.run=^TestSelfStarts$")
 		run.Env = append(os.Environ(), "LAATMUX_TEST_SELF_START="+c.mode)
 		b, err := run.CombinedOutput()
 		out := string(b)
+		if c.want == nil {
+			if err != nil || !strings.Contains(out, "PASS\n") {
+				t.Errorf("%s %s: %v\n%s", c.mode, c.exe, err, out)
+			}
+			continue
+		}
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			t.Errorf("%s: %v\n%s", c.mode, err, out)
+			t.Errorf("%s %s: %v\n%s", c.mode, c.exe, err, out)
 			continue
 		}
 		// The test fails; with "run", the test passes and the run fails
@@ -178,18 +247,65 @@ func TestSelfStarts(t *testing.T) {
 			msg, test = selfStartRun, "PASS\n"
 		}
 		if !strings.Contains(out, test) {
-			t.Errorf("%s: no %q\n%s", c.mode, test, out)
+			t.Errorf("%s %s: no %q\n%s", c.mode, c.exe, test, out)
 		}
 		for _, w := range c.want {
 			found := false
 			for _, l := range strings.Split(out, "\n") {
-				if i := strings.Index(l, msg); i >= 0 && strings.Contains(l[i:], self) && strings.Contains(l[i:], w) {
+				if i := strings.Index(l, msg); i >= 0 && namesPath(l[i:], c.exe) && strings.Contains(l[i:], w) {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("%s: no line %q with the binary and %q\n%s", c.mode, msg, w, out)
+				t.Errorf("%s %s: no line %q with the binary and %q\n%s", c.mode, c.exe, msg, w, out)
 			}
+		}
+	}
+}
+
+// selfStarts starts no server where none runs, so reads no config, and
+// finds nothing there; a server it cannot see, behind a socket
+// directory tmux refuses as unsafe, is a line for each listing.
+func TestSelfStartsUnseen(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("no tmux")
+	}
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("/tmp", "lmxt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	read := filepath.Join(dir, "read")
+	if err := os.WriteFile(filepath.Join(dir, ".tmux.conf"), []byte("run-shell "+tmux.ShellJoin([]string{"touch " + read})+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = workspace.Server.Run(context.Background(), "kill-server") })
+	if found := selfStarts(ctx); len(found) != 0 {
+		t.Errorf("with no server: %q", found)
+	}
+	if _, err := os.Stat(read); err == nil {
+		t.Error("a server started, and read the config")
+	}
+	unsafe := filepath.Join(dir, "unsafe")
+	sock := filepath.Join(unsafe, fmt.Sprintf("tmux-%d", os.Getuid()))
+	if err := os.MkdirAll(sock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sock, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", unsafe)
+	found := selfStarts(ctx)
+	if len(found) != 4 {
+		t.Errorf("behind an unsafe directory: %q, want a line for each listing", found)
+	}
+	for _, l := range found {
+		if !strings.HasPrefix(l, "tmux -N ") {
+			t.Errorf("behind an unsafe directory: %q, not a tmux error", l)
 		}
 	}
 }
