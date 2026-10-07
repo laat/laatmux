@@ -96,11 +96,11 @@ func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
 		}
 		return w, parent, true
 	}
-	// The viewer's tile is in the main group whatever its state; of
-	// several, the one following takes.
-	if i := followRow(len(m.Rows.Main), func(i int) *rows.Row { return &m.Rows.Main[i] }); i >= 0 {
-		r := &m.Rows.Main[i]
-		return m.tileWorktree(r), m.tileRepo(r), true
+	// The viewer's tile is in the main group whatever its state.
+	for i := range m.Rows.Main {
+		if r := &m.Rows.Main[i]; r.Current {
+			return m.tileWorktree(r), m.tileRepo(r), true
+		}
 	}
 	return "", "", false
 }

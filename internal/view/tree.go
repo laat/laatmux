@@ -487,23 +487,32 @@ func (m *Model) Switch() {
 }
 
 // followedID is the id of the viewer's own row in the current view,
-// whether or not a fold hides it: the tile that is the viewer's in the
-// agent view, the first of a worktree or a task (followRow), the
-// viewer's line in the tree.
+// whether or not a fold hides it: in the agent view the tile followRow
+// picks, in the tree the viewer's line.
 func (m *Model) followedID() string {
 	if m.View == ViewTree {
-		for _, n := range m.Tree {
-			if n.Current {
-				return n.ID()
-			}
+		if n := m.treeFollowed(); n != nil {
+			return n.ID()
 		}
 		return ""
 	}
 	// The viewer's tile is in the main group whatever its state.
-	if i := followRow(len(m.Rows.Main), func(i int) *rows.Row { return &m.Rows.Main[i] }); i >= 0 {
+	if i := m.followRow(len(m.Rows.Main), func(i int) *rows.Row { return &m.Rows.Main[i] }); i >= 0 {
 		return m.Rows.Main[i].ID()
 	}
 	return ""
+}
+
+// treeFollowed is the node following takes in the tree, whether or not a
+// fold, the filter or the scope hides it: the first that is the viewer's
+// in the tree's order; nil for none.
+func (m *Model) treeFollowed() *rows.Row {
+	for i := range m.Tree {
+		if m.Tree[i].Current {
+			return &m.Tree[i]
+		}
+	}
+	return nil
 }
 
 // crossID is the id of the node the row resolves to in the other view.

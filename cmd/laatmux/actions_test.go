@@ -1836,7 +1836,8 @@ func TestJumpNowhereSelects(t *testing.T) {
 // active a minute ago. Its tile sorts first, yet following is on the
 // root agent's, so o opens proj/z's PR, O its checks, x asks to remove
 // proj/z, and a pre-fills its repository and host. With the root agent
-// gone, following is on the split's tile, which x says is no worktree.
+// no longer listed, following is on the split's tile, which x says is
+// no worktree.
 func TestFollowedKeysFindWorktree(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -1887,7 +1888,8 @@ func TestFollowedKeysFindWorktree(t *testing.T) {
 	if !m.Follow {
 		t.Fatal("the keys ended following")
 	}
-	// The root agent gone: the split's tile is the viewer's only one.
+	// The root agent no longer listed: the split's tile is the viewer's
+	// only one.
 	in.Agents = []protocol.Agent{stray}
 	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
 	if r := m.Selection(); r == nil || r.ID() != stray.ID {
