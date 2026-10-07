@@ -129,6 +129,12 @@ the same `repos` list are rejected as a duplicate, so a config that
 listed both must drop one before the daemon starts again.
 `laatmux serve --tmux-servers laatmux,default` overrides the file.
 
+An agent's `cmd` is an argv: each word is one argument, quoted for the
+shell tmux starts the agent with. A first word such as `FOO=1` would be
+run as a command, so the config refuses it, as `add -- <cmd>` and
+`new -- <cmd>` do; a variable is set through `env`, as in
+`cmd: [env, FOO=1, claude]`.
+
 An agent's `cmd` may carry `{prompt}` as one argument: `add -p` replaces
 it with the prompt, as one argument however many lines it has, and an add
 without a prompt removes it. The prompt is then on the host's process

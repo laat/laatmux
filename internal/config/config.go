@@ -546,6 +546,9 @@ func (c *Config) validateAgents() error {
 		if len(a.Cmd) == 0 || a.Cmd[0] == "" {
 			return fmt.Errorf("agents: %s has no cmd", name)
 		}
+		if err := CheckCmd(a.Cmd); err != nil {
+			return fmt.Errorf("agents: %s cmd: %w", name, err)
+		}
 	}
 	if c.DefaultAgentName != "" {
 		if _, ok := c.Agents[c.DefaultAgentName]; !ok {
@@ -553,6 +556,28 @@ func (c *Config) validateAgents() error {
 		}
 	}
 	return nil
+}
+
+// CheckCmd refuses a command whose first word is an environment
+// assignment, FOO=1. A command is an argv, and the shell line tmux
+// starts it with quotes every word, so the shell would look for a
+// program named FOO=1 and the pane would exit at once; env sets the
+// variable instead: [env, FOO=1, claude].
+func CheckCmd(cmd []string) error {
+	if len(cmd) == 0 {
+		return nil
+	}
+	name, _, ok := strings.Cut(cmd[0], "=")
+	if !ok || name == "" || '0' <= name[0] && name[0] <= '9' {
+		return nil
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		if !('A' <= b && b <= 'Z' || 'a' <= b && b <= 'z' || '0' <= b && b <= '9' || b == '_') {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s is an environment assignment, not a command; put env before it to set the variable", cmd[0])
 }
 
 // AgentNames lists configured agents, sorted.

@@ -158,6 +158,7 @@ func TestParseRejects(t *testing.T) {
 		"hosts:\n  - name: a\n    repos: /c\n    worktrees: ./wt\n":            "worktrees \"./wt\" must be absolute or start with ~",
 		"agents:\n  my.agent:\n    cmd: [x]\n":                                 "not a valid label",
 		"agents:\n  claude: {}\n":                                              "has no cmd",
+		"agents:\n  sbx:\n    cmd: [IS_SANDBOX=1, claude]\n":                   "agents: sbx cmd: IS_SANDBOX=1 is an environment assignment",
 		"repos:\n  - a/b\n  - a/b\n":                                           "listed twice",
 		"repos:\n  - git@github.com:a/b.git\n  - https://github.com/a/b\n":     "are one repository",
 		"repos:\n  - source: a/x\n    name: x\n  - source: b/x\n    name: x\n": "both get the name x",
@@ -206,6 +207,26 @@ func TestParseLeadingDash(t *testing.T) {
 	}
 	if len(c.Repos) != 2 || c.Repos[0].Name != "x--" || c.Repos[1].Name != "y-" {
 		t.Errorf("repos: %+v", c.Repos)
+	}
+}
+
+// A command whose first word is an environment assignment is refused:
+// tmux's shell line quotes it, and the shell would run it as a program.
+// The assignment after env, an = in a later word or in a path, and a
+// word that is no shell name before its = are commands as written.
+func TestCheckCmd(t *testing.T) {
+	for _, bad := range [][]string{{"FOO=1", "claude"}, {"_x=", "claude"}, {"a1=b"}} {
+		if err := CheckCmd(bad); err == nil || !strings.Contains(err.Error(), "put env before it") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	for _, ok := range [][]string{nil, {"claude"}, {"env", "FOO=1", "claude"}, {"claude", "--model=x"}, {"./a=b"}, {"1a=b"}, {"=x"}, {"a-b=c"}} {
+		if err := CheckCmd(ok); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	if _, err := Parse([]byte("agents:\n  sbx:\n    cmd: [env, IS_SANDBOX=1, claude]\n")); err != nil {
+		t.Errorf("env form refused: %v", err)
 	}
 }
 

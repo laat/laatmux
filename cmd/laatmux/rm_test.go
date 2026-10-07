@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,7 @@ func TestParseAddArgs(t *testing.T) {
 		{[]string{""}, addArgs{}, true},
 		{[]string{"-p", "!!!"}, addArgs{}, true},
 		{[]string{"fix", "extra"}, addArgs{}, true},
+		{[]string{"fix", "--", "FOO=1", "claude"}, addArgs{}, true},
 	}
 	for _, c := range cases {
 		got, err := parseAddArgs(c.args)
@@ -142,6 +144,17 @@ func TestParseAddArgs(t *testing.T) {
 		if err != nil || got.branch != c.want.branch || got.generated != c.want.generated || got.prompt != c.want.prompt || got.host != c.want.host || got.agent != c.want.agent || got.detach != c.want.detach || strings.Join(got.cmd, " ") != strings.Join(c.want.cmd, " ") {
 			t.Errorf("%v: got %+v %v, want %+v", c.args, got, err, c.want)
 		}
+	}
+}
+
+// new refuses a command that starts with an environment assignment
+// before it reads the config or dials a daemon; without the check the
+// unknown host would be the error.
+func TestNewRefusesAssignment(t *testing.T) {
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
+	err := cmdNew(context.Background(), []string{"s", "--host", "nosuch", "--cwd", "/w", "--", "FOO=1", "claude"})
+	if err == nil || !strings.Contains(err.Error(), "FOO=1 is an environment assignment") {
+		t.Fatalf("new: %v", err)
 	}
 }
 

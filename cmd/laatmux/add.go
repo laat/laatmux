@@ -114,6 +114,9 @@ func parseAddArgs(args []string) (addArgs, error) {
 	fs.BoolVar(&a.detach, "detach", false, "hand the add to the local daemon and return; laatmux tasks shows it")
 	if i := slices.Index(args, "--"); i >= 0 {
 		args, a.cmd = args[:i], args[i+1:]
+		if err := config.CheckCmd(a.cmd); err != nil {
+			return a, err
+		}
 	}
 	if err := fs.Parse(args); err != nil {
 		return a, err

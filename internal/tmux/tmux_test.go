@@ -25,7 +25,8 @@ import (
 
 // shellWords are words shellJoin must quote, one per character that
 // forces it, with the character inside the word, and words it must
-// leave bare: what git allows in a branch besides those characters.
+// leave bare: what git allows in a branch besides those characters,
+// non-ASCII letters included.
 // The set is spelled out here rather than read from the code, so a
 // character dropped from the code fails the test.
 func shellWords() (quoted, bare []string) {
@@ -35,7 +36,7 @@ func shellWords() (quoted, bare []string) {
 	// Under zsh's magic_equal_subst an unquoted a==ls is a=/bin/ls, a
 	// branch add would then make; =lcl is zsh's equals expansion.
 	quoted = append(quoted, "a==ls", "a/==ls", "=lcl", "")
-	bare = []string{"a%b", "a+b", "a,b", "a@b", "feature/x-1_2.3", "ABCXYZabcxyz0123456789"}
+	bare = []string{"a%b", "a+b", "a,b", "a@b", "feature/x-1_2.3", "ABCXYZabcxyz0123456789", "blåbær"}
 	return quoted, bare
 }
 
@@ -66,8 +67,11 @@ func TestShellJoinRoundTrip(t *testing.T) {
 	line := `printf '%s\0' ` + shellJoin(words)
 	shells := [][]string{{"sh", "-c", line}}
 	if _, err := exec.LookPath("zsh"); err == nil {
-		// -f reads no startup files, so the user's options stay out.
+		// -f reads none of the user's startup files, so their options
+		// stay out; only the system's zshenv is read.
 		shells = append(shells, []string{"zsh", "-f", "-o", "magic_equal_subst", "-c", line})
+	} else {
+		t.Log("no zsh on PATH; the round trip runs through sh only")
 	}
 	for _, sh := range shells {
 		cmd := exec.Command(sh[0], sh[1:]...)
