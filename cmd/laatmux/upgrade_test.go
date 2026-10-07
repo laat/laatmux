@@ -882,7 +882,8 @@ func TestMain(m *testing.M) {
 	// directory, with last.json and the runtime file that names their
 	// daemon, and the config, a file that is not there, are the run's
 	// own. A test that wants either sets it itself. After the daemon
-	// above: a daemon a test starts keeps the test's.
+	// above, so a daemon a test starts keeps the test's; any other child
+	// of this binary is a run of its own, and gets its own.
 	runDir = dir
 	os.Setenv("LAATMUX_HOME", filepath.Join(dir, "home"))
 	os.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
@@ -901,6 +902,9 @@ var runDir string
 // a live daemon at a socket that is not there, and a config that does
 // not parse, it reads neither.
 func TestRunStateIsItsOwn(t *testing.T) {
+	if runDir == "" {
+		t.Fatal("TestMain gave the run no directory")
+	}
 	for what, p := range map[string]string{"state directory": home.Dir(), "config": config.Path()} {
 		if !strings.HasPrefix(p, runDir+"/") {
 			t.Errorf("the %s is %s, not under the run's %s", what, p, runDir)
@@ -910,8 +914,8 @@ func TestRunStateIsItsOwn(t *testing.T) {
 		if rt, err := home.ReadRuntime(); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("the user's runtime file read: %+v %v", rt, err)
 		}
-		if _, err := config.Load(); err != nil {
-			t.Errorf("the user's config read: %v", err)
+		if _, err := os.Stat(config.Path()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a config at %s: %v", config.Path(), err)
 		}
 		return
 	}
