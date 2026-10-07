@@ -1110,7 +1110,9 @@ func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
 			in.Current = current
 			mine := current != "elsewhere"
 			nodes := Tree(in)
-			if l := treeLines(nodes); len(l) != 1 || l[0].Current != mine {
+			// The line is the viewer's by its own session either way:
+			// its workspace session, or the plain one its jump goes to.
+			if l := treeLines(nodes); len(l) != 1 || l[0].Current != mine || l[0].Own != mine {
 				t.Fatalf("settled %v, the viewer in %s: B's line %+v", settled, current, l)
 			}
 			rs := Agents(in, nodes)
@@ -1128,7 +1130,7 @@ func TestHomelessLineWorkspaceOverPlain(t *testing.T) {
 			}
 			marked := map[string]bool{}
 			for _, n := range treeLines(Tree(tasks)) {
-				if n.Pending == nil || n.Local == nil || n.Local.Name != "mac/proj/b" {
+				if n.Pending == nil || n.Local == nil || n.Local.Name != "mac/proj/b" || n.Own != n.Current {
 					t.Fatalf("settled %v, the viewer in %s: the task line %+v", settled, current, n)
 				}
 				marked[n.ID()] = n.Current

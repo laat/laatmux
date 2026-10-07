@@ -709,11 +709,18 @@ worktree's first agent, a repository line to its first worktree's, a
 task to itself, opening the folds over the target; a target the view
 has none of leaves the selection on no row. A following selection keeps
 following: in the tree the first row in the tree's order that is the
-viewer's, usually the viewer's worktree line; in the agent view the
+viewer's by its own session, a worktree, task or orphaned session's
+line before an agent in other sessions, usually the viewer's worktree
+line; another worktree's line that is the viewer's only through one of
+its agents in the viewer's session, started there from a split after a
+`cd` into that worktree say, is followed only when no row is the
+viewer's by its own session; in the agent view the
 first of the viewer's tiles of what the tree follows, that line's
 worktree's agents and tasks or the tile of the agent the tree follows
-in other sessions; when none of those is shown, the first of the
-viewer's tiles. A tile in other sessions that sorts first is not
+in other sessions, and of a line followed through a visitor the
+visitor's; when none of those is shown, the first of the viewer's
+tiles in the viewer's session, else the first of the viewer's tiles.
+A tile in other sessions that sorts first is not
 followed for that reason. Such a tile can be the viewer's beside the
 worktree's own, an agent started outside any worktree from a split of
 the viewer's session, say, and `o`, `O`, `x` and `a` on it would find
@@ -894,8 +901,13 @@ row's session exists locally and is switched to.
   window of the viewer's session, which stands in other sessions; and
   another worktree's line with its children, such as the line of an
   agent observed in a window of the viewer's session with its
-  directory in that worktree. A pane in a session that is no row's shows
-  the empty state under `session` and `project`. `F` switches the pane to
+  directory in that worktree, or of one started from a split of the
+  viewer's session after a `cd` into that worktree. Such a line is not
+  the viewer's row while a line is the viewer's by its own session:
+  `session` is still that line's worktree and `project` its
+  repository, whichever sorts first. A pane in a session that is no
+  row's shows the empty state under `session` and `project`. `F`
+  switches the pane to
   `session` and, pressed again, back to the scope the pane had before,
   whatever set it; on `session` already it goes to `all`. `F` acts on
   that pane alone and is not kept. The footer names a scope in force:

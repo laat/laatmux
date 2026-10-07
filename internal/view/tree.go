@@ -504,17 +504,44 @@ func (m *Model) followedID() string {
 }
 
 // treeFollowed is the tree's own choice of the viewer's row, which a
-// switch reveals: the first node in the tree's order that is the
-// viewer's, whether or not a fold or the filter hides it; nil for none.
-// With it hidden by the filter, following in the tree takes the next
-// shown row that is the viewer's.
+// switch reveals and the scope is defined by: of the nodes that are the
+// viewer's, the first in the tree's order of those viewerRank puts
+// first, whether or not a fold or the filter hides it; nil for none.
+// With it hidden by the filter, following in the tree takes the shown
+// row that is the viewer's the same way.
 func (m *Model) treeFollowed() *rows.Row {
+	best := -1
 	for i := range m.Tree {
-		if m.Tree[i].Current {
-			return &m.Tree[i]
+		if k := viewerRank(&m.Tree[i]); k > 0 && (best < 0 || k > viewerRank(&m.Tree[best])) {
+			best = i
 		}
 	}
-	return nil
+	if best < 0 {
+		return nil
+	}
+	return &m.Tree[best]
+}
+
+// viewerRank is how a tree node or a tile is the viewer's, 0 for not: a
+// worktree, task or orphaned session's line by its own session (rows'
+// Own), 3; another node by its own session, an agent in other sessions,
+// or a tile in the viewer's session, 2; one the viewer's only through
+// another, 1: a line through an agent of it in the viewer's session, a
+// visitor from a split or a window there, an agent of no worktree
+// through the line whose home its session is, or a tile through its
+// line. So the line of the session the viewer is in is followed over
+// another worktree's line an agent of it visiting marks, and over an
+// agent in other sessions in a window of that session.
+func viewerRank(r *rows.Row) int {
+	switch {
+	case !r.Current:
+		return 0
+	case !r.Own:
+		return 1
+	case r.Kind == rows.KindWorktree || r.Kind == rows.KindTask:
+		return 3
+	}
+	return 2
 }
 
 // crossID is the id of the node the row resolves to in the other view.

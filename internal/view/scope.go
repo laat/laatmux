@@ -7,21 +7,25 @@ import (
 )
 
 // Scope is what a pane shows, defined by the viewer's row, the one
-// Following picks: every row; the viewer's worktree, in the agent view
-// every agent of it whatever session each runs in and every task at its
-// root, in the tree its line, or the task standing for it, with its
-// children and any other task at its root beside it, under its
-// repository; or every line under the viewer's worktree's repository,
-// and in the agent view that repository's agents and tasks. Session and
-// project also keep every row that is the viewer's, whatever its
-// worktree. One in other sessions has none: an agent observed in a
-// window of the viewer's workspace session, or a managed agent of no
-// worktree in the home session of the viewer's line. Another worktree's
-// line is the viewer's, with its children, when one of its agents is
-// observed in a window of the viewer's session, or runs in a managed
-// session the viewer is in through a plain attachment. With no worktree,
-// session and project are the viewer's line alone, and a pane in a
-// session that is no row's shows the empty state under both.
+// Following picks in the tree (treeFollowed): every row; the viewer's
+// worktree, in the agent view every agent of it whatever session each
+// runs in and every task at its root, in the tree its line, or the task
+// standing for it, with its children and any other task at its root
+// beside it, under its repository; or every line under the viewer's
+// worktree's repository, and in the agent view that repository's agents
+// and tasks. Session and project also keep every row that is the
+// viewer's, whatever its worktree. One in other sessions has none: an
+// agent observed in a window of the viewer's workspace session, or a
+// managed agent of no worktree in the home session of the viewer's
+// line. Another worktree's line is the viewer's, with its children,
+// when one of its agents is observed in a window of the viewer's
+// session, runs in the home session of the viewer's line, where enter on
+// it lands, or runs in a managed session the viewer is in through a
+// plain attachment. Such a line is not the viewer's row while a line is
+// the viewer's by its own session: the scope's worktree and repository
+// stay that line's, whichever sorts first. With no worktree, session and
+// project are the viewer's line alone, and a pane in a session that is
+// no row's shows the empty state under both.
 type Scope string
 
 const (
@@ -71,30 +75,16 @@ func (m *Model) ToggleScope() {
 // viewerWorktree is the worktree the viewer's row is or is under, "",
 // and its repository node; ok is false when no row is the viewer's.
 func (m *Model) viewerWorktree() (worktree, repo string, ok bool) {
-	// The tree first: a child that is the viewer's marks its line.
-	parent := ""
-	for i := range m.Tree {
-		r := &m.Tree[i]
-		if r.Depth == 0 {
-			parent = r.ID()
-		}
-		if !r.Current || r.Depth == 0 {
-			continue
-		}
-		w := worktreeOf(r)
-		if r.Depth > 1 {
+	// The tree first: the node following takes there, the line of the
+	// session the viewer is in over another worktree's line a visiting
+	// agent marks (treeFollowed).
+	if t := m.treeFollowed(); t != nil {
+		w := worktreeOf(t)
+		if line := m.lineOver(t.ID()); line != nil {
 			// A child: its line's worktree.
-			for j := i - 1; j >= 0; j-- {
-				if m.Tree[j].Depth == 1 {
-					w = worktreeOf(&m.Tree[j])
-					break
-				}
-			}
+			w = worktreeOf(line)
 		}
-		if parent != "" && m.Tree[m.indexOf(parent)].Kind != rows.KindRepo {
-			parent = ""
-		}
-		return w, parent, true
+		return w, m.repoOver(t.ID()), true
 	}
 	// The viewer's tile is in the main group whatever its state.
 	for i := range m.Rows.Main {

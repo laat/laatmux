@@ -328,50 +328,111 @@ func TestScopeViewerRow(t *testing.T) {
 	// mac, beside its own agent in its home session: that line is the
 	// viewer's too, so the scope keeps it with its children, and in the
 	// agent view its agents, beside proj/z's: a worktree of proj that
-	// sorts before proj/z, which the scope's worktree then is, or after;
-	// and one of a third repository, which project keeps with its
-	// repository line beside proj's lines.
+	// sorts before proj/z or after; and one of another repository, after
+	// proj or before it, which project keeps with its repository line
+	// beside proj's lines. The scope's worktree is proj/z's whichever
+	// sorts first, the viewer's by its own session, and its repository
+	// proj's. So for claude started in a split of proj/z after a cd into
+	// a worktree on vm: an agent of that worktree on the managed server
+	// in proj/z's home session, whose pane jump lands in vm/proj/z.
 	base := in
-	third := "git@github.com:u/third.git"
-	for _, c := range []struct{ repo, source, branch string }{{"proj", src, "a"}, {"proj", src, "zz"}, {"third", third, "b"}} {
-		in = base
-		root := "/m/" + c.repo + "/" + c.branch
-		wt := "menv/worktree/" + root
-		visiting := observed("menv/default/%10", "vm/proj/z")
-		visiting.Cwd, visiting.WorktreeID = root, wt
-		home := protocol.Agent{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: c.repo + "/" + c.branch, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: root, WorktreeID: wt}
-		in.Agents = append(slices.Clone(base.Agents), visiting, home)
-		in.Worktrees = append(slices.Clone(base.Worktrees), protocol.Worktree{ID: wt, EnvironmentID: "menv", Repo: c.repo, Source: c.source, Branch: c.branch, Root: root, Session: c.repo + "/" + c.branch})
-		in.Locals = append(slices.Clone(base.Locals), protocol.Session{Name: "mac/" + c.repo + "/" + c.branch, Key: "menv/" + root, Host: "mac"})
-		in.Current = "vm/proj/z"
-		m.View, m.Scope = ViewAgents, ScopeSession
+	third, aaa := "git@github.com:u/third.git", "git@github.com:u/aaa.git"
+	for _, managed := range []bool{false, true} {
+		for _, c := range []struct{ repo, source, branch string }{{"proj", src, "a"}, {"proj", src, "zz"}, {"third", third, "b"}, {"aaa", aaa, "c"}} {
+			in = base
+			session := c.repo + "/" + c.branch
+			root := "/m/" + session
+			wt := "menv/worktree/" + root
+			visiting := observed("menv/default/%10", "vm/proj/z")
+			visiting.Cwd, visiting.WorktreeID = root, wt
+			home := protocol.Agent{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: root, WorktreeID: wt}
+			w := protocol.Worktree{ID: wt, EnvironmentID: "menv", Repo: c.repo, Source: c.source, Branch: c.branch, Root: root, Session: session}
+			local := protocol.Session{Name: "mac/" + session, Key: "menv/" + root, Host: "mac"}
+			if managed {
+				root = "/w/" + session
+				wt = "venv/worktree/" + root
+				visiting, home = agent("venv/laatmux/%10", "proj/z", root, wt), agent("venv/laatmux/%4", session, root, wt)
+				// A split's pane is not one laatmux new made.
+				visiting.Managed = false
+				w.ID, w.EnvironmentID, w.Root = wt, "venv", root
+				local = protocol.Session{Name: "vm/" + session, Key: "venv/" + root, Host: "vm"}
+			}
+			name := c.branch + ", managed " + strconv.FormatBool(managed)
+			in.Agents = append(slices.Clone(base.Agents), visiting, home)
+			in.Worktrees = append(slices.Clone(base.Worktrees), w)
+			in.Locals = append(slices.Clone(base.Locals), local)
+			in.Current = "vm/proj/z"
+			tiles := func(more ...string) string {
+				want := append([]string{visiting.ID, home.ID, "menv/default/%6", "venv/laatmux/%1", "venv/laatmux/%5"}, more...)
+				slices.Sort(want)
+				return strings.Join(want, " ")
+			}
+			m.View, m.Scope = ViewAgents, ScopeSession
+			set()
+			if got, want := sortedIDs(), tiles(); got != want {
+				t.Errorf("%s: session tiles: %s, want %s", name, got, want)
+			}
+			if w, repo, _ := m.viewerWorktree(); w != "venv/worktree//w/proj/z" || repo != rows.RepoNode(src) {
+				t.Errorf("%s: the scope's worktree %s in %s, want proj/z's in proj", name, w, repo)
+			}
+			m.View = ViewTree
+			theirs := "\n" + wt + "\n" + visiting.ID + "\n" + home.ID
+			vm := "\nvenv/worktree//w/proj/z\nvenv/laatmux/%1"
+			others := "\nvenv/laatmux/%5\nmenv/default/%6"
+			want := map[string]string{
+				"a":  rows.RepoNode(src) + theirs + vm + others,
+				"zz": rows.RepoNode(src) + vm + theirs + others,
+				"b":  rows.RepoNode(src) + vm + "\n" + rows.RepoNode(third) + theirs + others,
+				"c":  rows.RepoNode(aaa) + theirs + "\n" + rows.RepoNode(src) + vm + others,
+			}[c.branch]
+			if got := ids(m); got != want {
+				t.Errorf("%s: session tree:\n%s\nwant:\n%s", name, got, want)
+			}
+			if c.repo == "proj" {
+				continue
+			}
+			m.Scope = ScopeProject
+			projLines := "\nvenv/worktree//w/proj/y\nvenv/laatmux/%2" + vm
+			want = rows.RepoNode(src) + projLines + "\n" + rows.RepoNode(third) + theirs + others
+			if c.repo == "aaa" {
+				want = rows.RepoNode(aaa) + theirs + "\n" + rows.RepoNode(src) + projLines + others
+			}
+			if got := ids(m); got != want {
+				t.Errorf("%s: project tree:\n%s\nwant:\n%s", name, got, want)
+			}
+			m.View = ViewAgents
+			if got, want := sortedIDs(), tiles("venv/laatmux/%2"); got != want {
+				t.Errorf("%s: project tiles: %s, want %s", name, got, want)
+			}
+		}
+	}
+	// The example of #253 and #254: claude started in a split of proj/z
+	// after a cd into proj/y, and a failed task at proj/z's root. The
+	// viewer's row is proj/z's line, by its own session, though proj/y's
+	// sorts first: following stays on proj/z in both views and both
+	// scopes, session keeps the task at its root, and proj/y's line,
+	// marked through the visitor, is shown with its agents.
+	in = base
+	split := agent("venv/laatmux/%11", "proj/z", "/w/proj/y", "venv/worktree//w/proj/y")
+	split.Managed = false
+	in.Agents = append(slices.Clone(base.Agents), split)
+	in.Pendings = []protocol.Pending{{ID: "add-fail", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: "proj/z", Taken: true, Done: true, Error: "failed at agent: boom", SubmittedAt: now}}
+	in.Current = "vm/proj/z"
+	for _, scope := range []Scope{ScopeSession, ScopeProject} {
+		m.View, m.Scope = ViewTree, scope
 		set()
-		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%5"; got != want {
-			t.Errorf("%s: session tiles: %s, want %s", c.branch, got, want)
+		if r := m.Selection(); r == nil || r.ID() != "venv/worktree//w/proj/z" {
+			t.Errorf("the split's visitor, %s: the tree follows %+v", scope, r)
 		}
-		m.View = ViewTree
-		mac := "\n" + wt + "\nmenv/default/%10\nmenv/laatmux/%4"
-		vm := "\nvenv/worktree//w/proj/z\nvenv/laatmux/%1"
-		others := "\nvenv/laatmux/%5\nmenv/default/%6"
-		want := map[string]string{
-			"a":  rows.RepoNode(src) + mac + vm + others,
-			"zz": rows.RepoNode(src) + vm + mac + others,
-			"b":  rows.RepoNode(src) + vm + "\n" + rows.RepoNode(third) + mac + others,
-		}[c.branch]
-		if got := ids(m); got != want {
-			t.Errorf("%s: session tree:\n%s\nwant:\n%s", c.branch, got, want)
-		}
-		if c.repo != "third" {
-			continue
-		}
-		m.Scope = ScopeProject
-		want = rows.RepoNode(src) + "\nvenv/worktree//w/proj/y\nvenv/laatmux/%2" + vm + "\n" + rows.RepoNode(third) + mac + others
-		if got := ids(m); got != want {
-			t.Errorf("%s: project tree:\n%s\nwant:\n%s", c.branch, got, want)
+		if got, want := ids(m), rows.RepoNode(src)+"\nvenv/worktree//w/proj/y\nvenv/laatmux/%11\nvenv/laatmux/%2\nvenv/worktree//w/proj/z\nvenv/laatmux/%1\nadd-fail\nvenv/laatmux/%5\nmenv/default/%6"; got != want {
+			t.Errorf("the split's visitor, %s: tree:\n%s\nwant:\n%s", scope, got, want)
 		}
 		m.View = ViewAgents
-		if got, want := sortedIDs(), "menv/default/%10 menv/default/%6 menv/laatmux/%4 venv/laatmux/%1 venv/laatmux/%2 venv/laatmux/%5"; got != want {
-			t.Errorf("%s: project tiles: %s, want %s", c.branch, got, want)
+		if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%1" {
+			t.Errorf("the split's visitor, %s: the agent view follows %+v", scope, r)
+		}
+		if got, want := sortedIDs(), "add-fail menv/default/%6 venv/laatmux/%1 venv/laatmux/%11 venv/laatmux/%2 venv/laatmux/%5"; got != want {
+			t.Errorf("the split's visitor, %s: tiles %s, want %s", scope, got, want)
 		}
 	}
 }

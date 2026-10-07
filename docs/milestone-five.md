@@ -236,18 +236,37 @@ nothing to hand over to does today; the next move puts it on the first
 row.
 
 **Following.** A selection that follows the viewer's own session keeps
-following it in the new view. In the tree it follows the first line in
-the tree's order that is the viewer's. That is usually the worktree
-line of the viewer's worktree, or the task line standing for it or at
-its session's root, the session a task's add or jump made before the
-host listed the worktree; or, with no worktree and no task, the
-viewer's session's own line, wherever it sits: under its repository
-for an orphaned session with a repository tag, in other sessions
-otherwise. In the agent view it follows the first tile, in sort order,
-of what the tree follows: the agents and tasks of that line's worktree,
-or the tile of the agent the tree follows in other sessions; with none
-of those shown, the first tile that is the viewer's. So the two views
-agree whenever the tree's choice and a tile of it are shown. A tile in
+following it in the new view. In the tree it follows, of the nodes
+that are the viewer's, the first in the tree's order of the first kind
+there is: a worktree, task or orphaned session's line that is the
+viewer's by its own session, the workspace session the viewer is in,
+an attachment to its home, or the plain session its jump goes to; an
+agent in other sessions in the viewer's session, the attachment to a
+`new` session say; any other. That is usually the worktree line of the
+viewer's worktree, or the task line standing for it or at its
+session's root, the session a task's add or jump made before the host
+listed the worktree; or, with no worktree and no task, the viewer's
+session's own line, wherever it sits: under its repository for an
+orphaned session with a repository tag, in other sessions otherwise,
+where it comes after an agent observed in a window of it and is
+followed all the same. Another worktree's line that is the viewer's
+only through one of its agents in the viewer's session, observed in a
+window of it or started from a split of it after a `cd` into that
+worktree, is followed only when nothing is the viewer's by its own
+session, as is an agent of no worktree that is the viewer's through
+the line whose home its session is. In the agent view it follows the
+first tile, in sort order, of what the tree follows: the agents and
+tasks of that line's worktree, or the tile of the agent the tree
+follows in other sessions; of a line followed through a visitor, the
+first of those in the viewer's session; with none of those shown, the
+first tile in the viewer's session, else the first that is the
+viewer's. So a visitor's tile is followed, not an agent of the
+visitor's worktree in that worktree's own session, which the visitor
+makes the viewer's too, whether the tree follows the visited line or
+the viewer's own line shows no tile; and an orphaned session's
+line, which has no tile, gives the tile of an agent observed in a
+window of the session. So the two views agree
+whenever the tree's choice and a tile of it are shown. A tile in
 other sessions can be the viewer's beside the worktree's agents and
 sort before them: an agent started outside any worktree from a split of
 the viewer's session, or observed in a window of it. `o`, `O`, `x` and
@@ -967,10 +986,15 @@ Five settlements differ from the plan in #52:
   for the line, the managed one is the task's, as `z` refuses it, and
   not the viewer's. Another worktree's line is the viewer's when one of
   its agents is observed in a window of the viewer's session with its
-  directory in that worktree, or runs in a managed session the viewer
-  is in through a plain attachment: the scope keeps that line with its
-  children, and in the agent view its agents, beside the viewer's
-  worktree.
+  directory in that worktree; runs in the home session of the viewer's
+  line, `cd ../y && claude` in a split, where `Enter` on it lands; or
+  runs in a managed session the viewer is in through a plain
+  attachment: the scope keeps that line with its children, and in the
+  agent view its agents, beside the viewer's worktree. While a line is
+  the viewer's by its own session, that one is the viewer's row
+  (Following), not the visited line: the scope's worktree and
+  repository are its whichever sorts first, and a task at its root
+  stays in `session`.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The
