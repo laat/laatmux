@@ -190,8 +190,10 @@ type Spec struct {
 // attachment to the managed session a keyed spec names, which it
 // adopts as the workspace: an older build's jump from the agent's row
 // made such a session, named as the workspace would be, before the
-// worktree had its home session back. The name of the session, existing
-// or new, and whether it was created are returned.
+// worktree had its home session back. A plain attachment to be made
+// under a name tmux would not store as given is refused. The name of
+// the session, existing or new, and whether it was created are
+// returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	locals, err := List(ctx)
 	if err != nil {
@@ -221,7 +223,22 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 			return "", false, fmt.Errorf("local session %s exists and is not laatmux's; name in use", s.Name)
 		}
 	}
-	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
+	// A plain attachment's name has the managed session's in it, which
+	// one made by an older laatmux new, or by hand, can have a character
+	// in that tmux would not store as given: the session made would have
+	// another name, and the tags in its own sequence would find no
+	// session, leaving it untagged. A workspace's name is not checked:
+	// it has a worktree's session name in it, which SessionName encoded
+	// from the branch, or new took for a session started at the root,
+	// and a branch with a $ in it keeps its workspace where tmux keeps
+	// the $. new-session expands the name as a format, and a name new
+	// took can have a # in it.
+	if s.Key == "" {
+		if err := tmux.CheckSessionName(s.Name); err != nil {
+			return "", false, err
+		}
+	}
+	args := []string{"new-session", "-d", "-s", tmux.FormatLiteral(s.Name), "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
 	if s.Key != "" {
 		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", s.Key)
 	} else {

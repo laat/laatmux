@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -416,4 +417,43 @@ func TestConnRefusals(t *testing.T) {
 		t.Errorf("new: %+v %v", got, err)
 	}
 	alive()
+}
+
+// new refuses a name tmux would not store as given, naming the
+// character, before the managed server is asked to make anything, as
+// for a client older than the refusal in laatmux new; the connection
+// stays up, and a name tmux keeps is made and answered as given. A byte
+// that is not UTF-8 cannot reach the daemon: JSON carries it as U+FFFD.
+func TestNewRefusesNames(t *testing.T) {
+	ft := onePane(pane, nil)
+	d := New(Config{EnvironmentID: "env", Targets: managed(ft)})
+	pc := conn(t, d)
+	for name, want := range map[string]string{
+		"a.b":       "has a .",
+		"a:b":       "has a :",
+		`a\b`:       `has a \`,
+		"tab\tx":    "has the control character U+0009",
+		"c1\u0085x": "has the control character U+0085",
+		"a$b":       "has a $",
+		"a\u2063b":  "has the character U+2063",
+		"":          "session name required",
+	} {
+		if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: name, Cwd: "/tmp"}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := pc.Read(); err != nil || got.Type != protocol.TypeResult || got.ID != "n" || got.OK || !strings.Contains(got.Error, want) {
+			t.Errorf("%q: %+v %v, want an error with %q", name, got, err, want)
+		}
+	}
+	var made int
+	ft.set(func() { made = len(ft.cmds) })
+	if made != 0 {
+		t.Fatalf("the managed server was asked for %d sessions", made)
+	}
+	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "notes##draft;", Cwd: "/tmp"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pc.Read(); err != nil || !got.OK || got.Error != "" || got.Session != "notes##draft;" {
+		t.Errorf("new notes##draft;: %+v %v", got, err)
+	}
 }

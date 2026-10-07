@@ -1111,12 +1111,18 @@ func (c *clientConn) subscribe(m protocol.Message) error {
 }
 
 // newSession makes a session on the managed server, the only one
-// sessions are ever created on.
+// sessions are ever created on. A name tmux would not store as given is
+// refused before anything runs: laatmux new refuses it first, but an
+// older client sends it.
 func (c *clientConn) newSession(m protocol.Message) error {
 	d := c.d
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	if d.managed == nil {
 		res.Error = errNoManaged
+		return c.pc.Write(res)
+	}
+	if err := tmux.CheckSessionName(m.Name); err != nil {
+		res.Error = err.Error()
 		return c.pc.Write(res)
 	}
 	// An older client does not check the command.
