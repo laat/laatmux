@@ -440,13 +440,18 @@ func TestExplicitHostSkipsBadLast(t *testing.T) {
 }
 
 // goneWorktrees makes directories of worktrees whose repository is gone:
-// the .git file names a path that is not there, absolute or relative, or
-// a directory without a HEAD; the last directory is below a .git file.
+// the .git file names a path that is not there, absolute or relative, a
+// directory without a HEAD, or a file. Last come a directory two levels
+// below the first worktree's .git file and a symlink to it from outside.
 func goneWorktrees(t *testing.T) []string {
 	t.Helper()
-	empty := t.TempDir()
+	nohead := t.TempDir()
+	file := filepath.Join(nohead, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var dirs []string
-	for _, gitdir := range []string{"", "gone", "../gone/.git/worktrees/x", empty} {
+	for _, gitdir := range []string{"", "gone", "../gone/.git/worktrees/x", nohead, file} {
 		wt := t.TempDir()
 		if gitdir == "" {
 			gitdir = filepath.Join(wt, "gone")
@@ -460,11 +465,15 @@ func goneWorktrees(t *testing.T) []string {
 	if err := os.MkdirAll(below, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return append(dirs, below)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(below, link); err != nil {
+		t.Fatal(err)
+	}
+	return append(dirs, below, link)
 }
 
 // Only git's own word that there is no origin, or no repository, or a
-// .git file's that its repository is gone, lets resolution fall back to
+// .git file showing its repository is gone, lets resolution fall back to
 // the directory label; a git that cannot run or read the repository is
 // an error.
 func TestOriginOf(t *testing.T) {
@@ -507,15 +516,34 @@ func TestOriginOf(t *testing.T) {
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("broken config read as no origin")
 	}
-	// So is it through a .git file naming it, by an absolute path with a
-	// CRLF line end or by a path relative to the file, and so is a bare
-	// repository git finds below a gone worktree's .git file.
-	link, rel := t.TempDir(), t.TempDir()
+	// So is it with its HEAD a symlink into refs/ that does not resolve,
+	// which git takes for a HEAD, through a .git file naming it: by an
+	// absolute path with a CRLF line end, by a path relative to the file,
+	// or by one through a symlink and .., which the file system resolves
+	// past the symlink.
+	head := filepath.Join(dir, ".git", "HEAD")
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("refs/heads/nothere", head); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := originOf(ctx, dir); err == nil {
+		t.Error("broken config with a HEAD symlink read as no origin")
+	}
+	abs, rel, viaLink := t.TempDir(), t.TempDir(), t.TempDir()
 	relPath, err := filepath.Rel(rel, filepath.Join(dir, ".git"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for d, content := range map[string]string{link: "gitdir: " + filepath.Join(dir, ".git") + "\r\n", rel: "gitdir: " + relPath + "\n"} {
+	if err := os.Symlink(filepath.Join(dir, ".git", "refs"), filepath.Join(viaLink, "l")); err != nil {
+		t.Fatal(err)
+	}
+	for d, content := range map[string]string{
+		abs:     "gitdir: " + filepath.Join(dir, ".git") + "\r\n",
+		rel:     "gitdir: " + relPath + "\n",
+		viaLink: "gitdir: l/..\n",
+	} {
 		if err := os.WriteFile(filepath.Join(d, ".git"), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -523,16 +551,40 @@ func TestOriginOf(t *testing.T) {
 			t.Errorf("broken config through %q read as no origin", content)
 		}
 	}
-	bare := filepath.Join(gone[0], "bare")
-	if out, err := exec.Command("git", "init", "-q", "--bare", bare).CombinedOutput(); err != nil {
-		t.Fatalf("git init --bare: %v\n%s", err, out)
+	// So is a broken repository git finds below a gone worktree's .git
+	// file, bare or with a .git directory.
+	bare, nested := filepath.Join(gone[0], "bare"), filepath.Join(gone[0], "nested")
+	for _, args := range [][]string{{"init", "-q", "--bare", bare}, {"init", "-q", nested}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(bare, "config"), []byte("[core\n"), 0o600); err != nil {
+	for _, config := range []string{filepath.Join(bare, "config"), filepath.Join(nested, ".git", "config")} {
+		if err := os.WriteFile(config, []byte("[core\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{bare, nested} {
+		if _, err := originOf(ctx, d); err == nil {
+			t.Errorf("broken config of a repository in a gone worktree, %s, read as no origin", d)
+		}
+	}
+	// A .git file with no path is one git cannot read.
+	nopath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nopath, ".git"), []byte("gitdir: \n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := originOf(ctx, bare); err == nil {
-		t.Error("broken config of a bare repository in a gone worktree read as no origin")
+	if _, err := originOf(ctx, nopath); err == nil {
+		t.Error("a .git file with no path read as no origin")
 	}
+	// With GIT_DIR set git reads that repository and searches nothing, so
+	// a gone worktree's .git file says nothing of git's failure.
+	t.Run("GIT_DIR", func(t *testing.T) {
+		t.Setenv("GIT_DIR", filepath.Join(dir, ".git"))
+		if _, err := originOf(ctx, gone[0]); err == nil {
+			t.Error("broken config of GIT_DIR read as no origin in a gone worktree")
+		}
+	})
 	// A directory gone, with a tab and an ESC in its name, is named
 	// quoted, and so is git's message that repeats it.
 	missing := filepath.Join(t.TempDir(), "a\tb\x1b]0;x\x07c")
@@ -580,6 +632,15 @@ exit 128
 		if o, err := originOf(ctx, d); err != nil || o != "" {
 			t.Errorf("git 2.56, repository gone, %s: %q %v", d, o, err)
 		}
+	}
+	// Another failure outside any repository, where the search for a
+	// .git file goes up to /, is still an error.
+	fake(`#!/bin/sh
+echo "fatal: bad config line 1 in file /x" >&2
+exit 128
+`)
+	if _, err := originOf(ctx, t.TempDir()); err == nil {
+		t.Error("another failure outside any repository read as no origin")
 	}
 	// A .git file naming a directory with a HEAD that is no repository
 	// does not show it is gone; a git before 2.56 says the directory is

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
@@ -145,14 +146,19 @@ func originOf(ctx context.Context, dir string) (string, error) {
 // goneGitfile reports whether git's search for the repository of dir
 // ends at a .git file naming a directory without a HEAD, which no git
 // takes for a repository: the worktree's repository is gone. The search
-// is git's, up from dir's physical path to the first level with a .git;
-// a .git that is not a regular file, or a level with a HEAD of its own,
-// which git may take for a bare repository, ends it undecided. So does
-// a dir that does not exist: git failed to enter it, not to read a .git
-// above it. The file is read as git reads it: "gitdir: " and a path,
-// relative to the file's directory, trailing line ends dropped, at most
-// 1 MiB.
+// goes up from dir's physical path, as git's does, to the first level
+// with a .git, and ends undecided where git might stop short of a .git
+// file: at a .git that is not a regular file (git moves past a directory
+// that is no repository, which this does not tell), or at a level with
+// a HEAD of its own, which git may take for a bare repository. A dir
+// that does not exist is undecided too, git failed to enter it, and so
+// is any dir with GIT_DIR set, as git then searches nothing. The file is
+// read as git reads it: "gitdir: " and a path, relative to the file's
+// directory, trailing line ends dropped, at most 1 MiB.
 func goneGitfile(dir string) bool {
+	if _, ok := os.LookupEnv("GIT_DIR"); ok {
+		return false
+	}
 	d, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return false
@@ -178,10 +184,11 @@ func goneGitfile(dir string) bool {
 				target = d + "/" + target
 			}
 			// Not Join, whose lexical .. can differ from the file
-			// system's past a symlink; Lstat, as a HEAD symlink
-			// counts for git whether or not it resolves.
+			// system's past a symlink; Lstat, as a HEAD symlink into
+			// refs/ counts for git whether or not it resolves. A
+			// target that is a file, or below one, has no HEAD either.
 			_, err = os.Lstat(target + "/HEAD")
-			return errors.Is(err, fs.ErrNotExist)
+			return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 		case !errors.Is(err, fs.ErrNotExist):
 			return false
 		}
