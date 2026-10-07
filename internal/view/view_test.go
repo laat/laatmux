@@ -1639,42 +1639,59 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	// makes the viewer's too and sorts first. A blocked `cd ~ && claude`
 	// in a split of proj/z, in other sessions, is in the viewer's
 	// session through proj/z's workspace session as much as an idle
-	// claude observed in a window of it, and sorts first.
+	// claude observed in a window of it, and sorts first. The viewer in
+	// vm/proj/z-att, a plain attachment to proj/z, is on proj/z's line
+	// by its own session all the same, and sits with the split's visitor
+	// or the stray agent there: the tree follows proj/z's line, the
+	// agent view that agent's tile.
 	busy := home
 	busy.Activity, busy.ActivityAt = protocol.Working, now.Add(-time.Minute)
 	stray := agent("venv/laatmux/%5", "proj/z", "/home/u", "", protocol.Blocked, time.Minute)
 	idle := protocol.Agent{ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/proj/z", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-10 * time.Minute), Liveness: protocol.Alive, Cwd: "/Users/u"}
+	zAtt := protocol.Session{Name: "vm/proj/z-att", Attach: "vm/proj/z", Host: "vm"}
+	yLocal := protocol.Session{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}
 	for _, c := range []struct {
 		visitor protocol.Agent
+		current string
 		in      rows.Input
 	}{
-		{stray, rows.Input{
+		{stray, zLocal.Name, rows.Input{
 			Agents:    []protocol.Agent{stray, idle},
 			Worktrees: []protocol.Worktree{z},
 			Locals:    []protocol.Session{zLocal},
 		}},
-		{split, rows.Input{
+		{split, zLocal.Name, rows.Input{
 			Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", y.Root, y.ID, protocol.Working, time.Minute), split},
 			Worktrees: []protocol.Worktree{z, y},
-			Locals:    []protocol.Session{zLocal, {Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}},
+			Locals:    []protocol.Session{zLocal, yLocal},
 		}},
-		{visiting, rows.Input{
+		{visiting, zLocal.Name, rows.Input{
 			Agents:    []protocol.Agent{visiting, busy},
 			Worktrees: []protocol.Worktree{z, a},
 			Locals:    []protocol.Session{zLocal, {Name: "mac/proj/a", Key: "menv//m/proj/a", Host: "mac"}},
 		}},
+		{split, zAtt.Name, rows.Input{
+			Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", y.Root, y.ID, protocol.Working, time.Minute), split},
+			Worktrees: []protocol.Worktree{z, y},
+			Locals:    []protocol.Session{zLocal, yLocal, zAtt},
+		}},
+		{stray, zAtt.Name, rows.Input{
+			Agents:    []protocol.Agent{stray},
+			Worktrees: []protocol.Worktree{z},
+			Locals:    []protocol.Session{zLocal, zAtt},
+		}},
 	} {
 		in := c.in
-		in.Hosts, in.Now, in.Current = hosts, now, "vm/proj/z"
+		in.Hosts, in.Now, in.Current = hosts, now, c.current
 		for _, scope := range []Scope{ScopeAll, ScopeSession, ScopeProject} {
 			m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 30, Follow: true, Scope: scope}
 			m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
 			if r := m.Selection(); r == nil || r.ID() != c.visitor.ID {
-				t.Errorf("%s, %s, no agent of proj/z: agent view follows %+v; tiles:\n%s", c.visitor.ID, scope, r, ids(m))
+				t.Errorf("%s in %s, %s, no agent of proj/z: agent view follows %+v; tiles:\n%s", c.visitor.ID, c.current, scope, r, ids(m))
 			}
 			m.Handle(term.Key{Kind: term.KeyTab})
 			if r := m.Selection(); r == nil || r.ID() != z.ID {
-				t.Errorf("%s, %s, no agent of proj/z: tree follows %+v", c.visitor.ID, scope, r)
+				t.Errorf("%s in %s, %s, no agent of proj/z: tree follows %+v", c.visitor.ID, c.current, scope, r)
 			}
 		}
 	}

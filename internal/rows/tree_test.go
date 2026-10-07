@@ -597,9 +597,10 @@ func TestHomeAgentSettled(t *testing.T) {
 // so with proj/z's home lost, through the session of the agent laatmux
 // made at its root, and in a standing task's session, through the
 // task's workspace session. The viewer in a plain attachment to proj/z
-// is on proj/y's line all the same, and with a plain attachment there
-// the viewer elsewhere is not; the viewer in vm/proj/y is not on
-// proj/z's. Without vm/proj/z the agent keeps proj/y's workspace
+// is on proj/y's line all the same, and on proj/z's by its own session,
+// with or without an agent of proj/z in its home; the visitor's tile is
+// in the viewer's session either way. With a plain attachment there the
+// viewer elsewhere is not; the viewer in vm/proj/y is not on proj/z's. Without vm/proj/z the agent keeps proj/y's workspace
 // session; so does one in a session of proj/z's name on vm's default
 // server, and one in the session of a task whose line holds a plain
 // session. The root agent of homeless worktree proj/a, moved by hand
@@ -629,11 +630,11 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 	}
 	// seen is an agent's node's own session, the lines marked as the
 	// viewer's and those of them Own, and whether its tile is the
-	// viewer's.
+	// viewer's, and Own.
 	type seen struct {
-		local       string
-		marked, own []string
-		tile        bool
+		local         string
+		marked, own   []string
+		tile, tileOwn bool
 	}
 	look := func(in Input, id string) seen {
 		var s seen
@@ -653,8 +654,11 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		}
 		rs := Agents(in, tree)
 		for _, r := range append(rs.Main, rs.Stale...) {
-			s.tile = s.tile || r.Agent != nil && r.Agent.ID == id && r.Current
-			// An agent's tile is Own in the viewer's session alone, not
+			if r.Agent != nil && r.Agent.ID == id {
+				s.tile, s.tileOwn = r.Current, r.Own
+				continue
+			}
+			// Another agent's tile is Own in its own session alone, not
 			// through its line.
 			if mine := in.Current != "" && r.Local != nil && r.Local.Name == in.Current; r.Pending == nil && r.Own != mine {
 				t.Errorf("the tile %s Own %v", r.ID(), r.Own)
@@ -671,19 +675,27 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		current string
 		want    seen
 	}{
-		{"the viewer in vm/proj/z", func(*Input) {}, "vm/proj/z", seen{"vm/proj/z", both, onZ, true}},
-		{"proj/z's home lost", func(in *Input) { in.Worktrees[0].Session = "" }, "vm/proj/z", seen{"vm/proj/z", both, onZ, true}},
-		{"the viewer in vm/proj/y", func(*Input) {}, "vm/proj/y", seen{"vm/proj/z", onY, onY, true}},
-		{"the viewer elsewhere", func(*Input) {}, "", seen{"vm/proj/z", nil, nil, false}},
-		{"the viewer in an attachment to proj/z", func(in *Input) { in.Locals = append(in.Locals, att) }, att.Name, seen{"vm/proj/z", both, onZ, true}},
-		{"an attachment to proj/z, the viewer elsewhere", func(in *Input) { in.Locals = append(in.Locals, att) }, "", seen{"vm/proj/z", nil, nil, false}},
+		{"the viewer in vm/proj/z", func(*Input) {}, "vm/proj/z", seen{"vm/proj/z", both, onZ, true, true}},
+		{"proj/z's home lost", func(in *Input) { in.Worktrees[0].Session = "" }, "vm/proj/z", seen{"vm/proj/z", both, onZ, true, true}},
+		{"the viewer in vm/proj/y", func(*Input) {}, "vm/proj/y", seen{"vm/proj/z", onY, onY, true, false}},
+		{"the viewer elsewhere", func(*Input) {}, "", seen{"vm/proj/z", nil, nil, false, false}},
+		{"the viewer in an attachment to proj/z", func(in *Input) { in.Locals = append(in.Locals, att) }, att.Name, seen{"vm/proj/z", both, onZ, true, true}},
+		{"the viewer in an attachment to proj/z, no agent of proj/z", func(in *Input) {
+			in.Agents = in.Agents[1:]
+			in.Locals = append(in.Locals, att)
+		}, att.Name, seen{"vm/proj/z", both, onZ, true, true}},
+		{"proj/z's home lost, the viewer in an attachment to proj/z", func(in *Input) {
+			in.Worktrees[0].Session = ""
+			in.Locals = append(in.Locals, att)
+		}, att.Name, seen{"vm/proj/z", both, onZ, true, true}},
+		{"an attachment to proj/z, the viewer elsewhere", func(in *Input) { in.Locals = append(in.Locals, att) }, "", seen{"vm/proj/z", nil, nil, false, false}},
 		{"in a standing task's session", func(in *Input) {
 			in.Agents[2].Session = task.Session
 			in.Pendings = []protocol.Pending{task}
 			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/t", Key: "venv//w/proj/t", Host: "vm"})
-		}, "vm/proj/t", seen{"vm/proj/t", []string{task.ID, y.ID}, []string{task.ID}, true}},
-		{"no vm/proj/z", func(in *Input) { in.Locals = in.Locals[1:2] }, "vm/proj/y", seen{"vm/proj/y", onY, onY, true}},
-		{"on vm's default server", func(in *Input) { in.Agents[2].Server = "default" }, "vm/proj/z", seen{"vm/proj/y", onZ, onZ, false}},
+		}, "vm/proj/t", seen{"vm/proj/t", []string{task.ID, y.ID}, []string{task.ID}, true, true}},
+		{"no vm/proj/z", func(in *Input) { in.Locals = in.Locals[1:2] }, "vm/proj/y", seen{"vm/proj/y", onY, onY, true, true}},
+		{"on vm's default server", func(in *Input) { in.Agents[2].Server = "default" }, "vm/proj/z", seen{"vm/proj/y", onZ, onZ, false, false}},
 	} {
 		in := base
 		in.Agents, in.Worktrees, in.Locals = append([]protocol.Agent(nil), base.Agents...), append([]protocol.Worktree(nil), base.Worktrees...), append([]protocol.Session(nil), base.Locals...)
@@ -710,7 +722,7 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		if got := look(in, moved.ID); got.local != "vm/proj/a" {
 			t.Errorf("proj/z's home %q: the moved root agent's session %q, want vm/proj/a", home, got.local)
 		}
-		if got, want := look(in, visitor.ID), (seen{"vm/proj/z", both, onZ, true}); !reflect.DeepEqual(got, want) {
+		if got, want := look(in, visitor.ID), (seen{"vm/proj/z", both, onZ, true, true}); !reflect.DeepEqual(got, want) {
 			t.Errorf("proj/z's home %q beside proj/a: %+v, want %+v", home, got, want)
 		}
 	}
@@ -738,7 +750,7 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 	if l := HomeLine(tree, "mac", "proj/z"); l < 0 || tree[l].Pending == nil || tree[l].Local == nil || tree[l].Local.Name != "notes" {
 		t.Fatalf("the task's line, home proj/z, holding notes: %d", l)
 	}
-	if got, want := look(in, onMac.ID), (seen{"mac/proj/y", []string{"add-z"}, []string{"add-z"}, false}); !reflect.DeepEqual(got, want) {
+	if got, want := look(in, onMac.ID), (seen{"mac/proj/y", []string{"add-z"}, []string{"add-z"}, false, false}); !reflect.DeepEqual(got, want) {
 		t.Errorf("the task's line holding notes: %+v, want %+v", got, want)
 	}
 }
