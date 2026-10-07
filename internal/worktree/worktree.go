@@ -462,7 +462,7 @@ type Record struct {
 // config lists its repository: a checkout the config lists is labelled
 // with the config's name and source, any other with its directory name,
 // made a label by dirLabel, and origin, a hash after it when another
-// checkout has that label, logged once (see labels). Prunable entries,
+// repository has that label, logged once (see labels). Prunable entries,
 // whose directory is gone, are left out, as is the main checkout, which
 // is not a worktree even when the repos directory sits under the
 // worktrees one. The repos directory is scanned once; one checkout

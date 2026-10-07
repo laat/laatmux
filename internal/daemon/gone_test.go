@@ -712,9 +712,9 @@ func (f *relayFixture) awaitGone(t *testing.T, id string) {
 // and found by its origin for adds through a repository entry, keeps
 // its worktrees listed when a checkout named se_nt, of another
 // repository, appears and takes their label: they are listed under a
-// label with a hash of their origin, so a task that needs the user does not go and one
-// that handed over keeps its record, prompt and all. Left out of the
-// listing, the worktrees would read as removed.
+// label with a hash of their origin, so a task that needs the user
+// does not go and one that handed over keeps its record, prompt and
+// all. Left out of the listing, the worktrees would read as removed.
 func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})

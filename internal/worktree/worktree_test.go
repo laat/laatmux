@@ -1431,6 +1431,14 @@ func TestUnlistedLabelCollision(t *testing.T) {
 		t.Fatalf("logged %q", logged.String())
 	}
 	known("c_d", "c_d", "/elsewhere/four.git")
+	// A directory named c_d, of a fifth repository, keeps that name but
+	// does not take the label from the config: c.d is still hashed
+	// against the config's name, and nothing new is logged.
+	clone("c_d", "/elsewhere/five.git", "")
+	list(againRec, Record{Repo: "c_d-06a376", Source: "/elsewhere/hand.git", Branch: "cd", Root: cd}, oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
+	if lines() != 6 {
+		t.Fatalf("logged %q", logged.String())
+	}
 }
 
 // The ssh and https forms of one hosted repository are one repository:
