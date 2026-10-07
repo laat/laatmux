@@ -589,7 +589,7 @@ func (h HostStatus) Local() bool { return h.SSH == "" }
 // workspace package lists them all; only laatmux's are published.
 type Session struct {
 	Name    string `json:"name"`
-	Key     string `json:"key,omitempty"`     // @laatmux_workspace: <environment_id>/<root>
+	Key     string `json:"key,omitempty"`     // the key @laatmux_workspace holds: <environment_id>/<root>
 	Host    string `json:"host,omitempty"`    // @laatmux_host
 	Source  string `json:"source,omitempty"`  // @laatmux_repo; "" when unknown
 	Branch  string `json:"branch,omitempty"`  // @laatmux_branch

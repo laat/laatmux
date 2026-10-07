@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -358,6 +360,46 @@ func TestEnsureEncodedNames(t *testing.T) {
 	}
 }
 
+// A workspace session an earlier build keyed with the root as given is
+// found by its key, whatever its name, for a root with a tab or a % in
+// it, which tmux gives back as written and which is stored encoded now;
+// a root with %01 in it is not taken for one with the byte, which gets
+// a session of its own, its key stored encoded.
+func TestEnsureFindsKeyWrittenAsGiven(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	host := peer.Host{Name: "mac"}
+	roots := []string{"/w/proj/tab\tx", "/w/proj/100%", "/w/proj/a%01b"}
+	for i, root := range roots {
+		name := fmt.Sprintf("old%d", i)
+		target := "=" + name + ":"
+		if _, err := Server.Run(ctx, "new-session", "-d", "-s", name, placeholder,
+			tmux.Next, "set-option", "-t", target, "@laatmux_workspace", "env/"+root,
+			tmux.Next, "set-option", "-t", target, "@laatmux_host", "mac"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, root := range roots {
+		spec := Spec{Host: host, Managed: "m1", Name: fmt.Sprintf("mac/new%d", i), Key: protocol.SessionKey("env", root)}
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != fmt.Sprintf("old%d", i) {
+			t.Errorf("%q: %q %v %v", root, name, created, err)
+		}
+	}
+	spec := Spec{Host: host, Managed: "m1", Name: "mac/byte", Key: protocol.SessionKey("env", "/w/proj/a\x01b")}
+	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+		t.Errorf("a\\x01b: %q %v %v", name, created, err)
+	}
+	if out, err := Server.Run(ctx, "show-options", "-qv", "-t", "=mac/byte:", "@laatmux_workspace"); err != nil || string(out) != "env%/w/proj/a%01b\n" {
+		t.Errorf("a\\x01b: stored key %q %v", out, err)
+	}
+}
+
 // A plain attachment to a session laatmux new made is made under
 // <host>/<session>, tagged, found again, and its attach pane reaches
 // the managed session, for names with what new takes: a #, which
@@ -598,7 +640,9 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
-	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live", Key: "env//r/live", Branch: "live"}); err != nil || created || name != "mac/proj/live" {
+	// Its root has a newline, so the key is stored encoded.
+	live := Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live", Key: protocol.SessionKey("env", "/r/live\nx"), Branch: "live"}
+	if name, created, err := Ensure(ctx, live); err != nil || created || name != "mac/proj/live" {
 		t.Fatalf("adopt with a live pane: %q %v %v", name, created, err)
 	}
 	after, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
@@ -606,8 +650,10 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Fatalf("the live pane after adopt: %q %q %q, pid %q then %q", tag, target, dead, before, after)
 	}
 	// Found by key the next time, nothing created.
-	if name, created, err := Ensure(ctx, keyed); err != nil || created || name != "mac/proj/w" {
-		t.Fatalf("ensure after adopt: %q %v %v", name, created, err)
+	for _, spec := range []Spec{keyed, live} {
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Fatalf("ensure %s after adopt: %q %v %v", spec.Name, name, created, err)
+		}
 	}
 	// Its agent moved to a session with a U+2063 in its name: refused
 	// before the attach pane is pointed at it, which keeps its target.

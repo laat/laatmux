@@ -24,6 +24,7 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // State is the merged stream applied. Every method takes the lock; a
@@ -161,6 +162,16 @@ func (h Host) Down() string {
 	return h.Error
 }
 
+// localSession is a local session as the daemon published it, its key
+// decoded: a daemon of an earlier build publishes the key as tmux has
+// it stored, and a session this build made for a root that is stored
+// encoded would not match its worktree's key. A key a daemon of this
+// build publishes is decoded already, and reads as it is.
+func localSession(s protocol.Session) protocol.Session {
+	s.Key = workspace.DecodeKey(s.Key)
+	return s
+}
+
 // Apply applies one message of the merged stream. A snapshot replaces
 // everything; records are attributed to hosts through the environment
 // id the host records carry.
@@ -192,7 +203,7 @@ func (m *State) Apply(msg protocol.Message) {
 			m.byHost[w.ID] = m.hostOfLocked(w.EnvironmentID)
 		}
 		for _, s := range msg.Sessions {
-			m.sessions[s.Name] = s
+			m.sessions[s.Name] = localSession(s)
 		}
 		// The handoffs merge into what is known; a view may hold an
 		// anchor whose handoff the daemon has dropped since.
@@ -252,7 +263,7 @@ func (m *State) Apply(msg protocol.Message) {
 			if m.sessions == nil {
 				m.sessions = map[string]protocol.Session{}
 			}
-			m.sessions[s.Name] = *s
+			m.sessions[s.Name] = localSession(*s)
 		}
 		if msg.SessionsError != "" {
 			m.sessionsErr = msg.SessionsError
