@@ -124,6 +124,9 @@ func TestEncodeBranch(t *testing.T) {
 		"a\xffb":       "a%ffb",
 		"%09":          "%2509",
 		"blåbær/ø":     "blåbær/ø",
+		"feat/😀":       "feat/😀",
+		"c1\u0085x":    "c1\u0085x",
+		"nc\ufffex":    "nc\ufffex",
 		"日本\x80":       "日本%80",
 		"\xe2\x82":     "%e2%82",
 		"\xed\xa0\x80": "%ed%a0%80",
@@ -156,7 +159,8 @@ func TestEncodeBranch(t *testing.T) {
 }
 
 // keptByTmux is a name tmux stores as given: valid UTF-8 with no control
-// byte, no DEL, and none of the characters it changes or reads.
+// byte, no DEL, and none of the characters it changes or reads, but for
+// the "$" tmux 3.4 changes (#220).
 func keptByTmux(name string) bool {
 	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;\\\x7f") &&
 		!strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 })
