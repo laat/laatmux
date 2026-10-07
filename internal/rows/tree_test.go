@@ -1051,6 +1051,102 @@ func TestHomeAttachment(t *testing.T) {
 	}
 }
 
+// Two plain attachments with one tag, set by hand or by an older build,
+// attach to one managed session: the viewer in either is in an
+// attachment to the session, the first listed as well as the last, the
+// one the join keeps by the tag (#320). On vm, each session with two:
+//   - proj/t, the home of proj/t with nothing running there: proj/t's
+//     line is the viewer's and Own (attachedHome);
+//   - proj/z, the home of proj/z, with its agent and a visitor from
+//     proj/y: proj/z's line is the viewer's and Own, proj/y's the
+//     viewer's through the visitor, whose tile is Own (visitors);
+//   - other, which holds an agent of proj/a, whose home is proj/a: the
+//     line is the viewer's through it, its tile Own;
+//   - scratch, which holds a managed agent of no worktree: its node in
+//     other sessions is the viewer's and Own, as is its tile;
+//   - proj/n, the session of task add-n before the listing, with the
+//     add's agent at the root: the task's line and tile are the
+//     viewer's and Own, as is the agent's tile.
+//
+// A workspace session tagged by hand with proj/t's tag is no attachment:
+// the viewer in it is on its orphaned line alone. The viewer in no
+// session, or in one that is not laatmux's, is on none.
+func TestTwoAttachmentsOneTag(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	agent := func(id, session, cwd, wt string, managed bool) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Idle, ActivityAt: now,
+			Liveness: protocol.Alive, Managed: managed, Cwd: cwd, WorktreeID: wt}
+	}
+	tree := func(branch string) protocol.Worktree {
+		return protocol.Worktree{ID: "venv/worktree//w/proj/" + branch, EnvironmentID: "venv", Repo: "proj", Branch: branch, Root: "/w/proj/" + branch, Session: "proj/" + branch}
+	}
+	pt, pz, py, pa := tree("t"), tree("z"), tree("y"), tree("a")
+	inZ := agent("venv/laatmux/%1", "proj/z", pz.Root, pz.ID, true)
+	inY := agent("venv/laatmux/%2", "proj/y", py.Root, py.ID, true)
+	visitor := agent("venv/laatmux/%3", "proj/z", py.Root, py.ID, false)
+	inOther := agent("venv/laatmux/%4", "other", pa.Root, pa.ID, false)
+	inScratch := agent("venv/laatmux/%5", "scratch", "/home/u", "", true)
+	task := protocol.Pending{ID: "add-n", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "n", Root: "/w/proj/n", Session: "proj/n", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	inTask := agent("venv/laatmux/%6", "proj/n", task.Root, "", true)
+	tagged := protocol.Session{Name: "vm/proj/w", Key: "venv//w/proj/w", Host: "vm", Attach: "vm/proj/t"}
+	in := Input{
+		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents:    []protocol.Agent{inZ, inY, visitor, inOther, inScratch, inTask},
+		Worktrees: []protocol.Worktree{pt, pz, py, pa},
+		Pendings:  []protocol.Pending{task},
+		Locals:    []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}, {Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}, tagged},
+		Now:       now,
+	}
+	pair := func(session string) []string { return []string{"vm/" + session + "-a", "vm/" + session + "-b"} }
+	for _, s := range []string{"proj/t", "proj/z", "other", "scratch", "proj/n"} {
+		for _, name := range pair(s) {
+			in.Locals = append(in.Locals, protocol.Session{Name: name, Attach: "vm/" + s, Host: "vm"})
+		}
+	}
+	// seen is the lines and nodes in other sessions marked as the
+	// viewer's, those of them Own, and the tiles the viewer's and Own.
+	type seen struct{ marked, own, tiles, tilesOwn []string }
+	orphan := "session/" + tagged.Name
+	for _, c := range []struct {
+		viewers []string
+		want    seen
+	}{
+		{pair("proj/t"), seen{[]string{pt.ID}, []string{pt.ID}, nil, nil}},
+		{pair("proj/z"), seen{[]string{py.ID, pz.ID}, []string{pz.ID}, []string{inY.ID, visitor.ID, inZ.ID}, []string{visitor.ID}}},
+		{pair("other"), seen{[]string{pa.ID}, nil, []string{inOther.ID}, []string{inOther.ID}}},
+		{pair("scratch"), seen{[]string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}}},
+		{pair("proj/n"), seen{[]string{task.ID}, []string{task.ID}, []string{task.ID, inTask.ID}, []string{task.ID, inTask.ID}}},
+		{[]string{tagged.Name}, seen{[]string{orphan}, []string{orphan}, nil, nil}},
+		{[]string{"", "main"}, seen{}},
+	} {
+		for _, cur := range c.viewers {
+			in.Current = cur
+			var got seen
+			tr := Tree(in)
+			for _, n := range tr {
+				if n.Depth == 1 && n.Current {
+					got.marked = append(got.marked, n.ID())
+					if n.Own {
+						got.own = append(got.own, n.ID())
+					}
+				}
+			}
+			rs := Agents(in, tr)
+			for _, r := range rs.Main {
+				if r.Current {
+					got.tiles = append(got.tiles, r.ID())
+				}
+				if r.Own {
+					got.tilesOwn = append(got.tilesOwn, r.ID())
+				}
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("the viewer in %q: %+v, want %+v", cur, got, c.want)
+			}
+		}
+	}
+}
+
 // A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the

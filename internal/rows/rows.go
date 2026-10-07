@@ -106,8 +106,9 @@ type Row struct {
 	hostRepo string
 	Agent    *protocol.Agent
 	// Local is the local session for the row, when there is one: the
-	// workspace session by key, the plain attachment by tag, or the
-	// observed session itself on the local default server.
+	// workspace session by key, the plain attachment by tag (of several
+	// with one tag, the viewer's when it is in one), or the observed
+	// session itself on the local default server.
 	Local    *protocol.Session
 	Settled  bool
 	Orphaned bool // a local workspace session with no worktree on a listed host
