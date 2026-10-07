@@ -487,8 +487,9 @@ func (m *Model) Switch() {
 }
 
 // followedID is the id of the viewer's own row in the current view,
-// whether or not a fold hides it: the first tile that is the viewer's
-// in the agent view, the viewer's line in the tree.
+// whether or not a fold hides it: the tile that is the viewer's in the
+// agent view, the first of a worktree or a task (followRow), the
+// viewer's line in the tree.
 func (m *Model) followedID() string {
 	if m.View == ViewTree {
 		for _, n := range m.Tree {
@@ -499,10 +500,8 @@ func (m *Model) followedID() string {
 		return ""
 	}
 	// The viewer's tile is in the main group whatever its state.
-	for _, r := range m.Rows.Main {
-		if r.Current {
-			return r.ID()
-		}
+	if i := followRow(len(m.Rows.Main), func(i int) *rows.Row { return &m.Rows.Main[i] }); i >= 0 {
+		return m.Rows.Main[i].ID()
 	}
 	return ""
 }

@@ -238,12 +238,19 @@ row.
 **Following.** A selection that follows the viewer's own session keeps
 following it in the new view. In the agent view it follows the first
 tile in sort order among the agents of the viewer's session or
-worktree; in the tree, the worktree line of the viewer's worktree, or
-the task line standing for it or at its session's root, the session a
-task's add or jump made before the host listed the worktree; or, with
-no worktree and no task, the viewer's session's own line, wherever it
-sits: under its repository for an orphaned session with a repository
-tag, in other sessions otherwise.
+worktree, and its tasks; in the tree, the worktree line of the viewer's
+worktree, or the task line standing for it or at its session's root,
+the session a task's add or jump made before the host listed the
+worktree; or, with no worktree and no task, the viewer's session's own
+line, wherever it sits: under its repository for an orphaned session
+with a repository tag, in other sessions otherwise. A tile of no
+worktree and no task is followed only when no tile of a worktree or a
+task is the viewer's: an agent started outside any worktree from a
+split of the viewer's session, or observed in a window of it, stands
+in other sessions and is the viewer's beside the worktree's agents. It
+may sort before them, and `o`, `O`, `x` and `a` on it would find no
+worktree. The tree follows its node only when no line is the viewer's,
+other sessions coming after every line.
 
 ### The rows package
 

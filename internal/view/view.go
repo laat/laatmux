@@ -314,14 +314,36 @@ func (m *Model) Visible() []Item {
 }
 
 // followed is the index of the viewer's own row among the visible ones,
-// -1 when none is: the filter or a collapsed group can hide it.
+// -1 when none is: the filter or a collapsed group can hide it. Of
+// several, the one followRow picks.
 func (m *Model) followed(vis []Item) int {
-	for _, it := range vis {
-		if it.Row.Current {
-			return it.Index
-		}
+	if i := followRow(len(vis), func(i int) *rows.Row { return vis[i].Row }); i >= 0 {
+		return vis[i].Index
 	}
 	return -1
+}
+
+// followRow is the index of the row following takes of n in display
+// order, row(i) the i-th: the first that is the viewer's, but a tile of
+// no worktree and no task only when none other is. Such a tile is in
+// other sessions, an agent started outside any worktree from a split of
+// the viewer's session or observed in a window of it, and may sort
+// before the viewer's worktree's tiles, where the keys that read the
+// row's worktree, o, O, x and a, would find none. The tree's order puts
+// other sessions after every line already. -1 for none.
+func followRow(n int, row func(int) *rows.Row) int {
+	first := -1
+	for i := 0; i < n; i++ {
+		r := row(i)
+		switch {
+		case !r.Current:
+		case r.Kind != rows.KindTile || r.Worktree != nil || r.Pending != nil:
+			return i
+		case first < 0:
+			first = i
+		}
+	}
+	return first
 }
 
 // Selection is the selected row, nil when the list is empty or, while
