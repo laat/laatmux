@@ -1004,21 +1004,28 @@ func CheckTarget(name string) error {
 }
 
 // KillSessionID kills the session with the id, a $ and its number as
-// #{session_id} prints it. An id reaches every session and nothing
-// else: tmux looks a target that starts with a $ up as an id only,
-// never as a name or a client's, so it kills a session whose name no
-// target reaches (CheckTarget), and tmux gives no other session the id
-// of one gone while the server runs. So a session gone is no error,
-// and is told by what tmux says: can't find session for the id, no
-// current target when the server has no session left, and NoServer
-// when the server is gone. Anything but an id is refused, not passed:
-// an empty target is the current session, and a window's or a pane's
-// id is the session it is in.
-func (s Server) KillSessionID(ctx context.Context, id string) error {
+// #{session_id} prints it, on the server whose #{pid} is serverPID: the
+// one it was listed on. An id reaches every session and nothing else:
+// tmux looks a target that starts with a $ up as an id only, never as a
+// name or a client's, so it kills a session whose name no target
+// reaches (CheckTarget), and tmux gives no other session the id of one
+// gone while the server runs. A server started since numbers its
+// sessions from $0 again, so if-shell -F runs the kill only when the
+// pid is the server's, in the same invocation and so on the same
+// server; on another one the session listed is gone with its own. A
+// session gone is no error either, and is told by what tmux says: can't
+// find session for the id, no current target when the server has no
+// session left, and NoServer when the server is gone. Anything but an
+// id is refused, not passed: an empty target is the current session,
+// and a window's or a pane's id is the session it is in.
+func (s Server) KillSessionID(ctx context.Context, id string, serverPID int) error {
 	if n, ok := strings.CutPrefix(id, "$"); !ok || n == "" || strings.Trim(n, "0123456789") != "" {
 		return fmt.Errorf("tmux: %q is not a session id", id)
 	}
-	_, err := s.Run(ctx, "kill-session", "-t", id)
+	if serverPID <= 0 {
+		return fmt.Errorf("tmux: %d is not a server pid", serverPID)
+	}
+	_, err := s.Run(ctx, "if-shell", "-F", "#{==:#{pid},"+strconv.Itoa(serverPID)+"}", "kill-session -t "+id)
 	var te *Error
 	if NoServer(err) || errors.As(err, &te) && (te.Msg == "can't find session: "+id || te.Msg == "no current target") {
 		return nil

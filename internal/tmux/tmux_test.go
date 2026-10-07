@@ -1060,10 +1060,12 @@ func TestSessionTargets(t *testing.T) {
 // =c:d: takes for window d:x of session c, and $1, which as a target is
 // the session with the id $1, c:d here (c_d before tmux 3.7). Anything
 // but a session id is refused: the empty target is the most recent
-// session, a window's id and a pane's the session they are in. A
-// session gone is no error and kills nothing else, so session c and its
-// two windows are left; nor is one gone from a server with no session
-// left, or with no server.
+// session, a window's id and a pane's the session they are in; so is a
+// pid that is none. A pid not the server's, which a server started
+// since the listing has, kills nothing. A session gone is no error and
+// kills nothing else, so session c and its two windows are left; nor
+// is one gone from a server with no session left, or with no server.
+// A server that cannot be reached is an error.
 func TestKillSessionID(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -1085,24 +1087,35 @@ func TestKillSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(panes) != len(made) {
+	if len(panes) != len(made) || panes[0].ServerPID <= 0 {
 		t.Fatalf("listed %d panes of %d: %+v", len(panes), len(made), panes)
 	}
+	pid := panes[0].ServerPID
 	for _, p := range panes {
-		if i := slices.IndexFunc(made, func(m [2]string) bool { return m[0] == p.ID }); i < 0 || p.SessionID != made[i][1] {
-			t.Errorf("pane %s of %q listed with the session id %q, made %q", p.ID, p.Session, p.SessionID, made)
+		if i := slices.IndexFunc(made, func(m [2]string) bool { return m[0] == p.ID }); i < 0 || p.SessionID != made[i][1] || p.ServerPID != pid {
+			t.Errorf("pane %s of %q listed with the session id %q on server %d, made %q on %d", p.ID, p.Session, p.SessionID, p.ServerPID, made, pid)
 		}
 	}
 	for _, id := range []string{"", "c", "=c:", "$", "$1x", "@1", "%1"} {
-		if err := s.KillSessionID(ctx, id); err == nil || !strings.Contains(err.Error(), "not a session id") {
+		if err := s.KillSessionID(ctx, id, pid); err == nil || !strings.Contains(err.Error(), "not a session id") {
 			t.Errorf("KillSessionID %q: %v, want a refusal", id, err)
 		}
 	}
+	dollar1 := made[3][1]
+	if err := s.KillSessionID(ctx, dollar1, 0); err == nil || !strings.Contains(err.Error(), "not a server pid") {
+		t.Errorf("KillSessionID %s on server 0: %v, want a refusal", dollar1, err)
+	}
+	if err := s.KillSessionID(ctx, dollar1, pid+1); err != nil {
+		t.Errorf("KillSessionID %s on another server: %v", dollar1, err)
+	}
+	if _, err := s.Run(ctx, "has-session", "-t", dollar1); err != nil {
+		t.Errorf("KillSessionID %s on another server killed it: %v", dollar1, err)
+	}
 	for _, m := range [][2]string{made[3], made[2]} {
-		if err := s.KillSessionID(ctx, m[1]); err != nil {
+		if err := s.KillSessionID(ctx, m[1], pid); err != nil {
 			t.Errorf("KillSessionID %s: %v", m[1], err)
 		}
-		if err := s.KillSessionID(ctx, m[1]); err != nil {
+		if err := s.KillSessionID(ctx, m[1], pid); err != nil {
 			t.Errorf("KillSessionID %s gone: %v", m[1], err)
 		}
 	}
@@ -1111,10 +1124,10 @@ func TestKillSessionID(t *testing.T) {
 		t.Fatalf("sessions left %q %v, want c with 2 windows", out, err)
 	}
 	c := made[0][1]
-	if err := s.KillSessionID(ctx, c); err != nil {
+	if err := s.KillSessionID(ctx, c, pid); err != nil {
 		t.Errorf("KillSessionID %s: %v", c, err)
 	}
-	if err := s.KillSessionID(ctx, c); err != nil {
+	if err := s.KillSessionID(ctx, c, pid); err != nil {
 		t.Errorf("KillSessionID %s with no session left: %v", c, err)
 	}
 	// The server may still be going after kill-server returns.
@@ -1130,8 +1143,11 @@ func TestKillSessionID(t *testing.T) {
 	if !NoServer(err) {
 		t.Fatalf("server still up: %v", err)
 	}
-	if err := s.KillSessionID(ctx, c); err != nil {
+	if err := s.KillSessionID(ctx, c, pid); err != nil {
 		t.Errorf("KillSessionID %s with no server: %v", c, err)
+	}
+	if err := (Server{Path: "/dev/null/sock"}).KillSessionID(ctx, c, pid); err == nil {
+		t.Error("KillSessionID through a socket path under a file: no error")
 	}
 }
 
