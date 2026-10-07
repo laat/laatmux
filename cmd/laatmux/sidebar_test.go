@@ -625,7 +625,8 @@ func TestSidebarExeFormat(t *testing.T) {
 
 // on --session names the session in the option, twice once, and kills
 // the tagged panes elsewhere; a plain on clears the option; off unsets
-// the option, the hooks and the jump keys.
+// the option, the hooks and the jump keys, and kills the tagged pane
+// and no other.
 func TestSidebarScopeAndOff(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -667,6 +668,16 @@ func TestSidebarScopeAndOff(t *testing.T) {
 	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
 		t.Errorf("the option after a plain on: %v", sessions)
 	}
+	// A tagged pane for off to kill, split before the hooks are set, so
+	// no hook runs for it; every other pane is the user's.
+	tagged := run("split-window", "-d", "-h", "-t", "other:", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", tagged, sidebarTag, "1")
+	var user []string
+	for _, id := range strings.Fields(run("list-panes", "-a", "-F", "#{pane_id}")) {
+		if id != tagged {
+			user = append(user, id)
+		}
+	}
 	if err := setSidebarHooks(ctx, "/usr/local/bin/laatmux"); err != nil {
 		t.Fatal(err)
 	}
@@ -677,14 +688,61 @@ func TestSidebarScopeAndOff(t *testing.T) {
 	if err := sidebarOff(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// -N on the reads after off: a server off killed would be started
+	// again by list-keys, and found empty.
+	if out, err := workspace.Server.Run(ctx, "-N", "list-panes", "-a", "-F", "#{pane_id}"); err != nil || !slices.Equal(strings.Fields(string(out)), user) {
+		t.Errorf("panes after off: %q %v, want %q", out, err, user)
+	}
 	if on, _ := sidebarHooksSet(ctx); on {
 		t.Error("hooks after off")
 	}
-	if k := run("list-keys", "-T", "root"); strings.Contains(k, "sidebar jump") {
+	if k := run("-N", "list-keys", "-T", "root"); strings.Contains(k, "sidebar jump") {
 		t.Error("jump keys after off")
 	}
 	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
 		t.Errorf("the option after off: %v", sessions)
+	}
+}
+
+// reap kills a sidebar pane alone in its window, and keeps one beside a
+// live pane and one beside a dead pane remain-on-exit keeps; no other
+// pane goes.
+func TestSidebarReap(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	window := func() (main, side string) {
+		w := run("new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000")
+		main = run("display-message", "-p", "-t", w, "#{pane_id}")
+		side = run("split-window", "-d", "-h", "-t", w, "-P", "-F", "#{pane_id}", "sleep 1000")
+		run("set-option", "-p", "-t", side, sidebarTag, "1")
+		return main, side
+	}
+	window()
+	dead, _ := window()
+	run("set-option", "-p", "-t", dead, "remain-on-exit", "on", tmux.Next, "respawn-pane", "-k", "-t", dead, "true")
+	for i := 0; run("display-message", "-p", "-t", dead, "#{pane_dead}") != "1"; i++ {
+		if i == 50 {
+			t.Fatalf("pane %s did not die", dead)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	alone, aloneSide := window()
+	run("kill-pane", "-t", alone)
+	var want []string
+	for _, id := range strings.Fields(run("list-panes", "-a", "-F", "#{pane_id}")) {
+		if id != aloneSide {
+			want = append(want, id)
+		}
+	}
+	if err := sidebarReap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Fields(run("list-panes", "-a", "-F", "#{pane_id}")); !slices.Equal(got, want) {
+		t.Errorf("panes after reap: %q, want %q", got, want)
 	}
 }
 
@@ -826,8 +884,12 @@ func TestNestedShell(t *testing.T) {
 // tmux.Sep or a newline in it: a pane listening there is listed by its
 // whole path, with its window's panes and with every pane, and a
 // command for its window reaches it. Split at Sep, the line of the
-// first path had three fields and the second path's line was cut in
-// two, so neither pane was listed and a command reached no sidebar.
+// first path had three fields and was dropped, and the second path's
+// line was cut at the newline, so its pane was listed by a path cut
+// short, and a command reached neither. Each path has a $ before a
+// letter, which tmux 3.4 prints as \$ and Records reads back as
+// written. A sidebar pane not listening yet, and a pane with a socket
+// tag that is no sidebar's, are not listed.
 func TestSidebarSocketsWithSep(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -842,7 +904,7 @@ func TestSidebarSocketsWithSep(t *testing.T) {
 	}
 	var sides []side
 	var want []string
-	for _, name := range []string{"st" + tmux.Sep + "x", "st\nx"} {
+	for _, name := range []string{"st" + tmux.Sep + "$a", "st\n$b"} {
 		window := run("new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000")
 		pane := run("split-window", "-d", "-h", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
 		run("set-option", "-p", "-t", pane, sidebarTag, "1")
@@ -869,6 +931,10 @@ func TestSidebarSocketsWithSep(t *testing.T) {
 		sides = append(sides, side{window, path, got})
 		want = append(want, path)
 	}
+	early := run("split-window", "-d", "-h", "-t", sides[0].window, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", early, sidebarTag, "1")
+	stray := run("split-window", "-d", "-h", "-t", sides[1].window, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", stray, socketTag, filepath.Join(base, "stray.sock"))
 	slices.Sort(want)
 	if got, err := sidebarSockets(ctx, "", true); err != nil || !slices.Equal(slices.Sorted(slices.Values(got)), want) {
 		t.Errorf("every socket: %q %v, want %q", got, err, want)
