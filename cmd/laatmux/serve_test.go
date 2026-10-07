@@ -150,7 +150,8 @@ func seedRemote(t *testing.T, base string) string {
 
 // The fixture's seed commit succeeds in an environment that names
 // config that fails every commit, with an identity from its
-// repository's config alone.
+// repository's config alone, and leaves alone the repository and index
+// the environment names as well.
 func TestGitIsolated(t *testing.T) {
 	gittest.CheckIsolated(t, func(t *testing.T) { seedRemote(t, t.TempDir()) })
 }

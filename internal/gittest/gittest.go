@@ -1,5 +1,5 @@
-// Package gittest keeps the git a test run starts to the config of the
-// test's own repositories and the run's, and checks that a package's
+// Package gittest keeps the git a test run starts to the test's own
+// repositories, their config and the run's, and checks that a package's
 // TestMain does.
 package gittest
 
@@ -24,11 +24,20 @@ import (
 // ignore and attributes files git reads with no config naming them. A
 // developer's commit signing, hooks, ignores and the like stay out of a
 // test's repositories, and a commit there takes its identity from its
-// repository's config, on every machine. A package whose tests run git
-// calls it from TestMain.
+// repository's config, on every machine. Nor does that git take its
+// repository, index or objects from the environment: none of the
+// variables of repoEnv, which git exports to a hook it runs, so a test
+// run from a hook leaves the hook's repository and index alone. A package
+// whose tests run git calls it from TestMain.
 func Isolate() {
 	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// After the two above, which keep a global or system config git
+	// cannot parse from failing the git that lists them, and before the
+	// run config below: the list has GIT_CONFIG_COUNT.
+	for _, k := range repoEnv() {
+		os.Unsetenv(k)
+	}
 	os.Unsetenv("GIT_CONFIG")
 	os.Unsetenv("GIT_CONFIG_PARAMETERS")
 	for i, kv := range runConfig {
@@ -36,6 +45,27 @@ func Isolate() {
 		os.Setenv(fmt.Sprintf("GIT_CONFIG_VALUE_%d", i), kv[1])
 	}
 	os.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(len(runConfig)))
+}
+
+// repoEnv returns the variables git clears when it starts a git for
+// another repository: the ones that name a repository, its work tree,
+// index and objects, and config that goes with them. It asks the git on
+// the machine, so a variable a later git adds is in the list; every git
+// the tests run with prints it outside a repository (git 2.8.2 made it
+// work there, and the tests' git init --initial-branch takes 2.28). When
+// that git does not run, it returns what git 2.54 prints.
+func repoEnv() []string {
+	out, err := exec.Command("git", "rev-parse", "--local-env-vars").Output()
+	if names := strings.Fields(string(out)); err == nil && len(names) > 0 {
+		return names
+	}
+	return []string{
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
+		"GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+		"GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+		"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+		"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+	}
 }
 
 // runConfig is the config Isolate gives every git of the run, in the
@@ -58,16 +88,19 @@ const child = "LAATMUX_TEST_GIT_ISOLATED"
 // with an identity in its config, in a run of this test binary with the
 // top-level test t alone, and checks there that git reads runConfig and
 // no other config outside a repository. That run's environment has
-// none of this run's GIT_CONFIG, author and committer variables, and
-// names config in each way git takes it from the environment: a global
-// config that signs with a program that fails; a system config, config
-// in GIT_CONFIG_PARAMETERS and in GIT_CONFIG_COUNT that each run a
-// pre-commit hook that fails; a GIT_CONFIG file, which git config reads
-// and writes in place of the repository's config, so the commit's
-// identity would land there; and a global ignore file that ignores
-// everything. Both pass when TestMain called Isolate. The global and the
-// system config are first shown to fail a commit read alone, and a
-// commit to succeed with neither.
+// none of this run's GIT_CONFIG, author and committer variables or of
+// repoEnv, and names config in each way git takes it from the
+// environment: a global config that signs with a program that fails; a
+// system config, config in GIT_CONFIG_PARAMETERS and in GIT_CONFIG_COUNT
+// that each run a pre-commit hook that fails; a GIT_CONFIG file, which
+// git config reads and writes in place of the repository's config, so
+// the commit's identity would land there; and a global ignore file that
+// ignores everything. It names a repository, its common directory, work
+// tree, index and objects too, as git does for a hook it runs, in a
+// directory of their own where none of them is; the commit leaves that
+// directory empty. Both pass when TestMain called Isolate. The global
+// and the system config are first shown to fail a commit read alone,
+// and a commit to succeed with neither.
 func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 	t.Helper()
 	if os.Getenv(child) != "" {
@@ -108,10 +141,14 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 	write(t, system, fmt.Sprintf("[core]\n\thooksPath = %q\n", hooks), 0o644)
 	write(t, filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", 0o755)
 	write(t, filepath.Join(xdg, "git", "ignore"), "*\n", 0o644)
+	// Without repoEnv's variables for the git here as well: in a package
+	// whose TestMain does not call Isolate, run from a hook, the init and
+	// the commits below would be the hook's repository's.
 	var env []string
+	local := repoEnv()
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(k, "GIT_CONFIG") && !strings.HasPrefix(k, "GIT_AUTHOR_") && !strings.HasPrefix(k, "GIT_COMMITTER_") && k != "EMAIL" {
+		if !strings.HasPrefix(k, "GIT_CONFIG") && !strings.HasPrefix(k, "GIT_AUTHOR_") && !strings.HasPrefix(k, "GIT_COMMITTER_") && k != "EMAIL" && !slices.Contains(local, k) {
 			env = append(env, kv)
 		}
 	}
@@ -139,6 +176,14 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// The repository variables git exports to a hook, naming paths in
+	// other that are not there. Each of them, left in place, fails the
+	// commit or has git write in other; repoEnv's other variables change
+	// nothing a commit in a new repository does.
+	other := filepath.Join(dir, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	run := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
 	run.Env = slices.Concat(env, []string{
 		child + "=1",
@@ -148,13 +193,25 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 		"GIT_CONFIG_PARAMETERS=" + sq("core.hooksPath") + "=" + sq(hooks),
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=" + hooks,
 		"XDG_CONFIG_HOME=" + xdg,
+		"GIT_DIR=" + filepath.Join(other, "git"),
+		"GIT_COMMON_DIR=" + filepath.Join(other, "common"),
+		"GIT_WORK_TREE=" + filepath.Join(other, "work"),
+		"GIT_INDEX_FILE=" + filepath.Join(other, "index"),
+		"GIT_OBJECT_DIRECTORY=" + filepath.Join(other, "objects"),
 	})
 	// Killed at the deadline, the child's output is not waited for past
 	// a moment: something it left running may hold the pipe.
 	run.WaitDelay = 5 * time.Second
 	out, err := run.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()+" ") {
-		t.Errorf("the commit under config that fails every commit: %v\n%s", err, out)
+		t.Errorf("the commit under config that fails every commit and another repository's variables: %v\n%s", err, out)
+	}
+	left, err := os.ReadDir(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range left {
+		t.Errorf("the commit wrote %s", filepath.Join(other, e.Name()))
 	}
 }
 
