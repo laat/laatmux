@@ -881,6 +881,156 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 	}
 }
 
+// The viewer in a plain attachment to a line's home is on the line by
+// its own session whatever runs there, and of several lines with that
+// home only the one HomeLine picks is Own; the others are the viewer's
+// through it. On vm:
+//   - a task add-t for proj/t before the listing, its session proj/t:
+//     the viewer in vm/proj/t-att is on the task's line, Own, with the
+//     add's agent at the root in proj/t, with no agent there, and with
+//     claude started there after a cd elsewhere, with and without the
+//     task's workspace session; the viewer elsewhere is not (#298).
+//     The older add-o for proj/t beside it is the viewer's with it, not
+//     Own: add-t, the newest, holds the add's agent and comes first;
+//   - add-t standing for proj/t listed with no home and no agent, whose
+//     home is the task's session: the same, and the older add-o for it,
+//     beside it, is the viewer's with it, not Own (#298). With add-t's
+//     session not reported yet and the agent laatmux made at the root
+//     in proj/t, add-t's home is that agent's session, which HomeLine
+//     counts add-o's own: add-t, which holds the children and which
+//     following goes to, is Own all the same, add-o the viewer's with it;
+//     so with no agent, add-t then having no home, the viewer on the
+//     group through add-o's session alone. Tasks standing for proj/y
+//     after proj/x's line, which the viewer is on, are not the viewer's;
+//   - add-t submitted through vm2, another name of vm's machine, which
+//     lists its worktrees under vm: the viewer in an attachment through
+//     either name is on the task's line, Own, standing for proj/t with
+//     its home or before the listing. With vm2 another machine, which
+//     has a proj/z homed in proj/z as vm has, the viewer in vm2's
+//     attachment is on vm2's line alone. A task for proj/z submitted
+//     through vm2 before the listing, beside proj/a's root agent moved
+//     into proj/z, leaves one line Own: proj/a's, the one HomeLine picks
+//     under vm, the name the view's LineFor asks with, which does not
+//     see the task (#322);
+//   - proj/z with its home lost, its root agent in proj/z, and homeless
+//     proj/a, branch z of the repository other, whose root agent was
+//     moved by hand into proj/z: both lines' home is proj/z, and proj/a's
+//     line is first in the tree. The viewer in vm/proj/z-att is on both,
+//     and Own on proj/z's alone, the session's line by its name; so with
+//     proj/z's home still reported, the line's by its own home (#303).
+func TestHomeAttachment(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	hosts := []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}}
+	managed := func(id, session, cwd, wt string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Idle, ActivityAt: now,
+			Liveness: protocol.Alive, Managed: true, Cwd: cwd, WorktreeID: wt}
+	}
+	task := protocol.Pending{ID: "add-t", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "t", Root: "/w/proj/t", Session: "proj/t", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	older := task
+	older.ID, older.SubmittedAt = "add-o", now.Add(-time.Minute)
+	unreported := task
+	unreported.Session = ""
+	wt := protocol.Worktree{ID: "venv/worktree//w/proj/t", EnvironmentID: "venv", Repo: "proj", Branch: "t", Root: "/w/proj/t"}
+	tAtt := protocol.Session{Name: "vm/proj/t-att", Attach: "vm/proj/t", Host: "vm"}
+	tLocal := protocol.Session{Name: "vm/proj/t", Key: "venv//w/proj/t", Host: "vm"}
+	z := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Branch: "z", Root: "/w/proj/z"}
+	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "other", Branch: "z", Root: "/w/proj/a"}
+	wtHomed := wt
+	wtHomed.Session = "proj/t"
+	viaVM2 := task
+	viaVM2.Host = "vm2"
+	aliases := []Host{hosts[0], hosts[0]}
+	aliases[1].Name = "vm2"
+	vm2Att := protocol.Session{Name: "vm2/proj/t", Attach: "vm2/proj/t", Host: "vm2"}
+	x := protocol.Worktree{ID: "venv/worktree//w/proj/x", EnvironmentID: "venv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}
+	y := protocol.Worktree{ID: "venv/worktree//w/proj/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y"}
+	yNew := protocol.Pending{ID: "add-y2", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: y.Root, Session: y.Session, Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	yOld := yNew
+	yOld.ID, yOld.SubmittedAt = "add-y1", now.Add(-time.Minute)
+	xAtt := protocol.Session{Name: "vm/proj/x-att", Attach: "vm/proj/x", Host: "vm"}
+	zHomed := z
+	zHomed.Session = "proj/z"
+	twoMachines := []Host{hosts[0], hosts[0]}
+	twoMachines[1].Name, twoMachines[1].EnvironmentID = "vm2", "v2env"
+	z2 := zHomed
+	z2.ID, z2.EnvironmentID = "v2env/worktree//w/proj/z", "v2env"
+	z2Att := protocol.Session{Name: "vm2/proj/z-att", Attach: "vm2/proj/z", Host: "vm2"}
+	zAtt := protocol.Session{Name: "vm/proj/z-att", Attach: "vm/proj/z", Host: "vm"}
+	zTask := protocol.Pending{ID: "add-z", Host: "vm2", EnvironmentID: "venv", Repo: "proj", Branch: "z", Root: z.Root, Session: "proj/z", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	zLocals := []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}, {Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"}, zAtt}
+	zAgents := []protocol.Agent{managed("venv/laatmux/%1", "proj/z", z.Root, z.ID), managed("venv/laatmux/%2", "proj/z", a.Root, a.ID)}
+	onT := []string{task.ID}
+	for _, c := range []struct {
+		name        string
+		in          Input
+		marked, own []string // the worktree and task lines in the tree's order
+	}{
+		{"the add's agent there", Input{Agents: []protocol.Agent{managed("venv/laatmux/%7", "proj/t", task.Root, "")}, Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"no agent there", Input{Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"no agent there, the task's workspace session", Input{Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tLocal, tAtt}, Current: tAtt.Name}, onT, onT},
+		{"claude after a cd there", Input{Agents: []protocol.Agent{managed("venv/laatmux/%8", "proj/t", "/home/u", "")}, Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"claude after a cd there, the task's workspace session", Input{Agents: []protocol.Agent{managed("venv/laatmux/%8", "proj/t", "/home/u", "")}, Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tLocal, tAtt}, Current: tAtt.Name}, onT, onT},
+		{"the viewer elsewhere", Input{Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tAtt}}, nil, nil},
+		{"beside add-o, the add's agent there", Input{Agents: []protocol.Agent{managed("venv/laatmux/%7", "proj/t", task.Root, "")}, Pendings: []protocol.Pending{older, task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, []string{task.ID, older.ID}, onT},
+		{"beside add-o, no agent there", Input{Pendings: []protocol.Pending{older, task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, []string{task.ID, older.ID}, onT},
+		{"standing for proj/t, no home, no agent", Input{Worktrees: []protocol.Worktree{wt}, Pendings: []protocol.Pending{task}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"standing for proj/t beside add-o", Input{Worktrees: []protocol.Worktree{wt}, Pendings: []protocol.Pending{older, task}, Locals: []protocol.Session{tLocal, tAtt}, Current: tAtt.Name}, []string{task.ID, older.ID}, onT},
+		{"add-t's session unreported, beside add-o", Input{Agents: []protocol.Agent{managed("venv/laatmux/%9", "proj/t", wt.Root, wt.ID)}, Worktrees: []protocol.Worktree{wt}, Pendings: []protocol.Pending{older, unreported}, Locals: []protocol.Session{tLocal, tAtt}, Current: tAtt.Name}, []string{task.ID, older.ID}, onT},
+		{"add-t's session unreported, no agent, beside add-o", Input{Worktrees: []protocol.Worktree{wt}, Pendings: []protocol.Pending{older, unreported}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, []string{task.ID, older.ID}, onT},
+		{"proj/x, then tasks standing for proj/y", Input{Worktrees: []protocol.Worktree{x, y}, Pendings: []protocol.Pending{yOld, yNew}, Locals: []protocol.Session{xAtt}, Current: xAtt.Name}, []string{x.ID}, []string{x.ID}},
+		{"standing for proj/t, through vm2, attached through vm", Input{Hosts: aliases, Worktrees: []protocol.Worktree{wtHomed}, Pendings: []protocol.Pending{viaVM2}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"standing for proj/t, through vm2, attached through vm2", Input{Hosts: aliases, Worktrees: []protocol.Worktree{wtHomed}, Pendings: []protocol.Pending{viaVM2}, Locals: []protocol.Session{vm2Att}, Current: vm2Att.Name}, onT, onT},
+		{"through vm2, attached through vm", Input{Hosts: aliases, Pendings: []protocol.Pending{viaVM2}, Locals: []protocol.Session{tAtt}, Current: tAtt.Name}, onT, onT},
+		{"proj/z's task through vm2 beside proj/a, attached through vm", Input{Hosts: aliases, Agents: zAgents[1:], Worktrees: []protocol.Worktree{a}, Pendings: []protocol.Pending{zTask}, Locals: []protocol.Session{zLocals[1], zAtt}, Current: zAtt.Name}, []string{a.ID, zTask.ID}, []string{a.ID}},
+		{"proj/z on vm and on vm2, attached through vm2", Input{Hosts: twoMachines, Worktrees: []protocol.Worktree{zHomed, z2}, Locals: []protocol.Session{zAtt, z2Att}, Current: z2Att.Name}, []string{z2.ID}, []string{z2.ID}},
+		{"proj/z's home lost, beside proj/a", Input{Agents: zAgents, Worktrees: []protocol.Worktree{z, a}, Locals: zLocals, Current: zAtt.Name}, []string{a.ID, z.ID}, []string{z.ID}},
+		{"proj/z's home reported, beside proj/a", Input{Agents: zAgents, Worktrees: []protocol.Worktree{zHomed, a}, Locals: zLocals, Current: zAtt.Name}, []string{a.ID, z.ID}, []string{z.ID}},
+		{"beside proj/a, the viewer elsewhere", Input{Agents: zAgents, Worktrees: []protocol.Worktree{z, a}, Locals: zLocals}, nil, nil},
+	} {
+		in := c.in
+		in.Now = now
+		if in.Hosts == nil {
+			in.Hosts = hosts
+		}
+		tree := Tree(in)
+		if len(in.Worktrees) == 2 && in.Worktrees[1].ID == a.ID {
+			// The precondition: proj/a's line first with the home, proj/z's
+			// the one HomeLine picks.
+			if l := HomeLine(tree, "vm", "proj/z"); l < 0 || tree[l].ID() != z.ID {
+				t.Fatalf("%s: the home's line is %d, not proj/z's", c.name, l)
+			}
+			for _, n := range tree {
+				if n.Depth == 1 && n.Home() == "proj/z" {
+					if n.ID() != a.ID {
+						t.Fatalf("%s: the first line with the home is %s, not proj/a's", c.name, n.ID())
+					}
+					break
+				}
+			}
+		}
+		var marked, own []string
+		for _, n := range tree {
+			if (n.Kind == KindWorktree || n.Kind == KindTask) && n.Current {
+				marked = append(marked, n.ID())
+				if n.Own {
+					own = append(own, n.ID())
+				}
+			}
+		}
+		if !reflect.DeepEqual(marked, c.marked) || !reflect.DeepEqual(own, c.own) {
+			t.Errorf("%s: the viewer's lines %v, Own %v; want %v, Own %v", c.name, marked, own, c.marked, c.own)
+		}
+		// proj/a's root agent in proj/z is the viewer's with its line, and
+		// not Own: its own session is vm/proj/a, where its jump goes.
+		rs := Agents(in, tree)
+		for _, r := range append(rs.Main, rs.Stale...) {
+			if r.Agent != nil && r.Agent.ID == zAgents[1].ID && (r.Current != (in.Current != "") || r.Own) {
+				t.Errorf("%s: proj/a's root agent's tile Current %v Own %v", c.name, r.Current, r.Own)
+			}
+		}
+	}
+}
+
 // A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the

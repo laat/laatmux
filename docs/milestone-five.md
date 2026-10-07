@@ -240,10 +240,14 @@ following it in the new view. In the tree it follows, of the nodes
 that are the viewer's, the first in the tree's order of the first kind
 there is: a worktree, task or orphaned session's line that is the
 viewer's by its own session, the workspace session the viewer is in,
-an attachment to its home (with none, to the session add made for
-it, as Precedence has it), or the plain session its jump goes to; an
-agent in other sessions in the viewer's session, the attachment to a
-`new` session say; any other. That is usually the worktree line of the
+an attachment to its home whatever runs there (with none, to the
+session add made for it, as Precedence has it), or the plain session
+its jump goes to; of several lines with one home, a homeless worktree
+whose root agent was moved by hand into another worktree's session
+say, the attachment is the own session only of the line the session
+stays with, as `Enter` has it, and the others are the viewer's through
+it; an agent in other sessions in the viewer's session, the attachment
+to a `new` session say; any other. That is usually the worktree line of the
 viewer's worktree, or the task line standing for it or at its
 session's root, the session a task's add or jump made before the host
 listed the worktree; or, with no worktree and no task, the viewer's

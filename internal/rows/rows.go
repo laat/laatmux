@@ -136,17 +136,20 @@ type Row struct {
 	Worst   *Row
 	Current bool // the viewer's own session
 	// Own is a depth-1 node of the tree that is the viewer's by its own
-	// session: its local session, an attachment to its home, or the
+	// session: its local session, an attachment to its home, of the
+	// lines with that home the one HomeLine picks (of the tasks standing
+	// for one worktree, the newest when it picks one of them), or the
 	// plain session its jump goes to. Not a line that is Current only
 	// through an agent of it in the viewer's session, a visitor from a
-	// split or a window there, nor an agent of no worktree that is
-	// Current through the workspace session of the line whose home its
-	// session is. On a tile: an agent's whose local session is the
-	// viewer's, or that in other sessions is the viewer's through that
-	// line; a visitor's the viewer sits with through a plain attachment
-	// to its session (attached); or a task's whose line is Own.
-	// Following prefers it, and a line to any other node (the view's
-	// viewerRank).
+	// split or a window there, nor another line with the home the
+	// viewer's attachment is attached to, nor an agent of no worktree
+	// that is Current through the workspace session of the line whose
+	// home its session is. On a tile: an agent's whose local session is
+	// the viewer's, or that in other sessions is the viewer's through
+	// that line; a visitor's the viewer sits with through a plain
+	// attachment to its session (attached); or a task's whose line is
+	// Own. Following prefers it, and a line to any other node (the
+	// view's viewerRank).
 	Own bool
 	// attached is an agent under a line, a visitor in another line's
 	// home session, that the viewer sits with through a plain attachment
