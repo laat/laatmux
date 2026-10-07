@@ -500,15 +500,15 @@ func TestSwitchExactName(t *testing.T) {
 // A plain attachment named as a worktree's workspace would be, left by
 // an older build's jump from the agent's row: a keyed spec to the same
 // managed session adopts it, keyed and tagged, its untagged attach pane
-// given the target, and found by key after; one to another managed
-// session is still a name in use.
+// given the target, and found by key after; so does one named
+// otherwise; one to another managed session is still a name in use.
 func TestEnsureAdoptsAttachment(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"proj/w", "proj/live", "proj/other"} {
+	for _, name := range []string{"proj/w", "proj/live", "proj/r", "proj/other"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
@@ -588,6 +588,26 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	// Found by key the next time, nothing created.
 	if name, created, err := Ensure(ctx, keyed); err != nil || created || name != "mac/proj/w" {
 		t.Fatalf("ensure after adopt: %q %v %v", name, created, err)
+	}
+	// One named otherwise, as an older build named an attachment to a
+	// managed session with a $ in its name, which AttachName now encodes,
+	// is adopted by its tag under its own name, and nothing is made under
+	// the spec's.
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/r", Name: "mac/old/r"}); err != nil || !created {
+		t.Fatalf("the attachment named otherwise: %v %v", created, err)
+	}
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/r", Name: "mac/proj/r", Key: "env//r/r", Branch: "r"}); err != nil || created || name != "mac/old/r" {
+		t.Fatalf("adopt by tag: %q %v %v", name, created, err)
+	}
+	locals, err = List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := Find(locals, "env//r/r", ""); !ok || l.Name != "mac/old/r" || l.Attach != "" {
+		t.Fatalf("after adopt by tag: %+v %v", l, ok)
+	}
+	if l, ok := ByName(locals, "mac/proj/r"); ok {
+		t.Fatalf("a session made under the spec's name: %+v", l)
 	}
 	// A plain attachment to another managed session stays a name in use.
 	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/other", Name: "mac/proj/other"}); err != nil || !created {

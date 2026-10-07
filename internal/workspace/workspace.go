@@ -40,13 +40,9 @@ var Server = tmux.DefaultServer
 
 // SessionName is the local session name for a workspace:
 // <host>/<repo>/<encoded branch>. The host is part of the name because the
-// same repository and branch may be checked out on two hosts at once. It
-// is named after the managed session as AttachName names one, so add,
-// which names it by the branch, and a jump from the worktree's home
-// session name it alike: a "$" in the branch, which EncodeBranch keeps
-// (#220), is encoded in both.
+// same repository and branch may be checked out on two hosts at once.
 func SessionName(host, repo, branch string) string {
-	return AttachName(host, tmux.SessionName(repo, branch))
+	return host + "/" + tmux.SessionName(repo, branch)
 }
 
 // AttachName is the local session name for a managed session on a host,
@@ -198,12 +194,14 @@ type Spec struct {
 // pane tagged by id and started. An existing session is found by its key,
 // or by its attach tag for a plain attachment, whatever its name; its
 // host, source and branch tags are refreshed, since it may predate a
-// rename, and a dead attach pane in it is respawned. A session with the
-// intended name that is not it is a name in use, but for a plain
-// attachment to the managed session a keyed spec names, which it
-// adopts as the workspace: an older build's jump from the agent's row
-// made such a session, named as the workspace would be, before the
-// worktree had its home session back. A plain attachment to be made
+// rename, and a dead attach pane in it is respawned. A keyed spec with
+// no session of its key adopts a plain attachment to its managed
+// session as the workspace, found by its tag whatever its name: an
+// older build's jump from the agent's row made such a session, named
+// as the workspace would be, before the worktree had its home session
+// back, and one named after a managed session with a "$" has the name
+// an older build gave it, not AttachName's. A session with the intended
+// name that is not it is a name in use. A plain attachment to be made
 // under a name tmux would not store as given is refused. The name of
 // the session, existing or new, and whether it was created are
 // returned.
@@ -223,13 +221,14 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		}
 		return l.Name, false, ensureAttach(ctx, l.Name, s)
 	}
+	if l, ok := Find(locals, "", attach); ok && s.Key != "" {
+		return l.Name, false, adopt(ctx, l.Name, s)
+	}
 	if l, ok := ByName(locals, s.Name); ok {
 		switch {
 		case l.Workspace():
 			_, root := protocol.SplitSessionKey(l.Key)
 			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", s.Name, root, l.Host)
-		case l.Attach == attach && s.Key != "":
-			return l.Name, false, adopt(ctx, l.Name, s)
 		case l.Attach != "":
 			return "", false, fmt.Errorf("local session %s is attached to %s; name in use", s.Name, l.Attach)
 		default:
@@ -240,7 +239,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// one made by an older laatmux new, or by hand, can have a character
 	// in that tmux would not store as given: the session made would have
 	// another name, and the tags in its own sequence would find no
-	// session, leaving it untagged. A workspace's name is not checked:
+	// session, leaving it untagged. AttachName encodes most of them; a
+	// line or paragraph separator and a noncharacter, which tmux 3.3
+	// stores escaped, it keeps (#247). A workspace's name is not checked:
 	// it has a worktree's session name in it, which SessionName encoded
 	// from the branch, or new took for a session started at the root,
 	// and a branch with a $ in it keeps its workspace where tmux keeps
@@ -280,9 +281,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 // managed session; then the key set and the attach tag unset in one
 // sequence, so the session is never observable as both or neither,
 // with the identity tags. An adopt cut short before the flip is met by
-// name again and redone whole; one cut short after it is a workspace
-// with its pane tagged, as Ensure then finds it by key. Last, the
-// attach pane is respawned or made as for a reuse.
+// its attach tag again and redone whole; one cut short after it is a
+// workspace with its pane tagged, as Ensure then finds it by key. Last,
+// the attach pane is respawned or made as for a reuse.
 func adopt(ctx context.Context, name string, s Spec) error {
 	out, err := Server.Run(ctx, "list-panes", "-s", "-t", sessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
 	if err != nil {

@@ -381,24 +381,34 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 // this machine, its managed server as isolated as the default one, and
 // its session names are read as the daemon reads them. c$xd is listed
 // as c\$xd on tmux 3.2 and as c\\$xd on 3.4, and its local name then
-// needs the $ encoded too; the attach tag reads back changed on 3.4
-// (#227), so that session is not looked for by its tag.
+// needs the $ encoded too; tmux 3.4 reads its attach tag back with a \
+// before the $ (#227), and there the session is not looked for by its
+// tag again. h\##{x} is stored, and listed, as h\\#{x}: its local name
+// keeps the #, which new-session is given as FormatLiteral writes it.
 func TestEnsureListedHostSessionName(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
 	host := tmux.LaatmuxServer
 	t.Cleanup(func() { _, _ = host.Run(context.Background(), "kill-server") })
-	for i, name := range []string{`a\b`, "tab\tx", "c$xd"} {
+	made := 0
+	for i, name := range []string{`a\b`, "tab\tx", "c$xd", `h\##{x}`} {
 		args := []string{"new-session", "-d", "-s", name, "sleep 1000"}
 		if i == 0 {
 			args = append([]string{"-f", "/dev/null"}, args...)
 		}
 		if _, err := host.Run(ctx, args...); err != nil {
+			// tmux 3.7 refuses a control byte in a session name, so a
+			// host there has no session with a tab.
+			if name == "tab\tx" && strings.Contains(err.Error(), "invalid session name") {
+				t.Logf("%q: %v", name, err)
+				continue
+			}
 			t.Fatal(err)
 		}
+		made++
 	}
 	panes, err := host.ListPanes(ctx)
-	if err != nil || len(panes) != 3 {
+	if err != nil || len(panes) != made {
 		t.Fatalf("panes %+v %v", panes, err)
 	}
 	h := config.Host{Host: peer.Host{Name: "mac"}}
@@ -432,11 +442,12 @@ func TestEnsureListedHostSessionName(t *testing.T) {
 		if err != nil || strings.TrimSpace(string(out)) != "mac" {
 			t.Errorf("%q: %s host tag %q %v", listed, name, out, err)
 		}
-		if strings.Contains(listed, "$") {
-			continue
-		}
 		out, err = workspace.Server.Run(ctx, "show-options", "-v", "-t", "="+name+":", "@laatmux_attach")
-		if err != nil || strings.TrimSpace(string(out)) != "mac/"+listed {
+		if tag := strings.TrimSpace(string(out)); err != nil || tag != "mac/"+listed {
+			if err == nil && strings.Contains(listed, "$") && tag == strings.ReplaceAll("mac/"+listed, "$", `\$`) {
+				t.Logf("%q: %s attach tag read back as %q (#227)", listed, name, tag)
+				continue
+			}
 			t.Errorf("%q: %s attach tag %q %v", listed, name, out, err)
 		}
 		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
@@ -447,16 +458,21 @@ func TestEnsureListedHostSessionName(t *testing.T) {
 
 // A worktree's workspace session is named alike by the jump from its
 // home session, by the jump from its root agent's session once the home
-// is lost, and by add, which names it by the branch: a $ in the branch,
-// which EncodeBranch keeps in the managed session's name (#220), is
-// encoded in each.
+// is lost, and by add, which names it by the branch: from the managed
+// session's name as SessionName makes it, and as an older build made it
+// for a branch with a $, which it kept as it was.
 func TestWorktreeSessionNamesAlike(t *testing.T) {
 	h := config.Host{Host: peer.Host{Name: "mac"}}
-	for _, branch := range []string{"main", "fix/v1.2", "fix$HOME", "v$1", "a%5cb"} {
-		w := protocol.Worktree{Repo: "proj", Branch: branch, Session: tmux.SessionName("proj", branch)}
+	for _, c := range []struct{ branch, session string }{
+		{"main", ""}, {"fix/v1.2", ""}, {"a%5cb", ""}, {"fix$HOME", ""}, {"fix$HOME", "proj/fix$HOME"}, {"v$1", "proj/v$1"},
+	} {
+		if c.session == "" {
+			c.session = tmux.SessionName("proj", c.branch)
+		}
+		w := protocol.Worktree{Repo: "proj", Branch: c.branch, Session: c.session}
 		home, lost := worktreeSpec(h, w).Name, worktreeSessionName(h, w)
-		if add := workspace.SessionName("mac", "proj", branch); home != add || lost != add || strings.Contains(add, "$") {
-			t.Errorf("%q: home %q, lost %q, add %q", branch, home, lost, add)
+		if add := workspace.SessionName("mac", "proj", c.branch); home != add || lost != add {
+			t.Errorf("%q in %q: home %q, lost %q, add %q", c.branch, c.session, home, lost, add)
 		}
 	}
 }
