@@ -419,9 +419,9 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// testDaemon is the stand-in daemon of TestStop, and of
-// TestReportPrefixOnce's start: serve is the real daemon with the
-// shutdown message; legacy is one without it, ended by SIGTERM.
+// testDaemon is the stand-in daemon a test names in LAATMUX_TEST_DAEMON:
+// serve is the real daemon with the shutdown message; legacy is one
+// without it, ended by SIGTERM.
 func testDaemon(mode string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
@@ -861,10 +861,26 @@ func TestIsDaemon(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	// First: a daemon client.StartDaemon starts is this binary with
-	// "serve" and no -test.run, which would run the whole suite.
+	// First: a start a test asks for, by naming a stand-in in
+	// LAATMUX_TEST_DAEMON, runs that stand-in, whatever its arguments.
 	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
 		testDaemon(mode)
+	}
+	// A start as "serve" with no stand-in named, from a test that reached
+	// client.StartDaemon without asking for one, ends at once, as a
+	// daemon that never comes up: a test binary takes "serve" as an
+	// ignored argument, so run on, it would run the whole suite again,
+	// detached, and a test that starts a daemon would start another.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		fmt.Fprintln(os.Stderr, noDaemon)
+		os.Exit(1)
+	}
+	// A child of TestRunStateIsItsOwn that got past the check above ends
+	// here, with a status of its own: run on, it would run the suite,
+	// and that test would start another child.
+	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
+		fmt.Fprintln(os.Stderr, "started as a daemon, and not stopped")
+		os.Exit(2)
 	}
 	// No test reaches the user's tmux: the default server's socket, and
 	// every other, is under a directory of the run's own, and the
@@ -897,10 +913,16 @@ func TestMain(m *testing.M) {
 // its state directory and its config are under it.
 var runDir string
 
+// noDaemon is what the binary says, started as a daemon with no
+// stand-in named.
+const noDaemon = "the cmd/laatmux tests start no daemon without LAATMUX_TEST_DAEMON"
+
 // A test that sets no LAATMUX_HOME or LAATMUX_CONFIG, as this one, has
 // the run's. Run again under a state directory whose runtime file names
 // a live daemon at a socket that is not there, and a config file, it
-// reads neither.
+// reads neither. The binary started as client.StartDaemon starts it,
+// with or without arguments after "serve", runs no test: it runs the
+// stand-in LAATMUX_TEST_DAEMON names, or none.
 func TestRunStateIsItsOwn(t *testing.T) {
 	if runDir == "" {
 		t.Fatal("TestMain gave the run no directory")
@@ -918,6 +940,31 @@ func TestRunStateIsItsOwn(t *testing.T) {
 			t.Errorf("a config at %s: %v", config.Path(), err)
 		}
 		return
+	}
+	// As StartDaemon starts it: its own executable, with "serve" and
+	// what LAATMUX_SERVE_ARGS adds. With no stand-in named, the guard's
+	// status, 1, and its line first; a binary built with -cover may add
+	// one of its own at exit. With one, that stand-in: absent exits 0.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := func(standIn string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		serve := exec.CommandContext(ctx, self, args...)
+		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1", "LAATMUX_TEST_DAEMON="+standIn)
+		return serve.CombinedOutput()
+	}
+	for _, args := range [][]string{{"serve"}, {"serve", "--listen", "tcp:127.0.0.1:0"}} {
+		out, err := start("", args...)
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), noDaemon+"\n") {
+			t.Errorf("started with %q: %v\n%s", args, err, out)
+		}
+	}
+	if out, err := start("absent", "serve"); err != nil || strings.Contains(string(out), noDaemon) {
+		t.Errorf("started with the absent stand-in: %v\n%s", err, out)
 	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
