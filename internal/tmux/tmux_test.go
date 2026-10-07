@@ -859,14 +859,15 @@ func TestRecordsError(t *testing.T) {
 // U+2063. The directory has a $ before a letter, which tmux 3.4 prints
 // as \$ everywhere, before its newline, where a Query that decoded the
 // line with the probe only left it; a title or a window name with one
-// is stored with the \$ by tmux 3.4 itself. The flags listed last are
-// set, the first pane in copy mode
-// and tagged as an attach pane and the second as a sidebar, so a value
+// is stored with the \$ by tmux 3.4 itself. Before the newline it has
+// Sep and the probe without its tail, which such a Query dropped as its
+// own. The flags listed last are set, the first pane in copy mode and
+// tagged as an attach pane and the second as a sidebar, so a value
 // read from another field shows there too.
 func TestListPanesValuesWithSep(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
-	root := filepath.Join(t.TempDir(), "proj", Sep+"a$b"+Sep+"b\nc"+Sep+"$")
+	root := filepath.Join(t.TempDir(), "proj", Sep+"a$b"+Sep+probe+"\nc"+Sep+"$")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
