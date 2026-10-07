@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/protocol"
 )
@@ -97,23 +98,34 @@ func TestNoServer(t *testing.T) {
 
 func TestEncodeBranch(t *testing.T) {
 	cases := map[string]string{
-		"main":       "main",
-		"fix/v1.2":   "fix/v1%2e2",
-		"a:b":        "a%3ab",
-		"100%":       "100%25",
-		"a.b":        "a%2eb",
-		"a-b":        "a-b",
-		"%2e":        "%252e",
-		"feat/x.y:z": "feat/x%2ey%3az",
-		"fix#12":     "fix%2312",
-		"x#{pid}":    "x%23{pid}",
-		"semi;":      "semi%3b",
-		"a;b":        "a%3bb",
-		"%23":        "%2523",
-		"%3b":        "%253b",
-		`a\b`:        "a%5cb",
-		`\\`:         "%5c%5c",
-		"%5c":        "%255c",
+		"main":         "main",
+		"fix/v1.2":     "fix/v1%2e2",
+		"a:b":          "a%3ab",
+		"100%":         "100%25",
+		"a.b":          "a%2eb",
+		"a-b":          "a-b",
+		"%2e":          "%252e",
+		"feat/x.y:z":   "feat/x%2ey%3az",
+		"fix#12":       "fix%2312",
+		"x#{pid}":      "x%23{pid}",
+		"semi;":        "semi%3b",
+		"a;b":          "a%3bb",
+		"%23":          "%2523",
+		"%3b":          "%253b",
+		`a\b`:          "a%5cb",
+		`\\`:           "%5c%5c",
+		"%5c":          "%255c",
+		"tab\tx":       "tab%09x",
+		"nl\n":         "nl%0a",
+		"a\x01b":       "a%01b",
+		"del\x7f":      "del%7f",
+		"a\xffb":       "a%ffb",
+		"%09":          "%2509",
+		"blåbær/ø":     "blåbær/ø",
+		"日本\x80":       "日本%80",
+		"\xe2\x82":     "%e2%82",
+		"\xed\xa0\x80": "%ed%a0%80",
+		"\xef\xbf\xbd": "\xef\xbf\xbd",
 	}
 	for in, want := range cases {
 		got := EncodeBranch(in)
@@ -123,13 +135,29 @@ func TestEncodeBranch(t *testing.T) {
 		if back := decodeBranch(got); back != in {
 			t.Errorf("decodeBranch(%q) = %q, want %q", got, back, in)
 		}
-		if strings.ContainsAny(got, `.:#;\`) {
+		if !keptByTmux(got) {
 			t.Errorf("EncodeBranch(%q) = %q contains a character tmux would not keep as given", in, got)
+		}
+	}
+	// Every byte alone, which covers each control byte, DEL and each
+	// byte that cannot stand alone in UTF-8.
+	for c := 0; c < 256; c++ {
+		in := string([]byte{byte(c)})
+		got := EncodeBranch(in)
+		if back := decodeBranch(got); back != in || !keptByTmux(got) {
+			t.Errorf("EncodeBranch(%q) = %q, decoded %q", in, got, back)
 		}
 	}
 	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
 		t.Errorf("SessionName = %q", got)
 	}
+}
+
+// keptByTmux is a name tmux stores as given: valid UTF-8 with no control
+// byte, no DEL, and none of the characters it changes or reads.
+func keptByTmux(name string) bool {
+	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;\\\x7f") &&
+		!strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 })
 }
 
 // Redact replaces the secret, bare and shell-quoted, in an error's text;
@@ -622,35 +650,16 @@ func TestSemicolonArgumentsReachTmux(t *testing.T) {
 	}
 }
 
-// decodeBranch reverses EncodeBranch, for the round trip. Sequences
-// EncodeBranch never emits are left as they are.
+// decodeBranch reverses EncodeBranch, for the round trip: "%" and two
+// lowercase hex digits is the byte they spell. Sequences EncodeBranch
+// never emits, uppercase digits say, are left as they are.
 func decodeBranch(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); i++ {
 		if name[i] == '%' && i+2 < len(name) {
-			switch name[i+1 : i+3] {
-			case "25":
-				b.WriteByte('%')
-				i += 2
-				continue
-			case "23":
-				b.WriteByte('#')
-				i += 2
-				continue
-			case "2e":
-				b.WriteByte('.')
-				i += 2
-				continue
-			case "3a":
-				b.WriteByte(':')
-				i += 2
-				continue
-			case "3b":
-				b.WriteByte(';')
-				i += 2
-				continue
-			case "5c":
-				b.WriteByte('\\')
+			hex := name[i+1 : i+3]
+			if v, err := strconv.ParseUint(hex, 16, 8); err == nil && hex == strings.ToLower(hex) {
+				b.WriteByte(byte(v))
 				i += 2
 				continue
 			}
