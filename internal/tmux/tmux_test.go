@@ -256,11 +256,12 @@ func keptByTmux(name string) bool {
 }
 
 // A session name as tmux lists it, escaped by vis(3), is decoded and
-// the bytes EncodeBranch encodes, but for %, # and ;, written as it
-// writes them; a name that is not one tmux could have stored is encoded
-// as it is; a name with nothing to encode, a managed session's encoded
-// one say, is kept. Every result, under a host's name, is one
-// CheckSessionName lets a plain attachment be made under.
+// the bytes EncodeBranch encodes, but for %, #, ;, . and :, written as
+// it writes them; a name that is not one tmux could have stored is
+// encoded as it is; a name with nothing to encode, a managed session's
+// encoded one say, is kept. Every result without a . or a :, under a
+// host's name, is one CheckSessionName lets a plain attachment be made
+// under.
 func TestEncodeListed(t *testing.T) {
 	cases := map[string]string{
 		"notes":          "notes",
@@ -288,10 +289,10 @@ func TestEncodeListed(t *testing.T) {
 		`c1` + "\u0085x": "c1%c2%85x",
 		"sep\u2063x":     "sep%e2%81%a3x",
 
-		// tmux 3.7 lists a . and a : as given, which tmux before it
-		// stores as _; a # and a ; are kept.
-		"a.b:c":  "a%2eb%3ac",
+		// A # and a ; are kept, and a . and a :, which tmux 3.7 lists
+		// as given, are kept for CheckSessionName to refuse.
 		"a#{b};": "a#{b};",
+		"a.b:c":  "a.b:c",
 
 		// A $ tmux 3.2 to 3.4 store escaped, one they keep, which is
 		// encoded all the same, and c$xd as tmux 3.2 and 3.4 list it.
@@ -328,7 +329,7 @@ func TestEncodeListed(t *testing.T) {
 		if got != want {
 			t.Errorf("EncodeListed(%q) = %q, want %q", in, got, want)
 		}
-		if err := CheckSessionName("mac/" + got); err != nil {
+		if err := CheckSessionName("mac/" + got); err != nil && !strings.ContainsAny(got, ".:") {
 			t.Errorf("EncodeListed(%q) = %q: %v", in, got, err)
 		}
 	}
@@ -337,7 +338,7 @@ func TestEncodeListed(t *testing.T) {
 	// but for the characters only EncodeBranch writes.
 	for c := 1; c < 256; c++ {
 		for _, name := range []string{string([]byte{byte(c)}), "a" + string([]byte{byte(c)}) + "z"} {
-			if strings.ContainsAny(name, "%#;") {
+			if strings.ContainsAny(name, "%#;.:") {
 				continue
 			}
 			if got, want := EncodeListed(visName(name)), EncodeBranch(name); got != want {

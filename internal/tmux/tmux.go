@@ -786,29 +786,33 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // what it decodes to gives it back; a name that is not, a\q say, is
 // taken as it is. Then each byte EncodeBranch encodes becomes "%" and
 // its two lowercase hex digits, as EncodeBranch writes them, but for
-// "%", "#" and ";": a "\", a control character, DEL, a byte that is not
-// part of a valid UTF-8 sequence, a "$", a U+2063, and a "." or ":",
-// which tmux 3.7 lists as given and tmux before it stores as "_". So
+// "%", "#", ";", "." and ":": a "\", a control character, DEL, a byte
+// that is not part of a valid UTF-8 sequence, a "$" and a U+2063. So
 // a\\b becomes a%5cb and tab\tx becomes tab%09x, as EncodeBranch writes
 // a\b and the tab, and a name with none of these is kept as it is. A
 // "%" is kept since the names listed are mostly managed sessions',
 // encoded already, whose workspace sessions are named after them as
-// they are; a "#" since new-session is given the name as FormatLiteral
-// writes it; a ";" since args writes a last one "\;". Two sessions on a
-// host, a\b and a%5cb, can so get one local name; the second's jump is
-// then refused as a name in use, since the local session is found by
-// its attach tag, which is exact. tmux 3.2 to 3.4 store a "$" before a
-// letter with a "\" before it: tmux 3.2 lists c$xd as c\$xd, which does
-// not decode, and tmux 3.4 with one more "\", as c\\$xd, which decodes
-// to c\$xd. Either becomes c%5c%24xd, a name kept as given, though a
-// host on tmux 3.4 cannot attach the session by its listed name (#227).
+// they are; a "#" since new-session is given the name as
+// FormatLiteral writes it; a ";" since args writes a last one "\;".
+// tmux before 3.7 lists no "." or ":", storing them as "_"; tmux 3.7
+// lists them as given, but a target splits there, so such a session
+// cannot be attached by its listed name, and they are kept for
+// CheckSessionName to refuse a plain attachment to it. Two sessions
+// on a host, a\b and a%5cb, can so get one local name; the second's
+// jump is then refused as a name in use, since the local session is
+// found by its attach tag, which is exact. tmux 3.2 to 3.4 store a
+// "$" before a letter with a "\" before it: tmux 3.2 lists c$xd as
+// c\$xd, which does not decode, and tmux 3.4 with one more "\", as
+// c\\$xd, which decodes to c\$xd. Either becomes c%5c%24xd, a name
+// kept as given, though a host on tmux 3.4 cannot attach the session
+// by its listed name (#227).
 func EncodeListed(name string) string {
 	if d := unvisName(name); visName(d) == name {
 		name = d
 	}
 	return encodeBytes(name, func(i int) bool {
 		c := name[i]
-		return c < 0x20 || c >= 0x7f || strings.IndexByte(`$.:\`, c) >= 0
+		return c < 0x20 || c >= 0x7f || c == '\\' || c == '$'
 	})
 }
 
