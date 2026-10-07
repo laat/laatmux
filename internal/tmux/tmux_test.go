@@ -1410,6 +1410,32 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
+// A hand-started server whose user config has an after-list-sessions
+// hook that fails is not taken for one that is not running: list-sessions
+// fails on it, and a cold start's set-option would run the failing
+// after-set-option before EnsureConfigured removes the hooks.
+func TestNewSessionHandStartedHooks(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	if _, err := s.Run(ctx, "new-session", "-d", "-s", "hand", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range []string{"after-list-sessions", "after-set-option"} {
+		if _, err := s.Run(ctx, "set-hook", "-g", hook, "select-window -t nosuch:9"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Run(ctx, "list-sessions"); err == nil || NoServer(err) {
+		t.Fatalf("list-sessions with a failing after-list-sessions: %v, want the hook's error", err)
+	}
+	if _, err := s.NewSession(ctx, NewSessionOpts{Name: "made", Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasSession(ctx, "made") {
+		t.Fatal("the new session is gone")
+	}
+}
+
 // A branch with a #, a ;, a \, a $, a C1 control character, a line
 // separator or a noncharacter gets a session with the name SessionName
 // computed, its pane tagged: new-session expands a # in the name as a

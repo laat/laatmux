@@ -790,15 +790,21 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	if _, err := os.Stat(o.Cwd); err != nil {
 		return made, fmt.Errorf("tmux: cwd: %w", PrintablePath(err))
 	}
-	_, notRunning := s.Run(ctx, "list-sessions")
-	if notRunning != nil && s.Managed() {
+	_, listed := s.Run(ctx, "list-sessions")
+	if NoServer(listed) && s.Managed() {
 		// Cold start: the server is started on its own, with no config
 		// file and told to stay without sessions, and the session is
 		// made in a second invocation. The process that starts a tmux
 		// server is the server, and keeps its command line for as long
 		// as it runs; a new-session that started it would leave the
 		// agent's command, a prompt included, on the process list for
-		// the server's lifetime rather than the agent's.
+		// the server's lifetime rather than the agent's. Only a server
+		// that is not there is started: a running one fails list-sessions
+		// too when the user's after-list-sessions hook fails, and its
+		// after-set-option hook would then fail the set-option here,
+		// before EnsureConfigured removes the hooks. A server that fails
+		// list-sessions for another reason fails EnsureConfigured, none of
+		// whose commands starts one.
 		if _, err := s.Run(ctx, "-f", "/dev/null", "start-server", Next, "set-option", "-s", "exit-empty", "off"); err != nil {
 			return made, err
 		}
