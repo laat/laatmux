@@ -1144,13 +1144,31 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s3", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "left", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
 		t.Fatal(res.Error)
 	}
-	f.awaitRecord(t, "s3", 30*time.Second, func(p pendingFile) bool { return p.Taken })
+	// Awaited at the launch's start, the last progress before the hold:
+	// Taken comes with the first progress, the fetch's, and with an
+	// outcome as well.
+	held := f.awaitRecord(t, "s3", 30*time.Second, func(p pendingFile) bool {
+		return p.Stage == protocol.StageAgent && p.State == protocol.StateStart
+	})
+	if !held.Sent || held.Done || held.Mismatch != "" {
+		t.Fatalf("record at the launch %+v", held)
+	}
 	f.hosts.set()
 	res = f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s3"})
 	f.local.relay.mu.Lock()
 	n = len(f.local.relay.runners["s3"])
 	f.local.relay.mu.Unlock()
 	close(release)
+	// The host's add, let go, is waited to its result, so it writes
+	// nothing into the directories the cleanup removes.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if e, ok := f.host.journal.get("s3"); ok && e.terminal() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the host's add never had its result")
+		}
+	}
 	if !res.OK {
 		t.Fatalf("dismiss with the host gone for good %+v", res)
 	}
