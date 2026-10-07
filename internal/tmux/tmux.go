@@ -221,6 +221,13 @@ func (e *HookError) Error() string {
 }
 func (e *HookError) Unwrap() error { return e.Err }
 
+// HookOnly reports whether err is a *HookError: the listing printed
+// every record, and only a command after it failed.
+func HookOnly(err error) bool {
+	var he *HookError
+	return errors.As(err, &he)
+}
+
 // lostServer is the line tmux ends its message with when its server
 // went away before the command finished.
 const lostServer = "server exited unexpectedly"

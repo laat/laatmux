@@ -115,6 +115,12 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 		Key:    protocol.SessionKey(hello.EnvironmentID, res.Root),
 		Source: a.Repo.Source, Branch: out.Branch,
 	})
+	if tmux.HookOnly(err) {
+		// The session is there; a user's hook failed after a listing
+		// Ensure read whole.
+		r.Note(err.Error())
+		err = nil
+	}
 	return out, err
 }
 

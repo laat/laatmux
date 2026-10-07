@@ -87,6 +87,36 @@ func TestListHookFails(t *testing.T) {
 	}
 }
 
+// A user's after-display-message hook that fails after display-message
+// printed the session: Current returns it, and PaneSession it and the
+// pane's directory, each with the *tmux.HookError.
+func TestCurrentHookFails(t *testing.T) {
+	startServers(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := Server.Run(ctx, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	pane := run("new-session", "-d", "-s", "w", "-c", t.TempDir(), "-P", "-F", "#{pane_id}", "sleep 600")
+	run("set-option", "-t", "=w:", "@laatmux_workspace", "env//w")
+	t.Setenv("TMUX", run("display-message", "-p", "#{socket_path}")+",0,0")
+	t.Setenv("TMUX_PANE", pane)
+	dir := run("display-message", "-p", "-t", pane, "#{pane_current_path}")
+	run("set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	cur, err := Current(ctx)
+	if cur.Name != "w" || cur.Key != "env//w" || !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux display-message -p -t "+pane+" -F ") {
+		t.Errorf("Current with the hook: %+v %v, want w and display-message's HookError", cur, err)
+	}
+	l, cwd, err := PaneSession(ctx, pane)
+	if l.Name != "w" || l.Key != "env//w" || cwd != dir || !tmux.HookOnly(err) {
+		t.Errorf("PaneSession with the hook: %+v %q %v, want w, %q and a HookError", l, cwd, err, dir)
+	}
+}
+
 func TestParseSessions(t *testing.T) {
 	locals := parseSessions([][]string{
 		{"vm/proj/fix", "env1/root/a", "vm", "", "1", "git@x:o/proj.git", "fix"},

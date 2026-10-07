@@ -92,8 +92,7 @@ var sessionVars = []string{
 // the *tmux.HookError.
 func List(ctx context.Context) ([]protocol.Session, error) {
 	recs, err := Server.Records(ctx, tmux.NewFields(sessionVars...), "list-sessions")
-	var he *tmux.HookError
-	if err != nil && !errors.As(err, &he) {
+	if err != nil && !tmux.HookOnly(err) {
 		if tmux.NoServer(err) || tmux.NotInstalled(err) && Server.NoSocket() {
 			return nil, nil
 		}
@@ -184,7 +183,9 @@ func decodeRoot(enc string) string {
 // Current is the session the calling process runs in: the pane's session
 // when TMUX_PANE is set, as it is for a process in a pane, else the
 // session TMUX names, which is what a run-shell job from a key binding
-// gets. Not inside tmux is an error saying so.
+// gets. Not inside tmux is an error saying so. A lookup a user's
+// after-display-message hook failed after has the session, returned with
+// the *tmux.HookError.
 func Current(ctx context.Context) (protocol.Session, error) {
 	if os.Getenv("TMUX") == "" {
 		return protocol.Session{}, errors.New("not inside tmux")
@@ -196,24 +197,26 @@ func Current(ctx context.Context) (protocol.Session, error) {
 		args = append(args, "-t", pane)
 	}
 	recs, err := (tmux.Server{}).Records(ctx, tmux.NewFields(sessionVars...), args...)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return protocol.Session{}, err
 	}
 	locals := parseSessions(recs)
 	if len(locals) != 1 {
 		return protocol.Session{}, errors.New("cannot find the current tmux session")
 	}
-	return locals[0], nil
+	return locals[0], err
 }
 
 // PaneSession is the session a pane is in, with its tags, and the pane's
 // current directory. The lookup is on the server TMUX names, as Current's
 // is, since a pane id is per server; split runs from a binding on the
-// user's server. The directory can have a newline or tmux.Sep in it.
+// user's server. The directory can have a newline or tmux.Sep in it. A
+// lookup a user's after-display-message hook failed after has both,
+// returned with the *tmux.HookError.
 func PaneSession(ctx context.Context, paneID string) (protocol.Session, string, error) {
 	fields := tmux.NewFields(append(slices.Clip(sessionVars), "#{pane_current_path}")...)
 	recs, err := (tmux.Server{}).Records(ctx, fields, "display-message", "-p", "-t", paneID)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return protocol.Session{}, "", err
 	}
 	if len(recs) != 1 {
@@ -224,7 +227,7 @@ func PaneSession(ctx context.Context, paneID string) (protocol.Session, string, 
 	if len(locals) != 1 {
 		return protocol.Session{}, "", errors.New("cannot find the session of pane " + paneID)
 	}
-	return locals[0], recs[0][n], nil
+	return locals[0], recs[0][n], err
 }
 
 // FindWorktree returns the workspace session for a branch of a repository
@@ -287,7 +290,10 @@ type Spec struct {
 // managed session also adopts one under the name an older build gave
 // it. A plain attachment to be made under a name tmux would not store
 // as given is refused. The name of the session, existing or new, and
-// whether it was created are returned.
+// whether it was created are returned. A listing a user's hook failed
+// after, list-sessions' or the attach pane's list-panes', is read all
+// the same: the session is returned with its *tmux.HookError, unless a
+// step failed, whose error is the one returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	// The attach tags and the attach command have the managed session's
 	// name, so one that cannot be in them is refused before any is
@@ -304,9 +310,10 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		return "", false, fmt.Errorf("managed %w", err)
 	}
 	locals, err := List(ctx)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return "", false, err
 	}
+	hook := err
 	attach := s.Host.Name + "/" + s.Managed
 	find := attach
 	if s.Key != "" {
@@ -316,7 +323,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		if _, err := Server.Run(ctx, tagArgs(l.Name, s)...); err != nil {
 			return "", false, err
 		}
-		return l.Name, false, ensureAttach(ctx, l.Name, s)
+		return l.Name, false, withHook(ensureAttach(ctx, l.Name, s), hook)
 	}
 	if l, ok := ByName(locals, s.Name); ok {
 		// A name, a root or a tag is printed as Printable shows it: a
@@ -326,7 +333,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 			_, root := protocol.SplitSessionKey(l.Key)
 			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", tmux.Printable(s.Name), tmux.Printable(root), tmux.Printable(l.Host))
 		case l.Attach == attach && s.Key != "":
-			return l.Name, false, adopt(ctx, l.Name, s)
+			return l.Name, false, withHook(adopt(ctx, l.Name, s), hook)
 		case l.Attach != "":
 			return "", false, fmt.Errorf("local session %s is attached to %s; name in use", tmux.Printable(s.Name), tmux.Printable(l.Attach))
 		default:
@@ -342,7 +349,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// is not its home, leaves a plain attachment to that session alone.
 	if s.Key != "" && s.Name != attach && s.Name == AttachName(s.Host.Name, s.Managed) {
 		if l, ok := ByName(locals, attach); ok && l.Attach == attach {
-			return l.Name, false, adopt(ctx, l.Name, s)
+			return l.Name, false, withHook(adopt(ctx, l.Name, s), hook)
 		}
 	}
 	// A plain attachment's name has the managed session's in it, which
@@ -385,7 +392,17 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	if err := startAttach(ctx, strings.TrimSpace(string(out)), s); err != nil {
 		return "", false, err
 	}
-	return s.Name, true, nil
+	return s.Name, true, hook
+}
+
+// withHook is err, or hook, a listing's *tmux.HookError or nil, when err
+// is nil: a step's failure is what a caller is told, and the hook's
+// error comes only with steps that worked.
+func withHook(err, hook error) error {
+	if err != nil {
+		return err
+	}
+	return hook
 }
 
 // adopt makes a plain attachment the workspace a keyed spec names: its
@@ -467,12 +484,15 @@ func tagArgs(name string, s Spec) []string {
 // attach pane at all, closed by hand or left by a crash before the tag,
 // gets a new attach window. A pane from before the target was tagged
 // is left as it is. Other panes in the session are the user's and are
-// left alone.
+// left alone. A listing a user's after-list-panes hook failed after is
+// read all the same, and its *tmux.HookError returned when the rest
+// worked.
 func ensureAttach(ctx context.Context, name string, s Spec) error {
 	out, err := Server.Query(ctx, strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep), "list-panes", "-s", "-t", tmux.SessionTarget(name))
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
+	hook := err
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
 		if len(f) != 4 || f[2] == "" {
@@ -481,15 +501,15 @@ func ensureAttach(ctx context.Context, name string, s Spec) error {
 		if f[1] == "1" || (f[3] != "" && f[3] != s.Managed) {
 			_, err := Server.Run(ctx, "set-option", "-p", "-t", f[0], "@laatmux_attach_target", s.Managed,
 				tmux.Next, "respawn-pane", "-k", "-t", f[0], AttachCommand(s.Host, s.Managed))
-			return err
+			return withHook(err, hook)
 		}
-		return nil
+		return hook
 	}
 	out, err = Server.Run(ctx, "new-window", "-t", tmux.SessionTarget(name), "-n", "agent", "-P", "-F", "#{pane_id}", placeholder)
 	if err != nil {
 		return err
 	}
-	return startAttach(ctx, strings.TrimSpace(string(out)), s)
+	return withHook(startAttach(ctx, strings.TrimSpace(string(out)), s), hook)
 }
 
 // AttachCommand is the shell command the attach window runs. TMUX is unset

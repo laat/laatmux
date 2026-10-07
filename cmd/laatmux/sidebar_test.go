@@ -911,7 +911,8 @@ func TestNestedShell(t *testing.T) {
 // short, and a command reached neither. Each path has a $ before a
 // letter, which tmux 3.4 prints as \$ and Records reads back as
 // written. A sidebar pane not listening yet, and a pane with a socket
-// tag that is no sidebar's, are not listed.
+// tag that is no sidebar's, are not listed. A failing after-list-panes
+// hook does not change any of that.
 func TestSidebarSocketsWithSep(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -973,6 +974,22 @@ func TestSidebarSocketsWithSep(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Errorf("next for %s did not reach the pane listening on %q", s.window, s.path)
 		}
+	}
+	// A user's after-list-panes hook that fails after list-panes printed:
+	// every socket is listed all the same, with the *tmux.HookError, and
+	// a command for a window still reaches its pane.
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-panes") })
+	if got, err := sidebarSockets(ctx, "", true); !tmux.HookOnly(err) || !slices.Equal(slices.Sorted(slices.Values(got)), want) {
+		t.Errorf("every socket with the hook: %q %v, want %q and a HookError", got, err, want)
+	}
+	if err := sidebarControl(ctx, "next", []string{"-t", sides[0].window}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sides[0].got:
+	case <-time.After(5 * time.Second):
+		t.Errorf("next for %s with the hook did not reach the pane listening on %q", sides[0].window, sides[0].path)
 	}
 }
 

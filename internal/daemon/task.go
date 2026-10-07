@@ -405,7 +405,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	// intended name whose pane records another root, or that is not a
 	// single managed pane, is a name in use; nothing is adopted.
 	name := tmux.SessionName(r.repo.Name, r.branch)
-	panes, err := rn.managed.Tmux.ListPanes(ctx)
+	panes, err := rn.listManaged(ctx)
 	if err != nil && !tmux.NoServer(err) {
 		return r.failed(prompt, "listing panes failed", err)
 	}
@@ -478,7 +478,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	rn.startTrust(trustTarget{pane: paneID, session: name, root: r.root, serverPID: made.ServerPID})
 	// Refresh the session join now, so the record the poke publishes
 	// names the session rather than waiting for the next pane poll.
-	if panes, err := rn.managed.Tmux.ListPanes(ctx); err == nil {
+	if panes, err := rn.listManaged(ctx); err == nil {
 		rn.core.setManagedRoots(panes, time.Now())
 	}
 	err = r.set(func(e *entry) {
@@ -735,7 +735,7 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 // in root, when there is exactly one and its single pane has a verified
 // live agent. The reason it cannot is returned otherwise.
 func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string) {
-	panes, err := rn.managed.Tmux.ListPanes(ctx)
+	panes, err := rn.listManaged(ctx)
 	if err != nil {
 		if tmux.NoServer(err) {
 			return tmux.Pane{}, "no agent to deliver to: no managed session in " + tmux.Printable(root)

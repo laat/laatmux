@@ -71,9 +71,13 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	if err := DismissAt(ctx, hello.EnvironmentID, out.Root, res.Listing); err != nil {
 		r.Note("tasks at " + tmux.Printable(out.Root) + " not dropped: " + err.Error())
 	}
-	// The local workspace session is the client's to clean up.
+	// The local workspace session is the client's to clean up. A user's
+	// hook that failed after list-sessions printed leaves every session
+	// listed, and is a note.
 	locals, err := workspace.List(ctx)
-	if err != nil {
+	if tmux.HookOnly(err) {
+		r.Note(err.Error())
+	} else if err != nil {
 		return out, err
 	}
 	key := protocol.SessionKey(hello.EnvironmentID, out.Root)

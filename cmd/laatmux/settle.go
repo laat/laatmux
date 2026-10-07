@@ -28,7 +28,7 @@ func setSettled(ctx context.Context, verb string, args []string, settled bool) e
 	var l protocol.Session
 	if len(args) == 1 {
 		locals, err := workspace.List(ctx)
-		if err != nil {
+		if err = warnHook(err); err != nil {
 			return err
 		}
 		var ok bool
@@ -38,7 +38,8 @@ func setSettled(ctx context.Context, verb string, args []string, settled bool) e
 		}
 	} else {
 		var err error
-		if l, err = workspace.Current(ctx); err != nil {
+		l, err = workspace.Current(ctx)
+		if err = warnHook(err); err != nil {
 			return fmt.Errorf("laatmux %s must run inside a workspace session, or name one: %w", verb, err)
 		}
 	}

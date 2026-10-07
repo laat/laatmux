@@ -456,3 +456,58 @@ func TestTrustEndsOnAnyReplacement(t *testing.T) {
 		t.Fatal("the watcher kept going after another agent replaced the bound Claude")
 	}
 }
+
+// A user's after-list-panes hook that fails on the managed server, one
+// started by hand with their config, after list-panes printed: each
+// command's listing takes the panes, as the poll does. The trust
+// watcher presses Enter; an add launches its session and names it in
+// the worktree's record at once; a prompt's adoption finds the
+// session's pane and asks for its verified agent; rm kills the session.
+func TestManagedListingHookError(t *testing.T) {
+	d, ft, _, remote := newAddDaemon(t)
+	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
+	ctx := context.Background()
+	real := t.TempDir()
+	key := paneKey(d.managed.Label, "%1")
+	id, _ := procs.FindIn([]procs.Proc{shell, claude})
+	d.mu.Lock()
+	d.panes[key] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: id}}
+	d.mu.Unlock()
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{ID: "%1", Session: "s", ServerPID: 5, CurrentPath: real, Managed: true}}
+		ft.screen = trustScreen(real, true)
+		ft.listErr = &tmux.HookError{Err: &tmux.Error{Args: []string{"list-panes", "-a"}, Msg: "can't find session: nosuch"}}
+	})
+	moved := false
+	if done, stop := d.tasks.trustStep(ctx, trustTarget{pane: "%1", session: "s", root: real, real: real, serverPID: 5}, id, &moved); !done || stop {
+		t.Fatalf("trust with the hook: done %v stop %v, want Enter pressed", done, stop)
+	}
+	d.mu.Lock()
+	delete(d.panes, key)
+	d.mu.Unlock()
+	ft.set(func() { ft.panes, ft.screen = nil, nil })
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
+	res, _ := result(t, pc, "c1")
+	if !res.OK || res.Session != "proj/task" {
+		t.Fatalf("add with the hook: %+v", res)
+	}
+	d.mu.Lock()
+	home := d.managedRoots[res.Root]
+	d.mu.Unlock()
+	if home != res.Session {
+		t.Errorf("the worktree's session after the add: %q, want %s", home, res.Session)
+	}
+	if _, reason := d.tasks.adopt(ctx, res.Root); reason != "no agent to deliver to: no verified agent in session proj/task" {
+		t.Errorf("adoption with the hook: %q", reason)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: res.Root, Force: true})
+	if res, _ := result(t, pc, "r1"); !res.OK {
+		t.Fatalf("rm with the hook: %+v", res)
+	}
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if len(ft.killed) != 1 || ft.killed[0] != "proj/task" {
+		t.Errorf("rm with the hook killed %q, want proj/task", ft.killed)
+	}
+}

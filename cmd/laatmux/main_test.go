@@ -15,7 +15,34 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
+
+// warnHook prints a *tmux.HookError, wrapped or not, as a note and
+// takes it as no error; any other error is returned and not printed.
+func TestWarnHook(t *testing.T) {
+	var b strings.Builder
+	warnings = &b
+	t.Cleanup(func() { warnings = os.Stderr })
+	hook := &tmux.HookError{Err: &tmux.Error{Args: []string{"list-sessions", "-F", "#{session_name}"}, Msg: "can't find session: nosuch"}}
+	plain := &tmux.Error{Args: []string{"list-sessions"}, Msg: "no server running on /tmp/x"}
+	if err := warnHook(hook); err != nil {
+		t.Errorf("a HookError: %v, want nil", err)
+	}
+	if err := warnHook(fmt.Errorf("ensure: %w", hook)); err != nil {
+		t.Errorf("a wrapped HookError: %v, want nil", err)
+	}
+	if err := warnHook(plain); err != plain {
+		t.Errorf("a plain error: %v, want it", err)
+	}
+	if err := warnHook(nil); err != nil {
+		t.Errorf("no error: %v", err)
+	}
+	line := "laatmux: " + hook.Error() + "\n"
+	if got := b.String(); got != line+"laatmux: ensure: "+hook.Error()+"\n" {
+		t.Errorf("printed %q, want the two hook errors as notes", got)
+	}
+}
 
 // A command's error is printed with "laatmux: " once: the packages'
 // errors leave it to main. A second serve, against a daemon that holds

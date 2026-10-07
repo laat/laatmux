@@ -23,6 +23,7 @@ import (
 	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 func dashConfig(t *testing.T) config.Config {
@@ -1135,6 +1136,55 @@ func TestAddPartialSuccess(t *testing.T) {
 	last, err := home.ReadLast()
 	if err != nil || last.Get("git@x:o/proj.git").Host != "lab" {
 		t.Errorf("last.json not written before the local failure: %+v %v", last, err)
+	}
+}
+
+// noteList is a Reporter that keeps the notes.
+type noteList []string
+
+func (*noteList) Progress(protocol.Message) {}
+func (n *noteList) Note(s string)           { *n = append(*n, s) }
+
+// An rm and an add whose local listing a user's after-list-sessions
+// hook failed after: the rm kills the workspace session the listing
+// has, and the add makes its session, each with the hook's error as a
+// note through the Reporter, not as a failure.
+func TestRmAddHookFails(t *testing.T) {
+	isolatedDefault(t)
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRm, protocol.CapAdd, protocol.CapFollow}, func(pc *protocol.Conn, m protocol.Message) bool {
+		switch m.Type {
+		case protocol.TypeRm:
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/task"})
+		case protocol.TypeAdd:
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/x", Session: "proj/x"})
+		}
+		return true
+	})
+	ctx := context.Background()
+	if _, err := workspace.Server.Run(ctx, "new-session", "-d", "-s", "lab/proj/task",
+		tmux.Next, "set-option", "-t", "=lab/proj/task:", "@laatmux_workspace", protocol.SessionKey("lenv", "/w/proj/task"),
+		tmux.Next, "set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-sessions") })
+	hooked := func(notes noteList) bool {
+		n := 0
+		for _, s := range notes {
+			if strings.HasPrefix(s, "tmux list-sessions ") && strings.HasSuffix(s, "(after the listing printed its records: a hook's error)") {
+				n++
+			}
+		}
+		return n == 1
+	}
+	var notes noteList
+	rm := command.Rm{Host: config.Host{Host: peer.Host{Name: "lab"}}, Root: "/w/proj/task"}
+	if res, err := rm.Run(ctx, &notes); err != nil || len(res.Killed) != 1 || res.Killed[0] != "lab/proj/task" || !hooked(notes) {
+		t.Errorf("rm: %+v %v, notes %q; want lab/proj/task killed and the hook's error noted", res, err, notes)
+	}
+	notes = nil
+	add := command.Add{Host: config.Host{Host: peer.Host{Name: "lab"}}, Repo: config.Repo{Source: "git@x:o/proj.git", Name: "proj"}, Branch: "x", Agent: "claude"}
+	if res, err := add.Run(ctx, &notes); err != nil || res.Session != "lab/proj/x" || !res.Created || !hooked(notes) {
+		t.Errorf("add: %+v %v, notes %q; want lab/proj/x made and the hook's error noted", res, err, notes)
 	}
 }
 

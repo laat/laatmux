@@ -182,8 +182,10 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 		}
 		window = strings.TrimSpace(string(out))
 	}
+	// A listing a user's hook failed after has every pane, and the hook's
+	// error goes unsaid with the rest.
 	sockets, err := sidebarSockets(ctx, window, all)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return nil
 	}
 	for _, s := range sockets {
@@ -195,7 +197,8 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 // sidebarSockets is the socket paths of the sidebar panes: the window's,
 // or every one with all. A path is under the state directory, which can
 // have tmux.Sep or a newline in it, so the panes are read through
-// tmux.Fields.
+// tmux.Fields. A listing a user's after-list-panes hook failed after
+// has every path, returned with the *tmux.HookError.
 func sidebarSockets(ctx context.Context, window string, all bool) ([]string, error) {
 	args := []string{"list-panes"}
 	if all {
@@ -204,7 +207,7 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 		args = append(args, "-t", window)
 	}
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{"+sidebarTag+"}", "#{"+socketTag+"}"), args...)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return nil, err
 	}
 	var paths []string
@@ -213,7 +216,7 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 			paths = append(paths, f[1])
 		}
 	}
-	return paths, nil
+	return paths, err
 }
 
 // send writes one command line to a pane's socket and waits for its

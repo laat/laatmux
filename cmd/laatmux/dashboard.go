@@ -106,7 +106,9 @@ type viewOptions struct {
 func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, o viewOptions) error {
 	exitOnJump, actions := o.exitOnJump, o.actions
 	current := ""
-	if cur, err := workspace.Current(ctx); err == nil {
+	// A lookup a user's hook failed after has the session all the same;
+	// the view has no line for the hook's error (warnHook).
+	if cur, err := workspace.Current(ctx); err == nil || tmux.HookOnly(err) {
 		current = cur.Name
 	}
 	st := merged.New()
@@ -354,8 +356,10 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if session != "" {
 		return switchTo(ctx, session)
 	}
+	// A session Ensure read from a listing a user's hook failed after is
+	// there; the view has no line for the hook's error (warnHook).
 	name, _, err := workspace.Ensure(ctx, spec)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	return switchTo(ctx, name)

@@ -39,7 +39,7 @@ func cmdRm(ctx context.Context, args []string) error {
 			return errors.New("--host goes with <repo>/<branch> or --root; inside a workspace session the target is the workspace")
 		}
 		cur, err := workspace.Current(ctx)
-		if err != nil {
+		if err = warnHook(err); err != nil {
 			return fmt.Errorf("laatmux rm must name <repo>/<branch>, give --root, or run inside a workspace session: %w", err)
 		}
 		if !cur.Workspace() {
@@ -79,7 +79,7 @@ func cmdRm(ctx context.Context, args []string) error {
 			rm.Root = w.Root
 		} else {
 			locals, err := workspace.List(ctx)
-			if err != nil {
+			if err = warnHook(err); err != nil {
 				return err
 			}
 			rm.Root = command.RootOf(locals, hello.EnvironmentID, rm.Host, repo, branch)

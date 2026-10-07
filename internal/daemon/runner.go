@@ -72,6 +72,19 @@ func newRunner(d *Daemon) *taskRunner {
 		runs: map[string]map[*runJob]struct{}{}, rootGen: map[string]uint64{}, pasted: map[string]time.Time{}}
 }
 
+// listManaged lists the managed server's panes for one command. A
+// listing a user's after-list-panes hook failed after, on a managed
+// server started by hand with their config, is every pane: they are
+// taken, and the hook's error is not logged here, since the poll lists
+// the same server the same way and logs it once (hookOnce).
+func (rn *taskRunner) listManaged(ctx context.Context) ([]tmux.Pane, error) {
+	panes, err := rn.managed.Tmux.ListPanes(ctx)
+	if tmux.HookOnly(err) {
+		err = nil
+	}
+	return panes, err
+}
+
 // StopRuns closes the registry, cancels every run and waits for them,
 // and waits for every paste in flight, all bounded by ctx: what a
 // clean shutdown does, so a restart for an upgrade leaves no orphan
