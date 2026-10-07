@@ -59,14 +59,12 @@ func TestListWithoutTmux(t *testing.T) {
 }
 
 func TestParseSessions(t *testing.T) {
-	sep := tmux.Sep
-	out := strings.Join([]string{
-		strings.Join([]string{"vm/proj/fix", "env1/root/a", "vm", "", "1", "git@x:o/proj.git", "fix"}, sep),
-		strings.Join([]string{"mac/work", "", "mac", "mac/work", "", "", ""}, sep),
-		strings.Join([]string{"notes", "", "", "", "", "", ""}, sep),
-		"",
-	}, "\n")
-	locals := parseSessions(out)
+	locals := parseSessions([][]string{
+		{"vm/proj/fix", "env1/root/a", "vm", "", "1", "git@x:o/proj.git", "fix"},
+		{"mac/work", "", "mac", "mac/work", "", "", ""},
+		{"notes", "", "", "", "", "", ""},
+		{"", "", "", "", "", "", ""},
+	})
 	if len(locals) != 3 {
 		t.Fatalf("got %d sessions: %+v", len(locals), locals)
 	}
@@ -176,8 +174,7 @@ func TestKeyStoredEncoded(t *testing.T) {
 		if got := DecodeKey(v); got != key {
 			t.Errorf("DecodeKey(%q) = %q, want %q", v, got, key)
 		}
-		line := strings.Join([]string{"s", v, "mac", "", "", "", ""}, tmux.Sep)
-		if locals := parseSessions(line + "\n"); len(locals) != 1 || locals[0].Key != key {
+		if locals := parseSessions([][]string{{"s", v, "mac", "", "", "", ""}}); len(locals) != 1 || locals[0].Key != key {
 			t.Errorf("%q parsed as %+v, want key %q", v, locals, key)
 		}
 	}

@@ -318,6 +318,86 @@ func TestExactSessionTargets(t *testing.T) {
 	}
 }
 
+// A workspace whose root, source and branch have tmux.Sep in them, the
+// root a newline too, is found by FindWorktree and again by its key,
+// and from a pane in it, whose directory is the root, by PaneSession,
+// with the pane's directory, and by Current. Split at Sep, the source
+// and branch were read from the wrong fields or cut at their first Sep,
+// and PaneSession found no session. Each value ends in a $ and comes
+// back as written: tmux 3.4 on macOS puts a backslash before a $ that
+// comes before a U+2063, which the | a separator starts with keeps
+// away from a value, and Query's decoding would undo. Each has a $
+// before a letter, which tmux 3.4 prints as \$ everywhere: in the root
+// before its newline, where a Query that decoded the line with the
+// probe only left it (#288). The user's after-display-message and
+// after-list-sessions hooks print a line after the records, which
+// PaneSession read into the pane's directory (#282).
+func TestEnsureValuesWithSep(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "proj", "fix"+tmux.Sep+"x$a\ny$")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, branch := "/src/"+tmux.Sep+"$HOME/proj$", "fix"+tmux.Sep+"x$y"+tmux.Sep+"$"
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: SessionName("mac", "proj", branch), Key: protocol.SessionKey("env", root), Source: src, Branch: branch}
+	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+		t.Fatalf("ensure: %q %v %v", name, created, err)
+	}
+	out, err := Server.Run(ctx, "new-window", "-d", "-t", tmux.SessionTarget(spec.Name), "-c", tmux.FormatLiteral(root), "-P", "-F", "#{pane_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := strings.TrimSpace(string(out))
+	sock, err := Server.Run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", strings.TrimSpace(string(sock))+",0,0")
+	for _, hook := range []string{"after-display-message", "after-list-sessions"} {
+		if _, err := Server.Run(ctx, "set-hook", "-g", hook, "display-message -p hook"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := FindWorktree(locals, "env", src, branch); !ok || l.Name != spec.Name || l.Key != spec.Key || l.Host != "mac" || len(locals) != 1 {
+		t.Errorf("FindWorktree: %+v %v, sessions %+v", l, ok, locals)
+	}
+	if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+		t.Errorf("ensure again: %q %v %v", name, created, err)
+	}
+	// The pane's path is read from its process, which may not have
+	// changed directory yet.
+	var l protocol.Session
+	var dir string
+	for i := 0; i < 200; i++ {
+		if l, dir, err = PaneSession(ctx, pane); err == nil && dir == real {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil || dir != real || l.Name != spec.Name || l.Key != spec.Key || l.Source != src || l.Branch != branch {
+		t.Errorf("PaneSession: %+v %q %v", l, dir, err)
+	}
+	t.Setenv("TMUX_PANE", pane)
+	if cur, err := Current(ctx); err != nil || cur.Name != spec.Name || cur.Key != spec.Key || cur.Source != src || cur.Branch != branch {
+		t.Errorf("Current: %+v %v", cur, err)
+	}
+}
+
 // A workspace for a branch with a # or a ; is made under the name
 // SessionName computed, tagged, with its attach pane, and reused the
 // next time: new-session expands a # in the name as a format, and an
