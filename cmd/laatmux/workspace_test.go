@@ -551,6 +551,14 @@ func TestOriginOf(t *testing.T) {
 			t.Errorf("broken config through %q read as no origin", content)
 		}
 	}
+	// A plain HEAD again, so what follows does not rest on git reading a
+	// HEAD symlink.
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// So is a broken repository git finds below a gone worktree's .git
 	// file, bare or with a .git directory.
 	bare, nested := filepath.Join(gone[0], "bare"), filepath.Join(gone[0], "nested")
