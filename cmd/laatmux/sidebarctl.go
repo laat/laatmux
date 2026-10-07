@@ -61,14 +61,16 @@ func listenPane(ctx context.Context, cmds chan<- func(*view.Model) view.Action, 
 	if err != nil {
 		return nil, err
 	}
+	// os's and net's errors name the socket's directory, under the state
+	// directory, as it is; the pane shows them.
 	if err := os.MkdirAll(socketDir(), 0o700); err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	path := socketPath(pid, paneID)
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	if _, err := workspace.Server.Run(ctx, "set-option", "-p", "-t", paneID, socketTag, path); err != nil {
 		ln.Close()

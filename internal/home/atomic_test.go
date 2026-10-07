@@ -1,13 +1,18 @@
 package home
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
 // WriteAtomic replaces the file whole and leaves no temporary, after a
-// write that succeeded and after one whose rename failed.
+// write that succeeded and after one whose rename failed; its errors
+// name the files quoted.
 func TestWriteAtomic(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.json")
@@ -33,6 +38,24 @@ func TestWriteAtomic(t *testing.T) {
 	}
 	if b, err := os.ReadFile(p); err != nil || string(b) != "two" {
 		t.Fatalf("after the failure %q %v", b, err)
+	}
+	// The errors name the files as tmux.Printable shows them, here in a
+	// directory with a tab and an ESC in its name: the failed rename
+	// both, a write into a directory that is gone the temporary; os's
+	// cause is kept.
+	odd := filepath.Join(dir, "d\tir\x1b[31m")
+	full = filepath.Join(odd, "full")
+	if err := os.MkdirAll(filepath.Join(full, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tmp := func(p string) string { return p + ".tmp." + strconv.Itoa(os.Getpid()) }
+	var le *os.LinkError
+	if err := WriteAtomic(full, nil); err == nil || !strings.HasPrefix(err.Error(), "rename "+strconv.Quote(tmp(full))+" "+strconv.Quote(full)+": ") || !errors.As(err, &le) {
+		t.Errorf("rename onto a directory: %v", err)
+	}
+	gone := filepath.Join(odd, "gone", "f.json")
+	if err := WriteAtomic(gone, nil); err == nil || err.Error() != "open "+strconv.Quote(tmp(gone))+": no such file or directory" || !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("write into a directory that is gone: %v", err)
 	}
 }
 

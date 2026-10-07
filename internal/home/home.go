@@ -15,10 +15,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Dir is the state directory. LAATMUX_HOME overrides the default
 // ~/.local/state/laatmux, which is what a sandboxed dev loop needs.
+// Either variable, or XDG_STATE_HOME, can have any byte in it, and
+// os's errors name a path as it is: the errors this package returns
+// name the directory and the files under it as tmux.Printable shows
+// them.
 func Dir() string {
 	if v := os.Getenv("LAATMUX_HOME"); v != "" {
 		return v
@@ -33,7 +39,7 @@ func Dir() string {
 	return filepath.Join(h, ".local", "state", "laatmux")
 }
 
-func ensure() error { return os.MkdirAll(Dir(), 0o700) }
+func ensure() error { return tmux.PrintablePath(os.MkdirAll(Dir(), 0o700)) }
 
 // EnvironmentID is minted once per host and kept across restarts. Routes to
 // a host may change; this id does not.
@@ -55,14 +61,14 @@ func EnvironmentID() (string, error) {
 	// Publish atomically so two concurrent initializers agree on one winner.
 	tmp := p + ".tmp." + strconv.Itoa(os.Getpid())
 	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err != nil {
-		return "", err
+		return "", tmux.PrintablePath(err)
 	}
 	if err := os.Link(tmp, p); err != nil {
 		os.Remove(tmp)
 		if b, rerr := os.ReadFile(p); rerr == nil {
 			return strings.TrimSpace(string(b)), nil
 		}
-		return "", err
+		return "", tmux.PrintablePath(err)
 	}
 	os.Remove(tmp)
 	return id, nil
@@ -99,7 +105,7 @@ func WriteRuntime(r Runtime) error {
 func ReadRuntime() (Runtime, error) {
 	b, err := os.ReadFile(runtimePath())
 	if err != nil {
-		return Runtime{}, err
+		return Runtime{}, tmux.PrintablePath(err)
 	}
 	var r Runtime
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -174,7 +180,7 @@ func TryLock() (*Lock, error) {
 	p := filepath.Join(Dir(), "daemon.lock")
 	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	for tries := 0; ; tries++ {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -218,7 +224,7 @@ func Holder() (int, error) {
 	}
 	f, err := os.OpenFile(filepath.Join(Dir(), "daemon.lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return 0, err
+		return 0, tmux.PrintablePath(err)
 	}
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {

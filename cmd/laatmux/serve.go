@@ -67,7 +67,9 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	ln, err := net.Listen(network, addr)
 	if err != nil {
-		return err
+		// A unix socket's error names its path, under the state
+		// directory by default, as it is.
+		return tmux.PrintablePath(err)
 	}
 	defer ln.Close()
 	if network == "unix" {

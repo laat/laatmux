@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -312,18 +313,26 @@ func PrintableLines(s string) string {
 
 // PrintablePath is err with its path as Printable shows it when err is
 // a bare *fs.PathError, as os's functions return, which names the path
-// as it is, or with both paths so when it is a bare *os.LinkError, as a
-// rename returns; err otherwise: one that wraps either is left as it
-// is, since rebuilding it would drop what wraps it. A cause that is
-// itself one, as os.Root's MkdirAll nests a failed stat in its error,
-// is rebuilt the same way. The rebuilt error keeps the op and the
-// cause, so errors.Is still finds fs.ErrNotExist and the like.
+// as it is, with both paths so when it is a bare *os.LinkError, as a
+// rename returns, and with the socket's path so when it is a bare
+// *net.OpError on a unix socket's address, as a listen returns; err
+// otherwise: one that wraps any of them is left as it is, since
+// rebuilding it would drop what wraps it. A cause that is itself a
+// path or link error, as os.Root's MkdirAll nests a failed stat in its
+// error, is rebuilt the same way. The rebuilt error keeps the op and
+// the cause, so errors.Is still finds fs.ErrNotExist and the like.
 func PrintablePath(err error) error {
 	switch e := err.(type) {
 	case *fs.PathError:
 		return &fs.PathError{Op: e.Op, Path: Printable(e.Path), Err: PrintablePath(e.Err)}
 	case *os.LinkError:
 		return &os.LinkError{Op: e.Op, Old: Printable(e.Old), New: Printable(e.New), Err: PrintablePath(e.Err)}
+	case *net.OpError:
+		if a, ok := e.Addr.(*net.UnixAddr); ok && a != nil {
+			cp := *e
+			cp.Addr = &net.UnixAddr{Name: Printable(a.Name), Net: a.Net}
+			return &cp
+		}
 	}
 	return err
 }

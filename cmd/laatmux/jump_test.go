@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -282,6 +283,16 @@ func TestAddHintCanRun(t *testing.T) {
 	if err := os.Remove(lastFile); err != nil {
 		t.Fatal(err)
 	}
+	// Under a state directory with a tab and an ESC in its name, the
+	// file is named as tmux.Printable shows it.
+	was := os.Getenv("LAATMUX_HOME")
+	odd := filepath.Join(t.TempDir(), "st\tate\x1b[31m")
+	if err := os.Mkdir(odd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", odd)
+	check(host("vm", "venv"), bv, onBadLast(strconv.Quote(badLast())))
+	t.Setenv("LAATMUX_HOME", was)
 	d.cfg.DefaultAgentName, d.cfg.Agents = "", nil
 	check(host("vm", "venv"), bv, "vm/proj/b has no managed session; laatmux add makes one once an agent is in the config")
 	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, git@github.com:laat/other.git is a repository in the config, and an agent is in the config")

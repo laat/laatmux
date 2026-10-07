@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // WriteAtomic writes data to path whole: through a temporary beside it,
@@ -11,16 +13,18 @@ import (
 // place, so a reader sees the old contents or the new and never a
 // partial file. A failed write or rename leaves no temporary behind;
 // one left by a process that died mid-write is named as Temporary
-// says.
+// says. Its error names the temporary, or both files, as
+// tmux.Printable shows them: the daemon passes it on to a client, and
+// the state directory's name can have any byte in it.
 func WriteAtomic(path string, data []byte) error {
 	tmp := path + ".tmp." + strconv.Itoa(os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		os.Remove(tmp)
-		return err
+		return tmux.PrintablePath(err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return err
+		return tmux.PrintablePath(err)
 	}
 	return nil
 }

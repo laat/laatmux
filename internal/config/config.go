@@ -52,6 +52,7 @@ import (
 
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -360,14 +361,16 @@ func Path() string {
 }
 
 // Load reads and validates the config. A missing file yields one local
-// host named after the machine.
+// host named after the machine. A read's error names the path as
+// tmux.Printable shows it: LAATMUX_CONFIG or XDG_CONFIG_HOME can have
+// any byte in it.
 func Load() (Config, error) {
 	b, err := os.ReadFile(Path())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Parse(nil)
 		}
-		return Config{}, err
+		return Config{}, tmux.PrintablePath(err)
 	}
 	return Parse(b)
 }

@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/protocol"
 )
 
 // A command's error is printed with "laatmux: " once: the packages'
@@ -63,5 +67,72 @@ func TestReportPrefixOnce(t *testing.T) {
 	report(&b, err)
 	if got := b.String(); !strings.HasPrefix(got, "laatmux: local daemon: daemon did not come up; ") || strings.Count(got, "laatmux:") != 1 {
 		t.Errorf("a start that does not come up: printed %q", got)
+	}
+}
+
+// The commands' errors that name the state directory, from a
+// LAATMUX_HOME with a tab and an ESC in its name, name it as
+// tmux.Printable shows it: stop's reads of the runtime file and the
+// lock, serve's lock and unix socket, the sidebar's lock and tasks
+// show's read of a record. laatmux tasks prints an add that failed at
+// the journal with the journal's file quoted once, not the whole error
+// quoted again.
+func TestStateDirQuoted(t *testing.T) {
+	q := strconv.Quote
+	check := func(what string, err error, want string) {
+		t.Helper()
+		if err == nil || !strings.HasPrefix(err.Error(), want) || strings.ContainsAny(err.Error(), "\t\x1b") {
+			t.Errorf("%s: %v, want %s...", what, err, want)
+		}
+	}
+	ctx := context.Background()
+	base := t.TempDir()
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(base, "none.yaml"))
+	t.Setenv("TMUX_TMPDIR", base)
+	file := filepath.Join(base, "fi\tle\x1b[31m")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", filepath.Join(file, "state"))
+	check("stop", cmdStop(ctx, nil), "open "+q(filepath.Join(file, "state", "runtime.json"))+": ")
+	check("serve", cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}), "mkdir "+q(file)+": ")
+	_, err := sidebarLock()
+	check("sidebar lock", err, "mkdir "+q(file)+": ")
+
+	dir := filepath.Join(base, "st\tate\x1b[31m")
+	t.Setenv("LAATMUX_HOME", dir)
+	path := func(name ...string) string { return filepath.Join(append([]string{dir}, name...)...) }
+	for _, p := range []string{path("daemon.lock"), path("sidebar.lock"), path("pending", daemon.FileName("t1"))} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("stop", cmdStop(ctx, nil), "open "+q(path("daemon.lock"))+": ")
+	check("serve", cmdServe(ctx, []string{"--listen", "tcp:127.0.0.1:0"}), "open "+q(path("daemon.lock"))+": ")
+	_, err = sidebarLock()
+	check("sidebar lock", err, "open "+q(path("sidebar.lock"))+": ")
+	check("tasks show", showTask("t1"), "read "+q(path("pending", daemon.FileName("t1")))+": ")
+	if err := os.Remove(path("daemon.lock")); err != nil {
+		t.Fatal(err)
+	}
+	sock := path("gone", "s.sock")
+	check("serve", cmdServe(ctx, []string{"--listen", "unix:" + sock}), "listen unix "+q(sock)+": ")
+
+	// The journal's write as the daemon gives it, in a directory that
+	// cannot be written: the add's error the relay keeps.
+	commands := path("commands")
+	if err := os.MkdirAll(commands, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	werr := home.WriteAtomic(filepath.Join(commands, "t2.json"), nil)
+	check("journal", werr, "open "+q(filepath.Join(commands, "t2.json.tmp."+strconv.Itoa(os.Getpid())))+": ")
+	msg := "failed at resolve: " + werr.Error()
+	m := merged.New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:    []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv"}},
+		Pendings: []protocol.Pending{{ID: "t2", Host: "vm", Repo: "proj", Branch: "b", Taken: true, Done: true, Stage: protocol.StageResolve, Error: msg}},
+	})
+	if got := taskReport(m.Status("")); !strings.HasPrefix(got, "t2  proj/b on vm  ") || !strings.HasSuffix(got, "  "+msg+"\n") {
+		t.Errorf("tasks:\n%q\nwant the line to end with %q", got, msg)
 	}
 }

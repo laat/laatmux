@@ -4,10 +4,84 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// Every error that names the state directory, or a file under it,
+// names it as tmux.Printable shows it, the directory's name here
+// having a tab and an ESC in it. Under a file, each function that
+// makes the directory fails at its mkdir and each read at its open; in
+// a directory where each file is a directory, or not JSON, each fails
+// naming that file, the environment id's link naming both.
+func TestStateDirQuoted(t *testing.T) {
+	q := strconv.Quote
+	check := func(what string, err error, want string) {
+		t.Helper()
+		if err == nil || !strings.HasPrefix(err.Error(), want) || strings.ContainsAny(err.Error(), "\t\x1b") {
+			t.Errorf("%s: %v, want %s...", what, err, want)
+		}
+	}
+	base := t.TempDir()
+	file := filepath.Join(base, "fi\tle\x1b[31m")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", filepath.Join(file, "state"))
+	mkdir := "mkdir " + q(file) + ": "
+	_, err := EnvironmentID()
+	check("EnvironmentID", err, mkdir)
+	_, err = TryLock()
+	check("TryLock", err, mkdir)
+	_, err = Holder()
+	check("Holder", err, mkdir)
+	check("WriteRuntime", WriteRuntime(Runtime{}), mkdir)
+	check("UpdateLast", UpdateLast(func(*Last) {}), mkdir)
+	check("UpdateSidebar", UpdateSidebar(time.Now(), func(*Sidebar) {}), mkdir)
+	_, err = ReadRuntime()
+	check("ReadRuntime", err, "open "+q(filepath.Join(file, "state", "runtime.json"))+": ")
+	_, err = ReadLast()
+	check("ReadLast", err, "open "+q(filepath.Join(file, "state", "last.json"))+": ")
+	_, _, err = ReadSidebar()
+	check("ReadSidebar", err, "open "+q(filepath.Join(file, "state", "sidebar.json"))+": ")
+
+	dir := filepath.Join(base, "st\tate\x1b[31m")
+	t.Setenv("LAATMUX_HOME", dir)
+	path := func(name string) string { return filepath.Join(dir, name) }
+	envTmp := "environment-id.tmp." + strconv.Itoa(os.Getpid())
+	runTmp := "runtime.json.tmp." + strconv.Itoa(os.Getpid())
+	for _, name := range []string{"daemon.lock", "last.json.lock", "sidebar.json.lock", "sidebar.json", "runtime.json", "environment-id", envTmp} {
+		if err := os.MkdirAll(path(name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path("last.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = TryLock()
+	check("TryLock", err, "open "+q(path("daemon.lock"))+": ")
+	_, err = Holder()
+	check("Holder", err, "open "+q(path("daemon.lock"))+": ")
+	check("UpdateLast", UpdateLast(func(*Last) {}), "open "+q(path("last.json.lock"))+": ")
+	check("UpdateSidebar", UpdateSidebar(time.Now(), func(*Sidebar) {}), "open "+q(path("sidebar.json.lock"))+": ")
+	_, _, err = ReadSidebar()
+	check("ReadSidebar", err, "read "+q(path("sidebar.json"))+": ")
+	_, err = ReadRuntime()
+	check("ReadRuntime", err, "read "+q(path("runtime.json"))+": ")
+	check("WriteRuntime", WriteRuntime(Runtime{}), "rename "+q(path(runTmp))+" "+q(path("runtime.json"))+": ")
+	_, err = ReadLast()
+	check("ReadLast", err, q(path("last.json"))+": ")
+	_, err = EnvironmentID()
+	check("EnvironmentID", err, "open "+q(path(envTmp))+": ")
+	if err := os.Remove(path(envTmp)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = EnvironmentID()
+	check("EnvironmentID", err, "link "+q(path(envTmp))+" "+q(path("environment-id"))+": ")
+}
 
 // Two starters must not both own the lock. A child
 // process holds it while the parent tries; flock is per open file

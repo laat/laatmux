@@ -39,6 +39,25 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
+// A config path with a tab and an ESC in it, from LAATMUX_CONFIG or
+// XDG_CONFIG_HOME, that cannot be read: the error names it as
+// tmux.Printable shows it, and os's cause is kept.
+func TestLoadPathQuoted(t *testing.T) {
+	odd := filepath.Join(t.TempDir(), "co\tnf\x1b[31m")
+	for _, env := range [][2]string{{"LAATMUX_CONFIG", odd}, {"XDG_CONFIG_HOME", odd}} {
+		t.Setenv("LAATMUX_CONFIG", "")
+		t.Setenv(env[0], env[1])
+		p := Path()
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load()
+		if err == nil || err.Error() != "read "+strconv.Quote(p)+": is a directory" {
+			t.Errorf("%s: %v", env[0], err)
+		}
+	}
+}
+
 const full = `
 hosts:
   - name: mac

@@ -13,6 +13,7 @@ import (
 
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Attention: what the user has seen. The merging daemon keeps, per agent,
@@ -104,7 +105,7 @@ func openAttention(path string) (*attention, error) {
 		return a, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	var f attnFile
 	if err := json.Unmarshal(b, &f); err != nil {
@@ -132,7 +133,7 @@ func (d *Daemon) flushAttentionLocked() {
 	}
 	b, err := json.Marshal(attnFile{Entries: a.entries})
 	if err == nil {
-		if err = os.MkdirAll(filepath.Dir(a.path), 0o700); err == nil {
+		if err = tmux.PrintablePath(os.MkdirAll(filepath.Dir(a.path), 0o700)); err == nil {
 			err = home.WriteAtomic(a.path, b)
 		}
 	}

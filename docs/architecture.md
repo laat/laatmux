@@ -107,12 +107,13 @@ By what each imports from the tree (leaves first):
 
 | Package | Imports | What |
 |---|---|---|
-| `protocol`, `source`, `peer`, `palette`, `home`, `procs`, `detect`, `tmux` | nothing | the wire format and the records; a source's key and forge split; a host as a value; the colours; the state directory, the environment id, the runtime file, the startup lock, `last.json` and `sidebar.json`, atomic writes; processes; the detection rules; tmux |
+| `protocol`, `source`, `peer`, `palette`, `procs`, `detect`, `tmux` | nothing | the wire format and the records; a source's key and forge split; a host as a value; the colours; processes; the detection rules; tmux |
+| `home` | tmux | the state directory, the environment id, the runtime file, the startup lock, `last.json` and `sidebar.json`, atomic writes |
 | `term` | palette | the terminal: raw mode, the frame, the keys |
 | `github` | protocol | the GraphQL queries for PRs and checks |
 | `rows` | protocol, source | the rows every listing shares: the tree rooted at repositories, the agent view's tiles |
 | `config` | palette, peer, source, tmux | the config file, and `.laatmux.yaml` per repository |
-| `client` | home, peer, protocol | dial a daemon, local or through the bridge; requests and streamed commands |
+| `client` | home, peer, protocol, tmux | dial a daemon, local or through the bridge; requests and streamed commands |
 | `worktree` | config, protocol, source, tmux | checkouts, worktrees, the git stages of `add` |
 | `workspace` | client, peer, protocol, source, tmux | the local workspace sessions on the default server |
 | `view` | palette, protocol, rows, term | the list view the sidebar pane and the dashboard share |

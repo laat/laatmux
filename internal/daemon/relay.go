@@ -20,6 +20,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // The relay: the background add, living in the daemon on the machine
@@ -105,15 +106,19 @@ type runner struct {
 	done   chan struct{}
 }
 
+// openRelay loads every record under dir, making the directory when it
+// is missing. os's errors name dir, under the state directory, as it
+// is: serve ends with the error, and the log has the rest, so both go
+// through tmux.PrintablePath.
 func openRelay(dir string, logger *log.Logger) (*relay, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	r := &relay{dir: dir, logger: logger, recs: map[string]*pendingFile{}, attempts: map[string]*sync.Mutex{}, runners: map[string][]*runner{},
 		checking: map[string]bool{}, recheck: map[string]bool{}, checked: map[string]string{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	for _, de := range entries {
 		if de.IsDir() {
@@ -130,12 +135,12 @@ func openRelay(dir string, logger *log.Logger) (*relay, error) {
 		}
 		b, err := os.ReadFile(filepath.Join(dir, de.Name()))
 		if err != nil {
-			logger.Printf("pending: %s: %v", de.Name(), err)
+			logger.Printf("pending: %s: %v", tmux.Printable(de.Name()), tmux.PrintablePath(err))
 			continue
 		}
 		var p pendingFile
 		if err := json.Unmarshal(b, &p); err != nil || p.ID == "" {
-			logger.Printf("pending: %s: not a record: %v", de.Name(), err)
+			logger.Printf("pending: %s: not a record: %v", tmux.Printable(de.Name()), err)
 			continue
 		}
 		r.recs[p.ID] = &p
@@ -200,12 +205,14 @@ func (r *relay) writeLocked(p *pendingFile) error {
 }
 
 // removeLocked deletes the record and its file. Called with r.mu held.
+// The error names the file as tmux.Printable shows it: dismiss passes
+// it on to a client.
 func (r *relay) removeLocked(id string) error {
 	if _, ok := r.recs[id]; !ok {
 		return nil
 	}
 	if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return tmux.PrintablePath(err)
 	}
 	delete(r.recs, id)
 	delete(r.checked, id)
@@ -225,7 +232,7 @@ func (r *relay) sweep(now time.Time, keep func(host, environmentID string) bool)
 			continue
 		}
 		if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
-			r.logger.Printf("pending: sweep %s: %v", id, err)
+			r.logger.Printf("pending: sweep %s: %v", id, tmux.PrintablePath(err))
 			continue
 		}
 		delete(r.recs, id)

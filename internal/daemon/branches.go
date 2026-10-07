@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // PR and checks: the merging daemon reads, through gh on this machine,
@@ -112,7 +113,7 @@ func openBranches(path string) (map[string]*branchEntry, error) {
 		return out, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	var f struct {
 		Entries map[string]*branchEntry `json:"entries"`
@@ -137,7 +138,7 @@ func (b *branches) saveLocked() {
 		Entries map[string]*branchEntry `json:"entries"`
 	}{b.entries})
 	if err == nil {
-		if err = os.MkdirAll(filepath.Dir(b.cfg.Branches), 0o700); err == nil {
+		if err = tmux.PrintablePath(os.MkdirAll(filepath.Dir(b.cfg.Branches), 0o700)); err == nil {
 			err = home.WriteAtomic(b.cfg.Branches, data)
 		}
 	}

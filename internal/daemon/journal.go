@@ -19,6 +19,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // The journal's clock contract, from the milestone-four note. Retention
@@ -148,14 +149,16 @@ type journal struct {
 // death left: an attempt still attempting is unknown, and a launch still
 // launching stays so, which the add reads as unknown. A file that does
 // not parse is left alone and logged; it is not laatmux's to delete.
+// os's errors name dir, under the state directory, as it is; they go
+// through tmux.PrintablePath, as the writes' do in home.WriteAtomic.
 func openJournal(dir string, logger *log.Logger, retention time.Duration) (*journal, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	j := &journal{dir: dir, logger: logger, retention: retention, byID: map[string]*entry{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	for _, de := range entries {
 		if de.IsDir() {
@@ -171,12 +174,12 @@ func openJournal(dir string, logger *log.Logger, retention time.Duration) (*jour
 		}
 		b, err := os.ReadFile(filepath.Join(dir, de.Name()))
 		if err != nil {
-			logger.Printf("journal: %s: %v", de.Name(), err)
+			logger.Printf("journal: %s: %v", tmux.Printable(de.Name()), tmux.PrintablePath(err))
 			continue
 		}
 		var e entry
 		if err := json.Unmarshal(b, &e); err != nil || e.ID == "" {
-			logger.Printf("journal: %s: not an entry: %v", de.Name(), err)
+			logger.Printf("journal: %s: not an entry: %v", tmux.Printable(de.Name()), err)
 			continue
 		}
 		// A paste the daemon died in is unknown; an attempt it died in
@@ -194,7 +197,7 @@ func openJournal(dir string, logger *log.Logger, retention time.Duration) (*jour
 				a.State, a.Error = state, reason
 			}
 			if err := j.writeLocked(&e); err != nil {
-				logger.Printf("journal: %s: %v", de.Name(), err)
+				logger.Printf("journal: %s: %v", tmux.Printable(de.Name()), err)
 			}
 		}
 		j.byID[e.ID] = &e
@@ -322,7 +325,7 @@ func (j *journal) sweep(now time.Time) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(j.dir, FileName(id))); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			j.logger.Printf("journal: sweep %s: %v", id, err)
+			j.logger.Printf("journal: sweep %s: %v", id, tmux.PrintablePath(err))
 			continue
 		}
 		delete(j.byID, id)

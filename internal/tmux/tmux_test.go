@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -801,6 +802,27 @@ func TestPrintablePath(t *testing.T) {
 	}
 	if got := PrintablePath(nil); got != nil {
 		t.Errorf("PrintablePath(nil) = %v", got)
+	}
+	// A listen on a unix socket whose directory is gone: net's error
+	// names the socket's path in its address, rebuilt quoted, with the
+	// op and the cause kept and the original untouched.
+	sock := filepath.Join(t.TempDir(), "go\tne\x1b[31m", "s.sock")
+	_, err := net.Listen("unix", sock)
+	var oe *net.OpError
+	if !errors.As(err, &oe) {
+		t.Fatalf("listen: %#v", err)
+	}
+	got = PrintablePath(err)
+	var goe *net.OpError
+	if !errors.As(got, &goe) || !strings.HasPrefix(got.Error(), "listen unix "+strconv.Quote(sock)+": ") || goe.Err != oe.Err {
+		t.Errorf("PrintablePath = %v", got)
+	}
+	if oe.Addr.String() != sock {
+		t.Errorf("the original's address changed: %q", oe.Addr)
+	}
+	tcp := &net.OpError{Op: "listen", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}, Err: syscall.EADDRINUSE}
+	if got := PrintablePath(tcp); got != tcp {
+		t.Errorf("a tcp error rebuilt: %v", got)
 	}
 }
 
