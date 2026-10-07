@@ -1049,7 +1049,7 @@ func TestRelayHandoffPatience(t *testing.T) {
 // its backoff and an attempt is open; a host that is back between the
 // dismiss's checks keeps its record with its goroutines restarted; and
 // an add still running whose host has left for good is removed with its
-// follow ended.
+// follow ended and its removal published.
 func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
@@ -1154,6 +1154,10 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 		t.Fatalf("record at the launch %+v", held)
 	}
 	f.hosts.set()
+	// Subscribed once the host is gone: the subscription's read of the
+	// config is one more gone read, and the stream follows no host.
+	c, pc, _ := f.merged(t)
+	defer c.Close()
 	res = f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s3"})
 	f.local.relay.mu.Lock()
 	n = len(f.local.relay.runners["s3"])
@@ -1181,11 +1185,14 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.dir, FileName("s3"))); !os.IsNotExist(err) {
 		t.Fatalf("file kept: %v", err)
 	}
+	if rm := awaitMerged(t, c, pc, 5*time.Second, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.PendingID == "s3" }); rm.ReplacedBy != "" {
+		t.Fatalf("dismiss remove %+v", rm)
+	}
 }
 
 // A machine under the host's name that is not the accepted one leaves
 // a sent add stuck by design, marked as a mismatch, and the record is
-// then dismissable.
+// then dismissable, its removal published.
 func TestRelayMismatchDismissable(t *testing.T) {
 	f := newRelayFixture(t, nil)
 	other := New(Config{EnvironmentID: "elsewhere", Host: "vm", Version: "other", Targets: []Target{{Label: "laatmux", Tmux: &fakeServer{}, Managed: true}}, Store: f.store, Commands: t.TempDir(), Timings: testTimings})
@@ -1219,11 +1226,16 @@ func TestRelayMismatchDismissable(t *testing.T) {
 	if got.Done {
 		t.Fatalf("done on a mismatch %+v", got)
 	}
+	c, pc, _ := f.merged(t)
+	defer c.Close()
 	if res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "mm"}); !res.OK {
 		t.Fatalf("dismiss on a mismatch %+v", res)
 	}
 	if _, ok := f.local.relay.get("mm"); ok {
 		t.Fatal("record kept")
+	}
+	if rm := awaitMerged(t, c, pc, 5*time.Second, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.PendingID == "mm" }); rm.ReplacedBy != "" {
+		t.Fatalf("dismiss remove %+v", rm)
 	}
 }
 
