@@ -429,17 +429,27 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 // built: args writes it as the value ";", so a caller that separated
 // two commands with it would give the first an argument too many, which
 // tmux refuses and only a test on a real server running that very
-// sequence notices. A ";" is caught as an argument of Run, RunInput,
-// ArgsBare or append, or as an element of a slice literal; the strings
-// package's Split and the like are not matched. The module's test files
-// are left out, since the tests here pass ";" as a value on purpose.
+// sequence notices. A ";" literal, in parentheses or not, is caught as
+// an argument of Run, RunInput, ArgsBare or append, as an element of a
+// slice literal or of one whose type is elided, the inner []string of a
+// [][]string say, and as the value of a const or var, which could then
+// be passed as the separator. The strings package's Split and the like,
+// append(b, ";"...) on bytes and struct literals are not matched; a ";"
+// that is a value, or not tmux's, is written string(';'). The walk
+// skips what the go tool skips, so it reads this module's code and no
+// other's. The module's test files are left out, since the tests here
+// pass ";" as a value on purpose.
 func TestNoBareSeparator(t *testing.T) {
 	root := filepath.Join("..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !slices.Contains(strings.Split(string(mod), "\n"), "module github.com/laat/laatmux") {
+		t.Fatalf("%s is not this module's root", root)
+	}
 	bare := func(e ast.Expr) bool {
-		lit, ok := e.(*ast.BasicLit)
+		lit, ok := ast.Unparen(e).(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			return false
 		}
@@ -447,15 +457,26 @@ func TestNoBareSeparator(t *testing.T) {
 		return err == nil && v == ";"
 	}
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			// A dot directory holds other checkouts, .git's and the
-			// agents' worktrees, not this module's code.
-			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "testdata") {
+		if path != root && (strings.HasPrefix(d.Name(), ".") || strings.HasPrefix(d.Name(), "_")) {
+			// The go tool ignores these: .git, the agents'
+			// worktrees, an editor's lock or an AppleDouble file.
+			if d.IsDir() {
 				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if path != root {
+				if d.Name() == "testdata" || d.Name() == "vendor" {
+					return filepath.SkipDir
+				}
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -472,7 +493,7 @@ func TestNoBareSeparator(t *testing.T) {
 			case *ast.CallExpr:
 				switch fn := n.Fun.(type) {
 				case *ast.Ident:
-					if fn.Name == "append" {
+					if fn.Name == "append" && !n.Ellipsis.IsValid() {
 						list = n.Args
 					}
 				case *ast.SelectorExpr:
@@ -481,11 +502,15 @@ func TestNoBareSeparator(t *testing.T) {
 					}
 				}
 			case *ast.CompositeLit:
-				list = n.Elts
+				if _, slice := n.Type.(*ast.ArrayType); slice || n.Type == nil {
+					list = n.Elts
+				}
+			case *ast.ValueSpec:
+				list = n.Values
 			}
 			for _, e := range list {
 				if bare(e) {
-					t.Errorf("%s: a bare \";\" passed as a tmux argument; separate commands with tmux.Next", fset.Position(e.Pos()))
+					t.Errorf("%s: a bare \";\" goes to tmux as the value ;: separate commands with tmux.Next, and write a ; that is a value, or not tmux's, as string(';')", fset.Position(e.Pos()))
 				}
 			}
 			return true
