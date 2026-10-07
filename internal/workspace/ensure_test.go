@@ -352,7 +352,7 @@ func TestEnsureValuesWithSep(t *testing.T) {
 	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
 		t.Fatalf("ensure: %q %v %v", name, created, err)
 	}
-	out, err := Server.Run(ctx, "new-window", "-d", "-t", sessionTarget(spec.Name), "-c", tmux.FormatLiteral(root), "-P", "-F", "#{pane_id}", "sleep 600")
+	out, err := Server.Run(ctx, "new-window", "-d", "-t", tmux.SessionTarget(spec.Name), "-c", tmux.FormatLiteral(root), "-P", "-F", "#{pane_id}", "sleep 600")
 	if err != nil {
 		t.Fatal(err)
 	}
