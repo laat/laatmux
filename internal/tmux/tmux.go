@@ -296,8 +296,9 @@ func (s Server) Managed() bool { return s == LaatmuxServer }
 // config files: the built-in defaults (prefix C-b, status on, default
 // bindings) remain, so everything is set explicitly here as well. It is also
 // applied when adopting a server that was started by hand, since the plan
-// allows `tmux -L laatmux new` as manual setup. Idempotent. Never call this
-// on a server the user owns; it refuses any server but LaatmuxServer.
+// allows `tmux -L laatmux new` as manual setup. The global environment's
+// locale is set last, by ensureLocale. Idempotent. Never call this on a
+// server the user owns; it refuses any server but LaatmuxServer.
 func (s Server) EnsureConfigured(ctx context.Context) error {
 	if !s.Managed() {
 		return fmt.Errorf("tmux: refusing to configure unmanaged server %s", s.Label())
@@ -320,6 +321,11 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		// The most recent client sizes the window, so a second attachment
 		// from a smaller terminal does not shrink the first.
 		{"set-option", "-g", "window-size", "latest"},
+		// tmux's own list, which has no locale variable: a hand-started
+		// server's could copy the daemon's LC_ALL=C into a session, or
+		// remove the LANG ensureLocale set, since new-session takes the
+		// listed variables from the client, the daemon, set or not.
+		{"set-option", "-gu", "update-environment"},
 		// -q: a table already emptied by a previous reconciliation no longer
 		// exists on tmux 3.5, and that is not an error here.
 		{"unbind-key", "-q", "-a", "-T", "root"},
@@ -359,7 +365,7 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return s.ensureLocale(ctx)
 }
 
 // NewSessionOpts describes a managed session.
