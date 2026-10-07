@@ -216,7 +216,8 @@ func TestEncodeBranch(t *testing.T) {
 
 		// A line and a paragraph separator and a noncharacter, which a
 		// tmux 3.3 built without utf8proc stores escaped, encoded byte
-		// by byte; U+2027, U+FDCF, U+FDF0 and U+FFFD next to them kept.
+		// by byte; U+2027, U+FDCF, U+FDF0, U+FFFD and U+FFDD0, a private
+		// use code point at U+FDD0 of plane 15, next to them kept.
 		"ls\u2028x":    "ls%e2%80%a8x",
 		"\u2029":       "%e2%80%a9",
 		"\u2027":       "\u2027",
@@ -227,6 +228,7 @@ func TestEncodeBranch(t *testing.T) {
 		"\uffff":       "%ef%bf%bf",
 		"\U0001fffe":   "%f0%9f%bf%be",
 		"\U0010ffff":   "%f4%8f%bf%bf",
+		"\U000ffdd0":   "\U000ffdd0",
 	}
 	for in, want := range cases {
 		got := EncodeBranch(in)
@@ -789,7 +791,7 @@ func TestCheckSessionName(t *testing.T) {
 			t.Errorf("CheckSessionName(%q) = %v, want %q", name, err, want)
 		}
 	}
-	for _, name := range []string{"work", "notes draft", "notes##draft", "x#{session_id}y", "a#b", "#[fg=red]x", "semi;", ";", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x", "100%", "a\uFFFDb", "a\u00a0b", "a\u200bb", "a\ue000b", "a\U0001F600b", "cafe\u0301", "\u2764\ufe0f", "fix-\U0001FAE9", "a\u0378b"} {
+	for _, name := range []string{"work", "notes draft", "notes##draft", "x#{session_id}y", "a#b", "#[fg=red]x", "semi;", ";", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x", "100%", "a\uFFFDb", "a\u00a0b", "a\u200bb", "a\ue000b", "a\U0001F600b", "cafe\u0301", "\u2764\ufe0f", "fix-\U0001FAE9", "a\u0378b", "a\U000ffdd0b"} {
 		if err := CheckSessionName(name); err != nil {
 			t.Errorf("CheckSessionName(%q) = %v", name, err)
 		}
@@ -803,8 +805,8 @@ func TestCheckSessionName(t *testing.T) {
 			t.Errorf("branch %q: %v", branch, err)
 		}
 	}
-	// And every code point, so what EncodeBranch keeps is what
-	// CheckSessionName takes.
+	// And every code point, so CheckSessionName takes whatever
+	// EncodeBranch keeps.
 	for r, bad := rune(0), 0; r <= unicode.MaxRune && bad < 20; r++ {
 		if err := CheckSessionName(SessionName("proj", string(r))); err != nil {
 			t.Errorf("branch %q: %v", string(r), err)

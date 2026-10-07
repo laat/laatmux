@@ -446,7 +446,7 @@ func CheckSessionName(name string) error {
 // noncharacter, U+FDD0 to U+FDEF and the last two code points of every
 // plane. CheckSessionName refuses one and EncodeBranch encodes it.
 func widthless(r rune) bool {
-	return unicode.In(r, unicode.Zl, unicode.Zp) || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
+	return r == 0x2028 || r == 0x2029 || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
 }
 
 // NewSessionOpts describes a managed session.
@@ -818,19 +818,20 @@ func FormatLiteral(s string) string {
 // at Sep, so each of those bytes, and "%" itself, becomes "%" and its
 // two lowercase hex digits: "%25", "%23", "%24", "%2e", "%3a", "%3b",
 // "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". A C1 control
-// character, a U+2063, and a line or paragraph separator or a
-// noncharacter, which a tmux 3.3 built without utf8proc stores escaped
-// (widthless), are encoded byte by byte, U+0085 as "%c2%85", U+2028 as
+// character and a U+2063 are encoded byte by byte, U+0085 as "%c2%85";
+// so are a line or paragraph separator and a noncharacter (widthless),
+// which a tmux 3.3 built without utf8proc stores escaped, U+2028 as
 // "%e2%80%a8". Every "$" is encoded, whatever follows it: what tmux
 // takes for a letter there is its C library's isalpha, which differs by
 // platform and locale, and a name then does not depend on the tmux it
 // is made on. Nothing else changes, any other multibyte UTF-8 character
-// included; such a tmux also escapes a code point its C library's
-// tables do not have, unassigned or a recent emoji say, which cannot be
-// told from here. git takes no "\", C0 control byte or DEL in a branch,
-// but a detached worktree's session is named by its directory, encoded
-// the same way. Distinct branches give distinct names and the encoding
-// is exact.
+// included; a tmux 3.3 built without utf8proc also escapes a code point
+// its C library's tables do not have, unassigned or a recent emoji say,
+// which is not encoded: Go's tables are not the host's, and a name
+// would change with the Unicode version laatmux is built with. git
+// takes no "\", C0 control byte or DEL in a branch, but a detached
+// worktree's session is named by its directory, encoded the same way.
+// Distinct branches give distinct names and the encoding is exact.
 func EncodeBranch(branch string) string {
 	return encodeBytes(branch, func(i int) bool {
 		c := branch[i]
