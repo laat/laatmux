@@ -128,11 +128,12 @@ func originOf(ctx context.Context, dir string) (string, error) {
 			return "", nil
 		}
 	}
+	// git's message can repeat dir, as it is.
 	msg := strings.TrimSpace(stderr.String())
 	if msg == "" {
 		msg = err.Error()
 	}
-	return "", fmt.Errorf("%s: cannot read git origin: %s", tmux.Printable(dir), msg)
+	return "", fmt.Errorf("%s: cannot read git origin: %s", tmux.Printable(dir), tmux.Printable(msg))
 }
 
 func repoList(cfg config.Config) string {

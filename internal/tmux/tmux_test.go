@@ -192,7 +192,12 @@ func TestRedactAndSubmitted(t *testing.T) {
 // A prompt with a newline makes the argument it is in, and tmux's
 // message that repeats it, quoted, and the prompt is in them escaped:
 // Redact replaces it there too. So it does for a prompt with a " in an
-// argument another word's tab makes quoted.
+// argument another word's tab makes quoted, and for a prompt with a
+// ', which is in the argument as shellJoin quotes it, escaped once
+// more where the argument is quoted. The replacement is one pass: a
+// prompt such as p, which the placeholder has in it, is not replaced
+// again in the placeholder; and the shell-quoted form wins where the
+// bare one starts at the same place, as ” does in its own quoting.
 func TestRedactQuoted(t *testing.T) {
 	for _, c := range []struct {
 		secret string
@@ -200,6 +205,8 @@ func TestRedactQuoted(t *testing.T) {
 	}{
 		{"fix it\n\"now\"\tplease", []string{"claude", "fix it\n\"now\"\tplease"}},
 		{`fix it "now" please`, []string{"claude", "--dir", "/w/a\tb", `fix it "now" please`}},
+		{"don't fix it\nplease", []string{"claude", "don't fix it\nplease"}},
+		{"don't fix it, please", []string{"claude", "--dir", "/w/a\tb", "don't fix it, please"}},
 	} {
 		err := &Error{Args: []string{"new-session", "-d", "-s", "proj/x", shellJoin(c.argv), Next, "set-option", "-p", "@laatmux_cwd", "/w/a\tb"}, Msg: "failed: " + c.secret}
 		got := Redact(&SubmittedError{Err: err}, c.secret, "{prompt}").Error()
@@ -208,6 +215,19 @@ func TestRedactQuoted(t *testing.T) {
 		}
 		if strings.ContainsFunc(got, unicode.IsControl) {
 			t.Errorf("%q: a control byte in %q", c.secret, got)
+		}
+	}
+	for secret, want := range map[string]string{
+		"p":      "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"{p":     "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"rom":    "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"prompt": "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"''":     "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"p\nq":   `tmux new-session -d "claude {prompt}": "failed: {prompt}"`,
+	} {
+		err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", secret})}, Msg: "failed: " + secret}
+		if got := Redact(err, secret, "{prompt}").Error(); got != want {
+			t.Errorf("%q: redacted %q, want %q", secret, got, want)
 		}
 	}
 }

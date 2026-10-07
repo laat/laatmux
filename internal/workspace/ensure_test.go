@@ -558,11 +558,12 @@ func TestEnsureKeyEndsInSemicolon(t *testing.T) {
 }
 
 // A spec whose name is held by the workspace of another root, a root
-// with an ESC ] 0 ; x BEL and a tab in it, is a name in use, and the
-// error names that root quoted, with no control byte in it: printed as
-// it is, the tab would break the line and the ESC sequence set the
-// terminal's title. The root is the one tmux reads back, which 3.4
-// gives with the ESC and BEL escaped but the tab as it is.
+// with an ESC ] 0 ; x BEL, a tab and a C1 CSI in it, is a name in use,
+// and the error names that root quoted, with no control byte in it:
+// printed as it is, the tab would break the line and the ESC sequence
+// set the terminal's title. The root is the one tmux reads back, which
+// 3.4 and 3.5 give with the ESC and BEL escaped but the tab and the CSI
+// as they are.
 func TestEnsureNameInUsePrintable(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -572,7 +573,7 @@ func TestEnsureNameInUsePrintable(t *testing.T) {
 	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
 		t.Fatal(err)
 	}
-	root := "/w/proj/a\x1b]0;x\x07b\tc"
+	root := "/w/proj/a\x1b]0;x\x07b\tc\u009b"
 	held := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/proj/x", Key: "env/" + root}
 	if _, created, err := Ensure(ctx, held); err != nil || !created {
 		t.Fatalf("the workspace of %q: %v %v", root, created, err)

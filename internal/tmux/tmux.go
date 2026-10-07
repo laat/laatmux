@@ -410,7 +410,8 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		return made, fmt.Errorf("tmux: cwd required")
 	}
 	if _, err := os.Stat(o.Cwd); err != nil {
-		// The path error names the root as it is.
+		// os.Stat's error names the path as it is; it is rebuilt
+		// with the path as Printable shows it.
 		var pe *fs.PathError
 		if errors.As(err, &pe) {
 			err = &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
@@ -594,19 +595,21 @@ func (s Server) DeleteBuffers(ctx context.Context, prefix string) error {
 // log. A prompt with a newline makes the argument it is in one that
 // Printable quotes, and each form is in it escaped: strconv.Quote
 // escapes rune by rune, so the form there is its own quoting without
-// the quotes, and that is replaced as well. The error's type is lost;
+// the quotes, and that is replaced as well. All forms are replaced in
+// one pass, the shell-quoted ones first where two start at one place,
+// so the placeholder put in is not searched again: a prompt that is a
+// part of it, p say, would be found in it. The error's type is lost;
 // the caller has classified it already.
 func Redact(err error, secret, placeholder string) error {
 	if err == nil || secret == "" {
 		return err
 	}
-	msg := err.Error()
+	var pairs []string
 	for _, form := range []string{shellJoin([]string{secret}), secret} {
 		q := strconv.Quote(form)
-		msg = strings.ReplaceAll(msg, q[1:len(q)-1], placeholder)
-		msg = strings.ReplaceAll(msg, form, placeholder)
+		pairs = append(pairs, q[1:len(q)-1], placeholder, form, placeholder)
 	}
-	return errors.New(msg)
+	return errors.New(strings.NewReplacer(pairs...).Replace(err.Error()))
 }
 
 // KillSession kills the session with exactly this name.
