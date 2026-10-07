@@ -421,7 +421,7 @@ func CheckSessionName(name string) error {
 			why = fmt.Sprintf("the byte 0x%02x, which is not UTF-8 and which tmux stores escaped", name[i])
 		case unicode.IsControl(r):
 			why = fmt.Sprintf("the control character %U, which tmux stores escaped", r)
-		case unicode.In(r, unicode.Zl, unicode.Zp) || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe:
+		case widthless(r):
 			why = fmt.Sprintf("the character %U, which tmux 3.3 stores escaped", r)
 		case r == '.' || r == ':':
 			why = fmt.Sprintf("a %c, which tmux stores as _", r)
@@ -438,6 +438,15 @@ func CheckSessionName(name string) error {
 		i += size
 	}
 	return nil
+}
+
+// widthless is a character tmux 3.3 built without utf8proc stores
+// escaped, as its C library has no width for it, and which is known
+// from here: a line or paragraph separator, U+2028 and U+2029, and a
+// noncharacter, U+FDD0 to U+FDEF and the last two code points of every
+// plane. CheckSessionName refuses one and EncodeBranch encodes it.
+func widthless(r rune) bool {
+	return unicode.In(r, unicode.Zl, unicode.Zp) || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
 }
 
 // NewSessionOpts describes a managed session.
@@ -809,17 +818,19 @@ func FormatLiteral(s string) string {
 // at Sep, so each of those bytes, and "%" itself, becomes "%" and its
 // two lowercase hex digits: "%25", "%23", "%24", "%2e", "%3a", "%3b",
 // "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". A C1 control
-// character and a U+2063 are encoded byte by byte, U+0085 as "%c2%85".
-// Every "$" is encoded, whatever follows it: what tmux takes for a
-// letter there is its C library's isalpha, which differs by platform
-// and locale, and a name then does not depend on the tmux it is made
-// on. Nothing else changes, any other multibyte UTF-8 character
-// included; a tmux 3.3 built without utf8proc also escapes a character
-// its C library has no width for, one newer than its Unicode tables, a
-// recent emoji say, which cannot be told from here. git takes no "\",
-// C0 control byte or DEL in a branch, but a detached worktree's session
-// is named by its directory, encoded the same way. Distinct branches
-// give distinct names and the encoding is exact.
+// character, a U+2063, and a line or paragraph separator or a
+// noncharacter, which a tmux 3.3 built without utf8proc stores escaped
+// (widthless), are encoded byte by byte, U+0085 as "%c2%85", U+2028 as
+// "%e2%80%a8". Every "$" is encoded, whatever follows it: what tmux
+// takes for a letter there is its C library's isalpha, which differs by
+// platform and locale, and a name then does not depend on the tmux it
+// is made on. Nothing else changes, any other multibyte UTF-8 character
+// included; such a tmux also escapes a code point its C library's
+// tables do not have, unassigned or a recent emoji say, which cannot be
+// told from here. git takes no "\", C0 control byte or DEL in a branch,
+// but a detached worktree's session is named by its directory, encoded
+// the same way. Distinct branches give distinct names and the encoding
+// is exact.
 func EncodeBranch(branch string) string {
 	return encodeBytes(branch, func(i int) bool {
 		c := branch[i]
@@ -830,15 +841,16 @@ func EncodeBranch(branch string) string {
 // encodeBytes writes each byte of s that escape picks by its index as
 // "%" and its two lowercase hex digits, and the rest as they are. A
 // valid multibyte UTF-8 character is kept whole, as tmux keeps it, but
-// for a C1 control character and a U+2063; a byte that is not part of
-// a character kept is offered to escape alone.
+// for a C1 control character, a U+2063 and a character widthless
+// takes; a byte that is not part of a character kept is offered to
+// escape alone.
 func encodeBytes(s string, escape func(i int) bool) string {
 	const hex = "0123456789abcdef"
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c >= utf8.RuneSelf {
-			if r, n := utf8.DecodeRuneInString(s[i:]); (r != utf8.RuneError || n > 1) && !unicode.IsControl(r) && !strings.ContainsRune(Sep, r) {
+			if r, n := utf8.DecodeRuneInString(s[i:]); (r != utf8.RuneError || n > 1) && !unicode.IsControl(r) && !strings.ContainsRune(Sep, r) && !widthless(r) {
 				b.WriteString(s[i : i+n])
 				i += n
 				continue
@@ -873,7 +885,8 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // taken as it is. Then each byte EncodeBranch encodes becomes "%" and
 // its two lowercase hex digits, as EncodeBranch writes them, but for
 // "%", "#", ";", "." and ":": a "\", a control character, DEL, a byte
-// that is not part of a valid UTF-8 sequence, a "$" and a U+2063. So
+// that is not part of a valid UTF-8 sequence, a "$", a U+2063, a line
+// or paragraph separator and a noncharacter. So
 // a\\b becomes a%5cb and tab\tx becomes tab%09x, as EncodeBranch writes
 // a\b and the tab, and a name with none of these is kept as it is. A
 // "%" is kept since the names listed are mostly managed sessions',
