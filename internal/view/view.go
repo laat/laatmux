@@ -329,7 +329,7 @@ func (m *Model) followed(vis []Item) int {
 // tiles of what the tree follows (treeFollowed): of the worktree of the
 // viewer's line, its tasks among them, or the node's own tile in other
 // sessions; when none of those is shown, the first of the viewer's
-// tiles. The two views so agree. A tile in other sessions can be the
+// tiles. So the two views agree. A tile in other sessions can be the
 // viewer's beside the worktree's and sort before them, an agent started
 // outside any worktree from a split of the viewer's session or observed
 // in a window of it, and the keys that read the row's worktree, o, O, x

@@ -488,7 +488,7 @@ func (m *Model) Switch() {
 
 // followedID is the id of the viewer's own row in the current view,
 // whether or not a fold hides it: in the agent view the tile followRow
-// picks, in the tree the viewer's line.
+// picks, in the tree treeFollowed.
 func (m *Model) followedID() string {
 	if m.View == ViewTree {
 		if n := m.treeFollowed(); n != nil {
@@ -503,9 +503,11 @@ func (m *Model) followedID() string {
 	return ""
 }
 
-// treeFollowed is the node following takes in the tree, whether or not a
-// fold, the filter or the scope hides it: the first that is the viewer's
-// in the tree's order; nil for none.
+// treeFollowed is the tree's own choice of the viewer's row, which a
+// switch reveals: the first node in the tree's order that is the
+// viewer's, whether or not a fold or the filter hides it; nil for none.
+// With it hidden by the filter, following in the tree takes the next
+// shown row that is the viewer's.
 func (m *Model) treeFollowed() *rows.Row {
 	for i := range m.Tree {
 		if m.Tree[i].Current {

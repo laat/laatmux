@@ -236,16 +236,17 @@ nothing to hand over to does today; the next move puts it on the first
 row.
 
 **Following.** A selection that follows the viewer's own session keeps
-following it in the new view. In the tree it follows the worktree line
-of the viewer's worktree, or the task line standing for it or at its
-session's root, the session a task's add or jump made before the host
-listed the worktree; or, with no worktree and no task, the viewer's
-session's own line, wherever it sits: under its repository for an
-orphaned session with a repository tag, in other sessions otherwise.
-In the agent view it follows the first tile, in sort order, of what
-the tree follows: the agents and tasks of that line's worktree, or the
-tile of the agent the tree follows in other sessions; with none of
-those shown, the first tile that is the viewer's. The two views so
+following it in the new view. In the tree it follows the first line in
+the tree's order that is the viewer's. That is usually the worktree
+line of the viewer's worktree, or the task line standing for it or at
+its session's root, the session a task's add or jump made before the
+host listed the worktree; or, with no worktree and no task, the
+viewer's session's own line, wherever it sits: under its repository
+for an orphaned session with a repository tag, in other sessions
+otherwise. In the agent view it follows the first tile, in sort order,
+of what the tree follows: the agents and tasks of that line's worktree,
+or the tile of the agent the tree follows in other sessions; with none
+of those shown, the first tile that is the viewer's. So the two views
 agree. A tile in other sessions can be the viewer's beside the
 worktree's agents and sort before them: an agent started outside any
 worktree from a split of the viewer's session, or observed in a window
