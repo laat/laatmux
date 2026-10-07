@@ -1436,6 +1436,57 @@ func TestNewSessionHandStartedHooks(t *testing.T) {
 	}
 }
 
+// NewSession starts the managed server when it is not there, both with
+// no socket and over the socket a killed server left: tmux says "error
+// connecting to" for the first and "no server running" for the second,
+// and none of EnsureConfigured's commands would start one. tmux 3.6a
+// leaves its socket on kill-server too, so the first is removed here.
+func TestNewSessionColdStart(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	s := LaatmuxServer
+	ctx := context.Background()
+	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
+	// A server the previous test killed may still be going.
+	gone := func() {
+		t.Helper()
+		for i := 0; i < 50; i++ {
+			if _, err := s.Run(ctx, "list-sessions"); NoServer(err) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("the managed server is still running")
+	}
+	s.Run(ctx, "kill-server")
+	gone()
+	path, ok := s.socket()
+	if !ok {
+		t.Fatal("no socket path")
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cold", "stale"} {
+		if s.NoSocket() != (name == "cold") {
+			t.Fatalf("%s: NoSocket is %v", name, s.NoSocket())
+		}
+		made, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if out, err := s.Run(ctx, "show-options", "-sv", "exit-empty"); err != nil || strings.TrimSpace(string(out)) != "off" {
+			t.Errorf("%s: exit-empty is %q %v, want off", name, out, err)
+		}
+		// SIGKILL leaves the socket, and the pane's sleep is hung up.
+		if err := syscall.Kill(made.ServerPID, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		gone()
+	}
+}
+
 // A branch with a #, a ;, a \, a $, a C1 control character, a line
 // separator or a noncharacter gets a session with the name SessionName
 // computed, its pane tagged: new-session expands a # in the name as a

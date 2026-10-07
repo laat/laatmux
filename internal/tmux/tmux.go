@@ -790,8 +790,8 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	if _, err := os.Stat(o.Cwd); err != nil {
 		return made, fmt.Errorf("tmux: cwd: %w", PrintablePath(err))
 	}
-	_, listed := s.Run(ctx, "list-sessions")
-	if NoServer(listed) && s.Managed() {
+	_, listErr := s.Run(ctx, "list-sessions")
+	if NoServer(listErr) && s.Managed() {
 		// Cold start: the server is started on its own, with no config
 		// file and told to stay without sessions, and the session is
 		// made in a second invocation. The process that starts a tmux
