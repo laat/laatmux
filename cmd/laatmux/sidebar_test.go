@@ -119,10 +119,12 @@ var hashRun = regexp.MustCompile(`#+`)
 
 // selfStartTest is what a test says, failed by isolatedDefault for a
 // line selfStarts found; selfStartRun is what the run says, failed by
-// TestMain for one on the run's own default server.
+// TestMain for one on the run's own default server. selfStartReady is
+// what a run of TestSelfStarts logs once its setup is done.
 const (
-	selfStartTest = "the test's tmux server can start this test binary:"
-	selfStartRun  = "the run fails: its default tmux server can start this test binary:"
+	selfStartTest  = "the test's tmux server can start this test binary:"
+	selfStartRun   = "the run fails: its default tmux server can start this test binary:"
+	selfStartReady = "the setup is done"
 )
 
 // A test whose server can still start this binary fails, whether or
@@ -152,7 +154,7 @@ func TestSelfStarts(t *testing.T) {
 			w := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 			id := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "split-window", "-d", "-t", w, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{self, "sidebar", "pane"})))))
 			dead := ""
-			for i := 0; i < 500 && dead != "1"; i++ {
+			for end := time.Now().Add(10 * time.Second); dead != "1" && time.Now().Before(end); {
 				time.Sleep(20 * time.Millisecond)
 				dead = strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", id, "#{pane_dead}"))))
 			}
@@ -186,13 +188,17 @@ func TestSelfStarts(t *testing.T) {
 			if err := setSidebarHooks(ctx, filepath.Join(t.TempDir(), filepath.Base(self))); err != nil {
 				t.Fatal(err)
 			}
-			// A # where this binary's path has none makes another path.
-			if err := bindJumpKeys(ctx, filepath.Join(filepath.Dir(self)+"#", filepath.Base(self))); err != nil {
+			// A # where this binary's path has none, before its name,
+			// which go test never starts with one, makes another path.
+			if err := bindJumpKeys(ctx, filepath.Join(filepath.Dir(self), "#"+filepath.Base(self))); err != nil {
 				t.Fatal(err)
 			}
 		default:
 			t.Fatalf("mode %q", mode)
 		}
+		// In the output of a failed test: the failure is the check's,
+		// not the setup's.
+		t.Log(selfStartReady)
 		return
 	}
 	if _, err := exec.LookPath("tmux"); err != nil {
@@ -204,7 +210,7 @@ func TestSelfStarts(t *testing.T) {
 	}
 	// This binary under a directory whose name has what the shell's and
 	// tmux's quoting, and a format literal, write otherwise: a hard link,
-	// or a copy from another file system.
+	// or a copy where it cannot link, as from another file system.
 	odd := filepath.Join(t.TempDir(), `a#b##c#[d'e"f\g$h`, filepath.Base(self))
 	if err := os.Mkdir(filepath.Dir(odd), 0o755); err != nil {
 		t.Fatal(err)
@@ -260,6 +266,9 @@ func TestSelfStarts(t *testing.T) {
 		}
 		if !strings.Contains(out, test) {
 			t.Errorf("%s %s: no %q\n%s", c.mode, c.exe, test, out)
+		}
+		if c.mode != "run" && !strings.Contains(out, selfStartReady) {
+			t.Errorf("%s %s: the setup failed\n%s", c.mode, c.exe, out)
 		}
 		for _, w := range c.want {
 			found := false
