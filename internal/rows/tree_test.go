@@ -381,6 +381,109 @@ func TestObservedAgentSettled(t *testing.T) {
 	}
 }
 
+// A managed agent of no worktree in a worktree's home session, started
+// in another directory from a split there, stands in other sessions
+// with the settled state of the worktree's workspace session, where its
+// pane jump lands and which z on it toggles: settled as the session is,
+// dim unless pressing, and in the Stale fold unless pressing; so with
+// the home lost, through the session of the agent laatmux made at the
+// root. Not one in a managed session that is no line's home, by an
+// option set by hand on its plain attachment, nor one in a standing
+// task's session, which z refuses as the task's.
+func TestHomeAgentSettled(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	managed := func(id, session string, act protocol.Activity) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: act, ActivityAt: now, Liveness: protocol.Alive, Managed: true, Cwd: "/home/u"}
+	}
+	root := managed("venv/laatmux/%1", "proj/z", protocol.Idle)
+	root.Cwd, root.WorktreeID = "/w/proj/z", "venv/worktree//w/proj/z"
+	idle := managed("venv/laatmux/%5", "proj/z", protocol.Idle)
+	working := managed("venv/laatmux/%6", "proj/z", protocol.Working)
+	blocked := managed("venv/laatmux/%7", "proj/z", protocol.Blocked)
+	scratch := managed("venv/laatmux/%8", "scratch", protocol.Idle)
+	inTask := managed("venv/laatmux/%9", "proj/y", protocol.Idle)
+	input := func(home string, settled bool) Input {
+		return Input{
+			Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+			Agents:    []protocol.Agent{root, idle, working, blocked, scratch, inTask},
+			Worktrees: []protocol.Worktree{{ID: root.WorktreeID, EnvironmentID: "venv", Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: home}},
+			Pendings: []protocol.Pending{{ID: "add-y", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y",
+				Sent: true, Taken: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, SubmittedAt: now}},
+			Locals: []protocol.Session{
+				{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: settled},
+				{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm", Settled: settled},
+				{Name: "vm/scratch", Attach: "vm/scratch", Settled: true},
+			},
+			Now: now,
+		}
+	}
+	type state struct{ settled, dim, stale bool }
+	for _, c := range []struct {
+		home    string
+		settled bool
+		want    map[string]state
+	}{
+		{"proj/z", true, map[string]state{idle.ID: {true, true, true}, working.ID: {true, true, true}, blocked.ID: {true, false, false}, scratch.ID: {}, inTask.ID: {}}},
+		{"", true, map[string]state{idle.ID: {true, true, true}, working.ID: {true, true, true}, blocked.ID: {true, false, false}, scratch.ID: {}, inTask.ID: {}}},
+		{"proj/z", false, map[string]state{idle.ID: {}, working.ID: {}, blocked.ID: {}, scratch.ID: {}, inTask.ID: {}}},
+	} {
+		in := input(c.home, c.settled)
+		tree := Tree(in)
+		// The nodes in other sessions, and the tiles of the agents there,
+		// which are in the Stale fold or not.
+		nodes, tiles, want := map[string]state{}, map[string]state{}, map[string]state{}
+		for _, n := range tree {
+			if n.Kind == KindAgent && n.Depth == 1 {
+				nodes[n.Agent.ID] = state{settled: n.Settled, dim: n.Dim}
+			}
+		}
+		rs := Agents(in, tree)
+		for _, g := range []struct {
+			tiles []Row
+			stale bool
+		}{{rs.Main, false}, {rs.Stale, true}} {
+			for _, r := range g.tiles {
+				if r.Agent != nil && r.Pending == nil && r.Worktree == nil {
+					tiles[r.Agent.ID] = state{r.Settled, r.Dim, g.stale}
+				}
+			}
+		}
+		for id, s := range c.want {
+			s.stale = false
+			want[id] = s
+		}
+		if !reflect.DeepEqual(nodes, want) {
+			t.Errorf("home %q settled %v: the nodes %+v, want %+v", c.home, c.settled, nodes, want)
+		}
+		if !reflect.DeepEqual(tiles, c.want) {
+			t.Errorf("home %q settled %v: the tiles %+v, want %+v", c.home, c.settled, tiles, c.want)
+		}
+	}
+	// Two lines with the home: the homeless worktree proj/a, whose root
+	// agent was moved into proj/z, comes first in the tree's order and
+	// holds the session, as LineFor finds it; the agent shows proj/a's
+	// workspace session's state, settled, not proj/z's.
+	in := input("proj/z", false)
+	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/proj/a"}
+	moved := managed("venv/laatmux/%2", "proj/z", protocol.Idle)
+	moved.Cwd, moved.WorktreeID = a.Root, a.ID
+	in.Worktrees = append(in.Worktrees, a)
+	in.Agents = append(in.Agents, moved)
+	in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm", Settled: true})
+	found := false
+	for _, n := range Tree(in) {
+		if n.Kind == KindAgent && n.Depth == 1 && n.Agent.ID == idle.ID {
+			found = true
+			if !n.Settled {
+				t.Errorf("two lines with the home: the agent's node %+v, want proj/a's state", n)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("two lines with the home: no node %s in other sessions", idle.ID)
+	}
+}
+
 // A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the

@@ -288,7 +288,12 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   worktree), is one of its agents too: it stands in other sessions
   with the session's state, and `z` on it changes its row as well as
   the session's line, when a line holds the session. One that a line
-  takes as a child, by its directory, is that line's. The viewer's own
+  takes as a child, by its directory, is that line's. A managed agent
+  whose directory is in no worktree, in a worktree's home session (or,
+  with the home lost, in the session of the agent laatmux made at its
+  root), is that worktree's as well: it stands in other sessions with
+  the state of the worktree's workspace session, where `Enter` on it
+  lands, and `z` and `S` on it act on that session. The viewer's own
   row never folds: settled or stale, it stays in sight, sorted with
   the stale ones, so `z` in the sidebar can undo itself.
 - **A worktree's status**, on its folded line and for `{worst_status}`:

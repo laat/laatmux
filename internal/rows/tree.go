@@ -585,6 +585,21 @@ func (b *builder) repoLines() []Row {
 // source tag; nothing when there are none.
 func (b *builder) otherSessions(out []Row) []Row {
 	in, j := b.in, b.j
+	// The workspace session of the depth-1 line with each home on each
+	// host, the first in the tree's order, as the view's LineFor finds
+	// the line; none for a task's line, which carries the session but
+	// not the state, and whose agent of no worktree z refuses as the
+	// task's.
+	homes := map[[2]string]*protocol.Session{}
+	for i := range out {
+		k := [2]string{out[i].Host, out[i].Home()}
+		if _, ok := homes[k]; k[1] != "" && !ok {
+			homes[k] = out[i].Local
+			if out[i].Pending != nil {
+				homes[k] = nil
+			}
+		}
+	}
 	var others []Row
 	for pass := 0; pass < 2; pass++ {
 		for i := range in.Agents {
@@ -598,8 +613,16 @@ func (b *builder) otherSessions(out []Row) []Row {
 			// An agent observed in a window of a workspace session is one
 			// of that workspace's agents, though no line takes it as a
 			// child (its worktree on another host, say): it shows the
-			// session's settled state as the line's children do.
-			c.Settled = c.Local != nil && c.Local.Workspace() && c.Local.Settled
+			// session's settled state as the line's children do. So is a
+			// managed agent in a line's home session, its directory in no
+			// worktree, whose pane jump lands in the line's workspace
+			// session: it shows that session's state, which z on it
+			// toggles.
+			ws := c.Local
+			if l, ok := homes[[2]string{host, a.Session}]; managed && ok {
+				ws = l
+			}
+			c.Settled = ws != nil && ws.Workspace() && ws.Settled
 			j.finish(&c)
 			others = append(others, c)
 		}
