@@ -198,7 +198,6 @@ func TestEncodeBranch(t *testing.T) {
 		"%09":          "%2509",
 		"blåbær/ø":     "blåbær/ø",
 		"feat/😀":       "feat/😀",
-		"nc\ufffex":    "nc\ufffex",
 		"日本\x80":       "日本%80",
 		"\xe2\x82":     "%e2%82",
 		"\xed\xa0\x80": "%ed%a0%80",
@@ -214,6 +213,22 @@ func TestEncodeBranch(t *testing.T) {
 		"a\xe2\x81\xa3b":              "a%e2%81%a3b",
 		"sep\xe2\x81\xa3\xe2\x81\xa3": "sep%e2%81%a3%e2%81%a3",
 		"is\xe2\x81\xa4x":             "is\xe2\x81\xa4x",
+
+		// A line and a paragraph separator and a noncharacter, which a
+		// tmux 3.3 built without utf8proc stores escaped, encoded byte
+		// by byte; U+2027, U+FDCF, U+FDF0, U+FFFD and U+FFDD0, a private
+		// use code point at U+FDD0 of plane 15, next to them kept.
+		"ls\u2028x":    "ls%e2%80%a8x",
+		"\u2029":       "%e2%80%a9",
+		"\u2027":       "\u2027",
+		"nc\ufdd0x":    "nc%ef%b7%90x",
+		"\ufdef":       "%ef%b7%af",
+		"\ufdcf\ufdf0": "\ufdcf\ufdf0",
+		"nc\ufffex":    "nc%ef%bf%bex",
+		"\uffff":       "%ef%bf%bf",
+		"\U0001fffe":   "%f0%9f%bf%be",
+		"\U0010ffff":   "%f4%8f%bf%bf",
+		"\U000ffdd0":   "\U000ffdd0",
 	}
 	for in, want := range cases {
 		got := EncodeBranch(in)
@@ -253,12 +268,15 @@ func TestEncodeBranch(t *testing.T) {
 // whole: valid UTF-8 with no control character, C1 included, none of
 // the characters tmux changes or reads, and no U+2063, of which Sep is
 // made. A "$" counts as changed, as tmux 3.2 to 3.4 change one before a
-// letter, "_" or "{". It does not know what a tmux 3.3 built without
-// utf8proc has no width for, a noncharacter or an unassigned code point
-// say, which such a tmux escapes too.
+// letter, "_" or "{", and so do U+2028, U+2029 and a noncharacter,
+// which a tmux 3.3 built without utf8proc escapes. It does not know
+// what code points such a tmux's C library has no tables for, an
+// unassigned one say, which that tmux escapes too.
 func keptByTmux(name string) bool {
-	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\") &&
-		!strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || strings.ContainsRune(Sep, r) })
+	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\\u2028\u2029") &&
+		!strings.ContainsFunc(name, func(r rune) bool {
+			return unicode.IsControl(r) || strings.ContainsRune(Sep, r) || r >= 0xfdd0 && r <= 0xfdef || r&0xffff >= 0xfffe
+		})
 }
 
 // A session name as tmux lists it, escaped by vis(3), is decoded and
@@ -294,6 +312,15 @@ func TestEncodeListed(t *testing.T) {
 		`a\\001`:         "a%5c001",
 		`c1` + "\u0085x": "c1%c2%85x",
 		"sep\u2063x":     "sep%e2%81%a3x",
+
+		// A line separator and a noncharacter as a host whose tmux keeps
+		// them lists them, encoded byte by byte, as EncodeBranch encodes
+		// them, since a tmux 3.3 built without utf8proc stores them
+		// escaped; a private use code point at U+FDD0's place in plane 15
+		// kept.
+		"ls\u2028x":     "ls%e2%80%a8x",
+		"nc\ufffex":     "nc%ef%bf%bex",
+		"pu\U000ffdd0x": "pu\U000ffdd0x",
 
 		// A # and a ; are kept, and a . and a :, which tmux 3.7 lists
 		// as given, are kept for CheckSessionName to refuse.
@@ -697,19 +724,20 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
-// A branch with a #, a ;, a \, a $ or a C1 control character gets a
-// session with the name SessionName computed, its pane tagged:
-// new-session expands a # in the name as a format, an argument that ends
-// in ; splits the sequence there, tmux stores a \ in a session name
-// doubled, tmux 3.2 to 3.4 store a $ before a letter, _ or { as \$, and
-// tmux 3.3 stores U+0085 as \302\205. git takes no \ in a branch, but a
-// detached worktree's directory name, encoded the same way, may have
-// one.
+// A branch with a #, a ;, a \, a $, a C1 control character, a line
+// separator or a noncharacter gets a session with the name SessionName
+// computed, its pane tagged: new-session expands a # in the name as a
+// format, an argument that ends in ; splits the sequence there, tmux
+// stores a \ in a session name doubled, tmux 3.2 to 3.4 store a $ before
+// a letter, _ or { as \$, tmux 3.3 stores U+0085 as \302\205, and one
+// built without utf8proc U+2028 as \342\200\250 and U+FFFE as
+// \357\277\276. git takes no \ in a branch, but a detached worktree's
+// directory name, encoded the same way, may have one.
 func TestNewSessionEncodedNames(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
 	want := map[string]bool{}
-	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`, "fix$HOME", "a${b}", "c1\xc2\x85x"} {
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`, "fix$HOME", "a${b}", "c1\xc2\x85x", "ls\u2028x", "nc\ufffex"} {
 		name := SessionName("proj", branch)
 		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
 			t.Fatalf("%s: %v", branch, err)
@@ -739,8 +767,9 @@ func TestNewSessionEncodedNames(t *testing.T) {
 // CheckSessionName names the character tmux would not store as given,
 // or Sep is made of, and takes every other one, a # and a ; at the end
 // included. The name SessionName computes passes it for a branch with
-// any byte in it, and with a $, a C1 control character or a U+2063,
-// which EncodeBranch encodes.
+// any byte or code point in it, a $, a C1 control character, a U+2063,
+// a line or paragraph separator and a noncharacter among them, which
+// EncodeBranch encodes.
 func TestCheckSessionName(t *testing.T) {
 	for name, want := range map[string]string{
 		"":             "session name required",
@@ -771,18 +800,26 @@ func TestCheckSessionName(t *testing.T) {
 			t.Errorf("CheckSessionName(%q) = %v, want %q", name, err, want)
 		}
 	}
-	for _, name := range []string{"work", "notes draft", "notes##draft", "x#{session_id}y", "a#b", "#[fg=red]x", "semi;", ";", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x", "100%", "a\uFFFDb", "a\u00a0b", "a\u200bb", "a\ue000b", "a\U0001F600b", "cafe\u0301", "\u2764\ufe0f", "fix-\U0001FAE9", "a\u0378b"} {
+	for _, name := range []string{"work", "notes draft", "notes##draft", "x#{session_id}y", "a#b", "#[fg=red]x", "semi;", ";", "a;b", "=eq", "%pct", "@at", "~tilde", "it's", `say "hi"`, "ø-norsk", "proj/x", "100%", "a\uFFFDb", "a\u00a0b", "a\u200bb", "a\ue000b", "a\U0001F600b", "cafe\u0301", "\u2764\ufe0f", "fix-\U0001FAE9", "a\u0378b", "a\U000ffdd0b"} {
 		if err := CheckSessionName(name); err != nil {
 			t.Errorf("CheckSessionName(%q) = %v", name, err)
 		}
 	}
-	branches := []string{"fix#12", "x#{session_id}", "#[x]", "v1.2:rc", `a\b`, "semi;", "$x", "a$b", "c1\u0085x", "c1\u009f", "a\u2063b", "\u2063\u2063", "ø-norsk", "a\U0001F600b"}
+	branches := []string{"fix#12", "x#{session_id}", "#[x]", "v1.2:rc", `a\b`, "semi;", "$x", "a$b", "c1\u0085x", "c1\u009f", "a\u2063b", "\u2063\u2063", "a\u2028b", "\u2029", "a\ufdd0b", "\ufdef", "a\ufffeb", "\U0010ffff", "ø-norsk", "a\U0001F600b"}
 	for b := 0; b < 256; b++ {
 		branches = append(branches, string([]byte{byte(b)}), "a"+string([]byte{byte(b)})+"b")
 	}
 	for _, branch := range branches {
 		if err := CheckSessionName(SessionName("proj", branch)); err != nil {
 			t.Errorf("branch %q: %v", branch, err)
+		}
+	}
+	// And every code point, so CheckSessionName takes whatever
+	// EncodeBranch keeps.
+	for r, bad := rune(0), 0; r <= unicode.MaxRune && bad < 20; r++ {
+		if err := CheckSessionName(SessionName("proj", string(r))); err != nil {
+			t.Errorf("branch %q: %v", string(r), err)
+			bad++
 		}
 	}
 }
