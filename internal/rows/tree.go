@@ -341,7 +341,7 @@ func (b *builder) worktrees() {
 			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
 				c.Local = j.byKey[key]
 				if own != nil && own.Name == in.Current {
-					line.Current = true
+					line.Current, line.Own = true, true
 				}
 			}
 			if c.Local == nil {
@@ -375,7 +375,7 @@ func (b *builder) worktrees() {
 					line.Local = l
 				}
 				if in.Current != "" && l.Name == in.Current {
-					line.Current = true
+					line.Current, line.Own = true, true
 				}
 			}
 		}
@@ -399,10 +399,10 @@ func (b *builder) worktrees() {
 			// children; the others follow as lines of their own.
 			owner := &b.taskRows[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
-			owner.Current, owner.hostRepo = line.Current, line.hostRepo
+			owner.Current, owner.Own, owner.hostRepo = line.Current, line.Own, line.hostRepo
 			j.finish(owner)
 			for _, k := range idx[1:] {
-				b.taskRows[k].Worktree, b.taskRows[k].hostRepo, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current = w, line.hostRepo, line.Local, 1, line.Current
+				b.taskRows[k].Worktree, b.taskRows[k].hostRepo, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current, b.taskRows[k].Own = w, line.hostRepo, line.Local, 1, line.Current, line.Own
 				j.finish(&b.taskRows[k])
 			}
 			group := append([]Row{*owner}, children...)
@@ -590,9 +590,14 @@ func (b *builder) repoLines() []Row {
 // lands there, by the line the view's LineFor finds (HomeLine), and the
 // viewer in that session sits with it, which marks its own line as the
 // viewer's (markViewer). The viewer in a plain attachment to the
-// agent's session is on its line all the same, as with an agent in its
-// own line's home session. A line with no workspace session leaves the
-// agent the session worktrees gave it. HomeLine wants the lines in the
+// agent's session is on its line all the same, as it was when the
+// attachment was the agent's own. Either way the line is the viewer's
+// through a visitor, not Own: following stays on the line whose session
+// the viewer is in. A line with no workspace session leaves the
+// agent the session worktrees gave it, also where the line holds a plain
+// session instead: a task standing for a homeless worktree carries the
+// session of the worktree's agent on this machine's default server,
+// which the agent's pane is not in. HomeLine wants the lines in the
 // tree's order, so this runs once they are.
 func (b *builder) visitors(out []Row) {
 	line := -1
@@ -610,7 +615,7 @@ func (b *builder) visitors(out []Row) {
 			continue
 		}
 		l := HomeLine(out, c.Host, a.Session)
-		if l < 0 || out[l].Local == nil {
+		if l < 0 || out[l].Local == nil || !out[l].Local.Workspace() {
 			continue
 		}
 		if own := b.j.agentLocal(c.Host, a); own != nil && own.Name == b.in.Current {
@@ -676,7 +681,8 @@ func (b *builder) otherSessions(out []Row) []Row {
 // session is, or a managed agent's there already through a line's
 // workspace session (otherSessions); a worktree or task line is when the
 // viewer sits with one of its agents, through the workspace session or
-// an attachment, as following wants it.
+// an attachment, as following wants it. A line is Own by its own
+// session alone, not through an agent of it.
 func markViewer(out []Row, current string) {
 	line := -1
 	for i := range out {
@@ -691,6 +697,7 @@ func markViewer(out []Row, current string) {
 			// A line may be the viewer's already, through an attachment
 			// to its home session beside its workspace session.
 			r.Current = mine || r.Current
+			r.Own = mine || r.Own
 		case mine && line >= 0:
 			out[line].Current = true
 		}
@@ -783,8 +790,9 @@ func (r Row) home() (session string, own bool) {
 // root, and the session stays the one it is named after. -1 for none,
 // and for no host: records no configured host claims may be of
 // different machines whose sessions share a name. The view's LineFor
-// finds the line by it, and a managed agent of no worktree in other
-// sessions takes the line's state by it.
+// finds the line by it, a managed agent of no worktree in other
+// sessions takes the line's state by it, and one of another worktree
+// in the session the line's workspace session (visitors).
 func HomeLine(tree []Row, host, session string) int {
 	if host == "" || session == "" {
 		return -1
