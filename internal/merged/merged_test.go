@@ -104,6 +104,32 @@ func TestApply(t *testing.T) {
 	}
 }
 
+// A daemon of an earlier build publishes a session's key as tmux has it
+// stored, encoded for a root this build encodes: the key is taken
+// decoded, in a snapshot and in an upsert, so it is its worktree's.
+func TestApplyDecodesStoredKey(t *testing.T) {
+	m := New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1,
+		Hosts:    []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true}},
+		Sessions: []protocol.Session{{Name: "mac/proj@100%25", Key: "menv%/w/proj/100%25", Host: "mac"}, {Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac"}},
+	})
+	m.Apply(protocol.Message{Type: protocol.TypeUpsert, Seq: 2, LocalSession: &protocol.Session{Name: "mac/proj@a%01b", Key: "menv%/w/proj/a%01b", Host: "mac"}})
+	want := map[string]string{
+		"mac/proj@100%25": protocol.SessionKey("menv", "/w/proj/100%"),
+		"mac/proj/x":      protocol.SessionKey("menv", "/w/proj/x"),
+		"mac/proj@a%01b":  protocol.SessionKey("menv", "/w/proj/a\x01b"),
+	}
+	locals := m.Status("").Input.Locals
+	if len(locals) != len(want) {
+		t.Fatalf("locals = %+v", locals)
+	}
+	for _, l := range locals {
+		if l.Key != want[l.Name] {
+			t.Errorf("%s: key %q, want %q", l.Name, l.Key, want[l.Name])
+		}
+	}
+}
+
 func hostNames(s Status) []string {
 	var out []string
 	for _, h := range s.Hosts {

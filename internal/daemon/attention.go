@@ -39,8 +39,8 @@ import (
 // sidebar pane is replaced by the pane beside it, and the tags that say
 // what that pane attaches to. Target is the attach pane's
 // @laatmux_attach_target; Host, Attach and Workspace are the session's
-// @laatmux_host, @laatmux_attach and @laatmux_workspace, for an attach
-// pane from before the target was tagged.
+// @laatmux_host, @laatmux_attach and the key @laatmux_workspace holds,
+// for an attach pane from before the target was tagged.
 type ClientView struct {
 	Client     string
 	Pane       string
