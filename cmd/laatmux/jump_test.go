@@ -164,7 +164,7 @@ func TestClassifyPreflightQuotes(t *testing.T) {
 // whichever are installed and know $'...', for every byte but NUL
 // followed by digits, which a greedy escape would take; and it holds no
 // ' or ! but its quotes, which bash 3.2's history expansion would
-// misread. No startup file runs: zsh -f, and no BASH_ENV or ENV.
+// misread. No user startup file runs: zsh -f, and no BASH_ENV or ENV.
 func TestDollarQuote(t *testing.T) {
 	var b strings.Builder
 	for c := 1; c < 256; c++ {

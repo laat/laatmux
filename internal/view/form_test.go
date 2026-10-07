@@ -446,6 +446,14 @@ func TestWrapVS16(t *testing.T) {
 			t.Errorf("wrapPrompt(%q) = %q", p, lines)
 		}
 	}
+	// A line break or a tab does part them: the symbol ends its line,
+	// drawn one cell, and fills the line's last cell.
+	for _, p := range []string{"123456789⚠\n️", "123456789⚠\t️"} {
+		f := &Form{prompt: []rune(p), focus: fieldBranch}
+		if lines, _ := f.wrapPrompt(10); len(lines) == 0 || lines[0] != "123456789⚠" {
+			t.Errorf("wrapPrompt(%q) = %q", p, lines)
+		}
+	}
 }
 
 // Left, Right, Backspace and Delete keep a symbol and its selector
