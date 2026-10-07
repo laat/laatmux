@@ -505,25 +505,34 @@ func TestHomeAgentSettled(t *testing.T) {
 	if !seen {
 		t.Errorf("unclaimed: no node %s", other.ID)
 	}
-	// Two lines with the home: proj/z and the homeless worktree proj/a,
-	// whose root agent was moved into proj/z and which comes first in
-	// the tree's order. The host then gives proj/z no home either, the
-	// session's panes no longer all in its root, and both lines have it
-	// through their root agents; it keeps the home only with proj/a's
-	// root inside proj/z's. Either way the session is proj/z's, by its
-	// name or by its home, as LineFor finds it: the agent shows the
-	// settled state of proj/z's workspace session, not proj/a's, and is
-	// the viewer's with the viewer in vm/proj/z, not in vm/proj/a,
+	// Two lines with the home: proj/z and the homeless worktree at
+	// /w/proj/a, branch z of the repository other, whose root agent was
+	// moved into proj/z and which comes first in the tree's order. The
+	// host then gives proj/z no home either, the session's panes no
+	// longer all in its root, and both lines have it through their root
+	// agents; it keeps the home only with /w/proj/a inside proj/z's
+	// root. Either way the session is proj/z's, by its name, the host's
+	// label proj and its branch, also where this machine labels proj
+	// zed, or by its home, as LineFor finds it: the agent shows the
+	// settled state of proj/z's workspace session, not the other's, and
+	// is the viewer's with the viewer in vm/proj/z, not in vm/proj/a,
 	// whichever of the two is settled.
-	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/proj/a"}
+	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "other", Branch: "z", Root: "/w/proj/a"}
 	moved := managed("venv/laatmux/%2", "proj/z", protocol.Idle)
 	moved.Cwd, moved.WorktreeID = a.Root, a.ID
 	for _, c := range []struct {
 		home    string
+		relabel bool
 		settled bool // vm/proj/z; vm/proj/a is the other way
 		current string
-	}{{"", true, "vm/proj/z"}, {"", false, "vm/proj/a"}, {"proj/z", true, "vm/proj/z"}, {"proj/z", false, "vm/proj/a"}} {
+	}{
+		{"", false, true, "vm/proj/z"}, {"", false, false, "vm/proj/a"}, {"", true, true, "vm/proj/z"}, {"", true, false, "vm/proj/a"},
+		{"proj/z", false, true, "vm/proj/z"}, {"proj/z", false, false, "vm/proj/a"},
+	} {
 		in := input(c.home, c.settled, c.current)
+		if c.relabel {
+			in.Worktrees[0].Repo, in.HostRepos = "zed", map[string]string{root.WorktreeID: "proj"}
+		}
 		in.Worktrees = append(in.Worktrees, a)
 		in.Agents = append(in.Agents, moved)
 		in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm", Settled: !c.settled})

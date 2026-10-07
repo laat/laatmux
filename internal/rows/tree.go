@@ -306,7 +306,7 @@ func (b *builder) worktrees() {
 	for i := range in.Worktrees {
 		w := &in.Worktrees[i]
 		host := j.byEnv[w.EnvironmentID]
-		line := Row{Kind: KindWorktree, Node: w.ID, Host: host, Worktree: w}
+		line := Row{Kind: KindWorktree, Node: w.ID, Host: host, Worktree: w, hostRepo: in.HostRepos[w.ID]}
 		if w.Branch == "" {
 			line.Name = w.Repo + " (detached) " + w.Root
 		} else {
@@ -396,10 +396,10 @@ func (b *builder) worktrees() {
 			// children; the others follow as lines of their own.
 			owner := &b.taskRows[idx[0]]
 			owner.Worktree, owner.Agent, owner.Local, owner.Worst, owner.Children, owner.Depth = w, line.Agent, line.Local, line.Worst, len(children), 1
-			owner.Current = line.Current
+			owner.Current, owner.hostRepo = line.Current, line.hostRepo
 			j.finish(owner)
 			for _, k := range idx[1:] {
-				b.taskRows[k].Worktree, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current = w, line.Local, 1, line.Current
+				b.taskRows[k].Worktree, b.taskRows[k].hostRepo, b.taskRows[k].Local, b.taskRows[k].Depth, b.taskRows[k].Current = w, line.hostRepo, line.Local, 1, line.Current
 				j.finish(&b.taskRows[k])
 			}
 			group := append([]Row{*owner}, children...)
@@ -761,7 +761,7 @@ func HomeLine(tree []Row, host, session string) int {
 		case home != session:
 		case own:
 			return i
-		case named < 0 && namedAfter(session, n.Worktree):
+		case named < 0 && n.namedAfter(session):
 			named = i
 		case first < 0:
 			first = i
@@ -774,13 +774,12 @@ func HomeLine(tree []Row, host, session string) int {
 }
 
 // namedAfter reports whether a managed session has the name add gives
-// the worktree's, <label>/<encoded branch> (tmux.SessionName), by the
-// branch alone: the label is the host's, which this machine's
-// configuration may name otherwise, and has no "/". Never for a
-// detached worktree, which add does not make.
-func namedAfter(session string, w *protocol.Worktree) bool {
-	_, branch, ok := strings.Cut(session, "/")
-	return ok && w != nil && w.Branch != "" && branch == tmux.EncodeBranch(w.Branch)
+// the line's worktree's, tmux.SessionName of the host's label, which
+// this machine's configuration may name otherwise, and the branch.
+// Never for a detached worktree, which add does not make.
+func (r Row) namedAfter(session string) bool {
+	w := r.Worktree
+	return w != nil && w.Branch != "" && session == tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)
 }
 
 // Agents is the agent view, from the tree Tree built of the input: the

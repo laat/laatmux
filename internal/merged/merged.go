@@ -556,7 +556,13 @@ func (m *State) inputLocked(current string) rows.Input {
 	}
 	for _, w := range m.worktrees {
 		if m.labels != nil && w.Source != "" {
-			if name, ok := m.labels(w.Source); ok {
+			if name, ok := m.labels(w.Source); ok && name != w.Repo {
+				// The host's label kept beside, which add named the
+				// worktree's managed session by.
+				if in.HostRepos == nil {
+					in.HostRepos = map[string]string{}
+				}
+				in.HostRepos[w.ID] = w.Repo
 				w.Repo = name
 			}
 		}

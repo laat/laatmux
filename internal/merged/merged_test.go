@@ -266,7 +266,9 @@ func TestPendingsAndHandoffs(t *testing.T) {
 // The rows name a host's worktree by this machine's name for its
 // source, in any form: a host labels a checkout its config does not
 // list by its directory. A source this machine does not know keeps the
-// host's label, and the stored record keeps the host's label either way.
+// host's label, and the stored record keeps the host's label either way;
+// so do the rows, beside, for a worktree they name otherwise, by which
+// add named its managed session.
 func TestRowsUseLocalNames(t *testing.T) {
 	cfg, err := config.Parse([]byte("repos:\n  - source: https://example.com/o/proj\n    name: mine\n"))
 	if err != nil {
@@ -279,11 +281,15 @@ func TestRowsUseLocalNames(t *testing.T) {
 		{ID: "b", EnvironmentID: "e", Repo: "theirs", Source: "git@example.com:o/other.git", Branch: "y", Root: "/w/b"},
 	}})
 	got := map[string]string{}
-	for _, w := range m.Status("").Input.Worktrees {
+	in := m.Status("").Input
+	for _, w := range in.Worktrees {
 		got[w.ID] = w.Repo
 	}
 	if got["a"] != "mine" || got["b"] != "theirs" || m.worktrees["a"].Repo != "checkout-dir" {
 		t.Fatalf("labels %v, stored %q", got, m.worktrees["a"].Repo)
+	}
+	if len(in.HostRepos) != 1 || in.HostRepos["a"] != "checkout-dir" {
+		t.Fatalf("the host's labels %v", in.HostRepos)
 	}
 }
 
