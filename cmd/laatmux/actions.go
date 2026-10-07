@@ -759,9 +759,9 @@ func (d *dash) settle(m *view.Model) {
 // hint. A worktree with no home whose jump goes by such an agent, or by
 // one on another host's default server, gets its workspace session from
 // add, which starts a managed session at the root: the hint ends with
-// the add line. A task still running has nothing to jump to until it is
-// done. The line is a worktree's: settle says a row of none is not a
-// workspace before asking.
+// the add line, or what add needs first. A task still running has
+// nothing to jump to until it is done. The line is a worktree's: settle
+// says a row of none is not a workspace before asking.
 func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
