@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -316,9 +318,20 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 		t.Fatalf("sent without follow: %+v", got)
 	}
 	// A host that cannot be dialled is the same refusal before the send.
-	t.Setenv("LAATMUX_HOME", t.TempDir())
-	if _, _, err := stream(context.Background(), host, nil, add.Request("a4"), Discard{}, streamOpts{}); err == nil || !errors.As(err, &ns) {
+	// No daemon runs and none can be started: the state directory is
+	// under a file, so the start fails before it runs anything, and the
+	// refusal comes at once, not after the wait for a daemon to come up.
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_HOME", filepath.Join(file, "home"))
+	start := time.Now()
+	if _, _, err := stream(context.Background(), host, nil, add.Request("a4"), Discard{}, streamOpts{}); err == nil || !errors.As(err, &ns) || !errors.Is(err, syscall.ENOTDIR) {
 		t.Fatalf("host down: %v", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("host down took %s, not at once", took)
 	}
 	if n := (Add{}).Needs(); len(n) != 1 || n[0] != protocol.CapAdd {
 		t.Fatalf("needs %v", n)
