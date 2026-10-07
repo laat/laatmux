@@ -183,6 +183,7 @@ func Tree(in Input) []Row {
 	b.orphans()
 	b.nameRepos()
 	out := b.repoLines()
+	b.visitors(out)
 	out = b.otherSessions(out)
 	markViewer(out, in.Current)
 	return out
@@ -332,7 +333,9 @@ func (b *builder) worktrees() {
 			// one in the home session, else the attachment to its
 			// session, or its session on this machine's default server.
 			// A viewer in an attachment to the home session is on the
-			// line all the same, as following wants it.
+			// line all the same, as following wants it. A managed one in
+			// another line's home session takes that line's workspace
+			// session once the tree is in order (visitors).
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
 			own := j.agentLocal(host, a)
 			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
@@ -579,6 +582,42 @@ func (b *builder) repoLines() []Row {
 		}
 	}
 	return out
+}
+
+// visitors gives a managed agent of a worktree that runs in another
+// line's home session, `cd ../y && claude` in a split of that line's
+// session, that line's workspace session as its own: its pane jump
+// lands there, by the line the view's LineFor finds (HomeLine), and the
+// viewer in that session sits with it, which marks its own line as the
+// viewer's (markViewer). The viewer in a plain attachment to the
+// agent's session is on its line all the same, as with an agent in its
+// own line's home session. A line with no workspace session leaves the
+// agent the session worktrees gave it. HomeLine wants the lines in the
+// tree's order, so this runs once they are.
+func (b *builder) visitors(out []Row) {
+	line := -1
+	for i := range out {
+		c := &out[i]
+		if c.Depth <= 1 {
+			line = -1
+			if c.Depth == 1 {
+				line = i
+			}
+			continue
+		}
+		a := c.Agent
+		if line < 0 || c.Kind != KindAgent || c.Worktree == nil || a.Server != protocol.ServerLaatmux || a.Session == out[line].Home() {
+			continue
+		}
+		l := HomeLine(out, c.Host, a.Session)
+		if l < 0 || out[l].Local == nil {
+			continue
+		}
+		if own := b.j.agentLocal(c.Host, a); own != nil && own.Name == b.in.Current {
+			out[line].Current = true
+		}
+		c.Local = out[l].Local
+	}
 }
 
 // otherSessions appends the other sessions group: managed agents in no

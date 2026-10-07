@@ -571,6 +571,112 @@ func TestHomeAgentSettled(t *testing.T) {
 	}
 }
 
+// A managed agent of worktree proj/y started from a split of proj/z's
+// home session, `cd ../y && claude`, sits under proj/y's line with
+// proj/z's workspace session as its own, where its pane jump lands: the
+// viewer in vm/proj/z is on proj/y's line through it, and on its tile;
+// so with proj/z's home lost, through the session of the agent laatmux
+// made at its root, and in a standing task's session, through the
+// task's workspace session. The viewer in a plain attachment to proj/z
+// is on proj/y's line all the same; the viewer in vm/proj/y is not on
+// proj/z's. Without vm/proj/z the agent keeps proj/y's workspace
+// session; so does one in a session of proj/z's name on vm's default
+// server. The root agent of homeless worktree proj/a, moved by hand into
+// proj/z, is in its own line's home and keeps proj/a's workspace
+// session, where its jump goes.
+func TestVisitorTakesHomeSession(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	managed := func(id, session, root string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Idle, ActivityAt: now,
+			Liveness: protocol.Alive, Managed: true, Cwd: root, WorktreeID: "venv/worktree/" + root}
+	}
+	z := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	y := protocol.Worktree{ID: "venv/worktree//w/proj/y", EnvironmentID: "venv", Repo: "proj", Branch: "y", Root: "/w/proj/y", Session: "proj/y"}
+	visitor := managed("venv/laatmux/%3", "proj/z", y.Root)
+	base := Input{
+		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents:    []protocol.Agent{managed("venv/laatmux/%1", "proj/z", z.Root), managed("venv/laatmux/%2", "proj/y", y.Root), visitor},
+		Worktrees: []protocol.Worktree{z, y},
+		Locals: []protocol.Session{
+			{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"},
+			{Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"},
+		},
+		Now: now,
+	}
+	// look is an agent's node's own session, the lines marked as the
+	// viewer's, and whether its tile is the viewer's.
+	look := func(in Input, id string) (local string, marked []string, tile bool) {
+		tree := Tree(in)
+		for _, n := range tree {
+			switch {
+			case n.Kind == KindAgent && n.Agent.ID == id && n.Local != nil:
+				local = n.Local.Name
+			case n.Depth == 1 && n.Current:
+				marked = append(marked, n.ID())
+			}
+		}
+		rs := Agents(in, tree)
+		for _, r := range append(rs.Main, rs.Stale...) {
+			tile = tile || r.Agent != nil && r.Agent.ID == id && r.Current
+		}
+		return local, marked, tile
+	}
+	task := protocol.Pending{ID: "add-t", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "t", Root: "/w/proj/t", Session: "proj/t", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	for _, c := range []struct {
+		name    string
+		edit    func(in *Input)
+		current string
+		local   string
+		marked  []string
+		tile    bool
+	}{
+		{"the viewer in vm/proj/z", func(*Input) {}, "vm/proj/z", "vm/proj/z", []string{y.ID, z.ID}, true},
+		{"proj/z's home lost", func(in *Input) { in.Worktrees[0].Session = "" }, "vm/proj/z", "vm/proj/z", []string{y.ID, z.ID}, true},
+		{"the viewer in vm/proj/y", func(*Input) {}, "vm/proj/y", "vm/proj/z", []string{y.ID}, true},
+		{"the viewer elsewhere", func(*Input) {}, "", "vm/proj/z", nil, false},
+		{"the viewer in an attachment to proj/z", func(in *Input) {
+			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/z-att", Attach: "vm/proj/z", Host: "vm"})
+		}, "vm/proj/z-att", "vm/proj/z", []string{y.ID, z.ID}, true},
+		{"in a standing task's session", func(in *Input) {
+			in.Agents[2].Session = task.Session
+			in.Pendings = []protocol.Pending{task}
+			in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/t", Key: "venv//w/proj/t", Host: "vm"})
+		}, "vm/proj/t", "vm/proj/t", []string{task.ID, y.ID}, true},
+		{"no vm/proj/z", func(in *Input) { in.Locals = in.Locals[1:2] }, "vm/proj/y", "vm/proj/y", []string{y.ID}, true},
+		{"on vm's default server", func(in *Input) { in.Agents[2].Server, in.Agents[2].Managed = "default", false }, "vm/proj/z", "vm/proj/y", []string{z.ID}, false},
+	} {
+		in := base
+		in.Agents, in.Worktrees, in.Locals = append([]protocol.Agent(nil), base.Agents...), append([]protocol.Worktree(nil), base.Worktrees...), append([]protocol.Session(nil), base.Locals...)
+		c.edit(&in)
+		in.Current = c.current
+		local, marked, tile := look(in, visitor.ID)
+		if local != c.local || !reflect.DeepEqual(marked, c.marked) || tile != c.tile {
+			t.Errorf("%s: the agent's session %q, the viewer's lines %v, its tile the viewer's %v; want %q, %v, %v", c.name, local, marked, tile, c.local, c.marked, c.tile)
+		}
+	}
+	// Homeless proj/a, branch z of the repository other, whose root agent
+	// was moved by hand into proj/z: its line's home is proj/z, the
+	// session's line proj/z's by its own home or, homeless too, by its
+	// name, and the moved agent keeps vm/proj/a beside the visitor's
+	// vm/proj/z.
+	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "other", Branch: "z", Root: "/w/proj/a"}
+	moved := managed("venv/laatmux/%4", "proj/z", a.Root)
+	for _, home := range []string{"proj/z", ""} {
+		in := base
+		in.Worktrees = []protocol.Worktree{z, y, a}
+		in.Worktrees[0].Session = home
+		in.Agents = append(append([]protocol.Agent(nil), base.Agents...), moved)
+		in.Locals = append(append([]protocol.Session(nil), base.Locals...), protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"})
+		in.Current = "vm/proj/z"
+		if local, _, _ := look(in, moved.ID); local != "vm/proj/a" {
+			t.Errorf("proj/z's home %q: the moved root agent's session %q, want vm/proj/a", home, local)
+		}
+		if local, marked, _ := look(in, visitor.ID); local != "vm/proj/z" || !reflect.DeepEqual(marked, []string{y.ID, z.ID}) {
+			t.Errorf("proj/z's home %q beside proj/a: the agent's session %q, the viewer's lines %v", home, local, marked)
+		}
+	}
+}
+
 // A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the

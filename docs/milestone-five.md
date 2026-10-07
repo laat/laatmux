@@ -967,10 +967,11 @@ Five settlements differ from the plan in #52:
   for the line, the managed one is the task's, as `z` refuses it, and
   not the viewer's. Another worktree's line is the viewer's when one of
   its agents is observed in a window of the viewer's session with its
-  directory in that worktree, or runs in a managed session the viewer
-  is in through a plain attachment: the scope keeps that line with its
-  children, and in the agent view its agents, beside the viewer's
-  worktree.
+  directory in that worktree; runs in the home session of the viewer's
+  line, `cd ../y && claude` in a split, where `Enter` on it lands; or
+  runs in a managed session the viewer is in through a plain
+  attachment: the scope keeps that line with its children, and in the
+  agent view its agents, beside the viewer's worktree.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The

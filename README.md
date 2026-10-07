@@ -894,10 +894,12 @@ row's session exists locally and is switched to.
   window of the viewer's session, which stands in other sessions; and
   another worktree's line with its children, such as the line of an
   agent observed in a window of the viewer's session with its
-  directory in that worktree. A pane in a session that is no row's shows
-  the empty state under `session` and `project`. `F` switches the pane to
-  `session` and, pressed again, back to the scope the pane had before,
-  whatever set it; on `session` already it goes to `all`. `F` acts on
+  directory in that worktree, or of one started from a split of the
+  viewer's session after a `cd` into that worktree. A pane in a session
+  that is no row's shows the empty state under `session` and
+  `project`. `F` switches the pane to `session` and, pressed again,
+  back to the scope the pane had before, whatever set it; on
+  `session` already it goes to `all`. `F` acts on
   that pane alone and is not kept. The footer names a scope in force:
   `[session]`; a strip names it at its right end. `f` sets the folds of
   the lines the scope and the filter leave, not a repository line
