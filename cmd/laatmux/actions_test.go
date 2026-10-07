@@ -783,6 +783,7 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("TMUX", "/tmp/lmx-fake/default,1,0")
+	t.Setenv("LAATMUX_HOME", t.TempDir())
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	mac := rows.Host{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	vm := rows.Host{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
@@ -834,7 +835,7 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	running := protocol.Pending{ID: "add-b", Host: "mac", EnvironmentID: "menv", Source: b.Source, Repo: "proj", Branch: "b", Root: b.Root, Sent: true, Taken: true, Stage: protocol.StageSetup, SubmittedAt: time.Now()}
 	done := running
 	done.Done, done.OK, done.Session, done.Prompt = true, true, "proj/b", protocol.DeliveryNotDelivered
-	add := "laatmux add b --repo proj --host mac makes one"
+	add := "laatmux add b --repo proj --host mac --agent claude makes one"
 	for _, c := range []struct {
 		name  string
 		in    rows.Input
@@ -855,7 +856,7 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 		{"root agent laatmux made", rows.Input{Hosts: []rows.Host{mac}, Worktrees: []protocol.Worktree{a, b}, Agents: []protocol.Agent{agent(b, "menv/laatmux/%3", "laatmux", "proj/b")}, Locals: locals},
 			b.ID, "menv/laatmux/%3", "new-session -d -s mac/proj/b ", "ENTER creates one"},
 		{"agent on vm's default server", rows.Input{Hosts: []rows.Host{vm}, Worktrees: []protocol.Worktree{bv}, Agents: []protocol.Agent{onVM}},
-			bv.ID, onVM.ID, "", "REFUSED; laatmux add b --repo proj --host vm makes one"},
+			bv.ID, onVM.ID, "", "REFUSED; laatmux add b --repo proj --host vm --agent claude makes one"},
 		{"agent on box's default server", rows.Input{Hosts: []rows.Host{box}, Worktrees: []protocol.Worktree{bb}, Agents: []protocol.Agent{onBox}},
 			bb.ID, onBox.ID, "", "REFUSED; laatmux add makes one once host box has repos and worktrees directories in the config"},
 		{"detached, agent in notes", rows.Input{Hosts: []rows.Host{mac}, Worktrees: []protocol.Worktree{a, det}, Agents: []protocol.Agent{detNotes}, Locals: locals},

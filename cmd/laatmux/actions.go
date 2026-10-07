@@ -791,8 +791,8 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, on a host this machine's config gives the
 // directories add needs, for a repository that config lists, which
-// --repo takes. It names every one of these the worktree lacks, not
-// only the first.
+// --repo takes, with an agent in that config for add to start. It
+// names every one of these the worktree lacks, not only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
 	if w.Branch == "" {
@@ -803,6 +803,9 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	}
 	if _, ok := cfg.RepoBySource(w.Source); w.Source != "" && !ok {
 		needs = append(needs, w.Source+" is a repository in the config")
+	}
+	if len(cfg.Agents) == 0 {
+		needs = append(needs, "an agent is in the config")
 	}
 	switch n := len(needs); {
 	case n == 0:

@@ -135,17 +135,29 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 // addCommand is the add line for the worktree's branch on the host. Its
 // --repo is resolved against this machine's config, so it names the
 // source as this machine knows it, not by the host's label; a record
-// without a source leaves it to the reader. The line is for pasting
-// into a shell, and git takes branches such as it's and a$(x): each
-// word is quoted as ShellJoin quotes it, only when it needs to be, and
-// the placeholder the reader replaces is left as it is.
+// without a source leaves it to the reader, and the agent with it. The
+// line is for pasting into a shell, and git takes branches such as it's
+// and a$(x): each word is quoted as ShellJoin quotes it, only when it
+// needs to be, and the placeholder the reader replaces is left as it is.
+// It names an agent only where add would refuse to pick one: no agent
+// last used for the repository is still configured (last.json read as
+// add reads it), there is no default_agent, and more than one agent is
+// configured. The agent named is then the first, which the add form
+// preselects too.
 func addCommand(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
 	repo := "<repo>"
 	if r := localRepoArg(cfg, w); r != "" {
 		repo = quote(r)
 	}
-	return fmt.Sprintf("laatmux add %s --repo %s --host %s", quote(w.Branch), repo, quote(h.Name))
+	line := fmt.Sprintf("laatmux add %s --repo %s --host %s", quote(w.Branch), repo, quote(h.Name))
+	if r, ok := cfg.RepoBySource(w.Source); ok {
+		_, lr, _ := hostFor(cfg, h.Name, r)
+		if _, _, err := cfg.DefaultAgent("", lr.Agent); err != nil && len(cfg.Agents) > 0 {
+			line += " --agent " + quote(cfg.AgentNames()[0])
+		}
+	}
+	return line
 }
 
 // localRepoArg is the record's repository as this machine names it: its

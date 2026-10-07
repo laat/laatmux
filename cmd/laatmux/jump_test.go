@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
@@ -129,8 +130,11 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // is named by its label here. A worktree that lacks more than one is
 // told all of them. The add line pastes into a shell: a branch git
 // takes with a ' or a $( in it is quoted, an ordinary one is not, and
-// a record without a source leaves the <repo> placeholder bare.
+// a record without a source leaves the <repo> placeholder bare, and the
+// agent with it. The line names an agent only where add would not pick
+// one, and with no agent configured, add needs one first.
 func TestAddHintCanRun(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	src := "git@github.com:laat/proj.git"
 	bv := protocol.Worktree{ID: "venv/worktree//w/b", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "b", Root: "/w/b"}
@@ -153,11 +157,30 @@ func TestAddHintCanRun(t *testing.T) {
 	host := func(name, env string) rows.Host {
 		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	}
-	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm makes one"
+	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm --agent claude makes one"
 	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
 	onOther := "vm/other/b has no managed session; laatmux add makes one once git@github.com:laat/other.git is a repository in the config"
-	onApos := `vm/proj/it's has no managed session; laatmux add 'it'\''s' --repo proj --host vm makes one`
-	onSubst := "vm/proj/a$(x) has no managed session; laatmux add 'a$(x)' --repo proj --host vm makes one"
+	onApos := `vm/proj/it's has no managed session; laatmux add 'it'\''s' --repo proj --host vm --agent claude makes one`
+	onSubst := "vm/proj/a$(x) has no managed session; laatmux add 'a$(x)' --repo proj --host vm --agent claude makes one"
+	check := func(host rows.Host, w protocol.Worktree, want string) {
+		t.Helper()
+		in := rows.Input{Hosts: []rows.Host{host}, Worktrees: []protocol.Worktree{w}}
+		m := &view.Model{Width: 100, Height: 20, ShowHidden: true, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(w.ID) {
+			t.Fatalf("no line %s", w.ID)
+		}
+		d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		if m.Message != want {
+			t.Errorf("enter on %s: %q, want %q", w.ID, m.Message, want)
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		if want := m.Selection().Name + ": no local workspace session; " + want; m.Message != want {
+			t.Errorf("z on %s: %q, want %q", w.ID, m.Message, want)
+		}
+	}
 	for _, c := range []struct {
 		host rows.Host
 		w    protocol.Worktree
@@ -174,23 +197,31 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
 		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
 	} {
-		in := rows.Input{Hosts: []rows.Host{c.host}, Worktrees: []protocol.Worktree{c.w}}
-		m := &view.Model{Width: 100, Height: 20, ShowHidden: true, View: view.ViewTree}
-		m.SetTree(rows.Tree(in))
-		m.SetRows(rows.Agents(in, rows.Tree(in)))
-		m.Render()
-		if !m.Select(c.w.ID) {
-			t.Fatalf("no line %s", c.w.ID)
-		}
-		d.jumpAction(m, view.Action{Kind: view.ActionJump})
-		if m.Message != c.want {
-			t.Errorf("enter on %s: %q, want %q", c.w.ID, m.Message, c.want)
-		}
-		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
-		if want := m.Selection().Name + ": no local workspace session; " + c.want; m.Message != want {
-			t.Errorf("z on %s: %q, want %q", c.w.ID, m.Message, want)
+		check(c.host, c.w, c.want)
+	}
+	// The agent add would pick itself is left to it: the one last used
+	// for the repository, kept under the source as this machine's config
+	// has it, which the https record finds too; else default_agent. One
+	// last used that is no longer configured is passed over, as add
+	// passes it over.
+	plain := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm makes one"
+	last := func(agent string) {
+		t.Helper()
+		if err := home.UpdateLast(func(l *home.Last) { l.Set(src, home.LastRepo{Agent: agent}) }); err != nil {
+			t.Fatal(err)
 		}
 	}
+	last("codex")
+	check(host("vm", "venv"), bv, plain)
+	check(host("vm", "venv"), https, plain)
+	last("gone")
+	check(host("vm", "venv"), bv, onVM)
+	last("")
+	d.cfg.DefaultAgentName = "codex"
+	check(host("vm", "venv"), bv, plain)
+	d.cfg.DefaultAgentName, d.cfg.Agents = "", nil
+	check(host("vm", "venv"), bv, "vm/proj/b has no managed session; laatmux add makes one once an agent is in the config")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, git@github.com:laat/other.git is a repository in the config, and an agent is in the config")
 	// jump, from the hosts' records through the local daemon. A
 	// detached worktree is not matched by jump at all.
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
@@ -203,7 +234,7 @@ func TestAddHintCanRun(t *testing.T) {
 		return true
 	})
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nagents:\n  claude: {cmd: [claude]}\n  codex: {cmd: [codex]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)

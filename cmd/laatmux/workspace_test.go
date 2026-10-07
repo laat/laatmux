@@ -267,7 +267,7 @@ func TestLabelUnderNested(t *testing.T) {
 }
 
 func TestLocalRepoArg(t *testing.T) {
-	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}}
+	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}, Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}}
 	cases := []struct {
 		w    protocol.Worktree
 		want string
