@@ -43,7 +43,8 @@ var (
 // drops an entry when its root goes or changes branch, so a refresh
 // still running for it publishes nothing.
 type gitEntry struct {
-	branch  string
+	branch  string // the record's, which the listing compares
+	name    string // the branch as git has it, which the read takes
 	cache   worktree.StatusCache
 	paths   worktree.Paths
 	mtimes  map[string]time.Time
@@ -121,7 +122,7 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 	d.mu.Lock()
 	for root, w := range d.worktrees {
 		if e := d.gits[root]; e == nil || e.branch != w.Branch {
-			d.gits[root] = &gitEntry{branch: w.Branch, due: true}
+			d.gits[root] = &gitEntry{branch: w.Branch, name: d.branchNameLocked(w), due: true}
 		}
 	}
 	var checks []check
@@ -197,7 +198,7 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 	if files := e.watched(); len(files) > 0 {
 		before = statMtimes(files)
 	}
-	st, head, paths, err := gitStatusRead(ctx, root, e.branch, &e.cache)
+	st, head, paths, err := gitStatusRead(ctx, root, e.name, &e.cache)
 	after := ""
 	if err == nil {
 		after, err = gitHeadRead(ctx, root)

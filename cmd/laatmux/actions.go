@@ -258,13 +258,14 @@ func (d *dash) startAdd(m *view.Model) {
 	}
 	// The repository and host of the selected row's worktree, from a
 	// tile or any tree line under one, with the branch when the worktree
-	// has no session yet, so an agent can be started in it; a
-	// repository line names its repository.
+	// has no session yet, so an agent can be started in it, unless the
+	// branch is only shown and add could not name it; a repository line
+	// names its repository.
 	preRepo, preHost, branch := "", "", ""
 	switch r := m.Selection(); {
 	case r != nil && r.Worktree != nil && !r.Orphaned:
 		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
-		if r.Worktree.Session == "" {
+		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly {
 			branch = r.Worktree.Branch
 		}
 	case r != nil && r.Kind == rows.KindRepo:
@@ -579,7 +580,8 @@ func (d *dash) deliverPrompt(m *view.Model) {
 // rmFor is the rm for a row: the worktree's repository, branch and root
 // from its record, or from an orphaned session's tags and key. A repository
 // this machine's config does not know is removed by root alone, as
-// --root does.
+// --root does. A branch the host only shows goes with the root as it was
+// shown: the daemon takes that form with the root it was listed for.
 func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	switch r.Kind {
 	case rows.KindPane, rows.KindRun:
@@ -812,15 +814,20 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 
 // addsSession says how add makes a workspace session for a worktree
 // with no home: by its branch, which a detached worktree has to have
-// checked out first, on a host this machine's config gives the
-// directories add needs, for a repository that config lists, which
-// --repo takes, with an agent in that config for add to start, and
-// last.json readable JSON, which add reads before it picks the host.
-// It names every one of these the worktree lacks, not only the first.
+// checked out first, and one whose branch is only shown has to have
+// one checked out that laatmux can carry, on a host this machine's
+// config gives the directories add needs, for a repository that config
+// lists, which --repo takes, with an agent in that config for add to
+// start, and last.json readable JSON, which add reads before it picks
+// the host. It names every one of these the worktree lacks, not only
+// the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
-	if w.Branch == "" {
+	switch {
+	case w.Branch == "":
 		needs = append(needs, "a branch is checked out in "+tmux.Printable(w.Root))
+	case w.BranchDisplayOnly:
+		needs = append(needs, "a branch laatmux can carry, valid UTF-8 without U+FFFD, is checked out in "+tmux.Printable(w.Root)+" instead of "+w.Branch)
 	}
 	if !h.CanAdd() {
 		needs = append(needs, "host "+h.Name+" has repos and worktrees directories in the config")

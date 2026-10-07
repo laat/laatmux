@@ -31,6 +31,23 @@ func TestSplitRepoBranch(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	// A branch that is not UTF-8 is refused here, before rm, run or path
+	// ask a daemon (#304), naming the form a host lists a worktree on it
+	// by. One in UTF-8 is a branch, and so is one with U+FFFD, which a
+	// record can have and findWorktree answers.
+	for target, want := range map[string]string{
+		"proj/a\xffb": `branch "a\xffb" is not valid UTF-8; laatmux cannot carry it between client and daemon; a worktree checked out on it is listed as proj/"a\xffb", which rm, run and path take to say its root`,
+		"proj/\x9b":   `branch "\x9b" is not valid UTF-8; laatmux cannot carry it between client and daemon; a worktree checked out on it is listed as proj/"\x9b", which rm, run and path take to say its root`,
+	} {
+		if _, _, err := splitRepoBranch(target); err == nil || err.Error() != want {
+			t.Errorf("%q: %v", target, err)
+		}
+	}
+	for _, b := range []string{"blåbær", "a\ufffdb"} {
+		if _, branch, err := splitRepoBranch("proj/" + b); err != nil || branch != b {
+			t.Errorf("%q: %q %v", b, branch, err)
+		}
+	}
 }
 
 func TestMatchWorktree(t *testing.T) {
@@ -149,6 +166,26 @@ func TestFindWorktreeBySource(t *testing.T) {
 	res := command.Added{Branch: "f\u009b31m", Root: "/w/mine/f\u009b31m", Managed: "mine/f%c2%9b31m"}
 	if got, want := readyLine("mine", res), strconv.Quote("mine/f\u009b31m")+" ready: "+strconv.Quote(res.Root)+", session mine/f%c2%9b31m"; got != want {
 		t.Errorf("ready line %q, want %q", got, want)
+	}
+	// A branch the host only shows is matched by the shown name and is
+	// no name to send: an error naming the root, which rm --root takes.
+	shown := []protocol.Worktree{{Repo: "proj", Source: "git@x:o/proj.git", Branch: `"a\xffb"`, BranchDisplayOnly: true, Root: "/r/hand"}}
+	if w, ok, err := findWorktree(shown, mine, `"a\xffb"`); ok || err == nil || !strings.HasPrefix(err.Error(), `mine/"a\xffb" is how the host shows the branch of the worktree at /r/hand; laatmux cannot carry the branch's name`) || !strings.Contains(err.Error(), "rm takes the root with --root") {
+		t.Errorf("shown branch: %+v %v %v", w, ok, err)
+	}
+	if w, ok, err := findWorktree(shown, mine, "fix"); ok || err != nil {
+		t.Errorf("another branch beside a shown one: %+v %v %v", w, ok, err)
+	}
+	// A real U+FFFD branch is shown as it is, and its name finds it; an
+	// older daemon sends a branch that is not UTF-8 with U+FFFD for its
+	// byte and no flag, which is answered the same.
+	legacy := []protocol.Worktree{{Repo: "proj", Source: "git@x:o/proj.git", Branch: "a\ufffdb", Root: "/r/legacy"}}
+	if w, ok, err := findWorktree(legacy, mine, "a\ufffdb"); ok || err == nil || !strings.HasPrefix(err.Error(), "mine/a\ufffdb is how the host shows the branch of the worktree at /r/legacy;") {
+		t.Errorf("an older daemon's record: %+v %v %v", w, ok, err)
+	}
+	fffd := []protocol.Worktree{{Repo: "proj", Source: "git@x:o/proj.git", Branch: "x\ufffdy", BranchDisplayOnly: true, Root: "/r/fffd"}}
+	if w, ok, err := findWorktree(fffd, mine, "x\ufffdy"); ok || err == nil || !strings.HasPrefix(err.Error(), "mine/x\ufffdy is how the host shows the branch of the worktree at /r/fffd;") {
+		t.Errorf("U+FFFD branch: %+v %v %v", w, ok, err)
 	}
 }
 

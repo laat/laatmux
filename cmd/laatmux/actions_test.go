@@ -1263,6 +1263,44 @@ func TestRmTreeRows(t *testing.T) {
 	}
 }
 
+// A worktree whose branch the host only shows (#304) is removed from the
+// dashboard by its root, with the branch as shown, which the daemon
+// takes for that root; a on its line leaves the form's branch for the
+// user: add could not name that branch. The form refuses a branch that
+// is not UTF-8 as it is typed, before anything is sent.
+func TestShownBranchFromTheDashboard(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	m := &view.Model{Width: 80, Height: 20, ShowHidden: true, View: view.ViewTree}
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{
+			{ID: "venv/worktree//w/proj/hand", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: `"a\xffb"`, BranchDisplayOnly: true, Root: "/w/proj/hand"},
+		},
+	}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	m.Render()
+	selectRow(t, m, `proj/"a\xffb"`)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if d.rm.Host.Name != "vm" || d.rm.Repo.Source != cfg.Repos[1].Source || d.rm.Branch != `"a\xffb"` || d.rm.Root != "/w/proj/hand" {
+		t.Errorf("rm = %+v", d.rm)
+	}
+	if m.Confirm != `remove proj/"a\xffb" on vm (/w/proj/hand)? y/n` {
+		t.Errorf("confirm = %q", m.Confirm)
+	}
+	m.Handle(term.Key{Rune: 'n'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
+	f, ok := m.Overlay.(*view.Form)
+	if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" || f.Branch() != "" {
+		t.Fatalf("form: %+v", m.Overlay)
+	}
+	if err := f.Validate("a\xffb"); err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Errorf("form validate: %v", err)
+	}
+}
+
 // A confirmed rm runs under a log overlay; a refusal without force
 // carries the hint to use X and stays until a key; then the list
 // returns with the message.

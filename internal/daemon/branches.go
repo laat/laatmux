@@ -154,7 +154,8 @@ func (b *branches) saveLocked() {
 func (d *Daemon) branchSetLocked() map[string]branchQuery {
 	out := map[string]branchQuery{}
 	add := func(w protocol.Worktree) {
-		if w.Source == "" || w.Branch == "" {
+		// A branch only shown is not a name GitHub has.
+		if w.Source == "" || w.Branch == "" || w.BranchDisplayOnly {
 			return
 		}
 		host, path, ok := source.Forge(w.Source)

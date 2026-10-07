@@ -456,6 +456,41 @@ func TestDismissAtOlderDaemon(t *testing.T) {
 	}
 }
 
+// A branch the connection cannot carry is refused before any daemon is
+// dialled, in the foreground and through the relay alike: JSON would
+// turn its byte into U+FFFD, and the host would add another branch.
+func TestAddRefusesBranchNotCarried(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapAdd, protocol.CapFollow, protocol.CapMerged, protocol.CapRelay}
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	for _, c := range []struct{ branch, want string }{
+		{"a\xffb", `branch "a\xffb" is not valid UTF-8`},
+		{"\x9b", `branch "\x9b" is not valid UTF-8`},
+		{"a\ufffdb", "branch \"a\ufffdb\" has U+FFFD"},
+	} {
+		add := Add{Host: config.Host{Host: peer.Host{Name: "local"}}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: c.branch, Agent: "claude"}
+		if _, err := add.Run(context.Background(), Discard{}); err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("run %q: %v", c.branch, err)
+		}
+		if _, err := add.Submit(context.Background()); err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("submit %q: %v", c.branch, err)
+		}
+	}
+	f.mu.Lock()
+	conns := f.conns
+	f.mu.Unlock()
+	if conns != 0 || len(f.commands()) != 0 {
+		t.Fatalf("dialled %d times, sent %+v", conns, f.commands())
+	}
+	// The same add with a name it can carry goes through.
+	add := Add{Host: config.Host{Host: peer.Host{Name: "local"}}, Repo: config.Repo{Source: "s", Name: "proj"}, Branch: "blåbær", Agent: "claude"}
+	if _, err := add.Submit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.commands(); len(got) != 1 || got[0].Branch != "blåbær" {
+		t.Fatalf("sent %+v", got)
+	}
+}
+
 // An add carries its repository as this machine's config has it, the
 // top-level copy rules after the repository's own, so the host need
 // not list it.

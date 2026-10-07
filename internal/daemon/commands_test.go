@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/gittest"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
@@ -844,6 +845,161 @@ func TestBranchWithC1Quoted(t *testing.T) {
 	}
 	if r := d.tasks.worktreeReplaced(context.Background(), entry{Root: root, Source: remote, Branch: invalid}); r != "worktree replaced: "+qroot+" is now on branch "+q(odd)+", not "+q(invalid) {
 		t.Errorf("reason %q", r)
+	}
+}
+
+// A branch laatmux cannot carry (#304). An older client's add of one,
+// and its rm of one by branch alone, arrive with U+FFFD for its byte and
+// are refused rather than taken for another branch: the add before the
+// checkout is cloned. A worktree checked out by hand on such a branch is
+// listed with the branch as tmux.Printable shows it and marked display
+// only, which survives the connection. A root sent with that shown name,
+// as the dashboard's x and a workspace session's rm and run send it, is
+// taken for that root and no other: another root, or the U+FFFD form,
+// is refused, saying how the worktree is named. Without a root the
+// shown name names nothing; with a gone root it finds the branch's
+// worktree elsewhere and is refused, as a carriable name is, killing
+// nothing. The root alone runs in
+// it and removes it. A branch with a real U+FFFD, which an older laatmux
+// made from such a name, is reached with its root and that name, and an
+// rm of a gone worktree's root with a session's U+FFFD tag still kills
+// the session there.
+func TestBranchNotCarried(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: remote, Branch: "a\xffb", Cmd: []string{"true"}})
+	if res, _ := result(t, pc, "a1"); res.OK || !strings.Contains(res.Error, "branch \"a\ufffdb\" has U+FFFD") {
+		t.Fatalf("add: %+v", res)
+	}
+	if _, err := os.Stat(store.Dirs.Checkout("proj")); !os.IsNotExist(err) {
+		t.Fatalf("the add reached the clone: %v", err)
+	}
+	// A branch with a C1 control character is one laatmux carries: it is
+	// listed as it is, and its quoted form names nothing.
+	csi := "csi\u009b1"
+	for id, b := range map[string]string{"a2": "first", "a3": csi} {
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: b, Cmd: []string{"true"}})
+		if res, _ := result(t, pc, id); !res.OK {
+			t.Fatalf("add %q: %+v", b, res)
+		}
+	}
+	checkout, _, _ := store.Checkout(ctx, worktree.Repo{Source: remote})
+	hand, hand2, fffd := store.Dirs.Worktree("proj", "hand"), store.Dirs.Worktree("proj", "hand2"), store.Dirs.Worktree("proj", "fffd")
+	gittest.HandMadeWorktree(t, checkout, hand, "a\xffb")
+	gittest.HandMadeWorktree(t, checkout, hand2, "c\xffd")
+	gittest.HandMadeWorktree(t, checkout, fffd, "x\ufffdy")
+	shown, shown2 := strconv.Quote("a\xffb"), strconv.Quote("c\xffd")
+	named := "; laatmux cannot carry that branch, so the worktree is named by its root, with the branch as listed or none"
+	// A session left at the root the worktree on a\xffb was at before
+	// it moved, which r8 must not kill.
+	moved := store.Dirs.Worktree("proj", "moved")
+	ft.set(func() {
+		ft.panes = append(ft.panes, tmux.Pane{Session: "proj/moved", SessionID: "$91", ID: "%91", Cwd: moved, Managed: true, ServerPID: 5})
+	})
+
+	for _, c := range []struct {
+		m    protocol.Message
+		want string
+	}{
+		{protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "a\xffb"}, "branch \"a\ufffdb\" has U+FFFD"},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "a\xffb", Root: hand}, hand + " is the worktree for branch " + shown + " of proj, not a\ufffdb" + named},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u1", Root: hand, Branch: "a\xffb", Cmd: []string{"true"}}, hand + " is the worktree for branch " + shown + ", not a\ufffdb" + named},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r3", Repo: remote, Branch: shown2, Root: hand}, hand + " is the worktree for branch " + shown + " of proj, not " + shown2 + named},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u2", Root: hand, Branch: shown2, Cmd: []string{"true"}}, hand + " is the worktree for branch " + shown + ", not " + shown2 + named},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u6", Root: store.Dirs.Worktree("proj", csi), Branch: strconv.Quote(csi), Cmd: []string{"true"}}, strconv.Quote(store.Dirs.Worktree("proj", csi)) + " is the worktree for branch " + strconv.Quote(csi) + ", not " + strconv.Quote(csi)},
+		// The shown name with no root names nothing; with a gone root it
+		// finds the branch's worktree elsewhere, as a carriable name does.
+		{protocol.Message{Type: protocol.TypeRm, ID: "r7", Repo: remote, Branch: shown}, shown + ` has a \, as no branch git takes has: a quoted branch a listing shows names its worktree only with the root`},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r8", Repo: remote, Branch: shown, Root: moved}, "branch " + shown + " of proj is checked out at " + hand + ", not " + moved},
+	} {
+		pc.Write(c.m)
+		if res, _ := result(t, pc, c.m.ID); res.OK || !strings.HasPrefix(res.Error, c.want) {
+			t.Errorf("%s: %q, want %q", c.m.ID, res.Error, c.want)
+		}
+	}
+	for _, root := range []string{hand, hand2, fffd} {
+		if _, err := os.Stat(root); err != nil {
+			t.Fatalf("refused commands touched %s: %v", root, err)
+		}
+	}
+	ft.mu.Lock()
+	killedMoved := slices.Contains(ft.killed, "proj/moved")
+	ft.mu.Unlock()
+	if killedMoved {
+		t.Fatal("a refused rm killed the session at the old root")
+	}
+
+	// Listed over a connection, the shown name intact.
+	sub := conn(t, d)
+	sub.Write(protocol.Message{Type: protocol.TypeSubscribe})
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d.markDiscovered(&d.panesDiscovered)
+	d.pollWorktrees(ctx)
+	var snap protocol.Message
+	for snap.Type != protocol.TypeSnapshot {
+		m, err := sub.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap = m
+	}
+	got := map[string]protocol.Worktree{}
+	for _, w := range snap.Worktrees {
+		got[w.Root] = w
+	}
+	for root, want := range map[string]protocol.Worktree{
+		hand:                                 {Branch: shown, BranchDisplayOnly: true},
+		hand2:                                {Branch: shown2, BranchDisplayOnly: true},
+		fffd:                                 {Branch: "x\ufffdy", BranchDisplayOnly: true},
+		store.Dirs.Worktree("proj", "first"): {Branch: "first"},
+		store.Dirs.Worktree("proj", csi):     {Branch: csi},
+	} {
+		if w := got[root]; w.Branch != want.Branch || w.BranchDisplayOnly != want.BranchDisplayOnly {
+			t.Errorf("%s: record %+v", root, w)
+		}
+	}
+
+	for _, m := range []protocol.Message{
+		{Type: protocol.TypeRun, ID: "u3", Root: hand, Branch: shown, Cmd: []string{"true"}},
+		{Type: protocol.TypeRun, ID: "u4", Root: hand, Cmd: []string{"true"}},
+		{Type: protocol.TypeRun, ID: "u5", Root: fffd, Branch: "x\ufffdy", Cmd: []string{"true"}},
+	} {
+		pc.Write(m)
+		if res, _ := result(t, pc, m.ID); !res.OK {
+			t.Errorf("%s: %+v", m.ID, res)
+		}
+	}
+	// The dashboard's x: the root with the shown name; rm --root: the
+	// root alone.
+	for _, m := range []protocol.Message{
+		{Type: protocol.TypeRm, ID: "r4", Repo: remote, Branch: shown, Root: hand},
+		{Type: protocol.TypeRm, ID: "r5", Root: hand2},
+	} {
+		pc.Write(m)
+		if res, _ := result(t, pc, m.ID); !res.OK || res.Root != m.Root {
+			t.Errorf("%s: %+v", m.ID, res)
+		}
+		if _, err := os.Stat(m.Root); !os.IsNotExist(err) {
+			t.Errorf("%s: root after rm: %v", m.ID, err)
+		}
+	}
+	// A gone worktree's root, with the U+FFFD tag of the session there.
+	gone := store.Dirs.Worktree("proj", "gone")
+	ft.set(func() {
+		ft.panes = append(ft.panes, tmux.Pane{Session: "proj/gone", SessionID: "$90", ID: "%90", Cwd: gone, Managed: true, ServerPID: 5})
+	})
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r6", Repo: remote, Branch: "a\ufffdb", Root: gone})
+	if res, _ := result(t, pc, "r6"); !res.OK || res.Root != gone {
+		t.Errorf("rm of a gone root: %+v", res)
+	}
+	ft.mu.Lock()
+	killed := slices.Contains(ft.killed, "proj/gone")
+	ft.mu.Unlock()
+	if !killed {
+		t.Errorf("the session at the gone root was not killed")
 	}
 }
 

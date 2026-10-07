@@ -390,6 +390,9 @@ func TestRelayResumesFiles(t *testing.T) {
 	}
 	write(pendingFile{Pending: protocol.Pending{ID: "r1", Host: "vm", Source: f.source(), Repo: "proj", Branch: "one", Agent: "argv"}, PromptText: "one"})
 	write(pendingFile{Pending: protocol.Pending{Sent: true, ID: "r2", Host: "vm", Source: f.source(), Repo: "proj", Branch: "two", Agent: "argv"}, PromptText: "two"})
+	// r4: an older daemon's record of a branch whose byte that was not
+	// UTF-8 became U+FFFD, never sent: refused here, not sent (#304).
+	write(pendingFile{Pending: protocol.Pending{ID: "r4", Host: "vm", Source: f.source(), Repo: "proj", Branch: "a\ufffdb", Agent: "argv"}, PromptText: "four"})
 	// r3: a finished add on the host whose prompt was not delivered,
 	// with an attempt the last daemon opened and the host never saw.
 	pc := conn(t, f.host)
@@ -420,6 +423,10 @@ func TestRelayResumesFiles(t *testing.T) {
 	p := f.awaitRecord(t, "r3", 30*time.Second, func(p pendingFile) bool { return !p.AttemptOpen })
 	if p.Prompt != protocol.DeliveryDelivered || p.PromptText != "three" {
 		t.Fatalf("r3: %+v", p)
+	}
+	p = f.awaitRecord(t, "r4", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	if p.OK || p.Sent || p.Taken || !strings.Contains(p.Error, "branch \"a\ufffdb\" has U+FFFD") {
+		t.Fatalf("r4: %+v", p)
 	}
 	if e := readEntry(t, f.host, "r3"); len(e.Attempts) != 1 || e.Attempts[0].State != protocol.DeliveryDelivered {
 		t.Fatalf("host entry %+v", e)
@@ -473,6 +480,14 @@ func TestRelayRefusalsAndDismiss(t *testing.T) {
 	defer c.Close()
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "x1", Relay: "nope", Repo: f.source(), Branch: "b"}); res.OK || !strings.Contains(res.Error, "not in the config") {
 		t.Fatalf("unknown host %+v", res)
+	}
+	// An older client's branch with a byte that is not UTF-8 arrives
+	// with U+FFFD for it, and is refused before the file (#304).
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "x0", Relay: "vm", Repo: f.source(), Branch: "a\xffb"}); res.OK || !strings.Contains(res.Error, "has U+FFFD") {
+		t.Fatalf("branch not carried %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("x0"))); !os.IsNotExist(err) {
+		t.Fatalf("pending file for a refused add: %v", err)
 	}
 	// The host row says the daemon has no task capability.
 	awaitMerged(t, c, pc, 10*time.Second, func(m protocol.Message) bool {

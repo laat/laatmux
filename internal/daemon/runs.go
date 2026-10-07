@@ -215,8 +215,10 @@ func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command
 				return fmt.Errorf("%s is a worktree of %s, not %s", tmux.Printable(root), rec.Repo, repo.Name)
 			}
 		}
-		if m.Branch != "" && rec.Branch != m.Branch {
-			return fmt.Errorf("%s is the worktree for %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), tmux.Printable(m.Branch))
+		// The branch is checked against the root's, which also refuses
+		// an older client's with U+FFFD for a byte that was not UTF-8.
+		if m.Branch != "" && !worktree.BranchIs(rec.Branch, m.Branch) {
+			return fmt.Errorf("%s is the worktree for %s, not %s%s", tmux.Printable(root), branchOrDetached(rec.Branch), tmux.Printable(m.Branch), byRootAlone(rec.Branch))
 		}
 		if err := rn.registerRun(r, gen); err != nil {
 			return err

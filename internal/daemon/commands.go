@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -309,6 +310,20 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		} else if m.Root == "" {
 			return errors.New("rm needs a repository and branch, or a root")
 		}
+		// An older client sends a branch it cannot carry with U+FFFD for
+		// its byte. With no root the branch is all there is, and one no
+		// worktree is on would find nothing and answer ok; with a root,
+		// the branch is checked against the worktree there below. The
+		// quoted form a listing shows for such a branch names a worktree
+		// with its root only, as no command names it by its branch.
+		if m.Root == "" {
+			if err := worktree.CheckWire(m.Branch); err != nil {
+				return err
+			}
+			if strings.Contains(m.Branch, `\`) {
+				return fmt.Errorf("%s has a \\, as no branch git takes has: a quoted branch a listing shows names its worktree only with the root", tmux.Printable(m.Branch))
+			}
+		}
 		unlock := rn.lockRepos()
 		defer unlock()
 
@@ -354,8 +369,8 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				if repo.Source != "" && !source.Same(rec.Source, repo.Source) {
 					return fmt.Errorf("%s is a worktree of %s, not %s", tmux.Printable(root), rec.Repo, repo.Name)
 				}
-				if m.Branch != "" && rec.Branch != m.Branch {
-					return fmt.Errorf("%s is the worktree for %s of %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, tmux.Printable(m.Branch))
+				if m.Branch != "" && !worktree.BranchIs(rec.Branch, m.Branch) {
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s%s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, tmux.Printable(m.Branch), byRootAlone(rec.Branch))
 				}
 				checkout = co
 				break
@@ -467,6 +482,17 @@ func branchOrDetached(branch string) string {
 		return "a detached HEAD"
 	}
 	return "branch " + tmux.Printable(branch)
+}
+
+// byRootAlone is what a refusal of a root and a branch that do not agree
+// adds when the worktree's branch is one laatmux cannot carry: what the
+// client sent is no name of it, an older client's with U+FFFD say, and
+// it is told how the worktree is named.
+func byRootAlone(branch string) string {
+	if worktree.CheckWire(branch) != nil {
+		return "; laatmux cannot carry that branch, so the worktree is named by its root, with the branch as listed or none"
+	}
+	return ""
 }
 
 // holdRepos is the shared hold on every repository that an add takes

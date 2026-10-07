@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/gittest"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
@@ -296,10 +297,85 @@ func TestBranchCases(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	// bad names never reach git
-	for _, bad := range []string{"", "-x", "a..b", "x/", "a b"} {
+	for _, bad := range []string{"", "-x", "a..b", "x/", "a b", "a\xffb"} {
 		if _, _, err := f.add(bad); err == nil || stageOf(t, err) != protocol.StageResolve {
 			t.Errorf("branch %q: %v", bad, err)
 		}
+	}
+}
+
+// A branch that is not valid UTF-8, or has U+FFFD, is refused, with
+// the reason: laatmux's connection would carry another name (#304), and
+// on macOS neither its ref nor its root can be made (#305). git takes
+// each of them, so the refusal is CheckBranch's own; a name in UTF-8
+// that is not ASCII is a name like any other.
+func TestCheckBranchNotCarried(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	ctx := context.Background()
+	for _, c := range []struct{ branch, want string }{
+		{"a\xffb", `branch "a\xffb" is not valid UTF-8; laatmux cannot carry it`},
+		{"\x9b", `branch "\x9b" is not valid UTF-8; laatmux cannot carry it`},
+		{"bl\xc3", `branch "bl\xc3" is not valid UTF-8; laatmux cannot carry it`},
+		{"a\ufffdb", "branch \"a\ufffdb\" has U+FFFD, which a byte that is not UTF-8 becomes"},
+	} {
+		if _, err := git(ctx, "", "check-ref-format", "--branch", c.branch); err != nil {
+			t.Fatalf("git refuses %q itself: %v", c.branch, err)
+		}
+		if err := CheckBranch(ctx, c.branch); err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("CheckBranch %q: %v", c.branch, err)
+		}
+		if err := CheckWire(c.branch); err == nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("CheckWire %q: %v", c.branch, err)
+		}
+	}
+	for _, b := range []string{"blåbær", "feature/日本", "task"} {
+		if err := CheckBranch(ctx, b); err != nil {
+			t.Errorf("CheckBranch %q: %v", b, err)
+		}
+	}
+}
+
+// A worktree checked out by hand on a branch laatmux cannot carry is
+// listed with the branch as git has it, found by its root and removed:
+// the daemon decides how to show it, and rm --root reaches it.
+func TestHandMadeBranchNotCarried(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	root := filepath.Join(f.store.Dirs.Worktrees, "proj", "hand")
+	gittest.HandMadeWorktree(t, c, root, "a\xffb")
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, r := range recs {
+		listed = listed || r.Root == root && r.Branch == "a\xffb"
+	}
+	if !listed {
+		t.Fatalf("records %+v", recs)
+	}
+	rec, co, found, err := f.store.Find(f.ctx, root)
+	if err != nil || !found || co != c || rec.Branch != "a\xffb" {
+		t.Fatalf("find: %+v %s %v %v", rec, co, found, err)
+	}
+	// ByBranch finds it by the name and by the form a listing shows,
+	// which is what a client has; the U+FFFD form an older client sent
+	// is neither.
+	for b, want := range map[string]bool{"a\xffb": true, strconv.Quote("a\xffb"): true, "a\ufffdb": false} {
+		if rec, _, found, err := f.store.ByBranch(f.ctx, f.repo, b); err != nil || found != want || found && rec.Root != root {
+			t.Errorf("by branch %q: %+v %v %v", b, rec, found, err)
+		}
+	}
+	if removed, err := Remove(f.ctx, c, root, false); err != nil || !removed {
+		t.Fatalf("remove: %v %v", removed, err)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("root after remove: %v", err)
 	}
 }
 
@@ -854,10 +930,8 @@ func rawByte(s string) bool {
 // A branch with a C1 control character, which git takes, is named in
 // add's progress and refusals and in ByBranch's and Allocate's errors as
 // tmux.Printable shows it: raw, U+009B is a CSI to a terminal that acts
-// on C1. A lone 0x9b byte, which is not UTF-8, is the same CSI to a
-// terminal that is not in UTF-8 mode; a filesystem that takes only
-// UTF-8 names, macOS's, refuses that branch's ref and root, so it is
-// added only where the filesystem takes it.
+// on C1. A lone 0x9b byte, which is not UTF-8, is no branch add takes
+// (TestCheckBranchNotCarried).
 func TestBranchWithC1Quoted(t *testing.T) {
 	f := newFixture(t)
 	if _, _, err := f.add("first"); err != nil {
@@ -883,15 +957,6 @@ func TestBranchWithC1Quoted(t *testing.T) {
 			{protocol.StageWorktree, protocol.StateDone, "branch " + q(pushed) + " tracks " + q("origin/"+pushed)},
 		}},
 		{hand, []step{{protocol.StageWorktree, protocol.StateSkip, "branch " + q(hand) + " exists, used as is"}}},
-	}
-	invalid := "raw\x9b31m"
-	if err := os.Mkdir(filepath.Join(t.TempDir(), invalid), 0o755); err == nil {
-		cases = append(cases, struct {
-			branch string
-			want   []step
-		}{invalid, []step{{protocol.StageWorktree, protocol.StateDone, "branch " + q(invalid) + " from origin/HEAD"}}})
-	} else {
-		t.Logf("the filesystem refuses a name that is not UTF-8: %q", err.Error())
 	}
 	for _, tc := range cases {
 		_, steps, err := f.add(tc.branch)
