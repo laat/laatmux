@@ -505,38 +505,69 @@ func TestHomeAgentSettled(t *testing.T) {
 	if !seen {
 		t.Errorf("unclaimed: no node %s", other.ID)
 	}
-	// Two lines with the home: the homeless worktree proj/a, whose root
-	// agent was moved into proj/z, comes first in the tree's order and
-	// holds the session, as LineFor finds it; the agent shows proj/a's
-	// workspace session's state, settled, not proj/z's, and is the
-	// viewer's with the viewer in vm/proj/a, a name other than its
-	// session's.
-	in := input("proj/z", false, "vm/proj/a")
-	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/proj/a"}
+	// Two lines with the home: proj/z and the homeless worktree at
+	// /w/proj/a, branch z of the repository other, whose root agent was
+	// moved into proj/z and which comes first in the tree's order. The
+	// host then gives proj/z no home either, the session's panes no
+	// longer all in its root, and both lines have it through their root
+	// agents; it keeps the home only with /w/proj/a inside proj/z's
+	// root. Either way the session is proj/z's, by its name, the host's
+	// label proj and its branch, also where this machine labels proj
+	// zed, or by its home, as LineFor finds it: the agent shows the
+	// settled state of proj/z's workspace session, not the other's, and
+	// is the viewer's with the viewer in vm/proj/z, not in vm/proj/a,
+	// whichever of the two is settled.
+	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "other", Branch: "z", Root: "/w/proj/a"}
 	moved := managed("venv/laatmux/%2", "proj/z", protocol.Idle)
 	moved.Cwd, moved.WorktreeID = a.Root, a.ID
-	in.Worktrees = append(in.Worktrees, a)
-	in.Agents = append(in.Agents, moved)
-	in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm", Settled: true})
-	found := false
-	tree := Tree(in)
-	for _, n := range tree {
-		if n.Kind == KindAgent && n.Depth == 1 && n.Agent.ID == idle.ID {
-			found = true
-			if !n.Settled || !n.Current {
-				t.Errorf("two lines with the home: the agent's node %+v, want proj/a's state and viewer", n)
+	for _, c := range []struct {
+		home    string
+		relabel bool
+		settled bool // vm/proj/z; vm/proj/a is the other way
+		current string
+	}{
+		{"", false, true, "vm/proj/z"}, {"", false, false, "vm/proj/a"}, {"", true, true, "vm/proj/z"}, {"", true, false, "vm/proj/a"},
+		{"proj/z", false, true, "vm/proj/z"}, {"proj/z", false, false, "vm/proj/a"},
+	} {
+		in := input(c.home, c.settled, c.current)
+		if c.relabel {
+			in.Worktrees[0].Repo, in.HostRepos = "zed", map[string]string{root.WorktreeID: "proj"}
+		}
+		in.Worktrees = append(in.Worktrees, a)
+		in.Agents = append(in.Agents, moved)
+		in.Locals = append(in.Locals, protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm", Settled: !c.settled})
+		tree := Tree(in)
+		first := -1
+		for i := range tree {
+			if first < 0 && tree[i].Depth == 1 && tree[i].Home() == "proj/z" {
+				first = i
 			}
 		}
-	}
-	if !found {
-		t.Errorf("two lines with the home: no node %s in other sessions", idle.ID)
-	}
-	found = false
-	for _, r := range Agents(in, tree).Main {
-		found = found || r.Agent != nil && r.Agent.ID == idle.ID && r.Current
-	}
-	if !found {
-		t.Errorf("two lines with the home: the agent's tile is not the viewer's in the main group")
+		if first < 0 || tree[first].ID() != a.ID {
+			t.Fatalf("%+v: the first line with the home is %d, not proj/a's", c, first)
+		}
+		if l := HomeLine(tree, "vm", "proj/z"); l < 0 || tree[l].ID() != root.WorktreeID {
+			t.Errorf("%+v: the home's line is %d, not proj/z's", c, l)
+		}
+		found := false
+		for _, n := range tree {
+			if n.Kind == KindAgent && n.Depth == 1 && n.Agent.ID == idle.ID {
+				found = true
+				if n.Settled != c.settled || n.Current != c.settled {
+					t.Errorf("two lines with the home %+v: the agent's node %+v, want proj/z's state and viewer", c, n)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("two lines with the home %+v: no node %s in other sessions", c, idle.ID)
+		}
+		found = false
+		for _, r := range Agents(in, tree).Main {
+			found = found || r.Agent != nil && r.Agent.ID == idle.ID && r.Current == c.settled
+		}
+		if !found {
+			t.Errorf("two lines with the home %+v: the agent's tile is not in the main group with the viewer's state", c)
+		}
 	}
 }
 

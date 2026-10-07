@@ -555,19 +555,14 @@ func (m *Model) firstAgentUnder(worktreeID string) string {
 // LineFor is the depth-1 line on a host whose workspace session
 // attaches to a managed session: the worktree with that home, the one
 // whose agent laatmux made at the root is in it with the home lost, or
-// the task standing for a worktree the host has not listed; nil for
-// none, and for no host: records no configured host claims may be of
-// different machines whose sessions share a name. A pane's jump goes
-// by it, and so do z and S on a managed agent of no worktree.
+// the task standing for a worktree the host has not listed; of
+// several, one whose own session it is, then one it is named after;
+// nil for none, and for no host (rows.HomeLine). A pane's jump goes by
+// it, unless the row's own line attaches the session too, and so do z
+// and S on a managed agent of no worktree.
 func (m *Model) LineFor(host, session string) *rows.Row {
-	if host == "" || session == "" {
-		return nil
-	}
-	for i := range m.Tree {
-		n := &m.Tree[i]
-		if n.Depth == 1 && n.Host == host && n.Home() == session {
-			return n
-		}
+	if i := rows.HomeLine(m.Tree, host, session); i >= 0 {
+		return &m.Tree[i]
 	}
 	return nil
 }

@@ -45,6 +45,10 @@ type Input struct {
 	Hosts     []Host
 	Agents    []protocol.Agent
 	Worktrees []protocol.Worktree
+	// HostRepos is the host's label of each worktree whose Repo this
+	// machine's configuration names otherwise, by worktree id: the label
+	// add named the worktree's managed session by.
+	HostRepos map[string]string
 	Locals    []protocol.Session
 	// Pendings are the relay's background adds that have not handed
 	// over to their worktree rows.
@@ -97,6 +101,9 @@ type Row struct {
 	Removed  bool
 	Replaced bool
 	Worktree *protocol.Worktree
+	// hostRepo is the host's label of a line's worktree where this
+	// machine names it otherwise (Input.HostRepos), "" where not.
+	hostRepo string
 	Agent    *protocol.Agent
 	// Local is the local session for the row, when there is one: the
 	// workspace session by key, the plain attachment by tag, or the
