@@ -762,6 +762,16 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 			t.Errorf("copy from %q to %q: %v", dirs[0], dirs[1], err)
 		}
 	}
+	// The file's directory in the worktree a link to itself: os.Root's
+	// MkdirAll nests the failed stat's error, which names it too.
+	loop := "lo\top\x1b[36m"
+	write(t, filepath.Join(c, loop, "f"), "x")
+	if err := os.Symlink(loop, filepath.Join(a.Root, loop)); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(f.ctx, c, a.Root, loop+"/f", report); !quoted(err, strconv.Quote(loop)) || !errors.Is(err, syscall.ELOOP) {
+		t.Errorf("copy into a directory that links to itself: %v", err)
+	}
 
 	// A new worktree's directory that cannot be made, a file in the way.
 	in := filepath.Join(f.store.Dirs.Worktrees, "proj", "in")
