@@ -143,9 +143,17 @@ type Row struct {
 	// Current through the workspace session of the line whose home its
 	// session is. On a tile: an agent's whose local session is the
 	// viewer's, or that in other sessions is the viewer's through that
-	// line; or a task's whose line is Own. Following prefers it, and a
-	// line to any other node (the view's viewerRank).
-	Own      bool
+	// line; a visitor's the viewer sits with through a plain attachment
+	// to its session (attached); or a task's whose line is Own.
+	// Following prefers it, and a line to any other node (the view's
+	// viewerRank).
+	Own bool
+	// attached is an agent under a line, a visitor in another line's
+	// home session, that the viewer sits with through a plain attachment
+	// to that session, which is not the visitor's local session: that
+	// line's workspace session is (visitors). Its tile is Own all the
+	// same.
+	attached bool
 	HostDown bool // the host is not connected
 	// Dim is no identified agent, an agent that is gone, a host that is
 	// down, an orphaned session, a settled workspace whose agent does not
