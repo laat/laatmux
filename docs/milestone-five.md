@@ -247,11 +247,12 @@ otherwise. In the agent view it follows the first tile, in sort order,
 of what the tree follows: the agents and tasks of that line's worktree,
 or the tile of the agent the tree follows in other sessions; with none
 of those shown, the first tile that is the viewer's. So the two views
-agree. A tile in other sessions can be the viewer's beside the
-worktree's agents and sort before them: an agent started outside any
-worktree from a split of the viewer's session, or observed in a window
-of it. `o`, `O`, `x` and `a` on it would find no worktree, and the tree
-follows the worktree's line.
+agree whenever the tree's choice and a tile of it are shown. A tile in
+other sessions can be the viewer's beside the worktree's agents and
+sort before them: an agent started outside any worktree from a split of
+the viewer's session, or observed in a window of it. `o`, `O`, `x` and
+`a` on it would find no worktree, and the tree follows the worktree's
+line.
 
 ### The rows package
 

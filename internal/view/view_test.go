@@ -1620,6 +1620,8 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
 	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%7" {
 		t.Errorf("the task's tile filtered away: follows %+v; tiles:\n%s", r, ids(m))
+	} else if w, _, _ := m.viewerWorktree(); m.tileWorktree(r) != w {
+		t.Errorf("the task's tile filtered away: the followed tile's worktree %q, the scope's %q", m.tileWorktree(r), w)
 	}
 }
 
