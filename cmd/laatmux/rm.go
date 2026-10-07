@@ -10,6 +10,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -52,7 +53,7 @@ func cmdRm(ctx context.Context, args []string) error {
 			return err
 		}
 		rm.Force = a.force
-		fmt.Printf("removing the workspace of this session, %s on %s (%s)\n", rm.Describe(), rm.Host.Name, rm.Root)
+		fmt.Printf("removing the workspace of this session, %s on %s (%s)\n", rm.Describe(), rm.Host.Name, tmux.Printable(rm.Root))
 	case a.targetGiven:
 		repoLabel, branch, err := splitRepoBranch(a.target)
 		if err != nil {
@@ -98,7 +99,7 @@ func cmdRm(ctx context.Context, args []string) error {
 	if err == nil || res.Root != "" {
 		fmt.Printf("removed %s on %s", rm.Describe(), rm.Host.Name)
 		if res.Root != "" {
-			fmt.Printf(" (%s)", res.Root)
+			fmt.Printf(" (%s)", tmux.Printable(res.Root))
 		}
 		fmt.Println()
 	}

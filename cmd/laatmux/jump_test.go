@@ -125,8 +125,9 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // laatmux jump. The add line comes only when add can run it: on vm, a
 // host whose entry here has the directories, the add line for the
 // branch; a detached worktree, named by its root, needs a branch
-// checked out first; box's entry has no directories, which add needs
-// first; a repository this machine's config does not list is one
+// checked out first, and a root with an ESC in it is named quoted;
+// box's entry has no directories, which add needs first; a repository
+// this machine's config does not list is one
 // --repo refuses, while one it lists under another form of the source
 // is named by its label here. A worktree that lacks more than one is
 // told all of them. The add line pastes into a shell: a branch git
@@ -149,6 +150,8 @@ func TestAddHintCanRun(t *testing.T) {
 	https.Source = "https://github.com/laat/proj"
 	detOther := other
 	detOther.ID, detOther.EnvironmentID, detOther.Branch = "benv/worktree//w/o", "benv", ""
+	detCtl := det
+	detCtl.ID, detCtl.Root = "menv/worktree//w/a\x1b]0;x\x07b", "/w/a\x1b]0;x\x07b"
 	apos := bv
 	apos.ID, apos.Branch, apos.Root = "venv/worktree//w/q", "it's", "/w/q"
 	subst := bv
@@ -199,6 +202,7 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("vm", "venv"), eq, "vm/proj/a==ls has no managed session; laatmux add 'a==ls' --repo proj --host vm --agent claude makes one"},
 		{host("vm", "venv"), noSrc, "vm/proj/b has no managed session; laatmux add b --repo <repo> --host vm makes one"},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
+		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
 		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
 	} {

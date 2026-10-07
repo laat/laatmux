@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
@@ -125,6 +127,12 @@ func TestFindWorktreeBySource(t *testing.T) {
 		if w, ok, err := findWorktree(ws, mine, "fix"); ok || err == nil || !strings.Contains(err.Error(), "/r/a and /r/b") {
 			t.Errorf("two clones: %+v %v %v", w, ok, err)
 		}
+	}
+	// A root with an ESC in it is named quoted.
+	esc := []protocol.Worktree{two[0], two[1]}
+	esc[0].Root = "/r/a\x1b]0;x\x07"
+	if _, _, err := findWorktree(esc, mine, "fix"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
+		t.Errorf("two clones, a root with an ESC: %v", err)
 	}
 }
 
@@ -435,6 +443,12 @@ func TestOriginOf(t *testing.T) {
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("broken config read as no origin")
 	}
+	// A directory gone, with a tab and an ESC in its name, is named
+	// quoted, and so is git's message that repeats it.
+	gone := filepath.Join(t.TempDir(), "a\tb\x1b]0;x\x07c")
+	if _, err := originOf(ctx, gone); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(gone)+": cannot read git origin: \"") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
+		t.Errorf("a directory gone: %v", err)
+	}
 	t.Setenv("PATH", t.TempDir())
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("missing git read as no origin")
@@ -502,6 +516,12 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 		if w, ok, err := matchWorktree(ws, cfg, "proj2/topic"); err != nil || !ok || w.Root != "/r/b" {
 			t.Errorf("by the host's label: %+v %v %v", w, ok, err)
 		}
+	}
+	// A root with an ESC in it is named quoted.
+	esc := []protocol.Worktree{two[0], two[1]}
+	esc[0].Root = "/r/a\x1b]0;x\x07"
+	if _, _, err := matchWorktree(esc, cfg, "mine/topic"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
+		t.Errorf("two clones, a root with an ESC: %v", err)
 	}
 	// This machine's name is one clone's host label: the target is that
 	// clone's, not a dead end.

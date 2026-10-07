@@ -97,6 +97,9 @@ func TestDescribe(t *testing.T) {
 	if got := (Rm{Root: "/r/x"}).Describe(); got != "/r/x" {
 		t.Error(got)
 	}
+	if got := (Rm{Root: "/r/a\tb"}).Describe(); got != `"/r/a\tb"` {
+		t.Error(got)
+	}
 }
 
 // A cancelled run is told apart from other refusals.

@@ -18,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -65,14 +66,14 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 		if r, ok := cfg.RepoBySource(origin); ok {
 			return r, nil
 		}
-		return config.Repo{}, fmt.Errorf("%s has origin %s, which is not a configured repository; use --repo (configured: %s)", cwd, origin, repoList(cfg))
+		return config.Repo{}, fmt.Errorf("%s has origin %s, which is not a configured repository; use --repo (configured: %s)", tmux.Printable(cwd), origin, repoList(cfg))
 	}
 	if label, ok := labelUnder(cfg, cwd); ok {
 		if r, ok := cfg.RepoByName(label); ok {
 			return r, nil
 		}
 	}
-	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (configured: %s)", cwd, repoList(cfg))
+	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (configured: %s)", tmux.Printable(cwd), repoList(cfg))
 }
 
 // labelUnder is the path component after the local host's repos or
@@ -127,11 +128,12 @@ func originOf(ctx context.Context, dir string) (string, error) {
 			return "", nil
 		}
 	}
+	// git's message can repeat dir, as it is.
 	msg := strings.TrimSpace(stderr.String())
 	if msg == "" {
 		msg = err.Error()
 	}
-	return "", fmt.Errorf("%s: cannot read git origin: %s", dir, msg)
+	return "", fmt.Errorf("%s: cannot read git origin: %s", tmux.Printable(dir), tmux.Printable(msg))
 }
 
 func repoList(cfg config.Config) string {
@@ -255,7 +257,7 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 	}
 	roots := make([]string, len(found))
 	for i, w := range found {
-		roots[i] = w.Root
+		roots[i] = tmux.Printable(w.Root)
 	}
 	sort.Strings(roots)
 	return protocol.Worktree{}, false, fmt.Errorf("%s/%s has worktrees at %s, in two clones of the repository", repo.Name, branch, strings.Join(roots, " and "))

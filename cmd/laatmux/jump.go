@@ -128,7 +128,7 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	name := h.Name + "/" + w.Repo + "/" + w.Branch
 	if w.Branch == "" {
-		name = w.Root + " on " + h.Name
+		name = tmux.Printable(w.Root) + " on " + h.Name
 	}
 	return name + " has no managed session; " + addsSession(cfg, h, w)
 }
@@ -215,7 +215,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 		}
 		roots := make([]string, len(found))
 		for i, w := range found {
-			roots[i] = w.Root
+			roots[i] = tmux.Printable(w.Root)
 		}
 		sort.Strings(roots)
 		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))

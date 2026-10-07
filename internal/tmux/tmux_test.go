@@ -275,6 +275,145 @@ func TestRedactAndSubmitted(t *testing.T) {
 	}
 }
 
+// A prompt with a newline makes the argument it is in, and tmux's
+// message that repeats it, quoted, and the prompt is in them escaped:
+// Redact replaces it there too. So it does for a prompt with a " in an
+// argument another word's tab makes quoted, and for a prompt with a
+// ', which is in the argument as shellJoin quotes it, escaped once
+// more where the argument is quoted. A prompt such as p, which the
+// placeholder has in it, is not replaced again in the placeholder; and
+// forms that overlap leave nothing of either: two apostrophes in their
+// own quoting, and claude 'claude and e 'e, whose bare forms start at
+// the command's name or in it, before their shell-quoted forms.
+func TestRedactQuoted(t *testing.T) {
+	for _, c := range []struct {
+		secret string
+		argv   []string
+	}{
+		{"fix it\n\"now\"\tplease", []string{"claude", "fix it\n\"now\"\tplease"}},
+		{`fix it "now" please`, []string{"claude", "--dir", "/w/a\tb", `fix it "now" please`}},
+		{"don't fix it\nplease", []string{"claude", "don't fix it\nplease"}},
+		{"don't fix it, please", []string{"claude", "--dir", "/w/a\tb", "don't fix it, please"}},
+	} {
+		err := &Error{Args: []string{"new-session", "-d", "-s", "proj/x", shellJoin(c.argv), Next, "set-option", "-p", "@laatmux_cwd", "/w/a\tb"}, Msg: "failed: " + c.secret}
+		got := Redact(&SubmittedError{Err: err}, c.secret, "{prompt}").Error()
+		if strings.Contains(got, "fix it") || strings.Contains(got, "please") || strings.Count(got, "{prompt}") != 2 {
+			t.Errorf("%q: redacted %q", c.secret, got)
+		}
+		if strings.ContainsFunc(got, unicode.IsControl) {
+			t.Errorf("%q: a control byte in %q", c.secret, got)
+		}
+	}
+	for secret, want := range map[string]string{
+		"p":              "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"{p":             "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"rom":            "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"prompt":         "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"''":             "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"claude 'claude": "tmux new-session -d {prompt}: failed: {prompt}",
+		"e 'e":           "tmux new-session -d claud{prompt}: failed: {prompt}",
+		"p\nq":           `tmux new-session -d "claude {prompt}": "failed: {prompt}"`,
+	} {
+		err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", secret})}, Msg: "failed: " + secret}
+		if got := Redact(err, secret, "{prompt}").Error(); got != want {
+			t.Errorf("%q: redacted %q, want %q", secret, got, want)
+		}
+	}
+	// Occurrences of one form that overlap are all hidden, as one run;
+	// so is a prompt of backslashes in an argument another word's tab
+	// makes quoted, where the bare prompt is found at every place in
+	// the doubled run.
+	if got, want := Redact(&Error{Args: []string{"x", "ababa"}, Msg: "ababa"}, "aba", "{prompt}").Error(), "tmux x {prompt}: {prompt}"; got != want {
+		t.Errorf("overlapping: %q, want %q", got, want)
+	}
+	slashes := strings.Repeat(`\`, 4096)
+	err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", "--dir", "/w/a\tb", slashes})}, Msg: "failed"}
+	if got, want := Redact(err, slashes, "{prompt}").Error(), `tmux new-session -d "claude --dir '/w/a\tb' {prompt}": failed`; got != want {
+		t.Errorf("backslashes: %q, want %q", got, want)
+	}
+}
+
+// cover marks every occurrence, overlapping ones too, and nothing
+// else, as a search from every byte does.
+func TestCover(t *testing.T) {
+	for _, c := range []struct{ msg, f string }{
+		{"ababa", "aba"}, {"aaaa", "aa"}, {"abcabcab", "abcab"}, {"xabx", "ab"},
+		{"aabaabaaab", "aabaa"}, {"abc", "abcd"}, {"abc", "c"}, {"", "a"},
+		{strings.Repeat("ab", 50) + "a", "abababa"}, {"aaabaaaabaaaaab", "aaab"}, {"aabaaabaaa", "aabaaa"},
+	} {
+		got := make([]bool, len(c.msg))
+		cover(got, c.msg, c.f)
+		want := make([]bool, len(c.msg))
+		for i := 0; i+len(c.f) <= len(c.msg); i++ {
+			if c.msg[i:i+len(c.f)] == c.f {
+				for j := i; j < i+len(c.f); j++ {
+					want[j] = true
+				}
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("cover(%q, %q) = %v, want %v", c.msg, c.f, got, want)
+		}
+	}
+}
+
+// An argument or tmux's message with a control character, C0, DEL or
+// C1, or a byte that is not UTF-8 is printed quoted: raw, a tab or a
+// newline breaks the line and an ESC starts an escape sequence, here
+// one that sets the terminal's title. A plain one, with a non-ASCII
+// letter, a " or a \ in it, is printed as it is, and Next as the ; it
+// stands for. A cwd that is not there is named quoted the same way, and
+// is still not there to errors.Is.
+func TestErrorPrintable(t *testing.T) {
+	for in, want := range map[string]string{
+		"/w/proj/plain":     "/w/proj/plain",
+		"/w/blåbær":         "/w/blåbær",
+		`/w/a "b" \c`:       `/w/a "b" \c`,
+		"":                  "",
+		"a\tb":              `"a\tb"`,
+		"a\nb":              `"a\nb"`,
+		"/w/a\x1b]0;x\x07b": `"/w/a\x1b]0;x\ab"`,
+		"\x01":              `"\x01"`,
+		"\x1f":              `"\x1f"`,
+		"del\x7f":           `"del\x7f"`,
+		"a\xffb":            `"a\xffb"`,
+		"truncated\xe2\x82": `"truncated\xe2\x82"`,
+		"c1 \u009b31m":      `"c1 \u009b31m"`,
+		"blåbær\t\"q\"":     `"blåbær\t\"q\""`,
+		"sep" + Sep:         "sep" + Sep,
+	} {
+		if got := Printable(in); got != want {
+			t.Errorf("Printable(%q) = %s, want %s", in, got, want)
+		}
+	}
+	err := &Error{Args: []string{"set-option", "-t", "=mac/proj/x:", "@laatmux_workspace", "env//w/a\x1b]0;x\x07b", Next, "set-option", "@laatmux_branch", "plain", Next, "set-option", "@c", ";"}, Msg: "no such session: =a\tb:"}
+	want := `tmux set-option -t =mac/proj/x: @laatmux_workspace "env//w/a\x1b]0;x\ab" ; set-option @laatmux_branch plain ; set-option @c ;: "no such session: =a\tb:"`
+	if got := err.Error(); got != want {
+		t.Errorf("Error = %s, want %s", got, want)
+	}
+	gone := "/nonexistent/a\x1b]0;x\x07b"
+	_, cerr := LaatmuxServer.NewSession(context.Background(), NewSessionOpts{Name: "proj/x", Cwd: gone})
+	if want := "tmux: cwd: stat " + strconv.Quote(gone) + ": no such file or directory"; cerr == nil || cerr.Error() != want || !errors.Is(cerr, fs.ErrNotExist) {
+		t.Errorf("NewSession in a cwd not there: %v, want %s", cerr, want)
+	}
+}
+
+// A failure on a real server for a target with an ESC and a tab: tmux
+// repeats the target in its message, and the error prints both quoted,
+// with no control byte in it, while the fields keep them as they are.
+func TestErrorPrintableOnServer(t *testing.T) {
+	s := startManaged(t)
+	target := "=no\x1b]0;x\x07such\tsession:"
+	_, err := s.Run(context.Background(), "set-option", "-t", target, "@laatmux_k", "v")
+	var te *Error
+	if !errors.As(err, &te) || te.Args[2] != target {
+		t.Fatalf("set-option on no session: %#v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, strconv.Quote(target)) || strings.ContainsFunc(got, unicode.IsControl) {
+		t.Fatalf("Error = %q", got)
+	}
+}
+
 // An empty server, kept by exit-empty off, lists no panes rather than
 // failing; a server that is not running is NoServer.
 func TestListPanesEmptyServer(t *testing.T) {

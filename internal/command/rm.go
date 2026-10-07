@@ -6,6 +6,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -68,7 +69,7 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	// Tasks at the worktree go with it; a failure here is no reason to
 	// say the rm failed, and the daemon marks them gone in any case.
 	if err := DismissAt(ctx, hello.EnvironmentID, out.Root, res.Listing); err != nil {
-		r.Note("tasks at " + out.Root + " not dropped: " + err.Error())
+		r.Note("tasks at " + tmux.Printable(out.Root) + " not dropped: " + err.Error())
 	}
 	// The local workspace session is the client's to clean up.
 	locals, err := workspace.List(ctx)
@@ -87,12 +88,13 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	return out, nil
 }
 
-// Describe names what the rm removes: <repo>/<branch>, or the root.
+// Describe names what the rm removes: <repo>/<branch>, or the root as
+// tmux.Printable shows it.
 func (m Rm) Describe() string {
 	if m.Repo.Name != "" && m.Branch != "" {
 		return m.Repo.Name + "/" + m.Branch
 	}
-	return m.Root
+	return tmux.Printable(m.Root)
 }
 
 // RootOf is the root rm sends for a branch when the worktree's record

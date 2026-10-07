@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
@@ -160,16 +161,31 @@ type Error struct {
 }
 
 // Error names the command as the caller gave it, each Next written as
-// the ";" it stands for.
+// the ";" it stands for, every other argument and tmux's message as
+// Printable shows them: a root goes into the arguments as it is, and
+// tmux's message can repeat a target that has it.
 func (e *Error) Error() string {
 	a := make([]string, len(e.Args))
 	for i, v := range e.Args {
 		if v == Next {
 			v = ";"
 		}
-		a[i] = v
+		a[i] = Printable(v)
 	}
-	return "tmux " + strings.Join(a, " ") + ": " + e.Msg
+	return "tmux " + strings.Join(a, " ") + ": " + Printable(e.Msg)
+}
+
+// Printable is s as an error or a line laatmux prints shows it: as it
+// is, or quoted as strconv.Quote quotes it when it has a control
+// character, C0, DEL or C1, or a byte that is not UTF-8. A worktree's
+// directory name can have any of them; printed raw, a tab or a newline
+// breaks the line and an ESC starts an escape sequence the terminal
+// acts on.
+func Printable(s string) string {
+	if !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+		return strconv.Quote(s)
+	}
+	return s
 }
 
 // NoServer reports whether the error means the server is not running. tmux
@@ -450,6 +466,12 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		return made, fmt.Errorf("tmux: cwd required")
 	}
 	if _, err := os.Stat(o.Cwd); err != nil {
+		// os.Stat's error names the path as it is; it is rebuilt
+		// with the path as Printable shows it.
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
+		}
 		return made, fmt.Errorf("tmux: cwd: %w", err)
 	}
 	_, notRunning := s.Run(ctx, "list-sessions")
@@ -627,16 +649,76 @@ func (s Server) DeleteBuffers(ctx context.Context, prefix string) error {
 // Redact replaces every occurrence of secret in an error's text, bare
 // and as shellJoin quotes it, with placeholder, so a tmux error that
 // echoes its command line does not carry a prompt into a result or a
-// log. The error's type is lost; the caller has classified it already.
+// log. A prompt with a newline makes the argument it is in one that
+// Printable quotes, and each form is in it escaped: strconv.Quote
+// escapes rune by rune, so the form there is its own quoting without
+// the quotes, and that is replaced as well. Every occurrence of every
+// form, overlapping ones too, is found in the text as it is, and each
+// run of text they cover becomes one placeholder: a placeholder is
+// never searched, where a prompt that is a part of it, p say, would be
+// found, and forms that overlap leave nothing of either, as a bare
+// prompt that starts with the command's name does before its own
+// shell-quoted form. The error's type is lost; the caller has
+// classified it already.
 func Redact(err error, secret, placeholder string) error {
 	if err == nil || secret == "" {
 		return err
 	}
 	msg := err.Error()
+	hide := make([]bool, len(msg))
 	for _, form := range []string{shellJoin([]string{secret}), secret} {
-		msg = strings.ReplaceAll(msg, form, placeholder)
+		q := strconv.Quote(form)
+		cover(hide, msg, form)
+		cover(hide, msg, q[1:len(q)-1])
 	}
-	return errors.New(msg)
+	var b strings.Builder
+	for i := 0; i < len(msg); i++ {
+		switch {
+		case !hide[i]:
+			b.WriteByte(msg[i])
+		case i == 0 || !hide[i-1]:
+			b.WriteString(placeholder)
+		}
+	}
+	return errors.New(b.String())
+}
+
+// cover sets hide for every byte of msg in an occurrence of f, which
+// is not empty, overlapping occurrences too. It is Knuth-Morris-Pratt:
+// one pass over msg, each byte compared a bounded number of times
+// amortized, so a prompt that repeats itself, a run of backslashes
+// that Printable doubles say, costs no more than one that does not,
+// where a search from each byte after a match would compare the whole
+// prompt again at every one.
+func cover(hide []bool, msg, f string) {
+	// fail[i] is the length of the longest proper prefix of f[:i+1]
+	// that is also a suffix of it.
+	fail := make([]int, len(f))
+	for i, k := 1, 0; i < len(f); i++ {
+		for k > 0 && f[i] != f[k] {
+			k = fail[k-1]
+		}
+		if f[i] == f[k] {
+			k++
+		}
+		fail[i] = k
+	}
+	end := 0 // hide is set up to here
+	for i, k := 0, 0; i < len(msg); i++ {
+		for k > 0 && msg[i] != f[k] {
+			k = fail[k-1]
+		}
+		if msg[i] == f[k] {
+			k++
+		}
+		if k == len(f) {
+			for j := max(i+1-len(f), end); j <= i; j++ {
+				hide[j] = true
+			}
+			end = i + 1
+			k = fail[k-1]
+		}
+	}
 }
 
 // KillSession kills the session with exactly this name.
