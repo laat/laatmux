@@ -549,8 +549,9 @@ func TestNewSessionRootWithHash(t *testing.T) {
 
 // An agent's arguments reach it as they were when the server's default
 // shell is a zsh with extended_glob, as a ~/.zshenv may set: HEAD^ is
-// an argument an agent may take, a bare a^b aborts the line with no
-// matches, and a bare ^missing is every file in the root but missing.
+// an argument an agent may take, a bare a^b is every file in the root
+// that starts with a and is not ab and aborts the line when there is
+// none, and a bare ^missing is every file in the root but missing.
 func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
@@ -560,9 +561,13 @@ func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	// The pane runs its command as the default shell's -c; -f keeps
-	// the user's startup files out.
+	// the user's startup files out. The wrapper leaves a mark, so the
+	// test fails rather than passes when another shell read the line:
+	// tmux runs /bin/sh in place of a default shell it cannot execute,
+	// and a server started anew has the shell SHELL names. zsh's errors
+	// go to a file: the pane of a line zsh refused is gone with them.
 	shell := filepath.Join(dir, "zsh-extended-glob")
-	if err := os.WriteFile(shell, []byte("#!/bin/sh\nexec "+shellJoin([]string{zsh})+" -f -o extended_glob \"$@\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\n: > \"$0.ran\"\nexec "+shellJoin([]string{zsh})+" -f -o extended_glob \"$@\" 2>> \"$0.err\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Run(ctx, "set-option", "-g", "default-shell", shell); err != nil {
@@ -580,7 +585,11 @@ func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if out == nil {
-		t.Fatal("the pane wrote no arguments: the shell refused the line")
+		msg, _ := os.ReadFile(shell + ".err")
+		t.Fatalf("the pane wrote no arguments: the shell refused the line: %s", msg)
+	}
+	if _, err := os.Stat(shell + ".ran"); err != nil {
+		t.Fatalf("the default shell was not the wrapper: %v", err)
 	}
 	if got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"); !slices.Equal(got, words) {
 		t.Errorf("the agent got %q, want %q", got, words)

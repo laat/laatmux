@@ -671,9 +671,10 @@ func shellJoin(argv []string) string {
 		// makes zsh look up a command named lcl and abort the line. Under
 		// zsh's magic_equal_subst any word with an = is an assignment
 		// whose value is expanded, so a==ls is a=/bin/ls. Under zsh's
-		// extended_glob ^ is glob negation, so ^x is every file but x and
-		// a^b aborts the line with no matches; the Bourne shell read ^ as
-		// a pipe.
+		// extended_glob ^ is glob negation: ^x is every file but x, and
+		// a^b every file that starts with a and is not ab; when none
+		// matches, zsh aborts the line. The Bourne shell read ^ as a
+		// pipe.
 		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~=^") {
 			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
