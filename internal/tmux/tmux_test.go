@@ -431,32 +431,72 @@ func TestArgsEscapeTrailingSemicolon(t *testing.T) {
 // tmux refuses and only a test on a real server running that very
 // sequence notices. A ";" literal, in parentheses or not, is caught as
 // an argument of Run, RunInput, ArgsBare or append, as an element of a
-// slice literal or of one whose type is elided, the inner []string of a
-// [][]string say, and as the value of a const or var, which could then
-// be passed as the separator. The strings package's Split and the like,
-// append(b, ";"...) on bytes and struct literals are not matched; a ";"
-// that is a value, or not tmux's, is written string(';'). The walk
-// skips what the go tool skips, so it reads this module's code and no
-// other's. The module's test files are left out, since the tests here
-// pass ";" as a value on purpose.
+// slice or array literal, keyed or not, the inner []string of a
+// [][]string or a map of them included, and as the value of a const or
+// var, which could then be passed as the separator. The strings
+// package's Split and the like, append(b, ";"...) on bytes, map values
+// and struct literals are not matched; a ";" that is a value, or not
+// tmux's, is written string(';'). The walk skips what the go tool
+// skips by name, so it reads this module's code and no other's, and it
+// must see a Next among what it checks, so a walk that read nothing
+// cannot pass. The module's test files are left out, since the tests
+// here pass ";" as a value on purpose.
 func TestNoBareSeparator(t *testing.T) {
 	root := filepath.Join("..", "..")
 	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(strings.Split(string(mod), "\n"), "module github.com/laat/laatmux") {
+	if !slices.ContainsFunc(strings.Split(string(mod), "\n"), func(l string) bool {
+		f := strings.Fields(l)
+		return len(f) >= 2 && f[0] == "module" && f[1] == "github.com/laat/laatmux"
+	}) {
 		t.Fatalf("%s is not this module's root", root)
 	}
-	bare := func(e ast.Expr) bool {
-		lit, ok := ast.Unparen(e).(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return false
-		}
-		v, err := strconv.Unquote(lit.Value)
-		return err == nil && v == ";"
-	}
 	fset := token.NewFileSet()
+	seen := 0
+	check := func(e ast.Expr) {
+		switch x := ast.Unparen(e).(type) {
+		case *ast.BasicLit:
+			if v, err := strconv.Unquote(x.Value); x.Kind == token.STRING && err == nil && v == ";" {
+				t.Errorf("%s: a bare \";\" goes to tmux as the value ;: separate commands with tmux.Next, and write a ; that is a value, or not tmux's, as string(';')", fset.Position(e.Pos()))
+			}
+		case *ast.Ident:
+			if x.Name == "Next" {
+				seen++
+			}
+		case *ast.SelectorExpr:
+			if x.Sel.Name == "Next" {
+				seen++
+			}
+		}
+	}
+	// elems checks the elements of a literal of type typ: a slice's or
+	// an array's, and those of an inner literal whose type is elided
+	// when the element or map value type is a slice or array too.
+	var elems func(lit *ast.CompositeLit, typ ast.Expr)
+	elems = func(lit *ast.CompositeLit, typ ast.Expr) {
+		var elt ast.Expr
+		switch t := typ.(type) {
+		case *ast.ArrayType:
+			elt = t.Elt
+		case *ast.MapType:
+			elt = t.Value
+		default:
+			return
+		}
+		_, slice := typ.(*ast.ArrayType)
+		for _, e := range lit.Elts {
+			if kv, ok := e.(*ast.KeyValueExpr); ok {
+				e = kv.Value
+			}
+			if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+				elems(inner, elt)
+			} else if slice {
+				check(e)
+			}
+		}
+	}
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -502,16 +542,16 @@ func TestNoBareSeparator(t *testing.T) {
 					}
 				}
 			case *ast.CompositeLit:
-				if _, slice := n.Type.(*ast.ArrayType); slice || n.Type == nil {
-					list = n.Elts
+				// An elided literal is checked from the one it is in,
+				// which knows its type.
+				if n.Type != nil {
+					elems(n, n.Type)
 				}
 			case *ast.ValueSpec:
 				list = n.Values
 			}
 			for _, e := range list {
-				if bare(e) {
-					t.Errorf("%s: a bare \";\" goes to tmux as the value ;: separate commands with tmux.Next, and write a ; that is a value, or not tmux's, as string(';')", fset.Position(e.Pos()))
-				}
+				check(e)
 			}
 			return true
 		})
@@ -519,6 +559,9 @@ func TestNoBareSeparator(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if seen == 0 {
+		t.Fatal("the walk saw no Next: it read none of the module's callers")
 	}
 }
 
