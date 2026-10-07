@@ -315,8 +315,9 @@ func TestEncodeListed(t *testing.T) {
 
 		// A line separator and a noncharacter as a host whose tmux keeps
 		// them lists them, encoded byte by byte, as EncodeBranch encodes
-		// them for a tmux 3.3 built without utf8proc; a private use code
-		// point at U+FDD0's place in plane 15 kept.
+		// them, since a tmux 3.3 built without utf8proc stores them
+		// escaped; a private use code point at U+FDD0's place in plane 15
+		// kept.
 		"ls\u2028x":     "ls%e2%80%a8x",
 		"nc\ufffex":     "nc%ef%bf%bex",
 		"pu\U000ffdd0x": "pu\U000ffdd0x",
