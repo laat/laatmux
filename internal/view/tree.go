@@ -556,9 +556,11 @@ func (m *Model) firstAgentUnder(worktreeID string) string {
 // attaches to a managed session: the worktree with that home, the one
 // whose agent laatmux made at the root is in it with the home lost, or
 // the task standing for a worktree the host has not listed; nil for
-// none. A pane's jump goes by it.
+// none, and for no host: records no configured host claims may be of
+// different machines whose sessions share a name. A pane's jump goes
+// by it, and so do z and S on a managed agent of no worktree.
 func (m *Model) LineFor(host, session string) *rows.Row {
-	if session == "" {
+	if host == "" || session == "" {
 		return nil
 	}
 	for i := range m.Tree {

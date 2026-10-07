@@ -812,6 +812,20 @@ func TestSettleGoesByLine(t *testing.T) {
 			}
 		}
 	}
+	// No configured host claims the worktree's machine nor the agent's,
+	// another one: the workspace session whose home has the agent's
+	// session's name is not the agent's, and z says it is not a
+	// workspace, as enter refuses it.
+	other := stray
+	other.ID, other.EnvironmentID = "yenv/laatmux/%10", "yenv"
+	xw := w
+	xw.ID, xw.EnvironmentID = "xenv/worktree//w/proj/z", "xenv"
+	unclaimed := rows.Input{Agents: []protocol.Agent{other}, Worktrees: []protocol.Worktree{xw}, Locals: []protocol.Session{{Name: "x/proj/z", Key: "xenv//w/proj/z"}}}
+	for _, tree := range []bool{false, true} {
+		if got, cmds := press(show(unclaimed, tree), other.ID); got != "proj/z: not a workspace" || cmds != "" {
+			t.Errorf("unclaimed tree %v: z on the agent: message %q, tmux %q", tree, got, cmds)
+		}
+	}
 	// The add's agent before the host lists the worktree, as its node
 	// and as its tile, with the task's workspace session settled, with
 	// none, as a background add leaves it, and with only a plain
