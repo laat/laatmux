@@ -419,7 +419,10 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	for _, s := range names {
 		ps := bySession[s]
 		if len(ps) == 1 && ps[0].Managed && ps[0].Cwd == r.root {
-			r.report(stage, protocol.StateSkip, "session "+s+" runs in "+r.root)
+			// s is any session of the managed server, one renamed by
+			// hand say, not SessionName's encoding; it is quoted with
+			// the root.
+			r.report(stage, protocol.StateSkip, "session "+tmux.Printable(s)+" runs in "+tmux.Printable(r.root))
 			r.res.Session, r.res.PaneID = s, ps[0].ID
 			if prompt == "" {
 				r.set(func(e *entry) { e.Delivery = protocol.DeliveryNone })
@@ -437,7 +440,7 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 		case !ps[0].Managed:
 			err = fmt.Errorf("session %s exists and is not managed by laatmux; name in use", name)
 		default:
-			err = fmt.Errorf("session %s runs in %s, not %s; name in use", name, ps[0].Cwd, r.root)
+			err = fmt.Errorf("session %s runs in %s, not %s; name in use", name, tmux.Printable(ps[0].Cwd), tmux.Printable(r.root))
 		}
 		return r.failed(prompt, "launch refused", err)
 	}
@@ -715,13 +718,13 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 	rec, _, found, err := rn.cfg.Store.Find(ctx, e.Root)
 	switch {
 	case err != nil:
-		return "worktree " + e.Root + " could not be checked: " + err.Error()
+		return "worktree " + tmux.Printable(e.Root) + " could not be checked: " + err.Error()
 	case !found:
-		return "worktree replaced: " + e.Root + " is gone"
+		return "worktree replaced: " + tmux.Printable(e.Root) + " is gone"
 	case !source.Same(rec.Source, e.Source):
-		return "worktree replaced: " + e.Root + " is now a worktree of " + rec.Repo
+		return "worktree replaced: " + tmux.Printable(e.Root) + " is now a worktree of " + rec.Repo
 	case rec.Branch != "" && rec.Branch != e.Branch:
-		return "worktree replaced: " + e.Root + " is now on branch " + rec.Branch + ", not " + e.Branch
+		return "worktree replaced: " + tmux.Printable(e.Root) + " is now on branch " + rec.Branch + ", not " + e.Branch
 	}
 	return ""
 }
@@ -733,7 +736,7 @@ func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string
 	panes, err := rn.managed.Tmux.ListPanes(ctx)
 	if err != nil {
 		if tmux.NoServer(err) {
-			return tmux.Pane{}, "no agent to deliver to: no managed session in " + root
+			return tmux.Pane{}, "no agent to deliver to: no managed session in " + tmux.Printable(root)
 		}
 		return tmux.Pane{}, "listing panes failed: " + err.Error()
 	}
@@ -749,10 +752,10 @@ func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string
 	}
 	switch len(found) {
 	case 0:
-		return tmux.Pane{}, "no agent to deliver to: no managed session in " + root
+		return tmux.Pane{}, "no agent to deliver to: no managed session in " + tmux.Printable(root)
 	case 1:
 	default:
-		return tmux.Pane{}, fmt.Sprintf("no agent to deliver to: %d managed sessions in %s", len(found), root)
+		return tmux.Pane{}, fmt.Sprintf("no agent to deliver to: %d managed sessions in %s", len(found), tmux.Printable(root))
 	}
 	p := found[0]
 	rn.mu.Lock()
@@ -760,7 +763,8 @@ func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string
 	verified := ok && st.obs.verified
 	rn.mu.Unlock()
 	if !verified {
-		return tmux.Pane{}, "no agent to deliver to: no verified agent in session " + p.Session
+		// Any session of the managed server, as in agent's "runs in".
+		return tmux.Pane{}, "no agent to deliver to: no verified agent in session " + tmux.Printable(p.Session)
 	}
 	return p, ""
 }

@@ -180,7 +180,7 @@ func (b *builder) build(ctx context.Context, goos, goarch string) (file, version
 	cmd.Dir = src
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("go build for %s in %s: %v\n%s", key, src, err, strings.TrimSpace(string(out)))
+		return "", "", fmt.Errorf("go build for %s in %s: %v\n%s", key, tmux.Printable(src), err, strings.TrimSpace(string(out)))
 	}
 	b.built[key] = file
 	return file, b.version, nil

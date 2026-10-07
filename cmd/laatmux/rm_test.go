@@ -246,4 +246,22 @@ func TestTaskState(t *testing.T) {
 	if got := TaskState(p, true); !strings.HasPrefix(got, "delivering the prompt, attempt 2") {
 		t.Fatalf("open attempt: %q", got)
 	}
+	// An error is one line with no control byte in it: a failed setup's
+	// is the last lines of its output, git's can span lines.
+	setup := "setup: npm ci: exit status 1: \x1b[31merror\x1b[0m | done"
+	for _, c := range []struct {
+		p    protocol.Pending
+		want string
+	}{
+		{protocol.Pending{Done: true, Stage: protocol.StageSetup, Error: setup}, strconv.Quote(setup)},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "a\nb"}, "prompt not delivered: " + strconv.Quote("a\nb")},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "a\tb"}, "prompt delivery unknown: " + strconv.Quote("a\tb")},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "a\x1bb"}, "prompt " + protocol.DeliveryNotDelivered + "; last attempt refused: " + strconv.Quote("a\x1bb")},
+		{protocol.Pending{Done: true, OK: true, ListingError: "a\x1bb"}, "done, awaiting the listing: " + strconv.Quote("a\x1bb")},
+		{protocol.Pending{Unreachable: "a\x1bb"}, "host unreachable, retrying: " + strconv.Quote("a\x1bb")},
+	} {
+		if got := TaskState(c.p, true); got != c.want {
+			t.Errorf("TaskState = %q, want %q", got, c.want)
+		}
+	}
 }

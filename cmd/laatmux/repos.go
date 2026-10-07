@@ -10,6 +10,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // cmdRepos shows each known repository's name and where it lands on each
@@ -27,7 +28,7 @@ func cmdRepos(ctx context.Context, args []string) error {
 		fmt.Printf("copy, every worktree on this machine: %s\n", strings.Join(cfg.Copy, "  "))
 	}
 	if len(cfg.Repos) == 0 {
-		fmt.Printf("no repos configured in %s\n", config.Path())
+		fmt.Printf("no repos configured in %s\n", tmux.Printable(config.Path()))
 		return nil
 	}
 	if len(cfg.Copy) > 0 {
@@ -57,7 +58,7 @@ func cmdRepos(ctx context.Context, args []string) error {
 				// last.json still names it; say so rather than hide it.
 				fmt.Fprintf(w, "  %s\tno repos and worktrees configured, cannot add", h.Name)
 			} else {
-				fmt.Fprintf(w, "  %s\t%s\t%s", h.Name, d.Checkout(r.Name), d.Worktree(r.Name, "<branch>"))
+				fmt.Fprintf(w, "  %s\t%s\t%s", h.Name, tmux.Printable(d.Checkout(r.Name)), tmux.Printable(d.Worktree(r.Name, "<branch>")))
 			}
 			if lr.Host == h.Name {
 				fmt.Fprint(w, "\tlast used")

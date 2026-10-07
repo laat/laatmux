@@ -287,6 +287,19 @@ func Printable(s string) string {
 	return s
 }
 
+// PrintablePath is err with its path as Printable shows it when err is
+// a bare *fs.PathError, as os's functions return, which names the path
+// as it is, and err otherwise: one that wraps a *fs.PathError is left
+// as it is, since rebuilding it would drop what wraps it. The rebuilt
+// error keeps the op and the cause, so errors.Is still finds
+// fs.ErrNotExist and the like.
+func PrintablePath(err error) error {
+	if pe, ok := err.(*fs.PathError); ok {
+		return &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
+	}
+	return err
+}
+
 // NoServer reports whether the error means the server is not running. tmux
 // says "no server running on <path>" when the socket is missing, and "error
 // connecting to <path> (<reason>)" when it exists but cannot be used. Only a
@@ -627,13 +640,7 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		return made, fmt.Errorf("tmux: cwd required")
 	}
 	if _, err := os.Stat(o.Cwd); err != nil {
-		// os.Stat's error names the path as it is; it is rebuilt
-		// with the path as Printable shows it.
-		var pe *fs.PathError
-		if errors.As(err, &pe) {
-			err = &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
-		}
-		return made, fmt.Errorf("tmux: cwd: %w", err)
+		return made, fmt.Errorf("tmux: cwd: %w", PrintablePath(err))
 	}
 	_, notRunning := s.Run(ctx, "list-sessions")
 	if notRunning != nil && s.Managed() {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -500,6 +501,14 @@ func TestLoadSetup(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, SetupFile), []byte(in), 0o600)
 		if _, err := LoadSetup(dir); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: error %v, want %q", in, err, want)
+		}
+	}
+	// A refused entry with a tab or an ESC in it is named as
+	// tmux.Printable shows it: the committed file is the branch's, and
+	// add prints the error.
+	for _, p := range []string{"/abs\t\x1b[1m", "a\t\x1b/../../x", "a//b\t\x1b", "a**\t\x1b/b", "no\tsuch*\x1b[1m"} {
+		if err := CheckCopy(p); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(p)) || strings.ContainsAny(err.Error(), "\t\x1b") {
+			t.Errorf("CheckCopy(%q) = %v", p, err)
 		}
 	}
 }

@@ -755,6 +755,27 @@ func TestErrorPrintable(t *testing.T) {
 	}
 }
 
+// PrintablePath quotes the path of a *fs.PathError and keeps its op and
+// cause; any other error, one that wraps a *fs.PathError among them, is
+// returned as it is, since rebuilding it would drop what wraps it.
+func TestPrintablePath(t *testing.T) {
+	pe := &fs.PathError{Op: "open", Path: "/w/a\tb\x1b[31m/.git", Err: fs.ErrPermission}
+	got := PrintablePath(pe)
+	if want := "open " + strconv.Quote(pe.Path) + ": permission denied"; got.Error() != want || !errors.Is(got, fs.ErrPermission) {
+		t.Errorf("PrintablePath = %v, want %s", got, want)
+	}
+	if pe.Path != "/w/a\tb\x1b[31m/.git" {
+		t.Errorf("the original's path changed: %q", pe.Path)
+	}
+	wrapped := fmt.Errorf("x: %w", pe)
+	if got := PrintablePath(wrapped); got != wrapped {
+		t.Errorf("a wrapping error rebuilt: %v", got)
+	}
+	if got := PrintablePath(nil); got != nil {
+		t.Errorf("PrintablePath(nil) = %v", got)
+	}
+}
+
 // A failure on a real server for a target with an ESC and a tab: tmux
 // repeats the target in its message, and the error prints both quoted,
 // with no control byte in it, while the fields keep them as they are.

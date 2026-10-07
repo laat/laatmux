@@ -14,6 +14,7 @@ import (
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -184,7 +185,7 @@ func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command
 		}
 		root := filepath.Clean(m.Root)
 		if !rn.cfg.Store.Owns(root) {
-			return fmt.Errorf("%s is not under the worktrees directory %s", root, rn.cfg.Store.Dirs.Worktrees)
+			return fmt.Errorf("%s is not under the worktrees directory %s", tmux.Printable(root), tmux.Printable(rn.cfg.Store.Dirs.Worktrees))
 		}
 		r.id, r.argv, r.root = m.ID, m.Cmd, root
 		// The generation is read before git is asked, so a removal
@@ -195,7 +196,7 @@ func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command
 			return err
 		}
 		if !found {
-			return fmt.Errorf("%s is not a worktree of a known repository", root)
+			return fmt.Errorf("%s is not a worktree of a known repository", tmux.Printable(root))
 		}
 		if m.Repo != "" && !source.Same(rec.Source, m.Repo) {
 			// The client sends the source; a source that is not the
@@ -211,11 +212,11 @@ func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command
 				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
 			}
 			if !source.Same(rec.Source, repo.Source) {
-				return fmt.Errorf("%s is a worktree of %s, not %s", root, rec.Repo, repo.Name)
+				return fmt.Errorf("%s is a worktree of %s, not %s", tmux.Printable(root), rec.Repo, repo.Name)
 			}
 		}
 		if m.Branch != "" && rec.Branch != m.Branch {
-			return fmt.Errorf("%s is the worktree for %s, not %s", root, branchOrDetached(rec.Branch), m.Branch)
+			return fmt.Errorf("%s is the worktree for %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), m.Branch)
 		}
 		if err := rn.registerRun(r, gen); err != nil {
 			return err
