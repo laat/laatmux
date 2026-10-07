@@ -637,6 +637,7 @@ func TestPaneJumpRouting(t *testing.T) {
 	owner := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending}
 	moved := &rows.Row{Kind: rows.KindTask, Depth: 1, Host: "vm", Worktree: listed, Pending: task.Pending, Agent: &protocol.Agent{ID: "venv/laatmux/%5", Server: "laatmux", Session: "laatmux/z-2", Managed: true, Cwd: "/r/z"}}
 	otherLine := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: other}
+	bare := &rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &lost}
 	for _, c := range []struct {
 		line    *rows.Row
 		row     rows.Row
@@ -654,6 +655,9 @@ func TestPaneJumpRouting(t *testing.T) {
 		// recorded: the pane's session, not the record's.
 		{moved, rows.Row{Kind: rows.KindAgent, Agent: a}, paneTarget{"laatmux", "laatmux/z-2", "%1"}, "vm/laatmux/z", "laatmux/z-2", "venv//r/z"},
 		{nil, rows.Row{Kind: rows.KindAgent, Worktree: &lost, Agent: a}, paneTarget{"laatmux", "scratch", "%1"}, "vm/scratch", "scratch", ""},
+		// A homeless line with no agent, the session named after it: its
+		// workspace session, attached to that session.
+		{bare, rows.Row{Kind: rows.KindAgent, Worktree: other, Agent: a}, paneTarget{"laatmux", "laatmux/x", "%1"}, "vm/laatmux/x", "laatmux/x", "venv//r/x"},
 	} {
 		spec := paneSpec(cfg, h, c.line, c.row, c.target)
 		if spec.Managed != c.managed || spec.Name != c.name || spec.Key != c.key {
@@ -699,8 +703,12 @@ func TestPaneJumpRouting(t *testing.T) {
 	// laatmux/w%2e1, which the one it is named after wins, branch w.1,
 	// though second; homeless q, whose session laatmux/q holds the
 	// task's root agent, moved out of the task's session, which q wins,
-	// though second; and a homeless line with no agent, whose Home is
-	// "", which no session finds.
+	// though second; a homeless line with no agent, whose Home is "",
+	// which the session it is named after finds, laatmux/d, and laatmux/h
+	// over the homeless line g whose root agent is in it, though second:
+	// the session add made for it is still its home for the viewer; and
+	// none for the session homeless c is named after, laatmux/c, which
+	// is not its Home, laatmux/x-2.
 	homeless := func(dir, session string) rows.Row {
 		root := "/r/" + dir
 		r := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "laatmux", Branch: dir, Root: root}}
@@ -719,6 +727,7 @@ func TestPaneJumpRouting(t *testing.T) {
 	m := &view.Model{Tree: []rows.Row{
 		{Kind: rows.KindRepo, Depth: 0, Node: "repo/x"}, homeless("d", ""), strayX, homeless("b", "laatmux/z"), homeless("f", "laatmux/foo"),
 		*home, *lostLine, *task, *otherLine, homeless("c", "laatmux/x-2"), homeless("e", "laatmux/w%2e1"), namedW, homeless("q", "laatmux/q"),
+		homeless("g", "laatmux/h"), homeless("h", ""),
 		{Kind: rows.KindWorktree, Depth: 1, Host: "mac", Worktree: &protocol.Worktree{ID: "menv/worktree//r/x", EnvironmentID: "menv", Session: "laatmux/x"}},
 		// A worktree no configured host claims: none of another unclaimed
 		// machine's sessions of the same name is its.
@@ -733,6 +742,7 @@ func TestPaneJumpRouting(t *testing.T) {
 		{"vm", "laatmux/q", "venv/worktree//r/q", &movedQ},
 		{"vm", "laatmux/y", other.ID, task}, {"vm", "scratch", "", task}, {"mac", "laatmux/x", "menv/worktree//r/x", task}, {"vm", "", "", task},
 		{"vm", "laatmux/z-2", "add-1", moved}, {"", "laatmux/u", "", task},
+		{"vm", "laatmux/d", "venv/worktree//r/d", task}, {"vm", "laatmux/h", "venv/worktree//r/h", task}, {"vm", "laatmux/c", "", task},
 	} {
 		m.Tree[7] = *c.at
 		got := ""

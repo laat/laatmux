@@ -1643,10 +1643,12 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	// vm/proj/z-att, a plain attachment to proj/z, is on proj/z's line
 	// by its own session all the same, and sits with the split's visitor
 	// there: the tree follows proj/z's line, the agent view the visitor's
-	// tile. The cases above take their records as given; in this one
-	// proj/y's root is under proj/z's, as the host reports it: a split's
-	// pane in a sibling directory, or at ~, takes proj/z's home away
-	// (#309).
+	// tile. In that case proj/y's root is under proj/z's, where the host
+	// keeps proj/z's home. A split's pane in a sibling directory, or at ~,
+	// takes the host's home away, and with claude gone from the root
+	// proj/z's line has none at all: the session add made for proj/z, by
+	// its name, is still its home for the viewer, so the same holds, in
+	// vm/proj/z and in vm/proj/z-att.
 	busy := home
 	busy.Activity, busy.ActivityAt = protocol.Working, now.Add(-time.Minute)
 	stray := agent("venv/laatmux/%5", "proj/z", "/home/u", "", protocol.Blocked, time.Minute)
@@ -1655,6 +1657,13 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	inner := protocol.Worktree{ID: "venv/worktree//w/proj/z/.wt/y", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "y", Root: "/w/proj/z/.wt/y", Session: "proj/y"}
 	nested := agent("venv/laatmux/%3", "proj/z", inner.Root, inner.ID, protocol.Idle, 10*time.Minute)
 	nested.Managed = false
+	lostZ := z
+	lostZ.Session = ""
+	sibling := rows.Input{
+		Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", y.Root, y.ID, protocol.Working, time.Minute), split},
+		Worktrees: []protocol.Worktree{lostZ, y},
+		Locals:    []protocol.Session{zLocal, {Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}, zAtt},
+	}
 	for _, c := range []struct {
 		visitor protocol.Agent
 		current string
@@ -1679,6 +1688,13 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 			Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", inner.Root, inner.ID, protocol.Working, time.Minute), nested},
 			Worktrees: []protocol.Worktree{z, inner},
 			Locals:    []protocol.Session{zLocal, {Name: "vm/proj/y", Key: "venv//w/proj/z/.wt/y", Host: "vm"}, zAtt},
+		}},
+		{split, zLocal.Name, sibling},
+		{split, zAtt.Name, sibling},
+		{stray, zLocal.Name, rows.Input{
+			Agents:    []protocol.Agent{stray, idle},
+			Worktrees: []protocol.Worktree{lostZ},
+			Locals:    []protocol.Session{zLocal},
 		}},
 	} {
 		in := c.in

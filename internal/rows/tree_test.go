@@ -500,6 +500,57 @@ func TestHomeAgentSettled(t *testing.T) {
 			t.Errorf("home %q settled %v current %q: the tiles %+v, want %+v", c.home, c.settled, c.current, tiles, c.want)
 		}
 	}
+	// claude gone from the root, with the agents of no worktree in proj/z
+	// taking the host's home away: proj/z's line has no home at all, and
+	// the session, named after it, is still its home for the viewer, as
+	// with its root agent there.
+	for _, c := range []struct {
+		current string
+		want    map[string]state
+	}{{"", settled}, {"vm/proj/z", viewed}} {
+		in := input("", true, c.current)
+		in.Agents = in.Agents[1:]
+		tree := Tree(in)
+		for _, n := range tree {
+			if n.Kind == KindAgent && n.Depth == 1 {
+				if want, ok := c.want[n.Agent.ID]; ok && (n.Settled != want.settled || n.Current != want.current) {
+					t.Errorf("no root agent, current %q: the node %s settled %v current %v, want %+v", c.current, n.Agent.ID, n.Settled, n.Current, want)
+				}
+			}
+		}
+	}
+	// On mac, homeless proj/z with no workspace session, its agent
+	// observed in the plain session notes on this machine's default
+	// server, which its line holds: an agent of no worktree in mac's
+	// managed session proj/z, the line's by its name, is not in notes,
+	// and is not the viewer's there.
+	mz := protocol.Worktree{ID: "menv/worktree//w/proj/z", EnvironmentID: "menv", Repo: "proj", Branch: "z", Root: "/w/proj/z"}
+	inNotes := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", Activity: protocol.Idle, ActivityAt: now,
+		Liveness: protocol.Alive, Cwd: mz.Root, WorktreeID: mz.ID}
+	onMac := managed("menv/laatmux/%5", "proj/z", protocol.Idle)
+	onMac.EnvironmentID = "menv"
+	notes := Input{
+		Hosts:     []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents:    []protocol.Agent{inNotes, onMac},
+		Worktrees: []protocol.Worktree{mz},
+		Locals:    []protocol.Session{{Name: "notes"}},
+		Current:   "notes",
+		Now:       now,
+	}
+	tree := Tree(notes)
+	if l := HomeLine(tree, "mac", "proj/z"); l < 0 || !tree[l].Current || tree[l].Local == nil || tree[l].Local.Name != "notes" {
+		t.Fatalf("notes: proj/z's line, the viewer's, holding notes: %d", l)
+	}
+	for _, n := range tree {
+		if n.Kind == KindAgent && n.Agent.ID == onMac.ID && (n.Current || n.Settled) {
+			t.Errorf("notes: the agent's node %+v", n)
+		}
+	}
+	for _, r := range Agents(notes, tree).Main {
+		if r.Agent != nil && r.Agent.ID == onMac.ID && (r.Current || r.Own) {
+			t.Errorf("notes: the agent's tile %+v", r)
+		}
+	}
 	// No configured host claims the worktree's machine nor the agent's,
 	// another one: the agent takes neither the state nor the viewer of a
 	// workspace session whose home has its session's name.
@@ -605,11 +656,16 @@ func TestHomeAgentSettled(t *testing.T) {
 // an attachment tagged for none. Without vm/proj/z the agent keeps
 // proj/y's workspace session; so does one in a session of proj/z's name
 // on vm's default server, and one in the session of a task whose line
-// holds a plain session. The root agent of homeless worktree proj/a,
-// moved by hand into proj/z, is in its own line's home and keeps
-// proj/a's workspace session, where its jump goes. A line the viewer is
-// on through the visitor is not Own; the line whose session the viewer
-// is in is.
+// holds a plain session. With claude gone from proj/z's root, the
+// visitor's pane in a sibling directory takes the host's home away and
+// proj/z's line has no home at all; the session, named after proj/z,
+// is still proj/z's home for the viewer: the visitor takes vm/proj/z,
+// and a plain attachment to proj/z marks proj/z's line, also without
+// vm/proj/z, unless the session is another worktree's own home. The
+// root agent of homeless worktree proj/a, moved by hand into proj/z, is
+// in its own line's home and keeps proj/a's workspace session, where
+// its jump goes. A line the viewer is on through the visitor is not
+// Own; the line whose session the viewer is in is.
 func TestVisitorTakesHomeSession(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	managed := func(id, session, root string) protocol.Agent {
@@ -671,6 +727,11 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 	}
 	att := protocol.Session{Name: "vm/proj/z-att", Attach: "vm/proj/z", Host: "vm"}
 	task := protocol.Pending{ID: "add-t", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "t", Root: "/w/proj/t", Session: "proj/t", Taken: true, Stage: protocol.StageSetup, SubmittedAt: now}
+	lostZ := func(in *Input) {
+		in.Worktrees[0].Session = ""
+		in.Agents = in.Agents[1:]
+	}
+	q := protocol.Worktree{ID: "venv/worktree//w/proj/q", EnvironmentID: "venv", Repo: "proj", Branch: "q", Root: "/w/proj/q", Session: "proj/z"}
 	both, onY, onZ := []string{y.ID, z.ID}, []string{y.ID}, []string{z.ID}
 	for _, c := range []struct {
 		name    string
@@ -707,6 +768,35 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 			in.Hosts, in.Agents = nil, in.Agents[1:2]
 			in.Locals = append(in.Locals, protocol.Session{Name: "proj/z-att", Attach: "/proj/z"})
 		}, "proj/z-att", seen{"", nil, nil, false, false}},
+		// claude gone from proj/z's root, the visitor's pane in the sibling
+		// /w/proj/y: the host gives proj/z no home, and its line has none,
+		// no root agent left. The session is the one add made for proj/z,
+		// by its name, and still its home for the viewer.
+		{"proj/z's home gone with its agent", lostZ, "vm/proj/z", seen{"vm/proj/z", both, onZ, true, true}},
+		{"proj/z's home gone with its agent, the viewer in an attachment to proj/z", func(in *Input) {
+			lostZ(in)
+			in.Locals = append(in.Locals, att)
+		}, att.Name, seen{"vm/proj/z", both, onZ, true, true}},
+		{"proj/z's home gone with its agent, an attachment to proj/z, the viewer in vm/proj/z", func(in *Input) {
+			lostZ(in)
+			in.Locals = append(in.Locals, att)
+		}, "vm/proj/z", seen{"vm/proj/z", both, onZ, true, true}},
+		{"proj/z's home gone with its agent, no vm/proj/z, the viewer in an attachment to proj/z", func(in *Input) {
+			lostZ(in)
+			in.Locals = append(in.Locals[1:2], att)
+		}, att.Name, seen{att.Name, both, onZ, true, true}},
+		{"proj/z's home gone with its agent, the viewer elsewhere", lostZ, "", seen{"vm/proj/z", nil, nil, false, false}},
+		{"proj/z's home gone with its agent, an attachment to proj/z, the viewer in vm/proj/y", func(in *Input) {
+			lostZ(in)
+			in.Locals = append(in.Locals, att)
+		}, "vm/proj/y", seen{"vm/proj/z", onY, onY, true, false}},
+		// The session is the home of worktree q, its panes all in q's root:
+		// q's own session, which proj/z's name does not take from it.
+		{"proj/z's home gone with its agent, proj/z q's home", func(in *Input) {
+			lostZ(in)
+			in.Worktrees = append(in.Worktrees, q)
+			in.Locals = append(in.Locals, att, protocol.Session{Name: "vm/proj/q", Key: "venv//w/proj/q", Host: "vm"})
+		}, att.Name, seen{"vm/proj/q", []string{q.ID, y.ID}, []string{q.ID}, true, true}},
 	} {
 		in := base
 		in.Agents, in.Worktrees, in.Locals = append([]protocol.Agent(nil), base.Agents...), append([]protocol.Worktree(nil), base.Worktrees...), append([]protocol.Session(nil), base.Locals...)
@@ -719,15 +809,18 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 	// Homeless proj/a, branch z of the repository other, whose root agent
 	// was moved by hand into proj/z: its line's home is proj/z, the
 	// session's line proj/z's by its own home or, homeless too, by its
-	// name, and the moved agent keeps vm/proj/a beside the visitor's
-	// vm/proj/z.
+	// name, also with no root agent of proj/z left there, and the moved
+	// agent keeps vm/proj/a beside the visitor's vm/proj/z.
 	a := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "other", Branch: "z", Root: "/w/proj/a"}
 	moved := managed("venv/laatmux/%4", "proj/z", a.Root)
-	for _, home := range []string{"proj/z", ""} {
+	for _, home := range []string{"proj/z", "", "gone"} {
 		in := base
 		in.Worktrees = []protocol.Worktree{z, y, a}
 		in.Worktrees[0].Session = home
 		in.Agents = append(append([]protocol.Agent(nil), base.Agents...), moved)
+		if home == "gone" {
+			in.Worktrees[0].Session, in.Agents = "", in.Agents[1:]
+		}
 		in.Locals = append(append([]protocol.Session(nil), base.Locals...), protocol.Session{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"})
 		in.Current = "vm/proj/z"
 		if got := look(in, moved.ID); got.local != "vm/proj/a" {
@@ -735,6 +828,28 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		}
 		if got, want := look(in, visitor.ID), (seen{"vm/proj/z", both, onZ, true, true}); !reflect.DeepEqual(got, want) {
 			t.Errorf("proj/z's home %q beside proj/a: %+v, want %+v", home, got, want)
+		}
+	}
+	// claude gone from proj/z's root, another agent of proj/z in a split
+	// of the session, in proj/z's directory sub, and a shell in a split in
+	// proj/y's taking the host's home away: no visitor, the agent sits in
+	// proj/z's home for the viewer as one in the home does, with vm/proj/z
+	// as its own, its tile Own in vm/proj/z alone and the viewer's
+	// through proj/z's line in vm/proj/z-att.
+	sub := managed("venv/laatmux/%5", "proj/z", "/w/proj/z/sub")
+	sub.Managed, sub.WorktreeID = false, z.ID
+	for _, c := range []struct {
+		current string
+		want    seen
+	}{{"vm/proj/z", seen{"vm/proj/z", onZ, onZ, true, true}}, {att.Name, seen{"vm/proj/z", onZ, onZ, true, false}}} {
+		in := base
+		in.Worktrees = []protocol.Worktree{z, y}
+		in.Worktrees[0].Session = ""
+		in.Agents = []protocol.Agent{base.Agents[1], sub}
+		in.Locals = append(append([]protocol.Session(nil), base.Locals...), att)
+		in.Current = c.current
+		if got := look(in, sub.ID); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("proj/z's own agent in its session, the viewer in %s: %+v, want %+v", c.current, got, c.want)
 		}
 	}
 	// On mac, a task standing for homeless proj/z, whose worktree's agent
