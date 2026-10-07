@@ -98,7 +98,8 @@ func taskReport(s merged.Status) string {
 				where += " on " + host
 			}
 		}
-		handed = append(handed, fmt.Sprintf("%s  handed over to %s; laatmux tasks show %s prints its prompt, tasks dismiss drops it", id, where, id))
+		// An unlisted worktree is named by its id, which has its root.
+		handed = append(handed, fmt.Sprintf("%s  handed over to %s; laatmux tasks show %s prints its prompt, tasks dismiss drops it", id, tmux.Printable(where), id))
 	}
 	if len(ps) == 0 && len(handed) == 0 {
 		return "no pending tasks\n"

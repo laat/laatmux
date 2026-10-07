@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,20 @@ func TestTaskReport(t *testing.T) {
 	}
 	if !strings.HasSuffix(lines[0], "  host removed; laatmux tasks dismiss p0 drops it\n") || !strings.HasSuffix(lines[1], "  submitted\n") {
 		t.Fatalf("host configured or not:\n%s", got)
+	}
+}
+
+// A task handed over to a worktree not listed is named by the
+// worktree's id, which has the root, as tmux.Printable shows it.
+func TestTaskReportQuotesRoot(t *testing.T) {
+	m := merged.New()
+	id := "venv/worktree//w/a\tb\x1b[31m"
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:    []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv"}},
+		Handoffs: []protocol.Handoff{{ID: "t1", ReplacedBy: id}},
+	})
+	want := "t1  handed over to " + strconv.Quote(id) + "; laatmux tasks show t1 prints its prompt, tasks dismiss drops it\n"
+	if got := taskReport(m.Status("")); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
