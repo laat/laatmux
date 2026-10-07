@@ -18,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
@@ -1825,6 +1826,78 @@ func TestJumpNowhereSelects(t *testing.T) {
 	d.jumpAction(m, a)
 	if refocused != 0 || !m.Follow || m.Selection().ID() != before {
 		t.Fatalf("enter: refocused %d follow %v selected %+v", refocused, m.Follow, m.Selection())
+	}
+}
+
+// The dashboard's keys on the row following takes. vm lists proj/z
+// homed in proj/z, and the viewer is in vm/proj/z. The root agent is
+// idle, last active ten minutes ago; a `cd ~ && claude` in a split of
+// proj/z, a managed agent of no worktree in other sessions, is working,
+// active a minute ago. Its tile sorts first, yet following is on the
+// root agent's, so o opens proj/z's PR, O its checks, x asks to remove
+// proj/z, and a pre-fills its repository and host. With the root agent
+// no longer listed, following is on the split's tile, which x says is
+// no worktree.
+func TestFollowedKeysFindWorktree(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/proj.git"
+	wt := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	root := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-10 * time.Minute), Liveness: protocol.Alive, Managed: true, Cwd: "/w/proj/z", WorktreeID: wt.ID}
+	stray := protocol.Agent{ID: "venv/laatmux/%5", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, ActivityAt: now.Add(-time.Minute), Liveness: protocol.Alive, Managed: true, Cwd: "/home/u"}
+	key := protocol.BranchKey{Source: source.Key(src), Branch: "z"}
+	pr, checks := "https://github.com/laat/proj/pull/7", "https://github.com/laat/proj/commit/abc/checks"
+	in := rows.Input{
+		Hosts: []rows.Host{
+			{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+		},
+		Agents:    []protocol.Agent{root, stray},
+		Worktrees: []protocol.Worktree{wt},
+		Locals:    []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}},
+		Branches:  map[protocol.BranchKey]protocol.BranchStatus{key: {BranchKey: key, ChecksURL: checks, PR: &protocol.PullRequest{Number: 7, State: "open", URL: pr}}},
+		Current:   "vm/proj/z",
+		Now:       now,
+	}
+	m := &view.Model{Now: now, Width: 80, Height: 20, View: view.ViewAgents, Follow: true}
+	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+	m.Render()
+	if vis := m.Visible(); len(vis) != 2 || vis[0].Row.ID() != stray.ID || !vis[0].Row.Current {
+		t.Fatalf("the split's tile is not first and the viewer's: %+v", vis)
+	}
+	var opened []string
+	defer func(was func(string) error) { openURL = was }(openURL)
+	openURL = func(url string) error { opened = append(opened, url); return nil }
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'o'}})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'O'}})
+	if len(opened) != 2 || opened[0] != pr || opened[1] != checks {
+		t.Errorf("o and O: opened %v, message %q", opened, m.Message)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if m.Confirm != "remove proj/z on vm (/w/proj/z) with its agent? y/n" {
+		t.Errorf("x: confirm %q message %q", m.Confirm, m.Message)
+	}
+	m.Handle(term.Key{Rune: 'n'})
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
+	if f, ok := m.Overlay.(*view.Form); !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "vm" {
+		t.Errorf("a: form %+v message %q", m.Overlay, m.Message)
+	}
+	m.Overlay, d.add = nil, nil
+	if !m.Follow {
+		t.Fatal("the keys ended following")
+	}
+	// The root agent no longer listed: the split's tile is the viewer's
+	// only one.
+	in.Agents = []protocol.Agent{stray}
+	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+	if r := m.Selection(); r == nil || r.ID() != stray.ID {
+		t.Fatalf("only the split's tile: follows %+v", r)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if m.Confirm != "" || !strings.Contains(m.Message, "not a worktree") {
+		t.Errorf("x on the split's tile: confirm %q message %q", m.Confirm, m.Message)
 	}
 }
 

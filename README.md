@@ -708,11 +708,19 @@ to its tile or node, a worktree line or what is under it to the
 worktree's first agent, a repository line to its first worktree's, a
 task to itself, opening the folds over the target; a target the view
 has none of leaves the selection on no row. A following selection keeps
-following: the viewer's worktree line in the tree, the first tile among
-its agents in the agent view. Local sessions are joined in by key, or by
-the attach tag for a `new` session's attachment, so a row knows its
-local session, whether it is settled, and whether it is the one the
-viewer is in. An idle agent that went from working to idle since a tmux client of
+following: in the tree the first row in the tree's order that is the
+viewer's, usually the viewer's worktree line; in the agent view the
+first of the viewer's tiles of what the tree follows, that line's
+worktree's agents and tasks or the tile of the agent the tree follows
+in other sessions; when none of those is shown, the first of the
+viewer's tiles. A tile in other sessions that sorts first is not
+followed for that reason. Such a tile can be the viewer's beside the
+worktree's own, an agent started outside any worktree from a split of
+the viewer's session, say, and `o`, `O`, `x` and `a` on it would find
+no worktree.
+Local sessions are joined in by key, or by the attach tag for a `new`
+session's attachment, so a row knows its local session, whether it is
+settled, and whether it is the one the viewer is in. An idle agent that went from working to idle since a tmux client of
 this machine last showed it is *done*; one idle for longer than
 `sidebar.stale_after`, an hour by default, is *stale* (milestone five,
 step 3). A done or blocked agent is never stale. A row is dim when it
