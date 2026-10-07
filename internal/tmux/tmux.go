@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Server addresses one tmux server: by -L name or -S path. The zero Server
@@ -653,33 +654,39 @@ func FormatLiteral(s string) string {
 }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux does not keep "." or ":" in a session name and stores a "\" in
-// one doubled, new-session expands a "#" in the name as a format, and
-// an argument that ends in ";" is a command separator, so "%" becomes
-// "%25", "#" becomes "%23", "." becomes "%2e", ":" becomes "%3a", ";"
-// becomes "%3b" and "\" becomes "%5c"; nothing else changes. git takes
-// no "\" in a branch, but a detached worktree's session is named by its
-// directory, encoded the same way. Distinct branches give distinct
-// names and the encoding is exact.
+// tmux does not keep "." or ":" in a session name, stores a "\" in one
+// doubled and a control byte, DEL or a byte that is not part of a valid
+// UTF-8 sequence escaped by vis(3), new-session expands a "#" in the
+// name as a format, and an argument that ends in ";" is a command
+// separator, so each of those bytes, and "%" itself, becomes "%" and
+// its two lowercase hex digits: "%25", "%23", "%2e", "%3a", "%3b",
+// "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". Nothing else
+// changes, a valid multibyte UTF-8 character included. git takes no
+// "\" or control byte in a branch, but a detached worktree's session is
+// named by its directory, encoded the same way. Distinct branches give
+// distinct names and the encoding is exact. tmux 3.2 to 3.4 also store
+// a "$" before a letter, "_" or "{" escaped, which this leaves as it is
+// (#220).
 func EncodeBranch(branch string) string {
+	const hex = "0123456789abcdef"
 	var b strings.Builder
-	for i := 0; i < len(branch); i++ {
-		switch c := branch[i]; c {
-		case '%':
-			b.WriteString("%25")
-		case '#':
-			b.WriteString("%23")
-		case '.':
-			b.WriteString("%2e")
-		case ':':
-			b.WriteString("%3a")
-		case ';':
-			b.WriteString("%3b")
-		case '\\':
-			b.WriteString("%5c")
-		default:
+	for i := 0; i < len(branch); {
+		c := branch[i]
+		if c >= utf8.RuneSelf {
+			if r, n := utf8.DecodeRuneInString(branch[i:]); r != utf8.RuneError || n > 1 {
+				b.WriteString(branch[i : i+n])
+				i += n
+				continue
+			}
+		}
+		if c < 0x20 || c >= 0x7f || strings.IndexByte(`%#.:;\`, c) >= 0 {
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xf])
+		} else {
 			b.WriteByte(c)
 		}
+		i++
 	}
 	return b.String()
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,31 +288,48 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	}
 }
 
-// A detached worktree whose directory name has a \ gets a workspace
-// session that the name its jump computed finds, made once and reused:
-// tmux stores a \ in a session name doubled, so a session made under
-// the name as given was not found by it, and the tags set in
-// new-session's own sequence found no session.
-func TestEnsureDetachedRootWithBackslash(t *testing.T) {
+// A detached worktree whose directory name has a \, a control byte, DEL
+// or a byte that is not UTF-8 gets a workspace session that the name its
+// jump computed finds: tmux stores a \ in a session name doubled and the
+// others escaped by vis(3), so a session made under the name as given
+// was not found by it, and the tags set in new-session's own sequence
+// found no session. A valid multibyte UTF-8 name is kept as given. The
+// session is reused where its key reads back as written; tmux 3.4 reads
+// a key with another control byte, DEL or a byte that is not UTF-8 back
+// escaped (#214).
+func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
 	h := config.Host{Host: peer.Host{Name: "mac"}}
 	cfg := config.Config{Hosts: []config.Host{h}}
-	w := protocol.Worktree{ID: `env/worktree//w/proj/a\b`, EnvironmentID: "env", Repo: "proj", Root: `/w/proj/a\b`}
-	a := protocol.Agent{ID: "env/laatmux/%1", EnvironmentID: "env", Server: "laatmux", Session: "m1", WorktreeID: w.ID}
-	spec, _, err := rowSpec(cfg, h, rows.Row{Host: "mac", Worktree: &w, Agent: &a})
-	if err != nil {
-		t.Fatal(err)
-	}
-	name, created, err := workspace.Ensure(ctx, spec)
-	if err != nil || !created || name != spec.Name {
-		t.Fatalf("ensure %q: %q %v %v", spec.Name, name, created, err)
-	}
-	if _, err := workspace.Server.Run(ctx, "has-session", "-t", "="+name+":"); err != nil {
-		t.Fatalf("has-session %q: %v", name, err)
-	}
-	if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
-		t.Fatalf("ensure again: %q %v %v", name, created, err)
+	for i, c := range []struct {
+		dir   string
+		again bool
+	}{
+		{`a\b`, true}, {"tab\tx", true}, {"blåbær", true},
+		{"a\x01b", false}, {"del\x7f", false}, {"a\xffb", false},
+	} {
+		root := "/w/proj/" + c.dir
+		w := protocol.Worktree{ID: "env/worktree/" + root, EnvironmentID: "env", Repo: "proj", Root: root}
+		a := protocol.Agent{ID: fmt.Sprintf("env/laatmux/%%%d", i), EnvironmentID: "env", Server: "laatmux", Session: fmt.Sprintf("m%d", i), WorktreeID: w.ID}
+		spec, _, err := rowSpec(cfg, h, rows.Row{Host: "mac", Worktree: &w, Agent: &a})
+		if err != nil {
+			t.Fatal(err)
+		}
+		name, created, err := workspace.Ensure(ctx, spec)
+		if err != nil || !created || name != spec.Name {
+			t.Errorf("%q: ensure %q: %q %v %v", c.dir, spec.Name, name, created, err)
+			continue
+		}
+		if _, err := workspace.Server.Run(ctx, "has-session", "-t", "="+name+":"); err != nil {
+			t.Errorf("%q: has-session %q: %v", c.dir, name, err)
+		}
+		if !c.again {
+			continue
+		}
+		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Errorf("%q: ensure again: %q %v %v", c.dir, name, created, err)
+		}
 	}
 }
 
