@@ -1003,29 +1003,26 @@ func CheckTarget(name string) error {
 	return nil
 }
 
-// KillSession kills the session with exactly this name; one no target
-// reaches is refused, not another session killed.
-func (s Server) KillSession(ctx context.Context, name string) error {
-	if err := CheckTarget(name); err != nil {
-		return err
-	}
-	_, err := s.Run(ctx, "kill-session", "-t", SessionTarget(name))
-	return err
-}
-
 // KillSessionID kills the session with the id, a $ and its number as
 // #{session_id} prints it. An id reaches every session and nothing
 // else: tmux looks a target that starts with a $ up as an id only,
 // never as a name or a client's, so it kills a session whose name no
-// target reaches (CheckTarget), and one gone is an error, as tmux gives
-// no other session its id while the server runs. Anything but an id is
-// refused, not passed: an empty target is the current session, and a
-// window's or a pane's id is the session it is in.
+// target reaches (CheckTarget), and tmux gives no other session the id
+// of one gone while the server runs. So a session gone is no error,
+// and is told by what tmux says: can't find session for the id, no
+// current target when the server has no session left, and NoServer
+// when the server is gone. Anything but an id is refused, not passed:
+// an empty target is the current session, and a window's or a pane's
+// id is the session it is in.
 func (s Server) KillSessionID(ctx context.Context, id string) error {
 	if n, ok := strings.CutPrefix(id, "$"); !ok || n == "" || strings.Trim(n, "0123456789") != "" {
 		return fmt.Errorf("tmux: %q is not a session id", id)
 	}
 	_, err := s.Run(ctx, "kill-session", "-t", id)
+	var te *Error
+	if NoServer(err) || errors.As(err, &te) && (te.Msg == "can't find session: "+id || te.Msg == "no current target") {
+		return nil
+	}
 	return err
 }
 

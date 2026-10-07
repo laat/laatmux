@@ -98,7 +98,7 @@ type Panes interface {
 	EnsureConfigured(ctx context.Context) error
 	NewSession(ctx context.Context, o tmux.NewSessionOpts) (tmux.Session, error)
 	// KillSessionID kills the session with the id a pane is listed
-	// with, on the managed server: rm's.
+	// with, on the managed server: rm's. A session gone is no error.
 	KillSessionID(ctx context.Context, id string) error
 	// Paste types text into a pane as one bracketed paste and Enter
 	// through the named buffer; DeleteBuffers deletes the buffers with

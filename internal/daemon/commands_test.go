@@ -142,17 +142,18 @@ func (f *fakeServer) unused(prefix string, n *int, key func(tmux.Pane) string) s
 	}
 }
 
-// KillSessionID fails as tmux does for an id no listed pane's session
-// has, and for a name, which the real one refuses.
+// KillSessionID refuses a name, as the real one does, and takes an id
+// no listed pane's session has for a session gone, which is no error.
 func (f *fakeServer) KillSessionID(_ context.Context, id string) error {
+	if !strings.HasPrefix(id, "$") {
+		return fmt.Errorf("tmux: %q is not a session id", id)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	i := slices.IndexFunc(f.panes, func(p tmux.Pane) bool { return p.SessionID == id })
-	if !strings.HasPrefix(id, "$") || i < 0 {
-		return fmt.Errorf("can't find session: %s", id)
+	if i := slices.IndexFunc(f.panes, func(p tmux.Pane) bool { return p.SessionID == id }); i >= 0 {
+		f.killed = append(f.killed, f.panes[i].Session)
+		f.panes = slices.DeleteFunc(f.panes, func(p tmux.Pane) bool { return p.SessionID == id })
 	}
-	f.killed = append(f.killed, f.panes[i].Session)
-	f.panes = slices.DeleteFunc(f.panes, func(p tmux.Pane) bool { return p.SessionID == id })
 	return nil
 }
 
@@ -849,11 +850,11 @@ func TestRmPrunableWorktree(t *testing.T) {
 }
 
 // rm kills each managed session at the root by its id, whatever its
-// name, and once when it has two panes there: a session made by hand
-// can be called c:d, which tmux 3.7 keeps and no target reaches by
-// name, or $1, which a target reads as the id of another session, here
-// one at another root that rm leaves. By name, c:d was refused after
-// git had removed the worktree, and rm failed.
+// name, one with two panes there too: a session made by hand can be
+// called c:d, which tmux 3.7 keeps and no target reaches by name, or
+// $1, which a target reads as the id of another session, here one at
+// another root that rm leaves. By name, c:d was refused after git had
+// removed the worktree, and rm failed.
 func TestRmKillsSessionsByID(t *testing.T) {
 	d, ft, store, remote := newAddDaemon(t)
 	ctx := context.Background()

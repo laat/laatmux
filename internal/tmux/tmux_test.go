@@ -1003,12 +1003,11 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 // when the name has a ., which tmux 3.7 keeps: =a.b alone is pane b of
 // window a, and has-session, the attach and kill-session found no
 // session a.b. A name with a : no target reaches: =c:d: is a window of
-// session c, which c's window d:x is, so HasSession does not find c:d
-// and KillSession refuses it rather than kill c; so for $1, which as
-// =$1: is the session with the id $1, c:d here, and for no name, which
-// as =: is the most recent session. That part runs on every version,
-// where tmux before 3.7 stores c:d as c_d; the rest is skipped there,
-// a.b being stored as a_b.
+// session c, which c's window d:x is, so HasSession does not find c:d;
+// nor $1, which as =$1: is the session with the id $1, c:d here, nor no
+// name, which as =: is the most recent session. That part runs on every
+// version, where tmux before 3.7 stores c:d as c_d; the rest is skipped
+// there, a.b being stored as a_b.
 func TestSessionTargets(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -1023,12 +1022,9 @@ func TestSessionTargets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for name, want := range map[string]string{"c:d": "has a :", "$1": "starts with a $", "": "session name required"} {
+	for _, name := range []string{"c:d", "$1", ""} {
 		if s.HasSession(ctx, name) {
 			t.Errorf("HasSession found %q", name)
-		}
-		if err := s.KillSession(ctx, name); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("KillSession %q: %v, want a refusal", name, err)
 		}
 	}
 	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
@@ -1051,8 +1047,8 @@ func TestSessionTargets(t *testing.T) {
 	if err != nil || !regexp.MustCompile(`(?m)^%session-changed \$\d+ a\.b$`).Match(out) {
 		t.Errorf("attach to a.b: %v\n%s", err, out)
 	}
-	if err := s.KillSession(ctx, "a.b"); err != nil || s.HasSession(ctx, "a.b") {
-		t.Errorf("KillSession a.b: %v", err)
+	if _, err := s.Run(ctx, "kill-session", "-t", SessionTarget("a.b")); err != nil || s.HasSession(ctx, "a.b") {
+		t.Errorf("kill-session a.b: %v", err)
 	}
 	if !s.HasSession(ctx, "c") {
 		t.Error("session c is gone")
@@ -1062,10 +1058,12 @@ func TestSessionTargets(t *testing.T) {
 // Every pane is listed with its session's id, and KillSessionID kills
 // a session by it whatever the name: c:d, which tmux 3.7 keeps and
 // =c:d: takes for window d:x of session c, and $1, which as a target is
-// the session with the id $1, c:d here (c_d before tmux 3.7). A session
-// gone is an error, and anything but a session id is refused: the empty
-// target is the most recent session, a window's id and a pane's the
-// session they are in. Session c and its two windows are left.
+// the session with the id $1, c:d here (c_d before tmux 3.7). Anything
+// but a session id is refused: the empty target is the most recent
+// session, a window's id and a pane's the session they are in. A
+// session gone is no error and kills nothing else, so session c and its
+// two windows are left; nor is one gone from a server with no session
+// left, or with no server.
 func TestKillSessionID(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -1104,13 +1102,36 @@ func TestKillSessionID(t *testing.T) {
 		if err := s.KillSessionID(ctx, m[1]); err != nil {
 			t.Errorf("KillSessionID %s: %v", m[1], err)
 		}
-		if err := s.KillSessionID(ctx, m[1]); err == nil {
-			t.Errorf("KillSessionID %s again: no error", m[1])
+		if err := s.KillSessionID(ctx, m[1]); err != nil {
+			t.Errorf("KillSessionID %s gone: %v", m[1], err)
 		}
 	}
 	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name} #{session_windows}")
 	if err != nil || string(out) != "c 2\n" {
-		t.Errorf("sessions left %q %v, want c with 2 windows", out, err)
+		t.Fatalf("sessions left %q %v, want c with 2 windows", out, err)
+	}
+	c := made[0][1]
+	if err := s.KillSessionID(ctx, c); err != nil {
+		t.Errorf("KillSessionID %s: %v", c, err)
+	}
+	if err := s.KillSessionID(ctx, c); err != nil {
+		t.Errorf("KillSessionID %s with no session left: %v", c, err)
+	}
+	// The server may still be going after kill-server returns.
+	if _, err := s.Run(ctx, "kill-server"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if _, err = s.Run(ctx, "list-sessions"); NoServer(err) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !NoServer(err) {
+		t.Fatalf("server still up: %v", err)
+	}
+	if err := s.KillSessionID(ctx, c); err != nil {
+		t.Errorf("KillSessionID %s with no server: %v", c, err)
 	}
 }
 
@@ -1292,7 +1313,7 @@ func TestNewSessionNamesAsGiven(t *testing.T) {
 		if !s.HasSession(ctx, name) {
 			t.Errorf("%q: not found by its name", name)
 		}
-		if err := s.KillSession(ctx, name); err != nil || s.HasSession(ctx, name) {
+		if _, err := s.Run(ctx, "kill-session", "-t", SessionTarget(name)); err != nil || s.HasSession(ctx, name) {
 			t.Errorf("%q: kill %v, or still there", name, err)
 		}
 	}
