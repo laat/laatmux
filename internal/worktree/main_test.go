@@ -15,9 +15,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// The fixture's commit succeeds under a global and a system config that
-// each fail every commit, with an identity from its repository's config
-// alone.
+// The fixture's commit succeeds in an environment that names config
+// that fails every commit, with an identity from its repository's
+// config alone.
 func TestGitIsolated(t *testing.T) {
 	gittest.CheckIsolated(t, func(t *testing.T) { newFixture(t) })
 }
