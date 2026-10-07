@@ -792,6 +792,132 @@ func TestListPanesEmptyServer(t *testing.T) {
 	}
 }
 
+// Fields reads back values with Sep, a newline or nothing in them, at
+// either end too, a record for each line tmux printed, which it ends
+// with a newline after the last separator; what a user's after hook
+// prints after the last one is not read. Each Fields draws its own
+// separator: a | and base32, with no % for display-message to expand
+// as strftime does and no # for a format to expand.
+func TestFieldsParse(t *testing.T) {
+	f := NewFields("#{a}", "#{b}", "#{c}")
+	if want := "#{a}" + f.sep + "#{b}" + f.sep + "#{c}" + f.sep; f.format != want {
+		t.Errorf("format = %q, want %q", f.format, want)
+	}
+	random := strings.TrimPrefix(f.sep, "|")
+	if !strings.HasPrefix(f.sep, "|") || len(random) < 16 || strings.Trim(random, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" {
+		t.Errorf("separator %q", f.sep)
+	}
+	if g := NewFields("#{a}", "#{b}", "#{c}"); g.sep == f.sep {
+		t.Errorf("two Fields share the separator %q", f.sep)
+	}
+	recs := [][]string{
+		{"a" + Sep + "b", "\nx\n", ""},
+		{Sep, "\n", "c" + Sep + Sep + "\n" + Sep},
+		{"", "", ""},
+		{"\n\n", Sep + "\n" + Sep, "end"},
+	}
+	var out string
+	for _, r := range recs {
+		out += strings.Join(r, f.sep) + f.sep + "\n"
+	}
+	out += "hook\n"
+	if got := f.Parse([]byte(out)); !slices.EqualFunc(got, recs, slices.Equal) {
+		t.Errorf("Parse(%q) = %q, want %q", out, got, recs)
+	}
+	if got := f.Parse(nil); len(got) != 0 {
+		t.Errorf("Parse of nothing = %q", got)
+	}
+}
+
+// A failed Records names the command with Sep where each separator
+// was, so the daemon's log line for a failed poll reads the same at
+// every poll, and is still the tmux error it was: a server that is not
+// running is NoServer, and no tmux on PATH NotInstalled.
+func TestRecordsError(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	s := Server{Name: fmt.Sprintf("laatmux-test-%d", os.Getpid())}
+	f := NewFields("#{pane_id}", "#{pane_tty}")
+	recs, err := s.Records(ctx, f, "list-panes", "-a")
+	if want := "tmux list-panes -a -F #{pane_id}" + Sep + "#{pane_tty}" + Sep + ": "; !NoServer(err) || !strings.HasPrefix(err.Error(), want) || len(recs) != 0 {
+		t.Errorf("Records on no server: %q %v, want an error starting %q", recs, err, want)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if _, err := s.Records(ctx, f, "list-panes", "-a"); !NotInstalled(err) {
+		t.Errorf("Records with no tmux on PATH: %v, not NotInstalled", err)
+	}
+}
+
+// A pane whose directory and @laatmux_cwd have Sep and a newline in
+// them, and whose title and window name have Sep, is listed with each
+// value in its own field, and so is the pane listed after it. Split at
+// Sep, the values after the directory were read from the fields after
+// theirs; split at the newline, the pane was not listed at all. Each
+// value ends in a $, which tmux 3.4 on macOS prints as \$ before a
+// U+2063. The directory has a $ before a letter, which tmux 3.4 prints
+// as \$ everywhere, before its newline, where a Query that decoded the
+// line with the probe only left it; a title or a window name with one
+// is stored with the \$ by tmux 3.4 itself. The flags listed last are
+// set, the first pane in copy mode
+// and tagged as an attach pane and the second as a sidebar, so a value
+// read from another field shows there too.
+func TestListPanesValuesWithSep(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "proj", Sep+"a$b"+Sep+"b\nc"+Sep+"$")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/a", Cwd: root, Cmd: []string{"sleep", "600"}, Host: "vm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := t.TempDir()
+	next, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/b", Cwd: plain, Cmd: []string{"sleep", "600"}, Host: "mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fields after the values are set as well, each half of Own on
+	// a pane of its own.
+	if _, err := s.Run(ctx, "select-pane", "-t", made.PaneID, "-T", "t"+Sep+"1$", Next, "rename-window", "-t", made.PaneID, "w"+Sep+"1$",
+		Next, "set-option", "-p", "-t", made.PaneID, "@laatmux_attach_pane", "1", Next, "copy-mode", "-t", made.PaneID,
+		Next, "set-option", "-p", "-t", next.PaneID, "@laatmux_sidebar", "1"); err != nil {
+		t.Fatal(err)
+	}
+	// The pane's path is read from its process, which may not have
+	// changed directory yet.
+	panes := map[string]Pane{}
+	for i := 0; i < 200 && panes[made.PaneID].CurrentPath != real; i++ {
+		list, err := s.ListPanes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clear(panes)
+		for _, p := range list {
+			panes[p.ID] = p
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	p := panes[made.PaneID]
+	if p.Session != "proj/a" || p.WindowIndex != 0 || p.WindowName != "w"+Sep+"1$" || !strings.HasPrefix(p.TTY, "/dev/") || p.PID <= 0 ||
+		p.CurrentPath != real || p.Title != "t"+Sep+"1$" || p.Dead || p.WindowActivity <= 0 || p.Host != "vm" || p.Cwd != root ||
+		!p.Managed || p.ServerPID != made.ServerPID || !p.InMode || !p.Own {
+		t.Errorf("pane in %q listed as %+v", root, p)
+	}
+	if p := panes[next.PaneID]; p.Session != "proj/b" || p.Host != "mac" || p.Cwd != plain || !p.Managed || p.ServerPID != next.ServerPID || p.InMode || !p.Own {
+		t.Errorf("pane in %q listed as %+v", plain, p)
+	}
+	if len(panes) != 2 {
+		t.Errorf("listed %d panes: %+v", len(panes), panes)
+	}
+}
+
 // startManaged starts the managed server without the user's config and
 // keeps it up with no session; it is killed at the end. A server the
 // previous test killed may still be going: a start that reaches it is
@@ -1311,35 +1437,41 @@ func dollarValues(f func(v string)) {
 }
 
 // unframe gives a Query's output as the server holds the values: each
-// line's probe dropped, and a line's backslashes undone when its own
-// probe was printed escaped. A line without the probe is left as
-// printed: one a user's after-hook printed after the records, as
-// display-message -p in an after-list-panes hook does, and the part
-// before the newline of a value that has one; a value that has the
-// escaped probe and a newline in it, on a server that prints values as
-// given, changes only its own record's lines. A line is decoded before
-// its probe is dropped: a value that ends in $ is followed by Sep, whose
-// first byte macOS takes for a letter, so tmux 3.4 there escapes that
-// $. Beside the table, every value from dollarValues as the last field
-// reads back as given from a server that prints it as given, and from
-// one that prints it as tmux 3.4 does when it has no newline.
+// record's Sep and end dropped, and a record's backslashes undone when
+// its own probe was printed escaped. A record ends at its end, not at
+// a newline: a value with a newline, or with Sep and the probe without
+// its tail, is read whole and decoded whole. What comes after the last
+// record is left as printed: what a user's after-hook printed, as
+// display-message -p in an after-list-panes hook does. A record is
+// decoded before its end is dropped: a value that ends in $ is
+// followed by Sep, whose first byte macOS takes for a letter, so tmux
+// 3.4 there escapes that $. Beside the table, every value from
+// dollarValues as the last field reads back as given from a server
+// that prints it as given, and from one that prints it as tmux 3.4
+// does, a newline in it or not.
 func TestUnframe(t *testing.T) {
+	end := probe + "TAIL"
+	esc := Sep + `\` + end + "\n"
 	for _, c := range []struct{ out, want string }{
 		{"", ""},
-		{`a\$b` + Sep + "$_\nc" + Sep + "$_\n", "a\\$b\nc\n"},
-		{`a\$b` + Sep + `\$_` + "\n" + `c\\$d` + Sep + `\$_` + "\n", "a$b\n" + `c\$d` + "\n"},
-		{`a\$b` + Sep + `\$_` + "\nhook \\$x\n", "a$b\nhook \\$x\n"},
-		{"x" + Sep + `\$_` + "\n" + `y\$a` + Sep + "$_\n", "x\n" + `y\$a` + "\n"},
+		{`a\$b` + Sep + end + "\nc" + Sep + end + "\n", "a\\$b\nc\n"},
+		{`a\$b` + esc + `c\\$d` + esc, "a$b\n" + `c\$d` + "\n"},
+		{`a\$b` + esc + "hook \\$x\n", "a$b\nhook \\$x\n"},
+		{"x" + esc + `y\$a` + Sep + end + "\n", "x\n" + `y\$a` + "\n"},
+		{`a\$b` + "\n" + `c\$d` + esc, "a$b\nc$d\n"},
+		{"p" + Sep + probe + "\nq" + Sep + end + "\n", "p" + Sep + probe + "\nq\n"},
+		{"p" + Sep + `\` + probe + "\nq" + Sep + end + "\n", "p" + Sep + `\` + probe + "\nq\n"},
+		{"p" + Sep + `\$_` + "\nq" + esc, "p" + Sep + probe + "\nq\n"},
 	} {
-		if got := unframe(c.out); got != c.want {
+		if got := unframe(c.out, end); got != c.want {
 			t.Errorf("%q: %q, want %q", c.out, got, c.want)
 		}
 	}
 	dollarValues(func(v string) {
-		if got := unframe(print34(v+Sep+probe) + "\n"); got != v+"\n" && !strings.Contains(v, "\n") {
-			t.Errorf("%q printed by tmux 3.4 as %q reads back %q", v, print34(v+Sep+probe), got)
+		if got := unframe(print34(v+Sep+end)+"\n", end); got != v+"\n" {
+			t.Errorf("%q printed by tmux 3.4 as %q reads back %q", v, print34(v+Sep+end), got)
 		}
-		if got := unframe(v + Sep + probe + "\n"); got != v+"\n" {
+		if got := unframe(v+Sep+end+"\n", end); got != v+"\n" {
 			t.Errorf("%q printed as given reads back %q", v, got)
 		}
 	})

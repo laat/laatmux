@@ -4,6 +4,7 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -157,8 +158,10 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 	return out.Bytes(), nil
 }
 
-// probe ends every line Query has the server print, after a Sep: tmux
-// 3.4 prints it back as `\$_`, every other version as given.
+// probe starts what ends every record Query has the server print,
+// after a Sep: tmux 3.4 prints it back as `\$_`, every other version
+// as given. Query follows it with a random tail drawn for the call, so
+// no value holds the whole of it.
 const probe = "$_"
 
 // Query runs a command that prints a line in a format for each pane,
@@ -166,49 +169,55 @@ const probe = "$_"
 // format, and returns its output as the server holds the values. tmux
 // 3.4 puts a backslash before a "$" that comes before a letter, "_" or
 // "{" in everything a command prints to a client: an option value, a
-// pane's path, a session name. Query ends the format with Sep and
-// probe, and undoes those backslashes when the server put one before
-// the probe's "$"; a server that prints values as given, 3.3 and older
-// or 3.5 and later, prints a "\$" only where the value has one. The
-// probe is in the format rather than a command of its own, which would
-// run a user's after-display-message hook. tmux 3.4 also writes a
-// control byte other than a tab or a newline, DEL and a byte that is
-// not part of valid UTF-8 as vis(3) does, \001 say, and those are left
-// as printed: it writes a backslash of the value as it is, so such an
-// escape cannot be told from the same text in the value.
+// pane's path, a session name. Query ends the format with Sep, probe
+// and a random tail, and undoes those backslashes in each record whose
+// probe the server put one before; a server that prints values as
+// given, 3.3 and older or 3.5 and later, prints a "\$" only where the
+// value has one. The probe is in the format rather than a command of
+// its own, which would run a user's after-display-message hook. tmux
+// 3.4 also writes a control byte other than a tab or a newline, DEL and
+// a byte that is not part of valid UTF-8 as vis(3) does, \001 say, and
+// those are left as printed: it writes a backslash of the value as it
+// is, so such an escape cannot be told from the same text in the value.
 func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, error) {
-	out, err := s.Run(ctx, append(slices.Clip(a), "-F", format+Sep+probe)...)
+	end := probe + rand.Text()
+	out, err := s.Run(ctx, append(slices.Clip(a), "-F", format+Sep+end)...)
 	var te *Error
 	if errors.As(err, &te) {
 		e := *te
 		e.Args = append(slices.Clip(a), "-F", format)
 		err = &e
 	}
-	return []byte(unframe(string(out))), err
+	return []byte(unframe(string(out), end)), err
 }
 
 // unframe is what a Query's command printed, as the server holds the
-// values, each line's Sep and probe dropped. Each line tells by its
-// own probe whether the server escaped it: one that ends in the probe
-// printed as `\$_` has its backslashes undone, then the probe dropped.
-// It is decoded first: tmux on macOS takes the first byte of Sep for a
-// letter, so a last value that ends in "$" has a backslash only the Sep
-// after it accounts for. A line that does not end in the probe is left
-// as printed: a line a user's after-hook printed after the records, or
-// the part of a record before a newline in one of its values, which
-// ListPanes and the readers that parse line by line drop, and which
-// PaneSession reads with its \$ kept.
-func unframe(out string) string {
+// values, each record's Sep and end dropped. A record ends in Sep, the
+// end Query drew, which is probe and a random tail, and the newline
+// tmux ends a line with; no value holds the end, so a record whose
+// value has a newline, or Sep and probe, is read whole. Each record
+// tells by its own probe whether the server escaped it: one whose
+// probe is printed as `\$_` has its backslashes undone, as a whole,
+// then its Sep and end dropped. It is decoded with them: tmux on macOS
+// takes the first byte of Sep for a letter, so a last value that ends
+// in "$" has a backslash only the Sep after it accounts for. What comes
+// after the last record, a line a user's after-hook printed, is left
+// as printed.
+func unframe(out, end string) string {
+	parts := strings.Split(out, end+"\n")
 	var b strings.Builder
-	for _, l := range strings.SplitAfter(out, "\n") {
-		l, nl := strings.CutSuffix(l, "\n")
-		if strings.HasSuffix(l, Sep+`\`+probe) {
-			l = unescapeDollar(l)
+	for i, r := range parts {
+		if i == len(parts)-1 {
+			b.WriteString(r)
+			break
 		}
-		b.WriteString(strings.TrimSuffix(l, Sep+probe))
-		if nl {
-			b.WriteByte('\n')
+		if strings.HasSuffix(r, Sep+`\`) {
+			r = unescapeDollar(r + end)
+		} else {
+			r += end
 		}
+		b.WriteString(strings.TrimSuffix(r, Sep+end))
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -383,26 +392,99 @@ type Pane struct {
 	Own bool
 }
 
-// Sep separates fields in list-panes output. tmux 3.5 strips control
-// characters from expanded formats, so a control byte fuses the fields on
-// Linux while passing through on macOS 3.6. A printable sequence that cannot
-// occur in a title, path or session name is used instead.
+// Sep separates the fields of a line tmux prints for a listing. tmux 3.5
+// strips control characters from expanded formats, so a control byte
+// fuses the fields on Linux while passing through on macOS 3.6. A
+// printable sequence is used instead. A directory, a branch, a pane's
+// title and a window's name can have it, so a listing with such a
+// value in it is read through Fields; one of ids, flags and tags
+// laatmux writes without it is split at Sep.
 const Sep = "\u2063\u2063" // two INVISIBLE SEPARATOR code points
 
-var paneFormat = strings.Join([]string{
+// Fields is a -F format that prints a line of values for each pane,
+// session or client, and reads the values back whatever they hold. Each
+// value is followed by a separator NewFields drew at random, so a value
+// with Sep in it, or a newline, which a directory can have, is read
+// back whole and does not shift the values after it: no value holds
+// the separator unless it was made knowing it, and one is drawn for
+// each listing. tmux prints a newline in a value as it is, so the
+// newline that ends a line is the one after its last separator. A
+// value escaped by tmux's s/// modifier would not do: the regexec of
+// macOS and of musl refuses a value with a byte that is not UTF-8, and
+// tmux then prints the value as it is.
+type Fields struct {
+	n      int
+	sep    string
+	format string
+}
+
+// NewFields is the format of the values of vars, each a format of its
+// own, #{pane_id} say, with a separator drawn for it: a | and random
+// base32, letters and digits. Every tmux prints those as given; none
+// is a %, which display-message expands as strftime does. The | comes
+// first since what follows a value is what tmux 3.4 looks at to put a
+// backslash before a $ the value ends in: a letter, an _ or a {, or on
+// macOS the first byte of a character such as U+2063, of which Sep is
+// made.
+func NewFields(vars ...string) Fields {
+	sep := "|" + rand.Text()
+	return Fields{n: len(vars), sep: sep, format: strings.Join(vars, sep) + sep}
+}
+
+// Records runs a command that prints a line for each pane, session or
+// client, list-panes or display-message -p say, through Query with the
+// format of f, and returns what Parse reads from its output: the
+// values as the server holds them. A failed command is named with Sep
+// where each separator was: the daemon logs a failed listing at every
+// poll, and the line then reads the same each time.
+func (s Server) Records(ctx context.Context, f Fields, a ...string) ([][]string, error) {
+	out, err := s.Query(ctx, f.format, a...)
+	var te *Error
+	if errors.As(err, &te) {
+		named := *te
+		named.Args = make([]string, len(te.Args))
+		for i, v := range te.Args {
+			named.Args[i] = strings.ReplaceAll(v, f.sep, Sep)
+		}
+		err = &named
+	}
+	return f.Parse(out), err
+}
+
+// Parse is what a command printed in the format: a record of the
+// values of each line, in the order of the vars. What a user's
+// after-list-panes or after-display-message hook prints comes after
+// the last separator, and is not read.
+func (f Fields) Parse(out []byte) [][]string {
+	if f.n == 0 {
+		return nil
+	}
+	parts := strings.Split(string(out), f.sep)
+	var recs [][]string
+	for len(parts) > f.n {
+		recs = append(recs, parts[:f.n:f.n])
+		parts = parts[f.n:]
+		parts[0] = strings.TrimPrefix(parts[0], "\n")
+	}
+	return recs
+}
+
+var paneVars = []string{
 	"#{session_name}", "#{window_index}", "#{window_name}", "#{pane_id}", "#{pane_tty}",
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
 	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}",
-}, Sep)
+}
 
 // ListPanes returns every pane on the server in one call. A server
 // that runs with no sessions, which the managed one does after its last
 // session ends, has no panes: tmux answers "no current target" for it,
-// and that is an empty listing, not a failure to observe. The values
-// are read as the server holds them, through Query.
+// and that is an empty listing, not a failure to observe. A pane's
+// directory and its @laatmux_cwd can have a newline or Sep in them, and
+// its title and its window's name Sep, so the panes are read through
+// Fields, as the server holds them.
 func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
-	out, err := s.Query(ctx, paneFormat, "list-panes", "-a")
+	recs, err := s.Records(ctx, NewFields(paneVars...), "list-panes", "-a")
 	if err != nil {
 		var te *Error
 		if errors.As(err, &te) && strings.Contains(te.Msg, "no current target") {
@@ -411,14 +493,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		return nil, err
 	}
 	var panes []Pane
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if line == "" {
-			continue
-		}
-		f := strings.Split(line, Sep)
-		if len(f) < 15 {
-			continue
-		}
+	for _, f := range recs {
 		p := Pane{
 			Session: f[0], WindowName: f[2], ID: f[3], TTY: f[4],
 			CurrentCommand: f[6], CurrentPath: f[7], Title: f[8],
@@ -430,8 +505,8 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.WindowActivity, _ = strconv.ParseInt(f[10], 10, 64)
 		p.Managed = f[13] != ""
 		p.ServerPID, _ = strconv.Atoi(f[14])
-		p.InMode = len(f) > 15 && f[15] == "1"
-		p.Own = len(f) > 17 && (f[16] != "" || f[17] != "")
+		p.InMode = f[15] == "1"
+		p.Own = f[16] != "" || f[17] != ""
 		panes = append(panes, p)
 	}
 	return panes, nil

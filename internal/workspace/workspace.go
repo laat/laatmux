@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,10 +72,13 @@ func Records(sessions []protocol.Session) []protocol.Session {
 	return out
 }
 
-var sessionFormat = strings.Join([]string{
+// sessionVars is what a session is read as. The source and the branch
+// are a repository's and git's, and can have tmux.Sep in them, so a
+// session is read through tmux.Fields.
+var sessionVars = []string{
 	"#{session_name}", "#{@laatmux_workspace}", "#{@laatmux_host}", "#{@laatmux_attach}", "#{@laatmux_settled}",
 	"#{@laatmux_repo}", "#{@laatmux_branch}",
-}, tmux.Sep)
+}
 
 // List returns every session on the default server. No server running is
 // an empty list, and so is no tmux on PATH with nothing at the server's
@@ -83,21 +87,21 @@ var sessionFormat = strings.Join([]string{
 // there is an error, since a server may be running that cannot be
 // reached, during a tmux upgrade say.
 func List(ctx context.Context) ([]protocol.Session, error) {
-	out, err := Server.Query(ctx, sessionFormat, "list-sessions")
+	recs, err := Server.Records(ctx, tmux.NewFields(sessionVars...), "list-sessions")
 	if err != nil {
 		if tmux.NoServer(err) || tmux.NotInstalled(err) && Server.NoSocket() {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return parseSessions(string(out)), nil
+	return parseSessions(recs), nil
 }
 
-func parseSessions(out string) []protocol.Session {
+// parseSessions is the sessions of records of sessionVars' values.
+func parseSessions(recs [][]string) []protocol.Session {
 	var locals []protocol.Session
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		f := strings.Split(line, tmux.Sep)
-		if len(f) < 7 || f[0] == "" {
+	for _, f := range recs {
+		if len(f) < len(sessionVars) || f[0] == "" {
 			continue
 		}
 		locals = append(locals, protocol.Session{Name: f[0], Key: DecodeKey(f[1]), Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
@@ -186,11 +190,11 @@ func Current(ctx context.Context) (protocol.Session, error) {
 	if pane := os.Getenv("TMUX_PANE"); pane != "" {
 		args = append(args, "-t", pane)
 	}
-	out, err := (tmux.Server{}).Query(ctx, sessionFormat, args...)
+	recs, err := (tmux.Server{}).Records(ctx, tmux.NewFields(sessionVars...), args...)
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	locals := parseSessions(string(out))
+	locals := parseSessions(recs)
 	if len(locals) != 1 {
 		return protocol.Session{}, errors.New("cannot find the current tmux session")
 	}
@@ -200,22 +204,22 @@ func Current(ctx context.Context) (protocol.Session, error) {
 // PaneSession is the session a pane is in, with its tags, and the pane's
 // current directory. The lookup is on the server TMUX names, as Current's
 // is, since a pane id is per server; split runs from a binding on the
-// user's server.
+// user's server. The directory can have a newline or tmux.Sep in it.
 func PaneSession(ctx context.Context, paneID string) (protocol.Session, string, error) {
-	out, err := (tmux.Server{}).Query(ctx, sessionFormat+tmux.Sep+"#{pane_current_path}", "display-message", "-p", "-t", paneID)
+	fields := tmux.NewFields(append(slices.Clip(sessionVars), "#{pane_current_path}")...)
+	recs, err := (tmux.Server{}).Records(ctx, fields, "display-message", "-p", "-t", paneID)
 	if err != nil {
 		return protocol.Session{}, "", err
 	}
-	line := strings.TrimRight(string(out), "\n")
-	f := strings.Split(line, tmux.Sep)
-	if len(f) != 8 {
+	if len(recs) != 1 {
 		return protocol.Session{}, "", errors.New("cannot find the session of pane " + paneID)
 	}
-	locals := parseSessions(strings.Join(f[:7], tmux.Sep) + "\n")
+	n := len(sessionVars)
+	locals := parseSessions([][]string{recs[0][:n]})
 	if len(locals) != 1 {
 		return protocol.Session{}, "", errors.New("cannot find the session of pane " + paneID)
 	}
-	return locals[0], f[7], nil
+	return locals[0], recs[0][n], nil
 }
 
 // FindWorktree returns the workspace session for a branch of a repository
