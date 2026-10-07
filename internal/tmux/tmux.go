@@ -148,7 +148,7 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 		if msg == "" {
 			msg = err.Error()
 		}
-		return out.Bytes(), &Error{Args: a, Msg: msg}
+		return out.Bytes(), &Error{Args: a, Msg: msg, err: err}
 	}
 	return out.Bytes(), nil
 }
@@ -157,6 +157,7 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 type Error struct {
 	Args []string
 	Msg  string
+	err  error // the run's own, for NotInstalled
 }
 
 // Error names the command as the caller gave it, each Next written as
@@ -189,6 +190,14 @@ func NoServer(err error) bool {
 		return strings.Contains(te.Msg, "(No such file or directory)") || strings.Contains(te.Msg, "(Connection refused)")
 	}
 	return false
+}
+
+// NotInstalled reports whether the error means there was no tmux to run:
+// no tmux binary on PATH. tmux never ran, so there is no message of its
+// own; the run's error says so.
+func NotInstalled(err error) bool {
+	var te *Error
+	return errors.As(err, &te) && errors.Is(te.err, exec.ErrNotFound)
 }
 
 // Pane is one row of list-panes -a.

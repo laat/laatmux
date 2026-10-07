@@ -1,6 +1,9 @@
 package workspace
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +15,24 @@ import (
 func TestSessionName(t *testing.T) {
 	if got := SessionName("vm", "proj", "fix/v1.2"); got != "vm/proj/fix/v1%2e2" {
 		t.Fatalf("SessionName = %q", got)
+	}
+}
+
+// A machine without tmux has no sessions: with no tmux on PATH, List is
+// an empty list, as with no server running. A tmux that is there and
+// fails is still an error.
+func TestListWithoutTmux(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if locals, err := List(ctx); err != nil || locals != nil {
+		t.Errorf("no tmux: %+v %v, want no sessions", locals, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho boom >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := List(ctx); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("failing tmux: %v, want its error", err)
 	}
 }
 

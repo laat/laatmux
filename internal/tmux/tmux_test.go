@@ -154,6 +154,28 @@ func TestNoServer(t *testing.T) {
 	}
 }
 
+// A run with no tmux on PATH is NotInstalled, wrapped or not, and not
+// NoServer; a tmux that runs and fails, or an error tmux did not give, is
+// not NotInstalled.
+func TestNotInstalled(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	_, err := DefaultServer.Run(ctx, "list-sessions")
+	if !NotInstalled(err) || !NotInstalled(fmt.Errorf("list: %w", err)) || NoServer(err) {
+		t.Errorf("no tmux on PATH: %v, NotInstalled %v, NoServer %v", err, NotInstalled(err), NoServer(err))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho 'no server running on /x' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DefaultServer.Run(ctx, "list-sessions"); NotInstalled(err) || !NoServer(err) {
+		t.Errorf("tmux that ran: %v, NotInstalled %v, NoServer %v", err, NotInstalled(err), NoServer(err))
+	}
+	if NotInstalled(&Error{Msg: "m"}) || NotInstalled(&exec.Error{Name: "tmux", Err: exec.ErrNotFound}) {
+		t.Error("an error not from a tmux run reported as not installed")
+	}
+}
+
 func TestEncodeBranch(t *testing.T) {
 	cases := map[string]string{
 		"main":       "main",
