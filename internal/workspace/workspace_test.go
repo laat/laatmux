@@ -1,7 +1,11 @@
 package workspace
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -15,6 +19,42 @@ import (
 func TestSessionName(t *testing.T) {
 	if got := SessionName("vm", "proj", "fix/v1.2"); got != "vm/proj/fix/v1%2e2" {
 		t.Fatalf("SessionName = %q", got)
+	}
+}
+
+// A machine without tmux has no sessions: with no tmux on PATH and
+// nothing at the default server's socket, List is an empty list, as with
+// no server running. With the socket there, a server may be running that
+// cannot be reached, and List says so. A tmux that is there and fails is
+// still an error, socket or not.
+func TestListWithoutTmux(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	tmpdir := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", tmpdir)
+	if locals, err := List(ctx); err != nil || locals != nil {
+		t.Errorf("no tmux: %+v %v, want no sessions", locals, err)
+	}
+	fake := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho boom >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := List(ctx); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("failing tmux: %v, want its error", err)
+	}
+	if err := os.Remove(fake); err != nil {
+		t.Fatal(err)
+	}
+	sockDir := filepath.Join(tmpdir, "tmux-"+strconv.Itoa(os.Getuid()))
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sockDir, "default"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := List(ctx); !tmux.NotInstalled(err) {
+		t.Errorf("no tmux, socket there: %v, want the not-found error", err)
 	}
 }
 

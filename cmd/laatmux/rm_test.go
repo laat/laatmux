@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/laat/laatmux/internal/command"
@@ -12,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // rm inside a workspace session takes the workspace from the session:
@@ -76,6 +79,61 @@ func TestRmCurrent(t *testing.T) {
 		if got.Host.Name != c.want.Host.Name || got.Repo.Source != c.want.Repo.Source || got.Branch != c.want.Branch || got.Root != c.want.Root || got.Environment != c.want.Environment || got.Force {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
 		}
+	}
+}
+
+// rm on a machine without tmux removes the worktree on the host and has
+// no local session to clean up, rather than failing after the host's
+// side is done: whether the host has the worktree's record or the root
+// is looked for among the local sessions. With the default server's
+// socket there, the local sessions may hold the root, and rm stops
+// before it sends a removal without it.
+func TestRmWithoutTmux(t *testing.T) {
+	const src = "git@x:o/proj.git"
+	var rms []protocol.Message
+	var mu sync.Mutex
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm}, func(pc *protocol.Conn, m protocol.Message) bool {
+		switch m.Type {
+		case protocol.TypeSubscribe:
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRm}},
+			}, Worktrees: []protocol.Worktree{{ID: "lenv/worktree//w/proj/b", EnvironmentID: "lenv", Repo: "proj", Branch: "b", Root: "/w/proj/b", Source: src}}})
+		case protocol.TypeRm:
+			mu.Lock()
+			rms = append(rms, m)
+			mu.Unlock()
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/" + m.Branch})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(os.Getenv("LAATMUX_HOME"), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	t.Setenv("PATH", t.TempDir())
+	tmpdir := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", tmpdir)
+	for _, branch := range []string{"b", "gone"} {
+		args := []string{"proj/" + branch, "--host", "mac"}
+		if err := cmdRm(context.Background(), args); err != nil {
+			t.Errorf("rm %v: %v", args, err)
+		}
+	}
+	sockDir := filepath.Join(tmpdir, "tmux-"+strconv.Itoa(os.Getuid()))
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sockDir, "default"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdRm(context.Background(), []string{"proj/gone", "--host", "mac"}); !tmux.NotInstalled(err) {
+		t.Errorf("rm proj/gone with the socket there: %v, want the not-found error", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rms) != 2 || rms[0].Root != "/w/proj/b" || rms[1].Root != "" || rms[1].Branch != "gone" {
+		t.Errorf("rms sent: %+v", rms)
 	}
 }
 

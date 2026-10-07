@@ -77,11 +77,15 @@ var sessionFormat = strings.Join([]string{
 }, tmux.Sep)
 
 // List returns every session on the default server. No server running is
-// an empty list.
+// an empty list, and so is no tmux on PATH with nothing at the server's
+// socket, which a tmux that ran would call no server: rm on a machine
+// without tmux has nothing local to clean up. No tmux with the socket
+// there is an error, since a server may be running that cannot be
+// reached, during a tmux upgrade say.
 func List(ctx context.Context) ([]protocol.Session, error) {
 	out, err := Server.Run(ctx, "list-sessions", "-F", sessionFormat)
 	if err != nil {
-		if tmux.NoServer(err) {
+		if tmux.NoServer(err) || tmux.NotInstalled(err) && Server.NoSocket() {
 			return nil, nil
 		}
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -149,7 +150,7 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 		if msg == "" {
 			msg = err.Error()
 		}
-		return out.Bytes(), &Error{Args: a, Msg: msg}
+		return out.Bytes(), &Error{Args: a, Msg: msg, err: err}
 	}
 	return out.Bytes(), nil
 }
@@ -158,6 +159,7 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 type Error struct {
 	Args []string
 	Msg  string
+	err  error // the run's own, for NotInstalled
 }
 
 // Error names the command as the caller gave it, each Next written as
@@ -205,6 +207,56 @@ func NoServer(err error) bool {
 		return strings.Contains(te.Msg, "(No such file or directory)") || strings.Contains(te.Msg, "(Connection refused)")
 	}
 	return false
+}
+
+// NotInstalled reports whether the error means there was no tmux to run:
+// no tmux binary on PATH. tmux never ran, so there is no message of its
+// own; the run's error says so.
+func NotInstalled(err error) bool {
+	var te *Error
+	return errors.As(err, &te) && errors.Is(te.err, exec.ErrNotFound)
+}
+
+// NoSocket reports whether nothing is at the socket a tmux run would
+// connect to for the server, so no server can be running on it: what
+// tmux says "no server running" for. It is how a caller with no tmux to
+// run tells a machine without a server from one whose server it cannot
+// reach. Anything there, a stale socket or a link included, a path that
+// cannot be checked, or one that cannot be told, is not NoSocket.
+func (s Server) NoSocket() bool {
+	path, ok := s.socket()
+	if !ok {
+		return false
+	}
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// socket is the path a stock tmux connects to for the server: -S as
+// given; with no selector, the socket TMUX names; else the -L name, or
+// default, in tmux-<uid> under TMUX_TMPDIR with its links resolved, as
+// tmux resolves it, or under /tmp when that is unset or empty. A
+// TMUX_TMPDIR that does not resolve cannot be told, so ok is false:
+// tmux 3.2 to 3.7 fall back to /tmp then, 3.1 and upstream's master fail.
+func (s Server) socket() (path string, ok bool) {
+	if s.Path != "" {
+		return s.Path, true
+	}
+	name := s.Name
+	if name == "" {
+		if v, _, _ := strings.Cut(os.Getenv("TMUX"), ","); v != "" {
+			return v, true
+		}
+		name = "default"
+	}
+	dir := "/tmp"
+	if v := os.Getenv("TMUX_TMPDIR"); v != "" {
+		var err error
+		if dir, err = filepath.EvalSymlinks(v); err != nil {
+			return "", false
+		}
+	}
+	return filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), name), true
 }
 
 // Pane is one row of list-panes -a.

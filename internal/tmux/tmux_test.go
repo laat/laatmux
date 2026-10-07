@@ -160,6 +160,148 @@ func TestNoServer(t *testing.T) {
 	}
 }
 
+// A run with no tmux on PATH is NotInstalled, wrapped or not, and not
+// NoServer. A tmux that is there is not NotInstalled: one that runs and
+// fails, whatever it says, one that cannot start, or one found only
+// relative to the current directory, which exec refuses. Nor is an
+// error tmux did not give. The cause is not unwrapped, so no other
+// caller's errors.Is or errors.As changes.
+func TestNotInstalled(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	_, err := DefaultServer.Run(ctx, "list-sessions")
+	if !NotInstalled(err) || !NotInstalled(fmt.Errorf("list: %w", err)) || NoServer(err) {
+		t.Errorf("no tmux on PATH: %v, NotInstalled %v, NoServer %v", err, NotInstalled(err), NoServer(err))
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("the cause is unwrapped: %v", err)
+	}
+	fake := func(script string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake("#!/bin/sh\necho 'no server running on /x' >&2\nexit 1\n")
+	if _, err := DefaultServer.Run(ctx, "list-sessions"); NotInstalled(err) || !NoServer(err) {
+		t.Errorf("tmux that ran: %v, NotInstalled %v, NoServer %v", err, NotInstalled(err), NoServer(err))
+	}
+	fake("#!/bin/sh\necho 'exec: \"tmux\": executable file not found in $PATH' >&2\nexit 1\n")
+	if _, err := DefaultServer.Run(ctx, "list-sessions"); err == nil || NotInstalled(err) {
+		t.Errorf("tmux that says not found: %v, NotInstalled %v", err, NotInstalled(err))
+	}
+	fake("#!/nonexistent/sh\n")
+	if _, err := DefaultServer.Run(ctx, "list-sessions"); err == nil || NotInstalled(err) {
+		t.Errorf("tmux that cannot start: %v, NotInstalled %v", err, NotInstalled(err))
+	}
+	fake("#!/bin/sh\nexit 0\n")
+	t.Chdir(dir)
+	t.Setenv("PATH", ".")
+	if _, err := DefaultServer.Run(ctx, "list-sessions"); err == nil || !strings.Contains(err.Error(), exec.ErrDot.Error()) || NotInstalled(err) {
+		t.Errorf("tmux relative to the current directory: %v, NotInstalled %v", err, NotInstalled(err))
+	}
+	if NotInstalled(&Error{Msg: "m"}) || NotInstalled(&exec.Error{Name: "tmux", Err: exec.ErrNotFound}) {
+		t.Error("an error not from a tmux run reported as not installed")
+	}
+}
+
+// The socket is found as tmux finds it, and NoSocket is nothing there:
+// anything there, a path that cannot be checked, or a TMUX_TMPDIR that
+// does not resolve, may be a server.
+func TestNoSocket(t *testing.T) {
+	dir := t.TempDir()
+	real, err := filepath.EvalSymlinks(dir) // macOS's /var is a link
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := "tmux-" + strconv.Itoa(os.Getuid())
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("TMUX", "")
+	socket := func(s Server, want string) {
+		t.Helper()
+		if got, ok := s.socket(); !ok || got != want {
+			t.Errorf("%+v with TMUX %q, TMUX_TMPDIR %q: socket %q %v, want %q", s, os.Getenv("TMUX"), os.Getenv("TMUX_TMPDIR"), got, ok, want)
+		}
+	}
+	for _, c := range []struct {
+		s    Server
+		tmux string
+		want string
+	}{
+		{DefaultServer, "", filepath.Join(real, uid, "default")},
+		{LaatmuxServer, "/s/other,1,0", filepath.Join(real, uid, "laatmux")},
+		{Server{Path: "/s/p", Name: "n"}, "", "/s/p"},
+		{Server{}, "/s/current,1,0", "/s/current"},
+		{Server{}, "", filepath.Join(real, uid, "default")},
+	} {
+		t.Setenv("TMUX", c.tmux)
+		socket(c.s, c.want)
+	}
+	t.Setenv("TMUX", "")
+	// Resolved before tmux-<uid> is added, as tmux's realpath does: a ..
+	// after a link goes up from the link's target.
+	if err := os.MkdirAll(filepath.Join(dir, "target", "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "case"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "target", "child"), filepath.Join(dir, "case", "link")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", dir+"/case/link/..")
+	socket(DefaultServer, filepath.Join(real, "target", uid, "default"))
+	t.Setenv("TMUX_TMPDIR", "")
+	socket(DefaultServer, filepath.Join("/tmp", uid, "default"))
+	t.Setenv("TMUX_TMPDIR", filepath.Join(dir, "missing"))
+	if got, ok := DefaultServer.socket(); ok || DefaultServer.NoSocket() {
+		t.Errorf("TMUX_TMPDIR that does not resolve: socket %q %v, NoSocket %v", got, ok, DefaultServer.NoSocket())
+	}
+	// One that is a file has no socket under it that tmux could make,
+	// and is not told for no socket.
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", file)
+	if DefaultServer.NoSocket() {
+		t.Error("TMUX_TMPDIR that is a file has no socket")
+	}
+	t.Setenv("TMUX_TMPDIR", dir)
+	if !DefaultServer.NoSocket() {
+		t.Error("nothing there is a socket")
+	}
+	sock := filepath.Join(dir, uid, "default")
+	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), sock); err != nil {
+		t.Fatal(err)
+	}
+	if DefaultServer.NoSocket() {
+		t.Error("a dangling link at the socket is no socket")
+	}
+	if err := os.Remove(sock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if DefaultServer.NoSocket() {
+		t.Error("a file at the socket is no socket")
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(filepath.Join(dir, uid), 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(dir, uid), 0o700) })
+		if (Server{Name: "other"}).NoSocket() {
+			t.Error("a socket directory that cannot be read is no socket")
+		}
+	}
+}
+
 func TestEncodeBranch(t *testing.T) {
 	cases := map[string]string{
 		"main":       "main",
