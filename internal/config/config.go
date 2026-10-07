@@ -514,6 +514,14 @@ func (c *Config) validateHosts() error {
 			}
 			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, LabelRule)
 		}
+		// The bridge's command starts with the binary, and the host's
+		// login shell reads a command that starts with - as its own
+		// options; upgrade's install script hands the path to command
+		// -v, dirname, mkdir and mv, which do the same. A relative path
+		// or one with spaces is a quoted word, run from the remote home.
+		if strings.HasPrefix(h.Bin, "-") {
+			return fmt.Errorf("hosts: bin %q for %s starts with -, which the host's shell reads as an option", h.Bin, h.Name)
+		}
 		if j, dup := seen[h.Name]; dup {
 			return fmt.Errorf("hosts: %s listed twice (entries %d and %d)", h.Name, j+1, i+1)
 		}

@@ -237,6 +237,46 @@ func TestParseSSHLeadingDash(t *testing.T) {
 	}
 }
 
+// A bin that starts with - is read as options by the host's login shell
+// running the bridge, and by the install script's tools, so the config
+// refuses one and says which host, however the host got its name. An
+// absolute path, a path under ~, a relative path, a path with a space,
+// a bare name and a - after the first character are binaries.
+func TestParseBinLeadingDash(t *testing.T) {
+	refused := map[string]string{
+		"hosts:\n  - name: mac\n  - name: vm\n    ssh: box\n    bin: -x\n": `hosts: bin "-x" for vm starts with -, which the host's shell reads as an option`,
+		"hosts:\n  - name: vm\n    ssh: box\n    bin: -x/laatmux\n":        `hosts: bin "-x/laatmux" for vm starts with -`,
+		"hosts:\n  - ssh: box\n    bin: \"--\"\n":                          `hosts: bin "--" for box starts with -`,
+	}
+	for in, want := range refused {
+		_, err := Parse([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %v, want %q", in, err, want)
+		}
+	}
+	bins := map[string]string{
+		"abs":   "/opt/laatmux/bin/laatmux",
+		"home":  "~/.local/bin/laatmux",
+		"rel":   "bin/laatmux",
+		"space": "~/my tools/laatmux",
+		"bare":  "laatmux",
+		"dash":  "laatmux-",
+	}
+	in := "hosts:\n"
+	for name, bin := range bins {
+		in += "  - name: " + name + "\n    ssh: " + name + "\n    bin: \"" + bin + "\"\n"
+	}
+	c, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, bin := range bins {
+		if h, ok := c.Find(name); !ok || h.Bin != bin {
+			t.Errorf("%s: %+v, want bin %q", name, h, bin)
+		}
+	}
+}
+
 // A command whose first word is an environment assignment or an append
 // is refused: tmux's shell line quotes it, and the shell would run it
 // as a program. The name is what comes before the first =. The
