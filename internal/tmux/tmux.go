@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -198,6 +200,39 @@ func NoServer(err error) bool {
 func NotInstalled(err error) bool {
 	var te *Error
 	return errors.As(err, &te) && errors.Is(te.err, exec.ErrNotFound)
+}
+
+// NoSocket reports whether nothing is at the socket a tmux run would
+// connect to for the server, so no server can be running on it: what
+// tmux says "no server running" for. It is how a caller with no tmux to
+// run tells a machine without a server from one whose server it cannot
+// reach. Anything there, a stale socket included, or a path that cannot
+// be checked, is not NoSocket.
+func (s Server) NoSocket() bool {
+	_, err := os.Lstat(s.socket())
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// socket is the path tmux connects to for the server, found as tmux 3.2
+// and later find it: -S as given; with no selector, the socket TMUX
+// names; else the -L name, or default, in tmux-<uid> under TMUX_TMPDIR
+// when that is a directory, else under /tmp.
+func (s Server) socket() string {
+	if s.Path != "" {
+		return s.Path
+	}
+	name := s.Name
+	if name == "" {
+		if v, _, _ := strings.Cut(os.Getenv("TMUX"), ","); v != "" {
+			return v
+		}
+		name = "default"
+	}
+	dir := os.Getenv("TMUX_TMPDIR")
+	if fi, err := os.Stat(dir); dir == "" || err != nil || !fi.IsDir() {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), name)
 }
 
 // Pane is one row of list-panes -a.

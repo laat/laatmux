@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // rm inside a workspace session takes the workspace from the session:
@@ -83,7 +85,9 @@ func TestRmCurrent(t *testing.T) {
 // rm on a machine without tmux removes the worktree on the host and has
 // no local session to clean up, rather than failing after the host's
 // side is done: whether the host has the worktree's record or the root
-// is looked for among the local sessions.
+// is looked for among the local sessions. With the default server's
+// socket there, the local sessions may hold the root, and rm stops
+// before it sends a removal without it.
 func TestRmWithoutTmux(t *testing.T) {
 	const src = "git@x:o/proj.git"
 	var rms []protocol.Message
@@ -108,11 +112,23 @@ func TestRmWithoutTmux(t *testing.T) {
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
 	t.Setenv("PATH", t.TempDir())
+	tmpdir := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", tmpdir)
 	for _, branch := range []string{"b", "gone"} {
 		args := []string{"proj/" + branch, "--host", "mac"}
 		if err := cmdRm(context.Background(), args); err != nil {
 			t.Errorf("rm %v: %v", args, err)
 		}
+	}
+	sockDir := filepath.Join(tmpdir, "tmux-"+strconv.Itoa(os.Getuid()))
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sockDir, "default"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdRm(context.Background(), []string{"proj/gone", "--host", "mac"}); !tmux.NotInstalled(err) {
+		t.Errorf("rm proj/gone with the socket there: %v, want the not-found error", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
