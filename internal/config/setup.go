@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/laat/laatmux/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,25 +79,25 @@ func CheckCopy(p string) error {
 		return fmt.Errorf("empty path")
 	}
 	if filepath.IsAbs(p) {
-		return fmt.Errorf("%s is absolute; entries are relative to the repository root", p)
+		return fmt.Errorf("%s is absolute; entries are relative to the repository root", tmux.Printable(p))
 	}
 	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
 		switch part {
 		case "..":
-			return fmt.Errorf("%s leaves the repository root", p)
+			return fmt.Errorf("%s leaves the repository root", tmux.Printable(p))
 		case "", ".":
 			// Git lists no such segment, so a glob with one would match
 			// nothing; a literal path is cleaned, but one spelling for
 			// both is clearer.
-			return fmt.Errorf("%s: no empty or . segments; spell the path from the repository root", p)
+			return fmt.Errorf("%s: no empty or . segments; spell the path from the repository root", tmux.Printable(p))
 		case "**":
 			continue
 		}
 		if strings.Contains(part, "**") {
-			return fmt.Errorf("%s: ** must be a whole path segment", p)
+			return fmt.Errorf("%s: ** must be a whole path segment", tmux.Printable(p))
 		}
 		if _, err := path.Match(part, ""); err != nil {
-			return fmt.Errorf("%s: %v", p, err)
+			return fmt.Errorf("%s: %v", tmux.Printable(p), err)
 		}
 	}
 	return nil

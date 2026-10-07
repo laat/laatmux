@@ -532,7 +532,10 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	}
 	// A copy pattern, which a repository's .laatmux.yaml may spell with
 	// any byte, is named quoted when it matches nothing.
-	pattern := "no\tsuch*\x1b[1m"
+	pattern := "no\tsuch*\x1b.env"
+	if err := config.CheckCopy(pattern); err != nil {
+		t.Fatalf("the pattern is not one a config may have: %v", err)
+	}
 	f.repo.Copy = []string{pattern}
 	a, steps, err := f.add("first")
 	if err != nil {
@@ -560,12 +563,79 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	// A file the main checkout has, named with them (no [, which would
 	// make the entry a glob), is copied and named quoted.
 	file := "lit\tx\x1b.env"
+	if err := config.CheckCopy(file); err != nil {
+		t.Fatalf("the entry is not one a config may have: %v", err)
+	}
 	write(t, filepath.Join(c, file), "x")
 	f.repo.Copy = []string{file}
 	if _, steps, err := f.add("copied"); err != nil || !hasStep(steps, protocol.StageCopy, protocol.StateDone, strconv.Quote(file)) {
 		t.Errorf("copy of %q: %v %+v", file, err, steps)
 	}
+	// Again, with the file there and an entry the checkout lacks; then
+	// a directory, a link out of the checkout, and a directory of the
+	// worktree that leads out of it, each of which fails the stage.
+	outside := filepath.Join(base, "outside")
+	write(t, filepath.Join(outside, "f"), "x")
+	copied := f.store.Dirs.Worktree("proj", "copied")
+	missing, dir, link, wdir := "gone\tx\x1b.env", "dir\tx\x1b", "out\tlink\x1b", "wdir\tx\x1b"
+	if err := os.Mkdir(filepath.Join(c, dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(c, wdir, "f"), "x")
+	for _, l := range [][2]string{{outside, filepath.Join(c, link)}, {outside, filepath.Join(copied, wdir)}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.repo.Copy = []string{file, missing}
+	_, steps, err = f.add("copied")
+	if err != nil || !hasStep(steps, protocol.StageCopy, protocol.StateSkip, strconv.Quote(file)+" exists") || !hasStep(steps, protocol.StageCopy, protocol.StateSkip, strconv.Quote(missing)+" not in "+qc) {
+		t.Errorf("copy again: %v %+v", err, steps)
+	}
+	for _, tc := range [][2]string{
+		{dir, strconv.Quote(filepath.Join(c, dir)) + ": not a regular file"},
+		{link + "/f", strconv.Quote(link+"/f") + " resolves outside the checkout " + qc},
+		{wdir + "/f", strconv.Quote(wdir+"/f") + ": its directory resolves outside the worktree " + strconv.Quote(copied)},
+	} {
+		f.repo.Copy = []string{tc[0]}
+		if _, _, err := f.add("copied"); !quoted(err, tc[1]) {
+			t.Errorf("copy of %q: %v", tc[0], err)
+		}
+	}
 	f.repo.Copy = nil
+
+	// A checkout's place taken by a directory that is no checkout of the
+	// repository, or one of another origin.
+	squat := f.store.Dirs.Checkout("squat")
+	other := Repo{Source: "/nowhere/squat.git", Name: "squat"}
+	if err := os.MkdirAll(squat, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.Prepare(f.ctx, other, nil); !quoted(err, strconv.Quote(squat)+" exists and is not a checkout of /nowhere/squat.git") {
+		t.Errorf("prepare in a plain directory: %v", err)
+	}
+	run(t, squat, "git", "init", "-q")
+	run(t, squat, "git", "remote", "add", "origin", "/nowhere/else.git")
+	if _, err := f.store.Prepare(f.ctx, other, nil); !quoted(err, strconv.Quote(squat)+" exists with origin /nowhere/else.git, not /nowhere/squat.git") {
+		t.Errorf("prepare in another checkout: %v", err)
+	}
+	if err := os.RemoveAll(squat); err != nil {
+		t.Fatal(err)
+	}
+	// A checkout whose config git cannot read; git's message after the
+	// quoted checkout is git's (#275).
+	cfgFile := filepath.Join(c, ".git", "config")
+	cfg, err := os.ReadFile(cfgFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, cfgFile, "[core\n")
+	f.store.origins = map[string]originEntry{}
+	if _, _, err := f.store.Checkout(f.ctx, f.repo); err == nil || !strings.Contains(err.Error(), qc+": git config --get remote.origin.url: ") {
+		t.Errorf("checkout with a bad config: %v", err)
+	}
+	write(t, cfgFile, string(cfg))
+	f.store.origins = map[string]originEntry{}
 
 	if _, _, err := f.add("main"); !quoted(err, "branch main is checked out in the main checkout "+qc) {
 		t.Errorf("add main: %v", err)
@@ -579,10 +649,6 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	run(t, c, "git", "worktree", "add", "-q", "-b", "squatter", wanted, "main")
 	if _, _, err := f.add("wanted"); !quoted(err, strconv.Quote(wanted)+" is a worktree on branch squatter, not wanted") {
 		t.Errorf("add wanted: %v", err)
-	}
-	outside := filepath.Join(base, "outside")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(f.store.Dirs.Worktrees, "proj", "sym")); err != nil {
 		t.Fatal(err)
@@ -625,7 +691,6 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(gitDir, 0o755) })
 	f.store.origins = map[string]originEntry{}
-	cfgFile := filepath.Join(gitDir, "config")
 	if _, _, err := f.store.Checkout(f.ctx, f.repo); !quoted(err, qc+": stat "+strconv.Quote(cfgFile)+": ") || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("checkout with an unreadable .git: %v", err)
 	}

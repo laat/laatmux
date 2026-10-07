@@ -18,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // cmdTasks lists the pending records the local daemon holds, one line
@@ -120,7 +121,8 @@ func taskReport(s merged.Status) string {
 // list has the record's host: the daemon re-reads the config for
 // every subscription, so a host removed from it has no row, and the
 // record says so first, since it is dismissable then whatever else it
-// says.
+// says. An error is put as tmux.Printable shows it: a failed setup's
+// is the last lines of its output, and git's can span lines.
 func TaskState(p protocol.Pending, configured bool) string {
 	switch {
 	case !configured:
@@ -128,7 +130,7 @@ func TaskState(p protocol.Pending, configured bool) string {
 	case p.Mismatch != "":
 		return "host replaced: " + p.Mismatch + "; laatmux tasks dismiss " + p.ID + " drops it"
 	case p.Done && !p.OK:
-		return p.Error
+		return tmux.Printable(p.Error)
 	case p.Done && p.Gone:
 		return "done, worktree gone"
 	case p.Done && p.AttemptOpen:
@@ -136,19 +138,19 @@ func TaskState(p protocol.Pending, configured bool) string {
 	case p.Done && p.AttemptError == protocol.ErrRecoveryExpired:
 		return "prompt " + p.Prompt + "; recovery expired, laatmux tasks show " + p.ID + " prints it"
 	case p.Done && p.AttemptError != "":
-		return "prompt " + p.Prompt + "; last attempt refused: " + p.AttemptError
+		return "prompt " + p.Prompt + "; last attempt refused: " + tmux.Printable(p.AttemptError)
 	case p.Done && p.Prompt == protocol.DeliveryNotDelivered:
-		return "prompt not delivered: " + p.Error
+		return "prompt not delivered: " + tmux.Printable(p.Error)
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
-		return "prompt delivery unknown: " + p.Error
+		return "prompt delivery unknown: " + tmux.Printable(p.Error)
 	case p.Done && !p.Listed && p.ListingError != "":
-		return "done, awaiting the listing: " + p.ListingError
+		return "done, awaiting the listing: " + tmux.Printable(p.ListingError)
 	case p.Done && !p.Listed:
 		return "done, awaiting the listing"
 	case p.Done:
 		return "done"
 	case !p.Reachable && p.Unreachable != "":
-		return "host unreachable, retrying: " + p.Unreachable
+		return "host unreachable, retrying: " + tmux.Printable(p.Unreachable)
 	case !p.Taken:
 		return "submitted"
 	default:

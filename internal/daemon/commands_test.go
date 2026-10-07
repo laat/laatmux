@@ -701,22 +701,45 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 		}
 	}
 
-	// A prompt's reasons: the root is gone or another repository's, no
-	// session runs in it, or two do.
+	// A prompt's reasons: the root is gone, another repository's or
+	// another branch's, no session runs in it, two do, the one that does
+	// is unverified (its session renamed by hand), the server is down,
+	// or the checkout cannot be read.
 	ctx := context.Background()
 	for _, c := range []struct{ got, want string }{
 		{d.tasks.worktreeReplaced(ctx, entry{Root: none, Source: remote, Branch: "none"}), "worktree replaced: " + qnone + " is gone"},
 		{d.tasks.worktreeReplaced(ctx, entry{Root: root, Source: "/nowhere/other.git", Branch: "task"}), "worktree replaced: " + q + " is now a worktree of proj"},
+		{d.tasks.worktreeReplaced(ctx, entry{Root: root, Source: remote, Branch: "renamed"}), "worktree replaced: " + q + " is now on branch task, not renamed"},
 		{func() string { _, r := d.tasks.adopt(ctx, none); return r }(), "no agent to deliver to: no managed session in " + qnone},
 	} {
 		if c.got != c.want {
 			t.Errorf("reason %q, want %q", c.got, c.want)
 		}
 	}
+	renamed := "odd\tsession\x1b[1m"
 	ft.set(func() {
-		ft.panes = append(ft.panes, tmux.Pane{Session: "proj/again", ID: "%8", Cwd: root, Managed: true})
+		ft.panes = append(ft.panes,
+			tmux.Pane{Session: "proj/again", ID: "%8", Cwd: root, Managed: true},
+			tmux.Pane{Session: renamed, ID: "%7", Cwd: none, Managed: true})
 	})
 	if _, r := d.tasks.adopt(ctx, root); r != "no agent to deliver to: 2 managed sessions in "+q {
+		t.Errorf("reason %q", r)
+	}
+	if _, r := d.tasks.adopt(ctx, none); r != "no agent to deliver to: no verified agent in session "+strconv.Quote(renamed) {
+		t.Errorf("reason %q", r)
+	}
+	ft.set(func() { ft.listErr = &tmux.Error{Args: []string{"list-panes"}, Msg: "no server running on /tmp/x"} })
+	_, r := d.tasks.adopt(ctx, root)
+	ft.set(func() { ft.listErr = nil })
+	if r != "no agent to deliver to: no managed session in "+q {
+		t.Errorf("reason %q", r)
+	}
+	// A checkout git cannot read: the reason names the root quoted, and
+	// git's message after it is git's (#275).
+	if err := os.WriteFile(filepath.Join(store.Dirs.Checkout("proj"), ".git", "config"), []byte("[core\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := d.tasks.worktreeReplaced(ctx, entry{Root: root, Source: remote, Branch: "task"}); !strings.HasPrefix(r, "worktree "+q+" could not be checked: ") {
 		t.Errorf("reason %q", r)
 	}
 }
