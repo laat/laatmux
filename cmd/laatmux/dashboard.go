@@ -423,7 +423,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		if how == jumpSwitch {
 			return spec, r.Agent.Session, nil
 		}
-		return workspace.Spec{Host: h.Host, Managed: r.Agent.Session, Name: h.Name + "/" + r.Agent.Session}, "", nil
+		return attachSpec(h, r.Agent.Session), "", nil
 	}
 	return spec, "", errors.New(r.Name + ": nothing to jump to")
 }

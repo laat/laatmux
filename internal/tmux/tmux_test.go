@@ -261,6 +261,187 @@ func keptByTmux(name string) bool {
 		!strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || strings.ContainsRune(Sep, r) })
 }
 
+// A session name as tmux lists it, escaped by vis(3), is decoded and
+// the bytes EncodeBranch encodes, but for %, #, ;, . and :, written as
+// it writes them; a name that is not one tmux could have stored is
+// encoded as it is; a name with nothing to encode, a managed session's
+// encoded one say, is kept. Every result without a . or a :, under a
+// host's name, is one CheckSessionName lets a plain attachment be made
+// under.
+func TestEncodeListed(t *testing.T) {
+	cases := map[string]string{
+		"notes":          "notes",
+		"proj/fix%2ebar": "proj/fix%2ebar",
+		"proj/a%5cb":     "proj/a%5cb",
+		"blåbær/ø":       "blåbær/ø",
+		"a b":            "a b",
+
+		// As tmux lists a\b, \\, a tab, a newline, the C-style controls,
+		// another control byte, DEL, bytes that are not UTF-8, and an
+		// octal escape before a digit.
+		`a\\b`:           "a%5cb",
+		`\\\\`:           "%5c%5c",
+		`end\\`:          "end%5c",
+		`tab\tx`:         "tab%09x",
+		`nl\n`:           "nl%0a",
+		`\a\b\v\f\r`:     "%07%08%0b%0c%0d",
+		`a\001b`:         "a%01b",
+		`del\177`:        "del%7f",
+		`a\377b`:         "a%ffb",
+		`日本\200`:         "日本%80",
+		`\342\202x`:      "%e2%82x",
+		`n\0011`:         "n%011",
+		`a\\001`:         "a%5c001",
+		`c1` + "\u0085x": "c1%c2%85x",
+		"sep\u2063x":     "sep%e2%81%a3x",
+
+		// A # and a ; are kept, and a . and a :, which tmux 3.7 lists
+		// as given, are kept for CheckSessionName to refuse.
+		"a#{b};": "a#{b};",
+		"a.b:c":  "a.b:c",
+
+		// A $ tmux 3.2 to 3.4 store escaped, one they keep, which is
+		// encoded all the same, and c$xd as tmux 3.2 and 3.4 list it.
+		"c$xd":   "c%24xd",
+		"a$_b":   "a%24_b",
+		"a${b}":  "a%24{b}",
+		"a$1b":   "a%241b",
+		"$(x)":   "%24(x)",
+		"end$":   "end%24",
+		"a$é":    "a%24é",
+		`c\$xd`:  "c%5c%24xd",
+		`c\\$xd`: "c%5c%24xd",
+
+		// A valid U+FFFD is kept whole, as tmux keeps it, so a name with
+		// one decodes.
+		"v\\\\\ufffdx": "v%5c\ufffdx",
+
+		// Not as tmux lists a name: an escape vis does not write, a
+		// lone \ at the end, an octal escape past 0377, a valid UTF-8
+		// character written in octal, and a raw tab; each is encoded
+		// whole as it is, the escapes that would decode with it too.
+		`a\q`:      "a%5cq",
+		`end\`:     "end%5c",
+		`\400`:     "%5c400",
+		`\303\251`: "%5c303%5c251",
+		"raw\ttab": "raw%09tab",
+		`a\\b\`:    "a%5c%5cb%5c",
+		`a\\$x\q`:  "a%5c%5c%24x%5cq",
+		`x\0`:      "x%5c0",
+		`\0012\9`:  "%5c0012%5c9",
+	}
+	for in, want := range cases {
+		got := EncodeListed(in)
+		if got != want {
+			t.Errorf("EncodeListed(%q) = %q, want %q", in, got, want)
+		}
+		if err := CheckSessionName("mac/" + got); err != nil && !strings.ContainsAny(got, ".:") {
+			t.Errorf("EncodeListed(%q) = %q: %v", in, got, err)
+		}
+	}
+	// Every byte alone, and between two letters, as tmux would list a
+	// name with it: decoded, it is encoded as EncodeBranch encodes it,
+	// but for the characters only EncodeBranch writes.
+	for c := 1; c < 256; c++ {
+		for _, name := range []string{string([]byte{byte(c)}), "a" + string([]byte{byte(c)}) + "z"} {
+			if strings.ContainsAny(name, "%#;.:") {
+				continue
+			}
+			if got, want := EncodeListed(visName(name)), EncodeBranch(name); got != want {
+				t.Errorf("EncodeListed(%q), listed from %q, = %q, want %q", visName(name), name, got, want)
+			}
+		}
+	}
+}
+
+// dollars is the name with each "$" before an ASCII letter, "_" or "{"
+// given the prefix before it: a "\" for the name tmux 3.2 to 3.4 store
+// for a session tmux 3.5 stores as this, which tmux 3.2 lists as
+// stored, and two for the name tmux 3.4 lists, with one more.
+func dollars(name, prefix string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '$' && i+1 < len(name) {
+			if c := name[i+1]; 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || c == '_' || c == '{' {
+				b.WriteString(prefix)
+			}
+		}
+		b.WriteByte(name[i])
+	}
+	return b.String()
+}
+
+// The model of tmux's vis against tmux itself: a session renamed to a
+// name with each byte in turn is listed as visName writes the name, or
+// on tmux 3.2 to 3.4 with its $ before a letter changed, or before 3.7
+// with a . or : as _, and a session
+// renamed to EncodeListed of what was listed, under a host's name, is
+// listed with exactly that name. rename-session stores a name as
+// new-session does; one session renamed over and over keeps the run to
+// one process and a dozen tmux commands.
+func TestEncodeListedKeptByTmux(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	out, err := s.Run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	var names []string
+	for c := 1; c < 256; c++ {
+		// new-session and rename-session expand a # as a format.
+		if c != '#' {
+			names = append(names, "a"+string([]byte{byte(c)})+"z")
+		}
+	}
+	names = append(names, "blåbær", "e😀", "u\ufffdx", "t\xe2\x82x", "s\xed\xa0\x80", `a\$xb`, "a$_b", "a${b", "a$1b", "end$")
+	// tmux 3.7 refuses a name with a control byte, DEL or a byte that is
+	// not UTF-8, so it lists none with one.
+	if _, err := s.Run(ctx, "rename-session", "-t", id, "a\x01z"); err != nil {
+		if !strings.Contains(err.Error(), "invalid session name") {
+			t.Fatal(err)
+		}
+		names = slices.DeleteFunc(names, func(n string) bool {
+			return !utf8.ValidString(n) || strings.ContainsFunc(n, func(r rune) bool { return r < 0x20 || r == 0x7f })
+		})
+	}
+	// Fifty names to a tmux command, which takes a command line of so
+	// many bytes only.
+	rename := func(names []string) []string {
+		var got []string
+		for chunk := range slices.Chunk(names, 50) {
+			var args []string
+			for _, n := range chunk {
+				args = append(args, "rename-session", "-t", id, n, Next, "display-message", "-p", "-t", id, "#{session_name}", Next)
+			}
+			out, err := s.Run(ctx, args[:len(args)-1]...)
+			if err != nil {
+				t.Fatalf("%q: %v", chunk, err)
+			}
+			got = append(got, strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")...)
+		}
+		if len(got) != len(names) {
+			t.Fatalf("%d names listed for %d: %q", len(got), len(names), got)
+		}
+		return got
+	}
+	listed := rename(names)
+	var local []string
+	for i, l := range listed {
+		// tmux before 3.7 stores a . or a : as _.
+		want := visName(names[i])
+		if !slices.Contains([]string{want, dollars(want, `\`), dollars(want, `\\`), strings.NewReplacer(".", "_", ":", "_").Replace(want)}, l) {
+			t.Errorf("%q listed as %q, visName %q", names[i], l, want)
+		}
+		local = append(local, "mac/"+EncodeListed(l))
+	}
+	for i, got := range rename(local) {
+		if got != local[i] {
+			t.Errorf("%q, listed as %q: local name %q listed as %q", names[i], listed[i], local[i], got)
+		}
+	}
+}
+
 // Redact replaces the secret, bare and shell-quoted, in an error's text;
 // Submitted tells a launch that may have taken from one that did not.
 func TestRedactAndSubmitted(t *testing.T) {

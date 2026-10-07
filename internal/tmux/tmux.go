@@ -821,18 +821,30 @@ func FormatLiteral(s string) string {
 // is named by its directory, encoded the same way. Distinct branches
 // give distinct names and the encoding is exact.
 func EncodeBranch(branch string) string {
+	return encodeBytes(branch, func(i int) bool {
+		c := branch[i]
+		return c < 0x20 || c >= 0x7f || strings.IndexByte(`$%#.:;\`, c) >= 0
+	})
+}
+
+// encodeBytes writes each byte of s that escape picks by its index as
+// "%" and its two lowercase hex digits, and the rest as they are. A
+// valid multibyte UTF-8 character is kept whole, as tmux keeps it, but
+// for a C1 control character and a U+2063; a byte that is not part of
+// a character kept is offered to escape alone.
+func encodeBytes(s string, escape func(i int) bool) string {
 	const hex = "0123456789abcdef"
 	var b strings.Builder
-	for i := 0; i < len(branch); {
-		c := branch[i]
+	for i := 0; i < len(s); {
+		c := s[i]
 		if c >= utf8.RuneSelf {
-			if r, n := utf8.DecodeRuneInString(branch[i:]); (r != utf8.RuneError || n > 1) && !unicode.IsControl(r) && !strings.ContainsRune(Sep, r) {
-				b.WriteString(branch[i : i+n])
+			if r, n := utf8.DecodeRuneInString(s[i:]); (r != utf8.RuneError || n > 1) && !unicode.IsControl(r) && !strings.ContainsRune(Sep, r) {
+				b.WriteString(s[i : i+n])
 				i += n
 				continue
 			}
 		}
-		if c < 0x20 || c >= 0x7f || strings.IndexByte(`$%#.:;\`, c) >= 0 {
+		if escape(i) {
 			b.WriteByte('%')
 			b.WriteByte(hex[c>>4])
 			b.WriteByte(hex[c&0xf])
@@ -848,3 +860,114 @@ func EncodeBranch(branch string) string {
 // <repo>/<encoded branch>. Labels cannot contain "/", so the first
 // component is the label and the rest is the branch, slashes included.
 func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(branch) }
+
+// EncodeListed makes a session name as tmux lists it a part of another
+// session's name that tmux stores as given, for a local session named
+// after a session on a host. tmux stores a session name through vis(3),
+// as visName writes it, and lists it as stored: a session made as a\b
+// is listed as a\\b, and one with a tab as tab\tx. Passed to
+// new-session again as part of a name, such a name is escaped again,
+// and the name stored is not the one computed. So the name is decoded
+// first, when it is one tmux could have stored, that is when encoding
+// what it decodes to gives it back; a name that is not, a\q say, is
+// taken as it is. Then each byte EncodeBranch encodes becomes "%" and
+// its two lowercase hex digits, as EncodeBranch writes them, but for
+// "%", "#", ";", "." and ":": a "\", a control character, DEL, a byte
+// that is not part of a valid UTF-8 sequence, a "$" and a U+2063. So
+// a\\b becomes a%5cb and tab\tx becomes tab%09x, as EncodeBranch writes
+// a\b and the tab, and a name with none of these is kept as it is. A
+// "%" is kept since the names listed are mostly managed sessions',
+// encoded already, whose workspace sessions are named after them as
+// they are; a "#" since new-session is given the name as
+// FormatLiteral writes it; a ";" since args writes a last one "\;".
+// tmux before 3.7 lists no "." or ":", storing them as "_"; tmux 3.7
+// lists them as given, but a target splits there, so such a session
+// cannot be attached by its listed name, and they are kept for
+// CheckSessionName to refuse a plain attachment to it. Two sessions
+// on a host, a\b and a%5cb, can so get one local name; the second's
+// jump is then refused as a name in use, since the local session is
+// found by its attach tag, which is exact. tmux 3.2 to 3.4 store a
+// "$" before a letter with a "\" before it: tmux 3.2 lists c$xd as
+// c\$xd, which does not decode, and tmux 3.4 with one more "\", as
+// c\\$xd, which decodes to c\$xd. Either becomes c%5c%24xd, a name
+// kept as given, though a host on tmux 3.4 cannot attach the session
+// by its listed name (#227).
+func EncodeListed(name string) string {
+	if d := unvisName(name); visName(d) == name {
+		name = d
+	}
+	return encodeBytes(name, func(i int) bool {
+		c := name[i]
+		return c < 0x20 || c >= 0x7f || c == '\\' || c == '$'
+	})
+}
+
+// The control bytes vis(3) writes as a letter after a "\", under
+// VIS_CSTYLE, and the letters.
+const (
+	cstyleBytes   = "\a\b\t\n\v\f\r"
+	cstyleLetters = "abtnvfr"
+)
+
+// visName is the name tmux 3.5 and later store for a session named s,
+// as session_check_name writes it through vis(3) with VIS_OCTAL,
+// VIS_CSTYLE, VIS_TAB and VIS_NL: a "\" doubled; a bell, backspace,
+// tab, newline, vertical tab, form feed and carriage return as "\" and
+// a letter; any other control byte, DEL and a byte that is not part of
+// a valid UTF-8 sequence as "\" and three octal digits; every other
+// byte, and a valid multibyte UTF-8 character, as it is. The ":" and
+// "." tmux before 3.7 turns into "_" first are not its business.
+func visName(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			if r, n := utf8.DecodeRuneInString(s[i:]); r != utf8.RuneError || n > 1 {
+				b.WriteString(s[i : i+n])
+				i += n
+				continue
+			}
+		}
+		switch j := strings.IndexByte(cstyleBytes, c); {
+		case c == '\\':
+			b.WriteString(`\\`)
+		case j >= 0:
+			b.WriteByte('\\')
+			b.WriteByte(cstyleLetters[j])
+		case c < 0x20 || c >= 0x7f:
+			b.WriteByte('\\')
+			b.WriteByte('0' + c>>6)
+			b.WriteByte('0' + c>>3&7)
+			b.WriteByte('0' + c&7)
+		default:
+			b.WriteByte(c)
+		}
+		i++
+	}
+	return b.String()
+}
+
+// unvisName reads a name as visName writes it. A "\" that starts none
+// of the escapes visName writes is read as itself, and visName then
+// does not give back the name read.
+func unvisName(s string) string {
+	octal := func(c byte) bool { return '0' <= c && c <= '7' }
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if rest := s[i+1:]; c == '\\' && rest != "" {
+			switch j := strings.IndexByte(cstyleLetters, rest[0]); {
+			case rest[0] == '\\':
+				i++
+			case j >= 0:
+				c = cstyleBytes[j]
+				i++
+			case len(rest) >= 3 && '0' <= rest[0] && rest[0] <= '3' && octal(rest[1]) && octal(rest[2]):
+				c = (rest[0]-'0')<<6 | (rest[1]-'0')<<3 | (rest[2] - '0')
+				i += 3
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}

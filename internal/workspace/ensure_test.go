@@ -415,6 +415,21 @@ func TestEnsureAttachmentNames(t *testing.T) {
 			t.Errorf("%q: %v, want a refusal with %q", m, err, want)
 		}
 	}
+	// A managed session with a U+2063 in its name is refused under the
+	// name AttachName gives it too, which has it encoded: the attach tag
+	// has it as it is, and would not read back.
+	sep := "a\u2063\u2063b"
+	if _, _, err := Ensure(ctx, Spec{Host: host, Managed: sep, Name: AttachName("mac", sep)}); err == nil || !strings.Contains(err.Error(), "U+2063") {
+		t.Errorf("%q: %v, want a refusal", sep, err)
+	}
+	// So is one whose name starts with a $, which the target =$0 reads
+	// as the session id $0, another session's.
+	if _, _, err := Ensure(ctx, Spec{Host: host, Managed: "$0", Name: AttachName("mac", "$0")}); err == nil || !strings.Contains(err.Error(), "starts with a $") {
+		t.Errorf("$0: %v, want a refusal", err)
+	}
+	if locals, err := List(ctx); err != nil || len(Records(locals)) != len(names) {
+		t.Errorf("after the refusals: %+v %v", locals, err)
+	}
 	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "legacy", "sleep 600", tmux.Next, "set-option", "-t", "=legacy:", "@laatmux_attach", "mac/a$1"); err != nil {
 		t.Fatal(err)
 	}
@@ -502,15 +517,18 @@ func TestSwitchExactName(t *testing.T) {
 // A plain attachment named as a worktree's workspace would be, left by
 // an older build's jump from the agent's row: a keyed spec to the same
 // managed session adopts it, keyed and tagged, its untagged attach pane
-// given the target, and found by key after; one to another managed
-// session is still a name in use.
+// given the target, and found by key after; one an older build named
+// after a managed session with a $ in it is adopted by a workspace named
+// after that session, but one named otherwise is not, nor by a workspace
+// named after a worktree whose agent is in the session; one to another
+// managed session is still a name in use.
 func TestEnsureAdoptsAttachment(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"proj/w", "proj/live", "proj/other"} {
+	for _, name := range []string{"proj/w", "proj/live", `proj/r\x`, "proj/live2", "proj/other"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
@@ -590,6 +608,91 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	// Found by key the next time, nothing created.
 	if name, created, err := Ensure(ctx, keyed); err != nil || created || name != "mac/proj/w" {
 		t.Fatalf("ensure after adopt: %q %v %v", name, created, err)
+	}
+	// Its agent moved to a session with a U+2063 in its name: refused
+	// before the attach pane is pointed at it, which keeps its target.
+	moved := keyed
+	// So with one whose name starts with a $, which the target reads as
+	// a session id.
+	for m, want := range map[string]string{"proj/w\u2063\u2063x": "U+2063", "$0": "starts with a $"} {
+		moved.Managed = m
+		if _, _, err := Ensure(ctx, moved); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("the moved agent's session %q: %v, want a refusal", m, err)
+		}
+		if _, target, _, _ := pane("mac/proj/w"); target != "proj/w" {
+			t.Fatalf("the attach pane's target after the refusal for %q: %q", m, target)
+		}
+	}
+	// One an older build named after a managed session with a $ in it,
+	// as listed, which AttachName now encodes, is adopted under its own
+	// name by a workspace named after that session, and nothing is made
+	// under the spec's. tmux 3.2 to 3.4 store such a $ escaped, so the
+	// older build made no session of that name there.
+	legacy := Spec{Host: host, Managed: "proj/fix$HOME", Name: AttachName("mac", "proj/fix$HOME"), Key: "env//r/fix$HOME", Branch: "fix$HOME"}
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/proj/fix$HOME", "sleep 600", tmux.Next, "set-option", "-t", "=mac/proj/fix$HOME:", "@laatmux_attach", "mac/proj/fix$HOME"); err != nil {
+		t.Logf("no session of the older build's name: %v", err)
+	} else {
+		if name, created, err := Ensure(ctx, legacy); err != nil || created || name != "mac/proj/fix$HOME" {
+			t.Fatalf("adopt the older build's attachment: %q %v %v", name, created, err)
+		}
+		locals, err = List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l, ok := Find(locals, legacy.Key, ""); !ok || l.Name != "mac/proj/fix$HOME" || l.Attach != "" {
+			t.Fatalf("after adopting the older build's attachment: %+v %v", l, ok)
+		}
+		if l, ok := ByName(locals, legacy.Name); ok {
+			t.Fatalf("a session made under the spec's name: %+v", l)
+		}
+	}
+	// A session of the older build's name without its tag, the user's
+	// own say, is not adopted: the workspace is made beside it.
+	other := Spec{Host: host, Managed: "proj/v$2", Name: AttachName("mac", "proj/v$2"), Key: "env//r/v$2", Branch: "v$2"}
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/proj/v$2", "sleep 600", tmux.Next, "has-session", "-t", "=mac/proj/v$2:"); err != nil {
+		t.Logf("no session of the older build's name: %v", err)
+	} else {
+		if name, created, err := Ensure(ctx, other); err != nil || !created || name != "mac/proj/v%242" {
+			t.Fatalf("the workspace beside the untagged session: %q %v %v", name, created, err)
+		}
+		locals, err = List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l, ok := ByName(locals, "mac/proj/v$2"); !ok || l.Key != "" || l.Attach != "" {
+			t.Fatalf("the untagged session after: %+v %v", l, ok)
+		}
+	}
+	// One under another name, renamed by hand say, is not adopted by a
+	// workspace named after the session, here one AttachName renames: it
+	// may be another worktree's to adopt by its name. The workspace is
+	// made, the attachment left.
+	renamed := `proj/r\\x` // as tmux lists proj/r\x
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: renamed, Name: "mac/old/r"}); err != nil || !created {
+		t.Fatalf("the attachment named otherwise: %v %v", created, err)
+	}
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: renamed, Name: AttachName("mac", renamed), Key: "env//r/r", Branch: "r"}); err != nil || !created || name != "mac/proj/r%5cx" {
+		t.Fatalf("the workspace beside it: %q %v %v", name, created, err)
+	}
+	locals, err = List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := ByName(locals, "mac/old/r"); !ok || l.Attach != "mac/"+renamed || l.Key != "" {
+		t.Fatalf("the attachment named otherwise after: %+v %v", l, ok)
+	}
+	// A workspace named otherwise, after a worktree whose root agent was
+	// moved into the session, leaves the plain attachment to it alone,
+	// named after the session as it is, and the attachment is still
+	// found by a plain spec.
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live2", Name: "mac/proj/live2"}); err != nil || !created {
+		t.Fatalf("the attachment to the agent's session: %v %v", created, err)
+	}
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live2", Name: "mac/proj/a", Key: "env//r/a", Branch: "a"}); err != nil || !created || name != "mac/proj/a" {
+		t.Fatalf("the lost home's workspace: %q %v %v", name, created, err)
+	}
+	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live2", Name: "mac/proj/live2"}); err != nil || created || name != "mac/proj/live2" {
+		t.Fatalf("the attachment to the agent's session after: %q %v %v", name, created, err)
 	}
 	// A plain attachment to another managed session stays a name in use.
 	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/other", Name: "mac/proj/other"}); err != nil || !created {

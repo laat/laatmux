@@ -45,6 +45,15 @@ func SessionName(host, repo, branch string) string {
 	return host + "/" + tmux.SessionName(repo, branch)
 }
 
+// AttachName is the local session name for a managed session on a host,
+// by the session's name as the host's tmux lists it: <host>/<session>,
+// the session's part made one tmux stores as given (tmux.EncodeListed).
+// A session made with a "\" or a tab in its name is listed escaped, and
+// as it is listed would be escaped again in the local name.
+func AttachName(host, session string) string {
+	return host + "/" + tmux.EncodeListed(session)
+}
+
 // Records is laatmux's sessions among the ones listed, a workspace or a
 // plain attachment each, which is what the merging daemon publishes; a
 // session with neither tag is not laatmux's and is left out.
@@ -190,11 +199,24 @@ type Spec struct {
 // attachment to the managed session a keyed spec names, which it
 // adopts as the workspace: an older build's jump from the agent's row
 // made such a session, named as the workspace would be, before the
-// worktree had its home session back. A plain attachment to be made
-// under a name tmux would not store as given is refused. The name of
-// the session, existing or new, and whether it was created are
-// returned.
+// worktree had its home session back. A workspace named after its
+// managed session also adopts one under the name an older build gave
+// it. A plain attachment to be made under a name tmux would not store
+// as given is refused. The name of the session, existing or new, and
+// whether it was created are returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
+	// The attach tags and the attach command have the managed session's
+	// name, so one that cannot be in them is refused before any is
+	// written, a reuse's or an adoption's too: a U+2063, since the tags
+	// are read back split at Sep, and a $ at the start, which the target
+	// =$name reads as a session id. AttachName encodes both in the local
+	// name, which CheckSessionName refused for them before.
+	switch {
+	case strings.ContainsAny(s.Managed, tmux.Sep):
+		return "", false, fmt.Errorf("managed session %q has the character U+2063, which laatmux separates the fields of tmux's listings with", s.Managed)
+	case strings.HasPrefix(s.Managed, "$"):
+		return "", false, fmt.Errorf("managed session %q starts with a $, which the attach target reads as a session id", s.Managed)
+	}
 	locals, err := List(ctx)
 	if err != nil {
 		return "", false, err
@@ -225,16 +247,29 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 			return "", false, fmt.Errorf("local session %s exists and is not laatmux's; name in use", tmux.Printable(s.Name))
 		}
 	}
+	// A workspace named after its managed session, as worktreeSpec names
+	// one after the worktree's home, adopts the plain attachment an
+	// older build named after the session as listed, a $ in it kept,
+	// which AttachName encodes now: the name its tag has. One named
+	// otherwise, after a worktree whose root agent is in a session that
+	// is not its home, leaves a plain attachment to that session alone.
+	if s.Key != "" && s.Name != attach && s.Name == AttachName(s.Host.Name, s.Managed) {
+		if l, ok := ByName(locals, attach); ok && l.Attach == attach {
+			return l.Name, false, adopt(ctx, l.Name, s)
+		}
+	}
 	// A plain attachment's name has the managed session's in it, which
 	// one made by an older laatmux new, or by hand, can have a character
 	// in that tmux would not store as given: the session made would have
 	// another name, and the tags in its own sequence would find no
-	// session, leaving it untagged. A workspace's name is not checked:
-	// it has a worktree's session name in it, which SessionName encoded
-	// from the branch, or new took for a session started at the root,
-	// and a branch with a $ in it keeps its workspace where tmux keeps
-	// the $. new-session expands the name as a format, and a name new
-	// took can have a # in it.
+	// session, leaving it untagged. AttachName encodes most of them; a
+	// line or paragraph separator and a noncharacter, which tmux 3.3
+	// stores escaped, it keeps (#247), and a "." or ":", which tmux 3.7
+	// lists as given, since the attach target would split there. A
+	// workspace's name is not checked: it has a worktree's session name
+	// in it, which SessionName encoded from the branch, or new took for
+	// a session started at the root. new-session expands the name as a
+	// format, and a name new took can have a # in it.
 	if s.Key == "" {
 		if err := tmux.CheckSessionName(s.Name); err != nil {
 			return "", false, err
@@ -268,8 +303,8 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 // the session is still plain since the pane attaches to the spec's
 // managed session; then the key set and the attach tag unset in one
 // sequence, so the session is never observable as both or neither,
-// with the identity tags. An adopt cut short before the flip is met by
-// name again and redone whole; one cut short after it is a workspace
+// with the identity tags. An adopt cut short before the flip is met as
+// it was again and redone whole; one cut short after it is a workspace
 // with its pane tagged, as Ensure then finds it by key. Last, the
 // attach pane is respawned or made as for a reuse.
 func adopt(ctx context.Context, name string, s Spec) error {
