@@ -518,10 +518,10 @@ func TestEnsureAttachmentNames(t *testing.T) {
 // mac/a.b on a local tmux 3.7 is found by its key and kept under its
 // name, and Kill kills it too, which =mac/a.b did not find. Neither
 // reaches mac/a, which =mac/a.b alone can: tmux reads its mac/a as a
-// window, then as a session. A plain attachment to a.b a build from
-// before the . was refused made as mac/a.b is adopted as the workspace
-// under its name. A tmux before 3.7 stores the . as _, and the test is
-// skipped there.
+// window, then as a session. A plain attachment a build before the .
+// was checked made as mac/a.b is adopted as the workspace under its
+// name. A tmux before 3.7 stores the . as _, and the test is skipped
+// there.
 func TestEnsureDottedManagedSession(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")

@@ -568,7 +568,7 @@ that fails at once leaves a dead pane for the next `jump` to respawn.
   build left one named as the worktree's workspace would be, the
   worktree's jump adopts it as the workspace, keyed and tagged, rather
   than refuse its name as in use, also under the name an older build
-  gave it before the `$` in it was encoded; an attachment to another
+  gave it before the `$` or `.` in it was encoded; an attachment to another
   managed session is still a name in use. The
   repository in the target is read as this
   machine's label first, then the host's, and the target after the host
