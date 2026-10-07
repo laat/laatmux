@@ -220,10 +220,10 @@ func TestAddHintCanRun(t *testing.T) {
 	last("")
 	d.cfg.DefaultAgentName = "codex"
 	check(host("vm", "venv"), bv, plain)
-	// A last.json add cannot read is a need too, as the add form refuses
-	// on it: add reads it first, and the line would fail there. It is
-	// the one under LAATMUX_HOME as it is then, which the fake daemon
-	// below moves.
+	// A last.json add cannot read or parse is a need too, as the add form
+	// refuses on it: add reads it before it picks the host, and the line
+	// would fail there. It is the one under LAATMUX_HOME as it is then,
+	// which the fake daemon below moves.
 	badLast := func() string {
 		t.Helper()
 		p := filepath.Join(os.Getenv("LAATMUX_HOME"), "last.json")
@@ -233,11 +233,19 @@ func TestAddHintCanRun(t *testing.T) {
 		return p
 	}
 	onBadLast := func(p string) string {
-		return "vm/proj/b has no managed session; laatmux add makes one once " + p + " is readable"
+		return "vm/proj/b has no managed session; laatmux add makes one once " + p + " is readable JSON"
 	}
 	lastFile := badLast()
 	check(host("vm", "venv"), bv, onBadLast(lastFile))
-	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, "+other.Source+" is a repository in the config, and "+lastFile+" is readable")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, "+other.Source+" is a repository in the config, and "+lastFile+" is readable JSON")
+	// One that is not a file cannot be read at all.
+	if err := os.Remove(lastFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lastFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	check(host("vm", "venv"), bv, onBadLast(lastFile))
 	if err := os.Remove(lastFile); err != nil {
 		t.Fatal(err)
 	}

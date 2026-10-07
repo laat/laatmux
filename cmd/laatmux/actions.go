@@ -794,8 +794,8 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // checked out first, on a host this machine's config gives the
 // directories add needs, for a repository that config lists, which
 // --repo takes, with an agent in that config for add to start, and
-// last.json readable, which add reads before anything else. It names
-// every one of these the worktree lacks, not only the first.
+// last.json readable JSON, which add reads before it picks the host.
+// It names every one of these the worktree lacks, not only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
 	if w.Branch == "" {
@@ -812,7 +812,7 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	}
 	last, err := home.ReadLast()
 	if err != nil {
-		needs = append(needs, home.LastPath()+" is readable")
+		needs = append(needs, home.LastPath()+" is readable JSON")
 	}
 	switch n := len(needs); {
 	case n == 0:

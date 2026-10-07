@@ -43,7 +43,8 @@ func LastPath() string { return filepath.Join(Dir(), "last.json") }
 // the decoder's is given it.
 func ReadLast() (Last, error) {
 	var l Last
-	b, err := os.ReadFile(LastPath())
+	p := LastPath()
+	b, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return l, nil
@@ -51,7 +52,7 @@ func ReadLast() (Last, error) {
 		return l, err
 	}
 	if err := json.Unmarshal(b, &l); err != nil {
-		return l, fmt.Errorf("%s: %w", LastPath(), err)
+		return l, fmt.Errorf("%s: %w", p, err)
 	}
 	return l, nil
 }

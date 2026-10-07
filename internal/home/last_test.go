@@ -77,8 +77,8 @@ func TestLastCorruptFileIsAnError(t *testing.T) {
 	}
 	if err := UpdateLast(func(l *Last) {}); err == nil {
 		t.Fatal("corrupt file overwritten")
-	} else if !strings.HasPrefix(err.Error(), path+": ") {
-		t.Errorf("update: %v, want it after %s", err, path)
+	} else if !strings.HasPrefix(err.Error(), path+": ") || strings.Count(err.Error(), path) != 1 || !errors.As(err, &syntax) {
+		t.Errorf("update: %v, want the decoder's error after %s", err, path)
 	}
 	os.Remove(path)
 	os.Mkdir(path, 0o700)
