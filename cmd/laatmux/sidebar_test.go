@@ -451,8 +451,11 @@ func TestSidebarFitBounds(t *testing.T) {
 	// A dead sidebar pane is not resized.
 	run("set-option", "-p", "-t", id, "remain-on-exit", "on")
 	run("respawn-pane", "-k", "-t", id, "true")
-	for i := 0; i < 50 && run("display", "-p", "-t", id, "#{pane_dead}") != "1"; i++ {
-		time.Sleep(20 * time.Millisecond)
+	for i := 0; run("display", "-p", "-t", id, "#{pane_dead}") != "1"; i++ {
+		if i == 50 {
+			t.Fatalf("pane %s did not die", id)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	run("resize-pane", "-t", id, "-x", "40")
 	run("resize-window", "-t", window, "-x", "180", "-y", "20")
@@ -518,22 +521,30 @@ func TestSidebarHooksRun(t *testing.T) {
 	if on, err := sidebarHooksSet(ctx); err != nil || !on {
 		t.Fatalf("hooks not seen as on: %v %v", on, err)
 	}
-	must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "sleep 1000"))
+	// The new session's window runs after-new-session, the two new
+	// windows after-new-window.
+	otherFirst := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "-P", "-F", "#{window_id}", "sleep 1000"))))
 	otherWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "other:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 	bootWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	otherSid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "other", "#{session_id}"))))
+	// Each hook runs in a job of its own, in the background, so a line
+	// can land after any other: the loop waits for every line the hooks
+	// write here, so the check cannot run ahead of one and no job is left
+	// to write into the test's directory after the test.
+	ran := func(s string) bool {
+		return strings.Contains(s, "sidebar attach "+bootWin+" "+sid) && strings.Contains(s, "sidebar attach "+otherFirst+" "+otherSid) && strings.Contains(s, "sidebar attach "+otherWin+" "+otherSid) && strings.Count(s, "user") >= 2
+	}
 	for i := 0; i < 100; i++ {
 		b, _ := os.ReadFile(logf)
-		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin+" "+sid) && strings.Count(got, "user") >= 2 {
+		if got = string(b); ran(got) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	b, _ := os.ReadFile(logf)
-	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin+" "+sid) || !strings.Contains(got, "sidebar attach "+otherWin) || strings.Count(got, "user") < 2 {
-		t.Fatalf("hooks ran %q: want attach for both windows with the session and the user's hook twice", got)
+	if !ran(got) {
+		t.Fatalf("hooks ran %q: want attach for the three windows with their sessions and the user's hook twice", got)
 	}
 	// attach itself: a window in a session not named gets no pane.
-	otherSid := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", "other", "#{session_id}"))))
 	if sessions, err := sidebarSessions(ctx); err != nil || len(sessions) != 1 || sessions[0] != sid {
 		t.Fatalf("sessions option: %v %v", sessions, err)
 	}
@@ -621,6 +632,10 @@ func TestSidebarExeFormat(t *testing.T) {
 	}
 	run("send-keys", "-K", "-c", client, "M-3")
 	wait("sidebar jump 3 -t " + window + " -c " + client + "\n")
+	// The client's attach ran the client-session-changed hook, in the
+	// background too: no job is left to write into the test's directory
+	// after the test.
+	wait("sidebar seen\n")
 }
 
 // on --session names the session in the option, twice once, and kills
