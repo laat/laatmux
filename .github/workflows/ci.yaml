@@ -36,20 +36,28 @@ jobs:
 
       # The tmux tests skip without it; the end-to-end test needs it
       # for the daemon's first poll to complete. On ubuntu-latest it is
-      # apt's tmux (3.4 on 24.04), for the tests that pin facts of tmux
-      # 3.2-3.4; the image has it today, and the install keeps the job
-      # from depending on that. On macOS it is brew's newest release.
+      # apt's tmux (3.4 on 24.04), so the tests that pin facts of tmux
+      # 3.2-3.4 run on 3.4. The image has it today; apt installs it
+      # only when the image does not, so a run needs no mirror for it.
+      # On macOS it is brew's newest release.
       - name: tmux (macOS)
         if: runner.os == 'macOS'
         run: brew install tmux
 
       - name: tmux (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: command -v tmux >/dev/null || { sudo apt-get update && sudo apt-get install -y tmux; }
 
-      # A runner image that changes the tmux version shows here.
+      # A runner image that changes the tmux version shows here. On
+      # ubuntu, a tmux other than 3.4 also puts a warning on the run:
+      # no job then runs the tests of the 3.2-3.4 facts on 3.4.
       - name: tmux version
-        run: tmux -V
+        run: |
+          v=$(tmux -V)
+          echo "$v"
+          if [ "$RUNNER_OS" = Linux ] && [ "$v" != "tmux 3.4" ]; then
+            echo "::warning::ubuntu-latest has $v, not tmux 3.4: the tests that pin facts of tmux 3.2-3.4 no longer run on 3.4"
+          fi
 
       - name: gofmt
         run: |
@@ -71,7 +79,7 @@ jobs:
       - name: go build
         run: go build ./...
 
-      # -v puts each skipped test and its reason in the log, so a test
-      # that stops running on one runner is visible.
+      # -v names each test that calls t.Skip, and its reason, so a test
+      # that stops running on one runner is visible in the log.
       - name: go test
         run: go test -race -v ./...
