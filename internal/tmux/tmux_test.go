@@ -824,6 +824,18 @@ func TestPrintablePath(t *testing.T) {
 	if got := PrintablePath(tcp); got != tcp {
 		t.Errorf("a tcp error rebuilt: %v", got)
 	}
+	// A read on a connection the daemon accepted names the listener's
+	// socket as its source, and a client's names it as the address.
+	for _, c := range []struct{ src, addr net.Addr }{
+		{&net.UnixAddr{Name: sock, Net: "unix"}, &net.UnixAddr{Net: "unix"}},
+		{&net.UnixAddr{Net: "unix"}, &net.UnixAddr{Name: sock, Net: "unix"}},
+	} {
+		rw := &net.OpError{Op: "read", Net: "unix", Source: c.src, Addr: c.addr, Err: syscall.ECONNRESET}
+		got := PrintablePath(rw)
+		if !strings.Contains(got.Error(), strconv.Quote(sock)) || strings.ContainsAny(got.Error(), "\t\x1b") || !errors.Is(got, syscall.ECONNRESET) {
+			t.Errorf("PrintablePath = %v", got)
+		}
+	}
 }
 
 // Each line is as Printable shows it, and the newlines between the lines

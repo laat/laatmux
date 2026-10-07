@@ -104,5 +104,7 @@ func sidebarSeen(ctx context.Context) error {
 	if err != nil || !protocol.Has(hello.Capabilities, protocol.CapAttention) {
 		return nil
 	}
-	return pc.Write(protocol.Message{Type: protocol.TypePoke})
+	// The write's error names the daemon's socket, under the state
+	// directory.
+	return tmux.PrintablePath(pc.Write(protocol.Message{Type: protocol.TypePoke}))
 }

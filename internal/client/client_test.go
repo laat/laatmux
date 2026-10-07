@@ -43,6 +43,51 @@ func TestStartDaemonStateDirQuoted(t *testing.T) {
 	}
 }
 
+// A local connection's errors name the daemon's socket, under the
+// state directory, as tmux.Printable shows it: the hello's write and a
+// Conn's write to a daemon that has closed the connection. The
+// directory is under the system's temporary directory, not t.TempDir,
+// which on macOS makes a socket path too long.
+func TestLocalConnErrorsQuoted(t *testing.T) {
+	dir, err := os.MkdirTemp("", "st\tate\x1b[31m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	closed := func() net.Conn {
+		t.Helper()
+		nc, err := net.Dial("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc, err := ln.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc.Close()
+		return nc
+	}
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), strconv.Quote(sock)) || strings.ContainsAny(err.Error(), "\t\x1b") {
+			t.Errorf("%s: %v, want %s in it", what, err, strconv.Quote(sock))
+		}
+	}
+	nc := closed()
+	_, err = Connect(context.Background(), peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	check("hello", err)
+	nc = closed()
+	defer nc.Close()
+	c := &Conn{Host: peer.Host{Name: "local"}, pc: protocol.NewConn(nc), close: func() { nc.Close() }}
+	check("write", c.Write(protocol.Message{Type: protocol.TypePing}))
+}
+
 // A pending Request returns when its context is cancelled.
 func TestRequestHonoursCancel(t *testing.T) {
 	server, client := net.Pipe()

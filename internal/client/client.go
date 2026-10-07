@@ -68,11 +68,13 @@ func (c *Conn) Read() (protocol.Message, error) {
 // wrap adds the transport's diagnostic to err. Best effort: ssh may not
 // have written its reason yet when its stdout closes; a caller that has
 // closed the connection, and so reaped ssh, reads the complete text with
-// Diag.
+// Diag. A local connection's error names the daemon's socket, under the
+// state directory, as tmux.Printable shows it.
 func (c *Conn) wrap(err error) error {
 	if err == nil {
 		return nil
 	}
+	err = tmux.PrintablePath(err)
 	if d := c.Diag(); d != "" {
 		return fmt.Errorf("%w (ssh: %s)", err, d)
 	}
@@ -183,9 +185,11 @@ func (t *tailBuffer) String() string {
 // On any failure the connection is closed.
 func completeHello(ctx context.Context, c *Conn) (*Conn, error) {
 	h := c.Host
+	// A local connection's errors name the daemon's socket, under the
+	// state directory; they go through tmux.PrintablePath as Conn's do.
 	if err := c.pc.Write(protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, Client: "laatmux"}); err != nil {
 		c.Close()
-		return nil, err
+		return nil, tmux.PrintablePath(err)
 	}
 	type res struct {
 		m   protocol.Message
@@ -212,7 +216,7 @@ func completeHello(ctx context.Context, c *Conn) (*Conn, error) {
 			if d := c.Diag(); d != "" {
 				return nil, fmt.Errorf("%s: %s", h.Name, d)
 			}
-			return nil, fmt.Errorf("%s: %w", h.Name, x.err)
+			return nil, fmt.Errorf("%s: %w", h.Name, tmux.PrintablePath(x.err))
 		}
 		if x.m.Type != protocol.TypeHello {
 			c.Close()
@@ -337,7 +341,7 @@ func (c *Conn) Request(ctx context.Context, m protocol.Message) (protocol.Messag
 func (c *Conn) Snapshot(ctx context.Context) (protocol.Message, error) {
 	defer c.CloseOnDone(ctx)()
 	if err := c.pc.Write(protocol.Message{Type: protocol.TypeSubscribe}); err != nil {
-		return protocol.Message{}, err
+		return protocol.Message{}, tmux.PrintablePath(err)
 	}
 	for {
 		m, err := c.pc.Read()
@@ -345,7 +349,7 @@ func (c *Conn) Snapshot(ctx context.Context) (protocol.Message, error) {
 			if ctx.Err() != nil {
 				return protocol.Message{}, ctx.Err()
 			}
-			return protocol.Message{}, err
+			return protocol.Message{}, tmux.PrintablePath(err)
 		}
 		if m.Type == protocol.TypeSnapshot {
 			return m, nil

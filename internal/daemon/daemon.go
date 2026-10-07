@@ -969,7 +969,9 @@ func (d *Daemon) Serve(ctx context.Context, ln net.Listener) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			// A unix listener's error names its socket, under the state
+			// directory by default; serve ends with it.
+			return tmux.PrintablePath(err)
 		}
 		go func() {
 			defer c.Close()

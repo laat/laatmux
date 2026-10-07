@@ -111,19 +111,20 @@ By what each imports from the tree (leaves first):
 | `home` | tmux | the state directory, the environment id, the runtime file, the startup lock, `last.json` and `sidebar.json`, atomic writes |
 | `term` | palette | the terminal: raw mode, the frame, the keys |
 | `github` | protocol | the GraphQL queries for PRs and checks |
-| `rows` | protocol, source | the rows every listing shares: the tree rooted at repositories, the agent view's tiles |
+| `rows` | protocol, source, tmux | the rows every listing shares: the tree rooted at repositories, the agent view's tiles |
 | `config` | palette, peer, source, tmux | the config file, and `.laatmux.yaml` per repository |
 | `client` | home, peer, protocol, tmux | dial a daemon, local or through the bridge; requests and streamed commands |
 | `worktree` | config, protocol, source, tmux | checkouts, worktrees, the git stages of `add` |
 | `workspace` | client, peer, protocol, source, tmux | the local workspace sessions on the default server |
 | `view` | palette, protocol, rows, term | the list view the sidebar pane and the dashboard share |
-| `merged` | client, config, peer, protocol, rows, source | the client's copy of the merged stream |
+| `merged` | client, config, peer, protocol, rows, source, workspace | the client's copy of the merged stream |
 | `command` | client, config, home, peer, protocol, tmux, workspace | the client side of `add`, `rm`, `run` and `shell` |
 | `daemon` | client, command, config, detect, github, home, peer, procs, protocol, source, tmux, worktree | above |
 | `cmd/laatmux` | all of them | the commands, and the sidebar's tmux side, over the above |
 
-`rows` and `view` depend on nothing that touches a socket or a
-process: the views are tested as functions of records.
+`rows` and `view` touch no socket and run no process (`rows` takes
+only `tmux.SessionName`, a function of its arguments, from tmux): the
+views are tested as functions of records.
 
 ## On disk
 

@@ -21,7 +21,7 @@ import (
 
 // Dir is the state directory. LAATMUX_HOME overrides the default
 // ~/.local/state/laatmux, which is what a sandboxed dev loop needs.
-// Either variable, or XDG_STATE_HOME, can have any byte in it, and
+// LAATMUX_HOME, XDG_STATE_HOME and HOME can have any byte in them, and
 // os's errors name a path as it is: the errors this package returns
 // name the directory and the files under it as tmux.Printable shows
 // them.

@@ -362,8 +362,8 @@ func Path() string {
 
 // Load reads and validates the config. A missing file yields one local
 // host named after the machine. A read's error names the path as
-// tmux.Printable shows it: LAATMUX_CONFIG or XDG_CONFIG_HOME can have
-// any byte in it.
+// tmux.Printable shows it: LAATMUX_CONFIG, XDG_CONFIG_HOME and HOME can
+// have any byte in them.
 func Load() (Config, error) {
 	b, err := os.ReadFile(Path())
 	if err != nil {

@@ -118,13 +118,16 @@ func TestStateDirQuoted(t *testing.T) {
 	sock := path("gone", "s.sock")
 	check("serve", cmdServe(ctx, []string{"--listen", "unix:" + sock}), "listen unix "+q(sock)+": ")
 
-	// The journal's write as the daemon gives it, in a directory that
-	// cannot be written: the add's error the relay keeps.
+	// The journal's write as the daemon gives it, with a file where its
+	// directory should be: the add's error the relay keeps.
 	commands := path("commands")
-	if err := os.MkdirAll(commands, 0o500); err != nil {
+	if err := os.WriteFile(commands, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	werr := home.WriteAtomic(filepath.Join(commands, "t2.json"), nil)
+	if werr == nil {
+		t.Fatal("a write under a file succeeded")
+	}
 	check("journal", werr, "open "+q(filepath.Join(commands, "t2.json.tmp."+strconv.Itoa(os.Getpid())))+": ")
 	msg := "failed at resolve: " + werr.Error()
 	m := merged.New()

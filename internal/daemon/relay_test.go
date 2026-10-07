@@ -1451,6 +1451,9 @@ func TestRelayDirectoryFatal(t *testing.T) {
 // unwritable too, a dismiss that cannot remove the record names its
 // file the same way.
 func TestRelayStateDirQuoted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a directory without write permission")
+	}
 	base := filepath.Join(t.TempDir(), "st\tate\x1b[31m")
 	pending, commands := filepath.Join(base, "pending"), filepath.Join(base, "commands")
 	f := newRelayFixtureIn(t, nil, pending, commands)
