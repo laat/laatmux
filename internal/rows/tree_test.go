@@ -355,8 +355,7 @@ func TestObservedAgentSettled(t *testing.T) {
 		for _, n := range tree {
 			if n.Kind == KindAgent && n.Depth == 1 {
 				nodes[n.Agent.ID] = state{settled: n.Settled, dim: n.Dim}
-				// The viewer's by its own session, the one it is in; its
-				// tile carries no Own.
+				// The viewer's by its own session, the one it is in.
 				if mine := c.current != "" && n.Agent.Session == c.current; n.Own != mine || n.Current != mine {
 					t.Errorf("settled %v current %q: %s Own %v Current %v", c.settled, c.current, n.Agent.ID, n.Own, n.Current)
 				}
@@ -371,8 +370,10 @@ func TestObservedAgentSettled(t *testing.T) {
 				if r.Agent.Server == protocol.ServerDefault {
 					tiles[r.Agent.ID] = state{r.Settled, r.Dim, g.stale}
 				}
-				if r.Own {
-					t.Errorf("settled %v current %q: the tile %s Own", c.settled, c.current, r.ID())
+				// Own in the viewer's session: the observed ones and the
+				// worktree's own agent through its workspace session.
+				if mine := c.current != "" && r.Local != nil && r.Local.Name == c.current; r.Own != mine {
+					t.Errorf("settled %v current %q: the tile %s Own %v", c.settled, c.current, r.ID(), r.Own)
 				}
 			}
 		}
@@ -648,8 +649,10 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		rs := Agents(in, tree)
 		for _, r := range append(rs.Main, rs.Stale...) {
 			s.tile = s.tile || r.Agent != nil && r.Agent.ID == id && r.Current
-			if r.Own {
-				t.Errorf("the tile %s Own", r.ID())
+			// An agent's tile is Own in the viewer's session alone, not
+			// through its line.
+			if mine := in.Current != "" && r.Local != nil && r.Local.Name == in.Current; r.Pending == nil && r.Own != mine {
+				t.Errorf("the tile %s Own %v", r.ID(), r.Own)
 			}
 		}
 		return s

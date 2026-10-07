@@ -258,9 +258,12 @@ the line whose home its session is. In the agent view it follows the
 first tile, in sort order, of what the tree follows: the agents and
 tasks of that line's worktree, or the tile of the agent the tree
 follows in other sessions; with none of those shown, the first tile
-that is the viewer's. An orphaned session's line has no tile, so with
-the tree on it the agent view follows that first tile, an agent
-observed in a window of the session say. So the two views agree
+in the viewer's session, else the first that is the viewer's. So with
+the viewer's line showing no tile, a visitor's tile there is followed,
+not an agent of the visitor's worktree in that worktree's own session,
+which the visitor makes the viewer's too; and an orphaned session's
+line, which has no tile, gives the tile of an agent observed in a
+window of the session. So the two views agree
 whenever the tree's choice and a tile of it are shown. A tile in
 other sessions can be the viewer's beside the worktree's agents and
 sort before them: an agent started outside any worktree from a split of
@@ -985,11 +988,11 @@ Five settlements differ from the plan in #52:
   line, `cd ../y && claude` in a split, where `Enter` on it lands; or
   runs in a managed session the viewer is in through a plain
   attachment: the scope keeps that line with its children, and in the
-  agent view its agents, beside the viewer's worktree. That line is not
-  the viewer's row, which stays the line the viewer is on by its own
-  session (Following): the scope's worktree and repository are that
-  line's whichever sorts first, and a task at its root stays in
-  `session`.
+  agent view its agents, beside the viewer's worktree. While a line is
+  the viewer's by its own session, that one is the viewer's row
+  (Following), not the visited line: the scope's worktree and
+  repository are its whichever sorts first, and a task at its root
+  stays in `session`.
 
   A pane in a session that is no row's, the user's own shell session
   say, shows the view's empty state under `session` and `project`. The

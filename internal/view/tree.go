@@ -522,15 +522,16 @@ func (m *Model) treeFollowed() *rows.Row {
 	return &m.Tree[best]
 }
 
-// viewerRank is how a tree node is the viewer's, 0 for not: a worktree,
-// task or orphaned session's line by its own session (rows' Own), 3;
-// another node by its own session, an agent in other sessions, 2; a
-// node the viewer's only through another, 1: a line through an agent
-// of it in the viewer's session, a visitor from a split or a window
-// there, or an agent of no worktree through the line whose home its
-// session is. So the line of the session the viewer is in is followed
-// over another worktree's line an agent of it visiting marks, and over
-// an agent in other sessions in a window of that session.
+// viewerRank is how a tree node or a tile is the viewer's, 0 for not: a
+// worktree, task or orphaned session's line by its own session (rows'
+// Own), 3; another node by its own session, an agent in other sessions,
+// or a tile in the viewer's session, 2; one the viewer's only through
+// another, 1: a line through an agent of it in the viewer's session, a
+// visitor from a split or a window there, an agent of no worktree
+// through the line whose home its session is, or a tile through its
+// line. So the line of the session the viewer is in is followed over
+// another worktree's line an agent of it visiting marks, and over an
+// agent in other sessions in a window of that session.
 func viewerRank(r *rows.Row) int {
 	switch {
 	case !r.Current:

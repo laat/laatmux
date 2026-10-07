@@ -1628,6 +1628,58 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 		Locals:   []protocol.Session{{Name: "vm/proj/n", Key: "venv//w/proj/n", Host: "vm"}},
 		Current:  "vm/proj/n",
 	}, "add-1", "add-1")
+	// The viewer in vm/proj/z, which has no agent on record, with a
+	// visitor there: claude started in a split of it in proj/y's
+	// directory, beside proj/y's own working agent in vm/proj/y; or
+	// claude observed in a window of it on mac's default server in mac's
+	// worktree proj/a, beside proj/a's own working agent. The tree
+	// follows proj/z's line; the agent view, with no tile of proj/z,
+	// follows the visitor's tile, the one in the viewer's session, not
+	// the other worktree's own agent, which its line being the viewer's
+	// makes the viewer's too and sorts first.
+	busy := home
+	busy.Activity, busy.ActivityAt = protocol.Working, now.Add(-time.Minute)
+	for _, c := range []struct {
+		visitor protocol.Agent
+		in      rows.Input
+	}{
+		{split, rows.Input{
+			Agents:    []protocol.Agent{agent("venv/laatmux/%2", "proj/y", y.Root, y.ID, protocol.Working, time.Minute), split},
+			Worktrees: []protocol.Worktree{z, y},
+			Locals:    []protocol.Session{zLocal, {Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}},
+		}},
+		{visiting, rows.Input{
+			Agents:    []protocol.Agent{visiting, busy},
+			Worktrees: []protocol.Worktree{z, a},
+			Locals:    []protocol.Session{zLocal, {Name: "mac/proj/a", Key: "menv//m/proj/a", Host: "mac"}},
+		}},
+	} {
+		in := c.in
+		in.Hosts, in.Now, in.Current = hosts, now, "vm/proj/z"
+		for _, scope := range []Scope{ScopeAll, ScopeSession, ScopeProject} {
+			m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 30, Follow: true, Scope: scope}
+			m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+			if r := m.Selection(); r == nil || r.ID() != c.visitor.ID {
+				t.Errorf("%s, %s, no agent of proj/z: agent view follows %+v; tiles:\n%s", c.visitor.ID, scope, r, ids(m))
+			}
+			m.Handle(term.Key{Kind: term.KeyTab})
+			if r := m.Selection(); r == nil || r.ID() != z.ID {
+				t.Errorf("%s, %s, no agent of proj/z: tree follows %+v", c.visitor.ID, scope, r)
+			}
+		}
+	}
+	// The viewer in a plain attachment to the task's session, with and
+	// without its workspace session, and a working `cd ~ && claude` in a
+	// split of it, in other sessions in the viewer's session: the task's
+	// line is the viewer's by the attachment to its home, and followed.
+	for _, ws := range [][]protocol.Session{nil, {{Name: "vm/proj/n", Key: "venv//w/proj/n", Host: "vm"}}} {
+		follows("a task's attachment", rows.Input{
+			Agents:   []protocol.Agent{agent("venv/laatmux/%7", "proj/n", "/w/proj/n", "", protocol.Idle, 10*time.Minute), agent("venv/laatmux/%8", "proj/n", "/home/u", "", protocol.Working, time.Minute)},
+			Pendings: []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "n", Root: "/w/proj/n", Session: "proj/n", SubmittedAt: now.Add(-time.Minute), Taken: true, Sent: true}},
+			Locals:   append([]protocol.Session{{Name: "vm/proj/n-1", Attach: "vm/proj/n", Host: "vm"}}, ws...),
+			Current:  "vm/proj/n-1",
+		}, "add-1", "add-1")
+	}
 	// The task's managed session other-n, and a working claude observed
 	// in a window of its workspace session vm/other-n: with the filter
 	// leaving the task's add agent and the observed one, not the task,

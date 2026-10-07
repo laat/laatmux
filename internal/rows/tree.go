@@ -484,10 +484,16 @@ func (b *builder) looseTasks() {
 				if !b.used[a] && a.EnvironmentID == p.EnvironmentID && a.Server == protocol.ServerLaatmux && a.Session == p.Session && a.Cwd == p.Root {
 					b.used[a] = true
 					// The task's workspace session, or the attachment
-					// to the add's session the viewer may be in.
+					// to the add's session the viewer may be in. The
+					// viewer in that attachment is on the task's line by
+					// an attachment to its home, as on a worktree's.
+					own := j.agentLocal(t.Host, a)
 					local := t.Local
 					if local == nil {
-						local = j.agentLocal(t.Host, a)
+						local = own
+					}
+					if own != nil && own.Name == in.Current {
+						t.Current, t.Own = true, true
 					}
 					c := Row{Kind: KindAgent, Node: a.ID, Host: t.Host, Name: a.Session, Agent: a, Local: local, Depth: 2}
 					j.finish(&c)
@@ -856,7 +862,8 @@ func Agents(in Input, tree []Row) Rows {
 		case KindTask:
 			owner = "t:" + n.Pending.ID
 			t := n
-			t.Kind, t.Node, t.Depth, t.Children, t.Own = KindTile, n.Pending.ID, 0, 0, false
+			t.Kind, t.Node, t.Depth, t.Children = KindTile, n.Pending.ID, 0, 0
+			// Own as its line is.
 			t.Current = viewer["t:"+n.Pending.ID]
 			rows = append(rows, t)
 		case KindWorktree:
@@ -869,7 +876,7 @@ func Agents(in Input, tree []Row) Rows {
 			// The tile's id is the agent's, as the node's is: a worktree
 			// with two agents is two tiles.
 			t := n
-			t.Kind, t.Node, t.Depth, t.Own = KindTile, n.Agent.ID, 0, false
+			t.Kind, t.Node, t.Depth = KindTile, n.Agent.ID, 0
 			// A node in other sessions is the viewer's as the tree marks
 			// it: by its own session, or by the workspace session of the
 			// line whose home a managed agent's session is.
@@ -878,12 +885,12 @@ func Agents(in Input, tree []Row) Rows {
 				t.Current = viewer[owner]
 			}
 			// A tile in the viewer's own session is the viewer's wherever
-			// its node sits. Not one in a session a line is marked through:
-			// a line marked through one of its children or an attachment
-			// stands for its own session, which the viewer is not in.
-			if t.Local != nil && in.Current != "" && t.Local.Name == in.Current {
-				t.Current = true
-			}
+			// its node sits, and Own. Not one in a session a line is
+			// marked through: a line marked through one of its children
+			// or an attachment stands for its own session, which the
+			// viewer is not in.
+			t.Own = t.Local != nil && in.Current != "" && t.Local.Name == in.Current
+			t.Current = t.Current || t.Own
 			rows = append(rows, t)
 		}
 	}

@@ -141,8 +141,9 @@ type Row struct {
 	// through an agent of it in the viewer's session, a visitor from a
 	// split or a window there, nor an agent of no worktree that is
 	// Current through the workspace session of the line whose home its
-	// session is. Following prefers it, and a line to any other node
-	// (the view's viewerRank). False on a tile.
+	// session is. On a tile: an agent's in the viewer's session, or a
+	// task's whose line is Own. Following prefers it, and a line to any
+	// other node (the view's viewerRank).
 	Own      bool
 	HostDown bool // the host is not connected
 	// Dim is no identified agent, an agent that is gone, a host that is
