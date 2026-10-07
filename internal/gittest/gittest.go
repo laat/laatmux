@@ -5,6 +5,7 @@ package gittest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,7 +41,10 @@ func Isolate() {
 // runConfig is the config Isolate gives every git of the run, in the
 // environment, above a repository's own: an identity is never guessed
 // from the user and host names, which works on one machine and not on
-// another, and the global ignore and attributes files are none.
+// another, and the global ignore and attributes files are none. Read
+// last, it wins over a repository's or a test's own global config of
+// the same keys: a test that needs one of its own sets GIT_CONFIG_COUNT
+// and its keys and values itself, with t.Setenv.
 var runConfig = [][2]string{
 	{"user.useConfigOnly", "true"},
 	{"core.excludesFile", os.DevNull},
@@ -55,11 +59,12 @@ const child = "LAATMUX_TEST_GIT_ISOLATED"
 // top-level test t alone, and checks there that git reads runConfig and
 // no other config outside a repository. That run's environment has
 // none of this run's GIT_CONFIG, author and committer variables, and
-// names config that fails every commit in each way git takes it from
-// the environment: a global config that signs with a program that
-// fails, and a system config, a GIT_CONFIG file, config in
-// GIT_CONFIG_PARAMETERS and in GIT_CONFIG_COUNT that each run a
-// pre-commit hook that fails; and a global ignore file that ignores
+// names config in each way git takes it from the environment: a global
+// config that signs with a program that fails; a system config, config
+// in GIT_CONFIG_PARAMETERS and in GIT_CONFIG_COUNT that each run a
+// pre-commit hook that fails; a GIT_CONFIG file, which git config reads
+// and writes in place of the repository's config, so the commit's
+// identity would land there; and a global ignore file that ignores
 // everything. Both pass when TestMain called Isolate. The global and the
 // system config are first shown to fail a commit read alone, and a
 // commit to succeed with neither.
@@ -70,6 +75,11 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 		list.Dir = t.TempDir()
 		out, err := list.Output()
 		if err != nil {
+			// git's reason, which Output keeps only in the error.
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				t.Fatalf("git config --list: %v\n%s", err, exit.Stderr)
+			}
 			t.Fatalf("git config --list: %v", err)
 		}
 		var got []string
@@ -139,6 +149,9 @@ func CheckIsolated(t *testing.T, commit func(t *testing.T)) {
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=" + hooks,
 		"XDG_CONFIG_HOME=" + xdg,
 	})
+	// Killed at the deadline, the child's output is not waited for past
+	// a moment: something it left running may hold the pipe.
+	run.WaitDelay = 5 * time.Second
 	out, err := run.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()+" ") {
 		t.Errorf("the commit under config that fails every commit: %v\n%s", err, out)
