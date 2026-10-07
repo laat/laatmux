@@ -411,25 +411,31 @@ func TestPaneJumpRouting(t *testing.T) {
 	// The line a pane's session routes by, from the tree. Before the
 	// lines whose own sessions laatmux/x, laatmux/z and laatmux/foo are,
 	// homeless lines whose root agents were moved into them, which those
-	// lines win, a task also once its root agent is identified in its
-	// session; after lostLine, another homeless line whose root agent is
-	// in laatmux/x-2, which the first of the two wins; two homeless lines
-	// whose root agents share laatmux/w%2e1, which the one it is named
-	// after wins, branch w.1, though second; and a homeless line with no
-	// agent, whose Home is "", which no session finds.
-	homeless := func(branch, session string) rows.Row {
-		root := "/r/" + branch
-		r := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "laatmux", Branch: branch, Root: root}}
+	// lines win: a worktree's home also over a line the session is named
+	// after, branch x of another repository, and a task also once its
+	// root agent is identified in its session. After lostLine, another
+	// homeless line whose root agent is in laatmux/x-2, which the first
+	// of the two wins; two homeless lines whose root agents share
+	// laatmux/w%2e1, which the one it is named after wins, branch w.1,
+	// though second and labelled otherwise here than on the host; and a
+	// homeless line with no agent, whose Home is "", which no session
+	// finds.
+	homeless := func(dir, session string) rows.Row {
+		root := "/r/" + dir
+		r := rows.Row{Kind: rows.KindWorktree, Depth: 1, Host: "vm", Worktree: &protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Repo: "laatmux", Branch: dir, Root: root}}
 		if session != "" {
-			r.Agent = &protocol.Agent{ID: "venv/laatmux/%" + branch, Server: "laatmux", Session: session, Managed: true, Cwd: root}
+			r.Agent = &protocol.Agent{ID: "venv/laatmux/%" + dir, Server: "laatmux", Session: session, Managed: true, Cwd: root}
 		}
 		return r
 	}
 	identified := *moved
 	identified.Agent = &protocol.Agent{ID: "venv/laatmux/%5", Server: "laatmux", Session: "laatmux/z", Managed: true, Cwd: "/r/z"}
+	strayX := homeless("a", "laatmux/x")
+	strayX.Worktree.Repo, strayX.Worktree.Branch = "other", "x"
 	namedW := homeless("w.1", "laatmux/w%2e1")
+	namedW.Worktree.Repo = "mine"
 	m := &view.Model{Tree: []rows.Row{
-		{Kind: rows.KindRepo, Depth: 0, Node: "repo/x"}, homeless("d", ""), homeless("a", "laatmux/x"), homeless("b", "laatmux/z"), homeless("f", "laatmux/foo"),
+		{Kind: rows.KindRepo, Depth: 0, Node: "repo/x"}, homeless("d", ""), strayX, homeless("b", "laatmux/z"), homeless("f", "laatmux/foo"),
 		*home, *lostLine, *task, *otherLine, homeless("c", "laatmux/x-2"), homeless("e", "laatmux/w%2e1"), namedW,
 		{Kind: rows.KindWorktree, Depth: 1, Host: "mac", Worktree: &protocol.Worktree{ID: "menv/worktree//r/x", EnvironmentID: "menv", Session: "laatmux/x"}},
 		// A worktree no configured host claims: none of another unclaimed

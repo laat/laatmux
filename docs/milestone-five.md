@@ -298,8 +298,9 @@ laatmux's detector already gives `working`, `blocked`, `idle` and
   and `z` refuses it as the task's. When a worktree's root agent is
   moved by hand into another worktree's session, the session is no
   longer either worktree's home, its panes not all in one root, and it
-  stays the worktree's whose name it has, as add names it: this agent
-  goes there. `Enter` on a worktree's own agent or pane goes to its own
+  stays the worktree's whose branch it is named by, as add names it
+  (the label is the host's, which this machine may name otherwise):
+  this agent goes there. `Enter` on a worktree's own agent or pane goes to its own
   workspace session whenever that attaches the agent's session, as `z`
   and `S` on it do. The viewer's own row never folds: settled or
   stale, it stays in sight, sorted with the stale ones, so `z` in the

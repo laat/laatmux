@@ -580,35 +580,51 @@ func TestShellGoesByLine(t *testing.T) {
 	// agent, a child of proj/z's line, and on the agent of no worktree
 	// lands in vm/proj/z, the session's by its home or by its name, as
 	// its tile and as its node, and S and z on them act on vm/proj/z;
-	// enter on proj/a's moved root agent lands in vm/proj/a, its own
-	// line's workspace session attaching proj/z too, where S and z on it
-	// act.
+	// enter on proj/a's moved root agent, and on a pane of proj/a in
+	// proj/z, lands in vm/proj/a, their own line's workspace session
+	// attaching proj/z too, where S and z on them act. An agent of proj/z
+	// in a window of homeless proj/b's session, which proj/z's line does
+	// not attach, lands in vm/proj/b, while S and z on it act on
+	// vm/proj/z.
 	pa := protocol.Worktree{ID: "venv/worktree//w/proj/a", EnvironmentID: "venv", Repo: "proj", Source: z.Source, Branch: "a", Root: "/w/proj/a"}
 	moved := protocol.Agent{ID: "venv/laatmux/%2", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: pa.Root, WorktreeID: pa.ID}
+	pane := protocol.Pane{ID: "venv/pane/laatmux/%3", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", PaneID: "%3", Command: "zsh", Cwd: pa.Root, WorktreeID: pa.ID}
+	pb := protocol.Worktree{ID: "venv/worktree//w/proj/b", EnvironmentID: "venv", Repo: "proj", Source: z.Source, Branch: "b", Root: "/w/proj/b"}
+	rootB := protocol.Agent{ID: "venv/laatmux/%4", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: pb.Root, WorktreeID: pb.ID}
+	visitor := protocol.Agent{ID: "venv/laatmux/%11", EnvironmentID: "venv", Server: "laatmux", Session: "proj/b", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: z.Root, WorktreeID: z.ID}
 	for _, home := range []string{"", "proj/z"} {
 		z.Session = home
-		in = rows.Input{Hosts: []rows.Host{vm}, Agents: []protocol.Agent{root, moved, stray}, Worktrees: []protocol.Worktree{pa, z},
-			Locals: []protocol.Session{{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"}, {Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}}}
+		in = rows.Input{Hosts: []rows.Host{vm}, Agents: []protocol.Agent{root, moved, stray, rootB, visitor}, Worktrees: []protocol.Worktree{pa, pb, z}, Panes: []protocol.Pane{pane},
+			Locals: []protocol.Session{{Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"}, {Name: "vm/proj/b", Key: "venv//w/proj/b", Host: "vm"}, {Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}}}
 		for _, tree := range []bool{false, true} {
 			m := show(in, tree)
 			if l := m.OwnerLine(pa.ID); l == nil || l.Home() != "proj/z" {
 				t.Fatalf("home %q tree %v: proj/a's line is %+v", home, tree, l)
 			}
-			for _, c := range []struct{ id, want string }{{root.ID, "vm/proj/z"}, {stray.ID, "vm/proj/z"}, {moved.ID, "vm/proj/a"}} {
+			for _, c := range []struct {
+				id, enter, act string
+				tree           bool // a node only
+			}{
+				{root.ID, "vm/proj/z", "vm/proj/z", false}, {stray.ID, "vm/proj/z", "vm/proj/z", false}, {moved.ID, "vm/proj/a", "vm/proj/a", false},
+				{pane.ID, "vm/proj/a", "vm/proj/a", true}, {visitor.ID, "vm/proj/b", "vm/proj/z", false},
+			} {
+				if c.tree && !tree {
+					continue
+				}
 				if !m.Select(c.id) {
 					t.Fatalf("home %q tree %v: no row %s", home, tree, c.id)
 				}
 				os.Remove(log)
 				d.jumpRow(m, *m.Selection())
-				if !strings.HasPrefix(m.Message, c.want+" is on the default tmux server") {
+				if !strings.HasPrefix(m.Message, c.enter+" is on the default tmux server") {
 					got, _ := os.ReadFile(log)
-					t.Errorf("home %q tree %v: enter on %s: message %q, tmux %q, want %s", home, tree, c.id, m.Message, got, c.want)
+					t.Errorf("home %q tree %v: enter on %s: message %q, tmux %q, want %s", home, tree, c.id, m.Message, got, c.enter)
 				}
-				if msg, cmds := press(m, c.id, 'S'); !strings.Contains(cmds, "-L default new-window -t ="+c.want+": -n shell ") || !strings.HasPrefix(msg, c.want+" is on the default tmux server") {
-					t.Errorf("home %q tree %v: S on %s: message %q, tmux %q, want %s", home, tree, c.id, msg, cmds, c.want)
+				if msg, cmds := press(m, c.id, 'S'); !strings.Contains(cmds, "-L default new-window -t ="+c.act+": -n shell ") || !strings.HasPrefix(msg, c.act+" is on the default tmux server") {
+					t.Errorf("home %q tree %v: S on %s: message %q, tmux %q, want %s", home, tree, c.id, msg, cmds, c.act)
 				}
-				if msg, cmds := press(m, c.id, 'z'); msg != "settled "+c.want || cmds != "-u -L default set-option -t ="+c.want+": @laatmux_settled 1\n" {
-					t.Errorf("home %q tree %v: z on %s: message %q, tmux %q, want %s", home, tree, c.id, msg, cmds, c.want)
+				if msg, cmds := press(m, c.id, 'z'); msg != "settled "+c.act || cmds != "-u -L default set-option -t ="+c.act+": @laatmux_settled 1\n" {
+					t.Errorf("home %q tree %v: z on %s: message %q, tmux %q, want %s", home, tree, c.id, msg, cmds, c.act)
 				}
 			}
 		}

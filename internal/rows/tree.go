@@ -738,14 +738,14 @@ func (r Row) home() (session string, own bool) {
 // workspace session attaches to a managed session, the line whose Home
 // it is. Of several, the first in the tree's order whose own session it
 // is; then the first whose root agent is in it with the home lost, of a
-// worktree the session is named after, as add names the session it
-// makes; then the first. A worktree's root agent moved by hand into
-// another worktree's session takes the home from both, the session's
-// panes no longer all in one root, and the session stays the one it is
-// named after. -1 for none, and for no host: records no configured host
-// claims may be of different machines whose sessions share a name. The
-// view's LineFor finds the line by it, and a managed agent of no
-// worktree in other sessions takes the line's state by it.
+// worktree the session is named after (namedAfter); then the first. A
+// worktree's root agent moved by hand into another worktree's session
+// takes the home from both, the session's panes no longer all in one
+// root, and the session stays the one it is named after. -1 for none,
+// and for no host: records no configured host claims may be of
+// different machines whose sessions share a name. The view's LineFor
+// finds the line by it, and a managed agent of no worktree in other
+// sessions takes the line's state by it.
 func HomeLine(tree []Row, host, session string) int {
 	if host == "" || session == "" {
 		return -1
@@ -761,7 +761,7 @@ func HomeLine(tree []Row, host, session string) int {
 		case home != session:
 		case own:
 			return i
-		case named < 0 && n.Worktree != nil && n.Worktree.Branch != "" && tmux.SessionName(n.Worktree.Repo, n.Worktree.Branch) == session:
+		case named < 0 && namedAfter(session, n.Worktree):
 			named = i
 		case first < 0:
 			first = i
@@ -771,6 +771,16 @@ func HomeLine(tree []Row, host, session string) int {
 		return named
 	}
 	return first
+}
+
+// namedAfter reports whether a managed session has the name add gives
+// the worktree's, <label>/<encoded branch> (tmux.SessionName), by the
+// branch alone: the label is the host's, which this machine's
+// configuration may name otherwise, and has no "/". Never for a
+// detached worktree, which add does not make.
+func namedAfter(session string, w *protocol.Worktree) bool {
+	_, branch, ok := strings.Cut(session, "/")
+	return ok && w != nil && w.Branch != "" && branch == tmux.EncodeBranch(w.Branch)
 }
 
 // Agents is the agent view, from the tree Tree built of the input: the
