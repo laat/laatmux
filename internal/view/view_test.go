@@ -1643,8 +1643,10 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	// vm/proj/z-att, a plain attachment to proj/z, is on proj/z's line
 	// by its own session all the same, and sits with the split's visitor
 	// there: the tree follows proj/z's line, the agent view the visitor's
-	// tile. There proj/y's root is under proj/z's: a split's pane in a
-	// sibling directory would take proj/z's home away on the host.
+	// tile. The cases above take their records as given; in this one
+	// proj/y's root is under proj/z's, as the host reports it: a split's
+	// pane in a sibling directory, or at ~, takes proj/z's home away
+	// (#309).
 	busy := home
 	busy.Activity, busy.ActivityAt = protocol.Working, now.Add(-time.Minute)
 	stray := agent("venv/laatmux/%5", "proj/z", "/home/u", "", protocol.Blocked, time.Minute)
