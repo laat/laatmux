@@ -243,9 +243,9 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 	if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
 		return "", err
 	}
-	if out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", "#{session_id}"+tmux.Sep+"#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"); err == nil {
-		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if f := strings.Split(l, tmux.Sep); len(f) == 3 && f[2] != "" && !slices.Contains(sessions, f[0]) {
+	if recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{session_id}", "#{pane_id}", "#{"+sidebarTag+"}"), "list-panes", "-a"); err == nil {
+		for _, f := range recs {
+			if f[2] != "" && !slices.Contains(sessions, f[0]) {
 				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[1])
 			}
 		}
@@ -363,16 +363,12 @@ func sidebarAttach(ctx context.Context, window, session string) error {
 // by a remain-on-exit the pane inherited before its own was set, is
 // killed and replaced. Called with the lock held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", "#{pane_id}"+tmux.Sep+"#{"+sidebarTag+"}"+tmux.Sep+"#{pane_dead}"+tmux.Sep+"#{window_width}")
+	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", "#{window_width}"), "list-panes", "-t", window)
 	if err != nil {
 		return err
 	}
 	windowWidth := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, tmux.Sep)
-		if len(f) != 4 {
-			continue
-		}
+	for _, f := range recs {
 		windowWidth, _ = strconv.Atoi(f[3])
 		if f[1] == "" {
 			continue
@@ -386,7 +382,7 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	if err != nil {
 		return err
 	}
-	out, err = workspace.Server.Run(ctx, append(sidebarSplit(cfg, windowWidth), "-t", window, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))...)
+	out, err := workspace.Server.Run(ctx, append(sidebarSplit(cfg, windowWidth), "-t", window, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{exe, "sidebar", "pane"}))...)
 	if err != nil {
 		return err
 	}
@@ -486,7 +482,7 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 	if cfg.Sidebar.Top() {
 		size = "#{pane_height}"
 	}
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{"#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", size, "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"}, tmux.Sep))
+	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", size, "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"), "list-panes", "-t", window)
 	if err != nil {
 		// Best effort, on every resize: a window killed while fit
 		// waited on the lock, or no server, is nothing to fit, and an
@@ -494,11 +490,7 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 		return nil
 	}
 	sidebar, zoomed, have, windowWidth := "", "", "", 0
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, tmux.Sep)
-		if len(f) != 7 {
-			continue
-		}
+	for _, f := range recs {
 		windowWidth, _ = strconv.Atoi(f[6])
 		if f[4] == "1" && f[5] == "1" {
 			zoomed = f[0]
@@ -532,7 +524,7 @@ type paneInfo struct {
 // sidebarPanes lists every pane on the default server with what reap
 // and off need. No server is no panes.
 func sidebarPanes(ctx context.Context) ([]paneInfo, error) {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-a", "-F", strings.Join([]string{"#{window_id}", "#{pane_id}", "#{" + sidebarTag + "}", "#{pane_dead}", "#{remain-on-exit}"}, tmux.Sep))
+	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{window_id}", "#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", "#{remain-on-exit}"), "list-panes", "-a")
 	if err != nil {
 		if tmux.NoServer(err) {
 			return nil, nil
@@ -540,11 +532,7 @@ func sidebarPanes(ctx context.Context) ([]paneInfo, error) {
 		return nil, err
 	}
 	var panes []paneInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, tmux.Sep)
-		if len(f) != 5 {
-			continue
-		}
+	for _, f := range recs {
 		panes = append(panes, paneInfo{window: f[0], id: f[1], sidebar: f[2] != "", dead: f[3] == "1", remain: f[4] == "on"})
 	}
 	return panes, nil
