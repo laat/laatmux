@@ -187,6 +187,42 @@ func (f *relayFixture) awaitRecord(t *testing.T, id string, wait time.Duration, 
 	}
 }
 
+// awaitFirstSweep waits for the laptop daemon's first relay sweep, which
+// reads the hosts once, at start, so it cannot take a read a test means
+// for a request. It counts every read of f.hosts, so it is called before
+// anything else reads them, and before setLocal adds a daemon whose
+// sweep would read them again.
+func (f *relayFixture) awaitFirstSweep(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); f.hosts.readCount() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first sweep never read the hosts")
+		}
+	}
+}
+
+// runners is the goroutines registered under the record's id.
+func (f *relayFixture) runners(id string) []*runner {
+	f.local.relay.mu.Lock()
+	defer f.local.relay.mu.Unlock()
+	return append([]*runner(nil), f.local.relay.runners[id]...)
+}
+
+// awaitHostResult waits for the host's journal entry of the add to be
+// terminal: its last write, so the host's add writes nothing into the
+// directories the cleanup removes.
+func (f *relayFixture) awaitHostResult(t *testing.T, id string) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if e, ok := f.host.journal.get(id); ok && e.terminal() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the host's add never had its result")
+		}
+	}
+}
+
 // A relayed add: accepted once the file is on disk, prompt included;
 // run against the host and followed to its result, the record in the
 // merged stream as it goes; then, the listing after the result seen,
@@ -1053,14 +1089,9 @@ func TestRelayHandoffPatience(t *testing.T) {
 func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	shortWait(t, time.Second)
 	f := newRelayFixture(t, []string{"loading"})
-	// The daemon's first relay sweep reads the hosts once, at start,
-	// before any request: waited for, so it cannot take the gone read
-	// meant for the dismiss below.
-	for deadline := time.Now().Add(10 * time.Second); f.hosts.readCount() == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the first sweep never read the hosts")
-		}
-	}
+	// Before any request: the first sweep cannot take the gone read meant
+	// for the dismiss below.
+	f.awaitFirstSweep(t)
 	// Done and OK, prompt not delivered, and the listing still owed
 	// with the host down: settle waits in retire's backoff.
 	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "s1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "stuck", AgentName: "claude", Prompt: "p", SubmittedAt: time.Now()}); !res.OK {
@@ -1111,15 +1142,10 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	f.awaitRecord(t, "s2", 30*time.Second, func(p pendingFile) bool { return p.Taken })
-	runners := func() []*runner {
-		f.local.relay.mu.Lock()
-		defer f.local.relay.mu.Unlock()
-		return append([]*runner(nil), f.local.relay.runners["s2"]...)
-	}
-	before := runners()
+	before := f.runners("s2")
 	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
 	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "s2"})
-	after := runners()
+	after := f.runners("s2")
 	close(release)
 	if res.OK || !strings.Contains(res.Error, "still running") {
 		t.Fatalf("dismiss with the host back %+v", res)
@@ -1163,16 +1189,8 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	n = len(f.local.relay.runners["s3"])
 	f.local.relay.mu.Unlock()
 	close(release)
-	// The host's add, let go, is waited to its result, so it writes
-	// nothing into the directories the cleanup removes.
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if e, ok := f.host.journal.get("s3"); ok && e.terminal() {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the host's add never had its result")
-		}
-	}
+	// The host's add, let go, is waited to its result.
+	f.awaitHostResult(t, "s3")
 	if !res.OK {
 		t.Fatalf("dismiss with the host gone for good %+v", res)
 	}
@@ -1200,6 +1218,83 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	})
 	if last.Type != protocol.TypeRemove || last.ReplacedBy != "" {
 		t.Fatalf("the record's last message %+v", last)
+	}
+}
+
+// A dismiss that keeps its record, the host back between its two
+// checks, publishes no removal for it: a dashboard subscribed then keeps
+// the row of an add that is still running.
+func TestRelayDismissKeptPublishesNoRemoval(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	// Before any request: the first sweep cannot take the gone read meant
+	// for the dismiss below.
+	f.awaitFirstSweep(t)
+	// A sent add held at its launch, so it has no outcome and its runner
+	// sits in the exchange with the host, reading no hosts, until the
+	// hold is let go after the dismiss.
+	release := make(chan struct{})
+	f.ft.set(func() { f.ft.newHold = release })
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "k1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "kept", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	held := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool {
+		return p.Stage == protocol.StageAgent && p.State == protocol.StateStart
+	})
+	if !held.Sent || held.Done || held.Mismatch != "" {
+		t.Fatalf("record at the launch %+v", held)
+	}
+	// Subscribed with the host configured, as a dashboard is: the snapshot
+	// has the row. The subscription reads the hosts itself, so it is made
+	// before the flip.
+	c, pc, snap := f.merged(t)
+	defer c.Close()
+	if len(snap.Pendings) != 1 || snap.Pendings[0].ID != "k1" {
+		t.Fatalf("snapshot pendings %+v", snap.Pendings)
+	}
+	before := f.runners("k1")
+	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
+	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "k1"})
+	// Read while the add is held, so before it can have its outcome.
+	after := f.runners("k1")
+	kept, ok := f.local.relay.get("k1")
+	_, statErr := os.Stat(filepath.Join(f.dir, FileName("k1")))
+	// A marker after the dismiss, published before the add is let go:
+	// anything the dismiss published is before it, and the handoff's
+	// removal, which needs the add's outcome, can only come after it.
+	f.local.relay.mu.Lock()
+	f.local.publishRemoved("marker", "")
+	f.local.relay.mu.Unlock()
+	close(release)
+	// The host's add, let go, is waited to its result before anything of
+	// the dismiss is checked, whichever check fails.
+	f.awaitHostResult(t, "k1")
+	var removed []protocol.Message
+	awaitMerged(t, c, pc, 5*time.Second, func(m protocol.Message) bool {
+		if m.Type == protocol.TypeRemove && m.PendingID == "k1" {
+			removed = append(removed, m)
+		}
+		return m.Type == protocol.TypeRemove && m.PendingID == "marker"
+	})
+	if res.OK || !strings.Contains(res.Error, "still running") {
+		t.Fatalf("dismiss with the host back %+v", res)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("removals published for the record the dismiss kept %+v", removed)
+	}
+	// The record stood, on disk too, and a follow the dismiss started
+	// again ran it.
+	if !ok || kept.Done || statErr != nil {
+		t.Fatalf("record after the dismiss %+v kept %v, file: %v", kept, ok, statErr)
+	}
+	if len(before) != 1 || len(after) != 1 || after[0] == before[0] {
+		t.Fatalf("runners: %d before the dismiss and %d after, want one each, not the same", len(before), len(after))
+	}
+	// That follow carries the add to its outcome. The handoff after it is
+	// not waited for: with the subscription open and vm followed, it waits
+	// for the stream to show the worktree, and the cleanup ends it
+	// wherever it is.
+	if got := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !got.OK {
+		t.Fatalf("record after the restart %+v", got)
 	}
 }
 
