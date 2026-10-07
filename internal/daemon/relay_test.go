@@ -1203,6 +1203,91 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	}
 }
 
+// A dismiss that keeps its record, the host back between its two
+// checks, publishes no removal for it: a dashboard subscribed then keeps
+// the row of an add that is still running.
+func TestRelayDismissKeptPublishesNoRemoval(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	// The daemon's first relay sweep reads the hosts once, at start: waited
+	// for, so it cannot take the gone read meant for the dismiss below.
+	for deadline := time.Now().Add(10 * time.Second); f.hosts.readCount() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first sweep never read the hosts")
+		}
+	}
+	// A sent add held at its launch, so it has no outcome and its runner
+	// sits in the exchange with the host, reading no hosts, until the
+	// hold is let go after the dismiss.
+	release := make(chan struct{})
+	f.ft.set(func() { f.ft.newHold = release })
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "k1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "kept", AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	held := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool {
+		return p.Stage == protocol.StageAgent && p.State == protocol.StateStart
+	})
+	if !held.Sent || held.Done || held.Mismatch != "" {
+		t.Fatalf("record at the launch %+v", held)
+	}
+	// Subscribed with the host configured, as a dashboard is: the snapshot
+	// has the row. The subscription reads the hosts itself, so it is made
+	// before the flip.
+	c, pc, snap := f.merged(t)
+	defer c.Close()
+	if len(snap.Pendings) != 1 || snap.Pendings[0].ID != "k1" {
+		t.Fatalf("snapshot pendings %+v", snap.Pendings)
+	}
+	runners := func() []*runner {
+		f.local.relay.mu.Lock()
+		defer f.local.relay.mu.Unlock()
+		return append([]*runner(nil), f.local.relay.runners["k1"]...)
+	}
+	before := runners()
+	f.hosts.setFlip(1) // gone for the dismiss's first read, back for its second
+	res := f.request(t, protocol.Message{Type: protocol.TypeDismiss, ID: "k1"})
+	after := runners()
+	// A marker after the dismiss, published before the add is let go:
+	// anything the dismiss published is before it, and the handoff's
+	// removal, which needs the add's outcome, can only come after it.
+	f.local.relay.mu.Lock()
+	f.local.publishRemoved("marker", "")
+	f.local.relay.mu.Unlock()
+	close(release)
+	if res.OK || !strings.Contains(res.Error, "still running") {
+		t.Fatalf("dismiss with the host back %+v", res)
+	}
+	var removed []protocol.Message
+	awaitMerged(t, c, pc, 5*time.Second, func(m protocol.Message) bool {
+		if m.Type == protocol.TypeRemove && m.PendingID == "k1" {
+			removed = append(removed, m)
+		}
+		return m.Type == protocol.TypeRemove && m.PendingID == "marker"
+	})
+	if len(removed) != 0 {
+		t.Fatalf("removals published for the record the dismiss kept %+v", removed)
+	}
+	// The record stands, on disk too, and a follow started again by the
+	// dismiss runs it.
+	if p, ok := f.local.relay.get("k1"); !ok || p.Done {
+		t.Fatalf("record after the dismiss %+v kept %v", p, ok)
+	}
+	if p := readPending(t, f.dir, "k1"); p.ID != "k1" {
+		t.Fatalf("file after the dismiss %+v", p)
+	}
+	if len(before) != 1 || len(after) != 1 || after[0] == before[0] {
+		t.Fatalf("runners: %d before the dismiss and %d after, want one each, not the same", len(before), len(after))
+	}
+	// The add, let go, reaches its outcome through that follow; the host's
+	// add has its result then, so it writes nothing into the directories
+	// the cleanup removes. The handoff after it is not waited for: with
+	// the subscription open and vm followed, it waits for the stream to
+	// show the worktree, and the cleanup ends it wherever it is.
+	if got := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !got.OK {
+		t.Fatalf("record after the restart %+v", got)
+	}
+}
+
 // A machine under the host's name that is not the accepted one leaves
 // a sent add stuck by design, marked as a mismatch, and the record is
 // then dismissable, its removal published.
