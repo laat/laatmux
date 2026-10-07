@@ -121,6 +121,7 @@ func TestRemoteBin(t *testing.T) {
 		"/opt/my bin/laatmux":  `'/opt/my bin/laatmux'`,
 		"/opt/it's/laatmux":    `'/opt/it'\''s/laatmux'`,
 		"$HOME/bin/laatmux":    `'$HOME/bin/laatmux'`,
+		"/opt/a=b/laatmux":     `'/opt/a=b/laatmux'`,
 		"laat mux":             `'laat mux'`,
 	}
 	for in, want := range cases {
