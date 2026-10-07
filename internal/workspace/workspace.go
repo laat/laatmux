@@ -4,11 +4,13 @@
 // A workspace is one worktree with one managed agent session and one local
 // session. The local session lives in the user's default tmux server and
 // is tagged with @laatmux_workspace = <environment_id>/<root>, the
-// workspace key, and @laatmux_host = the configured host name. The key is
-// what a local session is matched on: neither the host name nor the
-// repository label is in it, so the session still matches its workspace
-// after either is renamed. The session name, <host>/<repo>/<encoded
-// branch>, is for display and for switching by name. @laatmux_repo, the
+// workspace key, the root encoded where tmux would not give it back as
+// written (protocol.SessionKey), and @laatmux_host = the configured host
+// name. The key is what a local session is matched on: neither the host
+// name nor the repository label is in it, so the session still matches
+// its workspace after either is renamed. The session name,
+// <host>/<repo>/<encoded branch>, is for display and for switching by
+// name. @laatmux_repo, the
 // repository source, and @laatmux_branch identify the worktree when its
 // record is gone from the host: that is how rm finds the root of an orphaned
 // workspace. The host, source and branch tags are refreshed every time
@@ -83,7 +85,15 @@ func parseSessions(out string) []protocol.Session {
 		if len(f) < 7 || f[0] == "" {
 			continue
 		}
-		locals = append(locals, protocol.Session{Name: f[0], Key: f[1], Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
+		key := f[1]
+		if env, root := protocol.SplitSessionKey(key); root != "" {
+			// A key an earlier build wrote has the root as given, which
+			// tmux gave back as written where it has no byte SessionKey
+			// encodes: it reads as the key its root has now, so the
+			// session is still found by it.
+			key = protocol.SessionKey(env, root)
+		}
+		locals = append(locals, protocol.Session{Name: f[0], Key: key, Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
 	}
 	return locals
 }

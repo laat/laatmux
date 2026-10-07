@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -63,6 +64,34 @@ func TestParseSessions(t *testing.T) {
 	}
 	if _, ok := ByName(locals, "vm/proj"); ok {
 		t.Error("ByName matched a prefix")
+	}
+}
+
+// A key read back is the key SessionKey gives its root: one an earlier
+// build wrote with the root as given, a tab or a % in it, reads as the
+// encoded key, so the spec's key finds it; a % before two hex digits in
+// such a key is the root's own and not decoded; a key written encoded,
+// and one with nothing to encode, read as they are.
+func TestParseSessionsKeyWrittenAsGiven(t *testing.T) {
+	line := func(name, key string) string {
+		return strings.Join([]string{name, key, "mac", "", "", "", ""}, tmux.Sep)
+	}
+	for key, want := range map[string]string{
+		"env//w/tab\tx": protocol.SessionKey("env", "/w/tab\tx"),
+		"env//w/a%01b":  protocol.SessionKey("env", "/w/a%01b"),
+		"env%/w/a%01b":  protocol.SessionKey("env", "/w/a\x01b"),
+		"env//w/proj/x": "env//w/proj/x",
+		"env1/root/a":   "env1/root/a",
+		"env":           "env",
+		"env//w/a\xffb": protocol.SessionKey("env", "/w/a\xffb"),
+	} {
+		locals := parseSessions(line("s", key) + "\n")
+		if len(locals) != 1 || locals[0].Key != want {
+			t.Errorf("key %q parsed as %+v, want %q", key, locals, want)
+		}
+	}
+	if protocol.SessionKey("env", "/w/a%01b") == protocol.SessionKey("env", "/w/a\x01b") {
+		t.Error("a root with %01 in it and one with the byte have one key")
 	}
 }
 

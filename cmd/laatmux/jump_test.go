@@ -333,9 +333,11 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 // others are escaped by vis(3), so a session made under the name as
 // given was not found by it, and the tags set in new-session's own
 // sequence found no session. A valid multibyte UTF-8 name is kept as
-// given. The session is reused where its key reads back as written;
-// tmux 3.4 reads a key with another control byte, DEL or a byte that is
-// not UTF-8 back escaped (#214), and one with such a $ as well (#227).
+// given. The session is found by its key the second time: the key has
+// the root encoded where it has a byte tmux 3.4 and 3.5 read back
+// escaped, a newline or the field separator, which would split the
+// session's line (#214). A key with such a $ is still read back escaped
+// by tmux 3.4 (#227).
 func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -346,7 +348,8 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 		again bool
 	}{
 		{`a\b`, true}, {"tab\tx", true}, {"blåbær", true}, {"c1\xc2\x85x", true},
-		{"a\x01b", false}, {"del\x7f", false}, {"a\xffb", false}, {"$x", false},
+		{"a\x01b", true}, {"del\x7f", true}, {"a\xffb", true}, {"nl\nx", true}, {"sep" + tmux.Sep + "x", true},
+		{"$x", false},
 	} {
 		root := "/w/proj/" + c.dir
 		w := protocol.Worktree{ID: "env/worktree/" + root, EnvironmentID: "env", Repo: "proj", Root: root}
@@ -365,6 +368,13 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 		}
 		if !c.again {
 			continue
+		}
+		locals, err := workspace.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l, ok := workspace.Find(locals, spec.Key, ""); !ok || l.Name != spec.Name {
+			t.Errorf("%q: key %q not read back: %+v", c.dir, spec.Key, locals)
 		}
 		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
 			t.Errorf("%q: ensure again: %q %v %v", c.dir, name, created, err)

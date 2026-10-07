@@ -2,12 +2,14 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/laat/laatmux/internal/peer"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -353,6 +355,43 @@ func TestEnsureEncodedNames(t *testing.T) {
 		if !ok || l.Key != key || l.Host != "mac" {
 			t.Errorf("%s: %+v %v", branch, l, ok)
 		}
+	}
+}
+
+// A workspace session an earlier build keyed with the root as given is
+// found by the key its root has now, whatever its name, for a root
+// with a tab or a % in it, which tmux gives back as written; a root
+// with %01 in it is not taken for one with the byte, which gets a
+// session of its own.
+func TestEnsureFindsKeyWrittenAsGiven(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	host := peer.Host{Name: "mac"}
+	roots := []string{"/w/proj/tab\tx", "/w/proj/100%", "/w/proj/a%01b"}
+	for i, root := range roots {
+		name := fmt.Sprintf("old%d", i)
+		target := "=" + name + ":"
+		if _, err := Server.Run(ctx, "new-session", "-d", "-s", name, placeholder,
+			tmux.Next, "set-option", "-t", target, "@laatmux_workspace", "env/"+root,
+			tmux.Next, "set-option", "-t", target, "@laatmux_host", "mac"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, root := range roots {
+		spec := Spec{Host: host, Managed: "m1", Name: fmt.Sprintf("mac/new%d", i), Key: protocol.SessionKey("env", root)}
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != fmt.Sprintf("old%d", i) {
+			t.Errorf("%q: %q %v %v", root, name, created, err)
+		}
+	}
+	spec := Spec{Host: host, Managed: "m1", Name: "mac/byte", Key: protocol.SessionKey("env", "/w/proj/a\x01b")}
+	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
+		t.Errorf("a\\x01b: %q %v %v", name, created, err)
 	}
 }
 

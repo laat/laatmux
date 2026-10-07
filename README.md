@@ -476,7 +476,13 @@ tmux server, named `<host>/<repo>/<encoded branch>`, with one window
 running the attach command (`env -u TMUX tmux -L laatmux attach` locally,
 the same through `ssh -t` remotely). It carries `@laatmux_workspace` =
 `<environment_id>/<root>`, the workspace key, `@laatmux_host`, and
-`@laatmux_repo` and `@laatmux_branch`, the source and branch; the attach
+`@laatmux_repo` and `@laatmux_branch`, the source and branch. A root with
+a control character, a byte that is not UTF-8, a U+2063 or a `%` in it
+is keyed `<environment_id>%<root>` instead, each byte of those written as
+`%` and two hex digits: tmux 3.4 and 3.5 print such a byte back escaped,
+and a newline or the separator laatmux reads tmux's listings with would
+split the session's line. A key from an earlier build, with the root as
+given after the `/`, still finds its session. The attach
 pane carries `@laatmux_attach_pane`, `@laatmux_attach_target`, the
 managed session it attaches to, and `remain-on-exit`. Sessions are
 matched on the key, never the name, so a renamed host or repository label
