@@ -331,7 +331,7 @@ func TestStreamResendsOnInterrupted(t *testing.T) {
 		t.Fatalf("host down: %v", err)
 	}
 	if took := time.Since(start); took > 2*time.Second {
-		t.Fatalf("host down took %s: a daemon was started and waited for", took)
+		t.Fatalf("host down took %s, not at once", took)
 	}
 	if n := (Add{}).Needs(); len(n) != 1 || n[0] != protocol.CapAdd {
 		t.Fatalf("needs %v", n)

@@ -24,12 +24,18 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, noDaemon)
 		os.Exit(1)
 	}
+	// A start of TestRunIsItsOwn's that got past the check above ends
+	// here, rather than run the suite and that test, which starts it.
+	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
+		fmt.Fprintln(os.Stderr, "started as a daemon, and not stopped")
+		os.Exit(1)
+	}
 	// No test reaches the user's tmux or laatmux: the tmux sockets, the
-	// state directory with the runtime file that names the daemon stream
-	// and Add.Run dial, and the config, a file that is not there, are
-	// under a directory of the run's own, and the variables that name
-	// the user's session are cleared. A test that wants a daemon or a
-	// config sets LAATMUX_HOME or LAATMUX_CONFIG itself.
+	// state directory with the runtime file that names the daemon
+	// client.Dial connects to, and the config, a file that is not there,
+	// are under a directory of the run's own, and the variables that
+	// name the user's session are cleared. A test that wants a daemon or
+	// a config sets LAATMUX_HOME or LAATMUX_CONFIG itself.
 	dir, err := os.MkdirTemp("/tmp", "lmxk")
 	if err != nil {
 		panic(err)
@@ -52,8 +58,9 @@ var runDir string
 // noDaemon is what the binary says, started as a daemon.
 const noDaemon = "the internal/command tests start no daemon"
 
-// A test that sets no LAATMUX_HOME or LAATMUX_CONFIG has the run's, and
-// the binary started as client.StartDaemon starts it runs no test.
+// A test that sets no LAATMUX_HOME, LAATMUX_CONFIG or TMUX_TMPDIR has
+// the run's, and the binary started as client.StartDaemon starts it,
+// with or without arguments after "serve", runs no test.
 func TestRunIsItsOwn(t *testing.T) {
 	if runDir == "" {
 		t.Fatal("TestMain gave the run no directory")
@@ -63,15 +70,29 @@ func TestRunIsItsOwn(t *testing.T) {
 			t.Errorf("the %s is %s, not under the run's %s", what, p, runDir)
 		}
 	}
-	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
-		// The start below, under a TestMain that ran the suite: not again.
-		return
+	if d := os.Getenv("TMUX_TMPDIR"); d != runDir {
+		t.Errorf("TMUX_TMPDIR is %q, not the run's %s", d, runDir)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	serve := exec.CommandContext(ctx, os.Args[0], "serve")
-	serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1")
-	if out, err := serve.CombinedOutput(); err == nil || string(out) != noDaemon+"\n" {
-		t.Errorf("started as a daemon: %v\n%s", err, out)
+	for _, v := range []string{"TMUX", "TMUX_PANE"} {
+		if s, ok := os.LookupEnv(v); ok {
+			t.Errorf("%s is set: %q", v, s)
+		}
+	}
+	// As StartDaemon starts it: its own executable, with "serve" and
+	// what LAATMUX_SERVE_ARGS adds. The guard's line comes first; a
+	// binary built with -cover may add one of its own at exit.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"serve"}, {"serve", "--listen", "tcp:127.0.0.1:0"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		serve := exec.CommandContext(ctx, self, args...)
+		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1")
+		out, err := serve.CombinedOutput()
+		cancel()
+		if err == nil || !strings.HasPrefix(string(out), noDaemon+"\n") {
+			t.Errorf("started with %q: %v\n%s", args, err, out)
+		}
 	}
 }
