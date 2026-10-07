@@ -325,15 +325,17 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 	}
 }
 
-// A detached worktree whose directory name has a \, a control byte, DEL
-// or a byte that is not UTF-8 gets a workspace session that the name its
-// jump computed finds: tmux stores a \ in a session name doubled and the
-// others escaped by vis(3), so a session made under the name as given
-// was not found by it, and the tags set in new-session's own sequence
-// found no session. A valid multibyte UTF-8 name is kept as given. The
-// session is reused where its key reads back as written; tmux 3.4 reads
-// a key with another control byte, DEL or a byte that is not UTF-8 back
-// escaped (#214).
+// A detached worktree whose directory name has a \, a control byte,
+// DEL, a byte that is not UTF-8, a $ before a letter, _ or { or a C1
+// control character gets a workspace session that the name its jump
+// computed finds: tmux stores a \ in a session name doubled, tmux 3.2
+// to 3.4 store such a $ as \$, tmux 3.3 escapes a C1 control, and the
+// others are escaped by vis(3), so a session made under the name as
+// given was not found by it, and the tags set in new-session's own
+// sequence found no session. A valid multibyte UTF-8 name is kept as
+// given. The session is reused where its key reads back as written;
+// tmux 3.4 reads a key with another control byte, DEL or a byte that is
+// not UTF-8 back escaped (#214), and one with such a $ as well (#227).
 func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -343,8 +345,8 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 		dir   string
 		again bool
 	}{
-		{`a\b`, true}, {"tab\tx", true}, {"blåbær", true},
-		{"a\x01b", false}, {"del\x7f", false}, {"a\xffb", false},
+		{`a\b`, true}, {"tab\tx", true}, {"blåbær", true}, {"c1\xc2\x85x", true},
+		{"a\x01b", false}, {"del\x7f", false}, {"a\xffb", false}, {"$x", false},
 	} {
 		root := "/w/proj/" + c.dir
 		w := protocol.Worktree{ID: "env/worktree/" + root, EnvironmentID: "env", Repo: "proj", Root: root}
