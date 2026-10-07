@@ -910,6 +910,8 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("TMUX_PANE")
 	// Nor the user's git config: a commit in a test's repository is not
 	// signed, runs no hook of theirs and takes the repository's identity.
+	// Run from a hook, it lands in that repository as well, not in the
+	// one the hook's environment names.
 	gittest.Isolate()
 	// Nor the user's laatmux, whatever the environment names: the state
 	// directory, with last.json and the runtime file that names their

@@ -22,6 +22,8 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("TMUX_PANE")
 	// Nor the user's git config: a commit in a test's repository is not
 	// signed, runs no hook of theirs and takes the repository's identity.
+	// Run from a hook, it lands in that repository as well, not in the
+	// one the hook's environment names.
 	gittest.Isolate()
 	code := m.Run()
 	for _, name := range []string{"default", "laatmux"} {
@@ -33,7 +35,8 @@ func TestMain(m *testing.M) {
 
 // The store's seed commit succeeds in an environment that names config
 // that fails every commit, with an identity from its repository's
-// config alone.
+// config alone, and leaves alone the repository and index the
+// environment names as well.
 func TestGitIsolated(t *testing.T) {
 	gittest.CheckIsolated(t, func(t *testing.T) { newStore(t) })
 }

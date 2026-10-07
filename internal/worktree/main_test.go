@@ -9,7 +9,8 @@ import (
 
 // No test's git reads the user's git config: a commit in a test's
 // repository is not signed, runs no hook of theirs and takes the
-// repository's identity.
+// repository's identity. Run from a hook, it lands in that repository
+// as well, not in the one the hook's environment names.
 func TestMain(m *testing.M) {
 	gittest.Isolate()
 	os.Exit(m.Run())
@@ -17,7 +18,8 @@ func TestMain(m *testing.M) {
 
 // The fixture's commit succeeds in an environment that names config
 // that fails every commit, with an identity from its repository's
-// config alone.
+// config alone, and leaves alone the repository and index the
+// environment names as well.
 func TestGitIsolated(t *testing.T) {
 	gittest.CheckIsolated(t, func(t *testing.T) { newFixture(t) })
 }
