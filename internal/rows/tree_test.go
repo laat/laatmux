@@ -1051,6 +1051,92 @@ func TestHomeAttachment(t *testing.T) {
 	}
 }
 
+// Two plain attachments with one tag, set by hand or by an older build,
+// attach to one managed session: the viewer in either is in an
+// attachment to the session, the first listed as the last, which the
+// join keeps by the tag (#320). On vm, each session with two:
+//   - proj/t, the home of proj/t with nothing running there: proj/t's
+//     line is the viewer's and Own (attachedHome);
+//   - proj/z, the home of proj/z, with its agent and a visitor from
+//     proj/y: proj/z's line is the viewer's and Own, proj/y's the
+//     viewer's through the visitor, whose tile is Own (visitors);
+//   - other, which holds an agent of proj/a, whose home is proj/a: the
+//     line is the viewer's through it, its tile Own;
+//   - scratch, which holds a managed agent of no worktree: its node in
+//     other sessions is the viewer's and Own, as is its tile.
+func TestTwoAttachmentsOneTag(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	agent := func(id, session, cwd, wt string, managed bool) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "venv", Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Idle, ActivityAt: now,
+			Liveness: protocol.Alive, Managed: managed, Cwd: cwd, WorktreeID: wt}
+	}
+	tree := func(branch string) protocol.Worktree {
+		return protocol.Worktree{ID: "venv/worktree//w/proj/" + branch, EnvironmentID: "venv", Repo: "proj", Branch: branch, Root: "/w/proj/" + branch, Session: "proj/" + branch}
+	}
+	pt, pz, py, pa := tree("t"), tree("z"), tree("y"), tree("a")
+	inZ := agent("venv/laatmux/%1", "proj/z", pz.Root, pz.ID, true)
+	inY := agent("venv/laatmux/%2", "proj/y", py.Root, py.ID, true)
+	visitor := agent("venv/laatmux/%3", "proj/z", py.Root, py.ID, false)
+	inOther := agent("venv/laatmux/%4", "other", pa.Root, pa.ID, false)
+	inScratch := agent("venv/laatmux/%5", "scratch", "/home/u", "", true)
+	pair := func(session string) []protocol.Session {
+		return []protocol.Session{{Name: "vm/" + session + "-a", Attach: "vm/" + session, Host: "vm"}, {Name: "vm/" + session + "-b", Attach: "vm/" + session, Host: "vm"}}
+	}
+	in := Input{
+		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents:    []protocol.Agent{inZ, inY, visitor, inOther, inScratch},
+		Worktrees: []protocol.Worktree{pt, pz, py, pa},
+		Locals:    []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}, {Name: "vm/proj/y", Key: "venv//w/proj/y", Host: "vm"}},
+		Now:       now,
+	}
+	for _, s := range []string{"proj/t", "proj/z", "other", "scratch"} {
+		in.Locals = append(in.Locals, pair(s)...)
+	}
+	// seen is the lines and nodes in other sessions marked as the
+	// viewer's, those of them Own, and the tiles the viewer's and Own.
+	type seen struct{ marked, own, tiles, tilesOwn []string }
+	for _, c := range []struct {
+		session string
+		want    seen
+	}{
+		{"proj/t", seen{[]string{pt.ID}, []string{pt.ID}, nil, nil}},
+		{"proj/z", seen{[]string{py.ID, pz.ID}, []string{pz.ID}, []string{inY.ID, visitor.ID, inZ.ID}, []string{visitor.ID}}},
+		{"other", seen{[]string{pa.ID}, nil, []string{inOther.ID}, []string{inOther.ID}}},
+		{"scratch", seen{[]string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}}},
+		{"", seen{}},
+	} {
+		viewers := []string{""}
+		if c.session != "" {
+			viewers = []string{"vm/" + c.session + "-a", "vm/" + c.session + "-b"}
+		}
+		for _, cur := range viewers {
+			in.Current = cur
+			var got seen
+			tr := Tree(in)
+			for _, n := range tr {
+				if n.Depth == 1 && n.Current {
+					got.marked = append(got.marked, n.ID())
+					if n.Own {
+						got.own = append(got.own, n.ID())
+					}
+				}
+			}
+			rs := Agents(in, tr)
+			for _, r := range rs.Main {
+				if r.Current {
+					got.tiles = append(got.tiles, r.ID())
+				}
+				if r.Own {
+					got.tilesOwn = append(got.tilesOwn, r.ID())
+				}
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("the viewer in %q: %+v, want %+v", cur, got, c.want)
+			}
+		}
+	}
+}
+
 // A worktree line's agent is the one its jump goes
 // through, and the most pressing one is kept apart for the icon; the
 // viewer in an attachment to another managed session holding the

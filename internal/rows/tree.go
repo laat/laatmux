@@ -110,13 +110,28 @@ func (j *join) up(env string) bool {
 	return ok && h.Connected && h.Listed && h.Worktrees && env != ""
 }
 
+// attached reports whether the viewer is in a plain attachment with the
+// tag, a host's name and a managed session's: by the viewer's own
+// session's tag. Two attachments can carry one tag, set by hand or by
+// an older build; byAttach keeps the last listed, a jump
+// (workspace.Find) the first, and the viewer may be in either.
+func (j *join) attached(tag string) bool {
+	v := j.byName[j.in.Current]
+	return j.in.Current != "" && v != nil && !v.Workspace() && v.Attach == tag
+}
+
 // agentLocal is the local session an agent stands for on its own: the
-// plain attachment to its managed session, or the observed session on
-// this machine's default server.
+// plain attachment to its managed session, the viewer's when it is in
+// one (attached), so that the viewer is found in it by its name; or the
+// observed session on this machine's default server.
 func (j *join) agentLocal(host string, a *protocol.Agent) *protocol.Session {
 	switch {
 	case a.Server == protocol.ServerLaatmux:
-		return j.byAttach[host+"/"+a.Session]
+		tag := host + "/" + a.Session
+		if j.attached(tag) {
+			return j.byName[j.in.Current]
+		}
+		return j.byAttach[tag]
 	case j.hosts[host].Local && a.Server == protocol.ServerDefault:
 		if l := j.byName[a.Session]; l != nil {
 			return l
@@ -660,7 +675,7 @@ func (b *builder) attachedHome(out []Row) {
 // host.
 func (b *builder) attachedTo(n *Row, home string) bool {
 	for _, host := range []string{n.Host, b.listed(n)} {
-		if att := b.j.byAttach[host+"/"+home]; host != "" && att != nil && att.Name == b.in.Current {
+		if host != "" && b.j.attached(host+"/"+home) {
 			return true
 		}
 	}
@@ -732,7 +747,7 @@ func (b *builder) visitors(out []Row) {
 		if l < 0 || out[l].Local == nil || !out[l].Local.Workspace() {
 			continue
 		}
-		if own := b.j.agentLocal(c.Host, a); l != line && own != nil && own.Name == b.in.Current {
+		if l != line && b.j.attached(c.Host+"/"+a.Session) {
 			out[line].Current, c.attached = true, true
 		}
 		c.Local = out[l].Local
