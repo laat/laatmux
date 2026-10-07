@@ -55,7 +55,7 @@ func SessionName(host, repo, branch string) string {
 // A session made with a "\" or a tab in its name is listed escaped, and
 // as it is listed would be escaped again in the local name; one made
 // with a "." on a host's tmux 3.7 is listed with it, which a local tmux
-// before 3.7 would store as "_".
+// before 3.7 would store as "_", and CheckSessionName refuses.
 func AttachName(host, session string) string {
 	return host + "/" + tmux.EncodeListed(session)
 }
@@ -328,8 +328,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	}
 	// A workspace named after its managed session, as worktreeSpec names
 	// one after the worktree's home, adopts the plain attachment an
-	// older build named after the session as listed, a $ in it kept,
-	// which AttachName encodes now: the name its tag has. One named
+	// older build named after the session as listed, a $ in it kept, or
+	// a . a host's tmux 3.7 keeps, which AttachName encodes now: the name
+	// its tag has. One named
 	// otherwise, after a worktree whose root agent is in a session that
 	// is not its home, leaves a plain attachment to that session alone.
 	if s.Key != "" && s.Name != attach && s.Name == AttachName(s.Host.Name, s.Managed) {
@@ -345,10 +346,10 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// CheckSessionName refuses but a ":", which tmux 3.7 lists as given
 	// and which is refused above. A workspace's name is not checked: it
 	// has a worktree's session name in it, which SessionName encoded from
-	// the branch, new took for a session started at the root, or
-	// AttachName encoded as listed, a "." from a host's tmux 3.7 too.
-	// new-session expands the name as a format, and a name new took can
-	// have a # in it.
+	// the branch, or new took for a session started at the root, made one
+	// tmux stores as given by AttachName, a "." from a host's tmux 3.7
+	// too. new-session expands the name as a format, and a name new took
+	// can have a # in it.
 	if s.Key == "" {
 		if err := tmux.CheckSessionName(s.Name); err != nil {
 			return "", false, err

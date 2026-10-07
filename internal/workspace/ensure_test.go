@@ -518,8 +518,10 @@ func TestEnsureAttachmentNames(t *testing.T) {
 // mac/a.b on a local tmux 3.7 is found by its key and kept under its
 // name, and Kill kills it too, which =mac/a.b did not find. Neither
 // reaches mac/a, which =mac/a.b alone can: tmux reads its mac/a as a
-// window, then as a session. A tmux before 3.7 stores the . as _, and
-// the test is skipped there.
+// window, then as a session. A plain attachment to a.b a build from
+// before the . was refused made as mac/a.b is adopted as the workspace
+// under its name. A tmux before 3.7 stores the . as _, and the test is
+// skipped there.
 func TestEnsureDottedManagedSession(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -573,6 +575,19 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	}
 	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
 		t.Errorf("after the kill of %s: %+v %v", name, locals, err)
+	}
+	// A plain attachment a build before the . was checked made as
+	// mac/a.b, tagged with a.b as listed, is adopted as the workspace
+	// under its name, and mac/a%2eb is not made.
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/a.b", "sleep 600", tmux.Next, "set-option", "-t", "=mac/a.b:", "@laatmux_attach", "mac/a.b"); err != nil {
+		t.Fatal(err)
+	}
+	if name, created, err = Ensure(ctx, spec); err != nil || created || name != "mac/a.b" {
+		t.Fatalf("the older build's attachment: %q %v %v", name, created, err)
+	}
+	locals, err := List(ctx)
+	if l, ok := ByName(locals, "mac/a.b"); err != nil || !ok || l.Key != spec.Key || l.Attach != "" || len(locals) != 2 {
+		t.Errorf("after the adoption: %+v %v", locals, err)
 	}
 }
 

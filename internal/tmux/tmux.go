@@ -1096,17 +1096,20 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // the "." changes no name a host there lists; tmux 3.7 lists them as
 // given. A "." is encoded since a local tmux before 3.7 would store it
 // as "_", and the set-option calls in new-session's own sequence would
-// then find no session by the name; the attach target and the attach
-// tag keep the name as listed, which =a.b: reaches on the host. A ":"
-// is kept: no target reaches a session with one (CheckTarget), so its
+// then find no session by the name; CheckSessionName refuses one for
+// that, whatever the local tmux. The attach target and the attach tag
+// keep the name as listed, which =a.b: reaches on the host. A ":" is
+// kept: no target reaches a session with one (CheckTarget), so its
 // attachment is refused whatever the local name. Two sessions on a
-// host, a\b and a%5cb, or a.b and a%2eb, can so get one local name; the
+// host, a\b and a%5cb, or a.b and a%2eb, can so get one local name, and
+// a session made by hand, proj/fix.bar or proj/fix$x, the name of the
+// workspace of the worktree whose branch is fix.bar or fix$x; the
 // second's jump is then refused as a name in use, since the local
-// session is found by its attach tag, which is exact. tmux 3.2 to 3.4
-// store a "$" before a letter with a "\" before it, so c$xd is listed
-// as c\$xd, which does not decode: tmux 3.4 prints it with one more
-// "\", as c\\$xd, which Query undoes. Either becomes c%5c%24xd, a name
-// kept as given.
+// session is found by its attach tag or key, which is exact. tmux 3.2
+// to 3.4 store a "$" before a letter with a "\" before it, so c$xd is
+// listed as c\$xd, which does not decode: tmux 3.4 prints it with one
+// more "\", as c\\$xd, which Query undoes. Either becomes c%5c%24xd, a
+// name kept as given.
 func EncodeListed(name string) string {
 	if d := unvisName(name); visName(d) == name {
 		name = d
