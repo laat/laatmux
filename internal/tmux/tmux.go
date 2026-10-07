@@ -186,20 +186,20 @@ func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, 
 }
 
 // unframe is what a Query's command printed, as the server holds the
-// values, each line's Sep and probe dropped. Every line tmux prints
-// ends in a newline, so the output ends in the last line's probe, which
-// no value can stand in for; that one tells whether to undo the
-// backslashes, in every line. A line is decoded before its probe is
-// dropped: tmux on macOS takes the first byte of Sep for a letter, so a
-// last value that ends in "$" has a backslash only the Sep after it
-// accounts for. A line that does not end in the probe is part of one
-// whose value has a newline in it, which no reader parses as a record.
+// values, each line's Sep and probe dropped. Each line tells by its
+// own probe whether the server escaped it: one that ends in the probe
+// printed as `\$_` has its backslashes undone, then the probe dropped.
+// It is decoded first: tmux on macOS takes the first byte of Sep for a
+// letter, so a last value that ends in "$" has a backslash only the Sep
+// after it accounts for. A line that does not end in the probe is left
+// as printed: a line a user's after-hook printed after the records, or
+// part of one whose value has a newline in it, which no reader parses
+// as a record.
 func unframe(out string) string {
-	escaped := strings.HasSuffix(out, Sep+`\`+probe+"\n")
 	var b strings.Builder
 	for _, l := range strings.SplitAfter(out, "\n") {
 		l, nl := strings.CutSuffix(l, "\n")
-		if escaped {
+		if strings.HasSuffix(l, Sep+`\`+probe) {
 			l = unescapeDollar(l)
 		}
 		b.WriteString(strings.TrimSuffix(l, Sep+probe))

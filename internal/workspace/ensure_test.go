@@ -837,13 +837,20 @@ func TestEnsureNameInUsePrintable(t *testing.T) {
 // PaneSession, which ask the server TMUX names, give its key from
 // inside it, and a pane's path. tmux 3.2 to 3.4 store the managed
 // session's name m$x as m\$x, and the spec names it as stored, as the
-// host's record does.
+// host's record does. The user's server has after-hooks that print a
+// line after the records of list-sessions and list-panes, which the
+// readers skip.
 func TestEnsureValuesWithDollar(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
+	for _, hook := range []string{"after-list-sessions", "after-list-panes"} {
+		if _, err := Server.Run(ctx, "set-hook", "-g", hook, "display-message -p hook"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	out, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m$x", "-P", "-F", "#{session_id}", "sleep 600")
 	if err != nil {
 		t.Fatal(err)

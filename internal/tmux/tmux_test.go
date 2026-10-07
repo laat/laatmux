@@ -1234,30 +1234,33 @@ func dollarValues(f func(v string)) {
 	walk("", 4)
 }
 
-// unframe gives a Query's output as the server holds the values: the
-// probe dropped from every line, and the backslashes undone in every
-// line when the last line's probe was printed escaped. The probe of
-// the last line decides, so a value that has the escaped probe and a
-// newline in it, on a server that prints values as given, does not
-// make the other lines decoded. A line is decoded before its probe is
-// dropped: a value that ends in $ is followed by Sep, whose first byte
-// macOS takes for a letter, so tmux 3.4 there escapes that $. Beside
-// the table, every value from dollarValues as the last field reads
-// back as given from a server that prints it as tmux 3.4 does and from
-// one that prints it as given.
+// unframe gives a Query's output as the server holds the values: each
+// line's probe dropped, and a line's backslashes undone when its own
+// probe was printed escaped. A line without the probe is left as
+// printed: one a user's after-hook printed after the records, as
+// display-message -p in an after-list-panes hook does, and the part
+// before the newline of a value that has one; a value that has the
+// escaped probe and a newline in it, on a server that prints values as
+// given, changes only its own record's lines. A line is decoded before
+// its probe is dropped: a value that ends in $ is followed by Sep, whose
+// first byte macOS takes for a letter, so tmux 3.4 there escapes that
+// $. Beside the table, every value from dollarValues as the last field
+// reads back as given from a server that prints it as given, and from
+// one that prints it as tmux 3.4 does when it has no newline.
 func TestUnframe(t *testing.T) {
 	for _, c := range []struct{ out, want string }{
 		{"", ""},
 		{`a\$b` + Sep + "$_\nc" + Sep + "$_\n", "a\\$b\nc\n"},
 		{`a\$b` + Sep + `\$_` + "\n" + `c\\$d` + Sep + `\$_` + "\n", "a$b\n" + `c\$d` + "\n"},
-		{"x" + Sep + `\$_` + "\n" + `y\$a` + Sep + "$_\n", "x" + Sep + `\$_` + "\n" + `y\$a` + "\n"},
+		{`a\$b` + Sep + `\$_` + "\nhook \\$x\n", "a$b\nhook \\$x\n"},
+		{"x" + Sep + `\$_` + "\n" + `y\$a` + Sep + "$_\n", "x\n" + `y\$a` + "\n"},
 	} {
 		if got := unframe(c.out); got != c.want {
 			t.Errorf("%q: %q, want %q", c.out, got, c.want)
 		}
 	}
 	dollarValues(func(v string) {
-		if got := unframe(print34(v+Sep+probe) + "\n"); got != v+"\n" {
+		if got := unframe(print34(v+Sep+probe) + "\n"); got != v+"\n" && !strings.Contains(v, "\n") {
 			t.Errorf("%q printed by tmux 3.4 as %q reads back %q", v, print34(v+Sep+probe), got)
 		}
 		if got := unframe(v + Sep + probe + "\n"); got != v+"\n" {
