@@ -1398,7 +1398,17 @@ records:
   and dashboard).
 - **Managed server** reconciliation runs on discovery, once per tmux server
   pid: global options, every global hook, session-level overrides of the
-  isolation options, and both key tables. A cold start also passes
+  isolation options, both key tables, `update-environment` (back to
+  tmux's own list), and the locale of the global environment that new
+  panes start with. That locale is the daemon's when its character set is
+  UTF-8 on the host, else the server's own when that one is, else
+  `LANG=C.UTF-8` (en_US.UTF-8 or another UTF-8 locale the host has where
+  C.UTF-8 is missing). Each locale variable is kept only when it is C,
+  POSIX or a UTF-8 locale the host has, as the host's `locale charmap`
+  says under the server's LOCPATH and LOCALE_ARCHIVE; one that names a
+  missing locale or another character set is dropped. Agents get a UTF-8
+  locale even when the daemon was started over ssh or as a service
+  without one. A cold start also passes
   `-f /dev/null`. `new` refuses a session that comes up with more than one
   pane. Only the `laatmux` server is ever reconciled; the other servers the
   daemon polls are the user's and are read only. Protocol: a daemon with a different protocol number is refused; within
