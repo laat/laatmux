@@ -191,7 +191,9 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 }
 
 // sidebarSockets is the socket paths of the sidebar panes: the window's,
-// or every one with all.
+// or every one with all. A path is under the state directory, which can
+// have tmux.Sep or a newline in it, so the panes are read through
+// tmux.Fields.
 func sidebarSockets(ctx context.Context, window string, all bool) ([]string, error) {
 	args := []string{"list-panes"}
 	if all {
@@ -199,14 +201,13 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 	} else {
 		args = append(args, "-t", window)
 	}
-	out, err := workspace.Server.Query(ctx, "#{"+sidebarTag+"}"+tmux.Sep+"#{"+socketTag+"}", args...)
+	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{"+sidebarTag+"}", "#{"+socketTag+"}"), args...)
 	if err != nil {
 		return nil, err
 	}
 	var paths []string
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(l, tmux.Sep)
-		if len(f) == 2 && f[0] != "" && f[1] != "" {
+	for _, f := range recs {
+		if f[0] != "" && f[1] != "" {
 			paths = append(paths, f[1])
 		}
 	}

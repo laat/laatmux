@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -818,6 +819,72 @@ func TestNestedShell(t *testing.T) {
 	}
 	if sessions, _ := sidebarSessions(ctx); len(sessions) != 0 {
 		t.Errorf("the option set from a nested shell: %v", sessions)
+	}
+}
+
+// A sidebar pane's socket is under the state directory, which can have
+// tmux.Sep or a newline in it: a pane listening there is listed by its
+// whole path, with its window's panes and with every pane, and a
+// command for its window reaches it. Split at Sep, the line of the
+// first path had three fields and the second path's line was cut in
+// two, so neither pane was listed and a command reached no sidebar.
+func TestSidebarSocketsWithSep(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	base := os.Getenv("LAATMUX_HOME")
+	type side struct {
+		window, path string
+		got          chan view.Command
+	}
+	var sides []side
+	var want []string
+	for _, name := range []string{"st" + tmux.Sep + "x", "st\nx"} {
+		window := run("new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000")
+		pane := run("split-window", "-d", "-h", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
+		run("set-option", "-p", "-t", pane, sidebarTag, "1")
+		t.Setenv("LAATMUX_HOME", filepath.Join(base, name))
+		t.Setenv("TMUX_PANE", pane)
+		got := make(chan view.Command, 8)
+		cmds := make(chan func(*view.Model) view.Action, 8)
+		stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
+			got <- c
+			return func(*view.Model) view.Action { return view.Action{} }
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stop)
+		pid, err := serverPID(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := socketPath(pid, pane)
+		if !strings.HasPrefix(path, filepath.Join(base, name)+"/") {
+			t.Fatalf("pane %s listens on %q", pane, path)
+		}
+		sides = append(sides, side{window, path, got})
+		want = append(want, path)
+	}
+	slices.Sort(want)
+	if got, err := sidebarSockets(ctx, "", true); err != nil || !slices.Equal(slices.Sorted(slices.Values(got)), want) {
+		t.Errorf("every socket: %q %v, want %q", got, err, want)
+	}
+	for _, s := range sides {
+		if got, err := sidebarSockets(ctx, s.window, false); err != nil || len(got) != 1 || got[0] != s.path {
+			t.Errorf("the socket of %s: %q %v, want %q", s.window, got, err, s.path)
+		}
+		if err := sidebarControl(ctx, "next", []string{"-t", s.window}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-s.got:
+		case <-time.After(5 * time.Second):
+			t.Errorf("next for %s did not reach the pane listening on %q", s.window, s.path)
+		}
 	}
 }
 
