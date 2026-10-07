@@ -791,8 +791,8 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, on a host this machine's config gives the
 // directories add needs, for a repository that config lists, which
-// --repo takes. Until add can run, it names everything add still
-// needs, not only the first.
+// --repo takes. It names every one of these the worktree lacks, not
+// only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
 	if w.Branch == "" {
@@ -804,10 +804,15 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	if _, ok := cfg.RepoBySource(w.Source); w.Source != "" && !ok {
 		needs = append(needs, w.Source+" is a repository in the config")
 	}
-	if len(needs) > 0 {
-		return "laatmux add makes one once " + strings.Join(needs, " and ")
+	switch n := len(needs); {
+	case n == 0:
+		return addCommand(cfg, h, w) + " makes one"
+	case n > 2:
+		// A list: the directories' own "and" would run into the joins.
+		needs[n-1] = "and " + needs[n-1]
+		return "laatmux add makes one once " + strings.Join(needs, ", ")
 	}
-	return addCommand(cfg, h, w) + " makes one"
+	return "laatmux add makes one once " + strings.Join(needs, " and ")
 }
 
 // shell opens the shell window in the selected workspace, creating the

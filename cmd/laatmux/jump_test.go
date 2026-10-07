@@ -125,8 +125,9 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // branch; a detached worktree, named by its root, needs a branch
 // checked out first; box's entry has no directories, which add needs
 // first; a repository this machine's config does not list is one
-// --repo refuses. A worktree that lacks more than one is told all of
-// them.
+// --repo refuses, while one it lists under another form of the source
+// is named by its label here. A worktree that lacks more than one is
+// told all of them.
 func TestAddHintCanRun(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
 	src := "git@github.com:laat/proj.git"
@@ -137,6 +138,10 @@ func TestAddHintCanRun(t *testing.T) {
 	detBox := det
 	detBox.ID, detBox.EnvironmentID = "benv/worktree//w/det", "benv"
 	other := protocol.Worktree{ID: "venv/worktree//w/o", EnvironmentID: "venv", Repo: "other", Source: "git@github.com:laat/other.git", Branch: "b", Root: "/w/o"}
+	https := bv
+	https.Source = "https://github.com/laat/proj"
+	detOther := other
+	detOther.ID, detOther.EnvironmentID, detOther.Branch = "benv/worktree//w/o", "benv", ""
 	host := func(name, env string) rows.Host {
 		return rows.Host{Name: name, Local: name == "mac", EnvironmentID: env, Connected: true, Listed: true, Worktrees: true, Attribution: true}
 	}
@@ -150,9 +155,11 @@ func TestAddHintCanRun(t *testing.T) {
 	}{
 		{host("vm", "venv"), bv, onVM},
 		{host("box", "benv"), bb, onBox},
+		{host("vm", "venv"), https, onVM},
 		{host("vm", "venv"), other, onOther},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
+		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
 	} {
 		in := rows.Input{Hosts: []rows.Host{c.host}, Worktrees: []protocol.Worktree{c.w}}
 		m := &view.Model{Width: 100, Height: 20, ShowHidden: true, View: view.ViewTree}
