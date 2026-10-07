@@ -199,7 +199,7 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 	} else {
 		args = append(args, "-t", window)
 	}
-	out, err := workspace.Server.Run(ctx, append(args, "-F", "#{"+sidebarTag+"}"+tmux.Sep+"#{"+socketTag+"}")...)
+	out, err := workspace.Server.Query(ctx, "#{"+sidebarTag+"}"+tmux.Sep+"#{"+socketTag+"}", args...)
 	if err != nil {
 		return nil, err
 	}

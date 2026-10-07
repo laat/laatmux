@@ -340,8 +340,8 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 // given. The session is found by its key the second time: the key is
 // stored with the root encoded where it has a byte tmux 3.4 and 3.5
 // read back escaped, a newline or the field separator, which would
-// split the session's line (#214). A key with such a $ is still read
-// back escaped by tmux 3.4 (#227).
+// split the session's line (#214), and a key with such a $ is read
+// back as written since its \$ is undone (#227).
 func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -353,7 +353,7 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	}{
 		{`a\b`, true}, {"tab\tx", true}, {"blåbær", true}, {"c1\xc2\x85x", true},
 		{"a\x01b", true}, {"del\x7f", true}, {"a\xffb", true}, {"nl\nx", true}, {"sep" + tmux.Sep + "x", true},
-		{"$x", false},
+		{"$x", true},
 	} {
 		root := "/w/proj/" + c.dir
 		w := protocol.Worktree{ID: "env/worktree/" + root, EnvironmentID: "env", Repo: "proj", Root: root}
@@ -394,11 +394,11 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 // worktree whose home it is name the local session alike. The host is
 // this machine, its managed server as isolated as the default one, and
 // its session names are read as the daemon reads them. c$xd is listed
-// as c\$xd on tmux 3.2 and as c\\$xd on 3.4, and its local name then
-// needs the $ encoded too; tmux 3.4 reads its attach tag back with a \
-// before the $ (#227), and there the session is not looked for by its
-// tag again. h\##{x} is stored, and listed, as h\\#{x}: its local name
-// keeps the #, which new-session is given as FormatLiteral writes it.
+// as c\$xd on tmux 3.2 to 3.4, which tmux 3.4 prints as c\\$xd and
+// ListPanes reads as stored, and its local name then needs the $
+// encoded too; its attach tag reads back as written, through Query.
+// h\##{x} is stored, and listed, as h\\#{x}: its local name keeps the
+// #, which new-session is given as FormatLiteral writes it.
 func TestEnsureListedHostSessionName(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -456,12 +456,8 @@ func TestEnsureListedHostSessionName(t *testing.T) {
 		if err != nil || strings.TrimSpace(string(out)) != "mac" {
 			t.Errorf("%q: %s host tag %q %v", listed, name, out, err)
 		}
-		out, err = workspace.Server.Run(ctx, "show-options", "-v", "-t", "="+name+":", "@laatmux_attach")
+		out, err = workspace.Server.Query(ctx, "#{@laatmux_attach}", "display-message", "-p", "-t", "="+name+":")
 		if tag := strings.TrimSpace(string(out)); err != nil || tag != "mac/"+listed {
-			if err == nil && strings.Contains(listed, "$") && tag == strings.ReplaceAll("mac/"+listed, "$", `\$`) {
-				t.Logf("%q: %s attach tag read back as %q (#227)", listed, name, tag)
-				continue
-			}
 			t.Errorf("%q: %s attach tag %q %v", listed, name, out, err)
 		}
 		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
