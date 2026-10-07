@@ -419,9 +419,9 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// testDaemon is the stand-in daemon of TestStop, and of
-// TestReportPrefixOnce's start: serve is the real daemon with the
-// shutdown message; legacy is one without it, ended by SIGTERM.
+// testDaemon is the stand-in daemon a test names in LAATMUX_TEST_DAEMON:
+// serve is the real daemon with the shutdown message; legacy is one
+// without it, ended by SIGTERM.
 func testDaemon(mode string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
@@ -861,16 +861,16 @@ func TestIsDaemon(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	// First: a daemon client.StartDaemon starts is this binary with
-	// "serve" and no -test.run, which would run the whole suite.
+	// First: a start a test asks for, by naming a stand-in in
+	// LAATMUX_TEST_DAEMON, runs that stand-in, whatever its arguments.
 	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
 		testDaemon(mode)
 	}
-	// A start as "serve" without it, from a test that reached
-	// client.StartDaemon with no stand-in asked for, ends at once, as a
-	// daemon that never comes up: run on, it would run the whole suite
-	// again, detached, and a test that starts a daemon would start
-	// another.
+	// A start as "serve" with no stand-in named, from a test that reached
+	// client.StartDaemon without asking for one, ends at once, as a
+	// daemon that never comes up: a test binary takes "serve" as an
+	// ignored argument, so run on, it would run the whole suite again,
+	// detached, and a test that starts a daemon would start another.
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		fmt.Fprintln(os.Stderr, noDaemon)
 		os.Exit(1)
@@ -949,21 +949,22 @@ func TestRunStateIsItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	start := func(standIn string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		serve := exec.CommandContext(ctx, self, args...)
+		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1", "LAATMUX_TEST_DAEMON="+standIn)
+		return serve.CombinedOutput()
+	}
 	for _, args := range [][]string{{"serve"}, {"serve", "--listen", "tcp:127.0.0.1:0"}} {
-		for _, mode := range []string{"", "absent"} {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			serve := exec.CommandContext(ctx, self, args...)
-			serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1", "LAATMUX_TEST_DAEMON="+mode)
-			out, err := serve.CombinedOutput()
-			cancel()
-			var exit *exec.ExitError
-			if mode == "" && (!errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), noDaemon+"\n")) {
-				t.Errorf("started with %q: %v\n%s", args, err, out)
-			}
-			if mode != "" && (err != nil || strings.Contains(string(out), noDaemon)) {
-				t.Errorf("started with %q and the %s stand-in: %v\n%s", args, mode, err, out)
-			}
+		out, err := start("", args...)
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), noDaemon+"\n") {
+			t.Errorf("started with %q: %v\n%s", args, err, out)
 		}
+	}
+	if out, err := start("absent", "serve"); err != nil || strings.Contains(string(out), noDaemon) {
+		t.Errorf("started with the absent stand-in: %v\n%s", err, out)
 	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
