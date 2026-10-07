@@ -313,6 +313,14 @@ func TestEncodeListed(t *testing.T) {
 		`c1` + "\u0085x": "c1%c2%85x",
 		"sep\u2063x":     "sep%e2%81%a3x",
 
+		// A line separator and a noncharacter as a host whose tmux keeps
+		// them lists them, encoded byte by byte, as EncodeBranch encodes
+		// them for a tmux 3.3 built without utf8proc; a private use code
+		// point at U+FDD0's place in plane 15 kept.
+		"ls\u2028x":     "ls%e2%80%a8x",
+		"nc\ufffex":     "nc%ef%bf%bex",
+		"pu\U000ffdd0x": "pu\U000ffdd0x",
+
 		// A # and a ; are kept, and a . and a :, which tmux 3.7 lists
 		// as given, are kept for CheckSessionName to refuse.
 		"a#{b};": "a#{b};",
