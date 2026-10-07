@@ -147,10 +147,11 @@ func repoList(cfg config.Config) string {
 
 // hostFor picks the host for a repository: the flag, else the last-used
 // host for it, else the config's default order. The host must be able to
-// hold worktrees. last.json is read only when it has something to give:
-// without the flag, or with withLast, for a caller that takes the
-// repository's other last-used defaults too, as add takes the agent. A
-// command given its host and wanting nothing more is not stopped by a
+// hold worktrees. last.json is read without the flag, for the last-used
+// host, and with withLast, for a caller that takes the repository's other
+// defaults from it or writes it back after the host's work, as add does:
+// a file it cannot read stops that caller here, before the host is asked.
+// A command given its host and wanting nothing more is not stopped by a
 // file it does not use; the defaults it gets back are then zero.
 func hostFor(cfg config.Config, flag string, repo config.Repo, withLast bool) (config.Host, home.LastRepo, error) {
 	var lr home.LastRepo

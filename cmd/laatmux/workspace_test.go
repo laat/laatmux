@@ -293,10 +293,12 @@ func TestLocalRepoArg(t *testing.T) {
 
 // add with a last.json it cannot parse says which file, as the add
 // form does: the decoder's error alone names none. It fails there,
-// before anything reaches a daemon, with --host given too: add takes
-// the last-used agent from the file and writes it back after. The
-// stand-in daemon answers an add that got past the file, so it fails
-// on another error rather than starting a real daemon.
+// before anything reaches a daemon, with --host given too, and with
+// the agent given or a command in its place: add writes the file back
+// after the host's work, so a file it cannot read must stop it first.
+// An add that got past the file would reach the stand-in daemon, whose
+// hello has no capabilities, and fail on another error rather than
+// start a real daemon.
 func TestAddBadLastNamesFile(t *testing.T) {
 	startFakeDaemon(t, nil, nil)
 	dir := os.Getenv("LAATMUX_HOME")
@@ -309,10 +311,49 @@ func TestAddBadLastNamesFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var b strings.Builder
-	report(&b, cmdAdd(context.Background(), []string{"b", "--repo", "proj", "--host", "mac"}))
-	if want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"; b.String() != want {
-		t.Errorf("printed %q, want %q", b.String(), want)
+	want := "laatmux: " + path + ": " + json.Unmarshal([]byte("not json"), &home.Last{}).Error() + "\n"
+	for _, args := range [][]string{
+		{"b", "--repo", "proj", "--host", "mac"},
+		{"b", "--repo", "proj", "--host", "mac", "--agent", "claude"},
+		{"b", "--repo", "proj", "--host", "mac", "--", "true"},
+	} {
+		var b strings.Builder
+		report(&b, cmdAdd(context.Background(), args))
+		if b.String() != want {
+			t.Errorf("add %v printed %q, want %q", args, b.String(), want)
+		}
+	}
+}
+
+// hostFor takes the last-used host without the flag, and gives the
+// repository's defaults back with withLast whether or not the flag is
+// given; with the flag and without withLast it reads nothing.
+func TestHostFor(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	const src = "git@x:o/proj.git"
+	cfg := config.Config{Hosts: []config.Host{
+		{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"},
+		{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
+	}}
+	repo := config.Repo{Name: "proj", Source: src}
+	used := home.LastRepo{Host: "vm", Agent: "codex"}
+	if err := home.UpdateLast(func(l *home.Last) { l.Set(src, used) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		flag     string
+		withLast bool
+		host     string
+		lr       home.LastRepo
+	}{
+		{"", false, "vm", used},
+		{"", true, "vm", used},
+		{"mac", true, "mac", used},
+		{"mac", false, "mac", home.LastRepo{}},
+	} {
+		if h, lr, err := hostFor(cfg, c.flag, repo, c.withLast); err != nil || h.Name != c.host || lr != c.lr {
+			t.Errorf("hostFor(%q, %v) = %s %+v %v, want %s %+v", c.flag, c.withLast, h.Name, lr, err, c.host, c.lr)
+		}
 	}
 }
 
