@@ -35,9 +35,10 @@ jobs:
           go-version-file: go.mod
 
       # The tmux tests skip without it; the end-to-end test needs it
-      # for the daemon's first poll to complete. apt's tmux on
-      # ubuntu-latest (3.4 on 24.04) runs the tests that pin facts of
-      # tmux 3.2-3.4; brew's on macOS is the newest release.
+      # for the daemon's first poll to complete. On ubuntu-latest it is
+      # apt's tmux (3.4 on 24.04), for the tests that pin facts of tmux
+      # 3.2-3.4; the image has it today, and the install keeps the job
+      # from depending on that. On macOS it is brew's newest release.
       - name: tmux (macOS)
         if: runner.os == 'macOS'
         run: brew install tmux
@@ -46,8 +47,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      # A runner image that changes tmux shows in the log; one that
-      # loses it fails here rather than letting the tmux tests skip.
+      # A runner image that changes the tmux version shows here.
       - name: tmux version
         run: tmux -V
 
