@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
@@ -105,11 +108,15 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 
 // originOf is the git origin of the repository dir is in, "" when git
 // positively reports none: the key is unset, outside any repository too
-// (exit 1), or the .git dir is under names a repository that is gone
-// (exit 128 with git's message, in the C locale so it is the English
-// one). Anything else, git missing or a repository it cannot read, is an
-// error, so a directory whose identity cannot be inspected is never
-// resolved from its label instead.
+// (exit 1), or the .git file dir is under names a repository that is
+// gone (exit 128). That last is decided by the .git file itself, on any
+// git (goneGitfile). git's message, in the C locale so it is the English
+// one, is the fallback for what the file does not show, such as a
+// directory with a HEAD that is no repository; only gits before 2.56 say
+// "not a git repository" there, 2.56 says "gitfile does not point to a
+// valid repository", which is not matched. Anything else, git missing or
+// a repository it cannot read, is an error, so a directory whose
+// identity cannot be inspected is never resolved from its label instead.
 func originOf(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", "remote.origin.url")
 	cmd.Env = worktree.GitEnv()
@@ -124,7 +131,7 @@ func originOf(ctx context.Context, dir string) (string, error) {
 		switch {
 		case exit.ExitCode() == 1:
 			return "", nil
-		case exit.ExitCode() == 128 && strings.Contains(stderr.String(), "not a git repository"):
+		case exit.ExitCode() == 128 && (goneGitfile(dir, cmd.Env) || strings.Contains(stderr.String(), "not a git repository")):
 			return "", nil
 		}
 	}
@@ -134,6 +141,69 @@ func originOf(ctx context.Context, dir string) (string, error) {
 		msg = err.Error()
 	}
 	return "", fmt.Errorf("%s: cannot read git origin: %s", tmux.Printable(dir), tmux.PrintableLines(msg))
+}
+
+// goneGitfile reports whether git's search for the repository of dir
+// ends at a .git file naming a directory without a HEAD, which no git
+// takes for a repository: the worktree's repository is gone. The search
+// goes up from dir's physical path, as git's does, to the first level
+// with a .git, and ends undecided where git might stop short of a .git
+// file: at a .git that is not a regular file (git moves past a directory
+// that is no repository, which this does not tell), or at a level with
+// a HEAD of its own, which git may take for a bare repository. A dir
+// that does not exist is undecided too, git failed to enter it, and so
+// is any dir when env, git's environment, sets GIT_DIR, as git then
+// searches nothing. The file is read as git reads it: "gitdir: " and a
+// path, relative to the file's directory, trailing line ends dropped, at
+// most 1 MiB.
+func goneGitfile(dir string, env []string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_DIR=") {
+			return false
+		}
+	}
+	d, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	for {
+		dotgit := filepath.Join(d, ".git")
+		fi, err := os.Stat(dotgit)
+		switch {
+		case err == nil:
+			if !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
+				return false
+			}
+			b, err := os.ReadFile(dotgit)
+			if err != nil {
+				return false
+			}
+			target, ok := strings.CutPrefix(string(b), "gitdir: ")
+			target = strings.TrimRight(target, "\r\n")
+			if !ok || target == "" {
+				return false
+			}
+			if !filepath.IsAbs(target) {
+				target = d + "/" + target
+			}
+			// Not Join, whose lexical .. can differ from the file
+			// system's past a symlink; Lstat, as a HEAD symlink into
+			// refs/ counts for git whether or not it resolves. A
+			// target that is a file, or below one, has no HEAD either.
+			_, err = os.Lstat(target + "/HEAD")
+			return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+		case !errors.Is(err, fs.ErrNotExist):
+			return false
+		}
+		if _, err := os.Lstat(filepath.Join(d, "HEAD")); !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
 }
 
 func repoList(cfg config.Config) string {

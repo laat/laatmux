@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -440,9 +439,43 @@ func TestExplicitHostSkipsBadLast(t *testing.T) {
 	}
 }
 
-// Only git's own word that there is no origin, or no repository, lets
-// resolution fall back to the directory label; a git that cannot run or
-// read the repository is an error.
+// goneWorktrees makes directories of worktrees whose repository is gone:
+// the .git file names a path that is not there, absolute or relative, a
+// directory without a HEAD, or a file. Last come a directory two levels
+// below the first worktree's .git file and a symlink to it from outside.
+func goneWorktrees(t *testing.T) []string {
+	t.Helper()
+	nohead := t.TempDir()
+	file := filepath.Join(nohead, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, gitdir := range []string{"", "gone", "../gone/.git/worktrees/x", nohead, file} {
+		wt := t.TempDir()
+		if gitdir == "" {
+			gitdir = filepath.Join(wt, "gone")
+		}
+		if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, wt)
+	}
+	below := filepath.Join(dirs[0], "sub", "deeper")
+	if err := os.MkdirAll(below, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(below, link); err != nil {
+		t.Fatal(err)
+	}
+	return append(dirs, below, link)
+}
+
+// Only git's own word that there is no origin, or no repository, or a
+// .git file showing its repository is gone, lets resolution fall back to
+// the directory label; a git that cannot run or read the repository is
+// an error.
 func TestOriginOf(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -463,6 +496,19 @@ func TestOriginOf(t *testing.T) {
 	if o, err := originOf(ctx, dir); err != nil || o != "git@x:o/proj.git" {
 		t.Errorf("origin: %q %v", o, err)
 	}
+	// A worktree whose repository is gone has no origin, whatever words
+	// this machine's git has for it.
+	gone := goneWorktrees(t)
+	for _, d := range gone {
+		if o, err := originOf(ctx, d); err != nil || o != "" {
+			t.Errorf("repository gone, %s: %q %v", d, o, err)
+		}
+	}
+	// A directory missing from such a worktree is an error: git could
+	// not enter it, which says nothing of the .git file above it.
+	if _, err := originOf(ctx, filepath.Join(gone[0], "missing")); err == nil {
+		t.Error("a directory missing from a gone worktree read as no origin")
+	}
 	// A repository git cannot read is an error, not a missing origin.
 	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -470,10 +516,87 @@ func TestOriginOf(t *testing.T) {
 	if _, err := originOf(ctx, dir); err == nil {
 		t.Error("broken config read as no origin")
 	}
+	// So is it with its HEAD a symlink into refs/ that does not resolve,
+	// which git takes for a HEAD, through a .git file naming it: by an
+	// absolute path with a CRLF line end, by a path relative to the file,
+	// or by one through a symlink and .., which the file system resolves
+	// past the symlink.
+	head := filepath.Join(dir, ".git", "HEAD")
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("refs/heads/nothere", head); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := originOf(ctx, dir); err == nil {
+		t.Error("broken config with a HEAD symlink read as no origin")
+	}
+	abs, rel, viaLink := t.TempDir(), t.TempDir(), t.TempDir()
+	relPath, err := filepath.Rel(rel, filepath.Join(dir, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, ".git", "refs"), filepath.Join(viaLink, "l")); err != nil {
+		t.Fatal(err)
+	}
+	for d, content := range map[string]string{
+		abs:     "gitdir: " + filepath.Join(dir, ".git") + "\r\n",
+		rel:     "gitdir: " + relPath + "\n",
+		viaLink: "gitdir: l/..\n",
+	} {
+		if err := os.WriteFile(filepath.Join(d, ".git"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := originOf(ctx, d); err == nil {
+			t.Errorf("broken config through %q read as no origin", content)
+		}
+	}
+	// A plain HEAD again, so what follows does not rest on git reading a
+	// HEAD symlink.
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// So is a broken repository git finds below a gone worktree's .git
+	// file, bare or with a .git directory.
+	bare, nested := filepath.Join(gone[0], "bare"), filepath.Join(gone[0], "nested")
+	for _, args := range [][]string{{"init", "-q", "--bare", bare}, {"init", "-q", nested}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	for _, config := range []string{filepath.Join(bare, "config"), filepath.Join(nested, ".git", "config")} {
+		if err := os.WriteFile(config, []byte("[core\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{bare, nested} {
+		if _, err := originOf(ctx, d); err == nil {
+			t.Errorf("broken config of a repository in a gone worktree, %s, read as no origin", d)
+		}
+	}
+	// A .git file with no path is one git cannot read.
+	nopath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nopath, ".git"), []byte("gitdir: \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := originOf(ctx, nopath); err == nil {
+		t.Error("a .git file with no path read as no origin")
+	}
+	// With GIT_DIR set git reads that repository and searches nothing, so
+	// a gone worktree's .git file says nothing of git's failure.
+	t.Run("GIT_DIR", func(t *testing.T) {
+		t.Setenv("GIT_DIR", filepath.Join(dir, ".git"))
+		if _, err := originOf(ctx, gone[0]); err == nil {
+			t.Error("broken config of GIT_DIR read as no origin in a gone worktree")
+		}
+	})
 	// A directory gone, with a tab and an ESC in its name, is named
 	// quoted, and so is git's message that repeats it.
-	gone := filepath.Join(t.TempDir(), "a\tb\x1b]0;x\x07c")
-	if _, err := originOf(ctx, gone); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(gone)+": cannot read git origin: \"") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
+	missing := filepath.Join(t.TempDir(), "a\tb\x1b]0;x\x07c")
+	if _, err := originOf(ctx, missing); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(missing)+": cannot read git origin: \"") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
 		t.Errorf("a directory gone: %v", err)
 	}
 	// git's message of two lines keeps them, each quoted on its own.
@@ -491,43 +614,68 @@ func TestOriginOf(t *testing.T) {
 	}
 }
 
-// git's word that a directory is in no repository is matched in English,
-// so under a translated locale the directory still has no origin rather
+// A worktree whose repository is gone has no origin whatever git's
+// language or its version's words for that: the .git file shows it.
+// What the file does not show is read from git's message, matched in
+// English, so under a translated locale that is no origin too rather
 // than an error.
 func TestOriginOfLocale(t *testing.T) {
 	ctx := context.Background()
-	// A worktree whose repository is gone: git reads its .git file and
-	// says the directory is not a repository.
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(dir, "gone")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	gone := goneWorktrees(t)
 	t.Setenv("LANG", "de_DE.UTF-8")
 	t.Setenv("LC_ALL", "de_DE.UTF-8")
 	t.Setenv("LANGUAGE", "de")
-	// This machine's git, when it has the locale and its translation.
-	out, err := exec.Command("git", "-C", dir, "config", "--get", "remote.origin.url").CombinedOutput()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 128 && !strings.Contains(string(out), "not a git repository") {
-		if o, err := originOf(ctx, dir); err != nil || o != "" {
-			t.Errorf("git in German, no repository: %q %v", o, err)
+	// This machine's git, translating or not.
+	for _, d := range gone {
+		if o, err := originOf(ctx, d); err != nil || o != "" {
+			t.Errorf("git in German, repository gone, %s: %q %v", d, o, err)
 		}
-	} else {
-		t.Logf("git does not translate here: %v %q", err, out)
 	}
-	// A git that translates unless its locale is C, on any machine.
 	bin := t.TempDir()
-	script := `#!/bin/sh
-case "${LC_ALL:-${LC_MESSAGES:-$LANG}}" in
-C) echo "fatal: not a git repository: $2/gone" >&2 ;;
-*) echo "fatal: Kein Git-Repository: $2/gone" >&2 ;;
-esac
-exit 128
-`
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	fake := func(script string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", bin)
+	// git 2.56's words for a .git file naming no repository, on any
+	// machine.
+	fake(`#!/bin/sh
+echo "fatal: gitfile does not point to a valid repository: $2/.git" >&2
+exit 128
+`)
+	for _, d := range gone {
+		if o, err := originOf(ctx, d); err != nil || o != "" {
+			t.Errorf("git 2.56, repository gone, %s: %q %v", d, o, err)
+		}
+	}
+	// Another failure outside any repository, where the search for a
+	// .git file goes up to /, is still an error.
+	fake(`#!/bin/sh
+echo "fatal: bad config line 1 in file /x" >&2
+exit 128
+`)
+	if _, err := originOf(ctx, t.TempDir()); err == nil {
+		t.Error("another failure outside any repository read as no origin")
+	}
+	// A .git file naming a directory with a HEAD that is no repository
+	// does not show it is gone; a git before 2.56 says the directory is
+	// not a repository, translated unless its locale is C.
+	half, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(half, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+half+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake(`#!/bin/sh
+case "${LC_ALL:-${LC_MESSAGES:-$LANG}}" in
+C) echo "fatal: not a git repository: $2" >&2 ;;
+*) echo "fatal: Kein Git-Repository: $2" >&2 ;;
+esac
+exit 128
+`)
 	if o, err := originOf(ctx, dir); err != nil || o != "" {
 		t.Errorf("translating git, no repository: %q %v", o, err)
 	}
