@@ -333,10 +333,9 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	// one made by an older laatmux new, or by hand, can have a character
 	// in that tmux would not store as given: the session made would have
 	// another name, and the tags in its own sequence would find no
-	// session, leaving it untagged. AttachName encodes most of them; a
-	// line or paragraph separator and a noncharacter, which tmux 3.3
-	// stores escaped, it keeps (#247), and a "." or ":", which tmux 3.7
-	// lists as given, since the attach target would split there. A
+	// session, leaving it untagged. AttachName encodes all of them but a
+	// "." or ":", which tmux 3.7 lists as given: it keeps those, since
+	// the attach target would split there. A
 	// workspace's name is not checked: it has a worktree's session name
 	// in it, which SessionName encoded from the branch, or new took for
 	// a session started at the root. new-session expands the name as a
