@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,11 +25,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, noDaemon)
 		os.Exit(1)
 	}
-	// A start of TestRunIsItsOwn's that got past the check above ends
-	// here, rather than run the suite and that test, which starts it.
+	// A child of TestRunIsItsOwn that got past the check above ends
+	// here, with a status of its own: run on, it would run the suite,
+	// and that test would start another child.
 	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
 		fmt.Fprintln(os.Stderr, "started as a daemon, and not stopped")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	// No test reaches the user's tmux or laatmux: the tmux sockets, the
 	// state directory with the runtime file that names the daemon
@@ -79,8 +81,8 @@ func TestRunIsItsOwn(t *testing.T) {
 		}
 	}
 	// As StartDaemon starts it: its own executable, with "serve" and
-	// what LAATMUX_SERVE_ARGS adds. The guard's line comes first; a
-	// binary built with -cover may add one of its own at exit.
+	// what LAATMUX_SERVE_ARGS adds. The guard's status, 1, and its line
+	// first; a binary built with -cover may add one of its own at exit.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +93,8 @@ func TestRunIsItsOwn(t *testing.T) {
 		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1")
 		out, err := serve.CombinedOutput()
 		cancel()
-		if err == nil || !strings.HasPrefix(string(out), noDaemon+"\n") {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), noDaemon+"\n") {
 			t.Errorf("started with %q: %v\n%s", args, err, out)
 		}
 	}
