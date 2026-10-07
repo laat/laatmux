@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
@@ -877,10 +878,60 @@ func TestMain(m *testing.M) {
 	os.Setenv("TMUX_TMPDIR", dir)
 	os.Unsetenv("TMUX")
 	os.Unsetenv("TMUX_PANE")
+	// Nor the user's laatmux, whatever the environment names: the state
+	// directory, with last.json and the runtime file that names their
+	// daemon, and the config, a file that is not there, are the run's
+	// own. A test that wants either sets it itself. After the daemon
+	// above, so a daemon a test starts keeps the test's; any other child
+	// of this binary is a run of its own, and gets its own.
+	runDir = dir
+	os.Setenv("LAATMUX_HOME", filepath.Join(dir, "home"))
+	os.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
 	code := m.Run()
 	exec.Command("tmux", "-L", "default", "kill-server").Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// runDir is the directory TestMain gives the run: its tmux sockets,
+// its state directory and its config are under it.
+var runDir string
+
+// A test that sets no LAATMUX_HOME or LAATMUX_CONFIG, as this one, has
+// the run's. Run again under a state directory whose runtime file names
+// a live daemon at a socket that is not there, and a config file, it
+// reads neither.
+func TestRunStateIsItsOwn(t *testing.T) {
+	if runDir == "" {
+		t.Fatal("TestMain gave the run no directory")
+	}
+	for what, p := range map[string]string{"state directory": home.Dir(), "config": config.Path()} {
+		if !strings.HasPrefix(p, runDir+"/") {
+			t.Errorf("the %s is %s, not under the run's %s", what, p, runDir)
+		}
+	}
+	if os.Getenv("LAATMUX_TEST_USER_STATE") != "" {
+		if rt, err := home.ReadRuntime(); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the user's runtime file read: %+v %v", rt, err)
+		}
+		if _, err := os.Stat(config.Path()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a config at %s: %v", config.Path(), err)
+		}
+		return
+	}
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
+	if err := home.WriteRuntime(home.Runtime{Address: "unix:" + filepath.Join(home.Dir(), "laatmux.sock"), PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path(), []byte("hosts: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := exec.Command(os.Args[0], "-test.run=^TestRunStateIsItsOwn$")
+	run.Env = append(os.Environ(), "LAATMUX_TEST_USER_STATE=1")
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Errorf("run under the user's state and config: %v\n%s", err, out)
+	}
 }
 
 // The source is the current directory only when it is the laatmux
