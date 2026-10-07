@@ -705,7 +705,8 @@ func (d *dash) settle(m *view.Model) {
 	// line holding it, whatever local session it has of its own. So
 	// does one under a task standing for a listed worktree, whose line
 	// carries the workspace session but, being a task's row, not the
-	// state.
+	// state, and a managed agent of no worktree in a line's home
+	// session, whose pane jump lands in that line's workspace session.
 	line, resolved := r, false
 	if l := ownerLine(m, *r); l != nil && r.Pending == nil {
 		line, resolved = l, true
@@ -717,15 +718,13 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
-	if r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
-		// A row of no worktree, which no line holds but the add's agent
-		// refused above, and of no workspace session: a repository line,
-		// the stale fold, or an agent in other sessions, in a plain
-		// session or a managed one. It is not a workspace, as S says,
-		// whatever enter on it does: enter folds the line and the fold,
-		// and takes the agent's pane jump, which for a managed agent in a
-		// line's home session lands in that line's workspace session, to
-		// be settled from the line.
+	if !resolved && r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
+		// A row of no worktree that no line holds, and of no workspace
+		// session: a repository line, the stale fold, or an agent in
+		// other sessions, in a plain session or in a managed one that is
+		// no line's home. It is not a workspace, as S says, whatever
+		// enter on it does: enter folds the line and the fold, and takes
+		// the agent's pane jump to its session.
 		m.Message = r.Name + ": not a workspace"
 		return
 	}
@@ -734,12 +733,13 @@ func (d *dash) settle(m *view.Model) {
 		return
 	}
 	// The direction is the session's own state, which the rows' copies
-	// are made from: a line's and its children's, and that of an
-	// observed agent on this machine's default server in a window of a
-	// workspace session whose worktree does not take it as a child (on
-	// another host, say), which stands in other sessions with that
-	// session as its own. A task's row carries the session but not the
-	// state.
+	// are made from: a line's and its children's; that of an observed
+	// agent on this machine's default server in a window of a workspace
+	// session whose worktree does not take it as a child (on another
+	// host, say), which stands in other sessions with that session as
+	// its own; and that of a managed agent of no worktree in a line's
+	// home session, which stands there too. A task's row carries the
+	// session but not the state.
 	settled := line.Local.Settled
 	if err := workspace.SetSettled(d.ctx, line.Local.Name, !settled); err != nil {
 		m.Message = err.Error()
@@ -760,8 +760,9 @@ func (d *dash) settle(m *view.Model) {
 // one on another host's default server, gets its workspace session from
 // add, which starts a managed session at the root: the hint ends with
 // the add line, or what add needs first. A task still running has
-// nothing to jump to until it is done. The line is a worktree's: settle
-// says a row of none is not a workspace before asking.
+// nothing to jump to until it is done. A line of no worktree, which
+// settle does not pass, gets no add line: what add needs is the
+// worktree's.
 func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
@@ -779,7 +780,7 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	default:
 		hint = err.Error()
 	}
-	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil {
+	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil && line.Worktree != nil {
 		// Enter went by the agent, which only the jump of a worktree
 		// with no home does: add gives it a home and the session.
 		hint += "; " + addsSession(cfg, h, *line.Worktree)
@@ -862,8 +863,10 @@ func (d *dash) shell(m *view.Model) bool {
 // agent's tile, an agent, a pane or a run goes by the line holding it,
 // whatever local session it has of its own, as z does: an agent
 // observed in a window of another worktree's workspace session has that
-// session as its own, and the shell belongs to its worktree's. The
-// line's jump agent is what the lost-home case counts on. The tile of a
+// session as its own, and the shell belongs to its worktree's. A
+// managed agent of no worktree in a line's home session goes by that
+// line, whose workspace session its pane jump lands in. The line's jump
+// agent is what the lost-home case counts on. The tile of a
 // task standing for a listed worktree goes by the task line holding the
 // worktree, the newest standing task's, which carries the same session;
 // a task's row by the task's own rules for its session.
@@ -878,9 +881,12 @@ func shellRow(m *view.Model, row rows.Row) (rows.Row, error) {
 }
 
 // ownerLine is the line holding a tile, an agent, a pane or a run: the
-// one holding its worktree's children, or the task line holding the
-// add's agent before the host lists the worktree. Nil for a line and
-// for a row no line holds.
+// one holding its worktree's children; for a managed agent of no
+// worktree, the line whose workspace session attaches to the agent's
+// session, a worktree's whose home it is or, with the home lost, whose
+// root agent is in it, or the task line holding the add's agent before
+// the host lists the worktree. Nil for a line and for a row no line
+// holds.
 func ownerLine(m *view.Model, row rows.Row) *rows.Row {
 	switch {
 	case row.Kind == rows.KindWorktree || row.Kind == rows.KindTask:
@@ -888,11 +894,10 @@ func ownerLine(m *view.Model, row rows.Row) *rows.Row {
 	case row.Worktree != nil:
 		return m.OwnerLine(row.Worktree.ID)
 	case row.Pending == nil && row.Agent != nil && row.Agent.Server == protocol.ServerLaatmux:
-		// As the pane jump routes it. Only on the managed server: an
-		// observed session of the same name is not the task's.
-		if l := m.LineFor(row.Host, row.Agent.Session); l != nil && l.Pending != nil {
-			return l
-		}
+		// As the pane jump routes it, so z and S act on the workspace
+		// session enter lands in. Only on the managed server: an
+		// observed session of the same name is not the line's.
+		return m.LineFor(row.Host, row.Agent.Session)
 	}
 	return nil
 }

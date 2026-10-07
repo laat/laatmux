@@ -530,6 +530,48 @@ func TestShellGoesByLine(t *testing.T) {
 			}
 		}
 	}
+	// vm lists worktree proj/z with the home session proj/z, and in a
+	// split of it the user ran claude in their home directory: an agent
+	// of no worktree, in other sessions with no local session of its own.
+	// Enter on it, as its tile and as its node, lands in vm/proj/z, the
+	// worktree's workspace session, and S opens the shell there, making
+	// the session first when there is none, as z toggles it
+	// (TestSettleGoesByLine); so with the home lost, through the root
+	// agent's session.
+	vm := rows.Host{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}
+	z := protocol.Worktree{ID: "venv/worktree//w/proj/z", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "z", Root: "/w/proj/z", Session: "proj/z"}
+	root := protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: z.Root, WorktreeID: z.ID}
+	stray := protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/home/u"}
+	for _, c := range []struct {
+		home      string
+		workspace bool // vm/proj/z exists
+	}{{"proj/z", true}, {"", true}, {"proj/z", false}, {"", false}} {
+		z.Session = c.home
+		in := rows.Input{Hosts: []rows.Host{vm}, Agents: []protocol.Agent{root, stray}, Worktrees: []protocol.Worktree{z}}
+		if c.workspace {
+			in.Locals = []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm"}}
+		}
+		for _, tree := range []bool{false, true} {
+			m := show(in, tree)
+			if !m.Select(stray.ID) {
+				t.Fatalf("%+v tree %v: no row %s", c, tree, stray.ID)
+			}
+			if r := m.Selection(); r.Worktree != nil || r.Local != nil || r.Name != "proj/z" {
+				t.Fatalf("%+v tree %v: the agent's row is %+v", c, tree, r)
+			}
+			os.Remove(log)
+			d.jumpRow(m, *m.Selection())
+			if !strings.HasPrefix(m.Message, "vm/proj/z is on the default tmux server") {
+				got, _ := os.ReadFile(log)
+				t.Errorf("%+v tree %v: enter on the agent: message %q, tmux %q", c, tree, m.Message, got)
+			}
+			msg, cmds := press(m, stray.ID, 'S')
+			if !strings.Contains(cmds, "-L default new-window -t =vm/proj/z: -n shell ") || !strings.HasPrefix(msg, "vm/proj/z is on the default tmux server") ||
+				c.workspace == strings.Contains(cmds, "-L default new-session -d -s vm/proj/z ") {
+				t.Errorf("%+v tree %v: S on the agent: message %q, tmux %q", c, tree, msg, cmds)
+			}
+		}
+	}
 }
 
 // z toggles the line's settled state from any row the line holds, not
@@ -734,6 +776,56 @@ func TestSettleGoesByLine(t *testing.T) {
 			}
 		}
 	}
+	// A managed agent of no worktree in the worktree's home session, run
+	// by the user in their home directory from a split of proj/z: it
+	// stands in other sessions with no local session of its own and with
+	// the workspace session's state, as its tile and as its node. z on it
+	// goes where enter goes, to the line whose home its session is, and
+	// toggles vm/proj/z, as S opens the shell there (TestShellGoesByLine);
+	// so with the home lost, through the root agent's session. Without
+	// the workspace session it says what enter on the line does about
+	// one.
+	stray := protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/home/u"}
+	lost := w
+	lost.Session = ""
+	for _, c := range []struct {
+		w                  protocol.Worktree
+		workspace, settled bool
+	}{{w, true, false}, {w, true, true}, {lost, true, false}, {lost, true, true}, {w, false, false}, {lost, false, false}} {
+		in := rows.Input{Hosts: []rows.Host{host}, Agents: append(append([]protocol.Agent{}, agents...), stray), Worktrees: []protocol.Worktree{c.w}}
+		want, msg := expect("vm/proj/z", c.settled)
+		if c.workspace {
+			in.Locals = []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: c.settled}}
+		} else {
+			want, msg = "", "proj/z: no local workspace session; enter on the line creates one"
+		}
+		for _, tree := range []bool{false, true} {
+			m := show(in, tree)
+			if !m.Select(stray.ID) {
+				t.Fatalf("%+v tree %v: no row %s", c, tree, stray.ID)
+			}
+			if r := m.Selection(); r.Worktree != nil || r.Local != nil || r.Settled != c.settled {
+				t.Fatalf("%+v tree %v: the agent's row is %+v", c, tree, r)
+			}
+			if got, cmds := press(m, stray.ID); got != msg || cmds != want {
+				t.Errorf("%+v tree %v: z on the agent: message %q, tmux %q", c, tree, got, cmds)
+			}
+		}
+	}
+	// No configured host claims the worktree's machine nor the agent's,
+	// another one: the workspace session whose home has the agent's
+	// session's name is not the agent's, and z says it is not a
+	// workspace, as enter refuses it.
+	other := stray
+	other.ID, other.EnvironmentID = "yenv/laatmux/%10", "yenv"
+	xw := w
+	xw.ID, xw.EnvironmentID = "xenv/worktree//w/proj/z", "xenv"
+	unclaimed := rows.Input{Agents: []protocol.Agent{other}, Worktrees: []protocol.Worktree{xw}, Locals: []protocol.Session{{Name: "x/proj/z", Key: "xenv//w/proj/z"}}}
+	for _, tree := range []bool{false, true} {
+		if got, cmds := press(show(unclaimed, tree), other.ID); got != "proj/z: not a workspace" || cmds != "" {
+			t.Errorf("unclaimed tree %v: z on the agent: message %q, tmux %q", tree, got, cmds)
+		}
+	}
 	// The add's agent before the host lists the worktree, as its node
 	// and as its tile, with the task's workspace session settled, with
 	// none, as a background add leaves it, and with only a plain
@@ -904,6 +996,13 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	unclaimed.Host = "ghost"
 	if got := noWorkspaceHint(d.cfg, unclaimed, false); got != `unknown host "ghost"` {
 		t.Errorf("a line on a host not configured: %q", got)
+	}
+	// A line of no worktree whose jump goes by an agent, which settle
+	// does not pass: enter's refusal, and no add line, which is the
+	// worktree's.
+	stray := rows.Row{Kind: rows.KindWorktree, Host: "vm", Name: "notes", Agent: &protocol.Agent{ID: "venv/default/%9", EnvironmentID: "venv", Server: "default", Session: "notes"}}
+	if got := noWorkspaceHint(d.cfg, stray, true); got != "vm/notes: on vm's default tmux server, which laatmux only observes; attach is limited to managed sessions" {
+		t.Errorf("a line of no worktree: %q", got)
 	}
 	// An agent of no worktree, in notes, has no line to go by: it is not
 	// a workspace, whatever enter on it does, and z runs nothing.

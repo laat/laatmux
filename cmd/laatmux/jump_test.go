@@ -412,11 +412,14 @@ func TestPaneJumpRouting(t *testing.T) {
 	m := &view.Model{Tree: []rows.Row{
 		{Kind: rows.KindRepo, Depth: 0, Node: "repo/x"}, *home, *lostLine, *task, *otherLine,
 		{Kind: rows.KindWorktree, Depth: 1, Host: "mac", Worktree: &protocol.Worktree{ID: "menv/worktree//r/x", EnvironmentID: "menv", Session: "laatmux/x"}},
+		// A worktree no configured host claims: none of another unclaimed
+		// machine's sessions of the same name is its.
+		{Kind: rows.KindWorktree, Depth: 1, Worktree: &protocol.Worktree{ID: "xenv/worktree//r/u", EnvironmentID: "xenv", Session: "laatmux/u"}},
 	}}
 	for _, c := range []struct{ host, session, want string }{
 		{"vm", "laatmux/x", home.Worktree.ID}, {"vm", "laatmux/x-2", lostLine.Worktree.ID}, {"vm", "laatmux/z", "add-1"},
 		{"vm", "laatmux/y", other.ID}, {"vm", "scratch", ""}, {"mac", "laatmux/x", "menv/worktree//r/x"}, {"vm", "", ""},
-		{"vm", "laatmux/z-2", "add-1"},
+		{"vm", "laatmux/z-2", "add-1"}, {"", "laatmux/u", ""},
 	} {
 		m.Tree[3] = *task
 		switch c.session {

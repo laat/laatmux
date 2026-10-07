@@ -585,6 +585,21 @@ func (b *builder) repoLines() []Row {
 // source tag; nothing when there are none.
 func (b *builder) otherSessions(out []Row) []Row {
 	in, j := b.in, b.j
+	// The workspace session of the depth-1 line with each home on each
+	// host, the first in the tree's order, as the view's LineFor finds
+	// the line, and as it does none on no host; none for a task's line,
+	// which carries the session but not the state, and whose agent of no
+	// worktree z refuses as the task's.
+	homes := map[[2]string]*protocol.Session{}
+	for i := range out {
+		k := [2]string{out[i].Host, out[i].Home()}
+		if _, ok := homes[k]; k[0] != "" && k[1] != "" && !ok {
+			homes[k] = out[i].Local
+			if out[i].Pending != nil {
+				homes[k] = nil
+			}
+		}
+	}
 	var others []Row
 	for pass := 0; pass < 2; pass++ {
 		for i := range in.Agents {
@@ -598,8 +613,19 @@ func (b *builder) otherSessions(out []Row) []Row {
 			// An agent observed in a window of a workspace session is one
 			// of that workspace's agents, though no line takes it as a
 			// child (its worktree on another host, say): it shows the
-			// session's settled state as the line's children do.
-			c.Settled = c.Local != nil && c.Local.Workspace() && c.Local.Settled
+			// session's settled state as the line's children do. So is a
+			// managed agent in a line's home session, its directory in no
+			// worktree, whose pane jump lands in the line's workspace
+			// session: it shows that session's state, which z on it
+			// toggles, and the viewer in that session sits with it, as
+			// with the line's children in the home session, so its row
+			// stays in sight when settled and z can undo itself.
+			ws := c.Local
+			if l, ok := homes[[2]string{host, a.Session}]; managed && ok {
+				ws = l
+				c.Current = l != nil && in.Current != "" && l.Name == in.Current
+			}
+			c.Settled = ws != nil && ws.Workspace() && ws.Settled
 			j.finish(&c)
 			others = append(others, c)
 		}
@@ -614,9 +640,10 @@ func (b *builder) otherSessions(out []Row) []Row {
 
 // markViewer marks the viewer's lines: a line of its own, an orphaned
 // session or a session in other sessions, is the viewer's when its
-// session is; a worktree or task line is when the viewer sits with one
-// of its agents, through the workspace session or an attachment, as
-// following wants it.
+// session is, or a managed agent's there already through a line's
+// workspace session (otherSessions); a worktree or task line is when the
+// viewer sits with one of its agents, through the workspace session or
+// an attachment, as following wants it.
 func markViewer(out []Row, current string) {
 	line := -1
 	for i := range out {
@@ -743,7 +770,10 @@ func Agents(in Input, tree []Row) Rows {
 			// with two agents is two tiles.
 			t := n
 			t.Kind, t.Node, t.Depth = KindTile, n.Agent.ID, 0
-			t.Current = false
+			// A node in other sessions is the viewer's as the tree marks
+			// it: by its own session, or by the workspace session of the
+			// line whose home a managed agent's session is.
+			t.Current = n.Depth == 1 && n.Current
 			if n.Depth == 2 {
 				t.Current = viewer[owner]
 			}
