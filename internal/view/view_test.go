@@ -1843,17 +1843,45 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	// submitted through it before the listing, beside homeless zz/z, whose
 	// root agent was moved into proj/z and whose line comes after the
 	// task's: one line is Own, zz/z's, the line LineFor finds through vm,
-	// which does not see the task (#322), and both views follow it.
+	// which does not see the task (#322), and both views follow it, with
+	// the viewer attached through either name.
 	zz := protocol.Worktree{ID: "venv/worktree//w/zz/z", EnvironmentID: "venv", Repo: "zz", Source: "git@github.com:u/zz.git", Branch: "z", Root: "/w/zz/z"}
 	movedZZ := agent("venv/laatmux/%2", "proj/z", zz.Root, zz.ID, protocol.Working, time.Minute)
-	follows("a task through vm2 beside zz/z's root agent in proj/z", rows.Input{
-		Hosts:     append(append([]rows.Host(nil), hosts...), rows.Host{Name: "vm2", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}),
-		Agents:    []protocol.Agent{movedZZ},
-		Worktrees: []protocol.Worktree{zz},
-		Pendings:  []protocol.Pending{{ID: "add-z", Host: "vm2", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "z", Root: z.Root, Session: "proj/z", SubmittedAt: now.Add(-time.Minute), Taken: true, Sent: true}},
-		Locals:    []protocol.Session{{Name: "vm/zz/z", Key: "venv//w/zz/z", Host: "vm"}, zAtt},
-		Current:   zAtt.Name,
-	}, movedZZ.ID, zz.ID)
+	for _, att := range []protocol.Session{zAtt, {Name: "vm2/proj/z", Attach: "vm2/proj/z", Host: "vm2"}} {
+		follows("a task through vm2 beside zz/z's root agent in proj/z, the viewer in "+att.Name, rows.Input{
+			Hosts:     append(append([]rows.Host(nil), hosts...), rows.Host{Name: "vm2", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}),
+			Agents:    []protocol.Agent{movedZZ},
+			Worktrees: []protocol.Worktree{zz},
+			Pendings:  []protocol.Pending{{ID: "add-z", Host: "vm2", EnvironmentID: "venv", Source: src, Repo: "proj", Branch: "z", Root: z.Root, Session: "proj/z", SubmittedAt: now.Add(-time.Minute), Taken: true, Sent: true}},
+			Locals:    []protocol.Session{{Name: "vm/zz/z", Key: "venv//w/zz/z", Host: "vm"}, att},
+			Current:   att.Name,
+		}, movedZZ.ID, zz.ID)
+	}
+	// proj/z with no home at all, claude gone from its root, beside
+	// proj/a's root agent moved into proj/z: the viewer in vm/proj/z-att
+	// is on both lines, and the tree follows proj/z's, the session's by
+	// its name, not proj/a's, first in the tree. proj/z has no tile, so
+	// the agent view follows proj/a's moved agent, the viewer's through
+	// its line.
+	{
+		noHome := z
+		noHome.Session = ""
+		in := rows.Input{
+			Hosts:     hosts,
+			Agents:    []protocol.Agent{moved},
+			Worktrees: []protocol.Worktree{noHome, other},
+			Locals:    []protocol.Session{zLocal, {Name: "vm/proj/a", Key: "venv//w/proj/a", Host: "vm"}, zAtt},
+			Current:   zAtt.Name,
+			Now:       now,
+		}
+		for _, scope := range []Scope{ScopeAll, ScopeSession, ScopeProject} {
+			m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 80, Height: 30, Follow: true, Scope: scope}
+			m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+			if r := m.Selection(); r == nil || r.ID() != z.ID {
+				t.Errorf("proj/z with no home beside proj/a, %s: tree follows %+v", scope, r)
+			}
+		}
+	}
 	// The task's managed session other-n, and a working claude observed
 	// in a window of its workspace session vm/other-n: with the filter
 	// leaving the task's add agent and the observed one, not the task,

@@ -136,7 +136,8 @@ type Row struct {
 	Worst   *Row
 	Current bool // the viewer's own session
 	// Own is a depth-1 node of the tree that is the viewer's by its own
-	// session: its local session, an attachment to its home, of the
+	// session: its local session, an attachment to its home (with none,
+	// to the session add made for it, while no line has it), of the
 	// lines with that home the one HomeLine picks (of the tasks standing
 	// for one worktree, the newest when it picks one of them), or the
 	// plain session its jump goes to. Not a line that is Current only

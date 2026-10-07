@@ -184,7 +184,6 @@ func Tree(in Input) []Row {
 	b.nameRepos()
 	out := b.repoLines()
 	b.attachedHome(out)
-	b.namedHomes(out)
 	b.visitors(out)
 	out = b.otherSessions(out)
 	markViewer(out, in.Current)
@@ -597,14 +596,20 @@ func (b *builder) repoLines() []Row {
 // session, say, stays the viewer's, not Own: the viewer sits with what
 // runs there for it, and the scope keeps it, as before; but one line is
 // the viewer's by its own session, so following does not take whichever
-// is first in the tree's order. The tasks standing for one worktree are
-// one line here, as for the workspace session they share: all are the
-// viewer's when one is by its own Home, which for a task with no agent
-// of its own may not be the line's, and the newest, which holds the
-// children and which following goes to, is Own when HomeLine picks any
-// of them. A line with no home, which HomeLine may pick by the session's
-// name, is namedHomes'. Not for no host, as HomeLine has it, which wants
-// the lines in the tree's order, so this runs once they are.
+// is first in the tree's order. A line with no home at all is the
+// viewer's, and Own, through an attachment to the session its worktree
+// is named after while that session is no other line's: the session
+// add made for the worktree, which the host stops calling its home once
+// a pane of another worktree is in it, is still the worktree's for the
+// viewer. The tasks standing for one worktree are one line here, as for
+// the workspace session they share: all are the viewer's when one is,
+// by its own Home or name, which for a task with no agent of its own may
+// not be the line's, and the newest, which holds the children and which
+// following goes to, is Own when HomeLine picks any of them. The line
+// HomeLine picks takes the mark whichever of a machine's two names the
+// attachment is tagged with and the line carries (homeLine). Not for no
+// host, as HomeLine has it, which wants the lines in the tree's order,
+// so this runs once they are.
 func (b *builder) attachedHome(out []Row) {
 	if b.in.Current == "" {
 		return
@@ -626,13 +631,19 @@ func (b *builder) attachedHome(out []Row) {
 	marked := map[int]bool{} // the groups the viewer is on through the attachment, by lead
 	for i := range out {
 		n := &out[i]
-		home := n.Home()
+		home, named := n.Home(), false
+		if home == "" && n.Depth == 1 {
+			home, named = n.named(), true
+		}
 		if home == "" || !b.attachedTo(n, home) {
 			continue
 		}
-		marked[lead[i]] = true
-		if l := b.homeLine(out, n, home); l >= 0 && lead[l] == lead[i] {
-			out[lead[i]].Own = true
+		l := b.homeLine(out, n, home)
+		if !named || l >= 0 && lead[l] == lead[i] {
+			marked[lead[i]] = true
+		}
+		if l >= 0 {
+			marked[lead[l]], out[lead[l]].Own = true, true
 		}
 	}
 	for i := range out {
@@ -643,7 +654,7 @@ func (b *builder) attachedHome(out []Row) {
 }
 
 // attachedTo reports whether the viewer is in a plain attachment to a
-// line's home: by the line's host name, or by the name its machine's
+// line's session: by the line's host name, or by the name its machine's
 // records are listed under where the config gives the machine two, as a
 // task submitted through the other keeps its own (Host). Never by no
 // host.
@@ -656,11 +667,12 @@ func (b *builder) attachedTo(n *Row, home string) bool {
 	return false
 }
 
-// homeLine is the line HomeLine picks for a line's home as the view's
-// LineFor asks for it, by the name the line's machine's records are
-// listed under, so one line is Own whichever name the others carry; by
-// the line's own name where no line under the listed name has the home,
-// a task submitted through another name of the machine.
+// homeLine is the line HomeLine picks for a line's session as the
+// view's LineFor asks for it, by the name the line's machine's records
+// are listed under, so one line is Own whichever name the others carry;
+// by the line's own name where no line under the listed name has the
+// session as its home or is named after it, a task submitted through
+// another name of the machine.
 func (b *builder) homeLine(out []Row, n *Row, home string) int {
 	if l := HomeLine(out, b.listed(n), home); l >= 0 {
 		return l
@@ -699,7 +711,7 @@ func (b *builder) listed(n *Row) string {
 // of the line's own worktree in the session its line has by name alone
 // (HomeLine) is no visitor: it takes the workspace session as one in
 // the home does, and the viewer in an attachment to the session is on
-// the line by that (namedHomes), not through the agent. HomeLine wants
+// the line by that (attachedHome), not through the agent. HomeLine wants
 // the lines in the tree's order, so this runs once they are.
 func (b *builder) visitors(out []Row) {
 	line := -1
@@ -724,31 +736,6 @@ func (b *builder) visitors(out []Row) {
 			out[line].Current, c.attached = true, true
 		}
 		c.Local = out[l].Local
-	}
-}
-
-// namedHomes marks a line with no home as the viewer's, and Own, with
-// the viewer in a plain attachment to the session the line's worktree
-// is named after, while that session is no other line's (HomeLine):
-// the session add made for the worktree, which the host stops calling
-// its home once a pane of another worktree is in it, is still the
-// worktree's for the viewer, as an attachment to the home is
-// (attachedHome). Not for no host, as HomeLine has it. HomeLine wants the
-// lines in the tree's order, so this runs once they are.
-func (b *builder) namedHomes(out []Row) {
-	if b.in.Current == "" {
-		return
-	}
-	for i := range out {
-		r := &out[i]
-		if r.Depth != 1 || r.Host == "" || r.Home() != "" {
-			continue
-		}
-		if s := r.named(); s != "" {
-			if att := b.j.byAttach[r.Host+"/"+s]; att != nil && att.Name == b.in.Current && HomeLine(out, r.Host, s) == i {
-				r.Current, r.Own = true, true
-			}
-		}
 	}
 }
 
