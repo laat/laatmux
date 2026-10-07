@@ -191,9 +191,9 @@ func deriveNames(repos []Repo) error {
 		}
 		if !ValidLabel(r.Name) {
 			if r.Explicit {
-				return fmt.Errorf("repos: name %q for %s is not a valid label (%s)", r.Name, r.Source, labelRule)
+				return fmt.Errorf("repos: name %q for %s is not a valid label (%s)", r.Name, r.Source, LabelRule)
 			}
-			return fmt.Errorf("repos: derived name %q for %s is not a valid label (%s); set an explicit name", r.Name, r.Source, labelRule)
+			return fmt.Errorf("repos: derived name %q for %s is not a valid label (%s); set an explicit name", r.Name, r.Source, LabelRule)
 		}
 		if j, dup := byName[r.Name]; dup {
 			return fmt.Errorf("repos: %s and %s both get the name %s; set an explicit name on one", repos[j].Source, r.Source, r.Name)

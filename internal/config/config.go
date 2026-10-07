@@ -382,7 +382,9 @@ func Parse(b []byte) (Config, error) {
 		return c, err
 	}
 	if len(c.Hosts) == 0 {
-		c.Hosts = []Host{{Host: peer.Host{Name: localName()}}}
+		// validateHosts names it after the machine, so an error says
+		// the name came from the hostname.
+		c.Hosts = []Host{{}}
 	}
 	if err := c.validateHosts(); err != nil {
 		return c, err
@@ -499,9 +501,9 @@ func (c *Config) validateHosts() error {
 		}
 		if !ValidLabel(h.Name) {
 			if from == "name" {
-				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, labelRule)
+				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, LabelRule)
 			}
-			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, labelRule)
+			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, LabelRule)
 		}
 		if j, dup := seen[h.Name]; dup {
 			return fmt.Errorf("hosts: %s listed twice (entries %d and %d)", h.Name, j+1, i+1)
@@ -539,7 +541,7 @@ func pick(cond bool, a, b string) string {
 func (c *Config) validateAgents() error {
 	for name, a := range c.Agents {
 		if !ValidLabel(name) {
-			return fmt.Errorf("agents: %q is not a valid label (%s)", name, labelRule)
+			return fmt.Errorf("agents: %q is not a valid label (%s)", name, LabelRule)
 		}
 		if len(a.Cmd) == 0 || a.Cmd[0] == "" {
 			return fmt.Errorf("agents: %s has no cmd", name)
@@ -563,7 +565,9 @@ func (c Config) AgentNames() []string {
 	return names
 }
 
-const labelRule = "A-Z a-z 0-9 _ -, not starting with -"
+// LabelRule is ValidLabel's rule in words, for the errors that refuse a
+// label.
+const LabelRule = "A-Z a-z 0-9 _ -, not starting with -"
 
 // ValidLabel reports whether s is a host name, repository name or agent
 // key: one or more of A-Z a-z 0-9 _ -, not starting with -. With / . : and

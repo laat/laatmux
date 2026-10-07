@@ -755,8 +755,9 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 // host's config does not list: cloned under the entry's name, with the
 // entry's setup, listed by its checkout, and removed by rm naming its
 // source. An entry that does not match the add, or whose name could
-// not place a directory, is refused at resolve; without an entry the
-// host's own config decides, as before.
+// not place a directory or is not a label, is refused at resolve, the
+// name's refusal with the label rule; without an entry the host's own
+// config decides, as before.
 func TestAddFromRepoEntry(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
 	store.Repos = nil
@@ -769,6 +770,7 @@ func TestAddFromRepoEntry(t *testing.T) {
 		"none":     {Repo: remote},
 		"mismatch": {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: "/elsewhere.git", Name: "sent"}},
 		"name":     {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "../sent"}},
+		"dash":     {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "--"}},
 		"copy":     {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "sent", Copy: []string{"../x"}}},
 		"setup":    {Repo: remote, RepoEntry: &protocol.RepoEntry{Source: remote, Name: "sent", Setup: []string{" "}}},
 	} {
@@ -776,6 +778,8 @@ func TestAddFromRepoEntry(t *testing.T) {
 		pc.Write(m)
 		if res, _ := result(t, pc, id); res.OK || res.Stage != protocol.StageResolve {
 			t.Fatalf("%s: %+v", id, res)
+		} else if id == "dash" && !strings.Contains(res.Error, `"--" is not a valid label (`+config.LabelRule+`)`) {
+			t.Fatalf("dash: the refusal should name the label and the rule: %q", res.Error)
 		}
 	}
 	if _, err := os.Stat(store.Dirs.Repos); err == nil {
