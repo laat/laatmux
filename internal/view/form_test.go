@@ -63,6 +63,17 @@ func TestFormRender(t *testing.T) {
 	if text := Text(long.Render(40, 12)); !strings.Contains(text, "…") || !strings.Contains(text, "hij█") {
 		t.Fatalf("long branch:\n%s", text)
 	}
+	// A branch preset from a worktree can have a C1 control character,
+	// which git takes: the branch line drops it focused or not, short or
+	// cut, as fit does.
+	for _, b := range []string{"fix\u009b2J", strings.Repeat("abcdefghij", 6) + "\u009b2J"} {
+		f := NewForm("t", chips(), b)
+		unfocused := Text(f.Render(40, 12))
+		f.Handle(term.Key{Kind: term.KeyTab})
+		if focused := Text(f.Render(40, 12)); strings.ContainsRune(unfocused+focused, 0x9b) || !strings.Contains(focused, "2J█") {
+			t.Errorf("branch %q:\n%s\n%s", b, unfocused, focused)
+		}
+	}
 }
 
 // The renderer is a pure function of the fields, the cursor and the
@@ -419,6 +430,30 @@ func TestWrapVS16(t *testing.T) {
 	if got := tail("abcdefgh⚠️x", 4); width(got) > 4 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
 	}
+	// A C1 control character between the symbol and its selector is
+	// not drawn, and the wrap measures the symbol as drawn, two cells:
+	// what follows it on the line, the cursor or a rune, is not cut.
+	for _, p := range []string{"12345678⚠\u009b️", "12345678⚠\u009b️x"} {
+		f := &Form{prompt: []rune(p), focus: fieldPrompt}
+		f.cursor = len(f.prompt)
+		lines, _ := f.wrapPrompt(10)
+		for _, l := range lines {
+			if width(l) > 10 {
+				t.Errorf("wrapPrompt(%q): line %q is %d cells", p, l, width(l))
+			}
+		}
+		if text := strings.Join(lines, "|"); !strings.HasSuffix(text, "█") || strings.HasSuffix(p, "x") && !strings.Contains(text, "x") {
+			t.Errorf("wrapPrompt(%q) = %q", p, lines)
+		}
+	}
+	// A line break or a tab does part them: the symbol ends its line,
+	// drawn one cell, and fills the line's last cell.
+	for _, p := range []string{"123456789⚠\n️", "123456789⚠\t️"} {
+		f := &Form{prompt: []rune(p), focus: fieldBranch}
+		if lines, _ := f.wrapPrompt(10); len(lines) == 0 || lines[0] != "123456789⚠" {
+			t.Errorf("wrapPrompt(%q) = %q", p, lines)
+		}
+	}
 }
 
 // Left, Right, Backspace and Delete keep a symbol and its selector
@@ -457,5 +492,17 @@ func TestPromptEditVS16(t *testing.T) {
 	}
 	if got := tail("abcdefgh⚠️x", 2); width(got) > 2 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+	// A C1 control character, which is not drawn, goes with the rune
+	// before it.
+	f = &Form{prompt: []rune("ab\u009bc"), focus: fieldPrompt, cursor: 3}
+	f.promptKey(term.Key{Kind: term.KeyLeft})
+	if f.cursor != 1 {
+		t.Errorf("left over a C1: cursor %d", f.cursor)
+	}
+	f.cursor = 3
+	f.promptKey(term.Key{Kind: term.KeyBackspace})
+	if string(f.prompt) != "ac" || f.cursor != 1 {
+		t.Errorf("backspace over a C1: %q at %d", string(f.prompt), f.cursor)
 	}
 }

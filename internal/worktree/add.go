@@ -171,25 +171,28 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	report(stage, protocol.StateDone, "origin/HEAD refreshed, stale worktrees pruned")
 	// The root was placed before the prune; a prunable entry for the
 	// branch elsewhere is gone now and the label's place stands.
+	// The branch is printed as tmux.Printable shows it: git takes a C1
+	// control character and a byte that is not UTF-8 in one.
+	b := tmux.Printable(branch)
 	switch {
 	case refExists(ctx, checkout, "refs/heads/"+branch):
-		report(stage, protocol.StateSkip, "branch "+branch+" exists, used as is")
+		report(stage, protocol.StateSkip, "branch "+b+" exists, used as is")
 	case refExists(ctx, checkout, "refs/remotes/origin/"+branch):
-		report(stage, protocol.StateStart, "git branch --track "+branch+" origin/"+branch)
+		report(stage, protocol.StateStart, "git branch --track "+b+" "+tmux.Printable("origin/"+branch))
 		if _, err := git(ctx, checkout, "branch", "--track", branch, "origin/"+branch); err != nil {
 			return a, fail(stage, err)
 		}
-		report(stage, protocol.StateDone, "branch "+branch+" tracks origin/"+branch)
+		report(stage, protocol.StateDone, "branch "+b+" tracks "+tmux.Printable("origin/"+branch))
 		setBase(ctx, checkout, branch, report)
 	default:
 		// --no-track: the new branch has no remote counterpart yet, and an
 		// upstream of origin/HEAD would make push refuse and pull merge the
 		// default branch.
-		report(stage, protocol.StateStart, "git branch --no-track "+branch+" origin/HEAD")
+		report(stage, protocol.StateStart, "git branch --no-track "+b+" origin/HEAD")
 		if _, err := git(ctx, checkout, "branch", "--no-track", branch, "origin/HEAD"); err != nil {
 			return a, fail(stage, err)
 		}
-		report(stage, protocol.StateDone, "branch "+branch+" from origin/HEAD")
+		report(stage, protocol.StateDone, "branch "+b+" from origin/HEAD")
 		setBase(ctx, checkout, branch, report)
 	}
 	entries, err := ListWorktrees(ctx, checkout)
@@ -200,7 +203,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	for _, e := range entries {
 		if e.Root == checkout {
 			if e.Branch == branch {
-				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s", branch, tmux.Printable(checkout)))
+				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s", b, tmux.Printable(checkout)))
 			}
 			continue
 		}
@@ -208,9 +211,9 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 		case e.Root == a.Root && e.Branch == branch:
 			registered = true
 		case e.Root == a.Root:
-			return a, fail(stage, fmt.Errorf("%s is a worktree on %s, not %s", tmux.Printable(a.Root), branchOrDetached(e), branch))
+			return a, fail(stage, fmt.Errorf("%s is a worktree on %s, not %s", tmux.Printable(a.Root), branchOrDetached(e), b))
 		case e.Branch == branch:
-			return a, fail(stage, fmt.Errorf("branch %s is checked out at %s", branch, tmux.Printable(e.Root)))
+			return a, fail(stage, fmt.Errorf("branch %s is checked out at %s", b, tmux.Printable(e.Root)))
 		}
 	}
 	if registered {
@@ -225,7 +228,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 		if err := os.MkdirAll(filepath.Dir(a.Root), 0o755); err != nil {
 			return a, fail(stage, tmux.PrintablePath(err))
 		}
-		report(stage, protocol.StateStart, "git worktree add "+tmux.Printable(a.Root)+" "+branch)
+		report(stage, protocol.StateStart, "git worktree add "+tmux.Printable(a.Root)+" "+b)
 		if _, err := git(ctx, checkout, "worktree", "add", "--", a.Root, branch); err != nil {
 			return a, fail(stage, err)
 		}
@@ -242,7 +245,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			}
 		}
 		if !placed {
-			return a, fail(stage, fmt.Errorf("git registered no worktree for %s under %s", branch, tmux.Printable(s.Dirs.Worktrees)))
+			return a, fail(stage, fmt.Errorf("git registered no worktree for %s under %s", b, tmux.Printable(s.Dirs.Worktrees)))
 		}
 		report(stage, protocol.StateDone, "worktree at "+tmux.Printable(a.Root))
 	}
@@ -361,7 +364,10 @@ func setBase(ctx context.Context, checkout, branch string, report Reporter) {
 
 // CheckBranch rejects names git would refuse, before anything is touched.
 // The dashboard runs it on the laptop before sending an add; the daemon
-// runs it again on the host.
+// runs it again on the host. git refuses a C0 control character and DEL;
+// a C1 control character and a byte that is not UTF-8 it takes, and a
+// branch someone pushed can have one, so such a name is not refused here
+// but printed as tmux.Printable shows it wherever a message names it.
 func CheckBranch(ctx context.Context, branch string) error {
 	if branch == "" {
 		return errors.New("branch required")
@@ -424,7 +430,7 @@ func Allocate(name string, taken func(string) bool) (string, error) {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("no free name for %s: every numbered form is taken, or a branch occupies a component of the name", name)
+	return "", fmt.Errorf("no free name for %s: every numbered form is taken, or a branch occupies a component of the name", tmux.Printable(name))
 }
 
 // ProposeBranch derives a branch name from a prompt: the first words,
@@ -467,7 +473,7 @@ func branchOrDetached(e Entry) string {
 	if e.Branch == "" {
 		return "a detached HEAD"
 	}
-	return "branch " + e.Branch
+	return "branch " + tmux.Printable(e.Branch)
 }
 
 // copyFile copies one entry from the main checkout into the worktree,

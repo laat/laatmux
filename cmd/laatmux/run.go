@@ -74,7 +74,7 @@ func cmdRun(ctx context.Context, args []string) error {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, run.Host.Name)
+			return noWorktree(repo, branch, run.Host.Name)
 		}
 		run.Repo, run.Branch, run.Root = repo, branch, w.Root
 	} else {

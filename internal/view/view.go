@@ -10,6 +10,7 @@ package view
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1123,22 +1124,44 @@ func ANSI(l Line, th palette.Theme) string {
 // of what the terminal does, without a grapheme library: a title with
 // a joined emoji sequence may measure wide by a cell or two, and the
 // line is trimmed to the measure, so the worst case is a short title,
-// not a wrapped line.
+// not a wrapped line. It measures what fit draws, s without its control
+// characters.
 func width(s string) int {
 	n := 0
-	rs := []rune(s)
+	rs := visible(s)
 	for i, r := range rs {
 		n += cellWidth(rs, i, r)
 	}
 	return n
 }
 
+// visible is s's runes as the view draws them: control characters, C1
+// among them, dropped, since git takes a C1 control character in a
+// branch and U+009B is a CSI to a terminal that acts on C1, and a byte
+// that is not UTF-8 read as U+FFFD. They are dropped before anything is
+// measured: a symbol is measured with the rune after it, and a control
+// character between a symbol and U+FE0F would hide the selector.
+func visible(s string) []rune {
+	return slices.DeleteFunc([]rune(s), unicode.IsControl)
+}
+
 // cellWidth is the cells rs[i] takes: runeWidth, but a one-cell symbol
 // followed by the emoji variation selector, U+FE0F, is drawn as an emoji,
-// two cells, as ⚠️ and ✔️ are.
+// two cells, as ⚠️ and ✔️ are. A control character between them is not
+// drawn, so it does not part them: the prompt's wrap measures its text
+// with them in, and fit draws it with them out. A line break and a tab
+// do part them; the wrap breaks the line at one and draws the other as
+// spaces.
 func cellWidth(rs []rune, i int, r rune) int {
 	w := runeWidth(r)
-	if w == 1 && i+1 < len(rs) && rs[i+1] == 0xfe0f {
+	if w != 1 {
+		return w
+	}
+	j := i + 1
+	for j < len(rs) && rs[j] != '\n' && rs[j] != '\t' && unicode.IsControl(rs[j]) {
+		j++
+	}
+	if j < len(rs) && rs[j] == 0xfe0f {
 		return 2
 	}
 	return w
@@ -1146,7 +1169,8 @@ func cellWidth(rs []rune, i int, r rune) int {
 
 func runeWidth(r rune) int {
 	switch {
-	case r < 0x20, r == 0x7f:
+	case r < 0x20, r >= 0x7f && r < 0xa0:
+		// C0, DEL and C1, which fit drops.
 		return 0
 	case r < 0x300:
 		return 1
@@ -1188,16 +1212,13 @@ func emojiWide(r rune) bool {
 	return false
 }
 
-// fit trims s to at most w cells, dropping control characters.
+// fit trims s to at most w cells of what visible keeps of it.
 func fit(s string, w int) string {
 	var b strings.Builder
 	n := 0
-	rs := []rune(s)
+	rs := visible(s)
 	for i, r := range rs {
 		rw := cellWidth(rs, i, r)
-		if rw == 0 && r < 0x20 || r == 0x7f {
-			continue
-		}
 		if n+rw > w {
 			break
 		}

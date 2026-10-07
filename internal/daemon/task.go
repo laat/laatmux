@@ -283,13 +283,15 @@ func (r *addRun) run(ctx context.Context) error {
 
 	// allocate: the branch decided, against branches that are current
 	// after the fetch and under the repository lock, and written before
-	// it is made, so a resend takes the allocated name.
+	// it is made, so a resend takes the allocated name. The branch and
+	// the proposal are put as tmux.Printable shows them: git takes a C1
+	// control character and a byte that is not UTF-8 in a branch.
 	stage = protocol.StageAllocate
-	detail := "branch " + branch + " given"
+	detail := "branch " + tmux.Printable(branch) + " given"
 	state := protocol.StateSkip
 	switch {
 	case generated && r.e.Allocated:
-		detail = "branch " + branch + " allocated before"
+		detail = "branch " + tmux.Printable(branch) + " allocated before"
 	case generated:
 		local, remote, err := worktree.Branches(ctx, p.Checkout)
 		if err != nil {
@@ -318,9 +320,9 @@ func (r *addRun) run(ctx context.Context) error {
 			return stageErr(stage, fmt.Errorf("journal: the allocation could not be written: %w", err))
 		}
 		branch, r.branch = name, name
-		detail = "branch " + name
+		detail = "branch " + tmux.Printable(name)
 		if name != m.Branch {
-			detail += " for proposal " + m.Branch
+			detail += " for proposal " + tmux.Printable(m.Branch)
 		}
 		state = protocol.StateDone
 	}
@@ -724,7 +726,7 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 	case !source.Same(rec.Source, e.Source):
 		return "worktree replaced: " + tmux.Printable(e.Root) + " is now a worktree of " + rec.Repo
 	case rec.Branch != "" && rec.Branch != e.Branch:
-		return "worktree replaced: " + tmux.Printable(e.Root) + " is now on branch " + rec.Branch + ", not " + e.Branch
+		return "worktree replaced: " + tmux.Printable(e.Root) + " is now on branch " + tmux.Printable(rec.Branch) + ", not " + tmux.Printable(e.Branch)
 	}
 	return ""
 }

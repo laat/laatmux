@@ -50,7 +50,7 @@ func cmdPath(ctx context.Context, args []string) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, h.Name)
+		return noWorktree(repo, branch, h.Name)
 	}
 	fmt.Println(w.Root)
 	return nil

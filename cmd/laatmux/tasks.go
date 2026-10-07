@@ -108,7 +108,9 @@ func taskReport(s merged.Status) string {
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
 		_, configured := s.Host(p.Host)
-		fmt.Fprintf(&b, "%s  %s/%s on %s  %s  %s\n", p.ID, p.Repo, p.Branch, p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured))
+		// git takes a C1 control character and a byte that is not
+		// UTF-8 in a branch.
+		fmt.Fprintf(&b, "%s  %s on %s  %s  %s\n", p.ID, tmux.Printable(p.Repo+"/"+p.Branch), p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured))
 	}
 	sort.Strings(handed)
 	for _, l := range handed {

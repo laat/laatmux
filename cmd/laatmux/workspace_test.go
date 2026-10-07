@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
@@ -132,6 +133,22 @@ func TestFindWorktreeBySource(t *testing.T) {
 	esc[0].Root = "/r/a\x1b]0;x\x07"
 	if _, _, err := findWorktree(esc, mine, "fix"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
 		t.Errorf("two clones, a root with an ESC: %v", err)
+	}
+	// A branch with a C1 control character, which git takes, is named
+	// quoted with its repository.
+	c1 := []protocol.Worktree{two[0], two[1]}
+	c1[0].Branch, c1[1].Branch = "f\u009b31m", "f\u009b31m"
+	if _, _, err := findWorktree(c1, mine, "f\u009b31m"); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote("mine/f\u009b31m")+" has worktrees at /r/a and /r/b") {
+		t.Errorf("two clones, a branch with a C1 control: %v", err)
+	}
+	// run's and path's error for a branch with no worktree, and add's
+	// ready line, quote it too.
+	if err := noWorktree(mine, "f\u009b31m", "vm"); err.Error() != "no worktree for "+strconv.Quote("mine/f\u009b31m")+" on vm" {
+		t.Errorf("no worktree: %v", err)
+	}
+	res := command.Added{Branch: "f\u009b31m", Root: "/w/mine/f\u009b31m", Managed: "mine/f%c2%9b31m"}
+	if got, want := readyLine("mine", res), strconv.Quote("mine/f\u009b31m")+" ready: "+strconv.Quote(res.Root)+", session mine/f%c2%9b31m"; got != want {
+		t.Errorf("ready line %q, want %q", got, want)
 	}
 }
 
@@ -706,6 +723,13 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 	esc[0].Root = "/r/a\x1b]0;x\x07"
 	if _, _, err := matchWorktree(esc, cfg, "mine/topic"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
 		t.Errorf("two clones, a root with an ESC: %v", err)
+	}
+	// The target with a branch that has a C1 control character, which
+	// git takes, is named quoted.
+	c1 := []protocol.Worktree{two[0], two[1]}
+	c1[0].Branch, c1[1].Branch = "t\u009b31m", "t\u009b31m"
+	if _, _, err := matchWorktree(c1, cfg, "mine/t\u009b31m"); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote("mine/t\u009b31m")+" matches worktrees at /r/a and /r/b") {
+		t.Errorf("two clones, a branch with a C1 control: %v", err)
 	}
 	// This machine's name is one clone's host label: the target is that
 	// clone's, not a dead end.

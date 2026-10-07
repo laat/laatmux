@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
@@ -765,6 +767,82 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r := d.tasks.worktreeReplaced(ctx, entry{Root: root, Source: remote, Branch: "task"}); !strings.HasPrefix(r, "worktree "+q+" could not be checked: ") {
+		t.Errorf("reason %q", r)
+	}
+}
+
+// A branch with a C1 control character, which git takes, is in add's
+// progress, in rm's and run's refusals and in a prompt's reason as
+// tmux.Printable shows it: raw, U+009B is a CSI to the client's
+// terminal. The branch a client asks for is quoted the same. A byte
+// that is not UTF-8 does not cross the connection, whose JSON has
+// U+FFFD for it; the reason is built from the entry as the daemon
+// holds it.
+func TestBranchWithC1Quoted(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	raw := func(s string) bool { return !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) }
+	q := strconv.Quote
+	odd, other, invalid := "a\u009b31mb", "b\u009b0m", "c\xffd"
+	root, none := store.Dirs.Worktree("proj", odd), store.Dirs.Worktree("proj", "none")
+	qroot := q(root)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: odd, Cmd: []string{"true"}})
+	res, progress := result(t, pc, "c1")
+	if !res.OK || res.Root != root || res.Branch != odd {
+		t.Fatalf("add: %+v", res)
+	}
+	// A generated add whose proposal is taken by then.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: odd, Generated: true, Cmd: []string{"true"}})
+	if res, p := result(t, pc, "c2"); !res.OK || res.Branch != odd+"-2" {
+		t.Fatalf("generated add: %+v", res)
+	} else {
+		progress = append(progress, p...)
+	}
+	// The resend of a generated add whose name was allocated before the
+	// daemon stopped.
+	if err := d.journal.create(entry{ID: "c3", Source: remote, Repo: "proj", Branch: odd + "-3", Generated: true, Allocated: true, Stage: protocol.StageWorktree, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: odd, Generated: true, Cmd: []string{"true"}})
+	if res, p := result(t, pc, "c3"); !res.OK || res.Branch != odd+"-3" {
+		t.Fatalf("resent add: %+v", res)
+	} else {
+		progress = append(progress, p...)
+	}
+	for _, want := range [][3]string{
+		{protocol.StageAllocate, protocol.StateSkip, "branch " + q(odd) + " given"},
+		{protocol.StageWorktree, protocol.StateStart, "git branch --no-track " + q(odd) + " origin/HEAD"},
+		{protocol.StageWorktree, protocol.StateDone, "branch " + q(odd) + " from origin/HEAD"},
+		{protocol.StageWorktree, protocol.StateStart, "git worktree add " + qroot + " " + q(odd)},
+		{protocol.StageAllocate, protocol.StateDone, "branch " + q(odd+"-2") + " for proposal " + q(odd)},
+		{protocol.StageAllocate, protocol.StateSkip, "branch " + q(odd+"-3") + " allocated before"},
+	} {
+		if !hasProgress(progress, want[0], want[1], want[2]) {
+			t.Errorf("missing %q in %+v", want, progress)
+		}
+	}
+	for _, p := range progress {
+		if p.State != protocol.StateOutput && raw(p.Detail) {
+			t.Errorf("progress with a raw byte: %q", p.Detail)
+		}
+	}
+
+	for _, c := range []struct {
+		m    protocol.Message
+		want string
+	}{
+		{protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root}, qroot + " is the worktree for branch " + q(odd) + " of proj, not task"},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: other, Root: root}, qroot + " is the worktree for branch " + q(odd) + " of proj, not " + q(other)},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r3", Repo: remote, Branch: odd, Root: none}, "branch " + q(odd) + " of proj is checked out at " + qroot + ", not " + none},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u1", Root: root, Branch: "task", Cmd: []string{"true"}}, qroot + " is the worktree for branch " + q(odd) + ", not task"},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u2", Root: root, Branch: other, Cmd: []string{"true"}}, qroot + " is the worktree for branch " + q(odd) + ", not " + q(other)},
+	} {
+		pc.Write(c.m)
+		if res, _ := result(t, pc, c.m.ID); res.OK || res.Error != c.want {
+			t.Errorf("%s: %q, want %q", c.m.ID, res.Error, c.want)
+		}
+	}
+	if r := d.tasks.worktreeReplaced(context.Background(), entry{Root: root, Source: remote, Branch: invalid}); r != "worktree replaced: "+qroot+" is now on branch "+q(odd)+", not "+q(invalid) {
 		t.Errorf("reason %q", r)
 	}
 }

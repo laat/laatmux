@@ -355,7 +355,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 					return fmt.Errorf("%s is a worktree of %s, not %s", tmux.Printable(root), rec.Repo, repo.Name)
 				}
 				if m.Branch != "" && rec.Branch != m.Branch {
-					return fmt.Errorf("%s is the worktree for %s of %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, m.Branch)
+					return fmt.Errorf("%s is the worktree for %s of %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, tmux.Printable(m.Branch))
 				}
 				checkout = co
 				break
@@ -369,7 +369,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 					return err
 				}
 				if moved {
-					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", m.Branch, repo.Name, tmux.Printable(rec.Root), tmux.Printable(root))
+					return fmt.Errorf("branch %s of %s is checked out at %s, not %s", tmux.Printable(m.Branch), repo.Name, tmux.Printable(rec.Root), tmux.Printable(root))
 				}
 			}
 		default:
@@ -459,11 +459,14 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 	rn.finish(c, res, err)
 }
 
+// branchOrDetached names a worktree's branch for rm's and run's
+// refusals, as tmux.Printable shows it: git takes a C1 control
+// character and a byte that is not UTF-8 in a branch.
 func branchOrDetached(branch string) string {
 	if branch == "" {
 		return "a detached HEAD"
 	}
-	return "branch " + branch
+	return "branch " + tmux.Printable(branch)
 }
 
 // holdRepos is the shared hold on every repository that an add takes

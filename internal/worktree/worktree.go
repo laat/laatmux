@@ -720,7 +720,7 @@ func (s *Store) ByBranch(ctx context.Context, repo Repo, branch string) (Record,
 	case 1:
 		return matches[0].rec, matches[0].checkout, true, nil
 	}
-	return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", branch, repo.Name, tmux.Printable(matches[0].rec.Root), tmux.Printable(matches[1].rec.Root))
+	return Record{}, first, false, fmt.Errorf("branch %s of %s has worktrees at %s and %s, in two clones of it; name the worktree by its root", tmux.Printable(branch), repo.Name, tmux.Printable(matches[0].rec.Root), tmux.Printable(matches[1].rec.Root))
 }
 
 // Remove unregisters and deletes a worktree through git, which is the

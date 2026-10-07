@@ -499,7 +499,9 @@ func (d *dash) askDismiss(m *view.Model, r rows.Row) {
 	}
 	p := *r.Pending
 	d.pending = &p
-	m.Ask(fmt.Sprintf("dismiss %s on %s (%s)? y/n", r.Name, r.Host, r.State()), "dismiss")
+	// The name is the task's <repo>/<branch>, and git takes a C1
+	// control character and a byte that is not UTF-8 in a branch.
+	m.Ask(fmt.Sprintf("dismiss %s on %s (%s)? y/n", tmux.Printable(r.Name), r.Host, r.State()), "dismiss")
 }
 
 // startDismiss drops the confirmed task through the local daemon.
@@ -513,7 +515,7 @@ func (d *dash) startDismiss(m *view.Model) {
 	if dismiss == nil {
 		dismiss = func(id string) error { return command.Dismiss(d.ctx, id) }
 	}
-	what := p.Repo + "/" + p.Branch + " on " + p.Host
+	what := tmux.Printable(p.Repo+"/"+p.Branch) + " on " + p.Host
 	d.start(m, "dismiss "+what, func(command.Reporter) error {
 		return dismiss(p.ID)
 	}, func(m *view.Model) bool {

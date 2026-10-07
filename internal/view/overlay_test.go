@@ -130,6 +130,14 @@ func TestWrap(t *testing.T) {
 	if got := wrap("setup:\x1b[2Jfailed\nline two", 80); len(got) != 1 || got[0] != "setup:[2Jfailed line two" {
 		t.Errorf("control characters = %q", got)
 	}
+	// A C1 control character as well, and a byte that is not UTF-8 is
+	// U+FFFD, on a line that fits as on one that is cut.
+	for _, w := range []int{80, 4} {
+		got := wrap("br\u009b31manch \x9b", w)
+		if j := strings.ReplaceAll(strings.Join(got, ""), " ", ""); j != "br31manch�" {
+			t.Errorf("C1 at width %d = %q", w, got)
+		}
+	}
 	// A wide rune at a width of one cell still moves on.
 	if got := wrap("日本x", 1); strings.Join(got, "|") != "日|本|x" {
 		t.Errorf("wide at width 1 = %q", got)
