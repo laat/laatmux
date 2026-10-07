@@ -118,6 +118,15 @@ func TestEncodeBranch(t *testing.T) {
 		`\\`:         "%5c%5c",
 		"%5c":        "%255c",
 
+		// A "$" tmux 3.2 to 3.4 store as "\$", before a letter, "_" or
+		// "{", and one they keep, encoded alike.
+		"fix$HOME": "fix%24HOME",
+		"a$_b":     "a%24_b",
+		"a${b}":    "a%24{b}",
+		"a$1b":     "a%241b",
+		"end$":     "end%24",
+		"%24":      "%2524",
+
 		// Bytes tmux escapes by vis(3), and UTF-8 it keeps as given.
 		"tab\tx":       "tab%09x",
 		"nl\n":         "nl%0a",
@@ -160,11 +169,12 @@ func TestEncodeBranch(t *testing.T) {
 	}
 }
 
-// keptByTmux is a name tmux stores as given: valid UTF-8 with no control
-// byte, no DEL, and none of the characters it changes or reads, but for
-// the "$" tmux 3.4 changes (#220).
+// keptByTmux is a name every tmux version stores as given: valid UTF-8
+// with no control byte, no DEL, and none of the characters it changes
+// or reads. A "$" counts as changed, as tmux 3.2 to 3.4 change one
+// before a letter, "_" or "{".
 func keptByTmux(name string) bool {
-	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;\\\x7f") &&
+	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\\x7f") &&
 		!strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 })
 }
 
@@ -284,17 +294,18 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
-// A branch with a #, a ; or a \ gets a session with the name
+// A branch with a #, a ;, a \ or a $ gets a session with the name
 // SessionName computed, its pane tagged: new-session expands a # in the
 // name as a format, an argument that ends in ; splits the sequence
-// there, and tmux stores a \ in a session name doubled. git takes no \
-// in a branch, but a detached worktree's directory name, encoded the
-// same way, may have one.
+// there, tmux stores a \ in a session name doubled, and tmux 3.2 to 3.4
+// store a $ before a letter, _ or { as \$. git takes no \ in a branch,
+// but a detached worktree's directory name, encoded the same way, may
+// have one.
 func TestNewSessionEncodedNames(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
 	want := map[string]bool{}
-	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`} {
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`, "fix$HOME", "a${b}"} {
 		name := SessionName("proj", branch)
 		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
 			t.Fatalf("%s: %v", branch, err)

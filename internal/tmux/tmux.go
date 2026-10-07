@@ -656,17 +656,18 @@ func FormatLiteral(s string) string {
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
 // tmux does not keep "." or ":" in a session name, stores a "\" in one
 // doubled and a control byte, DEL or a byte that is not part of a valid
-// UTF-8 sequence escaped by vis(3), new-session expands a "#" in the
-// name as a format, and an argument that ends in ";" is a command
-// separator, so each of those bytes, and "%" itself, becomes "%" and
-// its two lowercase hex digits: "%25", "%23", "%2e", "%3a", "%3b",
-// "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". Nothing else
-// changes, a valid multibyte UTF-8 character included. git takes no
-// "\" or control byte in a branch, but a detached worktree's session is
-// named by its directory, encoded the same way. Distinct branches give
-// distinct names and the encoding is exact. tmux 3.2 to 3.4 also store
-// a "$" before a letter, "_" or "{" escaped, which this leaves as it is
-// (#220).
+// UTF-8 sequence escaped by vis(3), tmux 3.2 to 3.4 store a "$" before
+// a letter, "_" or "{" as "\$", new-session expands a "#" in the name
+// as a format, and an argument that ends in ";" is a command separator,
+// so each of those bytes, and "%" itself, becomes "%" and its two
+// lowercase hex digits: "%25", "%23", "%24", "%2e", "%3a", "%3b",
+// "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". Every "$" is
+// encoded, whatever follows it, so a name does not depend on the tmux
+// version it is made on. Nothing else changes, a valid multibyte UTF-8
+// character included. git takes no "\" or control byte in a branch, but
+// a detached worktree's session is named by its directory, encoded the
+// same way. Distinct branches give distinct names and the encoding is
+// exact.
 func EncodeBranch(branch string) string {
 	const hex = "0123456789abcdef"
 	var b strings.Builder
@@ -679,7 +680,7 @@ func EncodeBranch(branch string) string {
 				continue
 			}
 		}
-		if c < 0x20 || c >= 0x7f || strings.IndexByte(`%#.:;\`, c) >= 0 {
+		if c < 0x20 || c >= 0x7f || strings.IndexByte(`$%#.:;\`, c) >= 0 {
 			b.WriteByte('%')
 			b.WriteByte(hex[c>>4])
 			b.WriteByte(hex[c&0xf])
