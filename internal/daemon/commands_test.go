@@ -410,6 +410,15 @@ func TestAddNameInUse(t *testing.T) {
 	if res, _ := result(t, pc, "c3"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "unknown agent") {
 		t.Fatalf("result %+v", res)
 	}
+	// So does a command whose first word is an assignment, which an
+	// older client sends unchecked: no worktree is made for it.
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c4", Repo: remote, Branch: "assign", Cmd: []string{"FOO=1", "claude"}})
+	if res, _ := result(t, pc, "c4"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "FOO=1 is an environment assignment") {
+		t.Fatalf("result %+v", res)
+	}
+	if _, err := os.Stat(store.Dirs.Worktree("proj", "assign")); !os.IsNotExist(err) {
+		t.Fatalf("worktree for a refused command: %v", err)
+	}
 }
 
 // A second connection sending the id of a running add attaches to its

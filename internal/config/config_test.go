@@ -210,17 +210,23 @@ func TestParseLeadingDash(t *testing.T) {
 	}
 }
 
-// A command whose first word is an environment assignment is refused:
-// tmux's shell line quotes it, and the shell would run it as a program.
-// The assignment after env, an = in a later word or in a path, and a
-// word that is no shell name before its = are commands as written.
+// A command whose first word is an environment assignment or an append
+// is refused: tmux's shell line quotes it, and the shell would run it
+// as a program. The name is what comes before the first =. The
+// assignment after env, an = in a later word or in a path, and a word
+// that is no shell name before its = are commands as written.
 func TestCheckCmd(t *testing.T) {
-	for _, bad := range [][]string{{"FOO=1", "claude"}, {"_x=", "claude"}, {"a1=b"}} {
+	for _, bad := range [][]string{{"FOO=1", "claude"}, {"_x=", "claude"}, {"a1=b"}, {"FOO=a=b", "claude"}} {
 		if err := CheckCmd(bad); err == nil || !strings.Contains(err.Error(), "put env before it") {
 			t.Errorf("%q: %v", bad, err)
 		}
 	}
-	for _, ok := range [][]string{nil, {"claude"}, {"env", "FOO=1", "claude"}, {"claude", "--model=x"}, {"./a=b"}, {"1a=b"}, {"=x"}, {"a-b=c"}} {
+	for _, bad := range [][]string{{"PATH+=:/x", "claude"}, {"_x+="}} {
+		if err := CheckCmd(bad); err == nil || !strings.Contains(err.Error(), "env cannot append") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	for _, ok := range [][]string{nil, {"claude"}, {"env", "FOO=1", "claude"}, {"claude", "--model=x"}, {"./a=b"}, {"1a=b"}, {"=x"}, {"a-b=c"}, {"+=x"}, {"a++=b"}} {
 		if err := CheckCmd(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}

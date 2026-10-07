@@ -559,16 +559,21 @@ func (c *Config) validateAgents() error {
 }
 
 // CheckCmd refuses a command whose first word is an environment
-// assignment, FOO=1. A command is an argv, and the shell line tmux
-// starts it with quotes every word, so the shell would look for a
-// program named FOO=1 and the pane would exit at once; env sets the
-// variable instead: [env, FOO=1, claude].
+// assignment, FOO=1, or bash's and zsh's append, FOO+=1. A command is
+// an argv, and the shell line tmux starts it with quotes every word
+// with an =, so the shell would look for a program named FOO=1 and the
+// pane would exit at once; env sets the variable instead:
+// [env, FOO=1, claude]. env cannot append.
 func CheckCmd(cmd []string) error {
 	if len(cmd) == 0 {
 		return nil
 	}
 	name, _, ok := strings.Cut(cmd[0], "=")
-	if !ok || name == "" || '0' <= name[0] && name[0] <= '9' {
+	if !ok {
+		return nil
+	}
+	name, appends := strings.CutSuffix(name, "+")
+	if name == "" || '0' <= name[0] && name[0] <= '9' {
 		return nil
 	}
 	for i := 0; i < len(name); i++ {
@@ -576,6 +581,9 @@ func CheckCmd(cmd []string) error {
 		if !('A' <= b && b <= 'Z' || 'a' <= b && b <= 'z' || '0' <= b && b <= '9' || b == '_') {
 			return nil
 		}
+	}
+	if appends {
+		return fmt.Errorf("%s is an append assignment, not a command; env cannot append, so put env before the whole value or run the command through sh -c", cmd[0])
 	}
 	return fmt.Errorf("%s is an environment assignment, not a command; put env before it to set the variable", cmd[0])
 }
