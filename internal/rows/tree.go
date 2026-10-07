@@ -856,7 +856,7 @@ func Agents(in Input, tree []Row) Rows {
 		case KindTask:
 			owner = "t:" + n.Pending.ID
 			t := n
-			t.Kind, t.Node, t.Depth, t.Children = KindTile, n.Pending.ID, 0, 0
+			t.Kind, t.Node, t.Depth, t.Children, t.Own = KindTile, n.Pending.ID, 0, 0, false
 			t.Current = viewer["t:"+n.Pending.ID]
 			rows = append(rows, t)
 		case KindWorktree:
@@ -869,7 +869,7 @@ func Agents(in Input, tree []Row) Rows {
 			// The tile's id is the agent's, as the node's is: a worktree
 			// with two agents is two tiles.
 			t := n
-			t.Kind, t.Node, t.Depth = KindTile, n.Agent.ID, 0
+			t.Kind, t.Node, t.Depth, t.Own = KindTile, n.Agent.ID, 0, false
 			// A node in other sessions is the viewer's as the tree marks
 			// it: by its own session, or by the workspace session of the
 			// line whose home a managed agent's session is.

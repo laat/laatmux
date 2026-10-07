@@ -355,6 +355,11 @@ func TestObservedAgentSettled(t *testing.T) {
 		for _, n := range tree {
 			if n.Kind == KindAgent && n.Depth == 1 {
 				nodes[n.Agent.ID] = state{settled: n.Settled, dim: n.Dim}
+				// The viewer's by its own session, the one it is in; its
+				// tile carries no Own.
+				if mine := c.current != "" && n.Agent.Session == c.current; n.Own != mine || n.Current != mine {
+					t.Errorf("settled %v current %q: %s Own %v Current %v", c.settled, c.current, n.Agent.ID, n.Own, n.Current)
+				}
 			}
 		}
 		rs := Agents(in, tree)
@@ -365,6 +370,9 @@ func TestObservedAgentSettled(t *testing.T) {
 			for _, r := range g.tiles {
 				if r.Agent.Server == protocol.ServerDefault {
 					tiles[r.Agent.ID] = state{r.Settled, r.Dim, g.stale}
+				}
+				if r.Own {
+					t.Errorf("settled %v current %q: the tile %s Own", c.settled, c.current, r.ID())
 				}
 			}
 		}
@@ -640,6 +648,9 @@ func TestVisitorTakesHomeSession(t *testing.T) {
 		rs := Agents(in, tree)
 		for _, r := range append(rs.Main, rs.Stale...) {
 			s.tile = s.tile || r.Agent != nil && r.Agent.ID == id && r.Current
+			if r.Own {
+				t.Errorf("the tile %s Own", r.ID())
+			}
 		}
 		return s
 	}

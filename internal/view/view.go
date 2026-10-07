@@ -324,8 +324,9 @@ func (m *Model) followed(vis []Item) int {
 }
 
 // followRow is the index of the row following takes of n in display
-// order, row(i) the i-th, -1 for none. In the tree it is the first that
-// is the viewer's. In the agent view it is the first of the viewer's
+// order, row(i) the i-th, -1 for none. In the tree it is the first of
+// the viewer's that viewerRank puts first, as treeFollowed picks of the
+// whole tree. In the agent view it is the first of the viewer's
 // tiles of what the tree follows (treeFollowed): of the worktree of the
 // viewer's line, its tasks among them, or the node's own tile in other
 // sessions; when none of those is shown, the first of the viewer's
@@ -347,7 +348,10 @@ func (m *Model) followRow(n int, row func(int) *rows.Row) int {
 		switch {
 		case !r.Current:
 		case r.Kind != rows.KindTile:
-			return i
+			// A node of the tree.
+			if first < 0 || viewerRank(r) > viewerRank(row(first)) {
+				first = i
+			}
 		case r.ID() == id, w != "" && m.tileWorktree(r) == w:
 			return i
 		case first < 0:
