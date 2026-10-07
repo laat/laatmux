@@ -194,10 +194,11 @@ func TestRedactAndSubmitted(t *testing.T) {
 // Redact replaces it there too. So it does for a prompt with a " in an
 // argument another word's tab makes quoted, and for a prompt with a
 // ', which is in the argument as shellJoin quotes it, escaped once
-// more where the argument is quoted. The replacement is one pass: a
-// prompt such as p, which the placeholder has in it, is not replaced
-// again in the placeholder; and the shell-quoted form wins where the
-// bare one starts at the same place, as ” does in its own quoting.
+// more where the argument is quoted. A prompt such as p, which the
+// placeholder has in it, is not replaced again in the placeholder; and
+// forms that overlap leave nothing of either: two apostrophes in their
+// own quoting, and claude 'claude and e 'e, whose bare forms start at
+// the command's name or in it, before their shell-quoted forms.
 func TestRedactQuoted(t *testing.T) {
 	for _, c := range []struct {
 		secret string
@@ -218,12 +219,14 @@ func TestRedactQuoted(t *testing.T) {
 		}
 	}
 	for secret, want := range map[string]string{
-		"p":      "tmux new-session -d claude {prompt}: failed: {prompt}",
-		"{p":     "tmux new-session -d claude {prompt}: failed: {prompt}",
-		"rom":    "tmux new-session -d claude {prompt}: failed: {prompt}",
-		"prompt": "tmux new-session -d claude {prompt}: failed: {prompt}",
-		"''":     "tmux new-session -d claude {prompt}: failed: {prompt}",
-		"p\nq":   `tmux new-session -d "claude {prompt}": "failed: {prompt}"`,
+		"p":              "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"{p":             "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"rom":            "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"prompt":         "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"''":             "tmux new-session -d claude {prompt}: failed: {prompt}",
+		"claude 'claude": "tmux new-session -d {prompt}: failed: {prompt}",
+		"e 'e":           "tmux new-session -d claud{prompt}: failed: {prompt}",
+		"p\nq":           `tmux new-session -d "claude {prompt}": "failed: {prompt}"`,
 	} {
 		err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", secret})}, Msg: "failed: " + secret}
 		if got := Redact(err, secret, "{prompt}").Error(); got != want {

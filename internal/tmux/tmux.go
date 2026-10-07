@@ -595,21 +595,47 @@ func (s Server) DeleteBuffers(ctx context.Context, prefix string) error {
 // log. A prompt with a newline makes the argument it is in one that
 // Printable quotes, and each form is in it escaped: strconv.Quote
 // escapes rune by rune, so the form there is its own quoting without
-// the quotes, and that is replaced as well. All forms are replaced in
-// one pass, the shell-quoted ones first where two start at one place,
-// so the placeholder put in is not searched again: a prompt that is a
-// part of it, p say, would be found in it. The error's type is lost;
-// the caller has classified it already.
+// the quotes, and that is replaced as well. Every occurrence of every
+// form, overlapping ones too, is found in the text as it is, and each
+// run of text they cover becomes one placeholder: a placeholder is
+// never searched, where a prompt that is a part of it, p say, would be
+// found, and forms that overlap leave nothing of either, as a bare
+// prompt that starts with the command's name does before its own
+// shell-quoted form. The error's type is lost; the caller has
+// classified it already.
 func Redact(err error, secret, placeholder string) error {
 	if err == nil || secret == "" {
 		return err
 	}
-	var pairs []string
+	msg := err.Error()
+	hide := make([]bool, len(msg))
 	for _, form := range []string{shellJoin([]string{secret}), secret} {
 		q := strconv.Quote(form)
-		pairs = append(pairs, q[1:len(q)-1], placeholder, form, placeholder)
+		for _, f := range []string{form, q[1 : len(q)-1]} {
+			end := 0
+			for i := 0; ; i++ {
+				j := strings.Index(msg[i:], f)
+				if j < 0 {
+					break
+				}
+				i += j
+				for k := max(i, end); k < i+len(f); k++ {
+					hide[k] = true
+				}
+				end = i + len(f)
+			}
+		}
 	}
-	return errors.New(strings.NewReplacer(pairs...).Replace(err.Error()))
+	var b strings.Builder
+	for i := 0; i < len(msg); i++ {
+		switch {
+		case !hide[i]:
+			b.WriteByte(msg[i])
+		case i == 0 || !hide[i-1]:
+			b.WriteString(placeholder)
+		}
+	}
+	return errors.New(b.String())
 }
 
 // KillSession kills the session with exactly this name.
