@@ -63,6 +63,17 @@ func TestFormRender(t *testing.T) {
 	if text := Text(long.Render(40, 12)); !strings.Contains(text, "…") || !strings.Contains(text, "hij█") {
 		t.Fatalf("long branch:\n%s", text)
 	}
+	// A branch preset from a worktree can have a C1 control character,
+	// which git takes: the branch line drops it focused or not, short or
+	// cut, as fit does.
+	for _, b := range []string{"fix\u009b2J", strings.Repeat("abcdefghij", 6) + "\u009b2J"} {
+		f := NewForm("t", chips(), b)
+		unfocused := Text(f.Render(40, 12))
+		f.Handle(term.Key{Kind: term.KeyTab})
+		if focused := Text(f.Render(40, 12)); strings.ContainsRune(unfocused+focused, 0x9b) || !strings.Contains(focused, "2J█") {
+			t.Errorf("branch %q:\n%s\n%s", b, unfocused, focused)
+		}
+	}
 }
 
 // The renderer is a pure function of the fields, the cursor and the
@@ -457,5 +468,17 @@ func TestPromptEditVS16(t *testing.T) {
 	}
 	if got := tail("abcdefgh⚠️x", 2); width(got) > 2 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
+	}
+	// A C1 control character, which is not drawn, goes with the rune
+	// before it.
+	f = &Form{prompt: []rune("ab\u009bc"), focus: fieldPrompt, cursor: 3}
+	f.promptKey(term.Key{Kind: term.KeyLeft})
+	if f.cursor != 1 {
+		t.Errorf("left over a C1: cursor %d", f.cursor)
+	}
+	f.cursor = 3
+	f.promptKey(term.Key{Kind: term.KeyBackspace})
+	if string(f.prompt) != "ac" || f.cursor != 1 {
+		t.Errorf("backspace over a C1: %q at %d", string(f.prompt), f.cursor)
 	}
 }

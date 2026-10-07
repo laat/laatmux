@@ -70,9 +70,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	// result that failed may still name a root, a removed one say, and
 	// that is not ready.
 	if res.Done {
-		// git takes a C1 control character and a byte that is not UTF-8
-		// in a branch, and the root has the branch in it.
-		fmt.Printf("%s ready: %s, session %s\n", tmux.Printable(repo.Name+"/"+res.Branch), tmux.Printable(res.Root), res.Managed)
+		fmt.Println(readyLine(repo.Name, res))
 	}
 	// The delivery state is printed as soon as the host has said it,
 	// before any local failure, and the exit is 0 whatever it says when
@@ -89,6 +87,15 @@ func cmdAdd(ctx context.Context, args []string) error {
 		return err
 	}
 	return focus(ctx, res.Session, res.Created)
+}
+
+// readyLine is add's line for an add the host finished: <repo>/<branch>
+// and the root as tmux.Printable shows them, since git takes a C1
+// control character and a byte that is not UTF-8 in a branch and the
+// root has the branch in it, and the managed session, whose name
+// encodes them.
+func readyLine(repo string, res command.Added) string {
+	return fmt.Sprintf("%s ready: %s, session %s", tmux.Printable(repo+"/"+res.Branch), tmux.Printable(res.Root), res.Managed)
 }
 
 // addArgs is the add command line: the flags, the branch, given or

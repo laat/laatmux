@@ -8,7 +8,6 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
-	"github.com/laat/laatmux/internal/tmux"
 )
 
 // cmdPath prints the worktree root of a branch on its host, from the
@@ -51,7 +50,7 @@ func cmdPath(ctx context.Context, args []string) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("no worktree for %s on %s", tmux.Printable(repo.Name+"/"+branch), h.Name)
+		return noWorktree(repo, branch, h.Name)
 	}
 	fmt.Println(w.Root)
 	return nil

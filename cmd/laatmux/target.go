@@ -262,3 +262,10 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 	sort.Strings(roots)
 	return protocol.Worktree{}, false, fmt.Errorf("%s has worktrees at %s, in two clones of the repository", tmux.Printable(repo.Name+"/"+branch), strings.Join(roots, " and "))
 }
+
+// noWorktree is run's and path's error for a branch with no worktree on
+// the host, <repo>/<branch> as tmux.Printable shows it: git takes a C1
+// control character and a byte that is not UTF-8 in a branch.
+func noWorktree(repo config.Repo, branch, host string) error {
+	return fmt.Errorf("no worktree for %s on %s", tmux.Printable(repo.Name+"/"+branch), host)
+}

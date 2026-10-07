@@ -282,7 +282,9 @@ func (f *Form) promptKey(k term.Key) {
 
 // joins reports whether r is drawn with the rune before it, taking no
 // cell of its own: a combining mark, a joiner, a variation selector or
-// a skin tone.
+// a skin tone; and DEL or a C1 control character, which is not drawn
+// at all, so the cursor keys and Backspace take it with the rune before
+// it rather than stop on nothing.
 func joins(r rune) bool { return r >= 0x20 && runeWidth(r) == 0 }
 
 func (f *Form) insert(rs []rune) {
@@ -449,10 +451,12 @@ func (f *Form) chipLines(w int) []Line {
 // tail is the last w cells of s, with an ellipsis first when it was
 // cut.
 func tail(s string, w int) string {
-	if width(s) <= w {
+	// What visible keeps of s, as fit draws it: a branch preset from a
+	// worktree can have a C1 control character.
+	rs := visible(s)
+	if s := string(rs); width(s) <= w {
 		return s
 	}
-	rs := []rune(s)
 	n := 0
 	i := len(rs)
 	for i > 0 && n+cellWidth(rs, i-1, rs[i-1]) <= w-1 {

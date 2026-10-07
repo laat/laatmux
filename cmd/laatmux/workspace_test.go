@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
@@ -140,6 +141,15 @@ func TestFindWorktreeBySource(t *testing.T) {
 	c1[0].Branch, c1[1].Branch = "f\u009b31m", "f\u009b31m"
 	if _, _, err := findWorktree(c1, mine, "f\u009b31m"); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote("mine/f\u009b31m")+" has worktrees at /r/a and /r/b") {
 		t.Errorf("two clones, a branch with a C1 control: %v", err)
+	}
+	// run's and path's error for a branch with no worktree, and add's
+	// ready line, quote it too.
+	if err := noWorktree(mine, "f\u009b31m", "vm"); err.Error() != "no worktree for "+strconv.Quote("mine/f\u009b31m")+" on vm" {
+		t.Errorf("no worktree: %v", err)
+	}
+	res := command.Added{Branch: "f\u009b31m", Root: "/w/mine/f\u009b31m", Managed: "mine/f%c2%9b31m"}
+	if got, want := readyLine("mine", res), strconv.Quote("mine/f\u009b31m")+" ready: "+strconv.Quote(res.Root)+", session mine/f%c2%9b31m"; got != want {
+		t.Errorf("ready line %q, want %q", got, want)
 	}
 }
 

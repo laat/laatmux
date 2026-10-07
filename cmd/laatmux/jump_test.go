@@ -118,6 +118,10 @@ func TestJumpMode(t *testing.T) {
 		{mac, "default", "$0", 0, `mac: session "$0" starts with a $`},
 		{mac, "laatmux", "", 0, "mac: session name required"},
 		{vm, "default", "c:d", 0, "vm/c:d: on vm's default tmux server"},
+		// A target naming a branch with a C1 control character, which
+		// git takes, is printed quoted.
+		{vm, "default", "proj/b\u009b2J", 0, `"vm/proj/b\u009b2J": on vm's default tmux server`},
+		{mac, "work", "proj/b\u009b2J", 0, `"mac/proj/b\u009b2J": tmux server work is not managed`},
 	}
 	for _, c := range cases {
 		got, err := jumpMode(c.h, tmux.Parse(c.srv), c.session)
@@ -162,6 +166,41 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // a record without a source leaves the <repo> placeholder bare, and the
 // agent with it. The line names an agent only where add would not pick
 // one, and with no agent configured, add needs one first.
+// dollarQuote's word is read back byte for byte by bash, zsh and ksh,
+// whichever are installed, for every byte but NUL followed by digits,
+// which a greedy escape would take; and it holds no ' or ! but its
+// quotes, which bash 3.2's history expansion would misread.
+func TestDollarQuote(t *testing.T) {
+	var b strings.Builder
+	for c := 1; c < 256; c++ {
+		b.WriteByte(byte(c))
+		b.WriteString("31")
+	}
+	s := b.String()
+	word := dollarQuote(s)
+	if !strings.HasPrefix(word, "$'") || !strings.HasSuffix(word, "'") || strings.ContainsAny(word[2:len(word)-1], "'!") {
+		t.Fatalf("word %q", word)
+	}
+	if strings.ContainsFunc(word, func(r rune) bool { return r < 0x20 || r >= 0x7f }) {
+		t.Fatalf("word has a byte that is not printable ASCII: %q", word)
+	}
+	ran := 0
+	for _, sh := range []string{"bash", "zsh", "ksh"} {
+		path, err := exec.LookPath(sh)
+		if err != nil {
+			continue
+		}
+		ran++
+		out, err := exec.Command(path, "-c", "printf %s "+word).Output()
+		if err != nil || string(out) != s {
+			t.Errorf("%s read back %q, %v", sh, out, err)
+		}
+	}
+	if ran == 0 {
+		t.Skip("no bash, zsh or ksh")
+	}
+}
+
 func TestAddHintCanRun(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
@@ -232,7 +271,7 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("vm", "venv"), subst, onSubst},
 		// zsh's magic_equal_subst would read a bare a==ls as a=/bin/ls.
 		{host("vm", "venv"), eq, "vm/proj/a==ls has no managed session; laatmux add 'a==ls' --repo proj --host vm --agent claude makes one"},
-		{host("vm", "venv"), ctl, `"vm/proj/it's\u009b31m\\x" has no managed session; laatmux add $'it\'s\xc2\x9b31m\\x' --repo proj --host vm --agent claude makes one`},
+		{host("vm", "venv"), ctl, `"vm/proj/it's\u009b31m\\x" has no managed session; laatmux add $'it\047s\302\23331m\134x' --repo proj --host vm --agent claude makes one`},
 		{host("vm", "venv"), noSrc, "vm/proj/b has no managed session; laatmux add b --repo <repo> --host vm makes one"},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},

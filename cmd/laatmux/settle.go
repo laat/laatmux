@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -32,7 +33,8 @@ func setSettled(ctx context.Context, verb string, args []string, settled bool) e
 		}
 		var ok bool
 		if l, ok = workspace.ByName(locals, args[0]); !ok {
-			return fmt.Errorf("no local session %s", args[0])
+			// The name can have a branch in it, as the user typed it.
+			return fmt.Errorf("no local session %s", tmux.Printable(args[0]))
 		}
 	} else {
 		var err error

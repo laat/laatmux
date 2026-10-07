@@ -347,6 +347,12 @@ func TestWidth(t *testing.T) {
 	if got := fit("a\x9bb", 5); got != "a�b" {
 		t.Errorf("not UTF-8: %q", got)
 	}
+	// The control character goes before anything is measured: between a
+	// symbol and U+FE0F it would hide the selector, and the symbol drawn
+	// two cells would have been measured one.
+	if s := "⚠\u009b️x"; width(s) != 3 || width(fit(s, 2)) > 2 || fit(s, 3) != "⚠️x" {
+		t.Errorf("C1 before a selector: width %d, fit %q", width(s), fit(s, 2))
+	}
 	if l, err := ParseLayout(""); err != nil || l != Tiles {
 		t.Error("ParseLayout empty")
 	}

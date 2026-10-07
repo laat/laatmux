@@ -798,12 +798,24 @@ func TestBranchWithC1Quoted(t *testing.T) {
 	} else {
 		progress = append(progress, p...)
 	}
+	// The resend of a generated add whose name was allocated before the
+	// daemon stopped.
+	if err := d.journal.create(entry{ID: "c3", Source: remote, Repo: "proj", Branch: odd + "-3", Generated: true, Allocated: true, Stage: protocol.StageWorktree, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: odd, Generated: true, Cmd: []string{"true"}})
+	if res, p := result(t, pc, "c3"); !res.OK || res.Branch != odd+"-3" {
+		t.Fatalf("resent add: %+v", res)
+	} else {
+		progress = append(progress, p...)
+	}
 	for _, want := range [][3]string{
 		{protocol.StageAllocate, protocol.StateSkip, "branch " + q(odd) + " given"},
 		{protocol.StageWorktree, protocol.StateStart, "git branch --no-track " + q(odd) + " origin/HEAD"},
 		{protocol.StageWorktree, protocol.StateDone, "branch " + q(odd) + " from origin/HEAD"},
 		{protocol.StageWorktree, protocol.StateStart, "git worktree add " + qroot + " " + q(odd)},
 		{protocol.StageAllocate, protocol.StateDone, "branch " + q(odd+"-2") + " for proposal " + q(odd)},
+		{protocol.StageAllocate, protocol.StateSkip, "branch " + q(odd+"-3") + " allocated before"},
 	} {
 		if !hasProgress(progress, want[0], want[1], want[2]) {
 			t.Errorf("missing %q in %+v", want, progress)

@@ -1573,8 +1573,13 @@ func TestConfirmsQuoteBranch(t *testing.T) {
 	if !ok {
 		t.Fatalf("no log: %v", m.Overlay)
 	}
-	for i := 0; i < 200 && !log.Done(); i++ {
+	// The dismiss is a stub that returns at once; ten seconds is room
+	// for a loaded machine, and a log not done by then is said as such.
+	for deadline := time.Now().Add(10 * time.Second); !log.Done() && time.Now().Before(deadline); {
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !log.Done() {
+		t.Fatal("the dismiss did not finish")
 	}
 	d.act(m, m.Poll())
 	if want := "dismissed " + strconv.Quote("proj/"+pb) + " on vm"; m.Message != want {
