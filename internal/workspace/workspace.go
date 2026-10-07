@@ -40,9 +40,22 @@ var Server = tmux.DefaultServer
 
 // SessionName is the local session name for a workspace:
 // <host>/<repo>/<encoded branch>. The host is part of the name because the
-// same repository and branch may be checked out on two hosts at once.
+// same repository and branch may be checked out on two hosts at once. It
+// is named after the managed session as AttachName names one, so add,
+// which names it by the branch, and a jump from the worktree's home
+// session name it alike: a "$" in the branch, which EncodeBranch keeps
+// (#220), is encoded in both.
 func SessionName(host, repo, branch string) string {
-	return host + "/" + tmux.SessionName(repo, branch)
+	return AttachName(host, tmux.SessionName(repo, branch))
+}
+
+// AttachName is the local session name for a managed session on a host,
+// by the session's name as the host's tmux lists it: <host>/<session>,
+// the session's part made one tmux stores as given (tmux.EncodeListed).
+// A session made with a "\" or a tab in its name is listed escaped, and
+// as it is listed would be escaped again in the local name.
+func AttachName(host, session string) string {
+	return host + "/" + tmux.EncodeListed(session)
 }
 
 // Records is laatmux's sessions among the ones listed, a workspace or a

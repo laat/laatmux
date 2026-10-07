@@ -140,7 +140,7 @@ func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p pa
 		w = *line.Worktree
 		home = w.Session
 	default:
-		return workspace.Spec{Host: h.Host, Managed: p.session, Name: h.Name + "/" + p.session}
+		return attachSpec(h, p.session)
 	}
 	// The pane's session, the one the line resolved to: its home, or
 	// the root agent's when the home is lost or the task's session is

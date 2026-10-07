@@ -93,7 +93,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
 		}
-		spec = workspace.Spec{Host: h.Host, Managed: rest, Name: h.Name + "/" + rest}
+		spec = attachSpec(h, rest)
 	}
 	name, created, err := workspace.Ensure(ctx, spec)
 	if err != nil {
@@ -102,19 +102,28 @@ func cmdJump(ctx context.Context, args []string) error {
 	return focus(ctx, name, created)
 }
 
+// attachSpec is the plain attachment to a managed session that is no
+// worktree's, by the session's name as the host lists it: the local
+// session is named after it as AttachName names it, and attaches to it
+// and is tagged with it as listed.
+func attachSpec(h config.Host, session string) workspace.Spec {
+	return workspace.Spec{Host: h.Host, Managed: session, Name: workspace.AttachName(h.Name, session)}
+}
+
 // worktreeSpec is the local workspace session for a worktree record with
 // a managed session. A detached worktree has no <repo>/<branch> form; it
 // is reached by its session name. The managed session is <repo>/<encoded
 // branch> as it was when add made it; the local name follows it rather
 // than the record's branch, which is empty for a worktree detached
-// since. The source is the identity and comes from the record; a record
-// without one leaves it empty, and Ensure keeps whatever the session
-// already knows.
+// since, as AttachName names it after a session the host lists. The
+// source is the identity and comes from the record; a record without
+// one leaves it empty, and Ensure keeps whatever the session already
+// knows.
 func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 	spec := workspace.Spec{
 		Host:    h.Host,
 		Managed: w.Session,
-		Name:    h.Name + "/" + w.Session,
+		Name:    workspace.AttachName(h.Name, w.Session),
 		Key:     protocol.SessionKey(w.EnvironmentID, w.Root),
 		Branch:  w.Branch,
 		Source:  w.Source,

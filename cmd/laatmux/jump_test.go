@@ -372,6 +372,95 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	}
 }
 
+// A session on a host made as a\b or with a tab, whose name tmux lists
+// escaped, is attached from a local session made under the name the
+// jump computes, which has-session finds by that name, tagged with the
+// session's name as the host lists it, and found by the tag again. An
+// agent's row, a pane in it, a jump by the session's name and a
+// worktree whose home it is name the local session alike. The host is
+// this machine, its managed server as isolated as the default one, and
+// its session names are read as the daemon reads them. c$xd is listed
+// as c\$xd on tmux 3.2 and as c\\$xd on 3.4, and its local name then
+// needs the $ encoded too; the attach tag reads back changed on 3.4
+// (#227), so that session is not looked for by its tag.
+func TestEnsureListedHostSessionName(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	host := tmux.LaatmuxServer
+	t.Cleanup(func() { _, _ = host.Run(context.Background(), "kill-server") })
+	for i, name := range []string{`a\b`, "tab\tx", "c$xd"} {
+		args := []string{"new-session", "-d", "-s", name, "sleep 1000"}
+		if i == 0 {
+			args = append([]string{"-f", "/dev/null"}, args...)
+		}
+		if _, err := host.Run(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	panes, err := host.ListPanes(ctx)
+	if err != nil || len(panes) != 3 {
+		t.Fatalf("panes %+v %v", panes, err)
+	}
+	h := config.Host{Host: peer.Host{Name: "mac"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	for _, p := range panes {
+		listed := p.Session
+		row := rows.Row{Kind: rows.KindAgent, Host: "mac", Agent: &protocol.Agent{ID: "env/laatmux/" + p.ID, EnvironmentID: "env", Server: "laatmux", Session: listed, PaneID: p.ID}}
+		spec, _, err := rowSpec(cfg, h, row)
+		if err != nil || spec.Managed != listed || spec.Key != "" {
+			t.Errorf("%q: spec %+v %v", listed, spec, err)
+			continue
+		}
+		if got := paneSpec(cfg, h, nil, row, paneTarget{"laatmux", listed, p.ID}); got != spec {
+			t.Errorf("%q: the pane's spec %+v, the row's %+v", listed, got, spec)
+		}
+		if got := attachSpec(h, listed); got != spec {
+			t.Errorf("%q: the jump's spec %+v, the row's %+v", listed, got, spec)
+		}
+		if got := worktreeSpec(h, protocol.Worktree{Session: listed}); got.Name != spec.Name || got.Managed != listed {
+			t.Errorf("%q: the worktree's spec %+v, the row's %+v", listed, got, spec)
+		}
+		name, created, err := workspace.Ensure(ctx, spec)
+		if err != nil || !created || name != spec.Name {
+			t.Errorf("%q: ensure %q: %q %v %v", listed, spec.Name, name, created, err)
+			continue
+		}
+		if _, err := workspace.Server.Run(ctx, "has-session", "-t", "="+name+":"); err != nil {
+			t.Errorf("%q: has-session %q: %v", listed, name, err)
+		}
+		out, err := workspace.Server.Run(ctx, "show-options", "-v", "-t", "="+name+":", "@laatmux_host")
+		if err != nil || strings.TrimSpace(string(out)) != "mac" {
+			t.Errorf("%q: %s host tag %q %v", listed, name, out, err)
+		}
+		if strings.Contains(listed, "$") {
+			continue
+		}
+		out, err = workspace.Server.Run(ctx, "show-options", "-v", "-t", "="+name+":", "@laatmux_attach")
+		if err != nil || strings.TrimSpace(string(out)) != "mac/"+listed {
+			t.Errorf("%q: %s attach tag %q %v", listed, name, out, err)
+		}
+		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Errorf("%q: ensure again: %q %v %v", listed, name, created, err)
+		}
+	}
+}
+
+// A worktree's workspace session is named alike by the jump from its
+// home session, by the jump from its root agent's session once the home
+// is lost, and by add, which names it by the branch: a $ in the branch,
+// which EncodeBranch keeps in the managed session's name (#220), is
+// encoded in each.
+func TestWorktreeSessionNamesAlike(t *testing.T) {
+	h := config.Host{Host: peer.Host{Name: "mac"}}
+	for _, branch := range []string{"main", "fix/v1.2", "fix$HOME", "v$1", "a%5cb"} {
+		w := protocol.Worktree{Repo: "proj", Branch: branch, Session: tmux.SessionName("proj", branch)}
+		home, lost := worktreeSpec(h, w).Name, worktreeSessionName(h, w)
+		if add := workspace.SessionName("mac", "proj", branch); home != add || lost != add || strings.Contains(add, "$") {
+			t.Errorf("%q: home %q, lost %q, add %q", branch, home, lost, add)
+		}
+	}
+}
+
 // A pane jump: a tile, an agent node and a pane node name their pane; a
 // worktree line, a task and a run do not. A pane on a remote host's
 // default server is refused as jump refuses it.
