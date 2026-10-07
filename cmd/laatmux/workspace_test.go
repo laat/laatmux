@@ -267,7 +267,7 @@ func TestLabelUnderNested(t *testing.T) {
 }
 
 func TestLocalRepoArg(t *testing.T) {
-	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}}
+	cfg := config.Config{Repos: []config.Repo{{Source: "git@x:o/proj.git", Name: "mine"}}, Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}}}
 	cases := []struct {
 		w    protocol.Worktree
 		want string
@@ -283,6 +283,7 @@ func TestLocalRepoArg(t *testing.T) {
 	}
 	// The hint for a record without a source leaves --repo to the reader
 	// rather than print it empty.
+	t.Setenv("LAATMUX_HOME", t.TempDir())
 	h := config.Host{Host: peer.Host{Name: "vm"}, Repos: "/r", Worktrees: "/w"}
 	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; laatmux add fix --repo <repo> --host vm makes one"; got != want {
 		t.Errorf("addHint = %q, want %q", got, want)
