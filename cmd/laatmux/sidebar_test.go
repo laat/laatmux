@@ -521,15 +521,20 @@ func TestSidebarHooksRun(t *testing.T) {
 	must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "other", "sleep 1000"))
 	otherWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "other:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 	bootWin := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+	// Each hook runs in a job of its own, in the background, so a line
+	// can land after any other: the loop waits for every line the check
+	// wants, the other window's too.
+	ran := func(got string) bool {
+		return strings.Contains(got, "sidebar attach "+bootWin+" "+sid) && strings.Contains(got, "sidebar attach "+otherWin) && strings.Count(got, "user") >= 2
+	}
 	for i := 0; i < 100; i++ {
 		b, _ := os.ReadFile(logf)
-		if got = string(b); strings.Contains(got, "sidebar attach "+bootWin+" "+sid) && strings.Count(got, "user") >= 2 {
+		if got = string(b); ran(got) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	b, _ := os.ReadFile(logf)
-	if got = string(b); !strings.Contains(got, "sidebar attach "+bootWin+" "+sid) || !strings.Contains(got, "sidebar attach "+otherWin) || strings.Count(got, "user") < 2 {
+	if !ran(got) {
 		t.Fatalf("hooks ran %q: want attach for both windows with the session and the user's hook twice", got)
 	}
 	// attach itself: a window in a session not named gets no pane.
