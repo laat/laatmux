@@ -7,10 +7,10 @@ import (
 	"github.com/laat/laatmux/internal/gittest"
 )
 
-// No test's git reads the user's git config or the repository a hook's
-// environment names: a commit in a test's repository is not signed,
-// runs no hook of theirs, takes the repository's identity and is that
-// repository's, in a run a hook starts as well.
+// No test's git reads the user's git config: a commit in a test's
+// repository is not signed, runs no hook of theirs and takes the
+// repository's identity. Run from a hook, it lands in that repository
+// as well, not in the one the hook's environment names.
 func TestMain(m *testing.M) {
 	gittest.Isolate()
 	os.Exit(m.Run())

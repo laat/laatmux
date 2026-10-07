@@ -20,10 +20,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("TMUX_TMPDIR", dir)
 	os.Unsetenv("TMUX")
 	os.Unsetenv("TMUX_PANE")
-	// Nor the user's git config or the repository a hook's environment
-	// names: a commit in a test's repository is not signed, runs no hook
-	// of theirs, takes the repository's identity and is that
-	// repository's, in a run a hook starts as well.
+	// Nor the user's git config: a commit in a test's repository is not
+	// signed, runs no hook of theirs and takes the repository's identity.
+	// Run from a hook, it lands in that repository as well, not in the
+	// one the hook's environment names.
 	gittest.Isolate()
 	code := m.Run()
 	for _, name := range []string{"default", "laatmux"} {
