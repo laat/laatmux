@@ -35,10 +35,21 @@ jobs:
           go-version-file: go.mod
 
       # The tmux tests skip without it; the end-to-end test needs it
-      # for the daemon's first poll to complete.
-      - name: tmux
+      # for the daemon's first poll to complete. apt's tmux on
+      # ubuntu-latest (3.4 on 24.04) runs the tests that pin facts of
+      # tmux 3.2-3.4; brew's on macOS is the newest release.
+      - name: tmux (macOS)
         if: runner.os == 'macOS'
         run: brew install tmux
+
+      - name: tmux (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      # A runner image that changes tmux shows in the log; one that
+      # loses it fails here rather than letting the tmux tests skip.
+      - name: tmux version
+        run: tmux -V
 
       - name: gofmt
         run: |
@@ -60,5 +71,7 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # -v puts each skipped test and its reason in the log, so a test
+      # that stops running on one runner is visible.
       - name: go test
-        run: go test -race ./...
+        run: go test -race -v ./...
