@@ -511,14 +511,15 @@ func TestEnsureAttachmentNames(t *testing.T) {
 }
 
 // A worktree whose home is a session made by hand as a.b on a host's
-// tmux 3.7, which keeps the ., gets its workspace session, and the
-// attach pane becomes a client of a.b: the attach target =a.b: reaches
-// it, where =a.b looked for pane b of window a and the attach exited at
-// once. Kill then kills the workspace session, mac/a.b on this tmux,
-// which =mac/a.b did not find either. Neither reaches mac/a, which
-// =mac/a.b alone can: tmux reads its mac/a as a window, then as a
-// session. A tmux before 3.7 stores the . as _, and the test is
-// skipped there.
+// tmux 3.7, which keeps the ., gets its workspace session, mac/a%2eb,
+// and the attach pane becomes a client of a.b: the attach target =a.b:
+// reaches it, where =a.b looked for pane b of window a and the attach
+// exited at once. Kill kills it. A workspace an earlier build made as
+// mac/a.b on a local tmux 3.7 is found by its key and kept under its
+// name, and Kill kills it too, which =mac/a.b did not find. Neither
+// reaches mac/a, which =mac/a.b alone can: tmux reads its mac/a as a
+// window, then as a session. A tmux before 3.7 stores the . as _, and
+// the test is skipped there.
 func TestEnsureDottedManagedSession(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -538,10 +539,10 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	}
 	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "a.b", Name: AttachName("mac", "a.b"), Key: "env//r/a.b", Branch: "a.b"}
 	name, created, err := Ensure(ctx, spec)
-	if err != nil || !created || name != "mac/a.b" {
+	if err != nil || !created || name != "mac/a%2eb" {
 		t.Fatalf("ensure: %q %v %v", name, created, err)
 	}
-	if locals, err := List(ctx); err != nil || len(Records(locals)) != 1 || Records(locals)[0].Name != "mac/a.b" {
+	if locals, err := List(ctx); err != nil || len(Records(locals)) != 1 || Records(locals)[0].Name != "mac/a%2eb" {
 		t.Errorf("laatmux's sessions: %+v %v", locals, err)
 	}
 	var clients string
@@ -560,6 +561,48 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	}
 	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
 		t.Errorf("after the kill: %+v %v", locals, err)
+	}
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/a.b", "sleep 600", tmux.Next, "set-option", "-t", "=mac/a.b:", "@laatmux_workspace", spec.Key); err != nil {
+		t.Fatal(err)
+	}
+	if name, created, err = Ensure(ctx, spec); err != nil || created || name != "mac/a.b" {
+		t.Fatalf("the earlier build's workspace: %q %v %v", name, created, err)
+	}
+	if err := Kill(ctx, name); err != nil {
+		t.Fatalf("kill %s: %v", name, err)
+	}
+	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
+		t.Errorf("after the kill of %s: %+v %v", name, locals, err)
+	}
+}
+
+// A worktree whose home a host's tmux 3.7 lists as a.b gets its
+// workspace session on any local tmux, under the name AttachName gives
+// it, mac/a%2eb, tagged with its key and found by it again: a tmux
+// before 3.7 stored mac/a.b as mac/a_b, and the set-option calls in
+// new-session's own sequence found no session mac/a.b, which failed
+// the jump and left that session untagged. The workspace is made
+// whether or not the host session is there.
+func TestEnsureDottedHomeOnAnyTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "a.b", Name: AttachName("mac", "a.b"), Key: "env//r/a.b", Branch: "a.b"}
+	name, created, err := Ensure(ctx, spec)
+	if err != nil || !created || name != "mac/a%2eb" {
+		t.Fatalf("ensure: %q %v %v", name, created, err)
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := Find(locals, spec.Key, ""); !ok || l.Name != name || len(locals) != 1 {
+		t.Errorf("by key: %+v %v, of %+v", l, ok, locals)
+	}
+	if name, created, err := Ensure(ctx, spec); err != nil || created || name != "mac/a%2eb" {
+		t.Errorf("ensure again: %q %v %v", name, created, err)
 	}
 }
 
