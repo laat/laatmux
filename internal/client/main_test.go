@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 	// directory of the run's own, and the variables that name the user's
 	// session are cleared. A test that wants a daemon or a config sets
 	// LAATMUX_HOME or LAATMUX_CONFIG itself.
-	dir, err := os.MkdirTemp("/tmp", "lmxc")
+	dir, err := os.MkdirTemp("/tmp", "lmxi")
 	if err != nil {
 		panic(err)
 	}
