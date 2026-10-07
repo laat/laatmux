@@ -141,8 +141,8 @@ Host names, agent keys and repository names are labels: `A-Z a-z 0-9 _ -`,
 nothing else, since they end up in session names, ids and directory names.
 A label does not start with `-`, so it never reads as a flag in the
 commands laatmux prints, such as the `laatmux add` line a hint gives.
-A host named after its ssh alias, and a repository named from its source,
-must pass the same rule or the config is rejected asking for an explicit
+A host named after its ssh alias or the machine's hostname, and a
+repository named from its source, must pass the same rule or the config is rejected asking for an explicit
 `name`. `repos` and `worktrees` have no defaults, and must be absolute or
 start with `~`; a host without them cannot `add`. A repository's name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
