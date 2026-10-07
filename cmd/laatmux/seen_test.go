@@ -37,13 +37,13 @@ func TestPickBeside(t *testing.T) {
 }
 
 // Each client is read with the tags of its pane and session: one on a
-// dead attach pane, and one on a sidebar pane, which stands for the
-// attach pane beside it. A target holds no tmux.Sep or newline, Ensure
+// live attach pane, one on a dead one, and one on a sidebar pane, which
+// stands for the attach pane beside it. A target holds no tmux.Sep or newline, Ensure
 // refusing a managed session with a U+2063 and tmux storing a newline
 // in a session name escaped, so the targets have them only to show
-// that the listings do not split a value: split at Sep, the first
+// that the listings do not split a value: split at Sep, the dead
 // client's line had more fields than it reads and was dropped, and the
-// second window's pane line was cut at the newline, its target read
+// sidebar window's pane line was cut at the newline, its target read
 // short. The user's after-list-clients and after-list-panes hooks
 // print a line after the records, which is no client and no pane.
 func TestListClients(t *testing.T) {
@@ -53,14 +53,14 @@ func TestListClients(t *testing.T) {
 		t.Helper()
 		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
 	}
-	targets := map[string]string{"v": "proj/" + tmux.Sep + "x", "w": "proj/y\n" + tmux.Sep + "z"}
+	targets := map[string]string{"u": "proj/u", "v": "proj/" + tmux.Sep + "x", "w": "proj/y\n" + tmux.Sep + "z"}
 	panes := map[string]string{}
-	for _, s := range []string{"v", "w"} {
+	for _, s := range []string{"u", "v", "w"} {
 		panes[s] = run("new-session", "-d", "-s", s, "-P", "-F", "#{pane_id}", "sleep 1000")
 		run("set-option", "-p", "-t", panes[s], "@laatmux_attach_pane", "1", tmux.Next, "set-option", "-p", "-t", panes[s], "@laatmux_attach_target", targets[s],
 			tmux.Next, "set-option", "-t", s, "@laatmux_host", "mac")
 	}
-	run("set-option", "-t", "v", "@laatmux_attach", "mac/v")
+	run("set-option", "-t", "u", "@laatmux_attach", "mac/u", tmux.Next, "set-option", "-t", "v", "@laatmux_attach", "mac/v")
 	run("set-option", "-t", "w", "@laatmux_workspace", "env1/root/w")
 	side := run("split-window", "-h", "-t", panes["w"], "-P", "-F", "#{pane_id}", "sleep 1000")
 	run("set-option", "-p", "-t", side, sidebarTag, "1", tmux.Next, "select-pane", "-t", side)
@@ -72,7 +72,7 @@ func TestListClients(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	for _, s := range []string{"v", "w"} {
+	for _, s := range []string{"u", "v", "w"} {
 		c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", s)
 		in, err := c.StdinPipe()
 		if err != nil {
@@ -85,7 +85,7 @@ func TestListClients(t *testing.T) {
 		t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
 	}
 	clients := map[string]string{}
-	for i := 0; i < 50 && len(clients) != 2; i++ {
+	for i := 0; i < 50 && len(clients) != 3; i++ {
 		time.Sleep(100 * time.Millisecond)
 		clear(clients)
 		for _, l := range strings.Split(run("list-clients", "-F", "#{client_session} #{client_name}"), "\n") {
@@ -94,7 +94,7 @@ func TestListClients(t *testing.T) {
 			}
 		}
 	}
-	if len(clients) != 2 {
+	if len(clients) != 3 {
 		t.Fatalf("clients: %v", clients)
 	}
 	for _, hook := range []string{"after-list-clients", "after-list-panes"} {
@@ -105,6 +105,7 @@ func TestListClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []daemon.ClientView{
+		{Client: clients["u"], Pane: panes["u"], AttachPane: true, Target: targets["u"], Host: "mac", Attach: "mac/u"},
 		{Client: clients["v"], Pane: panes["v"], Dead: true, AttachPane: true, Target: targets["v"], Host: "mac", Attach: "mac/v"},
 		{Client: clients["w"], Pane: panes["w"], AttachPane: true, Target: targets["w"], Host: "mac", Workspace: "env1/root/w"},
 	}

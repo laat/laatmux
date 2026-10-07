@@ -704,9 +704,9 @@ func TestSidebarScopeAndOff(t *testing.T) {
 	}
 }
 
-// reap kills a sidebar pane alone in its window, and keeps one beside a
-// live pane and one beside a dead pane remain-on-exit keeps; no other
-// pane goes.
+// reap kills a sidebar pane alone in its window and a dead one, and
+// keeps one beside a live pane and one beside a dead pane remain-on-exit
+// keeps; no other pane goes.
 func TestSidebarReap(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -721,20 +721,27 @@ func TestSidebarReap(t *testing.T) {
 		run("set-option", "-p", "-t", side, sidebarTag, "1")
 		return main, side
 	}
+	// die makes the pane exit, kept dead by remain-on-exit.
+	die := func(pane string) {
+		t.Helper()
+		run("set-option", "-p", "-t", pane, "remain-on-exit", "on", tmux.Next, "respawn-pane", "-k", "-t", pane, "true")
+		for i := 0; run("display-message", "-p", "-t", pane, "#{pane_dead}") != "1"; i++ {
+			if i == 50 {
+				t.Fatalf("pane %s did not die", pane)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 	window()
 	dead, _ := window()
-	run("set-option", "-p", "-t", dead, "remain-on-exit", "on", tmux.Next, "respawn-pane", "-k", "-t", dead, "true")
-	for i := 0; run("display-message", "-p", "-t", dead, "#{pane_dead}") != "1"; i++ {
-		if i == 50 {
-			t.Fatalf("pane %s did not die", dead)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	die(dead)
 	alone, aloneSide := window()
 	run("kill-pane", "-t", alone)
+	_, deadSide := window()
+	die(deadSide)
 	var want []string
 	for _, id := range strings.Fields(run("list-panes", "-a", "-F", "#{pane_id}")) {
-		if id != aloneSide {
+		if id != aloneSide && id != deadSide {
 			want = append(want, id)
 		}
 	}
