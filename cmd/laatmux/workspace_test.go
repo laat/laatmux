@@ -327,7 +327,8 @@ func TestAddBadLastNamesFile(t *testing.T) {
 
 // hostFor takes the last-used host without the flag, and gives the
 // repository's defaults back with withLast whether or not the flag is
-// given; with the flag and without withLast it reads nothing.
+// given; with the flag and without withLast it gives no defaults back
+// (TestExplicitHostSkipsBadLast shows it does not read the file then).
 func TestHostFor(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	const src = "git@x:o/proj.git"
