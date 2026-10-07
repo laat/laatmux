@@ -21,7 +21,8 @@ func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 		return fmt.Errorf("%s is not a workspace session", l.Name)
 	}
 	_, root := protocol.SplitSessionKey(l.Key)
-	out, err := workspace.Server.Run(ctx, "list-windows", "-t", "="+l.Name, "-F", "#{window_id}"+tmux.Sep+"#{@laatmux_shell}")
+	target := tmux.SessionTarget(l.Name)
+	out, err := workspace.Server.Run(ctx, "list-windows", "-t", target, "-F", "#{window_id}"+tmux.Sep+"#{@laatmux_shell}")
 	if err != nil {
 		return err
 	}
@@ -33,8 +34,7 @@ func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	}
 	// new-window makes the new window current, so the option set in the
 	// same sequence lands on it and the window is never seen untagged.
-	sessionTarget := "=" + l.Name + ":"
-	cmd := []string{"new-window", "-t", sessionTarget, "-n", "shell"}
+	cmd := []string{"new-window", "-t", target, "-n", "shell"}
 	if h.Local() {
 		// new-window expands -c as a format, and the root has the
 		// branch in it: a directory that is not there after expansion
@@ -44,7 +44,7 @@ func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	} else {
 		cmd = append(cmd, workspace.ShellCommand(h.Host, root))
 	}
-	cmd = append(cmd, tmux.Next, "set-option", "-w", "-t", sessionTarget, "@laatmux_shell", "1")
+	cmd = append(cmd, tmux.Next, "set-option", "-w", "-t", target, "@laatmux_shell", "1")
 	_, err = workspace.Server.Run(ctx, cmd...)
 	return err
 }

@@ -471,6 +471,14 @@ func TestEnsureAttachmentNames(t *testing.T) {
 	if _, _, err := Ensure(ctx, Spec{Host: host, Managed: "$0", Name: AttachName("mac", "$0")}); err == nil || !strings.Contains(err.Error(), "starts with a $") {
 		t.Errorf("$0: %v, want a refusal", err)
 	}
+	// And one with a :, which tmux 3.7 keeps in a name made by hand:
+	// the attach target =c:d: is a window of a session c, so it is
+	// refused for a workspace too, whose name is not checked.
+	for _, spec := range []Spec{{Host: host, Managed: "c:d", Name: AttachName("mac", "c:d")}, {Host: host, Managed: "c:d", Name: "mac/proj/w", Key: "env//r/w"}} {
+		if _, _, err := Ensure(ctx, spec); err == nil || !strings.Contains(err.Error(), "managed session \"c:d\" has a :, at which tmux splits a target") {
+			t.Errorf("%+v: %v, want a refusal", spec, err)
+		}
+	}
 	if locals, err := List(ctx); err != nil || len(Records(locals)) != len(names) {
 		t.Errorf("after the refusals: %+v %v", locals, err)
 	}
@@ -499,6 +507,50 @@ func TestEnsureAttachmentNames(t *testing.T) {
 		if l, ok := ByName(locals, "mac/"+m); !ok || l.Attach != "mac/"+m || l.Host != "mac" {
 			t.Errorf("%q: %+v %v", m, l, ok)
 		}
+	}
+}
+
+// A worktree whose home is a session made by hand as a.b on a host's
+// tmux 3.7, which keeps the ., gets its workspace session, and the
+// attach pane becomes a client of a.b: the attach target =a.b: reaches
+// it, where =a.b looked for pane b of window a and the attach exited at
+// once. Kill then kills the workspace session, mac/a.b on this tmux,
+// which =mac/a.b did not find either. A tmux before 3.7 stores the . as
+// _, and the test is skipped there.
+func TestEnsureDottedManagedSession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	out, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "a.b", "-P", "-F", "#{session_name}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := strings.TrimSpace(string(out)); m != "a.b" {
+		t.Skipf("tmux before 3.7 stores a . in a session name as _: %q", m)
+	}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "a.b", Name: AttachName("mac", "a.b"), Key: "env//r/a.b", Branch: "a.b"}
+	name, created, err := Ensure(ctx, spec)
+	if err != nil || !created || name != "mac/a.b" {
+		t.Fatalf("ensure: %q %v %v", name, created, err)
+	}
+	var clients string
+	for i := 0; i < 250 && clients == ""; i++ {
+		out, _ := tmux.LaatmuxServer.Run(ctx, "list-clients", "-t", "=a.b:", "-F", "#{client_session}")
+		clients = strings.TrimSpace(string(out))
+		if clients == "" {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if clients != "a.b" {
+		t.Errorf("clients of a.b: %q", clients)
+	}
+	if err := Kill(ctx, name); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	if locals, err := List(ctx); err != nil || len(locals) != 0 {
+		t.Errorf("after the kill: %+v %v", locals, err)
 	}
 }
 

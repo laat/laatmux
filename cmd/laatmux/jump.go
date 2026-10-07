@@ -251,18 +251,28 @@ const (
 
 // jumpMode decides how a session is reached, or that it is not: the managed
 // server anywhere is attached; the default server on this machine is
-// switched to; everything else is observed only.
+// switched to; everything else is observed only. A session whose name no
+// target reaches (tmux.CheckTarget), one made by hand on tmux 3.7 with a
+// : in it say, is not reached either: the preflight, the attach and the
+// switch could not name it, and could name another session. A
+// <repo>/<branch> jump target is never refused so, since neither a label
+// nor a git branch can have a : or start with a $.
 func jumpMode(h peer.Host, srv tmux.Server, session string) (jumpKind, error) {
+	var how jumpKind
 	switch {
 	case srv.Managed():
-		return jumpAttach, nil
+		how = jumpAttach
 	case srv == tmux.DefaultServer && h.Local():
-		return jumpSwitch, nil
+		how = jumpSwitch
 	case srv == tmux.DefaultServer:
 		return 0, fmt.Errorf("%s/%s: on %s's default tmux server, which laatmux only observes; attach is limited to managed sessions", h.Name, session, h.Name)
 	default:
 		return 0, fmt.Errorf("%s/%s: tmux server %s is not managed by laatmux; attach is limited to managed sessions", h.Name, session, srv.Label())
 	}
+	if err := tmux.CheckTarget(session); err != nil {
+		return 0, fmt.Errorf("%s: %w", h.Name, err)
+	}
+	return how, nil
 }
 
 // checkSession fails early when the target session does not exist, so jump
@@ -280,7 +290,7 @@ func checkSession(ctx context.Context, h peer.Host, session string) error {
 	ctx, cancel := context.WithTimeout(ctx, preflightTimeout)
 	defer cancel()
 	argv := client.SSH(h.SSH, client.SSHOptions{ConnectTimeout: 10 * time.Second, KeepAlive: 5 * time.Second, KeepAliveCount: 2},
-		tmux.ShellJoin(append([]string{"tmux"}, tmux.LaatmuxServer.ArgsBare("has-session", "-t", "="+session)...)))
+		tmux.ShellJoin(append([]string{"tmux"}, tmux.LaatmuxServer.ArgsBare("has-session", "-t", tmux.SessionTarget(session))...)))
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
