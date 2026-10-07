@@ -864,25 +864,35 @@ func TestIsDaemon(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// A test run has a -test. flag first: go test puts its own first,
+	// every test that runs this binary passes one first, and Go's flags
+	// take two dashes as well as one. Or no argument at all, a run by
+	// hand. Any other first argument makes a start as laatmux.
+	asTest := len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-test.") || strings.HasPrefix(os.Args[1], "--test.")
 	// First: a start a test asks for, by naming a stand-in in
-	// LAATMUX_TEST_DAEMON, runs that stand-in, whatever its arguments.
-	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" {
+	// LAATMUX_TEST_DAEMON, runs that stand-in: the daemon StartDaemon
+	// starts, "serve" first, or a test's own child, a -test. flag first.
+	// Not a sidebar's start in a pane or hook of a server that inherited
+	// the variable: the guard below ends that.
+	if mode := os.Getenv("LAATMUX_TEST_DAEMON"); mode != "" && (asTest || os.Args[1] == "serve") {
 		testDaemon(mode)
 	}
-	// A start as "serve" with no stand-in named, from a test that reached
-	// client.StartDaemon without asking for one, ends at once, as a
-	// daemon that never comes up: a test binary takes "serve" as an
-	// ignored argument, so run on, it would run the whole suite again,
-	// detached, and a test that starts a daemon would start another.
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		fmt.Fprintln(os.Stderr, noDaemon)
-		os.Exit(1)
+	// Any other start as laatmux ends at once: as "serve", from a test
+	// that reached client.StartDaemon without asking for a stand-in, a
+	// daemon that never comes up; as "sidebar pane" from the sidebar's
+	// split, or "sidebar attach" and the like from its hooks and keys, a
+	// sidebar that never runs. A test binary ignores a word such as
+	// these, so run on, it would run the whole suite again, detached, in
+	// a pane or in a hook, and a test that starts a daemon would start
+	// another.
+	if !asTest {
+		refuse()
 	}
 	// A child of TestRunStateIsItsOwn that got past the check above ends
 	// here, with a status of its own: run on, it would run the suite,
 	// and that test would start another child.
 	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
-		fmt.Fprintln(os.Stderr, "started as a daemon, and not stopped")
+		fmt.Fprintln(os.Stderr, "a child of TestRunStateIsItsOwn, past the guard")
 		os.Exit(2)
 	}
 	// No test reaches the user's tmux: the default server's socket, and
@@ -906,8 +916,25 @@ func TestMain(m *testing.M) {
 	runDir = dir
 	os.Setenv("LAATMUX_HOME", filepath.Join(dir, "home"))
 	os.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
+	// A start the guard ends reports to its log, pane or hook, which no
+	// one may read, and a test that takes the failure in its stride
+	// passes: the start leaves a marker here, and the run fails on it.
+	// Only on a marker there when m.Run returns: a start no test waits
+	// for, such as a detached daemon after a cancelled dial, can come
+	// later, and a pane or hook start dies unrecorded when its server is
+	// killed first, as isolatedDefault kills its own at the end of the
+	// test. Those run no test all the same: the guard or the kill ends
+	// them.
+	marks := filepath.Join(dir, "refused")
+	if err := os.Mkdir(marks, 0o700); err != nil {
+		panic(err)
+	}
+	os.Setenv("LAATMUX_TEST_REFUSED", marks)
 	code := m.Run()
 	exec.Command("tmux", "-L", "default", "kill-server").Run()
+	if refusedStarts(marks) && code == 0 {
+		code = 1
+	}
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -916,16 +943,50 @@ func TestMain(m *testing.M) {
 // its state directory and its config are under it.
 var runDir string
 
-// noDaemon is what the binary says, started as a daemon with no
-// stand-in named.
-const noDaemon = "the cmd/laatmux tests start no daemon without LAATMUX_TEST_DAEMON"
+// refuse ends a start as laatmux: the guard's line on stderr, then a
+// marker with the start's arguments under the directory
+// LAATMUX_TEST_REFUSED names, the run's that made the start.
+func refuse() {
+	fmt.Fprintln(os.Stderr, refused)
+	if dir := os.Getenv("LAATMUX_TEST_REFUSED"); dir != "" {
+		os.WriteFile(filepath.Join(dir, strconv.Itoa(os.Getpid())), fmt.Appendf(nil, "%q\n", os.Args[1:]), 0o600)
+	}
+	os.Exit(1)
+}
+
+// refusedStarts says, on stderr, which starts left a marker under dir,
+// and whether any did.
+func refusedStarts(dir string) bool {
+	marks, _ := os.ReadDir(dir)
+	for _, e := range marks {
+		b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		// Empty when the start was killed between the create and the
+		// write, as a pane is when its server goes.
+		args := strings.TrimSpace(string(b))
+		if args == "" {
+			args = "(none recorded)"
+		}
+		fmt.Fprintln(os.Stderr, refusedRun, args)
+	}
+	return len(marks) > 0
+}
+
+// refused is what the binary says, started as laatmux other than as
+// "serve" with a stand-in named; refusedRun is what the run says,
+// failed for such a start.
+const (
+	refused    = "the cmd/laatmux tests start this binary as laatmux only as serve with a stand-in LAATMUX_TEST_DAEMON names"
+	refusedRun = "the run fails: a test started this binary as laatmux, and the guard ended it, with arguments"
+)
 
 // A test that sets no LAATMUX_HOME or LAATMUX_CONFIG, as this one, has
 // the run's. Run again under a state directory whose runtime file names
 // a live daemon at a socket that is not there, and a config file, it
-// reads neither. The binary started as client.StartDaemon starts it,
-// with or without arguments after "serve", runs no test: it runs the
-// stand-in LAATMUX_TEST_DAEMON names, or none.
+// reads neither. The binary started as laatmux, by client.StartDaemon,
+// the sidebar or anything else that puts an argument other than a
+// -test. flag first, runs no test: as "serve" with a stand-in named in
+// LAATMUX_TEST_DAEMON it runs that stand-in, and otherwise it leaves a
+// marker that fails the run that started it.
 func TestRunStateIsItsOwn(t *testing.T) {
 	if runDir == "" {
 		t.Fatal("TestMain gave the run no directory")
@@ -944,30 +1005,79 @@ func TestRunStateIsItsOwn(t *testing.T) {
 		}
 		return
 	}
-	// As StartDaemon starts it: its own executable, with "serve" and
-	// what LAATMUX_SERVE_ARGS adds. With no stand-in named, the guard's
-	// status, 1, and its line first; a binary built with -cover may add
-	// one of its own at exit. With one, that stand-in: absent exits 0.
+	if os.Getenv("LAATMUX_TEST_STRAY") != "" {
+		// A test that starts a sidebar and takes its failure in its
+		// stride, as one that tolerates a daemon that never comes up.
+		// LAATMUX_TEST_SERVED ends the start if the guard does not.
+		stray := exec.Command(os.Args[0], "sidebar", "pane")
+		stray.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1")
+		stray.Run()
+		return
+	}
+	// As StartDaemon starts it, its own executable with "serve" and
+	// what LAATMUX_SERVE_ARGS adds, as the sidebar's split, hooks and
+	// keys start it, or with any other first argument but a -test.
+	// flag, a flag of laatmux's such as --version included. With no
+	// stand-in named, the guard's status, 1, its line first, and a
+	// marker with the arguments under the directory LAATMUX_TEST_REFUSED
+	// names; a binary built with -cover may add a line of its own at
+	// exit. With one, the same but for "serve", which runs that
+	// stand-in: absent exits 0. A -test. flag first, with one dash or
+	// two, gets past the guard: to the status of a child of this test,
+	// 2, or to the stand-in.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := func(standIn string, args ...string) ([]byte, error) {
+	start := func(standIn string, args ...string) ([]byte, []string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		dir := t.TempDir()
 		serve := exec.CommandContext(ctx, self, args...)
-		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1", "LAATMUX_TEST_DAEMON="+standIn)
-		return serve.CombinedOutput()
+		serve.Env = append(os.Environ(), "LAATMUX_TEST_SERVED=1", "LAATMUX_TEST_DAEMON="+standIn, "LAATMUX_TEST_REFUSED="+dir)
+		out, err := serve.CombinedOutput()
+		var marks []string
+		es, _ := os.ReadDir(dir)
+		for _, e := range es {
+			b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+			marks = append(marks, strings.TrimSpace(string(b)))
+		}
+		return out, marks, err
 	}
-	for _, args := range [][]string{{"serve"}, {"serve", "--listen", "tcp:127.0.0.1:0"}} {
-		out, err := start("", args...)
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), noDaemon+"\n") {
-			t.Errorf("started with %q: %v\n%s", args, err, out)
+	var exit *exec.ExitError
+	ended := func(standIn string, args ...string) {
+		t.Helper()
+		out, marks, err := start(standIn, args...)
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.HasPrefix(string(out), refused+"\n") {
+			t.Errorf("started with %q, stand-in %q: %v\n%s", args, standIn, err, out)
+		}
+		if want := fmt.Sprintf("%q", args); len(marks) != 1 || marks[0] != want {
+			t.Errorf("started with %q, stand-in %q: markers %q, not one of %s", args, standIn, marks, want)
 		}
 	}
-	if out, err := start("absent", "serve"); err != nil || strings.Contains(string(out), noDaemon) {
-		t.Errorf("started with the absent stand-in: %v\n%s", err, out)
+	for _, args := range [][]string{{"serve"}, {"serve", "--listen", "tcp:127.0.0.1:0"}, {"sidebar", "pane"}, {"sidebar", "attach"}, {"--version"}, {"foo"}} {
+		ended("", args...)
+	}
+	ended("absent", "sidebar", "pane")
+	for _, flag := range []string{"-test.run=^$", "--test.run=^$"} {
+		if out, marks, err := start("", flag); !errors.As(err, &exit) || exit.ExitCode() != 2 || strings.Contains(string(out), refused) || len(marks) != 0 {
+			t.Errorf("started with %s: %v, markers %q\n%s", flag, err, marks, out)
+		}
+		if out, marks, err := start("absent", flag); err != nil || strings.Contains(string(out), refused) || len(marks) != 0 {
+			t.Errorf("started with %s and the absent stand-in: %v, markers %q\n%s", flag, err, marks, out)
+		}
+	}
+	if out, marks, err := start("absent", "serve"); err != nil || strings.Contains(string(out), refused) || len(marks) != 0 {
+		t.Errorf("started with the absent stand-in: %v, markers %q\n%s", err, marks, out)
+	}
+	// A run whose test made such a start and passed fails after the
+	// test, on the marker, and says which start it was.
+	stray := exec.Command(os.Args[0], "-test.run=^TestRunStateIsItsOwn$")
+	stray.Env = append(os.Environ(), "LAATMUX_TEST_STRAY=1")
+	out, err := stray.CombinedOutput()
+	pass, fail := strings.Index(string(out), "PASS\n"), strings.Index(string(out), refusedRun+` ["sidebar" "pane"]`+"\n")
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || pass < 0 || fail < pass {
+		t.Errorf("run with a test that made a start the guard ended: %v\n%s", err, out)
 	}
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	t.Setenv("LAATMUX_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
