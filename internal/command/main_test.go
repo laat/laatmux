@@ -19,20 +19,20 @@ import (
 func TestMain(m *testing.M) {
 	// First: a start whose first argument is not a -test. flag is a
 	// start as laatmux, such as the daemon client.StartDaemon starts,
-	// this binary with "serve". A test binary ignores such an argument:
-	// it would run the whole suite again, detached, and a test that
+	// this binary with "serve". A test binary ignores a word such as
+	// that: it would run the whole suite again, detached, and a test that
 	// starts a daemon would start another. No test here wants one; the
 	// start ends at once, as a daemon that never comes up. go test puts
-	// its -test. flags first, and every test that runs this binary
-	// passes one first.
-	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-test.") {
+	// its -test. flags first, every test that runs this binary passes
+	// one first, and Go's flags take two dashes as well as one.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-test.") && !strings.HasPrefix(os.Args[1], "--test.") {
 		refuse()
 	}
 	// A child of TestRunIsItsOwn that got past the check above ends
 	// here, with a status of its own: run on, it would run the suite,
 	// and that test would start another child.
 	if os.Getenv("LAATMUX_TEST_SERVED") != "" {
-		fmt.Fprintln(os.Stderr, "started as a daemon, and not stopped")
+		fmt.Fprintln(os.Stderr, "a child of TestRunIsItsOwn, past the guard")
 		os.Exit(2)
 	}
 	// No test reaches the user's tmux or laatmux: the tmux sockets, the
@@ -53,7 +53,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("LAATMUX_CONFIG", filepath.Join(dir, "config.yaml"))
 	// A start the guard ends reports to its log, which no one may read,
 	// and a test that takes the failure in its stride passes: the start
-	// leaves a marker here, and the run fails on it.
+	// leaves a marker here, and the run fails on it. Only on a marker
+	// there when m.Run returns: a start no test waits for, such as a
+	// detached daemon after a cancelled dial, can come later, and the
+	// guard ends it all the same.
 	marks := filepath.Join(dir, "refused")
 	if err := os.Mkdir(marks, 0o700); err != nil {
 		panic(err)
@@ -87,8 +90,14 @@ func refuse() {
 func refusedStarts(dir string) bool {
 	marks, _ := os.ReadDir(dir)
 	for _, e := range marks {
-		args, _ := os.ReadFile(filepath.Join(dir, e.Name()))
-		fmt.Fprintln(os.Stderr, refusedRun, strings.TrimSpace(string(args)))
+		b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		// Empty when the start was killed between the create and the
+		// write.
+		args := strings.TrimSpace(string(b))
+		if args == "" {
+			args = "(none recorded)"
+		}
+		fmt.Fprintln(os.Stderr, refusedRun, args)
 	}
 	return len(marks) > 0
 }
@@ -137,8 +146,8 @@ func TestRunIsItsOwn(t *testing.T) {
 	// included: the guard's status, 1, its line first, and a marker
 	// with the arguments under the directory LAATMUX_TEST_REFUSED names;
 	// a binary built with -cover may add a line of its own at exit. A
-	// -test. flag first gets past the guard, to the status of a child of
-	// this test, 2.
+	// -test. flag first, with one dash or two, gets past the guard, to
+	// the status of a child of this test, 2.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +177,10 @@ func TestRunIsItsOwn(t *testing.T) {
 			t.Errorf("started with %q: markers %q, not one of %s", args, marks, want)
 		}
 	}
-	if out, marks, err := start("-test.run=^$"); !errors.As(err, &exit) || exit.ExitCode() != 2 || strings.Contains(string(out), refused) || len(marks) != 0 {
-		t.Errorf("started with a -test. flag: %v, markers %q\n%s", err, marks, out)
+	for _, flag := range []string{"-test.run=^$", "--test.run=^$"} {
+		if out, marks, err := start(flag); !errors.As(err, &exit) || exit.ExitCode() != 2 || strings.Contains(string(out), refused) || len(marks) != 0 {
+			t.Errorf("started with %s: %v, markers %q\n%s", flag, err, marks, out)
+		}
 	}
 	// A run whose test made such a start and passed fails after the
 	// test, on the marker, and says which start it was.
