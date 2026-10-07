@@ -626,6 +626,29 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	if !s.Managed() {
 		return fmt.Errorf("tmux: refusing to configure unmanaged server %s", s.Label())
 	}
+	// A hand-started server may carry global hooks from the user's config,
+	// such as a split on new-session. They are removed first: an after-hook
+	// that fails makes the command it follows exit 1 though the command
+	// did its work, so a failing after-set-option, after-unbind-key or
+	// after-show-environment would stop every reconciliation before the
+	// removal, and a failing after-list-sessions would skip the sessions'
+	// overrides. set-hook runs after-set-hook, which goes before the
+	// others, and not for its own removal; show-hooks has no hook. Remove
+	// every global hook that has a value; tmux 3.5 lists all hook names,
+	// set or not.
+	_, _ = s.Run(ctx, "set-hook", "-gu", "after-set-hook")
+	if out, err := s.Run(ctx, "show-hooks", "-g"); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			name, _, ok := strings.Cut(line, " ")
+			if !ok || name == "" {
+				continue
+			}
+			if idx := strings.IndexByte(name, '['); idx > 0 {
+				name = name[:idx]
+			}
+			_, _ = s.Run(ctx, "set-hook", "-gu", name)
+		}
+	}
 	cmds := [][]string{
 		{"set-option", "-g", "prefix", "None"},
 		{"set-option", "-g", "prefix2", "None"},
@@ -657,21 +680,6 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	for _, c := range cmds {
 		if _, err := s.Run(ctx, c...); err != nil {
 			return err
-		}
-	}
-	// A hand-started server may carry global hooks from the user's config,
-	// such as a split on new-session. Remove every global hook that has a
-	// value; tmux 3.5 lists all hook names, set or not.
-	if out, err := s.Run(ctx, "show-hooks", "-g"); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			name, _, ok := strings.Cut(line, " ")
-			if !ok || name == "" {
-				continue
-			}
-			if idx := strings.IndexByte(name, '['); idx > 0 {
-				name = name[:idx]
-			}
-			_, _ = s.Run(ctx, "set-hook", "-gu", name)
 		}
 	}
 	// Session-level overrides of the isolation options shadow the globals.

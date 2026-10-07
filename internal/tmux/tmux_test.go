@@ -1147,6 +1147,74 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 	}
 }
 
+// A hand-started server whose user config has after-hooks that fail is
+// reconciled on the first try: the hooks go before the commands they
+// follow, set-option, unbind-key, show-environment and list-sessions,
+// each of which would otherwise exit 1 with the hook's error. tmux runs
+// an after-hook only on a server with a session. The user's
+// after-set-hook, which appends to @laatmux_hooked here, is removed
+// before the other hooks, so it never runs for their removal.
+func TestEnsureConfiguredRemovesHooksFirst(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	out, err := s.Run(ctx, "new-session", "-d", "-s", "a", "-P", "-F", "#{session_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	if _, err := s.Run(ctx, "set-option", "-t", id, "status", "on"); err != nil {
+		t.Fatal(err)
+	}
+	fail := "select-window -t nosuch:9"
+	for _, hook := range []string{"after-set-option", "after-unbind-key", "after-show-environment", "after-list-sessions"} {
+		if _, err := s.Run(ctx, "set-hook", "-g", hook, fail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Last, as it runs for its own setting.
+	if _, err := s.Run(ctx, "set-hook", "-g", "after-set-hook", "set-option -ga @laatmux_hooked x"); err != nil {
+		t.Fatal(err)
+	}
+	marked := func() string {
+		out, err := s.Run(ctx, "show-options", "-gqv", "@laatmux_hooked")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	before := marked()
+	if before == "" {
+		t.Fatal("after-set-hook did not run for its own setting; tmux runs no after-hook here")
+	}
+	if _, err := s.Run(ctx, "set-option", "-g", "mouse", "on"); err == nil || !strings.Contains(err.Error(), "nosuch") {
+		t.Fatalf("set-option with a failing after-set-option: %v, want the hook's error", err)
+	}
+
+	if err := s.EnsureConfigured(ctx); err != nil {
+		t.Fatalf("first EnsureConfigured: %v", err)
+	}
+	if got := marked(); got != before {
+		t.Errorf("@laatmux_hooked went from %q to %q: after-set-hook ran for another hook's removal", before, got)
+	}
+	out, err = s.Run(ctx, "show-hooks", "-g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.Contains(line, " ") {
+			t.Errorf("hook kept: %s", line)
+		}
+	}
+	for opt, want := range map[string]string{"prefix": "None", "mouse": "off"} {
+		if out, err := s.Run(ctx, "show-options", "-gv", opt); err != nil || strings.TrimSpace(string(out)) != want {
+			t.Errorf("%s is %q %v, want %s", opt, out, err, want)
+		}
+	}
+	if out, err := s.Run(ctx, "show-options", "-t", id, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
+		t.Errorf("session %s keeps %q %v", id, out, err)
+	}
+}
+
 // A session is reached by its exact name as SessionTarget writes it
 // when the name has a ., which tmux 3.7 keeps: =a.b alone is pane b of
 // window a, and has-session, the attach and kill-session found no
