@@ -417,12 +417,14 @@ func withHook(err, hook error) error {
 // with its pane tagged, as Ensure then finds it by key. Last, the
 // attach pane is respawned or made as for a reuse. A listing of its
 // panes a user's after-list-panes hook failed after is read all the
-// same; ensureAttach lists them again, and returns the hook's error.
+// same, and its *tmux.HookError returned when the rest worked; a hook
+// that fails at this listing and not at ensureAttach's is said too.
 func adopt(ctx context.Context, name string, s Spec) error {
 	out, err := Server.Query(ctx, strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep), "list-panes", "-s", "-t", tmux.SessionTarget(name))
 	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
+	hook := err
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, tmux.Sep)
 		if len(f) == 3 && f[1] != "" && f[2] == "" {
@@ -436,7 +438,7 @@ func adopt(ctx context.Context, name string, s Spec) error {
 	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
 		return err
 	}
-	return ensureAttach(ctx, name, s)
+	return withHook(ensureAttach(ctx, name, s), hook)
 }
 
 // placeholder is what a new attach pane runs until it is tagged: a
@@ -540,23 +542,21 @@ func ShellCommand(h peer.Host, root string) string {
 // server, so switch-client can reach a session on it. A process inside
 // another server is outside for this purpose. Socket paths are compared
 // as tmux reports them rather than trusting the inherited TMUX value.
+// A lookup a user's after-display-message hook failed after has the path
+// all the same.
 func Inside(ctx context.Context) bool {
 	if os.Getenv("TMUX") == "" {
 		return false
 	}
-	here := socketPath(ctx, tmux.Server{})
-	return here != "" && here == socketPath(ctx, Server)
-}
-
-// socketPath is the server's socket as tmux reports it, "" when the
-// server cannot be asked. A lookup a user's after-display-message hook
-// failed after has it all the same.
-func socketPath(ctx context.Context, s tmux.Server) string {
-	recs, err := s.Records(ctx, tmux.NewFields("#{socket_path}"), "display-message", "-p")
-	if err != nil && !tmux.HookOnly(err) || len(recs) != 1 {
-		return ""
+	here, err := (tmux.Server{}).Display(ctx, "#{socket_path}")
+	if err != nil && !tmux.HookOnly(err) {
+		return false
 	}
-	return recs[0][0]
+	def, err := Server.Display(ctx, "#{socket_path}")
+	if err != nil && !tmux.HookOnly(err) {
+		return false
+	}
+	return here == def
 }
 
 // Switch makes the session current for the calling client.

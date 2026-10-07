@@ -122,16 +122,18 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 // attach pane to the spec's managed session, leaves it when it is
 // there, makes a new one when it is gone, and adopts a plain attachment,
 // as the listings of the panes have them, each time with list-panes'
-// HookError; AttachPane finds the pane. A step that fails after a
-// listing a hook failed after, an adoption's set-option failed by a
-// hook of its own, is the error returned, not the listing's.
+// HookError, also when the hook fails at adopt's listing alone;
+// AttachPane finds the pane. A step that fails after a listing a hook
+// failed after, the attach pane's respawn or an adoption's set-option,
+// failed by an after-set-option hook, is the error returned, not the
+// listing's.
 func TestEnsureHookFails(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"s1", "s2", "s3", "s4"} {
+	for _, name := range []string{"s1", "s2", "s3", "s4", "s5"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +211,11 @@ func TestEnsureHookFails(t *testing.T) {
 	// follows.
 	target := func() string {
 		t.Helper()
-		return run("show-options", "-p", "-v", "-t", AttachPane(ctx, "mac/w"), "@laatmux_attach_target")
+		p := AttachPane(ctx, "mac/w")
+		if p == "" {
+			t.Fatal("no attach pane found")
+		}
+		return run("show-options", "-p", "-v", "-t", p, "@laatmux_attach_target")
 	}
 	spec.Managed = "s2"
 	_, _, err = Ensure(ctx, spec)
@@ -225,7 +231,20 @@ func TestEnsureHookFails(t *testing.T) {
 	if p := AttachPane(ctx, "mac/w"); p == "" || p == gone {
 		t.Fatalf("attach pane %q after it went, want a new one", p)
 	}
+	// A respawn that fails, by an after-set-option hook that fails for
+	// a pane's option alone, so tagArgs' session options are set, is the
+	// error returned, not list-panes'.
+	run("set-hook", "-g", "after-set-option", `if-shell -F "#{hook_flag_p}" "`+fails+`"`)
+	spec.Managed = "s1"
+	if _, _, err := Ensure(ctx, spec); err == nil || tmux.HookOnly(err) || !strings.Contains(err.Error(), " respawn-pane ") {
+		t.Fatalf("a respawn that fails: %v, want its error", err)
+	}
+	run("set-hook", "-gu", "after-set-option")
 	adopt("adopted with list-panes' hook", "list-panes", Spec{Host: host, Managed: "s3", Name: "mac/s3"}, "env//s3")
+	// A hook that fails once, at adopt's listing and not at ensureAttach's
+	// after it, is said all the same.
+	run("set-hook", "-g", "after-list-panes", "set-hook -gu after-list-panes ; "+fails)
+	adopt("adopted with a hook failing once", "list-panes", Spec{Host: host, Managed: "s5", Name: "mac/s5"}, "env//s5")
 
 	run("set-hook", "-g", "after-list-sessions", fails)
 	plain := Spec{Host: host, Managed: "s4", Name: "mac/s4"}

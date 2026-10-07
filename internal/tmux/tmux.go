@@ -558,6 +558,21 @@ func (s Server) Records(ctx context.Context, f Fields, a ...string) ([][]string,
 	return f.Parse(out), err
 }
 
+// Display is the one value display-message -p prints for format, a its
+// other arguments, -t say: read through Records, so it is the value as
+// the server holds it. A lookup a user's after-display-message hook
+// failed after has the value, returned with the *HookError.
+func (s Server) Display(ctx context.Context, format string, a ...string) (string, error) {
+	recs, err := s.Records(ctx, NewFields(format), append([]string{"display-message", "-p"}, a...)...)
+	if err != nil && !HookOnly(err) {
+		return "", err
+	}
+	if len(recs) != 1 {
+		return "", fmt.Errorf("tmux display-message -p: %d values for %s", len(recs), format)
+	}
+	return recs[0][0], err
+}
+
 // Parse is what a command printed in the format: a record of the
 // values of each line, in the order of the vars. What a user's
 // after-list-panes or after-display-message hook prints comes after

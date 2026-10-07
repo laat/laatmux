@@ -30,10 +30,11 @@ import (
 // $LAATMUX_HOME/sidebar.lock: two attaches for the same window, or an
 // attach racing on, would each see no tagged pane and make two.
 //
-// A listing of the panes a user's after-list-panes hook failed after has
-// every pane, and the sidebar goes on with it, saying nothing of the
-// hook: its commands run from hooks and keys, where an error flashes,
-// and the daemon's pane poll logs the hook's error.
+// A listing of the panes, or a display-message lookup, that a user's
+// after-list-panes or after-display-message hook failed after has what
+// it read, and the sidebar goes on with it, saying nothing of the hook:
+// its commands run from hooks and keys, where an error flashes. The
+// daemon's pane poll logs a failing after-list-panes hook's error.
 
 // sidebarTag is the pane option that marks a sidebar pane.
 const sidebarTag = "@laatmux_sidebar"
@@ -236,11 +237,10 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 		// nested on the laatmux server, and kill the panes elsewhere.
 		return "", errors.New("sidebar on --session: run it in a session of the default tmux server")
 	}
-	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
-	if err != nil {
+	target, err := workspace.Server.Display(ctx, "#{session_id}")
+	if err != nil && !tmux.HookOnly(err) {
 		return "", err
 	}
-	target := strings.TrimSpace(string(out))
 	sessions, _ := sidebarSessions(ctx)
 	if !slices.Contains(sessions, target) {
 		sessions = append(sessions, target)

@@ -838,6 +838,77 @@ func TestSidebarListingsHookFails(t *testing.T) {
 	}
 }
 
+// A user's after-display-message hook that fails after display-message
+// printed: the sidebar's lookups go on with the value. A sidebar pane
+// opens its socket by the server's pid; next with no -t reaches the
+// pane in the window the command runs in, and jump with no -c names the
+// client it runs from; on --session scopes the sidebar to the session.
+func TestSidebarLookupsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	sock, boot := run("display", "-p", "#{socket_path}"), run("display", "-p", "-t", "boot", "#{session_id}")
+	// A control-mode client on boot stands for the user's terminal.
+	c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	var client string
+	for i := 0; i < 50 && client == ""; i++ {
+		time.Sleep(100 * time.Millisecond)
+		client = run("list-clients", "-F", "#{client_name}")
+	}
+	pane := run("split-window", "-d", "-h", "-t", "boot:", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", pane, sidebarTag, "1")
+	t.Setenv("TMUX", sock+",1,0")
+	t.Setenv("TMUX_PANE", pane)
+	run("set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-display-message") })
+	got := make(chan view.Command, 8)
+	cmds := make(chan func(*view.Model) view.Action, 8)
+	stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
+		got <- c
+		return func(*view.Model) view.Action { return view.Action{} }
+	})
+	if err != nil {
+		t.Fatalf("the pane's socket with the hook: %v", err)
+	}
+	defer stop()
+	recv := func(what string) view.Command {
+		t.Helper()
+		select {
+		case c := <-got:
+			<-cmds
+			return c
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s with the hook did not reach the pane", what)
+		}
+		return view.Command{}
+	}
+	if err := sidebarControl(ctx, "next", nil); err != nil {
+		t.Fatal(err)
+	}
+	recv("next")
+	if err := sidebarControl(ctx, "jump", []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := recv("jump"); c.Client != client {
+		t.Errorf("jump with the hook names client %q, want %q", c.Client, client)
+	}
+	if target, err := scopeSidebar(ctx, true); err != nil || target != boot {
+		t.Errorf("on --session with the hook: %q %v, want %s", target, err, boot)
+	}
+}
+
 // The jump keys: on binds M-1..M-9 in the root table to a jump with
 // the window and client, off unbinds them and leaves a user's M-0 and
 // a user's M-5 bound to something else alone.

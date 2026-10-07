@@ -151,6 +151,18 @@ func TestCurrentHookFails(t *testing.T) {
 	}
 }
 
+// TMUX naming a socket no server listens on, and no default server
+// either: Inside is false, though the two lookups that failed have the
+// same value, none.
+func TestInsideNoServer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("TMUX", filepath.Join(dir, "none")+",0,0")
+	if Inside(context.Background()) {
+		t.Error("inside with no server")
+	}
+}
+
 func TestParseSessions(t *testing.T) {
 	locals := parseSessions([][]string{
 		{"vm/proj/fix", "env1/root/a", "vm", "", "1", "git@x:o/proj.git", "fix"},
