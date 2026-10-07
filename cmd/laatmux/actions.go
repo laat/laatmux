@@ -741,13 +741,13 @@ func (d *dash) settle(m *view.Model) {
 		return
 	}
 	if line.Local == nil || !line.Local.Workspace() {
-		hint := noWorkspaceHint(d.cfg, *line, resolved)
-		if resolved && r.Worktree == nil && line.Home() == "" {
-			// A managed agent of no worktree in the session its line has
-			// by name alone, with no home: the line's own jump refuses,
-			// and the agent's pane jump makes the line's workspace
-			// session (paneSpec).
-			hint = "enter creates one"
+		// A managed agent of no worktree in the session its line has by
+		// name alone, with no home: the line's own jump does not make the
+		// workspace session, refusing or going to its agent's plain
+		// session, and the agent's pane jump makes it (paneSpec).
+		hint := "enter creates one"
+		if !resolved || r.Worktree != nil || line.Home() != "" {
+			hint = noWorkspaceHint(d.cfg, *line, resolved)
 		}
 		m.Message = line.Name + ": no local workspace session; " + hint
 		return
