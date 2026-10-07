@@ -51,16 +51,26 @@ jobs:
         if: runner.os == 'Linux'
         run: command -v tmux >/dev/null || { sudo apt-get update && sudo apt-get install -y tmux; }
 
-      # A runner image that changes the tmux version shows here. On
-      # Linux, a tmux other than 3.4 also puts a warning on the run:
-      # no job then runs the tests of the 3.2-3.4 facts on 3.4.
-      - name: tmux version
+      # The tests that run shellJoin's words through zsh need it on
+      # PATH; without it TestShellJoinRoundTrip runs them through sh
+      # alone. macOS has zsh. The ubuntu-24.04 image has none, so apt
+      # installs it, and a Linux run needs the mirror for it.
+      - name: zsh (Linux)
+        if: runner.os == 'Linux'
+        run: command -v zsh >/dev/null || { sudo apt-get update && sudo apt-get install -y zsh; }
+
+      # A tmux or zsh version changed by the runner image, apt or brew
+      # shows here, and a runner without zsh fails here. On Linux, a
+      # tmux other than 3.4 also puts a warning on the run: no job
+      # then runs the tests of the 3.2-3.4 facts on 3.4.
+      - name: tmux and zsh versions
         run: |
           v=$(tmux -V)
           echo "$v"
           if [ "$RUNNER_OS" = Linux ] && [ "$v" != "tmux 3.4" ]; then
             echo "::warning::${{ matrix.os }} has $v, not tmux 3.4: the tests that pin facts of tmux 3.2-3.4 no longer run on 3.4"
           fi
+          zsh --version
 
       - name: gofmt
         run: |
