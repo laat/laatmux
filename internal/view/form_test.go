@@ -430,6 +430,22 @@ func TestWrapVS16(t *testing.T) {
 	if got := tail("abcdefgh⚠️x", 4); width(got) > 4 {
 		t.Errorf("tail: %q is %d cells", got, width(got))
 	}
+	// A C1 control character between the symbol and its selector is
+	// not drawn, and the wrap measures the symbol as drawn, two cells:
+	// what follows it on the line, the cursor or a rune, is not cut.
+	for _, p := range []string{"12345678⚠\u009b️", "12345678⚠\u009b️x"} {
+		f := &Form{prompt: []rune(p), focus: fieldPrompt}
+		f.cursor = len(f.prompt)
+		lines, _ := f.wrapPrompt(10)
+		for _, l := range lines {
+			if width(l) > 10 {
+				t.Errorf("wrapPrompt(%q): line %q is %d cells", p, l, width(l))
+			}
+		}
+		if text := strings.Join(lines, "|"); !strings.HasSuffix(text, "█") || strings.HasSuffix(p, "x") && !strings.Contains(text, "x") {
+			t.Errorf("wrapPrompt(%q) = %q", p, lines)
+		}
+	}
 }
 
 // Left, Right, Backspace and Delete keep a symbol and its selector

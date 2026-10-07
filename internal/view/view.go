@@ -1147,10 +1147,21 @@ func visible(s string) []rune {
 
 // cellWidth is the cells rs[i] takes: runeWidth, but a one-cell symbol
 // followed by the emoji variation selector, U+FE0F, is drawn as an emoji,
-// two cells, as ⚠️ and ✔️ are.
+// two cells, as ⚠️ and ✔️ are. A control character between them is not
+// drawn, so it does not part them: the prompt's wrap measures its text
+// with them in, and fit draws it with them out. A line break and a tab
+// do part them; the wrap breaks the line at one and draws the other as
+// spaces.
 func cellWidth(rs []rune, i int, r rune) int {
 	w := runeWidth(r)
-	if w == 1 && i+1 < len(rs) && rs[i+1] == 0xfe0f {
+	if w != 1 {
+		return w
+	}
+	j := i + 1
+	for j < len(rs) && rs[j] != '\n' && rs[j] != '\t' && unicode.IsControl(rs[j]) {
+		j++
+	}
+	if j < len(rs) && rs[j] == 0xfe0f {
 		return 2
 	}
 	return w

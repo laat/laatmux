@@ -151,6 +151,67 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	}
 }
 
+// The preflight's "no such session" names the target quoted when it
+// has a C1 control character, as a branch can.
+func TestClassifyPreflightQuotes(t *testing.T) {
+	err := exec.Command("sh", "-c", "exit 1").Run()
+	if got := classifyPreflight("vm", "proj/b\u009b2J", err, nil, ""); got == nil || got.Error() != `"vm/proj/b\u009b2J": no such session on the laatmux tmux server` {
+		t.Errorf("classifyPreflight = %v", got)
+	}
+}
+
+// dollarQuote's word is read back byte for byte by bash, zsh and ksh,
+// whichever are installed and know $'...', for every byte but NUL
+// followed by digits, which a greedy escape would take; and it holds no
+// ' or ! but its quotes, which bash 3.2's history expansion would
+// misread. No startup file runs: zsh -f, and no BASH_ENV or ENV.
+func TestDollarQuote(t *testing.T) {
+	var b strings.Builder
+	for c := 1; c < 256; c++ {
+		b.WriteByte(byte(c))
+		b.WriteString("31")
+	}
+	s := b.String()
+	word := dollarQuote(s)
+	if !strings.HasPrefix(word, "$'") || !strings.HasSuffix(word, "'") || strings.ContainsAny(word[2:len(word)-1], "'!") {
+		t.Fatalf("word %q", word)
+	}
+	if strings.ContainsFunc(word, func(r rune) bool { return r < 0x20 || r >= 0x7f }) {
+		t.Fatalf("word has a byte that is not printable ASCII: %q", word)
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "BASH_ENV=") && !strings.HasPrefix(kv, "ENV=") {
+			env = append(env, kv)
+		}
+	}
+	run := func(sh []string, script string) (string, error) {
+		cmd := exec.Command(sh[0], append(sh[1:], "-c", script)...)
+		cmd.Env = env
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	ran := 0
+	for _, sh := range [][]string{{"bash"}, {"zsh", "-f"}, {"ksh"}} {
+		path, err := exec.LookPath(sh[0])
+		if err != nil {
+			continue
+		}
+		sh[0] = path
+		// A ksh derived from pdksh has no $'...'.
+		if out, err := run(sh, `printf %s $'\101'`); err != nil || out != "A" {
+			continue
+		}
+		ran++
+		if out, err := run(sh, "printf %s "+word); err != nil || out != s {
+			t.Errorf("%s read back %q, %v", sh[0], out, err)
+		}
+	}
+	if ran == 0 {
+		t.Skip("no bash, zsh or ksh that knows $'...'")
+	}
+}
+
 // A worktree with no home and no agent: enter on its line refuses with
 // how add makes it a session, z on the line says the same, and so does
 // laatmux jump. The add line comes only when add can run it: on vm, a
@@ -166,41 +227,6 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // a record without a source leaves the <repo> placeholder bare, and the
 // agent with it. The line names an agent only where add would not pick
 // one, and with no agent configured, add needs one first.
-// dollarQuote's word is read back byte for byte by bash, zsh and ksh,
-// whichever are installed, for every byte but NUL followed by digits,
-// which a greedy escape would take; and it holds no ' or ! but its
-// quotes, which bash 3.2's history expansion would misread.
-func TestDollarQuote(t *testing.T) {
-	var b strings.Builder
-	for c := 1; c < 256; c++ {
-		b.WriteByte(byte(c))
-		b.WriteString("31")
-	}
-	s := b.String()
-	word := dollarQuote(s)
-	if !strings.HasPrefix(word, "$'") || !strings.HasSuffix(word, "'") || strings.ContainsAny(word[2:len(word)-1], "'!") {
-		t.Fatalf("word %q", word)
-	}
-	if strings.ContainsFunc(word, func(r rune) bool { return r < 0x20 || r >= 0x7f }) {
-		t.Fatalf("word has a byte that is not printable ASCII: %q", word)
-	}
-	ran := 0
-	for _, sh := range []string{"bash", "zsh", "ksh"} {
-		path, err := exec.LookPath(sh)
-		if err != nil {
-			continue
-		}
-		ran++
-		out, err := exec.Command(path, "-c", "printf %s "+word).Output()
-		if err != nil || string(out) != s {
-			t.Errorf("%s read back %q, %v", sh, out, err)
-		}
-	}
-	if ran == 0 {
-		t.Skip("no bash, zsh or ksh")
-	}
-}
-
 func TestAddHintCanRun(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
