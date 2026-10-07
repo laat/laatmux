@@ -759,9 +759,9 @@ func (d *dash) settle(m *view.Model) {
 // hint. A worktree with no home whose jump goes by such an agent, or by
 // one on another host's default server, gets its workspace session from
 // add, which starts a managed session at the root: the hint ends with
-// the add line. A task still running has nothing to jump to until it is
-// done. The line is a worktree's: settle says a row of none is not a
-// workspace before asking.
+// the add line, or what add needs first. A task still running has
+// nothing to jump to until it is done. The line is a worktree's: settle
+// says a row of none is not a workspace before asking.
 func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
@@ -790,15 +790,29 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // addsSession says how add makes a workspace session for a worktree
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, on a host this machine's config gives the
-// directories add needs.
+// directories add needs, for a repository that config lists, which
+// --repo takes. It names every one of these the worktree lacks, not
+// only the first.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	switch {
-	case w.Branch == "":
-		return "laatmux add makes one once a branch is checked out in " + w.Root
-	case !h.CanAdd():
-		return "laatmux add makes one once host " + h.Name + " has repos and worktrees directories in the config"
+	var needs []string
+	if w.Branch == "" {
+		needs = append(needs, "a branch is checked out in "+w.Root)
 	}
-	return addCommand(cfg, h, w) + " makes one"
+	if !h.CanAdd() {
+		needs = append(needs, "host "+h.Name+" has repos and worktrees directories in the config")
+	}
+	if _, ok := cfg.RepoBySource(w.Source); w.Source != "" && !ok {
+		needs = append(needs, w.Source+" is a repository in the config")
+	}
+	switch n := len(needs); {
+	case n == 0:
+		return addCommand(cfg, h, w) + " makes one"
+	case n > 2:
+		// A list: the directories' own "and" would run into the joins.
+		needs[n-1] = "and " + needs[n-1]
+		return "laatmux add makes one once " + strings.Join(needs, ", ")
+	}
+	return "laatmux add makes one once " + strings.Join(needs, " and ")
 }
 
 // shell opens the shell window in the selected workspace, creating the

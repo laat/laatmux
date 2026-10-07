@@ -283,8 +283,8 @@ func TestLocalRepoArg(t *testing.T) {
 	}
 	// The hint for a record without a source leaves --repo to the reader
 	// rather than print it empty.
-	h := config.Host{Host: peer.Host{Name: "vm"}}
-	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; start one with: laatmux add fix --repo <repo> --host vm"; got != want {
+	h := config.Host{Host: peer.Host{Name: "vm"}, Repos: "/r", Worktrees: "/w"}
+	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; laatmux add fix --repo <repo> --host vm makes one"; got != want {
 		t.Errorf("addHint = %q, want %q", got, want)
 	}
 }
