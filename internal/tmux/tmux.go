@@ -444,7 +444,8 @@ func CheckSessionName(name string) error {
 // escaped, as its C library has no width for it, and which is known
 // from here: a line or paragraph separator, U+2028 and U+2029, and a
 // noncharacter, U+FDD0 to U+FDEF and the last two code points of every
-// plane. CheckSessionName refuses one and EncodeBranch encodes it.
+// plane. CheckSessionName refuses one, and EncodeBranch and
+// EncodeListed encode it.
 func widthless(r rune) bool {
 	return r == 0x2028 || r == 0x2029 || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
 }
