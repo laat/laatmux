@@ -323,11 +323,13 @@ func TestExactSessionTargets(t *testing.T) {
 // and from a pane in it, whose directory is the root, by PaneSession,
 // with the pane's directory, and by Current. Split at Sep, the source
 // and branch were read from the wrong fields or cut at their first Sep,
-// and PaneSession found no session. Each value ends in a $, which tmux
-// 3.4 on macOS prints as \$ before a U+2063, and has a $ before a
-// letter, which tmux 3.4 prints as \$ everywhere: in the root before
-// its newline, where a Query that decoded the line with the probe only
-// left it (#288). The user's after-display-message and
+// and PaneSession found no session. Each value ends in a $ and comes
+// back as written: tmux 3.4 on macOS puts a backslash before a $ that
+// comes before a U+2063, which the | a separator starts with keeps
+// away from a value, and Query's decoding would undo. Each has a $
+// before a letter, which tmux 3.4 prints as \$ everywhere: in the root
+// before its newline, where a Query that decoded the line with the
+// probe only left it (#288). The user's after-display-message and
 // after-list-sessions hooks print a line after the records, which
 // PaneSession read into the pane's directory (#282).
 func TestEnsureValuesWithSep(t *testing.T) {

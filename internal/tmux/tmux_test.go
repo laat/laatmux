@@ -855,8 +855,10 @@ func TestRecordsError(t *testing.T) {
 // value in its own field, and so is the pane listed after it. Split at
 // Sep, the values after the directory were read from the fields after
 // theirs; split at the newline, the pane was not listed at all. Each
-// value ends in a $, which tmux 3.4 on macOS prints as \$ before a
-// U+2063. The directory has a $ before a letter, which tmux 3.4 prints
+// value ends in a $ and comes back as written: tmux 3.4 on macOS puts
+// a backslash before a $ that comes before a U+2063, which the | a
+// separator starts with keeps away from a value, and Query's decoding
+// would undo. The directory has a $ before a letter, which tmux 3.4 prints
 // as \$ everywhere, before its newline, where a Query that decoded the
 // line with the probe only left it; a title or a window name with one
 // is stored with the \$ by tmux 3.4 itself. Before the newline it has
