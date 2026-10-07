@@ -151,12 +151,13 @@ func originOf(ctx context.Context, dir string) (string, error) {
 // file: at a .git that is not a regular file (git moves past a directory
 // that is no repository, which this does not tell), or at a level with
 // a HEAD of its own, which git may take for a bare repository. A dir
-// that does not exist is undecided too, git failed to enter it. git
-// searches from dir whatever this process's environment names, as
+// that does not exist is undecided too, git failed to enter it. git's
+// search starts at dir whatever this process's environment names, as
 // worktree.GitEnv gives it no GIT_DIR or other variable naming a
-// repository. The file is read as git reads it: "gitdir: " and a path,
-// relative to the file's directory, trailing line ends dropped, at most
-// 1 MiB.
+// repository; a GIT_CEILING_DIRECTORIES that ends it sooner has git find
+// no repository, which is no origin too. The file is read as git reads
+// it: "gitdir: " and a path, relative to the file's directory, trailing
+// line ends dropped, at most 1 MiB.
 func goneGitfile(dir string) bool {
 	d, err := filepath.EvalSymlinks(dir)
 	if err != nil {

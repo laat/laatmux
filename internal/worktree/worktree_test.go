@@ -1817,10 +1817,11 @@ func TestUnreadableDotGitIsAnError(t *testing.T) {
 	}
 }
 
-// GitEnv has none of the variables this machine's git rev-parse
-// --local-env-vars prints but the config git keeps for another
-// repository too, and every other variable of the process. A variable a
-// later git adds fails it until gitenv.Local has it.
+// GitEnv drops every variable this machine's git rev-parse
+// --local-env-vars prints, and GIT_INTERNAL_SUPER_PREFIX, which gits
+// before 2.40 print, except GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT,
+// and keeps every other variable of the process. A variable a later git
+// adds fails it until gitenv.Local has it.
 func TestGitEnv(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -1831,7 +1832,7 @@ func TestGitEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	local := strings.Fields(string(out))
+	local := append(strings.Fields(string(out)), "GIT_INTERNAL_SUPER_PREFIX")
 	if !slices.Contains(local, "GIT_DIR") {
 		t.Fatalf("git rev-parse --local-env-vars: %q", out)
 	}

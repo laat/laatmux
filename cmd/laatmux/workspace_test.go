@@ -695,13 +695,13 @@ func TestOriginOfRepoEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone := goneWorktrees(t)[0]
-	for _, c := range []struct{ k, v string }{
-		{"GIT_DIR", filepath.Join(other, ".git")},
-		{"GIT_DIR", filepath.Join(broken, ".git")},
-		{"GIT_COMMON_DIR", filepath.Join(other, ".git")},
-		{"GIT_CONFIG", file},
+	for _, c := range []struct{ name, k, v string }{
+		{"GIT_DIR", "GIT_DIR", filepath.Join(other, ".git")},
+		{"GIT_DIR unreadable", "GIT_DIR", filepath.Join(broken, ".git")},
+		{"GIT_COMMON_DIR", "GIT_COMMON_DIR", filepath.Join(other, ".git")},
+		{"GIT_CONFIG", "GIT_CONFIG", file},
 	} {
-		t.Run(c.k, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			t.Setenv(c.k, c.v)
 			if o, err := originOf(ctx, mine); err != nil || o != "git@x:o/mine.git" {
 				t.Errorf("a repository: %q %v", o, err)
