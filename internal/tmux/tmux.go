@@ -312,13 +312,17 @@ func PrintableLines(s string) string {
 
 // PrintablePath is err with its path as Printable shows it when err is
 // a bare *fs.PathError, as os's functions return, which names the path
-// as it is, and err otherwise: one that wraps a *fs.PathError is left
-// as it is, since rebuilding it would drop what wraps it. The rebuilt
-// error keeps the op and the cause, so errors.Is still finds
-// fs.ErrNotExist and the like.
+// as it is, or with both paths so when it is a bare *os.LinkError, as a
+// rename returns; err otherwise: one that wraps either is left as it
+// is, since rebuilding it would drop what wraps it. The rebuilt error
+// keeps the op and the cause, so errors.Is still finds fs.ErrNotExist
+// and the like.
 func PrintablePath(err error) error {
-	if pe, ok := err.(*fs.PathError); ok {
-		return &fs.PathError{Op: pe.Op, Path: Printable(pe.Path), Err: pe.Err}
+	switch e := err.(type) {
+	case *fs.PathError:
+		return &fs.PathError{Op: e.Op, Path: Printable(e.Path), Err: e.Err}
+	case *os.LinkError:
+		return &os.LinkError{Op: e.Op, Old: Printable(e.Old), New: Printable(e.New), Err: e.Err}
 	}
 	return err
 }

@@ -755,9 +755,10 @@ func TestErrorPrintable(t *testing.T) {
 	}
 }
 
-// PrintablePath quotes the path of a *fs.PathError and keeps its op and
-// cause; any other error, one that wraps a *fs.PathError among them, is
-// returned as it is, since rebuilding it would drop what wraps it.
+// PrintablePath quotes the path of a *fs.PathError and both of an
+// *os.LinkError, and keeps the op and the cause; any other error, one
+// that wraps either among them, is returned as it is, since rebuilding
+// it would drop what wraps it.
 func TestPrintablePath(t *testing.T) {
 	pe := &fs.PathError{Op: "open", Path: "/w/a\tb\x1b[31m/.git", Err: fs.ErrPermission}
 	got := PrintablePath(pe)
@@ -766,6 +767,17 @@ func TestPrintablePath(t *testing.T) {
 	}
 	if pe.Path != "/w/a\tb\x1b[31m/.git" {
 		t.Errorf("the original's path changed: %q", pe.Path)
+	}
+	le := &os.LinkError{Op: "renameat", Old: "d\tir/.tmp", New: "d\tir/f\x1b[1m", Err: fs.ErrExist}
+	got = PrintablePath(le)
+	if want := "renameat " + strconv.Quote(le.Old) + " " + strconv.Quote(le.New) + ": file already exists"; got.Error() != want || !errors.Is(got, fs.ErrExist) {
+		t.Errorf("PrintablePath = %v, want %s", got, want)
+	}
+	if le.Old != "d\tir/.tmp" || le.New != "d\tir/f\x1b[1m" {
+		t.Errorf("the original's paths changed: %q %q", le.Old, le.New)
+	}
+	if wrapped := fmt.Errorf("x: %w", le); PrintablePath(wrapped) != wrapped {
+		t.Errorf("a wrapping error rebuilt")
 	}
 	wrapped := fmt.Errorf("x: %w", pe)
 	if got := PrintablePath(wrapped); got != wrapped {

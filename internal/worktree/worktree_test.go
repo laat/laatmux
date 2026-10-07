@@ -530,7 +530,6 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	quoted := func(err error, want string) bool {
 		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
 	}
-	open := openQuote
 	// A copy pattern, which a repository's .laatmux.yaml may spell with
 	// any byte, is named quoted when it matches nothing.
 	pattern := "no\tsuch*\x1b.env"
@@ -663,7 +662,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	// message after it names the root too, and its line is quoted. git
 	// itself turns the ESC into ?, and keeps the tab.
 	write(t, filepath.Join(elsewhere, "dirt"), "x")
-	if _, err := Remove(f.ctx, c, elsewhere, false); !quoted(err, "git worktree remove "+strconv.Quote(elsewhere)+": "+open("fatal: '"+filepath.Join(base, "else\twhere"))) || !strings.Contains(err.Error(), "contains modified or untracked files") || strings.Contains(err.Error(), "\n") {
+	if _, err := Remove(f.ctx, c, elsewhere, false); !quoted(err, "git worktree remove "+strconv.Quote(elsewhere)+": "+openQuote("fatal: '"+filepath.Join(base, "else\twhere"))) || !strings.Contains(err.Error(), "contains modified or untracked files") || strings.Contains(err.Error(), "\n") {
 		t.Errorf("remove: %v", err)
 	}
 	// A root under the worktrees directory whose .git is not a worktree's.
@@ -736,8 +735,10 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	// A directory that is gone: git cannot be run in it, and os's error
 	// names it.
 	gone := filepath.Join(base, "go\tne\x1b[33m")
-	if _, err := git(f.ctx, gone, "status"); !quoted(err, "git status: "+openQuote("chdir "+gone+": ")) {
-		t.Errorf("git in a directory gone: %v", err)
+	for _, dir := range []string{gone, filepath.Join(base, "new\nline")} {
+		if _, err := git(f.ctx, dir, "status"); err == nil || err.Error() != "git status: chdir "+strconv.Quote(dir)+": no such file or directory" {
+			t.Errorf("git in a directory gone: %v", err)
+		}
 	}
 	var out []string
 	report := func(_, state, detail string) {
@@ -793,6 +794,12 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	}
 	if err := os.Remove(markers); err != nil {
 		t.Fatal(err)
+	}
+	// A checkout whose .git/worktrees cannot be resolved, its name too
+	// long for the file system.
+	long := filepath.Join(base, "lo\tng\x1b"+strings.Repeat("x", 300))
+	if _, err := pointsBack(a.Root, long); !quoted(err, "lstat "+strconv.Quote(long)+": ") || !errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Errorf("points back to a checkout whose name is too long: %v", err)
 	}
 	// A repos directory that cannot be read, a file.
 	file := filepath.Join(base, "fi\tle\x1b[34m")

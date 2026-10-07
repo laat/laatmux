@@ -655,7 +655,9 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
-			msg = err.Error()
+			// The exit status, or os's error when git could not be
+			// started, which names a dir that cannot be entered.
+			msg = tmux.PrintablePath(err).Error()
 		}
 		return out.String(), &gitError{args: args, msg: msg, err: err}
 	}
