@@ -196,26 +196,76 @@ func TestExchangeAndRefused(t *testing.T) {
 }
 
 // SSH's argv for each kind of command laatmux runs over ssh, as the
-// sites wrote them by hand before: the options in a fixed order, the
+// sites wrote them by hand before: the options in a fixed order, --, the
 // alias, the command as one argument.
 func TestSSHArgv(t *testing.T) {
 	cases := []struct {
 		o    SSHOptions
 		want []string
 	}{
-		{bridgeSSH, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "vm", "laatmux bridge"}},
-		{SSHOptions{ConnectTimeout: 10 * time.Second, KeepAlive: 5 * time.Second, KeepAliveCount: 2}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "vm", "laatmux bridge"}},
-		{SSHOptions{ConnectTimeout: 15 * time.Second}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "vm", "laatmux bridge"}},
-		{SSHOptions{TTY: true, KeepAlive: 15 * time.Second, KeepAliveCount: 3}, []string{"ssh", "-t", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "vm", "laatmux bridge"}},
-		{SSHOptions{TTY: true}, []string{"ssh", "-t", "vm", "laatmux bridge"}},
+		{bridgeSSH, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", "vm", "laatmux bridge"}},
+		{SSHOptions{ConnectTimeout: 10 * time.Second, KeepAlive: 5 * time.Second, KeepAliveCount: 2}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "--", "vm", "laatmux bridge"}},
+		{SSHOptions{ConnectTimeout: 15 * time.Second}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", "vm", "laatmux bridge"}},
+		{SSHOptions{TTY: true, KeepAlive: 15 * time.Second, KeepAliveCount: 3}, []string{"ssh", "-t", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", "vm", "laatmux bridge"}},
+		{SSHOptions{TTY: true}, []string{"ssh", "-t", "--", "vm", "laatmux bridge"}},
 		// A keepalive without a count leaves ssh's count; fractions of
 		// a second round up rather than to 0, which would mean none.
-		{SSHOptions{KeepAlive: 15 * time.Second}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "vm", "laatmux bridge"}},
-		{SSHOptions{ConnectTimeout: 500 * time.Millisecond, KeepAlive: 1500 * time.Millisecond, KeepAliveCount: 1}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=1", "vm", "laatmux bridge"}},
+		{SSHOptions{KeepAlive: 15 * time.Second}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "--", "vm", "laatmux bridge"}},
+		{SSHOptions{ConnectTimeout: 500 * time.Millisecond, KeepAlive: 1500 * time.Millisecond, KeepAliveCount: 1}, []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=1", "--", "vm", "laatmux bridge"}},
 	}
 	for _, c := range cases {
 		if got := SSH("vm", c.o, "laatmux bridge"); !slices.Equal(got, c.want) {
 			t.Errorf("SSH(%+v):\n got %q\nwant %q", c.o, got, c.want)
+		}
+	}
+	// An alias or a command that starts with - comes after the --, where
+	// ssh reads it as the destination or the command, not as an option.
+	for _, c := range []struct {
+		alias, command string
+		want           []string
+	}{
+		{"-oProxyCommand=true", "laatmux bridge", []string{"ssh", "-t", "--", "-oProxyCommand=true", "laatmux bridge"}},
+		{"u@vm", "-oPort=2222", []string{"ssh", "-t", "--", "u@vm", "-oPort=2222"}},
+	} {
+		if got := SSH(c.alias, SSHOptions{TTY: true}, c.command); !slices.Equal(got, c.want) {
+			t.Errorf("SSH(%q, %q):\n got %q\nwant %q", c.alias, c.command, got, c.want)
+		}
+	}
+}
+
+// ssh itself reads SSH's argv as meant: the options before the --, the
+// alias after it as the destination, a user@ included, and the command
+// not as an option, as ssh would read a word that starts with - after
+// the alias without the --. ssh -G prints the configuration it would
+// connect with and exits without connecting; -F /dev/null leaves the
+// user's and the system's ssh config out. Where ssh cannot print a
+// configuration at all, an ssh without -G or a uid with no passwd entry,
+// the test is skipped with ssh's reason.
+func TestSSHArgvAsSSHReadsIt(t *testing.T) {
+	if out, err := exec.Command("ssh", "-G", "-F", "/dev/null", "probe.invalid").CombinedOutput(); err != nil {
+		t.Skipf("ssh -G does not run here: %v %s", err, out)
+	}
+	for _, c := range []struct {
+		alias string
+		o     SSHOptions
+		want  []string
+	}{
+		{"box.invalid", bridgeSSH, []string{"hostname box.invalid", "batchmode yes", "requesttty false", "serveraliveinterval 15", "serveralivecountmax 3", "port 22"}},
+		{"u@box.invalid", SSHOptions{TTY: true, ConnectTimeout: 10 * time.Second}, []string{"user u", "hostname box.invalid", "batchmode no", "requesttty true", "connecttimeout 10", "port 22"}},
+	} {
+		argv := SSH(c.alias, c.o, "-oPort=2222")
+		var stderr strings.Builder
+		cmd := exec.Command(argv[0], append([]string{"-G", "-F", "/dev/null"}, argv[1:]...)...)
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%q: %v %s", argv, err, stderr.String())
+		}
+		lines := strings.Split(string(out), "\n")
+		for _, w := range c.want {
+			if !slices.Contains(lines, w) {
+				t.Errorf("%q: ssh -G has no %q", argv, w)
+			}
 		}
 	}
 }

@@ -183,7 +183,6 @@ func TestParseLeadingDash(t *testing.T) {
 	refused := map[string]string{
 		"hosts:\n  - name: \"--\"\n":                  `hosts: name "--" is not a valid label`,
 		"hosts:\n  - name: -x\n":                      `hosts: name "-x" is not a valid label`,
-		"hosts:\n  - ssh: -box\n":                     `hosts: "-box" from ssh alias is not a valid label`,
 		"agents:\n  \"--\":\n    cmd: [x]\n":          `agents: "--" is not a valid label`,
 		"agents:\n  -x:\n    cmd: [x]\n":              `agents: "-x" is not a valid label`,
 		"repos:\n  - source: a/x\n    name: \"--\"\n": `repos: name "--" for a/x is not a valid label`,
@@ -207,6 +206,34 @@ func TestParseLeadingDash(t *testing.T) {
 	}
 	if len(c.Repos) != 2 || c.Repos[0].Name != "x--" || c.Repos[1].Name != "y-" {
 		t.Errorf("repos: %+v", c.Repos)
+	}
+}
+
+// ssh reads an alias that starts with - as an option, so the config
+// refuses one whether the host has a name or is named after the alias,
+// and says which host. An alias that is the name is not told to set
+// one, which would not help. A plain alias, a user@host alias and a -
+// after the first character are aliases.
+func TestParseSSHLeadingDash(t *testing.T) {
+	refused := map[string]string{
+		"hosts:\n  - name: mac\n  - name: vm\n    ssh: -oProxyCommand=true\n": `hosts: ssh "-oProxyCommand=true" for vm starts with -, which ssh reads as an option`,
+		"hosts:\n  - name: vm\n    ssh: \"--\"\n":                             `hosts: ssh "--" for vm starts with -`,
+		"hosts:\n  - ssh: -box\n":                                             `hosts: ssh "-box" starts with -`,
+	}
+	for in, want := range refused {
+		_, err := Parse([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "explicit name") {
+			t.Errorf("%q: error %v, want %q", in, err, want)
+		}
+	}
+	c, err := Parse([]byte("hosts:\n  - name: vm\n    ssh: box\n  - name: dev\n    ssh: u@dev.example.com\n  - ssh: b-\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, alias := range map[string]string{"vm": "box", "dev": "u@dev.example.com", "b-": "b-"} {
+		if h, ok := c.Find(name); !ok || h.SSH != alias {
+			t.Errorf("%s: %+v, want ssh %q", name, h, alias)
+		}
 	}
 }
 

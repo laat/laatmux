@@ -499,6 +499,15 @@ func (c *Config) validateHosts() error {
 				from = "ssh alias"
 			}
 		}
+		// ssh reads a word that starts with - as an option, so such an
+		// alias is never a host, whatever the name. Checked before the
+		// name, so an alias that is the name is not told to get one.
+		if strings.HasPrefix(h.SSH, "-") {
+			if from == "name" {
+				return fmt.Errorf("hosts: ssh %q for %s starts with -, which ssh reads as an option", h.SSH, h.Name)
+			}
+			return fmt.Errorf("hosts: ssh %q starts with -, which ssh reads as an option", h.SSH)
+		}
 		if !ValidLabel(h.Name) {
 			if from == "name" {
 				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, LabelRule)
