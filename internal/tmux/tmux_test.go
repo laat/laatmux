@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1439,32 +1440,51 @@ func TestNewSessionHandStartedHooks(t *testing.T) {
 // NewSession starts the managed server when it is not there, both with
 // no socket and over the socket a killed server left: tmux says "error
 // connecting to" for the first and "no server running" for the second,
-// and none of EnsureConfigured's commands would start one. tmux 3.6a
-// leaves its socket on kill-server too, so the first is removed here.
+// and none of EnsureConfigured's commands would start one. tmux leaves
+// its socket on kill-server too, so it is removed for the first. The
+// server is started with no config file: HOME and XDG_CONFIG_HOME point
+// at configs that set @laatmux_conf, which must not be there, and keep a
+// developer's own config out of the test server.
 func TestNewSessionColdStart(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
+	home := t.TempDir()
+	for _, conf := range []string{".tmux.conf", ".config/tmux/tmux.conf"} {
+		p := filepath.Join(home, conf)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("set-option -g @laatmux_conf loaded\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	s := LaatmuxServer
 	ctx := context.Background()
 	t.Cleanup(func() { s.Run(context.Background(), "kill-server") })
-	// A server the previous test killed may still be going.
+	path, ok := s.socket()
+	if !ok {
+		t.Fatal("no socket path")
+	}
+	// gone waits for nothing to listen on the socket: a server the
+	// previous test killed may still be going. It does not ask tmux, so
+	// what NoServer makes of each case is left to NewSession.
 	gone := func() {
 		t.Helper()
 		for i := 0; i < 50; i++ {
-			if _, err := s.Run(ctx, "list-sessions"); NoServer(err) {
+			c, err := net.Dial("unix", path)
+			if err != nil {
 				return
 			}
+			c.Close()
 			time.Sleep(20 * time.Millisecond)
 		}
 		t.Fatal("the managed server is still running")
 	}
 	s.Run(ctx, "kill-server")
 	gone()
-	path, ok := s.socket()
-	if !ok {
-		t.Fatal("no socket path")
-	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
@@ -1478,6 +1498,9 @@ func TestNewSessionColdStart(t *testing.T) {
 		}
 		if out, err := s.Run(ctx, "show-options", "-sv", "exit-empty"); err != nil || strings.TrimSpace(string(out)) != "off" {
 			t.Errorf("%s: exit-empty is %q %v, want off", name, out, err)
+		}
+		if out, err := s.Run(ctx, "show-options", "-gqv", "@laatmux_conf"); err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Errorf("%s: the server loaded a config: @laatmux_conf is %q %v", name, out, err)
 		}
 		// SIGKILL leaves the socket, and the pane's sleep is hung up.
 		if err := syscall.Kill(made.ServerPID, syscall.SIGKILL); err != nil {

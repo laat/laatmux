@@ -378,10 +378,11 @@ func PrintablePath(err error) error {
 }
 
 // NoServer reports whether the error means the server is not running. tmux
-// says "no server running on <path>" when the socket is missing, and "error
-// connecting to <path> (<reason>)" when it exists but cannot be used. Only a
-// stale socket counts as absent; "Permission denied" and other reasons are
-// failures to observe, not an empty server.
+// says "no server running on <path>" when nothing listens on the socket,
+// the stale one a server that exited leaves, and "error connecting to
+// <path> (<reason>)" when it cannot connect for another reason. Of those
+// only a missing socket or a refused connection counts; "Permission
+// denied" and other reasons are failures to observe, not an empty server.
 func NoServer(err error) bool {
 	var te *Error
 	if !errors.As(err, &te) {
