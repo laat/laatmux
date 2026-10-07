@@ -573,10 +573,10 @@ func TestPromptAdopts(t *testing.T) {
 		t.Fatalf("entry %+v", e)
 	}
 	// No session in the root: nothing to adopt.
-	ft.KillSession(context.Background(), first.Session)
+	ft.endSession(first.Session)
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "two", AgentName: "claude"})
 	third, _ := result(t, pc, "c3")
-	ft.KillSession(context.Background(), third.Session)
+	ft.endSession(third.Session)
 	if err := d.journal.create(entry{ID: "c4", Source: remote, Repo: "proj", Branch: "two", Allocated: true, HasPrompt: true, Root: third.Root, Result: &protocol.Message{OK: true}, TerminalAt: time.Now(), FirstSeen: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

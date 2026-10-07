@@ -24,13 +24,16 @@ import (
 
 // fakeServer is a tmux server, the managed one or the user's, with any
 // number of panes. NewSession adds a managed pane tagged with the root,
-// as the real one does, under an id no listed pane has; KillSession
-// removes it.
+// as the real one does, under a pane id and a session id no listed pane
+// has; KillSessionID removes the session's panes on the server it is
+// given and records its name in killed.
 type fakeServer struct {
-	mu     sync.Mutex
-	panes  []tmux.Pane
-	next   int
-	killed []string
+	mu       sync.Mutex
+	panes    []tmux.Pane
+	next     int // the last pane number given
+	sessions int // the last session number given
+	killed   []string
+	kills    []string // every id KillSessionID was asked for
 	// pastes records every Paste: the buffer, pane and text; pasteErr
 	// is returned instead when set; newErr fails NewSession; buffers
 	// is what DeleteBuffers was asked to clear.
@@ -118,31 +121,53 @@ func (f *fakeServer) NewSession(ctx context.Context, o tmux.NewSessionOpts) (tmu
 	if f.newErr != nil {
 		return tmux.Session{}, f.newErr
 	}
-	f.next++
-	id := "%" + strconv.Itoa(f.next)
-	for slices.ContainsFunc(f.panes, func(p tmux.Pane) bool { return p.ID == id }) {
-		f.next++
-		id = "%" + strconv.Itoa(f.next)
-	}
+	id := f.unused("%", &f.next, func(p tmux.Pane) string { return p.ID })
+	sid := f.unused("$", &f.sessions, func(p tmux.Pane) string { return p.SessionID })
 	server := f.server
 	if server == 0 {
 		server = 5
 	}
-	f.panes = append(f.panes, tmux.Pane{Session: o.Name, ID: id, Cwd: o.Cwd, CurrentPath: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
+	f.panes = append(f.panes, tmux.Pane{Session: o.Name, SessionID: sid, ID: id, Cwd: o.Cwd, CurrentPath: o.Cwd, Managed: true, Host: o.Host, ServerPID: server, TTY: "/dev/null"})
 	return tmux.Session{PaneID: id, ServerPID: server}, nil
 }
-func (f *fakeServer) KillSession(_ context.Context, name string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.killed = append(f.killed, name)
-	kept := f.panes[:0]
-	for _, p := range f.panes {
-		if p.Session != name {
-			kept = append(kept, p)
+
+// unused is prefix and the first number after *n that no listed pane
+// has for key; *n is advanced to it. The fake is locked.
+func (f *fakeServer) unused(prefix string, n *int, key func(tmux.Pane) string) string {
+	for {
+		*n++
+		id := prefix + strconv.Itoa(*n)
+		if !slices.ContainsFunc(f.panes, func(p tmux.Pane) bool { return key(p) == id }) {
+			return id
 		}
 	}
-	f.panes = kept
+}
+
+// KillSessionID refuses a name and a pid that is none, as the real one
+// does, and records every id it is asked for in kills. A session no
+// listed pane has under the id and the server pid is one gone, which is
+// no error.
+func (f *fakeServer) KillSessionID(_ context.Context, id string, serverPID int) error {
+	if !strings.HasPrefix(id, "$") || serverPID <= 0 {
+		return fmt.Errorf("tmux: session %q on server %d refused", id, serverPID)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kills = append(f.kills, id)
+	listed := func(p tmux.Pane) bool { return p.SessionID == id && p.ServerPID == serverPID }
+	if i := slices.IndexFunc(f.panes, listed); i >= 0 {
+		f.killed = append(f.killed, f.panes[i].Session)
+		f.panes = slices.DeleteFunc(f.panes, listed)
+	}
 	return nil
+}
+
+// endSession removes the panes of the session with the name, as the
+// session ending on its own does.
+func (f *fakeServer) endSession(name string) {
+	f.set(func() {
+		f.panes = slices.DeleteFunc(f.panes, func(p tmux.Pane) bool { return p.Session == name })
+	})
 }
 func (f *fakeServer) Paste(_ context.Context, buffer, pane, text string) error {
 	f.mu.Lock()
@@ -826,6 +851,44 @@ func TestRmPrunableWorktree(t *testing.T) {
 	d.pollWorktrees(context.Background())
 	if wts := d.worktreeRecords(); len(wts) != 0 {
 		t.Fatalf("worktrees %+v", wts)
+	}
+}
+
+// rm kills each managed session at the root by its id, on the server
+// it was listed on, and once when it has two panes there: a session
+// made by hand can be called c:d, which tmux 3.7 keeps and no target
+// reaches by name, or $1, which a target reads as the id of another
+// session, here one at another root that rm leaves. By name, c:d was
+// refused after git had removed the worktree, and rm failed.
+func TestRmKillsSessionsByID(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	repo, _ := store.Repo(remote)
+	added, err := store.Add(ctx, repo, "task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, other := added.Root, store.Dirs.Worktree("proj", "other")
+	ft.set(func() {
+		ft.panes = []tmux.Pane{
+			{Session: "c:d", SessionID: "$7", ID: "%1", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+			{Session: "c:d", SessionID: "$7", ID: "%2", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+			{Session: "$1", SessionID: "$8", ID: "%3", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+			{Session: "proj/other", SessionID: "$1", ID: "%4", Cwd: other, CurrentPath: other, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+		}
+	})
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root, Force: true})
+	if res, _ := result(t, pc, "r1"); !res.OK {
+		t.Fatalf("rm: %+v", res)
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatal("root still exists")
+	}
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if !slices.Equal(ft.killed, []string{"c:d", "$1"}) || !slices.Equal(ft.kills, []string{"$7", "$8"}) || len(ft.panes) != 1 || ft.panes[0].ID != "%4" {
+		t.Fatalf("killed %q by %q, panes left %+v", ft.killed, ft.kills, ft.panes)
 	}
 }
 

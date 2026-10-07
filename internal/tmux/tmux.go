@@ -381,6 +381,7 @@ func (s Server) socket() (path string, ok bool) {
 // Pane is one row of list-panes -a.
 type Pane struct {
 	Session        string
+	SessionID      string // $N, which reaches the session whatever its name
 	WindowIndex    int
 	WindowName     string
 	ID             string // %N
@@ -486,7 +487,7 @@ var paneVars = []string{
 	"#{session_name}", "#{window_index}", "#{window_name}", "#{pane_id}", "#{pane_tty}",
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
-	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}",
+	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}", "#{session_id}",
 }
 
 // ListPanes returns every pane on the server in one call. A server
@@ -520,6 +521,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.ServerPID, _ = strconv.Atoi(f[14])
 		p.InMode = f[15] == "1"
 		p.Own = f[16] != "" || f[17] != ""
+		p.SessionID = f[18]
 		panes = append(panes, p)
 	}
 	return panes, nil
@@ -1001,13 +1003,36 @@ func CheckTarget(name string) error {
 	return nil
 }
 
-// KillSession kills the session with exactly this name; one no target
-// reaches is refused, not another session killed.
-func (s Server) KillSession(ctx context.Context, name string) error {
-	if err := CheckTarget(name); err != nil {
-		return err
+// KillSessionID kills the session with the id, a $ and its number as
+// #{session_id} prints it, on the server whose #{pid} is serverPID: the
+// one it was listed on. An id reaches every session and nothing else:
+// tmux looks a target that starts with a $ up as an id only, never as a
+// name or a client's, so it kills a session whose name no target
+// reaches (CheckTarget), and tmux gives no other session the id of one
+// gone while the server runs. A server started since numbers its
+// sessions from $0 again, so if-shell -F runs the kill only when the
+// pid is the server's, in the same invocation and so on the same
+// server; on another one the session listed is gone with its own. A
+// session gone is no error either, and is told by what tmux says: can't
+// find session for the id, no current target when the server has no
+// session left, and NoServer when the server is gone. Anything but an
+// id is refused, not passed: an empty target is the current session,
+// and a window's or a pane's id is the session it is in.
+func (s Server) KillSessionID(ctx context.Context, id string, serverPID int) error {
+	if n, ok := strings.CutPrefix(id, "$"); !ok || n == "" || strings.Trim(n, "0123456789") != "" {
+		return fmt.Errorf("tmux: %q is not a session id", id)
 	}
-	_, err := s.Run(ctx, "kill-session", "-t", SessionTarget(name))
+	if serverPID <= 0 {
+		return fmt.Errorf("tmux: %d is not a server pid", serverPID)
+	}
+	// The kill is a command string, which tmux parses as a config line
+	// would and where it expands a $ and a name from the environment;
+	// quoted, the id is kept as it is.
+	_, err := s.Run(ctx, "if-shell", "-F", "#{==:#{pid},"+strconv.Itoa(serverPID)+"}", "kill-session -t '"+id+"'")
+	var te *Error
+	if NoServer(err) || errors.As(err, &te) && (te.Msg == "can't find session: "+id || te.Msg == "no current target") {
+		return nil
+	}
 	return err
 }
 
