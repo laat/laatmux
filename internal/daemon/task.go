@@ -419,6 +419,9 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	for _, s := range names {
 		ps := bySession[s]
 		if len(ps) == 1 && ps[0].Managed && ps[0].Cwd == r.root {
+			// s is any session of the managed server, one renamed by
+			// hand say, not SessionName's encoding; it is quoted with
+			// the root.
 			r.report(stage, protocol.StateSkip, "session "+tmux.Printable(s)+" runs in "+tmux.Printable(r.root))
 			r.res.Session, r.res.PaneID = s, ps[0].ID
 			if prompt == "" {
@@ -760,6 +763,7 @@ func (rn *taskRunner) adopt(ctx context.Context, root string) (tmux.Pane, string
 	verified := ok && st.obs.verified
 	rn.mu.Unlock()
 	if !verified {
+		// Any session of the managed server, as in agent's "runs in".
 		return tmux.Pane{}, "no agent to deliver to: no verified agent in session " + tmux.Printable(p.Session)
 	}
 	return p, ""

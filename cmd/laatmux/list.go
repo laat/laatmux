@@ -103,8 +103,10 @@ func renderLine(b *strings.Builder, n rows.Row, now time.Time) {
 	switch {
 	case n.Pending != nil:
 		note = n.Mark() + " " + n.State()
+		// The detail is the task's last progress line or its error, a
+		// setup command's output among them, in a one-line slot.
 		if d := n.Detail(); d != "" {
-			note += "  " + d
+			note += "  " + tmux.Printable(d)
 		}
 	case n.Orphaned:
 		_, root := protocol.SplitSessionKey(n.Local.Key)

@@ -517,21 +517,78 @@ func TestRunStreamingLongLine(t *testing.T) {
 	}
 }
 
-// A root with a tab and an ESC in it is in the worktree stage's errors,
-// in git's command line and in a failed read of its .git as
-// tmux.Printable shows it: raw, the tab would break the line and the
-// ESC reach the terminal of the client that prints it.
+// A root or checkout with a tab and an ESC in it, here from the repos
+// and worktrees directories' names, is in add's steps and errors, in
+// git's command line and in a failed read of a .git as tmux.Printable
+// shows it: raw, the tab would break the line and the ESC reach the
+// terminal of the client that prints it.
 func TestRootWithControlBytesQuoted(t *testing.T) {
 	f := newFixture(t)
-	if _, _, err := f.add("first"); err != nil {
+	base := filepath.Dir(f.store.Dirs.Repos)
+	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
+	f.repo = f.store.Repos[0]
+	quoted := func(err error, want string) bool {
+		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
+	}
+	// A copy pattern, which a repository's .laatmux.yaml may spell with
+	// any byte, is named quoted when it matches nothing.
+	pattern := "no\tsuch*\x1b[1m"
+	f.repo.Copy = []string{pattern}
+	a, steps, err := f.add("first")
+	if err != nil {
 		t.Fatal(err)
 	}
 	c := f.checkout()
-	raw := func(err error) bool { return strings.ContainsAny(err.Error(), "\t\x1b") }
-	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "else\twhere\x1b[31m")
+	q, qc := strconv.Quote(a.Root), strconv.Quote(c)
+	for _, want := range []step{
+		{protocol.StageResolve, protocol.StateDone, "checkout " + qc},
+		{protocol.StageClone, protocol.StateStart, "git clone " + f.remote + " " + qc},
+		{protocol.StageWorktree, protocol.StateStart, "git worktree add " + q + " first"},
+		{protocol.StageWorktree, protocol.StateDone, "worktree at " + q},
+		{protocol.StageCopy, protocol.StateSkip, "missing.txt not in " + qc},
+		{protocol.StageCopy, protocol.StateSkip, strconv.Quote(pattern) + " matches nothing in " + qc},
+	} {
+		if !hasStep(steps, want.stage, want.state, want.detail) {
+			t.Errorf("missing %q in %+v", want, steps)
+		}
+	}
+	for _, s := range steps {
+		if strings.ContainsAny(s.detail, "\t\x1b") {
+			t.Errorf("step with a raw control byte: %q", s.detail)
+		}
+	}
+	// A file the main checkout has, named with them (no [, which would
+	// make the entry a glob), is copied and named quoted.
+	file := "lit\tx\x1b.env"
+	write(t, filepath.Join(c, file), "x")
+	f.repo.Copy = []string{file}
+	if _, steps, err := f.add("copied"); err != nil || !hasStep(steps, protocol.StageCopy, protocol.StateDone, strconv.Quote(file)) {
+		t.Errorf("copy of %q: %v %+v", file, err, steps)
+	}
+	f.repo.Copy = nil
+
+	if _, _, err := f.add("main"); !quoted(err, "branch main is checked out in the main checkout "+qc) {
+		t.Errorf("add main: %v", err)
+	}
+	elsewhere := filepath.Join(base, "else\twhere\x1b[31m")
 	run(t, c, "git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
-	if _, _, err := f.add("outside"); err == nil || !strings.Contains(err.Error(), "branch outside is checked out at "+strconv.Quote(elsewhere)) || raw(err) {
+	if _, _, err := f.add("outside"); !quoted(err, "branch outside is checked out at "+strconv.Quote(elsewhere)) {
 		t.Errorf("add outside: %v", err)
+	}
+	wanted := f.store.Dirs.Worktree("proj", "wanted")
+	run(t, c, "git", "worktree", "add", "-q", "-b", "squatter", wanted, "main")
+	if _, _, err := f.add("wanted"); !quoted(err, strconv.Quote(wanted)+" is a worktree on branch squatter, not wanted") {
+		t.Errorf("add wanted: %v", err)
+	}
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(f.store.Dirs.Worktrees, "proj", "sym")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.add("sym/x"); !quoted(err, strconv.Quote(f.store.Dirs.Worktree("proj", "sym/x"))+" resolves outside the worktrees directory "+strconv.Quote(f.store.Dirs.Worktrees)) {
+		t.Errorf("add sym/x: %v", err)
 	}
 	// git refuses to remove a worktree with an untracked file in it, and
 	// the error names the command with the root quoted; git's own
@@ -540,18 +597,37 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	if _, err := Remove(f.ctx, c, elsewhere, false); err == nil || !strings.HasPrefix(err.Error(), "git worktree remove "+strconv.Quote(elsewhere)+": ") {
 		t.Errorf("remove: %v", err)
 	}
-	if os.Getuid() == 0 {
-		return // root reads the .git whatever its mode
+	// A root under the worktrees directory whose .git is not a worktree's.
+	dotgit := filepath.Join(a.Root, ".git")
+	saved, err := os.ReadFile(dotgit)
+	if err != nil {
+		t.Fatal(err)
 	}
-	odd := filepath.Join(f.store.Dirs.Worktrees, "proj", "de\ttached\x1b[1m")
-	run(t, c, "git", "worktree", "add", "-q", "--detach", odd, "main")
-	dotgit := filepath.Join(odd, ".git")
+	write(t, dotgit, "not a gitdir line\n")
+	if _, _, _, err := f.store.Find(f.ctx, a.Root); !quoted(err, strconv.Quote(dotgit)+" is not a worktree's .git file") {
+		t.Errorf("find with a bad .git: %v", err)
+	}
+	write(t, dotgit, string(saved))
+
+	if os.Getuid() == 0 {
+		return // root reads what it likes whatever the mode
+	}
 	if err := os.Chmod(dotgit, 0); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(dotgit, 0o644) })
-	if _, _, _, err := f.store.Find(f.ctx, odd); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote(dotgit)+": open "+strconv.Quote(dotgit)+": ") || raw(err) || !errors.Is(err, fs.ErrPermission) {
-		t.Errorf("find: %v", err)
+	if _, _, _, err := f.store.Find(f.ctx, a.Root); !quoted(err, strconv.Quote(dotgit)+": open "+strconv.Quote(dotgit)+": ") || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("find with an unreadable .git: %v", err)
+	}
+	gitDir := filepath.Join(c, ".git")
+	if err := os.Chmod(gitDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(gitDir, 0o755) })
+	f.store.origins = map[string]originEntry{}
+	cfgFile := filepath.Join(gitDir, "config")
+	if _, _, err := f.store.Checkout(f.ctx, f.repo); !quoted(err, qc+": stat "+strconv.Quote(cfgFile)+": ") || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("checkout with an unreadable .git: %v", err)
 	}
 }
 

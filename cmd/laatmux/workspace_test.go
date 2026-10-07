@@ -239,13 +239,15 @@ func TestRenderUnclaimedHost(t *testing.T) {
 	}
 }
 
-// A detached worktree's label, the root of a gone one and a pane's
-// title are printed as tmux.Printable shows them: a directory can be
-// named with a tab or an ESC, and a program in the pane sets its title.
+// A detached worktree's label, the root of a gone one, a pane's title
+// and a task's last progress line are printed as tmux.Printable shows
+// them: a directory can be named with a tab or an ESC, a program in the
+// pane sets its title, and a setup command writes the progress line.
 func TestRenderControlBytesQuoted(t *testing.T) {
 	m := merged.New()
-	odd, gone, title := "/r/a\tb\x1b[31m", "/r/g\tone\x1b[2J", "t\x1b]0;x\x07"
+	odd, gone, title, detail := "/r/a\tb\x1b[31m", "/r/g\tone\x1b[2J", "t\x1b]0;x\x07", "out\x1b[1mput\tline"
 	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Pendings: []protocol.Pending{{ID: "add-z", Host: "vm", EnvironmentID: "env1", Source: "s", Repo: "proj", Branch: "z", Taken: true, Sent: true, Reachable: true, Stage: protocol.StageSetup, State: protocol.StateOutput, Detail: detail}},
 		Hosts:    []protocol.HostStatus{{Name: "vm", Connected: true, Listed: true, Version: "v", EnvironmentID: "env1", Capabilities: []string{protocol.CapWorktrees}}},
 		Sessions: []protocol.Session{{Name: "vm/proj/gone", Key: "env1/" + gone, Host: "vm"}},
 		Agents: []protocol.Agent{
@@ -254,7 +256,7 @@ func TestRenderControlBytesQuoted(t *testing.T) {
 		Worktrees: []protocol.Worktree{{ID: "env1/worktree/" + odd, EnvironmentID: "env1", Repo: "proj", Root: odd, Session: "proj/a"}},
 	})
 	out := render(m.Status(""))
-	for _, want := range []string{strconv.Quote("a\tb\x1b[31m") + " (vm)", "worktree gone " + strconv.Quote(gone), strconv.Quote(title)} {
+	for _, want := range []string{strconv.Quote("a\tb\x1b[31m") + " (vm)", "worktree gone " + strconv.Quote(gone), strconv.Quote(title), "adding: setup  " + strconv.Quote(detail)} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render lacks %q:\n%s", want, out)
 		}

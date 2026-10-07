@@ -626,21 +626,24 @@ func TestRmMismatchRefused(t *testing.T) {
 	}
 }
 
-// A root with a tab and an ESC in it, here from the worktrees
-// directory's name, is in add's progress and in rm's and run's
-// refusals as tmux.Printable shows it: raw, the tab would break the
-// client's line and the ESC reach its terminal.
+// A root with a tab and an ESC in it, here from the repos and worktrees
+// directories' names, is in add's progress, in rm's and run's refusals
+// and in a prompt's reasons as tmux.Printable shows it: raw, the tab
+// would break the client's line and the ESC reach its terminal. The
+// output lines of git and the setup commands are theirs, and raw.
 func TestRootWithControlBytesQuoted(t *testing.T) {
 	store, remote := newStore(t)
 	dirs := store.Dirs
-	dirs.Worktrees = filepath.Join(filepath.Dir(dirs.Worktrees), "work\ttrees\x1b[31m")
-	store = worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}})
+	base := filepath.Dir(dirs.Worktrees)
+	dirs.Repos = filepath.Join(base, "re\tpos\x1b[32m")
+	dirs.Worktrees = filepath.Join(base, "work\ttrees\x1b[31m")
+	store = worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}, {Source: "/nowhere/other.git", Name: "other"}})
 	d, ft := addDaemon(t, store)
 	pc := conn(t, d)
 	raw := func(s string) bool { return strings.ContainsAny(s, "\t\x1b") }
 
-	root := store.Dirs.Worktree("proj", "task")
-	q := strconv.Quote(root)
+	root, none := store.Dirs.Worktree("proj", "task"), store.Dirs.Worktree("proj", "none")
+	q, qnone, qcheckout := strconv.Quote(root), strconv.Quote(none), strconv.Quote(store.Dirs.Checkout("proj"))
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", Cmd: []string{"true"}})
 	res, progress := result(t, pc, "c1")
 	if !res.OK || res.Root != root {
@@ -654,8 +657,11 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 		progress = append(progress, p...)
 	}
 	for _, want := range [][3]string{
+		{protocol.StageResolve, protocol.StateDone, "checkout " + qcheckout},
+		{protocol.StageClone, protocol.StateStart, "git clone " + remote + " " + qcheckout},
 		{protocol.StageWorktree, protocol.StateStart, "git worktree add " + q + " task"},
 		{protocol.StageWorktree, protocol.StateDone, "worktree at " + q},
+		{protocol.StageCopy, protocol.StateSkip, ".envrc not in " + qcheckout},
 		{protocol.StageWorktree, protocol.StateSkip, "worktree registered at " + q},
 		{protocol.StageAgent, protocol.StateSkip, "session proj/task runs in " + q},
 	} {
@@ -664,30 +670,54 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 		}
 	}
 	for _, p := range progress {
-		if raw(p.Detail) {
+		if p.State != protocol.StateOutput && raw(p.Detail) {
 			t.Errorf("progress with a raw control byte: %q", p.Detail)
 		}
 	}
 
 	// The session with the name an add wants runs in a directory that
 	// has them too.
-	ft.mu.Lock()
-	ft.panes = append(ft.panes, tmux.Pane{Session: "proj/taken", ID: "%9", Cwd: "/else\twhere\x1b[1m", Managed: true})
-	ft.mu.Unlock()
+	elsewhere := "/else\twhere\x1b[1m"
+	ft.set(func() {
+		ft.panes = append(ft.panes, tmux.Pane{Session: "proj/taken", ID: "%9", Cwd: elsewhere, Managed: true})
+	})
 	for _, c := range []struct {
 		m    protocol.Message
 		want string
 	}{
-		{protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "taken", Cmd: []string{"true"}}, "session proj/taken runs in " + strconv.Quote("/else\twhere\x1b[1m") + ", not " + strconv.Quote(store.Dirs.Worktree("proj", "taken")) + "; name in use"},
+		{protocol.Message{Type: protocol.TypeAdd, ID: "c3", Repo: remote, Branch: "taken", Cmd: []string{"true"}}, "session proj/taken runs in " + strconv.Quote(elsewhere) + ", not " + strconv.Quote(store.Dirs.Worktree("proj", "taken")) + "; name in use"},
 		{protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "other", Root: root}, q + " is the worktree for branch task of proj, not other"},
-		{protocol.Message{Type: protocol.TypeRm, ID: "r2", Root: "/elsewhere"}, "/elsewhere is not under the worktrees directory " + strconv.Quote(dirs.Worktrees)},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r2", Root: elsewhere}, strconv.Quote(elsewhere) + " is not under the worktrees directory " + strconv.Quote(dirs.Worktrees)},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r3", Repo: "other", Root: root}, q + " is a worktree of proj, not other"},
+		{protocol.Message{Type: protocol.TypeRm, ID: "r4", Repo: remote, Branch: "task", Root: none}, "branch task of proj is checked out at " + q + ", not " + qnone},
 		{protocol.Message{Type: protocol.TypeRun, ID: "u1", Root: root, Branch: "other", Cmd: []string{"true"}}, q + " is the worktree for branch task, not other"},
-		{protocol.Message{Type: protocol.TypeRun, ID: "u2", Root: store.Dirs.Worktree("proj", "none"), Cmd: []string{"true"}}, strconv.Quote(store.Dirs.Worktree("proj", "none")) + " is not a worktree of a known repository"},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u2", Root: none, Cmd: []string{"true"}}, qnone + " is not a worktree of a known repository"},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u3", Root: elsewhere, Cmd: []string{"true"}}, strconv.Quote(elsewhere) + " is not under the worktrees directory " + strconv.Quote(dirs.Worktrees)},
+		{protocol.Message{Type: protocol.TypeRun, ID: "u4", Root: root, Repo: "other", Cmd: []string{"true"}}, q + " is a worktree of proj, not other"},
 	} {
 		pc.Write(c.m)
 		if res, _ := result(t, pc, c.m.ID); res.OK || !strings.Contains(res.Error, c.want) || raw(res.Error) {
 			t.Errorf("%s: %q, want %q", c.m.ID, res.Error, c.want)
 		}
+	}
+
+	// A prompt's reasons: the root is gone or another repository's, no
+	// session runs in it, or two do.
+	ctx := context.Background()
+	for _, c := range []struct{ got, want string }{
+		{d.tasks.worktreeReplaced(ctx, entry{Root: none, Source: remote, Branch: "none"}), "worktree replaced: " + qnone + " is gone"},
+		{d.tasks.worktreeReplaced(ctx, entry{Root: root, Source: "/nowhere/other.git", Branch: "task"}), "worktree replaced: " + q + " is now a worktree of proj"},
+		{func() string { _, r := d.tasks.adopt(ctx, none); return r }(), "no agent to deliver to: no managed session in " + qnone},
+	} {
+		if c.got != c.want {
+			t.Errorf("reason %q, want %q", c.got, c.want)
+		}
+	}
+	ft.set(func() {
+		ft.panes = append(ft.panes, tmux.Pane{Session: "proj/again", ID: "%8", Cwd: root, Managed: true})
+	})
+	if _, r := d.tasks.adopt(ctx, root); r != "no agent to deliver to: 2 managed sessions in "+q {
+		t.Errorf("reason %q", r)
 	}
 }
 

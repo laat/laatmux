@@ -97,9 +97,9 @@ func cmdServe(ctx context.Context, args []string) error {
 	logger := log.New(os.Stderr, "laatmux ", log.LstdFlags)
 	labels := make([]string, len(watched))
 	for i, s := range watched {
-		labels[i] = s.Label()
+		labels[i] = tmux.Printable(s.Label())
 	}
-	logger.Printf("serve %s env=%s tmux=%s listen=%s", version, envID, strings.Join(labels, ","), rt.Address)
+	logger.Printf("serve %s env=%s tmux=%s listen=%s", version, envID, strings.Join(labels, ","), tmux.Printable(rt.Address))
 	if store != nil {
 		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", tmux.Printable(store.Dirs.Repos), tmux.Printable(store.Dirs.Worktrees), len(store.Repos))
 	} else {

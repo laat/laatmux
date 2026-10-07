@@ -309,7 +309,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 			}
 		}
 		if matched == 0 {
-			report(stage, protocol.StateSkip, entry+" matches nothing in "+tmux.Printable(checkout))
+			report(stage, protocol.StateSkip, tmux.Printable(entry)+" matches nothing in "+tmux.Printable(checkout))
 		}
 	}
 
