@@ -201,47 +201,85 @@ func TestNotInstalled(t *testing.T) {
 }
 
 // The socket is found as tmux finds it, and NoSocket is nothing there:
-// a file there, or a path that cannot be checked, may be a server.
+// anything there, a path that cannot be checked, or a TMUX_TMPDIR that
+// does not resolve, may be a server.
 func TestNoSocket(t *testing.T) {
 	dir := t.TempDir()
+	real, err := filepath.EvalSymlinks(dir) // macOS's /var is a link
+	if err != nil {
+		t.Fatal(err)
+	}
 	uid := "tmux-" + strconv.Itoa(os.Getuid())
 	t.Setenv("TMUX_TMPDIR", dir)
 	t.Setenv("TMUX", "")
+	socket := func(s Server, want string) {
+		t.Helper()
+		if got, ok := s.socket(); !ok || got != want {
+			t.Errorf("%+v with TMUX %q, TMUX_TMPDIR %q: socket %q %v, want %q", s, os.Getenv("TMUX"), os.Getenv("TMUX_TMPDIR"), got, ok, want)
+		}
+	}
 	for _, c := range []struct {
 		s    Server
 		tmux string
 		want string
 	}{
-		{DefaultServer, "", filepath.Join(dir, uid, "default")},
-		{LaatmuxServer, "/s/other,1,0", filepath.Join(dir, uid, "laatmux")},
+		{DefaultServer, "", filepath.Join(real, uid, "default")},
+		{LaatmuxServer, "/s/other,1,0", filepath.Join(real, uid, "laatmux")},
 		{Server{Path: "/s/p", Name: "n"}, "", "/s/p"},
 		{Server{}, "/s/current,1,0", "/s/current"},
-		{Server{}, "", filepath.Join(dir, uid, "default")},
+		{Server{}, "", filepath.Join(real, uid, "default")},
 	} {
 		t.Setenv("TMUX", c.tmux)
-		if got := c.s.socket(); got != c.want {
-			t.Errorf("%+v with TMUX %q: socket %q, want %q", c.s, c.tmux, got, c.want)
-		}
+		socket(c.s, c.want)
 	}
 	t.Setenv("TMUX", "")
+	// Resolved before tmux-<uid> is added, as tmux's realpath does: a ..
+	// after a link goes up from the link's target.
+	if err := os.MkdirAll(filepath.Join(dir, "target", "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "case"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "target", "child"), filepath.Join(dir, "case", "link")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", dir+"/case/link/..")
+	socket(DefaultServer, filepath.Join(real, "target", uid, "default"))
+	t.Setenv("TMUX_TMPDIR", "")
+	socket(DefaultServer, filepath.Join("/tmp", uid, "default"))
+	t.Setenv("TMUX_TMPDIR", filepath.Join(dir, "missing"))
+	if got, ok := DefaultServer.socket(); ok || DefaultServer.NoSocket() {
+		t.Errorf("TMUX_TMPDIR that does not resolve: socket %q %v, NoSocket %v", got, ok, DefaultServer.NoSocket())
+	}
+	// One that is a file has no socket under it that tmux could make,
+	// and is not told for no socket.
 	file := filepath.Join(dir, "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, tmpdir := range []string{"", filepath.Join(dir, "missing"), file} {
-		t.Setenv("TMUX_TMPDIR", tmpdir)
-		if got, want := DefaultServer.socket(), filepath.Join("/tmp", uid, "default"); got != want {
-			t.Errorf("TMUX_TMPDIR %q: socket %q, want %q", tmpdir, got, want)
-		}
+	t.Setenv("TMUX_TMPDIR", file)
+	if DefaultServer.NoSocket() {
+		t.Error("TMUX_TMPDIR that is a file has no socket")
 	}
 	t.Setenv("TMUX_TMPDIR", dir)
 	if !DefaultServer.NoSocket() {
 		t.Error("nothing there is a socket")
 	}
-	if err := os.MkdirAll(filepath.Join(dir, uid), 0o700); err != nil {
+	sock := filepath.Join(dir, uid, "default")
+	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, uid, "default"), nil, 0o600); err != nil {
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), sock); err != nil {
+		t.Fatal(err)
+	}
+	if DefaultServer.NoSocket() {
+		t.Error("a dangling link at the socket is no socket")
+	}
+	if err := os.Remove(sock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if DefaultServer.NoSocket() {

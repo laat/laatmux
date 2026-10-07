@@ -206,33 +206,42 @@ func NotInstalled(err error) bool {
 // connect to for the server, so no server can be running on it: what
 // tmux says "no server running" for. It is how a caller with no tmux to
 // run tells a machine without a server from one whose server it cannot
-// reach. Anything there, a stale socket included, or a path that cannot
-// be checked, is not NoSocket.
+// reach. Anything there, a stale socket or a link included, a path that
+// cannot be checked, or one that cannot be told, is not NoSocket.
 func (s Server) NoSocket() bool {
-	_, err := os.Lstat(s.socket())
+	path, ok := s.socket()
+	if !ok {
+		return false
+	}
+	_, err := os.Lstat(path)
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// socket is the path tmux connects to for the server, found as tmux 3.2
-// and later find it: -S as given; with no selector, the socket TMUX
-// names; else the -L name, or default, in tmux-<uid> under TMUX_TMPDIR
-// when that is a directory, else under /tmp.
-func (s Server) socket() string {
+// socket is the path a stock tmux connects to for the server: -S as
+// given; with no selector, the socket TMUX names; else the -L name, or
+// default, in tmux-<uid> under TMUX_TMPDIR with its links resolved, as
+// tmux resolves it, or under /tmp when that is unset or empty. A
+// TMUX_TMPDIR that does not resolve cannot be told, so ok is false:
+// tmux 3.2 to 3.7 fall back to /tmp then, 3.1 and upstream's master fail.
+func (s Server) socket() (path string, ok bool) {
 	if s.Path != "" {
-		return s.Path
+		return s.Path, true
 	}
 	name := s.Name
 	if name == "" {
 		if v, _, _ := strings.Cut(os.Getenv("TMUX"), ","); v != "" {
-			return v
+			return v, true
 		}
 		name = "default"
 	}
-	dir := os.Getenv("TMUX_TMPDIR")
-	if fi, err := os.Stat(dir); dir == "" || err != nil || !fi.IsDir() {
-		dir = "/tmp"
+	dir := "/tmp"
+	if v := os.Getenv("TMUX_TMPDIR"); v != "" {
+		var err error
+		if dir, err = filepath.EvalSymlinks(v); err != nil {
+			return "", false
+		}
 	}
-	return filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), name)
+	return filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), name), true
 }
 
 // Pane is one row of list-panes -a.
