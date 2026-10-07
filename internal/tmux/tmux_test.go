@@ -1059,6 +1059,61 @@ func TestSessionTargets(t *testing.T) {
 	}
 }
 
+// Every pane is listed with its session's id, and KillSessionID kills
+// a session by it whatever the name: c:d, which tmux 3.7 keeps and
+// =c:d: takes for window d:x of session c, and $1, which as a target is
+// the session with the id $1, c:d here (c_d before tmux 3.7). A session
+// gone is an error, and anything but a session id is refused: the empty
+// target is the most recent session, a window's id and a pane's the
+// session they are in. Session c and its two windows are left.
+func TestKillSessionID(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	var made [][2]string // the pane id and session id each command printed
+	for _, args := range [][]string{
+		{"new-session", "-d", "-s", "c"},
+		{"new-window", "-d", "-t", "=c:", "-n", "d:x"},
+		{"new-session", "-d", "-s", "c:d"},
+		{"new-session", "-d", "-s", "$1"},
+	} {
+		out, err := s.Run(ctx, append(args, "-P", "-F", "#{pane_id} #{session_id}", "sleep 600")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pane, id, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+		made = append(made, [2]string{pane, id})
+	}
+	panes, err := s.ListPanes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != len(made) {
+		t.Fatalf("listed %d panes of %d: %+v", len(panes), len(made), panes)
+	}
+	for _, p := range panes {
+		if i := slices.IndexFunc(made, func(m [2]string) bool { return m[0] == p.ID }); i < 0 || p.SessionID != made[i][1] {
+			t.Errorf("pane %s of %q listed with the session id %q, made %q", p.ID, p.Session, p.SessionID, made)
+		}
+	}
+	for _, id := range []string{"", "c", "=c:", "$", "$1x", "@1", "%1"} {
+		if err := s.KillSessionID(ctx, id); err == nil || !strings.Contains(err.Error(), "not a session id") {
+			t.Errorf("KillSessionID %q: %v, want a refusal", id, err)
+		}
+	}
+	for _, m := range [][2]string{made[3], made[2]} {
+		if err := s.KillSessionID(ctx, m[1]); err != nil {
+			t.Errorf("KillSessionID %s: %v", m[1], err)
+		}
+		if err := s.KillSessionID(ctx, m[1]); err == nil {
+			t.Errorf("KillSessionID %s again: no error", m[1])
+		}
+	}
+	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name} #{session_windows}")
+	if err != nil || string(out) != "c 2\n" {
+		t.Errorf("sessions left %q %v, want c with 2 windows", out, err)
+	}
+}
+
 // CheckTarget refuses no name, a name with a : wherever it is, and one
 // that starts with a $; a . and a $ or % elsewhere are reached.
 func TestCheckTarget(t *testing.T) {

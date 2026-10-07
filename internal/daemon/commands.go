@@ -436,15 +436,19 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 			}
 			return err
 		}
+		// Each session is killed by its id, which reaches it whatever its
+		// name: a session made by hand can have a name no target reaches
+		// (tmux.CheckTarget), and a name no session has is looked up as a
+		// client's.
 		killed := map[string]bool{}
 		for _, p := range panes {
-			if !p.Managed || p.Cwd != root || killed[p.Session] {
+			if !p.Managed || p.Cwd != root || killed[p.SessionID] {
 				continue
 			}
-			if err := rn.managed.Tmux.KillSession(ctx, p.Session); err != nil {
+			if err := rn.managed.Tmux.KillSessionID(ctx, p.SessionID); err != nil {
 				return err
 			}
-			killed[p.Session] = true
+			killed[p.SessionID] = true
 		}
 		return nil
 	}()

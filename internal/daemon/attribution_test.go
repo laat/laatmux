@@ -508,8 +508,8 @@ func TestHomeSessionAndRm(t *testing.T) {
 		session := "proj/" + c.branch
 		ft.set(func() {
 			ft.panes = []tmux.Pane{
-				{Session: session, ID: "%1", Cwd: added.Root, CurrentPath: added.Root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
-				{Session: session, ID: "%2", CurrentPath: splitPath, ServerPID: 5, TTY: "/dev/null"},
+				{Session: session, SessionID: "$1", ID: "%1", Cwd: added.Root, CurrentPath: added.Root, Managed: true, ServerPID: 5, TTY: "/dev/null"},
+				{Session: session, SessionID: "$1", ID: "%2", CurrentPath: splitPath, ServerPID: 5, TTY: "/dev/null"},
 			}
 		})
 		d.pollWorktrees(ctx)
