@@ -374,7 +374,8 @@ func Load() (Config, error) {
 
 // Parse reads config from bytes and validates it. Host names, agent keys
 // and repository names are labels: they end up in session names, ids and
-// directory names, so anything but A-Z a-z 0-9 _ - is rejected.
+// directory names, so anything but A-Z a-z 0-9 _ - is rejected, and so is
+// a leading -.
 func Parse(b []byte) (Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
@@ -498,9 +499,9 @@ func (c *Config) validateHosts() error {
 		}
 		if !ValidLabel(h.Name) {
 			if from == "name" {
-				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, labelChars)
+				return fmt.Errorf("hosts: name %q is not a valid label (%s)", h.Name, labelRule)
 			}
-			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, labelChars)
+			return fmt.Errorf("hosts: %q from %s is not a valid label (%s); set an explicit name", h.Name, from, labelRule)
 		}
 		if j, dup := seen[h.Name]; dup {
 			return fmt.Errorf("hosts: %s listed twice (entries %d and %d)", h.Name, j+1, i+1)
@@ -538,7 +539,7 @@ func pick(cond bool, a, b string) string {
 func (c *Config) validateAgents() error {
 	for name, a := range c.Agents {
 		if !ValidLabel(name) {
-			return fmt.Errorf("agents: %q is not a valid label (%s)", name, labelChars)
+			return fmt.Errorf("agents: %q is not a valid label (%s)", name, labelRule)
 		}
 		if len(a.Cmd) == 0 || a.Cmd[0] == "" {
 			return fmt.Errorf("agents: %s has no cmd", name)
@@ -562,14 +563,16 @@ func (c Config) AgentNames() []string {
 	return names
 }
 
-const labelChars = "A-Z a-z 0-9 _ -"
+const labelRule = "A-Z a-z 0-9 _ -, not starting with -"
 
 // ValidLabel reports whether s is a host name, repository name or agent
-// key: one or more of A-Z a-z 0-9 _ -. With / . : and % excluded, a
-// /-joined name parses unambiguously from the left and only branches need
-// encoding.
+// key: one or more of A-Z a-z 0-9 _ -, not starting with -. With / . : and
+// % excluded, a /-joined name parses unambiguously from the left and only
+// branches need encoding. Without a leading -, a label in a command
+// laatmux prints or builds is never read as a flag, or as the -- that
+// starts add's command override.
 func ValidLabel(s string) bool {
-	if s == "" {
+	if s == "" || s[0] == '-' {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
