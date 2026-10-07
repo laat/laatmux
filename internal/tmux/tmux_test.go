@@ -854,7 +854,8 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 // window a, and has-session, the attach and kill-session found no
 // session a.b. A name with a : no target reaches: =c:d: is a window of
 // session c, which c's window d:x is, so HasSession does not find c:d
-// and KillSession refuses it rather than kill c. That part runs on
+// and KillSession refuses it rather than kill c; so for no name, which
+// as =: is the most recent session, a.b here. That part runs on
 // every version, where tmux before 3.7 stores c:d as c_d; the rest is
 // skipped there, a.b being stored as a_b.
 func TestSessionTargets(t *testing.T) {
@@ -876,8 +877,15 @@ func TestSessionTargets(t *testing.T) {
 	if err := s.KillSession(ctx, "c:d"); err == nil || !strings.Contains(err.Error(), "has a :") {
 		t.Errorf("KillSession c:d: %v, want a refusal", err)
 	}
-	if !s.HasSession(ctx, "c") {
-		t.Fatal("session c is gone")
+	// No name is no session, where =: is the current one.
+	if s.HasSession(ctx, "") {
+		t.Error(`HasSession found ""`)
+	}
+	if err := s.KillSession(ctx, ""); err == nil {
+		t.Error(`KillSession "" killed a session`)
+	}
+	if !s.HasSession(ctx, "c") || !s.HasSession(ctx, "a.b") && !s.HasSession(ctx, "a_b") {
+		t.Fatal("a session is gone")
 	}
 	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
@@ -904,11 +912,11 @@ func TestSessionTargets(t *testing.T) {
 	}
 }
 
-// CheckTarget refuses a name with a : wherever it is, and one that
-// starts with a $; a . and a $ or % elsewhere are reached.
+// CheckTarget refuses no name, a name with a : wherever it is, and one
+// that starts with a $; a . and a $ or % elsewhere are reached.
 func TestCheckTarget(t *testing.T) {
 	for name, want := range map[string]string{
-		"a.b": "", "proj/v1%2e2": "", "a$b": "", "%pct": "", "=eq": "", "semi;": "", "x.": "",
+		"": "session name required", "a.b": "", "proj/v1%2e2": "", "a$b": "", "%pct": "", "=eq": "", "semi;": "", "x.": "",
 		"c:d": "has a :", ":x": "has a :", "x:": "has a :", "a.b:c": "has a :",
 		"$0": "starts with a $", "$x": "starts with a $",
 	} {

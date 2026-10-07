@@ -114,6 +114,7 @@ func TestJumpMode(t *testing.T) {
 		{vm, "laatmux", "c:d", 0, `vm: session "c:d" has a :`},
 		{mac, "default", "c:d", 0, `mac: session "c:d" has a :`},
 		{mac, "default", "$0", 0, `mac: session "$0" starts with a $`},
+		{mac, "laatmux", "", 0, "mac: session name required"},
 		{vm, "default", "c:d", 0, "vm/c:d: on vm's default tmux server"},
 	}
 	for _, c := range cases {

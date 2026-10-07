@@ -880,12 +880,12 @@ func cover(hide []bool, msg, f string) {
 }
 
 // SessionTarget is the target of any command for the session with
-// exactly this name, and a session gone is an error rather than another
-// session reached. The = asks for the session by its exact name and the
-// : ends the session's part of the target. Without the colon tmux reads
-// a . in the name as the separator of a window and a pane: tmux 3.7
-// keeps a . in a session name, and a session named a.b is reached by
-// =a.b: and not by =a.b, which looks for pane b of window a. A bare
+// exactly this name, and a session gone is an error rather than one its
+// name is a prefix of. The = asks for the session by its exact name and
+// the : ends the session's part of the target. Without the colon tmux
+// reads a . in the name as the separator of a window and a pane: tmux
+// 3.7 keeps a . in a session name, and a session named a.b is reached
+// by =a.b: and not by =a.b, which looks for pane b of window a. A bare
 // name may be taken as a pane or window of the current session before
 // it is a session, and as a session it is a prefix of after; the
 // current session is the one with the pane TMUX_PANE names on that
@@ -897,12 +897,15 @@ func cover(hide []bool, msg, f string) {
 func SessionTarget(name string) string { return "=" + name + ":" }
 
 // CheckTarget refuses a session name that SessionTarget does not reach,
-// and says why: one with a :, which tmux 3.7 keeps in a session name,
-// since a target's session part ends at its first :, so =c:d: is a
-// window of session c, its window named d:x say; and one that starts
-// with a $, which =$0: reads as the session id $0, another session's.
+// and says why: no name, since =: is the current session; one with a :,
+// which tmux 3.7 keeps in a session name, since a target's session part
+// ends at its first :, so =c:d: is a window of session c, its window
+// named d:x say; and one that starts with a $, which =$0: reads as the
+// session id $0, another session's.
 func CheckTarget(name string) error {
 	switch {
+	case name == "":
+		return errors.New("session name required")
 	case strings.Contains(name, ":"):
 		return fmt.Errorf("session %q has a :, at which tmux splits a target, so no target reaches it by name", name)
 	case strings.HasPrefix(name, "$"):
