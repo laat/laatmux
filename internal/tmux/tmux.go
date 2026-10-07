@@ -670,8 +670,11 @@ func shellJoin(argv []string) string {
 		// ~ and = are zsh's tilde and equals expansion: an unquoted "=lcl"
 		// makes zsh look up a command named lcl and abort the line. Under
 		// zsh's magic_equal_subst any word with an = is an assignment
-		// whose value is expanded, so a==ls is a=/bin/ls.
-		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~=") {
+		// whose value is expanded, so a==ls is a=/bin/ls. Under zsh's
+		// extended_glob ^ is glob negation, so ^x is every file but x and
+		// a^b aborts the line with no matches; the Bourne shell read ^ as
+		// a pipe.
+		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~=^") {
 			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
 		parts[i] = a

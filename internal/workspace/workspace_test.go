@@ -77,6 +77,11 @@ func TestShellCommand(t *testing.T) {
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
+	// The remote login shell may be a zsh with extended_glob, where a
+	// bare ^ is glob negation.
+	if got, want := ShellCommand(h, "/w/a^b"), `ssh -t -- vm 'cd '\''/w/a^b'\'' && exec "$SHELL" -l'`; got != want {
+		t.Fatalf("root with a ^:\n got %s\nwant %s", got, want)
+	}
 	if got, want := AttachCommand(h, "proj/x"), "ssh -t -o 'ServerAliveInterval=15' -o 'ServerAliveCountMax=3' -- vm 'tmux -u -L laatmux attach-session -t '\\''=proj/x'\\'''"; got != want {
 		t.Fatalf("remote attach:\n got %s\nwant %s", got, want)
 	}
