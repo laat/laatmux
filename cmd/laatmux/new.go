@@ -47,8 +47,9 @@ type newArgs struct {
 }
 
 // parseNewArgs reads the new command line. A name tmux would not store
-// as given is refused here, before a host is dialled; the daemon
-// refuses it again.
+// as given, and a command that starts with an environment assignment,
+// are refused here, before a host is dialled; the daemon refuses both
+// again.
 func parseNewArgs(args []string) (newArgs, error) {
 	var a newArgs
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)

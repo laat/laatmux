@@ -412,8 +412,9 @@ func TestNewSessionEncodedNames(t *testing.T) {
 
 // CheckSessionName names the character tmux would not store as given,
 // or Sep is made of, and takes every other one, a # and a ; at the end
-// included; the names SessionName computes for branches with a #, ., :,
-// \, ;, a control byte or a byte that is not UTF-8 pass it.
+// included. The name SessionName computes passes it for a branch with
+// any byte in it, and with a $, a C1 control character or a U+2063,
+// which EncodeBranch encodes.
 func TestCheckSessionName(t *testing.T) {
 	for name, want := range map[string]string{
 		"":             "session name required",
@@ -436,6 +437,7 @@ func TestCheckSessionName(t *testing.T) {
 		"a\u2028b":     "has the character U+2028, which tmux 3.3",
 		"a\u2029b":     "has the character U+2029",
 		"a\ufdd0b":     "has the character U+FDD0",
+		"a\ufdefb":     "has the character U+FDEF",
 		"a\ufffeb":     "has the character U+FFFE",
 		"a\U0010ffffb": "has the character U+10FFFF",
 	} {
@@ -448,7 +450,11 @@ func TestCheckSessionName(t *testing.T) {
 			t.Errorf("CheckSessionName(%q) = %v", name, err)
 		}
 	}
-	for _, branch := range []string{"fix#12", "x#{session_id}", "v1.2:rc", `a\b`, "semi;", "a\tb", "del\x7f", "bad\xffx"} {
+	branches := []string{"fix#12", "x#{session_id}", "#[x]", "v1.2:rc", `a\b`, "semi;", "$x", "a$b", "c1\u0085x", "c1\u009f", "a\u2063b", "\u2063\u2063", "ø-norsk", "a\U0001F600b"}
+	for b := 0; b < 256; b++ {
+		branches = append(branches, string([]byte{byte(b)}), "a"+string([]byte{byte(b)})+"b")
+	}
+	for _, branch := range branches {
 		if err := CheckSessionName(SessionName("proj", branch)); err != nil {
 			t.Errorf("branch %q: %v", branch, err)
 		}
