@@ -515,8 +515,10 @@ func TestEnsureAttachmentNames(t *testing.T) {
 // attach pane becomes a client of a.b: the attach target =a.b: reaches
 // it, where =a.b looked for pane b of window a and the attach exited at
 // once. Kill then kills the workspace session, mac/a.b on this tmux,
-// which =mac/a.b did not find either. A tmux before 3.7 stores the . as
-// _, and the test is skipped there.
+// which =mac/a.b did not find either. Neither reaches mac/a, which
+// =mac/a.b alone can: tmux reads its mac/a as a window, then as a
+// session. A tmux before 3.7 stores the . as _, and the test is
+// skipped there.
 func TestEnsureDottedManagedSession(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -530,10 +532,17 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	if m := strings.TrimSpace(string(out)); m != "a.b" {
 		t.Skipf("tmux before 3.7 stores a . in a session name as _: %q", m)
 	}
+	// A local session mac/a gets none of the new session's tags.
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/a", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
 	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "a.b", Name: AttachName("mac", "a.b"), Key: "env//r/a.b", Branch: "a.b"}
 	name, created, err := Ensure(ctx, spec)
 	if err != nil || !created || name != "mac/a.b" {
 		t.Fatalf("ensure: %q %v %v", name, created, err)
+	}
+	if locals, err := List(ctx); err != nil || len(Records(locals)) != 1 || Records(locals)[0].Name != "mac/a.b" {
+		t.Errorf("laatmux's sessions: %+v %v", locals, err)
 	}
 	var clients string
 	for i := 0; i < 250 && clients == ""; i++ {
@@ -549,7 +558,7 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	if err := Kill(ctx, name); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
-	if locals, err := List(ctx); err != nil || len(locals) != 0 {
+	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
 		t.Errorf("after the kill: %+v %v", locals, err)
 	}
 }
