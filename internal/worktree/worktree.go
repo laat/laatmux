@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,14 +46,17 @@ type Repo struct {
 
 // Store is one host's checkouts and worktrees. Copy is the host's own
 // copy rules for every worktree, from its config, applied after a
-// repository's own.
+// repository's own. Log, when set, says why a checkout's label has a
+// hash (see labels).
 type Store struct {
 	Dirs  config.Dirs // expanded for this host
 	Repos []Repo
 	Copy  []string
+	Log   *log.Logger
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
+	logged  map[string]bool        // the collisions logged, by directory and holder
 }
 
 type originEntry struct {
@@ -100,11 +104,12 @@ func (s *Store) BySource(src string) (Repo, bool) {
 }
 
 // Known finds a repository this host has, as List labels it: by label,
-// the config's name or the directory of a checkout the config does not
-// list, else by source, the config's or a checkout's origin. rm and run
-// name a repository by what a listing said, which covers checkouts the
-// config does not list. A label two repositories answer to is an error
-// rather than a guess: the source tells them apart.
+// the config's name or, for a checkout the config does not list, the
+// label labels gives it; else by source, the config's or a checkout's
+// origin. rm and run name a repository by what a listing said, which
+// covers checkouts the config does not list. A label two repositories
+// answer to, the config's name and a checkout's, is an error rather
+// than a guess: the source tells them apart.
 func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, error) {
 	cos, err := s.scan(ctx)
 	if err != nil {
@@ -116,12 +121,13 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 			named = append(named, r)
 		}
 	}
+	labels, _ := s.labels(cos)
 	for _, co := range cos {
-		if filepath.Base(co.dir) != nameOrSource {
+		if _, listed := s.BySource(co.origin); listed {
 			continue
 		}
-		if _, listed := s.BySource(co.origin); !listed {
-			named = append(named, s.label(co))
+		if r := labels[co.dir]; r.Name == nameOrSource {
+			named = append(named, r)
 		}
 	}
 	for i := 1; i < len(named); i++ {
@@ -137,7 +143,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 	}
 	for _, co := range cos {
 		if source.Same(co.origin, nameOrSource) {
-			return s.label(co), true, nil
+			return labels[co.dir], true, nil
 		}
 	}
 	return Repo{}, false, nil
@@ -203,13 +209,111 @@ func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 	return out, nil
 }
 
-// label is the repository a checkout holds: the config's entry for its
-// origin, else the origin under the checkout's directory name.
-func (s *Store) label(co checkout) Repo {
-	if r, ok := s.BySource(co.origin); ok {
-		return r
+// dirLabel is the label of a checkout the config does not list, from
+// its directory's name: the name itself when config.ValidLabel takes
+// it, else the name with every character the rule does not take, a byte
+// that is not UTF-8 and a leading - included, made a _: next.js is
+// next_js. A label is printed by ls and in rm's and run's refusals,
+// names the repository in jump's target, and is the repository's part
+// of the local session name a jump gives a worktree in a session other
+// than its home, which a control byte or a ":" would break, and a "."
+// before tmux 3.7. laatmux clones under a label, but a checkout cloned
+// into the repos directory by hand can be named anything, next.js by
+// git's default say. Such a checkout is labelled rather than left out:
+// an add finds a checkout by its origin, whatever its name, and
+// leaving it out would hide the worktrees made in it.
+func dirLabel(name string) string {
+	if config.ValidLabel(name) {
+		return name
 	}
-	return Repo{Source: co.origin, Name: filepath.Base(co.dir)}
+	out := []byte(strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, name))
+	if out[0] == '-' {
+		out[0] = '_'
+	}
+	return string(out)
+}
+
+// labels is the repository each checkout of a scan holds, by directory,
+// as List, Find and Known name it: the config's entry for its origin,
+// else the origin under the label dirLabel makes of its directory's
+// name. A label made of a name that is not one, next_js of next.js,
+// does not take one another repository has: the config's name for it,
+// or the label of a checkout the config does not list, whose directory
+// is named so or which comes first in directory order, next_js or
+// next:js say. The made label then has a - and a hash of its origin
+// after it, so every clone of one repository that loses the plain
+// label gets the same one; held names, by the directory of each such,
+// the holder of its plain label, a checkout, or the config's entry with
+// no directory. Every checkout is labelled, so a collision that appears
+// next to a checkout with worktrees never takes them out of the
+// listing, which the daemon would take for their removal. A directory
+// whose own name is the config's name for another repository keeps it,
+// as the user named it: Known refuses that label, naming both sources.
+func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]checkout) {
+	out = make(map[string]Repo, len(cos))
+	held = map[string]checkout{}
+	holders := map[string]checkout{} // by label, what has it
+	for _, r := range s.Repos {
+		holders[r.Name] = checkout{origin: r.Source}
+	}
+	var made []checkout // unlisted checkouts whose name is not a label
+	for _, co := range cos {
+		if r, listed := s.BySource(co.origin); listed {
+			out[co.dir] = r
+			continue
+		}
+		name := filepath.Base(co.dir)
+		if !config.ValidLabel(name) {
+			made = append(made, co)
+			continue
+		}
+		out[co.dir] = Repo{Source: co.origin, Name: name}
+		if _, taken := holders[name]; !taken {
+			holders[name] = co
+		}
+	}
+	for _, co := range made {
+		label := dirLabel(filepath.Base(co.dir))
+		h, taken := holders[label]
+		switch {
+		case !taken:
+			holders[label] = co
+		case !source.Same(h.origin, co.origin):
+			held[co.dir] = h
+			sum := sha256.Sum256([]byte(source.Key(co.origin)))
+			label += "-" + hex.EncodeToString(sum[:3])
+		}
+		out[co.dir] = Repo{Source: co.origin, Name: label}
+	}
+	return out, held
+}
+
+// collided logs, once per pair, that a checkout's label has a hash
+// because another repository has its plain label, and what settles it.
+func (s *Store) collided(co, holder checkout, label string) {
+	key := co.dir + "\x00" + holder.dir + "\x00" + holder.origin
+	s.mu.Lock()
+	seen := s.logged[key]
+	if !seen {
+		if s.logged == nil {
+			s.logged = map[string]bool{}
+		}
+		s.logged[key] = true
+	}
+	s.mu.Unlock()
+	if seen || s.Log == nil {
+		return
+	}
+	if holder.dir == "" {
+		s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is this host's config's name for %s; a name for it in the config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.origin))
+		return
+	}
+	s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is %s's, of another repository; a name for either in this host's config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.dir))
 }
 
 // linked reports whether git must be asked for a main checkout's
@@ -356,17 +460,20 @@ type Record struct {
 // List returns every worktree that lives under the worktrees directory
 // of every main checkout under the repos directory, whether or not the
 // config lists its repository: a checkout the config lists is labelled
-// with the config's name and source, any other with its directory name
-// and origin. Prunable entries, whose directory is gone, are left out,
-// as is the main checkout, which is not a worktree even when the repos
-// directory sits under the worktrees one. The repos directory is
-// scanned once; one checkout failing to list does not hide the others:
-// its error is returned alongside what was listed.
+// with the config's name and source, any other with its directory name,
+// made a label by dirLabel, and origin, a hash after it when another
+// repository has that label, logged once (see labels). Prunable entries,
+// whose directory is gone, are left out, as is the main checkout, which
+// is not a worktree even when the repos directory sits under the
+// worktrees one. The repos directory is scanned once; one checkout
+// failing to list does not hide the others: its error is returned
+// alongside what was listed.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
 	cos, err := s.scan(ctx)
 	if err != nil {
 		return nil, err
 	}
+	labels, held := s.labels(cos)
 	var records []Record
 	var errs []error
 	seen := map[string]bool{}
@@ -374,12 +481,15 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 		if !s.linked(co.dir) {
 			continue
 		}
+		r := labels[co.dir]
+		if h, ok := held[co.dir]; ok {
+			s.collided(co, h, r.Name)
+		}
 		entries, err := ListWorktrees(ctx, co.dir)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", tmux.Printable(co.dir), err))
 			continue
 		}
-		r := s.label(co)
 		for _, e := range entries {
 			// A root two checkouts register, one after the other's
 			// directory was deleted by hand, is listed once, for the
@@ -534,7 +644,8 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 			if mine, err := pointsBack(root, co.dir); err != nil {
 				return Record{}, "", false, err
 			} else if mine {
-				r := s.label(co)
+				labels, _ := s.labels(cos)
+				r := labels[co.dir]
 				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
 			}
 		}

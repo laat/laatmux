@@ -3,7 +3,10 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 )
 
 // notDelivered makes a task that ends needing the user: the add done,
@@ -701,5 +705,79 @@ func (f *relayFixture) awaitGone(t *testing.T, id string) {
 			t.Fatalf("%s kept", id)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A checkout the host's config does not list, cloned by hand as se.nt
+// and found by its origin for adds through a repository entry, keeps
+// its worktrees listed when a checkout named se_nt, of another
+// repository, appears and takes their label: they are listed under a
+// label with a hash of their origin, so a task that needs the user
+// does not go and one that handed over keeps its record, prompt and
+// all. Left out of the listing, the worktrees would read as removed.
+func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	c, _, _ := f.merged(t)
+	defer c.Close()
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	other := filepath.Join(t.TempDir(), "other.git")
+	git("clone", "-q", "--bare", f.source(), other)
+	git("clone", "-q", other, filepath.Join(f.store.Dirs.Repos, "se.nt"))
+	entry := &protocol.RepoEntry{Source: other, Name: "sent"}
+	sum := sha256.Sum256([]byte(source.Key(other)))
+	hashed := "se_nt-" + hex.EncodeToString(sum[:3])
+	for id, agent := range map[string]string{"n1": "claude", "h1": "argv"} {
+		if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: id, Relay: "vm", Repo: other, Name: "sent", Branch: id, RepoEntry: entry, AgentName: agent, Prompt: "made for " + id, SubmittedAt: time.Now()}); !res.OK {
+			t.Fatal(res.Error)
+		}
+	}
+	n := f.awaitRecord(t, "n1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	h := f.awaitRecord(t, "h1", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	if n.Prompt != protocol.DeliveryNotDelivered || n.Gone || h.PromptText != "made for h1" || n.Root != f.store.Dirs.Worktree("sent", "n1") {
+		t.Fatalf("records %+v %+v", n, h)
+	}
+	// The other checkout appears whole, by a rename, with an origin no
+	// config lists.
+	twin := filepath.Join(t.TempDir(), "se_nt")
+	git("clone", "-q", f.source(), twin)
+	git("-C", twin, "remote", "set-url", "origin", "/elsewhere/twin.git")
+	if err := os.Rename(twin, filepath.Join(f.store.Dirs.Repos, "se_nt")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		f.host.mu.Lock()
+		w, listed := f.host.worktrees[n.Root]
+		f.host.mu.Unlock()
+		if !listed || w.Repo == hashed {
+			break
+		}
+		if i > 500 {
+			t.Fatalf("the host's listing kept the worktree as %+v", w)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Listings later, both tasks are as they were.
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if got, ok := f.local.relay.get("n1"); !ok || got.Gone {
+			t.Fatalf("the task that needs the user went: %+v %v", got, ok)
+		}
+		if _, ok := f.local.relay.get("h1"); !ok {
+			t.Fatal("the task that handed over was dropped")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("h1"))); err != nil {
+		t.Fatalf("the handed-over task's file: %v", err)
+	}
+	f.host.mu.Lock()
+	w := f.host.worktrees[h.Root]
+	f.host.mu.Unlock()
+	if w.Repo != hashed {
+		t.Fatalf("the host lists the handed-over task's worktree as %+v", w)
 	}
 }
