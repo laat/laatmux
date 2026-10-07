@@ -209,16 +209,18 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 		return l.Name, false, ensureAttach(ctx, l.Name, s)
 	}
 	if l, ok := ByName(locals, s.Name); ok {
+		// A name, a root or a tag is printed as Printable shows it: a
+		// root is a directory's name, which can have a control byte.
 		switch {
 		case l.Workspace():
 			_, root := protocol.SplitSessionKey(l.Key)
-			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", s.Name, root, l.Host)
+			return "", false, fmt.Errorf("local session %s is the workspace for %s on %s; name in use", tmux.Printable(s.Name), tmux.Printable(root), tmux.Printable(l.Host))
 		case l.Attach == attach && s.Key != "":
 			return l.Name, false, adopt(ctx, l.Name, s)
 		case l.Attach != "":
-			return "", false, fmt.Errorf("local session %s is attached to %s; name in use", s.Name, l.Attach)
+			return "", false, fmt.Errorf("local session %s is attached to %s; name in use", tmux.Printable(s.Name), tmux.Printable(l.Attach))
 		default:
-			return "", false, fmt.Errorf("local session %s exists and is not laatmux's; name in use", s.Name)
+			return "", false, fmt.Errorf("local session %s exists and is not laatmux's; name in use", tmux.Printable(s.Name))
 		}
 	}
 	args := []string{"new-session", "-d", "-s", s.Name, "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}

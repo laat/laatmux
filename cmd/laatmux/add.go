@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -69,7 +70,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	// result that failed may still name a root, a removed one say, and
 	// that is not ready.
 	if res.Done {
-		fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, res.Branch, res.Root, res.Managed)
+		fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, res.Branch, tmux.Printable(res.Root), res.Managed)
 	}
 	// The delivery state is printed as soon as the host has said it,
 	// before any local failure, and the exit is 0 whatever it says when

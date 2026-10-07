@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -185,6 +186,86 @@ func TestRedactAndSubmitted(t *testing.T) {
 	var pe *PasteError
 	if e := (&PasteError{Step: "enter", Err: err}); !errors.As(fmt.Errorf("w: %w", e), &pe) || pe.Step != "enter" || !strings.HasPrefix(e.Error(), "paste (enter)") {
 		t.Fatalf("paste error %v", e)
+	}
+}
+
+// A prompt with a newline makes the argument it is in, and tmux's
+// message that repeats it, quoted, and the prompt is in them escaped:
+// Redact replaces it there too. So it does for a prompt with a " in an
+// argument another word's tab makes quoted.
+func TestRedactQuoted(t *testing.T) {
+	for _, c := range []struct {
+		secret string
+		argv   []string
+	}{
+		{"fix it\n\"now\"\tplease", []string{"claude", "fix it\n\"now\"\tplease"}},
+		{`fix it "now" please`, []string{"claude", "--dir", "/w/a\tb", `fix it "now" please`}},
+	} {
+		err := &Error{Args: []string{"new-session", "-d", "-s", "proj/x", shellJoin(c.argv), Next, "set-option", "-p", "@laatmux_cwd", "/w/a\tb"}, Msg: "failed: " + c.secret}
+		got := Redact(&SubmittedError{Err: err}, c.secret, "{prompt}").Error()
+		if strings.Contains(got, "fix it") || strings.Contains(got, "please") || strings.Count(got, "{prompt}") != 2 {
+			t.Errorf("%q: redacted %q", c.secret, got)
+		}
+		if strings.ContainsFunc(got, unicode.IsControl) {
+			t.Errorf("%q: a control byte in %q", c.secret, got)
+		}
+	}
+}
+
+// An argument or tmux's message with a control character, C0, DEL or
+// C1, or a byte that is not UTF-8 is printed quoted: raw, a tab or a
+// newline breaks the line and an ESC starts an escape sequence, here
+// one that sets the terminal's title. A plain one, with a non-ASCII
+// letter, a " or a \ in it, is printed as it is, and Next as the ; it
+// stands for. A cwd that is not there is named quoted the same way, and
+// is still not there to errors.Is.
+func TestErrorPrintable(t *testing.T) {
+	for in, want := range map[string]string{
+		"/w/proj/plain":     "/w/proj/plain",
+		"/w/blåbær":         "/w/blåbær",
+		`/w/a "b" \c`:       `/w/a "b" \c`,
+		"":                  "",
+		"a\tb":              `"a\tb"`,
+		"a\nb":              `"a\nb"`,
+		"/w/a\x1b]0;x\x07b": `"/w/a\x1b]0;x\ab"`,
+		"\x01":              `"\x01"`,
+		"\x1f":              `"\x1f"`,
+		"del\x7f":           `"del\x7f"`,
+		"a\xffb":            `"a\xffb"`,
+		"truncated\xe2\x82": `"truncated\xe2\x82"`,
+		"c1 \u009b31m":      `"c1 \u009b31m"`,
+		"blåbær\t\"q\"":     `"blåbær\t\"q\""`,
+		"sep" + Sep:         "sep" + Sep,
+	} {
+		if got := Printable(in); got != want {
+			t.Errorf("Printable(%q) = %s, want %s", in, got, want)
+		}
+	}
+	err := &Error{Args: []string{"set-option", "-t", "=mac/proj/x:", "@laatmux_workspace", "env//w/a\x1b]0;x\x07b", Next, "set-option", "@laatmux_branch", "plain", Next, "set-option", "@c", ";"}, Msg: "no such session: =a\tb:"}
+	want := `tmux set-option -t =mac/proj/x: @laatmux_workspace "env//w/a\x1b]0;x\ab" ; set-option @laatmux_branch plain ; set-option @c ;: "no such session: =a\tb:"`
+	if got := err.Error(); got != want {
+		t.Errorf("Error = %s, want %s", got, want)
+	}
+	gone := "/nonexistent/a\x1b]0;x\x07b"
+	_, cerr := LaatmuxServer.NewSession(context.Background(), NewSessionOpts{Name: "proj/x", Cwd: gone})
+	if want := "tmux: cwd: stat " + strconv.Quote(gone) + ": no such file or directory"; cerr == nil || cerr.Error() != want || !errors.Is(cerr, fs.ErrNotExist) {
+		t.Errorf("NewSession in a cwd not there: %v, want %s", cerr, want)
+	}
+}
+
+// A failure on a real server for a target with an ESC and a tab: tmux
+// repeats the target in its message, and the error prints both quoted,
+// with no control byte in it, while the fields keep them as they are.
+func TestErrorPrintableOnServer(t *testing.T) {
+	s := startManaged(t)
+	target := "=no\x1b]0;x\x07such\tsession:"
+	_, err := s.Run(context.Background(), "set-option", "-t", target, "@laatmux_k", "v")
+	var te *Error
+	if !errors.As(err, &te) || te.Args[2] != target {
+		t.Fatalf("set-option on no session: %#v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, strconv.Quote(target)) || strings.ContainsFunc(got, unicode.IsControl) {
+		t.Fatalf("Error = %q", got)
 	}
 }
 

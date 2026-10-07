@@ -16,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/term"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
@@ -435,7 +436,7 @@ func (d *dash) askRm(m *view.Model, force bool) {
 			with = fmt.Sprintf(" with its %d agents", n)
 		}
 	}
-	m.Ask(fmt.Sprintf("%s %s on %s (%s)%s? y/n", verb, rm.Describe(), rm.Host.Name, rm.Root, with), "rm")
+	m.Ask(fmt.Sprintf("%s %s on %s (%s)%s? y/n", verb, rm.Describe(), rm.Host.Name, tmux.Printable(rm.Root), with), "rm")
 }
 
 // Dismissable is a pending task that x drops: one that needs the user,
@@ -797,7 +798,7 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	var needs []string
 	if w.Branch == "" {
-		needs = append(needs, "a branch is checked out in "+w.Root)
+		needs = append(needs, "a branch is checked out in "+tmux.Printable(w.Root))
 	}
 	if !h.CanAdd() {
 		needs = append(needs, "host "+h.Name+" has repos and worktrees directories in the config")

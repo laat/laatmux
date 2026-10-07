@@ -3,9 +3,11 @@ package workspace
 import (
 	"context"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/tmux"
@@ -552,5 +554,40 @@ func TestEnsureKeyEndsInSemicolon(t *testing.T) {
 		if l, ok := FindWorktree(locals, "env", spec.Source, spec.Branch); !ok || l.Name != spec.Name {
 			t.Fatalf("%s: by branch: %+v %v", spec.Branch, l, ok)
 		}
+	}
+}
+
+// A spec whose name is held by the workspace of another root, a root
+// with an ESC ] 0 ; x BEL and a tab in it, is a name in use, and the
+// error names that root quoted, with no control byte in it: printed as
+// it is, the tab would break the line and the ESC sequence set the
+// terminal's title. The root is the one tmux reads back, which 3.4
+// gives with the ESC and BEL escaped but the tab as it is.
+func TestEnsureNameInUsePrintable(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m1", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	root := "/w/proj/a\x1b]0;x\x07b\tc"
+	held := Spec{Host: peer.Host{Name: "mac"}, Managed: "m1", Name: "mac/proj/x", Key: "env/" + root}
+	if _, created, err := Ensure(ctx, held); err != nil || !created {
+		t.Fatalf("the workspace of %q: %v %v", root, created, err)
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, ok := ByName(locals, held.Name)
+	if !ok || !l.Workspace() {
+		t.Fatalf("no workspace %s: %+v", held.Name, locals)
+	}
+	back := strings.TrimPrefix(l.Key, "env/")
+	_, _, err = Ensure(ctx, Spec{Host: held.Host, Managed: "m1", Name: held.Name, Key: "env//w/proj/other"})
+	if err == nil || !strings.Contains(err.Error(), "is the workspace for "+strconv.Quote(back)+" on mac; name in use") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
+		t.Fatalf("another root's workspace, read back as %q: %v", back, err)
 	}
 }
