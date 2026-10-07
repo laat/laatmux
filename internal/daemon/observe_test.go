@@ -400,13 +400,15 @@ func TestConnRefusals(t *testing.T) {
 	refused(protocol.Message{Type: protocol.TypeRun}, "command id required")
 	alive()
 	// A store and the managed server, but no journal: a prompt is
-	// refused for what it lacks, in order, and new answers with the
-	// session and its pane.
+	// refused for what it lacks, in order, a new whose command starts
+	// with an assignment is refused, and new answers with the session
+	// and its pane.
 	d = New(Config{EnvironmentID: "env", Targets: managed(onePane(pane, nil)), Store: &worktree.Store{}})
 	pc = conn(t, d)
 	refused(protocol.Message{Type: protocol.TypePrompt}, "command id required")
 	refused(protocol.Message{Type: protocol.TypePrompt, ID: "p"}, "this daemon has no task capability")
 	refused(protocol.Message{Type: protocol.TypeSelect, ID: "s"}, "pane id required")
+	refused(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x", Cmd: []string{"FOO=1", "claude"}}, "FOO=1 is an environment assignment, not a command; put env before it to set the variable, or ./ if it is a program's path")
 	if err := pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n", Name: "proj/x"}); err != nil {
 		t.Fatal(err)
 	}

@@ -609,9 +609,11 @@ func (s Server) ArgsBare(a ...string) []string { return s.args(a...) }
 func shellJoin(argv []string) string {
 	parts := make([]string, len(argv))
 	for i, a := range argv {
-		// Leading = and ~ are zsh equals and tilde expansion: an unquoted
-		// "=lcl" makes zsh look up a command named lcl and abort the line.
-		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~") || a[0] == '=' {
+		// ~ and = are zsh's tilde and equals expansion: an unquoted "=lcl"
+		// makes zsh look up a command named lcl and abort the line. Under
+		// zsh's magic_equal_subst any word with an = is an assignment
+		// whose value is expanded, so a==ls is a=/bin/ls.
+		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$`!*?[]{}()<>|&;#~=") {
 			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
 		parts[i] = a
@@ -621,8 +623,8 @@ func shellJoin(argv []string) string {
 
 // ShellJoin is the words as one shell line, each quoted when it needs
 // to be; the sidebar's hooks, keys and pane, the workspace's attach
-// commands, the ssh commands and the daemon's new-session line are
-// built with it.
+// commands, the ssh commands, the daemon's new-session line, the jump
+// hint's add line and the remote binary's word are built with it.
 func ShellJoin(argv []string) string { return shellJoin(argv) }
 
 // FormatLiteral is s as a tmux format that expands to s: a # is

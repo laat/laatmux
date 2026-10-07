@@ -23,14 +23,69 @@ import (
 	"github.com/laat/laatmux/internal/protocol"
 )
 
-func TestShellJoin(t *testing.T) {
-	got := shellJoin([]string{"claude", "--flag", "a b", "it's"})
-	want := `claude --flag 'a b' 'it'\''s'`
-	if got := shellJoin([]string{"tmux", "attach-session", "-t", "=lcl"}); got != `tmux attach-session -t '=lcl'` {
-		t.Fatalf("leading = not quoted: %s", got)
+// shellWords are words shellJoin must quote, one per character that
+// forces it, with the character inside the word, and words it must
+// leave bare: what git allows in a branch besides those characters,
+// non-ASCII letters included.
+// The set is spelled out here rather than read from the code, so a
+// character dropped from the code fails the test.
+func shellWords() (quoted, bare []string) {
+	for _, c := range " \t\n'\"\\$`!*?[]{}()<>|&;#~=" {
+		quoted = append(quoted, "a"+string(c)+"b")
 	}
-	if got != want {
+	// Under zsh's magic_equal_subst an unquoted a==ls is a=/bin/ls, a
+	// branch add would then make; =lcl is zsh's equals expansion.
+	quoted = append(quoted, "a==ls", "a/==ls", "=lcl", "")
+	bare = []string{"a%b", "a+b", "a,b", "a@b", "feature/x-1_2.3", "ABCXYZabcxyz0123456789", "blåbær"}
+	return quoted, bare
+}
+
+func TestShellJoin(t *testing.T) {
+	quoted, bare := shellWords()
+	for _, w := range quoted {
+		want := "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+		if got := shellJoin([]string{w}); got != want {
+			t.Errorf("%q: got %s want %s", w, got, want)
+		}
+	}
+	for _, w := range bare {
+		if got := shellJoin([]string{w}); got != w {
+			t.Errorf("%q quoted: %s", w, got)
+		}
+	}
+	if got, want := shellJoin([]string{"claude", "--flag", "a b", "it's"}), `claude --flag 'a b' 'it'\''s'`; got != want {
 		t.Fatalf("got %s want %s", got, want)
+	}
+}
+
+// The joined words reach a command as they were, through sh and through
+// zsh with magic_equal_subst, which expands the value of any unquoted
+// word with an =.
+func TestShellJoinRoundTrip(t *testing.T) {
+	quoted, bare := shellWords()
+	words := append(quoted, bare...)
+	line := `printf '%s\0' ` + shellJoin(words)
+	shells := [][]string{{"sh", "-c", line}}
+	if _, err := exec.LookPath("zsh"); err == nil {
+		// -f reads none of the user's startup files, so their options
+		// stay out; only the system's zshenv is read.
+		shells = append(shells, []string{"zsh", "-f", "-o", "magic_equal_subst", "-c", line})
+	} else {
+		t.Log("no zsh on PATH; the round trip runs through sh only")
+	}
+	for _, sh := range shells {
+		cmd := exec.Command(sh[0], sh[1:]...)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Errorf("%s: %v: %s", sh[0], err, stderr.String())
+			continue
+		}
+		got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+		if !slices.Equal(got, words) {
+			t.Errorf("%s printed %q, want %q", sh[0], got, words)
+		}
 	}
 }
 

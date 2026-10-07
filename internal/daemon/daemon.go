@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
+	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/detect"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/peer"
@@ -1116,6 +1117,11 @@ func (c *clientConn) newSession(m protocol.Message) error {
 	res := protocol.Message{Type: protocol.TypeResult, ID: m.ID}
 	if d.managed == nil {
 		res.Error = errNoManaged
+		return c.pc.Write(res)
+	}
+	// An older client does not check the command.
+	if err := config.CheckCmd(m.Cmd); err != nil {
+		res.Error = err.Error()
 		return c.pc.Write(res)
 	}
 	made, err := d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})

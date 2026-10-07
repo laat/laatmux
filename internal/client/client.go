@@ -21,6 +21,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Conn is an open, hello-completed connection to one daemon.
@@ -127,24 +128,17 @@ var HelloTimeout = 15 * time.Second
 // it whatever it does with quotes; anything else is quoted as one word,
 // a bare name included, which the shell then finds on its PATH. The
 // bridge and upgrade's install use the same word, so the binary the
-// bridge runs is the one upgrade replaces.
+// bridge runs is the one upgrade replaces. A word is quoted as
+// tmux.ShellJoin quotes it.
 func RemoteBin(bin string) string {
 	if bin == "" {
 		bin = "laatmux"
 	}
+	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
 	if rest, ok := strings.CutPrefix(bin, "~/"); ok {
-		return `"$HOME"/` + shellQuote(rest)
+		return `"$HOME"/` + quote(rest)
 	}
-	return shellQuote(bin)
-}
-
-// shellQuote makes s one word for a POSIX shell; a plain word stays as
-// it is.
-func shellQuote(s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~=") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return quote(bin)
 }
 
 // Connect completes the hello exchange over an open transport: r and w

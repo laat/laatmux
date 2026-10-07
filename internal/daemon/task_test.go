@@ -354,6 +354,32 @@ func TestAddLaunchInterrupted(t *testing.T) {
 	if res, _ := result(t, pc, "i4"); !res.OK || res.Prompt != protocol.DeliveryDelivered || res.Session != first.Session || len(ft.pastes) != 1 || ft.pastes[0].text != "late" {
 		t.Fatalf("i4: %+v pastes %+v", res, ft.pastes)
 	}
+	// An older daemon took a command that starts with an assignment.
+	// A resend after the upgrade keeps the recovery of a launch that is
+	// recorded, launching or launched, since nothing is launched again;
+	// one with no launch recorded is refused at resolve.
+	legacy := []string{"FOO=1", "claude"}
+	if err := d.journal.create(entry{ID: "i5", Source: remote, Repo: "proj", Branch: "five", Allocated: true, Root: store.Dirs.Worktree("proj", "five"), Stage: protocol.StageAgent, Launch: launchLaunching, Session: "proj/five", FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i5", Repo: remote, Branch: "five", Cmd: legacy})
+	if res, _ := result(t, pc, "i5"); !res.OK || res.Prompt != protocol.DeliveryNone || !strings.Contains(res.Error, "restarted during the launch") {
+		t.Fatalf("i5: %+v", res)
+	}
+	if err := d.journal.create(entry{ID: "i6", Source: remote, Repo: "proj", Branch: "three", Allocated: true, Root: first.Root, Stage: protocol.StageAgent, Launch: launchLaunched, Session: first.Session, PaneID: first.PaneID, ServerPID: 5, Delivery: protocol.DeliveryNone, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i6", Repo: remote, Branch: "three", Cmd: legacy})
+	if res, _ := result(t, pc, "i6"); !res.OK || res.Session != first.Session || res.Prompt != protocol.DeliveryNone {
+		t.Fatalf("i6: %+v", res)
+	}
+	if err := d.journal.create(entry{ID: "i7", Source: remote, Repo: "proj", Branch: "seven", Allocated: true, Stage: protocol.StageFetch, FirstSeen: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "i7", Repo: remote, Branch: "seven", Cmd: legacy})
+	if res, _ := result(t, pc, "i7"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "FOO=1 is an environment assignment") {
+		t.Fatalf("i7: %+v", res)
+	}
 }
 
 // rm marks the journal's entries at the root removed: a follow and a
