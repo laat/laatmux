@@ -538,7 +538,8 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 // given, or could not find by its name once made, and says which
 // character is the reason. tmux rewrites a name after expanding it as a
 // format, so no escape gets these through:
-//   - a . or a : is stored as _, and a \ doubled;
+//   - a . or a : is stored as _ by tmux before 3.7, and no target
+//     reaches a session with a : (CheckTarget); a \ is stored doubled;
 //   - a byte that is not UTF-8 and a control character are stored
 //     escaped, a C1 one by tmux 3.3 (U+0085 as \302\205);
 //   - tmux 3.3 built without utf8proc stores escaped a character its C
@@ -571,8 +572,10 @@ func CheckSessionName(name string) error {
 			why = fmt.Sprintf("the control character %U, which tmux stores escaped", r)
 		case widthless(r):
 			why = fmt.Sprintf("the character %U, which tmux 3.3 stores escaped", r)
-		case r == '.' || r == ':':
-			why = fmt.Sprintf("a %c, which tmux stores as _", r)
+		case r == '.':
+			why = "a ., which tmux before 3.7 stores as _"
+		case r == ':':
+			why = "a :, which tmux before 3.7 stores as _ and a target splits at"
 		case r == '\\':
 			why = `a \, which tmux stores doubled`
 		case r == '$':
@@ -887,13 +890,15 @@ func cover(hide []bool, msg, f string) {
 // 3.7 keeps a . in a session name, and a session named a.b is reached
 // by =a.b: and not by =a.b, which looks for pane b of window a. A bare
 // name may be taken as a pane or window of the current session before
-// it is a session, and as a session it is a prefix of after; the
-// current session is the one with the pane TMUX_PANE names on that
-// server, else the most recently active. =name without the colon still
-// falls back to a session prefix where a window is wanted, set-option
-// refuses it, and switch-client looks it up as a pane when the name has
-// a %, as an encoded branch does. A name CheckTarget refuses is reached
-// by no target.
+// it is taken as a session, and then for a session whose name starts
+// with it; the current session is the one with the pane TMUX_PANE
+// names on that server, else the most recently active. =name without
+// the colon still falls back to a session prefix where a window is
+// wanted, set-option refuses it, and switch-client looks it up as a
+// pane when the name has a %, as an encoded branch does. A name no
+// session has but a client does, its tty without /dev/ say, is that
+// client's session even so. A name CheckTarget refuses is reached by
+// no target by name.
 func SessionTarget(name string) string { return "=" + name + ":" }
 
 // CheckTarget refuses a session name that SessionTarget does not reach,
@@ -1001,7 +1006,8 @@ func FormatLiteral(s string) string {
 }
 
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
-// tmux does not keep "." or ":" in a session name, stores a "\" in one
+// tmux before 3.7 does not keep "." or ":" in a session name, no target
+// reaches a session with a ":" (CheckTarget), tmux stores a "\" in one
 // doubled and a control byte, DEL or a byte that is not part of a valid
 // UTF-8 sequence escaped by vis(3), tmux 3.3 a C1 control character
 // too, tmux 3.2 to 3.4 store a "$" before a letter, "_" or "{" as "\$",

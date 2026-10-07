@@ -854,10 +854,11 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 // window a, and has-session, the attach and kill-session found no
 // session a.b. A name with a : no target reaches: =c:d: is a window of
 // session c, which c's window d:x is, so HasSession does not find c:d
-// and KillSession refuses it rather than kill c; so for no name, which
-// as =: is the most recent session, a.b here. That part runs on
-// every version, where tmux before 3.7 stores c:d as c_d; the rest is
-// skipped there, a.b being stored as a_b.
+// and KillSession refuses it rather than kill c; so for $1, which as
+// =$1: is the session with the id $1, c:d here, and for no name, which
+// as =: is the most recent session. That part runs on every version,
+// where tmux before 3.7 stores c:d as c_d; the rest is skipped there,
+// a.b being stored as a_b.
 func TestSessionTargets(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -866,30 +867,26 @@ func TestSessionTargets(t *testing.T) {
 		{"new-window", "-d", "-t", "=c:", "-n", "d:x", "sleep 600"},
 		{"new-session", "-d", "-s", "c:d", "sleep 600"},
 		{"new-session", "-d", "-s", "a.b", "sleep 600"},
+		{"new-session", "-d", "-s", "$1", "sleep 600"},
 	} {
 		if _, err := s.Run(ctx, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s.HasSession(ctx, "c:d") {
-		t.Error("HasSession found c:d")
-	}
-	if err := s.KillSession(ctx, "c:d"); err == nil || !strings.Contains(err.Error(), "has a :") {
-		t.Errorf("KillSession c:d: %v, want a refusal", err)
-	}
-	// No name is no session, where =: is the current one.
-	if s.HasSession(ctx, "") {
-		t.Error(`HasSession found ""`)
-	}
-	if err := s.KillSession(ctx, ""); err == nil {
-		t.Error(`KillSession "" killed a session`)
-	}
-	if !s.HasSession(ctx, "c") || !s.HasSession(ctx, "a.b") && !s.HasSession(ctx, "a_b") {
-		t.Fatal("a session is gone")
+	for name, want := range map[string]string{"c:d": "has a :", "$1": "starts with a $", "": "session name required"} {
+		if s.HasSession(ctx, name) {
+			t.Errorf("HasSession found %q", name)
+		}
+		if err := s.KillSession(ctx, name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("KillSession %q: %v, want a refusal", name, err)
+		}
 	}
 	out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n := strings.Count(string(out), "\n"); n != 4 {
+		t.Fatalf("%d sessions left of 4: %q", n, out)
 	}
 	if !slices.Contains(strings.Split(strings.TrimSpace(string(out)), "\n"), "a.b") {
 		t.Skipf("tmux before 3.7 stores a . in a session name as _: %q", out)
@@ -1004,8 +1001,8 @@ func TestNewSessionEncodedNames(t *testing.T) {
 func TestCheckSessionName(t *testing.T) {
 	for name, want := range map[string]string{
 		"":             "session name required",
-		"a.b":          `session name "a.b" has a ., which tmux stores as _`,
-		"a:b":          `has a :, which tmux stores as _`,
+		"a.b":          `session name "a.b" has a ., which tmux before 3.7 stores as _`,
+		"a:b":          `has a :, which tmux before 3.7 stores as _ and a target splits at`,
 		`a\b`:          `has a \, which tmux stores doubled`,
 		"nul\x00":      "has the control character U+0000",
 		"tab\tx":       "has the control character U+0009",
