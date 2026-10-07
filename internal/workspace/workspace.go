@@ -4,8 +4,8 @@
 // A workspace is one worktree with one managed agent session and one local
 // session. The local session lives in the user's default tmux server and
 // is tagged with @laatmux_workspace = <environment_id>/<root>, the
-// workspace key, the root encoded where tmux would not give it back as
-// written (protocol.SessionKey), and @laatmux_host = the configured host
+// workspace key, written with the root encoded where tmux would not give
+// it back as given (encodeKey), and @laatmux_host = the configured host
 // name. The key is what a local session is matched on: neither the host
 // name nor the repository label is in it, so the session still matches
 // its workspace after either is renamed. The session name,
@@ -27,8 +27,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/peer"
@@ -85,17 +88,76 @@ func parseSessions(out string) []protocol.Session {
 		if len(f) < 7 || f[0] == "" {
 			continue
 		}
-		key := f[1]
-		if env, root := protocol.SplitSessionKey(key); root != "" {
-			// A key an earlier build wrote has the root as given, which
-			// tmux gave back as written where it has no byte SessionKey
-			// encodes: it reads as the key its root has now, so the
-			// session is still found by it.
-			key = protocol.SessionKey(env, root)
-		}
-		locals = append(locals, protocol.Session{Name: f[0], Key: key, Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
+		locals = append(locals, protocol.Session{Name: f[0], Key: DecodeKey(f[1]), Host: f[2], Attach: f[3], Settled: f[4] != "", Source: f[5], Branch: f[6]})
 	}
 	return locals
+}
+
+// encodeKey is the value @laatmux_workspace is set to for a key: the
+// key as given, or <environment_id>%<encoded root> for a root that tmux
+// or the reading of its listings would not give back as written. tmux
+// 3.4 and 3.5 print a control byte, DEL and a byte that is not part of
+// a valid UTF-8 sequence in an option value escaped by vis(3), a
+// newline ends the line a listing has the key on, and the line is
+// split at tmux.Sep, made of U+2063. Each byte of a control character,
+// a tab and a C1 one included, of a byte that is not UTF-8, of a U+2063
+// and of every "%" in the root is written "%" and two lowercase hex
+// digits, as tmux.EncodeBranch writes them. The environment id is hex,
+// so the byte after it says which form the value has: a value an
+// earlier build wrote is the key as given, whatever its root holds.
+func encodeKey(key string) string {
+	env, root := protocol.SplitSessionKey(key)
+	if enc := encodeRoot(root); enc != root {
+		return env + "%" + enc
+	}
+	return key
+}
+
+// DecodeKey is the key a @laatmux_workspace value stands for: the root
+// decoded where encodeKey encoded it, else the value as it is.
+func DecodeKey(v string) string {
+	i := strings.IndexAny(v, "/%")
+	if i < 0 || v[i] == '/' {
+		return v
+	}
+	return protocol.SessionKey(v[:i], decodeRoot(v[i+1:]))
+}
+
+// encodeRoot is a root as encodeKey writes it after the %.
+func encodeRoot(root string) string {
+	const hex = "0123456789abcdef"
+	var b strings.Builder
+	for i := 0; i < len(root); {
+		r, n := utf8.DecodeRuneInString(root[i:])
+		if r == utf8.RuneError && n == 1 || unicode.IsControl(r) || r == '\u2063' || r == '%' {
+			for _, c := range []byte(root[i : i+n]) {
+				b.WriteByte('%')
+				b.WriteByte(hex[c>>4])
+				b.WriteByte(hex[c&0xf])
+			}
+		} else {
+			b.WriteString(root[i : i+n])
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// decodeRoot reverses encodeRoot: "%" and two hex digits is the byte
+// they spell, and anything else is kept.
+func decodeRoot(enc string) string {
+	var b strings.Builder
+	for i := 0; i < len(enc); i++ {
+		if enc[i] == '%' && i+2 < len(enc) {
+			if v, err := strconv.ParseUint(enc[i+1:i+3], 16, 8); err == nil {
+				b.WriteByte(byte(v))
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(enc[i])
+	}
+	return b.String()
 }
 
 // Current is the session the calling process runs in: the pane's session
@@ -250,7 +312,7 @@ func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) 
 	}
 	args := []string{"new-session", "-d", "-s", tmux.FormatLiteral(s.Name), "-n", "agent", "-P", "-F", "#{pane_id}", placeholder}
 	if s.Key != "" {
-		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", s.Key)
+		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_workspace", encodeKey(s.Key))
 	} else {
 		args = append(args, tmux.Next, "set-option", "-t", sessionTarget(s.Name), "@laatmux_attach", attach)
 	}
@@ -293,7 +355,7 @@ func adopt(ctx context.Context, name string, s Spec) error {
 			}
 		}
 	}
-	args := []string{"set-option", "-t", sessionTarget(name), "@laatmux_workspace", s.Key,
+	args := []string{"set-option", "-t", sessionTarget(name), "@laatmux_workspace", encodeKey(s.Key),
 		tmux.Next, "set-option", "-u", "-t", sessionTarget(name), "@laatmux_attach", tmux.Next}
 	if _, err := Server.Run(ctx, append(args, tagArgs(name, s)...)...); err != nil {
 		return err

@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
@@ -67,31 +69,77 @@ func TestParseSessions(t *testing.T) {
 	}
 }
 
-// A key read back is the key SessionKey gives its root: one an earlier
-// build wrote with the root as given, a tab or a % in it, reads as the
-// encoded key, so the spec's key finds it; a % before two hex digits in
-// such a key is the root's own and not decoded; a key written encoded,
-// and one with nothing to encode, read as they are.
-func TestParseSessionsKeyWrittenAsGiven(t *testing.T) {
-	line := func(name, key string) string {
-		return strings.Join([]string{name, key, "mac", "", "", "", ""}, tmux.Sep)
-	}
-	for key, want := range map[string]string{
-		"env//w/tab\tx": protocol.SessionKey("env", "/w/tab\tx"),
-		"env//w/a%01b":  protocol.SessionKey("env", "/w/a%01b"),
-		"env%/w/a%01b":  protocol.SessionKey("env", "/w/a\x01b"),
-		"env//w/proj/x": "env//w/proj/x",
-		"env1/root/a":   "env1/root/a",
-		"env":           "env",
-		"env//w/a\xffb": protocol.SessionKey("env", "/w/a\xffb"),
+// A key is stored with its root encoded after a % where the root has a
+// byte tmux 3.4 prints escaped, a tab, a newline, a C1 control
+// character, a U+2063 or a %, so the value has none of them and reads
+// back as the key; any other key is stored as given. A value with a /
+// after the environment id is never decoded, so one an earlier build
+// wrote for a root with %01 in it still reads as that root's key.
+func TestKeyStoredEncoded(t *testing.T) {
+	for root, want := range map[string]string{
+		"/w/proj/fix/v1.2":                     "env//w/proj/fix/v1.2",
+		`/w/a\b$x#y;`:                          `env//w/a\b$x#y;`,
+		"/w/bl\u00e5b\u00e6r/\U0001f600\ufffd": "env//w/bl\u00e5b\u00e6r/\U0001f600\ufffd",
+		"/w/nb\u00a0x\u2064y\u2028":            "env//w/nb\u00a0x\u2064y\u2028",
+		"/w/a\x01b":                            "env%/w/a%01b",
+		"/w/tab\tx":                            "env%/w/tab%09x",
+		"/w/nl\nx":                             "env%/w/nl%0ax",
+		"/w/del\x7f":                           "env%/w/del%7f",
+		"/w/a\xffb":                            "env%/w/a%ffb",
+		"/w/c1\u0085x":                         "env%/w/c1%c2%85x",
+		"/w/sep\u2063\u2063x":                  "env%/w/sep%e2%81%a3%e2%81%a3x",
+		"/w/100%":                              "env%/w/100%25",
+		"/w/a%01b":                             "env%/w/a%2501b",
+		"/w/\xe2\x82":                          "env%/w/%e2%82",
 	} {
-		locals := parseSessions(line("s", key) + "\n")
-		if len(locals) != 1 || locals[0].Key != want {
-			t.Errorf("key %q parsed as %+v, want %q", key, locals, want)
+		key := protocol.SessionKey("env", root)
+		v := encodeKey(key)
+		if v != want {
+			t.Errorf("encodeKey(%q) = %q, want %q", key, v, want)
+		}
+		if back := DecodeKey(v); back != key {
+			t.Errorf("DecodeKey(%q) = %q, want %q", v, back, key)
 		}
 	}
-	if protocol.SessionKey("env", "/w/a%01b") == protocol.SessionKey("env", "/w/a\x01b") {
-		t.Error("a root with %01 in it and one with the byte have one key")
+	// Every byte alone, and every code point, round trips through a
+	// value that is UTF-8 with no control character and no U+2063.
+	check := func(root string) {
+		key := protocol.SessionKey("env", root)
+		v := encodeKey(key)
+		if back := DecodeKey(v); back != key {
+			t.Errorf("encodeKey(%q) = %q, decoded %q", key, v, back)
+		}
+		if !utf8.ValidString(v) || strings.IndexFunc(v, func(r rune) bool { return unicode.IsControl(r) || r == '\u2063' }) >= 0 {
+			t.Errorf("encodeKey(%q) = %q", key, v)
+		}
+	}
+	for c := 0; c < 256; c++ {
+		check("/w/" + string([]byte{byte(c)}))
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		check("/w/" + string(r))
+	}
+	// A value with a / is the key as it is, a %01 or a byte in it too;
+	// one with a % has the root decoded, a % before no two hex digits
+	// kept. parseSessions reads the key so.
+	for v, key := range map[string]string{
+		"env//w/a%01b":  "env//w/a%01b",
+		"env//w/a\x01b": "env//w/a\x01b",
+		"env1/root/a":   "env1/root/a",
+		"env%/w/a%01b":  "env//w/a\x01b",
+		"env%/w/a%1":    "env//w/a%1",
+		"env%/w/a%zzb":  "env//w/a%zzb",
+		"env%/w/a%FFb":  "env//w/a\xffb",
+		"env":           "env",
+		"":              "",
+	} {
+		if got := DecodeKey(v); got != key {
+			t.Errorf("DecodeKey(%q) = %q, want %q", v, got, key)
+		}
+		line := strings.Join([]string{"s", v, "mac", "", "", "", ""}, tmux.Sep)
+		if locals := parseSessions(line + "\n"); len(locals) != 1 || locals[0].Key != key {
+			t.Errorf("%q parsed as %+v, want key %q", v, locals, key)
+		}
 	}
 }
 

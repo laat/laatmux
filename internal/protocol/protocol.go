@@ -11,12 +11,9 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
 // Version is the protocol version this build speaks.
@@ -592,7 +589,7 @@ func (h HostStatus) Local() bool { return h.SSH == "" }
 // workspace package lists them all; only laatmux's are published.
 type Session struct {
 	Name    string `json:"name"`
-	Key     string `json:"key,omitempty"`     // @laatmux_workspace, as SessionKey writes it
+	Key     string `json:"key,omitempty"`     // @laatmux_workspace: <environment_id>/<root>
 	Host    string `json:"host,omitempty"`    // @laatmux_host
 	Source  string `json:"source,omitempty"`  // @laatmux_repo; "" when unknown
 	Branch  string `json:"branch,omitempty"`  // @laatmux_branch
@@ -608,74 +605,13 @@ func (s Session) Workspace() bool { return s.Key != "" }
 func (s Session) Laatmux() bool { return s.Key != "" || s.Attach != "" }
 
 // SessionKey is the workspace key a session carries: <environment_id>/
-// <root>, or <environment_id>%<encoded root> for a root that tmux or
-// laatmux's reading of its listings would not give back as written:
-// tmux 3.4 and 3.5 print a control byte, DEL and a byte that is not
-// part of a valid UTF-8 sequence in an option value escaped by vis(3),
-// a newline ends the line a listing has the key on, and laatmux splits
-// the line at tmux.Sep, made of U+2063. Each byte of a control
-// character, a tab and a C1 one included, of a byte that is not UTF-8,
-// of a U+2063 and of every "%" is written "%" and two lowercase hex
-// digits, as tmux.EncodeBranch writes them; any other root is written
-// as given. The environment id is hex, so the key parses from the left,
-// and the byte after the id says whether the root is encoded: a key an
-// earlier build wrote has the root as given after a /, whatever it
-// holds.
-func SessionKey(environmentID, root string) string {
-	if enc := encodeRoot(root); enc != root {
-		return environmentID + "%" + enc
-	}
-	return environmentID + "/" + root
-}
+// <root>. The environment id is hex, so the key parses from the left.
+func SessionKey(environmentID, root string) string { return environmentID + "/" + root }
 
-// SplitSessionKey returns the environment id and root of a key, the
-// root decoded where the key has it encoded.
+// SplitSessionKey returns the environment id and root of a key.
 func SplitSessionKey(key string) (environmentID, root string) {
-	i := strings.IndexAny(key, "/%")
-	switch {
-	case i < 0:
-		return key, ""
-	case key[i] == '%':
-		return key[:i], decodeRoot(key[i+1:])
-	}
-	return key[:i], key[i+1:]
-}
-
-// encodeRoot is a root as SessionKey writes it after a %.
-func encodeRoot(root string) string {
-	const hex = "0123456789abcdef"
-	var b strings.Builder
-	for i := 0; i < len(root); {
-		r, n := utf8.DecodeRuneInString(root[i:])
-		if r == utf8.RuneError && n == 1 || unicode.IsControl(r) || r == '\u2063' || r == '%' {
-			for _, c := range []byte(root[i : i+n]) {
-				b.WriteByte('%')
-				b.WriteByte(hex[c>>4])
-				b.WriteByte(hex[c&0xf])
-			}
-		} else {
-			b.WriteString(root[i : i+n])
-		}
-		i += n
-	}
-	return b.String()
-}
-
-// decodeRoot reverses encodeRoot: "%" and two hex digits is the byte
-// they spell, and anything else is kept.
-func decodeRoot(enc string) string {
-	var b strings.Builder
-	for i := 0; i < len(enc); i++ {
-		if enc[i] == '%' && i+2 < len(enc) {
-			if v, err := strconv.ParseUint(enc[i+1:i+3], 16, 8); err == nil {
-				b.WriteByte(byte(v))
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(enc[i])
-	}
-	return b.String()
+	environmentID, root, _ = strings.Cut(key, "/")
+	return environmentID, root
 }
 
 // Message is the single envelope. Fields are used per Type; unused ones are

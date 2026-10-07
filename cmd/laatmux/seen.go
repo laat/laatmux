@@ -38,7 +38,7 @@ func listClients(ctx context.Context) ([]daemon.ClientView, error) {
 			continue
 		}
 		v := daemon.ClientView{Client: f[0], Pane: f[2], Dead: f[3] == "1", AttachPane: f[5] != "", Target: f[6],
-			Host: f[7], Attach: f[8], Workspace: f[9]}
+			Host: f[7], Attach: f[8], Workspace: workspace.DecodeKey(f[9])}
 		if f[4] != "" {
 			// A focused sidebar pane stands for the pane beside it: the
 			// user reading the sidebar is looking at the attach or the

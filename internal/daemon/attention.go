@@ -323,7 +323,7 @@ func (d *Daemon) agentLocked(id string, e *attnEntry) (protocol.Agent, bool) {
 // homeSessionLocked is the home session of the worktree a workspace key
 // names, "" when no record has it.
 func (d *Daemon) homeSessionLocked(key string) string {
-	env, root := protocol.SplitSessionKey(key)
+	env, root, _ := strings.Cut(key, "/")
 	if env == d.cfg.EnvironmentID {
 		if w, ok := d.worktrees[root]; ok {
 			return w.Session

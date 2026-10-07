@@ -359,10 +359,10 @@ func TestEnsureEncodedNames(t *testing.T) {
 }
 
 // A workspace session an earlier build keyed with the root as given is
-// found by the key its root has now, whatever its name, for a root
-// with a tab or a % in it, which tmux gives back as written; a root
-// with %01 in it is not taken for one with the byte, which gets a
-// session of its own.
+// found by its key, whatever its name, for a root with a tab or a % in
+// it, which tmux gives back as written and which is stored encoded now;
+// a root with %01 in it is not taken for one with the byte, which gets
+// a session of its own, its key stored encoded.
 func TestEnsureFindsKeyWrittenAsGiven(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
@@ -392,6 +392,9 @@ func TestEnsureFindsKeyWrittenAsGiven(t *testing.T) {
 	spec := Spec{Host: host, Managed: "m1", Name: "mac/byte", Key: protocol.SessionKey("env", "/w/proj/a\x01b")}
 	if name, created, err := Ensure(ctx, spec); err != nil || !created || name != spec.Name {
 		t.Errorf("a\\x01b: %q %v %v", name, created, err)
+	}
+	if out, err := Server.Run(ctx, "show-options", "-qv", "-t", "=mac/byte:", "@laatmux_workspace"); err != nil || string(out) != "env%/w/proj/a%01b\n" {
+		t.Errorf("a\\x01b: stored key %q %v", out, err)
 	}
 }
 
@@ -617,7 +620,9 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
-	if name, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live", Key: "env//r/live", Branch: "live"}); err != nil || created || name != "mac/proj/live" {
+	// Its root has a newline, so the key is stored encoded.
+	live := Spec{Host: host, Managed: "proj/live", Name: "mac/proj/live", Key: protocol.SessionKey("env", "/r/live\nx"), Branch: "live"}
+	if name, created, err := Ensure(ctx, live); err != nil || created || name != "mac/proj/live" {
 		t.Fatalf("adopt with a live pane: %q %v %v", name, created, err)
 	}
 	after, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/live", "-F", "#{pane_pid}")
@@ -625,8 +630,10 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 		t.Fatalf("the live pane after adopt: %q %q %q, pid %q then %q", tag, target, dead, before, after)
 	}
 	// Found by key the next time, nothing created.
-	if name, created, err := Ensure(ctx, keyed); err != nil || created || name != "mac/proj/w" {
-		t.Fatalf("ensure after adopt: %q %v %v", name, created, err)
+	for _, spec := range []Spec{keyed, live} {
+		if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+			t.Fatalf("ensure %s after adopt: %q %v %v", spec.Name, name, created, err)
+		}
 	}
 	// A plain attachment to another managed session stays a name in use.
 	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "proj/other", Name: "mac/proj/other"}); err != nil || !created {

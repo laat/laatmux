@@ -333,11 +333,11 @@ func TestRowSpecWorktreeThroughManagedAgent(t *testing.T) {
 // others are escaped by vis(3), so a session made under the name as
 // given was not found by it, and the tags set in new-session's own
 // sequence found no session. A valid multibyte UTF-8 name is kept as
-// given. The session is found by its key the second time: the key has
-// the root encoded where it has a byte tmux 3.4 and 3.5 read back
-// escaped, a newline or the field separator, which would split the
-// session's line (#214). A key with such a $ is still read back escaped
-// by tmux 3.4 (#227).
+// given. The session is found by its key the second time: the key is
+// stored with the root encoded where it has a byte tmux 3.4 and 3.5
+// read back escaped, a newline or the field separator, which would
+// split the session's line (#214). A key with such a $ is still read
+// back escaped by tmux 3.4 (#227).
 func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()

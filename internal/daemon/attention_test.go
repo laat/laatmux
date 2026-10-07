@@ -267,15 +267,6 @@ func TestAttentionViews(t *testing.T) {
 	if done(d, n) {
 		t.Error("old plain attachment did not see")
 	}
-	// A key with its root encoded names the worktree of the root.
-	d.mu.Lock()
-	d.mhosts["vm"].worktrees["venv/worktree//w/z\x01"] = protocol.Worktree{ID: "venv/worktree//w/z\x01", EnvironmentID: "venv", Root: "/w/z\x01", Session: "proj/z"}
-	d.mu.Unlock()
-	z := finish("%4", "proj/z")
-	look(d, ClientView{Pane: "%62", AttachPane: true, Host: "vm", Workspace: protocol.SessionKey("venv", "/w/z\x01")})
-	if done(d, z) {
-		t.Error("workspace attach with an encoded key did not see")
-	}
 }
 
 // The state outlives the daemon: a restart does not bring back done on
