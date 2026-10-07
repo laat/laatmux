@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	"github.com/laat/laatmux/internal/gittest"
 )
 
 // No test reaches the user's tmux: every server's socket, the default
@@ -18,10 +20,20 @@ func TestMain(m *testing.M) {
 	os.Setenv("TMUX_TMPDIR", dir)
 	os.Unsetenv("TMUX")
 	os.Unsetenv("TMUX_PANE")
+	// Nor the user's git config: a commit in a test's repository is not
+	// signed, runs no hook of theirs and takes the repository's identity.
+	gittest.Isolate()
 	code := m.Run()
 	for _, name := range []string{"default", "laatmux"} {
 		exec.Command("tmux", "-L", name, "kill-server").Run()
 	}
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// The store's seed commit succeeds in an environment that names config
+// that fails every commit, with an identity from its repository's
+// config alone.
+func TestGitIsolated(t *testing.T) {
+	gittest.CheckIsolated(t, func(t *testing.T) { newStore(t) })
 }

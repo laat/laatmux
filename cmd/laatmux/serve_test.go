@@ -14,6 +14,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/gittest"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
@@ -67,23 +68,7 @@ func serveFixture(t *testing.T) *served {
 			base = real
 		}
 	}
-	sh := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	remote, seed := filepath.Join(base, "remote.git"), filepath.Join(base, "seed")
-	sh(base, "git", "init", "-q", "--bare", "--initial-branch=main", remote)
-	sh(base, "git", "init", "-q", "--initial-branch=main", seed)
-	sh(seed, "git", "config", "user.email", "t@example.com")
-	sh(seed, "git", "config", "user.name", "t")
-	os.WriteFile(filepath.Join(seed, "README"), []byte("x\n"), 0o644)
-	sh(seed, "git", "add", ".")
-	sh(seed, "git", "commit", "-q", "-m", "init")
-	sh(seed, "git", "push", "-q", remote, "main")
+	remote := seedRemote(t, base)
 	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
 	cfg := fmt.Sprintf("hosts:\n  - name: box\n    repos: %s\n    worktrees: %s\nrepos:\n  - source: %s\n    name: proj\n", dirs.Repos, dirs.Worktrees, remote)
 	os.WriteFile(filepath.Join(base, "config.yaml"), []byte(cfg), 0o644)
@@ -137,6 +122,37 @@ func serveFixture(t *testing.T) *served {
 	t.Cleanup(func() { c.Close() })
 	s.conn = c
 	return s
+}
+
+// seedRemote makes a bare repository under base with one commit on
+// main, pushed from a seed repository beside it, and returns its path.
+func seedRemote(t *testing.T, base string) string {
+	t.Helper()
+	sh := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	remote, seed := filepath.Join(base, "remote.git"), filepath.Join(base, "seed")
+	sh(base, "git", "init", "-q", "--bare", "--initial-branch=main", remote)
+	sh(base, "git", "init", "-q", "--initial-branch=main", seed)
+	sh(seed, "git", "config", "user.email", "t@example.com")
+	sh(seed, "git", "config", "user.name", "t")
+	os.WriteFile(filepath.Join(seed, "README"), []byte("x\n"), 0o644)
+	sh(seed, "git", "add", ".")
+	sh(seed, "git", "commit", "-q", "-m", "init")
+	sh(seed, "git", "push", "-q", remote, "main")
+	return remote
+}
+
+// The fixture's seed commit succeeds in an environment that names
+// config that fails every commit, with an identity from its
+// repository's config alone.
+func TestGitIsolated(t *testing.T) {
+	gittest.CheckIsolated(t, func(t *testing.T) { seedRemote(t, t.TempDir()) })
 }
 
 // serve's own shutdown, the context ending as a signal ends it, stops
