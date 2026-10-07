@@ -233,6 +233,42 @@ func TestRedactQuoted(t *testing.T) {
 			t.Errorf("%q: redacted %q, want %q", secret, got, want)
 		}
 	}
+	// Occurrences of one form that overlap are all hidden, as one run;
+	// so is a prompt of backslashes in an argument another word's tab
+	// makes quoted, where the bare prompt is found at every place in
+	// the doubled run.
+	if got, want := Redact(&Error{Args: []string{"x", "ababa"}, Msg: "ababa"}, "aba", "{prompt}").Error(), "tmux x {prompt}: {prompt}"; got != want {
+		t.Errorf("overlapping: %q, want %q", got, want)
+	}
+	slashes := strings.Repeat(`\`, 4096)
+	err := &Error{Args: []string{"new-session", "-d", shellJoin([]string{"claude", "--dir", "/w/a\tb", slashes})}, Msg: "failed"}
+	if got, want := Redact(err, slashes, "{prompt}").Error(), `tmux new-session -d "claude --dir '/w/a\tb' {prompt}": failed`; got != want {
+		t.Errorf("backslashes: %q, want %q", got, want)
+	}
+}
+
+// cover marks every occurrence, overlapping ones too, and nothing
+// else, as a search from every byte does.
+func TestCover(t *testing.T) {
+	for _, c := range []struct{ msg, f string }{
+		{"ababa", "aba"}, {"aaaa", "aa"}, {"abcabcab", "abcab"}, {"xabx", "ab"},
+		{"aabaabaaab", "aabaa"}, {"abc", "abcd"}, {"abc", "c"}, {"", "a"},
+		{strings.Repeat("ab", 50) + "a", "abababa"}, {"aaabaaaabaaaaab", "aaab"}, {"aabaaabaaa", "aabaaa"},
+	} {
+		got := make([]bool, len(c.msg))
+		cover(got, c.msg, c.f)
+		want := make([]bool, len(c.msg))
+		for i := 0; i+len(c.f) <= len(c.msg); i++ {
+			if c.msg[i:i+len(c.f)] == c.f {
+				for j := i; j < i+len(c.f); j++ {
+					want[j] = true
+				}
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("cover(%q, %q) = %v, want %v", c.msg, c.f, got, want)
+		}
+	}
 }
 
 // An argument or tmux's message with a control character, C0, DEL or

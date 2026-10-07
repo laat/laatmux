@@ -611,20 +611,8 @@ func Redact(err error, secret, placeholder string) error {
 	hide := make([]bool, len(msg))
 	for _, form := range []string{shellJoin([]string{secret}), secret} {
 		q := strconv.Quote(form)
-		for _, f := range []string{form, q[1 : len(q)-1]} {
-			end := 0
-			for i := 0; ; i++ {
-				j := strings.Index(msg[i:], f)
-				if j < 0 {
-					break
-				}
-				i += j
-				for k := max(i, end); k < i+len(f); k++ {
-					hide[k] = true
-				}
-				end = i + len(f)
-			}
-		}
+		cover(hide, msg, form)
+		cover(hide, msg, q[1:len(q)-1])
 	}
 	var b strings.Builder
 	for i := 0; i < len(msg); i++ {
@@ -636,6 +624,44 @@ func Redact(err error, secret, placeholder string) error {
 		}
 	}
 	return errors.New(b.String())
+}
+
+// cover sets hide for every byte of msg in an occurrence of f, which
+// is not empty, overlapping occurrences too. It is Knuth-Morris-Pratt:
+// one pass over msg, each byte compared a bounded number of times
+// amortized, so a prompt that repeats itself, a run of backslashes
+// that Printable doubles say, costs no more than one that does not,
+// where a search from each byte after a match would compare the whole
+// prompt again at every one.
+func cover(hide []bool, msg, f string) {
+	// fail[i] is the length of the longest proper prefix of f[:i+1]
+	// that is also a suffix of it.
+	fail := make([]int, len(f))
+	for i, k := 1, 0; i < len(f); i++ {
+		for k > 0 && f[i] != f[k] {
+			k = fail[k-1]
+		}
+		if f[i] == f[k] {
+			k++
+		}
+		fail[i] = k
+	}
+	end := 0 // hide is set up to here
+	for i, k := 0, 0; i < len(msg); i++ {
+		for k > 0 && msg[i] != f[k] {
+			k = fail[k-1]
+		}
+		if msg[i] == f[k] {
+			k++
+		}
+		if k == len(f) {
+			for j := max(i+1-len(f), end); j <= i; j++ {
+				hide[j] = true
+			}
+			end = i + 1
+			k = fail[k-1]
+		}
+	}
 }
 
 // KillSession kills the session with exactly this name.
