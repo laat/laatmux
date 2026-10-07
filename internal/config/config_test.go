@@ -174,13 +174,48 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
+// A label that starts with - reads as a flag, or as the -- that starts
+// add's command override, in the commands laatmux prints. Each kind of
+// label refuses it, and the error names the field, the label and the
+// rule. A - after the first character is still a plain word.
+func TestParseLeadingDash(t *testing.T) {
+	refused := map[string]string{
+		"hosts:\n  - name: \"--\"\n":                  `hosts: name "--" is not a valid label`,
+		"hosts:\n  - name: -x\n":                      `hosts: name "-x" is not a valid label`,
+		"hosts:\n  - ssh: -box\n":                     `hosts: "-box" from ssh alias is not a valid label`,
+		"agents:\n  \"--\":\n    cmd: [x]\n":          `agents: "--" is not a valid label`,
+		"agents:\n  -x:\n    cmd: [x]\n":              `agents: "-x" is not a valid label`,
+		"repos:\n  - source: a/x\n    name: \"--\"\n": `repos: name "--" for a/x is not a valid label`,
+		"repos:\n  - a/-x\n":                          `repos: derived name "-x" for a/-x is not a valid label`,
+	}
+	for in, want := range refused {
+		_, err := Parse([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "not starting with -") {
+			t.Errorf("%q: error %v, want %q and the rule", in, err, want)
+		}
+	}
+	c, err := Parse([]byte("hosts:\n  - name: a-\n  - ssh: b--c\nagents:\n  x_-y:\n    cmd: [x]\nrepos:\n  - source: a/x\n    name: x--\n  - a/y-\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Find("b--c"); !ok || c.Hosts[0].Name != "a-" {
+		t.Errorf("hosts: %+v", c.Hosts)
+	}
+	if _, ok := c.Agents["x_-y"]; !ok {
+		t.Errorf("agents: %v", c.AgentNames())
+	}
+	if len(c.Repos) != 2 || c.Repos[0].Name != "x--" || c.Repos[1].Name != "y-" {
+		t.Errorf("repos: %+v", c.Repos)
+	}
+}
+
 func TestValidLabel(t *testing.T) {
-	for _, ok := range []string{"a", "A-z_09", "claude-safe"} {
+	for _, ok := range []string{"a", "A-z_09", "claude-safe", "a-", "a--b", "_x", "0-"} {
 		if !ValidLabel(ok) {
 			t.Errorf("%q rejected", ok)
 		}
 	}
-	for _, bad := range []string{"", "a.b", "a/b", "a:b", "a%b", "a b", "ø"} {
+	for _, bad := range []string{"", "a.b", "a/b", "a:b", "a%b", "a b", "ø", "-", "--", "-x", "-a-b"} {
 		if ValidLabel(bad) {
 			t.Errorf("%q accepted", bad)
 		}
