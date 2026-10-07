@@ -818,6 +818,8 @@ func startManaged(t *testing.T) Server {
 // A hand-started server's sessions lose their overrides of the
 // isolation options, each named exactly: the first one is called 0,
 // which as a bare target is pane 0 of the most recent session, b here.
+// The third is named n$m, which tmux 3.2 to 3.4 store as n\$m and tmux
+// 3.4 lists as n\\$m; the test names it by its id.
 func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -831,12 +833,20 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	out, err := s.Run(ctx, "new-session", "-d", "-s", "n$m", "-P", "-F", "#{session_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	if _, err := s.Run(ctx, "set-option", "-t", id, "status", "on"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.EnsureConfigured(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"0", "b"} {
-		if out, err := s.Run(ctx, "show-options", "-t", "="+name+":", "status"); err != nil || strings.TrimSpace(string(out)) != "" {
-			t.Errorf("session %s keeps %q %v", name, out, err)
+	for _, target := range []string{"=0:", "=b:", id} {
+		if out, err := s.Run(ctx, "show-options", "-t", target, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Errorf("session %s keeps %q %v", target, out, err)
 		}
 	}
 }
@@ -1092,6 +1102,183 @@ func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
 	}
 	if got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"); !slices.Equal(got, words) {
 		t.Errorf("the agent got %q, want %q", got, words)
+	}
+}
+
+// A root with a $ in it reads back as given, as its pane's path and
+// its @laatmux_cwd, through ListPanes and Query: tmux 3.4 prints a $
+// before a letter, _ or { back as \$ and a backslash of the value as it
+// is, so `a\$b` prints as `a\\$b` and `c\$1` as given, and tmux 3.4 on
+// macOS takes é, and the first byte of the Sep after a last value that
+// ends in $, for a letter there too; tmux 3.5 and later print every
+// value as given, `a\$b` included. A failed Query names the command as
+// the caller gave it.
+func TestListPanesRootWithDollar(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	for _, leaf := range []string{"fix$foo", `a\$b`, `c\$1`, "d${e}$_f", "e$é", "g$", `h\$`} {
+		root := filepath.Join(t.TempDir(), "proj", leaf)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		real, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := SessionName("proj", leaf)
+		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: root, Cmd: []string{"sleep", "600"}}); err != nil {
+			t.Fatalf("%s: %v", leaf, err)
+		}
+		// The pane's path is read from its process, which may not have
+		// changed directory yet.
+		var got Pane
+		for i := 0; i < 200 && got.CurrentPath != real; i++ {
+			panes, err := s.ListPanes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range panes {
+				if p.Session == name {
+					got = p
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got.Cwd != root || got.CurrentPath != real {
+			t.Errorf("%s: pane @laatmux_cwd %q, path %q; want %q, %q", leaf, got.Cwd, got.CurrentPath, root, real)
+		}
+		if out, err := s.Query(ctx, "#{@laatmux_cwd}", "display-message", "-p", "-t", "="+name+":"); err != nil || string(out) != root+"\n" {
+			t.Errorf("%s: display-message @laatmux_cwd %q %v, want %q", leaf, out, err, root)
+		}
+	}
+	_, err := s.Query(ctx, "#{@laatmux_cwd}", "list-panes", "-t", "=nosuch:")
+	if err == nil || !strings.HasPrefix(err.Error(), "tmux list-panes -t =nosuch: -F #{@laatmux_cwd}: ") {
+		t.Errorf("failed query: %v", err)
+	}
+}
+
+// unescapeDollar undoes the backslash tmux 3.4 prints before a $ that
+// comes before a letter, _ or {, and keeps every other backslash: tmux
+// prints a backslash of the value as it is, so `\\$a` is the value
+// `\$a`, and puts none before a $ at the end or before a digit, a
+// newline or another $. A \$ before an escaped byte, \351, is kept:
+// tmux 3.4 on macOS prints the value $ and a lone 0xe9 so, and so the
+// value `\$\351`, which is #214's. Which bytes above 0x7f are letters
+// there is the C library's: on macOS the Latin-1 letters, the first
+// byte of é and of U+2063 among them but not that of U+05D0; on Linux
+// none. Beside the table, every string of up to four pieces from a set
+// of them is printed as tmux 3.4 prints it and read back.
+func TestUnescapeDollar(t *testing.T) {
+	mac := runtime.GOOS == "darwin"
+	for _, c := range []struct {
+		printed, value string
+		macOnly        bool
+	}{
+		{`fix\$foo`, `fix$foo`, false},
+		{`\$_x\${y}\$Z`, `$_x${y}$Z`, false},
+		{`a\\$b`, `a\$b`, false},
+		{`c\$1`, `c\$1`, false},
+		{`end\$`, `end\$`, false},
+		{"\\$\n\\$a", "\\$\n$a", false},
+		{`$\$a`, `$$a`, false},
+		{`\\\$a`, `\\$a`, false},
+		{`\377\$a`, `\377$a`, false},
+		{`\$\351`, `\$\351`, false},
+		{`\$א`, `\$א`, false},
+		{`\$é`, `$é`, true},
+		{`a\$` + Sep + "b", "a$" + Sep + "b", true},
+	} {
+		want := c.value
+		if c.macOnly && !mac {
+			want = c.printed
+		}
+		if got := unescapeDollar(c.printed); got != want {
+			t.Errorf("%q: %q, want %q", c.printed, got, want)
+		}
+	}
+	dollarValues(func(v string) {
+		if got := unescapeDollar(print34(v)); got != v {
+			t.Errorf("%q printed %q reads back %q", v, print34(v), got)
+		}
+	})
+}
+
+// print34 is what tmux 3.4 prints for a line of whole UTF-8 characters
+// with no byte it escapes otherwise: a backslash before every $ that
+// comes before a byte dollarLetter takes.
+func print34(v string) string {
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '$' && i+1 < len(v) && dollarLetter(v[i+1]) {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
+}
+
+// dollarValues calls f with every string of up to four pieces: a $, a
+// backslash, a letter, a digit, an _, a {, é, whose first byte macOS
+// takes for a letter, א, whose first byte it does not, and a newline.
+func dollarValues(f func(v string)) {
+	pieces := []string{"$", `\`, "a", "1", "_", "{", "é", "א", "\n"}
+	var walk func(v string, n int)
+	walk = func(v string, n int) {
+		f(v)
+		if n > 0 {
+			for _, p := range pieces {
+				walk(v+p, n-1)
+			}
+		}
+	}
+	walk("", 4)
+}
+
+// unframe gives a Query's output as the server holds the values: the
+// probe dropped from every line, and the backslashes undone in every
+// line when the last line's probe was printed escaped. The probe of
+// the last line decides, so a value that has the escaped probe and a
+// newline in it, on a server that prints values as given, does not
+// make the other lines decoded. A line is decoded before its probe is
+// dropped: a value that ends in $ is followed by Sep, whose first byte
+// macOS takes for a letter, so tmux 3.4 there escapes that $. Beside
+// the table, every value from dollarValues as the last field reads
+// back as given from a server that prints it as tmux 3.4 does and from
+// one that prints it as given.
+func TestUnframe(t *testing.T) {
+	for _, c := range []struct{ out, want string }{
+		{"", ""},
+		{`a\$b` + Sep + "$_\nc" + Sep + "$_\n", "a\\$b\nc\n"},
+		{`a\$b` + Sep + `\$_` + "\n" + `c\\$d` + Sep + `\$_` + "\n", "a$b\n" + `c\$d` + "\n"},
+		{"x" + Sep + `\$_` + "\n" + `y\$a` + Sep + "$_\n", "x" + Sep + `\$_` + "\n" + `y\$a` + "\n"},
+	} {
+		if got := unframe(c.out); got != c.want {
+			t.Errorf("%q: %q, want %q", c.out, got, c.want)
+		}
+	}
+	dollarValues(func(v string) {
+		if got := unframe(print34(v+Sep+probe) + "\n"); got != v+"\n" {
+			t.Errorf("%q printed by tmux 3.4 as %q reads back %q", v, print34(v+Sep+probe), got)
+		}
+		if got := unframe(v + Sep + probe + "\n"); got != v+"\n" {
+			t.Errorf("%q printed as given reads back %q", v, got)
+		}
+	})
+}
+
+// dollarLetter takes the bytes tmux 3.4's isalpha takes beside _ and {:
+// the ASCII letters everywhere, and on macOS the Latin-1 letters, which
+// is what its C library takes in the UTF-8 locale tmux sets; glibc and
+// musl take no byte above 0x7f.
+func TestDollarLetter(t *testing.T) {
+	for b := 0; b < 256; b++ {
+		want := b == '_' || b == '{' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
+		if runtime.GOOS == "darwin" && (b == 0xaa || b == 0xb5 || b == 0xba || b >= 0xc0 && b != 0xd7 && b != 0xf7) {
+			want = true
+		}
+		if got := dollarLetter(byte(b)); got != want {
+			t.Errorf("%#x: %v, want %v", b, got, want)
+		}
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -153,6 +155,98 @@ func (s Server) RunInput(ctx context.Context, in io.Reader, a ...string) ([]byte
 		return out.Bytes(), &Error{Args: a, Msg: msg, err: err}
 	}
 	return out.Bytes(), nil
+}
+
+// probe ends every line Query has the server print, after a Sep: tmux
+// 3.4 prints it back as `\$_`, every other version as given.
+const probe = "$_"
+
+// Query runs a command that prints a line in a format for each pane,
+// session or client, list-panes or display-message -p say, with -F
+// format, and returns its output as the server holds the values. tmux
+// 3.4 puts a backslash before a "$" that comes before a letter, "_" or
+// "{" in everything a command prints to a client: an option value, a
+// pane's path, a session name. Query ends the format with Sep and
+// probe, and undoes those backslashes when the server put one before
+// the probe's "$"; a server that prints values as given, 3.3 and older
+// or 3.5 and later, prints a "\$" only where the value has one. The
+// probe is in the format rather than a command of its own, which would
+// run a user's after-display-message hook. tmux 3.4 also writes a
+// control byte other than a tab or a newline, DEL and a byte that is
+// not part of valid UTF-8 as vis(3) does, \001 say, and those are left
+// as printed: it writes a backslash of the value as it is, so such an
+// escape cannot be told from the same text in the value.
+func (s Server) Query(ctx context.Context, format string, a ...string) ([]byte, error) {
+	out, err := s.Run(ctx, append(slices.Clip(a), "-F", format+Sep+probe)...)
+	var te *Error
+	if errors.As(err, &te) {
+		err = &Error{Args: append(slices.Clip(a), "-F", format), Msg: te.Msg}
+	}
+	return []byte(unframe(string(out))), err
+}
+
+// unframe is what a Query's command printed, as the server holds the
+// values, each line's Sep and probe dropped. Every line tmux prints
+// ends in a newline, so the output ends in the last line's probe, which
+// no value can stand in for; that one tells whether to undo the
+// backslashes, in every line. A line is decoded before its probe is
+// dropped: tmux on macOS takes the first byte of Sep for a letter, so a
+// last value that ends in "$" has a backslash only the Sep after it
+// accounts for. A line that does not end in the probe is part of one
+// whose value has a newline in it, which no reader parses as a record.
+func unframe(out string) string {
+	escaped := strings.HasSuffix(out, Sep+`\`+probe+"\n")
+	var b strings.Builder
+	for _, l := range strings.SplitAfter(out, "\n") {
+		l, nl := strings.CutSuffix(l, "\n")
+		if escaped {
+			l = unescapeDollar(l)
+		}
+		b.WriteString(strings.TrimSuffix(l, Sep+probe))
+		if nl {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// unescapeDollar drops the backslash tmux 3.4 puts before a "$" that
+// comes before a byte dollarLetter takes. tmux puts it there whatever
+// comes before the "$" and writes a backslash of the value as it is, so
+// the backslash right before such a "$" is always its own: `\\$a` is
+// the value `\$a`, and `\$1` is the value `\$1`, since tmux puts none
+// before a "$" that comes before a digit. A "\$" before an escaped
+// byte is left as printed: on macOS tmux puts its backslash before a
+// "$" that comes before a lone 0xe9, which it prints as \351, and that
+// cannot be told from the value `\$\351`.
+func unescapeDollar(s string) string {
+	if !strings.Contains(s, `\$`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+2 < len(s) && s[i+1] == '$' && dollarLetter(s[i+2]) {
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// dollarLetter reports whether tmux 3.4 puts a backslash before a "$"
+// that comes before the byte b: an ASCII letter, "_" or "{", or a byte
+// its C library's isalpha takes for a letter in the UTF-8 locale tmux
+// runs in. On macOS that is a Latin-1 letter too, which includes the
+// first byte of every multibyte UTF-8 character but those from U+05C0
+// to U+05FF; glibc and musl take no byte above 0x7f.
+func dollarLetter(b byte) bool {
+	switch {
+	case b == '_' || b == '{' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z':
+		return true
+	case b >= utf8.RuneSelf:
+		return runtime.GOOS == "darwin" && unicode.IsLetter(rune(b))
+	}
+	return false
 }
 
 // Error is a failed tmux command.
@@ -302,9 +396,10 @@ var paneFormat = strings.Join([]string{
 // ListPanes returns every pane on the server in one call. A server
 // that runs with no sessions, which the managed one does after its last
 // session ends, has no panes: tmux answers "no current target" for it,
-// and that is an empty listing, not a failure to observe.
+// and that is an empty listing, not a failure to observe. The values
+// are read as the server holds them, through Query.
 func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
-	out, err := s.Run(ctx, "list-panes", "-a", "-F", paneFormat)
+	out, err := s.Query(ctx, paneFormat, "list-panes", "-a")
 	if err != nil {
 		var te *Error
 		if errors.As(err, &te) && strings.Contains(te.Msg, "no current target") {
@@ -422,7 +517,7 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		}
 	}
 	// Session-level overrides of the isolation options shadow the globals.
-	if out, err := s.Run(ctx, "list-sessions", "-F", "#{session_name}"); err == nil {
+	if out, err := s.Query(ctx, "#{session_name}", "list-sessions"); err == nil {
 		for _, sess := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if sess == "" {
 				continue
@@ -953,11 +1048,10 @@ func SessionName(repo, branch string) string { return repo + "/" + EncodeBranch(
 // attachment to it. Two sessions on a host, a\b and a%5cb, can so get
 // one local name; the second's jump is then refused as a name in use,
 // since the local session is found by its attach tag, which is exact.
-// tmux 3.2 to 3.4 store a "$" before a letter with a "\" before it:
-// tmux 3.2 lists c$xd as c\$xd, which does not decode, and tmux 3.4
-// with one more "\", as c\\$xd, which decodes to c\$xd. Either becomes
-// c%5c%24xd, a name kept as given, though a host on tmux 3.4 cannot
-// attach the session by its listed name (#227).
+// tmux 3.2 to 3.4 store a "$" before a letter with a "\" before it,
+// so c$xd is listed as c\$xd, which does not decode: tmux 3.4 prints it
+// with one more "\", as c\\$xd, which Query undoes. Either becomes
+// c%5c%24xd, a name kept as given.
 func EncodeListed(name string) string {
 	if d := unvisName(name); visName(d) == name {
 		name = d

@@ -24,7 +24,7 @@ var clientFormat = strings.Join([]string{
 // listClients is what each client of the default server shows, for the
 // daemon's seen rule. No server is no clients.
 func listClients(ctx context.Context) ([]daemon.ClientView, error) {
-	out, err := workspace.Server.Run(ctx, "list-clients", "-F", clientFormat)
+	out, err := workspace.Server.Query(ctx, clientFormat, "list-clients")
 	if err != nil {
 		if tmux.NoServer(err) {
 			return nil, nil
@@ -57,9 +57,9 @@ func listClients(ctx context.Context) ([]daemon.ClientView, error) {
 // besideSidebar is the pane a window's sidebar stands for: its live
 // attach pane, or its one other pane. None is a view of nothing.
 func besideSidebar(ctx context.Context, window string) (daemon.ClientView, error) {
-	out, err := workspace.Server.Run(ctx, "list-panes", "-t", window, "-F", strings.Join([]string{
+	out, err := workspace.Server.Query(ctx, strings.Join([]string{
 		"#{pane_id}", "#{pane_dead}", "#{" + sidebarTag + "}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}",
-	}, tmux.Sep))
+	}, tmux.Sep), "list-panes", "-t", window)
 	if err != nil {
 		// The window or the server went between the two commands:
 		// nothing is shown.

@@ -3,7 +3,9 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -824,5 +826,106 @@ func TestEnsureNameInUsePrintable(t *testing.T) {
 	_, _, err = Ensure(ctx, Spec{Host: held.Host, Managed: "m1", Name: held.Name, Key: "env//w/proj/other"})
 	if err == nil || !strings.Contains(err.Error(), "is the workspace for "+strconv.Quote(back)+" on mac; name in use") || strings.ContainsFunc(err.Error(), unicode.IsControl) {
 		t.Fatalf("another root's workspace, read back as %q: %v", back, err)
+	}
+}
+
+// A workspace whose root, source and branch have a $ before a letter,
+// attached to a managed session whose name has one, reads back as
+// given, though tmux 3.4 prints such a $ as \$. A second Ensure finds
+// it by its key and finds its attach pane on the managed session, and
+// leaves that pane running rather than respawning it; Current and
+// PaneSession, which ask the server TMUX names, give its key from
+// inside it, and a pane's path. tmux 3.2 to 3.4 store the managed
+// session's name m$x as m\$x, and the spec names it as stored, as the
+// host's record does.
+func TestEnsureValuesWithDollar(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	out, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "m$x", "-P", "-F", "#{session_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	out, err = tmux.LaatmuxServer.Query(ctx, "#{session_name}", "display-message", "-p", "-t", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "proj", "fix$foo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: strings.TrimSpace(string(out)), Name: SessionName("mac", "proj", "fix$foo"),
+		Key: "env/" + root, Source: "/src/$HOME/proj", Branch: "fix$foo"}
+	name, created, err := Ensure(ctx, spec)
+	if err != nil || !created || name != spec.Name {
+		t.Fatalf("first ensure: %q %v %v", name, created, err)
+	}
+	pane := AttachPane(ctx, name)
+	pid := func() string {
+		t.Helper()
+		out, err := Server.Run(ctx, "display-message", "-p", "-t", pane, "#{pane_pid}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// Attached, the pane does not die before the second Ensure looks.
+	for i := 0; ; i++ {
+		if out, _ := tmux.LaatmuxServer.Run(ctx, "list-clients", "-t", id, "-F", "#{client_pid}"); strings.TrimSpace(string(out)) != "" {
+			break
+		}
+		if i > 200 {
+			t.Fatalf("the attach pane %q is not attached to %q", pane, spec.Managed)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := pid()
+	if name, created, err := Ensure(ctx, spec); err != nil || created || name != spec.Name {
+		t.Fatalf("second ensure: %q %v %v", name, created, err)
+	}
+	if AttachPane(ctx, name) != pane || pid() != before {
+		t.Errorf("the attach pane was respawned: %s pid %s, was %s", AttachPane(ctx, name), pid(), before)
+	}
+	locals, err := List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := Find(locals, spec.Key, ""); !ok || l.Source != spec.Source || l.Branch != spec.Branch {
+		t.Errorf("by key: %+v %v", l, ok)
+	}
+	out, err = Server.Run(ctx, "new-window", "-d", "-t", "="+name+":", "-c", tmux.FormatLiteral(root), "-P", "-F", "#{pane_id}", "sleep 600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := strings.TrimSpace(string(out))
+	sock, err := Server.Run(ctx, "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", strings.TrimSpace(string(sock))+",1,0")
+	t.Setenv("TMUX_PANE", shell)
+	if l, err := Current(ctx); err != nil || l.Key != spec.Key {
+		t.Errorf("current: %+v %v", l, err)
+	}
+	// The pane's path is read from its process, which may not have
+	// changed directory yet.
+	var cwd string
+	for i := 0; i < 200 && cwd != real; i++ {
+		l, got, err := PaneSession(ctx, shell)
+		if err != nil || l.Key != spec.Key {
+			t.Fatalf("pane session: %+v %v", l, err)
+		}
+		cwd = got
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cwd != real {
+		t.Errorf("pane path %q, want %q", cwd, real)
 	}
 }

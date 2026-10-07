@@ -83,7 +83,7 @@ var sessionFormat = strings.Join([]string{
 // there is an error, since a server may be running that cannot be
 // reached, during a tmux upgrade say.
 func List(ctx context.Context) ([]protocol.Session, error) {
-	out, err := Server.Run(ctx, "list-sessions", "-F", sessionFormat)
+	out, err := Server.Query(ctx, sessionFormat, "list-sessions")
 	if err != nil {
 		if tmux.NoServer(err) || tmux.NotInstalled(err) && Server.NoSocket() {
 			return nil, nil
@@ -186,7 +186,7 @@ func Current(ctx context.Context) (protocol.Session, error) {
 	if pane := os.Getenv("TMUX_PANE"); pane != "" {
 		args = append(args, "-t", pane)
 	}
-	out, err := (tmux.Server{}).Run(ctx, append(args, sessionFormat)...)
+	out, err := (tmux.Server{}).Query(ctx, sessionFormat, args...)
 	if err != nil {
 		return protocol.Session{}, err
 	}
@@ -202,7 +202,7 @@ func Current(ctx context.Context) (protocol.Session, error) {
 // is, since a pane id is per server; split runs from a binding on the
 // user's server.
 func PaneSession(ctx context.Context, paneID string) (protocol.Session, string, error) {
-	out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "-t", paneID, sessionFormat+tmux.Sep+"#{pane_current_path}")
+	out, err := (tmux.Server{}).Query(ctx, sessionFormat+tmux.Sep+"#{pane_current_path}", "display-message", "-p", "-t", paneID)
 	if err != nil {
 		return protocol.Session{}, "", err
 	}
@@ -464,7 +464,7 @@ func tagArgs(name string, s Spec) []string {
 // is left as it is. Other panes in the session are the user's and are
 // left alone.
 func ensureAttach(ctx context.Context, name string, s Spec) error {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", sessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
+	out, err := Server.Query(ctx, strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep), "list-panes", "-s", "-t", sessionTarget(name))
 	if err != nil {
 		return err
 	}

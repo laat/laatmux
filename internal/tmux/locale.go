@@ -43,6 +43,9 @@ func (s Server) ensureLocale(ctx context.Context) error {
 	// locale.
 	localeMu.Lock()
 	defer localeMu.Unlock()
+	// show-environment takes no format, so this is not a Query: tmux 3.4
+	// prints a $ before a letter, _ or { here as \$, which no locale
+	// name and no locale directory in practice has.
 	out, err := s.Run(ctx, "show-environment", "-g")
 	if err != nil {
 		return err
