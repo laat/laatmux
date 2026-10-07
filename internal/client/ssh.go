@@ -25,9 +25,9 @@ type SSHOptions struct {
 
 // SSH is the argv of ssh to the alias running command: the options in a
 // fixed order, --, the alias, the command as one argument for the remote
-// shell. ssh reads no option after --, so neither the alias nor the
-// command is read as one; without it ssh reads options after the alias
-// as well as before.
+// shell. ssh reads no option after --, so the alias is never read as
+// one, nor, from OpenSSH 7.6, the command; without it ssh reads options
+// after the alias as well as before.
 func SSH(alias string, o SSHOptions, command string) []string {
 	argv := []string{"ssh"}
 	if o.TTY {

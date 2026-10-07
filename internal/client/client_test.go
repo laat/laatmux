@@ -238,10 +238,12 @@ func TestSSHArgv(t *testing.T) {
 // not as an option, as ssh would read a word that starts with - after
 // the alias without the --. ssh -G prints the configuration it would
 // connect with and exits without connecting; -F /dev/null leaves the
-// user's and the system's ssh config out.
+// user's and the system's ssh config out. Where ssh cannot print a
+// configuration at all, an ssh without -G or a uid with no passwd entry,
+// the test is skipped with ssh's reason.
 func TestSSHArgvAsSSHReadsIt(t *testing.T) {
-	if _, err := exec.LookPath("ssh"); err != nil {
-		t.Skip("no ssh on PATH")
+	if out, err := exec.Command("ssh", "-G", "-F", "/dev/null", "probe.invalid").CombinedOutput(); err != nil {
+		t.Skipf("ssh -G does not run here: %v %s", err, out)
 	}
 	for _, c := range []struct {
 		alias string
@@ -252,9 +254,12 @@ func TestSSHArgvAsSSHReadsIt(t *testing.T) {
 		{"u@box.invalid", SSHOptions{TTY: true, ConnectTimeout: 10 * time.Second}, []string{"user u", "hostname box.invalid", "batchmode no", "requesttty true", "connecttimeout 10", "port 22"}},
 	} {
 		argv := SSH(c.alias, c.o, "-oPort=2222")
-		out, err := exec.Command(argv[0], append([]string{"-G", "-F", "/dev/null"}, argv[1:]...)...).Output()
+		var stderr strings.Builder
+		cmd := exec.Command(argv[0], append([]string{"-G", "-F", "/dev/null"}, argv[1:]...)...)
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
 		if err != nil {
-			t.Fatalf("%q: %v", argv, err)
+			t.Fatalf("%q: %v %s", argv, err, stderr.String())
 		}
 		lines := strings.Split(string(out), "\n")
 		for _, w := range c.want {
