@@ -189,7 +189,9 @@ func (f *relayFixture) awaitRecord(t *testing.T, id string, wait time.Duration, 
 
 // awaitFirstSweep waits for the laptop daemon's first relay sweep, which
 // reads the hosts once, at start, so it cannot take a read a test means
-// for a request.
+// for a request. It counts every read of f.hosts, so it is called before
+// anything else reads them, and before setLocal adds a daemon whose
+// sweep would read them again.
 func (f *relayFixture) awaitFirstSweep(t *testing.T) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); f.hosts.readCount() == 0; time.Sleep(10 * time.Millisecond) {
@@ -204,6 +206,21 @@ func (f *relayFixture) runners(id string) []*runner {
 	f.local.relay.mu.Lock()
 	defer f.local.relay.mu.Unlock()
 	return append([]*runner(nil), f.local.relay.runners[id]...)
+}
+
+// awaitHostResult waits for the host's journal entry of the add to be
+// terminal: its last write, so the host's add writes nothing into the
+// directories the cleanup removes.
+func (f *relayFixture) awaitHostResult(t *testing.T, id string) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if e, ok := f.host.journal.get(id); ok && e.terminal() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the host's add never had its result")
+		}
+	}
 }
 
 // A relayed add: accepted once the file is on disk, prompt included;
@@ -1172,16 +1189,8 @@ func TestRelayDismissEndsStuckGoroutines(t *testing.T) {
 	n = len(f.local.relay.runners["s3"])
 	f.local.relay.mu.Unlock()
 	close(release)
-	// The host's add, let go, is waited to its result, so it writes
-	// nothing into the directories the cleanup removes.
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if e, ok := f.host.journal.get("s3"); ok && e.terminal() {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the host's add never had its result")
-		}
-	}
+	// The host's add, let go, is waited to its result.
+	f.awaitHostResult(t, "s3")
 	if !res.OK {
 		t.Fatalf("dismiss with the host gone for good %+v", res)
 	}
@@ -1256,13 +1265,9 @@ func TestRelayDismissKeptPublishesNoRemoval(t *testing.T) {
 	f.local.publishRemoved("marker", "")
 	f.local.relay.mu.Unlock()
 	close(release)
-	// The add, let go, is waited to its outcome before anything is
-	// checked: the host journals its result before it answers, so its add
-	// writes nothing into the directories the cleanup removes, whichever
-	// check fails. The handoff after the outcome is not waited for: with
-	// the subscription open and vm followed, it waits for the stream to
-	// show the worktree, and the cleanup ends it wherever it is.
-	got := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool { return p.Done })
+	// The host's add, let go, is waited to its result before anything of
+	// the dismiss is checked, whichever check fails.
+	f.awaitHostResult(t, "k1")
 	var removed []protocol.Message
 	awaitMerged(t, c, pc, 5*time.Second, func(m protocol.Message) bool {
 		if m.Type == protocol.TypeRemove && m.PendingID == "k1" {
@@ -1277,14 +1282,18 @@ func TestRelayDismissKeptPublishesNoRemoval(t *testing.T) {
 		t.Fatalf("removals published for the record the dismiss kept %+v", removed)
 	}
 	// The record stood, on disk too, and a follow the dismiss started
-	// again carried the add to its outcome.
+	// again ran it.
 	if !ok || kept.Done || statErr != nil {
 		t.Fatalf("record after the dismiss %+v kept %v, file: %v", kept, ok, statErr)
 	}
 	if len(before) != 1 || len(after) != 1 || after[0] == before[0] {
 		t.Fatalf("runners: %d before the dismiss and %d after, want one each, not the same", len(before), len(after))
 	}
-	if !got.OK {
+	// That follow carries the add to its outcome. The handoff after it is
+	// not waited for: with the subscription open and vm followed, it waits
+	// for the stream to show the worktree, and the cleanup ends it
+	// wherever it is.
+	if got := f.awaitRecord(t, "k1", 30*time.Second, func(p pendingFile) bool { return p.Done }); !got.OK {
 		t.Fatalf("record after the restart %+v", got)
 	}
 }
