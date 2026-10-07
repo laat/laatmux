@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/view"
 	"github.com/laat/laatmux/internal/workspace"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // A fake ssh on PATH scripted through an env var: exit code, stderr, delay.
@@ -408,6 +410,61 @@ func TestEnsureDetachedRootWithEscapedByte(t *testing.T) {
 		if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
 			t.Errorf("%q: ensure again: %q %v %v", c.dir, name, created, err)
 		}
+	}
+}
+
+// A checkout the config does not list, cloned by hand as my.repo, is
+// labelled my_repo in the host's listing, and the workspace session a
+// jump to its worktree makes once the home is lost, named after the
+// worktree, is mac/my_repo/b, which tmux stores as given: the jump finds
+// it again. Named after the directory, mac/my.repo/b, it was stored as
+// mac/my_repo/b by tmux before 3.7, the tags in new-session's own
+// sequence found no session, and the jump failed and left the session
+// untagged.
+func TestEnsureUnlistedDottedCheckout(t *testing.T) {
+	isolatedDefault(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	ctx := context.Background()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
+	checkout := filepath.Join(dirs.Repos, "my.repo")
+	root := dirs.Worktree("my_repo", "b")
+	for _, args := range [][]string{
+		{"init", "-q", checkout},
+		{"-C", checkout, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", checkout, "remote", "add", "origin", "https://example.com/o/my.repo"},
+		{"-C", checkout, "worktree", "add", "-q", "-b", "b", root},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	recs, err := worktree.New(dirs, nil).List(ctx)
+	if err != nil || len(recs) != 1 || recs[0].Repo != "my_repo" {
+		t.Fatalf("list %+v %v", recs, err)
+	}
+	h := config.Host{Host: peer.Host{Name: "mac"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	w := protocol.Worktree{ID: "env/worktree/" + root, EnvironmentID: "env", Repo: recs[0].Repo, Source: recs[0].Source, Branch: recs[0].Branch, Root: recs[0].Root}
+	a := protocol.Agent{ID: "env/laatmux/%1", EnvironmentID: "env", Server: "laatmux", Session: "m1", WorktreeID: w.ID}
+	spec, _, err := rowSpec(cfg, h, rows.Row{Host: "mac", Worktree: &w, Agent: &a})
+	if err != nil || spec.Name != "mac/my_repo/b" {
+		t.Fatalf("spec %+v %v", spec, err)
+	}
+	name, created, err := workspace.Ensure(ctx, spec)
+	if err != nil || !created || name != spec.Name {
+		t.Fatalf("ensure: %q %v %v", name, created, err)
+	}
+	if _, err := workspace.Server.Run(ctx, "has-session", "-t", "="+name+":"); err != nil {
+		t.Fatalf("has-session %q: %v", name, err)
+	}
+	if name, created, err := workspace.Ensure(ctx, spec); err != nil || created || name != spec.Name {
+		t.Fatalf("ensure again: %q %v %v", name, created, err)
 	}
 }
 

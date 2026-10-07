@@ -1037,6 +1037,43 @@ func TestRmUnlistedRepository(t *testing.T) {
 	}
 }
 
+// A checkout no config lists, cloned by hand under a name with a tab
+// and an ESC, is named by its label in rm's and run's refusals, and the
+// label names it in a request: no raw byte of the directory's name
+// reaches a client.
+func TestUnlistedCheckoutLabelInRefusals(t *testing.T) {
+	d, _, store, remote := newAddDaemon(t)
+	pc := conn(t, d)
+	root := addWorktree(t, pc, remote, "task")
+	const label = "hand_made__31m"
+	hand := filepath.Join(store.Dirs.Repos, "hand\tmade\x1b[31m")
+	side := store.Dirs.Worktree("hand", "side")
+	for _, args := range [][]string{
+		{"clone", "-q", remote, hand},
+		{"-C", hand, "remote", "set-url", "origin", "/elsewhere/hand.git"},
+		{"-C", hand, "worktree", "add", "-q", "-b", "side", side},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	for _, c := range []struct {
+		m    protocol.Message
+		want string
+	}{
+		{protocol.Message{Type: protocol.TypeRm, ID: "rm1", Repo: remote, Root: side}, side + " is a worktree of " + label + ", not proj"},
+		{protocol.Message{Type: protocol.TypeRm, ID: "rm2", Repo: label, Root: root}, root + " is a worktree of proj, not " + label},
+		{protocol.Message{Type: protocol.TypeRun, ID: "run1", Repo: remote, Root: side, Cmd: []string{"true"}}, side + " is a worktree of " + label + ", not proj"},
+		{protocol.Message{Type: protocol.TypeRun, ID: "run2", Repo: label, Root: root, Cmd: []string{"true"}}, root + " is a worktree of proj, not " + label},
+	} {
+		pc.Write(c.m)
+		res, _ := result(t, pc, c.m.ID)
+		if res.OK || !strings.Contains(res.Error, c.want) || strings.ContainsAny(res.Error, "\t\x1b") {
+			t.Fatalf("%s: %+v, want %q", c.m.ID, res, c.want)
+		}
+	}
+}
+
 // The select command makes a pane current on the managed server and
 // answers; a daemon without one refuses, and so does an empty pane id.
 func TestSelectCommand(t *testing.T) {

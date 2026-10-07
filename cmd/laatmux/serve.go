@@ -95,6 +95,10 @@ func cmdServe(ctx context.Context, args []string) error {
 		rt.ProcessStart = self.StartID
 	}
 	logger := log.New(os.Stderr, "laatmux ", log.LstdFlags)
+	if store != nil {
+		// Two checkouts whose names make one label are logged once.
+		store.Log = logger
+	}
 	labels := make([]string, len(watched))
 	for i, s := range watched {
 		labels[i] = tmux.Printable(s.Label())

@@ -1,14 +1,17 @@
 package worktree
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1266,6 +1269,147 @@ func TestUnlistedCheckoutListed(t *testing.T) {
 	// A listed repository keeps the config's label and source.
 	if r, ok, err := f.store.Known(f.ctx, "proj"); err != nil || !ok || r.Source != f.remote {
 		t.Fatalf("known proj: %+v %v %v", r, ok, err)
+	}
+}
+
+// A directory's name that is a label is the label; any other becomes
+// one, each character the rule does not take a _.
+func TestDirLabel(t *testing.T) {
+	for name, want := range map[string]string{
+		"proj":    "proj",
+		"a-b_C9":  "a-b_C9",
+		"x--":     "x--",
+		"next.js": "next_js",
+		"a:b":     "a_b",
+		"a\tb":    "a_b",
+		"\xff":    "_",
+		"å":       "_",
+		"-x":      "_x",
+		"--":      "_-",
+		".":       "_",
+	} {
+		got := dirLabel(name)
+		if got != want || !config.ValidLabel(got) {
+			t.Errorf("dirLabel(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// A checkout cloned into the repos directory by hand under a name that
+// is not a label, a tab and an ESC in it, is labelled by dirLabel in
+// what ls lists and in rm's and run's lookups, which name it in their
+// refusals: no raw byte of the directory's name reaches them. The
+// label finds it; the directory's name does not.
+func TestUnlistedCheckoutNotALabel(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("task"); err != nil {
+		t.Fatal(err)
+	}
+	name := "hand\tmade\x1b[31m"
+	const label = "hand_made__31m"
+	hand := filepath.Join(f.store.Dirs.Repos, name)
+	run(t, f.store.Dirs.Repos, "git", "clone", "-q", f.remote, hand)
+	run(t, hand, "git", "remote", "set-url", "origin", "/elsewhere/hand.git")
+	root := f.store.Dirs.Worktree("hand", "side")
+	run(t, hand, "git", "worktree", "add", "-q", "-b", "side", root)
+	want := Record{Repo: label, Source: "/elsewhere/hand.git", Branch: "side", Root: root}
+	recs, err := f.store.List(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || (recs[0] != want && recs[1] != want) {
+		t.Fatalf("list %+v", recs)
+	}
+	rec, co, ok, err := f.store.Find(f.ctx, root)
+	if err != nil || !ok || co != hand || rec != want {
+		t.Fatalf("find: %+v %q %v %v", rec, co, ok, err)
+	}
+	for _, by := range []string{label, "/elsewhere/hand.git"} {
+		r, ok, err := f.store.Known(f.ctx, by)
+		if err != nil || !ok || r.Name != label || r.Source != "/elsewhere/hand.git" {
+			t.Fatalf("known %q: %+v %v %v", by, r, ok, err)
+		}
+		rec, _, ok, err := f.store.ByBranch(f.ctx, r, "side")
+		if err != nil || !ok || rec != want {
+			t.Fatalf("by branch of %q: %+v %v %v", by, rec, ok, err)
+		}
+	}
+	if r, ok, err := f.store.Known(f.ctx, name); err != nil || ok {
+		t.Fatalf("known by the directory's name: %+v %v %v", r, ok, err)
+	}
+}
+
+// Two checkouts the config does not list whose names make one label,
+// of two repositories, do not share it: the first in directory order
+// keeps it, or the one whose directory is named so, and the other's
+// label has a hash of its name after it, logged once, its directory
+// quoted. Nothing is left out of the listing, so the worktrees of a
+// checkout a collision appears next to stay listed. A clone of the
+// repository that keeps the label shares it.
+func TestUnlistedLabelCollision(t *testing.T) {
+	f := newFixture(t)
+	var logged bytes.Buffer
+	f.store.Log = log.New(&logged, "", 0)
+	clone := func(name, origin, branch string) (dir, root string) {
+		t.Helper()
+		dir = filepath.Join(f.store.Dirs.Repos, name)
+		run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, dir)
+		run(t, dir, "git", "remote", "set-url", "origin", origin)
+		if branch != "" {
+			root = f.store.Dirs.Worktree(branch, "w")
+			run(t, dir, "git", "worktree", "add", "-q", "-b", branch, root)
+		}
+		return dir, root
+	}
+	list := func(want ...Record) {
+		t.Helper()
+		recs, err := f.store.List(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(recs, want) {
+			t.Fatalf("list %+v, want %+v", recs, want)
+		}
+	}
+	known := func(by, name, src string) {
+		t.Helper()
+		if r, ok, err := f.store.Known(f.ctx, by); err != nil || !ok || r.Name != name || r.Source != src {
+			t.Fatalf("known %s: %+v %v %v, want %s of %s", by, r, ok, err, name, src)
+		}
+	}
+	lines := func() int { return strings.Count(logged.String(), "\n") }
+	dot, one := clone("a.b", "/elsewhere/one.git", "one")
+	del, two := clone("a\x7fb", "/elsewhere/two.git", "two")
+	oneRec := Record{Repo: "a_b", Source: "/elsewhere/one.git", Branch: "one", Root: one}
+	twoRec := Record{Repo: "a_b-4ef992", Source: "/elsewhere/two.git", Branch: "two", Root: two}
+	for range 2 {
+		list(oneRec, twoRec)
+	}
+	line := strconv.Quote(del) + " is labelled a_b-4ef992: the label its name makes is " + dot + "'s"
+	if lines() != 1 || !strings.Contains(logged.String(), line) || !strings.Contains(logged.String(), "name") || strings.Contains(logged.String(), "\x7f") {
+		t.Fatalf("logged %q, want once %q", logged.String(), line)
+	}
+	known("a_b", "a_b", "/elsewhere/one.git")
+	known("a_b-4ef992", "a_b-4ef992", "/elsewhere/two.git")
+	known("/elsewhere/two.git", "a_b-4ef992", "/elsewhere/two.git")
+	if rec, co, ok, err := f.store.Find(f.ctx, two); err != nil || !ok || co != del || rec != twoRec {
+		t.Fatalf("find the second checkout's worktree: %+v %q %v %v", rec, co, ok, err)
+	}
+
+	// A directory named a_b, of a third repository, keeps the label from
+	// both, and each of them is listed under a label of its own.
+	clone("a_b", "/elsewhere/three.git", "")
+	oneRec.Repo = "a_b-2e7336"
+	list(oneRec, twoRec)
+	if lines() != 3 || !strings.Contains(logged.String(), dot+" is labelled a_b-2e7336") {
+		t.Fatalf("logged %q", logged.String())
+	}
+	known("a_b", "a_b", "/elsewhere/three.git")
+	// A clone of the third repository under another name shares it.
+	_, three := clone("a+b", "/elsewhere/three.git", "three")
+	list(oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
+	if lines() != 3 {
+		t.Fatalf("logged %q", logged.String())
 	}
 }
 
