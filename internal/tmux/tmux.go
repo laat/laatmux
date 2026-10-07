@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -656,16 +657,22 @@ func FormatLiteral(s string) string {
 // EncodeBranch makes a branch safe for a tmux session name, injectively:
 // tmux does not keep "." or ":" in a session name, stores a "\" in one
 // doubled and a control byte, DEL or a byte that is not part of a valid
-// UTF-8 sequence escaped by vis(3), tmux 3.2 to 3.4 store a "$" before
-// a letter, "_" or "{" as "\$", new-session expands a "#" in the name
-// as a format, and an argument that ends in ";" is a command separator,
-// so each of those bytes, and "%" itself, becomes "%" and its two
-// lowercase hex digits: "%25", "%23", "%24", "%2e", "%3a", "%3b",
-// "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". Every "$" is
-// encoded, whatever follows it, so a name does not depend on the tmux
-// version it is made on. Nothing else changes, a valid multibyte UTF-8
-// character included. git takes no "\" or control byte in a branch, but
-// a detached worktree's session is named by its directory, encoded the
+// UTF-8 sequence escaped by vis(3), tmux 3.3 a C1 control character
+// too, tmux 3.2 to 3.4 store a "$" before a letter, "_" or "{" as "\$",
+// new-session expands a "#" in the name as a format, an argument that
+// ends in ";" is a command separator, and laatmux splits tmux's listings
+// at Sep, so each of those bytes, and "%" itself, becomes "%" and its
+// two lowercase hex digits: "%25", "%23", "%24", "%2e", "%3a", "%3b",
+// "%5c", a tab "%09", DEL "%7f", a lone 0xff "%ff". A C1 control
+// character and a U+2063 are encoded byte by byte, U+0085 as "%c2%85".
+// Every "$" is encoded, whatever follows it: what tmux takes for a
+// letter there is its C library's isalpha, which differs by platform
+// and locale, and a name then does not depend on the tmux it is made
+// on. Nothing else changes, any other multibyte UTF-8 character
+// included; a tmux 3.3 built without utf8proc also escapes a character
+// its C library has no width for, U+FFFE say, which cannot be told from
+// here. git takes no "\", C0 control byte or DEL in a branch, but a
+// detached worktree's session is named by its directory, encoded the
 // same way. Distinct branches give distinct names and the encoding is
 // exact.
 func EncodeBranch(branch string) string {
@@ -674,7 +681,7 @@ func EncodeBranch(branch string) string {
 	for i := 0; i < len(branch); {
 		c := branch[i]
 		if c >= utf8.RuneSelf {
-			if r, n := utf8.DecodeRuneInString(branch[i:]); r != utf8.RuneError || n > 1 {
+			if r, n := utf8.DecodeRuneInString(branch[i:]); (r != utf8.RuneError || n > 1) && !unicode.IsControl(r) && !strings.ContainsRune(Sep, r) {
 				b.WriteString(branch[i : i+n])
 				i += n
 				continue

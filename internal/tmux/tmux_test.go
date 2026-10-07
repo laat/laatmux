@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -136,12 +137,22 @@ func TestEncodeBranch(t *testing.T) {
 		"%09":          "%2509",
 		"blåbær/ø":     "blåbær/ø",
 		"feat/😀":       "feat/😀",
-		"c1\u0085x":    "c1\u0085x",
 		"nc\ufffex":    "nc\ufffex",
 		"日本\x80":       "日本%80",
 		"\xe2\x82":     "%e2%82",
 		"\xed\xa0\x80": "%ed%a0%80",
 		"\xef\xbf\xbd": "\xef\xbf\xbd",
+
+		// A C1 control character (U+0085, U+0080, U+009F), which tmux
+		// 3.3 stores escaped, and U+2063, of which Sep is made, encoded
+		// byte by byte; U+00A0 and U+2064 next to them kept.
+		"c1\xc2\x85x":                 "c1%c2%85x",
+		"\xc2\x80":                    "%c2%80",
+		"\xc2\x9f":                    "%c2%9f",
+		"nb\xc2\xa0x":                 "nb\xc2\xa0x",
+		"a\xe2\x81\xa3b":              "a%e2%81%a3b",
+		"sep\xe2\x81\xa3\xe2\x81\xa3": "sep%e2%81%a3%e2%81%a3",
+		"is\xe2\x81\xa4x":             "is\xe2\x81\xa4x",
 	}
 	for in, want := range cases {
 		got := EncodeBranch(in)
@@ -156,9 +167,16 @@ func TestEncodeBranch(t *testing.T) {
 		}
 	}
 	// Every byte alone, which covers each control byte, DEL and each
-	// byte that cannot stand alone in UTF-8.
+	// byte that cannot stand alone in UTF-8, and every code point.
 	for c := 0; c < 256; c++ {
 		in := string([]byte{byte(c)})
+		got := EncodeBranch(in)
+		if back := decodeBranch(got); back != in || !keptByTmux(got) {
+			t.Errorf("EncodeBranch(%q) = %q, decoded %q", in, got, back)
+		}
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		in := string(r)
 		got := EncodeBranch(in)
 		if back := decodeBranch(got); back != in || !keptByTmux(got) {
 			t.Errorf("EncodeBranch(%q) = %q, decoded %q", in, got, back)
@@ -169,13 +187,14 @@ func TestEncodeBranch(t *testing.T) {
 	}
 }
 
-// keptByTmux is a name every tmux version stores as given: valid UTF-8
-// with no control byte, no DEL, and none of the characters it changes
-// or reads. A "$" counts as changed, as tmux 3.2 to 3.4 change one
-// before a letter, "_" or "{".
+// keptByTmux is a name tmux stores as given and laatmux reads back
+// whole: valid UTF-8 with no control character, C1 included, none of
+// the characters tmux changes or reads, and no U+2063, of which Sep is
+// made. A "$" counts as changed, as tmux 3.2 to 3.4 change one before a
+// letter, "_" or "{".
 func keptByTmux(name string) bool {
-	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\\x7f") &&
-		!strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 })
+	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\") &&
+		!strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || strings.ContainsRune(Sep, r) })
 }
 
 // Redact replaces the secret, bare and shell-quoted, in an error's text;
@@ -294,18 +313,19 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
-// A branch with a #, a ;, a \ or a $ gets a session with the name
-// SessionName computed, its pane tagged: new-session expands a # in the
-// name as a format, an argument that ends in ; splits the sequence
-// there, tmux stores a \ in a session name doubled, and tmux 3.2 to 3.4
-// store a $ before a letter, _ or { as \$. git takes no \ in a branch,
-// but a detached worktree's directory name, encoded the same way, may
-// have one.
+// A branch with a #, a ;, a \, a $ or a C1 control character gets a
+// session with the name SessionName computed, its pane tagged:
+// new-session expands a # in the name as a format, an argument that ends
+// in ; splits the sequence there, tmux stores a \ in a session name
+// doubled, tmux 3.2 to 3.4 store a $ before a letter, _ or { as \$, and
+// tmux 3.3 stores U+0085 as \302\205. git takes no \ in a branch, but a
+// detached worktree's directory name, encoded the same way, may have
+// one.
 func TestNewSessionEncodedNames(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
 	want := map[string]bool{}
-	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`, "fix$HOME", "a${b}"} {
+	for _, branch := range []string{"fix#12", "x#{session_id}", "y##", "semi;", "a;b", `back\slash`, `end\`, "fix$HOME", "a${b}", "c1\xc2\x85x"} {
 		name := SessionName("proj", branch)
 		if _, err := s.NewSession(ctx, NewSessionOpts{Name: name, Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}}); err != nil {
 			t.Fatalf("%s: %v", branch, err)
