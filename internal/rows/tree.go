@@ -694,12 +694,15 @@ func (b *builder) otherSessions(out []Row) []Row {
 			// stays in sight when settled and z can undo itself. The line
 			// is the one the view's LineFor finds (HomeLine). A task's
 			// line carries the session but not the state, and z refuses
-			// its agent of no worktree as the task's: none.
+			// its agent of no worktree as the task's: none. So does a
+			// line holding a plain session instead, a homeless worktree's
+			// with no workspace session whose agent is on this machine's
+			// default server, which the agent's pane is not in.
 			ws := c.Local
 			if managed {
 				if l := HomeLine(out, host, a.Session); l >= 0 {
 					ws = out[l].Local
-					if out[l].Pending != nil {
+					if out[l].Pending != nil || ws != nil && !ws.Workspace() {
 						ws = nil
 					}
 					c.Current = ws != nil && in.Current != "" && ws.Name == in.Current
@@ -824,8 +827,9 @@ func (r Row) home() (session string, own bool) {
 
 // HomeLine is the index in the tree of the depth-1 line on a host whose
 // workspace session attaches to a managed session, the line whose Home
-// it is. Of several, the first in the tree's order whose own session it
-// is; then the first of a worktree the session is named after
+// it is, or, with no home at all, the line of the worktree the session
+// is named after. Of several, the first in the tree's order whose own
+// session it is; then the first of a worktree the session is named after
 // (namedAfter), whose root agent is in it with the home lost or which
 // has no home at all; then the first. A worktree's root agent moved by
 // hand into another worktree's session takes the home from both, the

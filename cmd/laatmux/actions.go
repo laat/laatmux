@@ -741,7 +741,15 @@ func (d *dash) settle(m *view.Model) {
 		return
 	}
 	if line.Local == nil || !line.Local.Workspace() {
-		m.Message = line.Name + ": no local workspace session; " + noWorkspaceHint(d.cfg, *line, resolved)
+		hint := noWorkspaceHint(d.cfg, *line, resolved)
+		if resolved && r.Worktree == nil && line.Home() == "" {
+			// A managed agent of no worktree in the session its line has
+			// by name alone, with no home: the line's own jump refuses,
+			// and the agent's pane jump makes the line's workspace
+			// session (paneSpec).
+			hint = "enter creates one"
+		}
+		m.Message = line.Name + ": no local workspace session; " + hint
 		return
 	}
 	// The direction is the session's own state, which the rows' copies

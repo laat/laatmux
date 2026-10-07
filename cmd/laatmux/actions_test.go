@@ -844,21 +844,31 @@ func TestSettleGoesByLine(t *testing.T) {
 	// the workspace session's state, as its tile and as its node. z on it
 	// goes where enter goes, to the line whose home its session is, and
 	// toggles vm/proj/z, as S opens the shell there (TestShellGoesByLine);
-	// so with the home lost, through the root agent's session. Without
+	// so with the home lost, through the root agent's session, and with
+	// no agent of the worktree left, through the session's name. Without
 	// the workspace session it says what enter on the line does about
-	// one.
+	// one, or, the line with no home, what enter on the agent does.
 	stray := protocol.Agent{ID: "venv/laatmux/%10", EnvironmentID: "venv", Server: "laatmux", Session: "proj/z", Agent: "claude", Activity: protocol.Working, Liveness: protocol.Alive, Managed: true, Cwd: "/home/u"}
 	lost := w
 	lost.Session = ""
 	for _, c := range []struct {
-		w                  protocol.Worktree
-		workspace, settled bool
-	}{{w, true, false}, {w, true, true}, {lost, true, false}, {lost, true, true}, {w, false, false}, {lost, false, false}} {
+		w                        protocol.Worktree
+		workspace, settled, bare bool
+	}{
+		{w, true, false, false}, {w, true, true, false}, {lost, true, false, false}, {lost, true, true, false}, {w, false, false, false}, {lost, false, false, false},
+		{lost, true, false, true}, {lost, true, true, true}, {lost, false, false, true},
+	} {
 		in := rows.Input{Hosts: []rows.Host{host}, Agents: append(append([]protocol.Agent{}, agents...), stray), Worktrees: []protocol.Worktree{c.w}}
+		if c.bare {
+			in.Agents = []protocol.Agent{stray}
+		}
 		want, msg := expect("vm/proj/z", c.settled)
-		if c.workspace {
+		switch {
+		case c.workspace:
 			in.Locals = []protocol.Session{{Name: "vm/proj/z", Key: "venv//w/proj/z", Host: "vm", Settled: c.settled}}
-		} else {
+		case c.bare:
+			want, msg = "", "proj/z: no local workspace session; enter creates one"
+		default:
 			want, msg = "", "proj/z: no local workspace session; enter on the line creates one"
 		}
 		for _, tree := range []bool{false, true} {
