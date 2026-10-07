@@ -175,11 +175,12 @@ func TestEncodeBranch(t *testing.T) {
 			t.Errorf("EncodeBranch(%q) = %q, decoded %q", in, got, back)
 		}
 	}
-	for r := rune(0); r <= unicode.MaxRune; r++ {
+	for r, bad := rune(0), 0; r <= unicode.MaxRune && bad < 20; r++ {
 		in := string(r)
 		got := EncodeBranch(in)
 		if back := decodeBranch(got); back != in || !keptByTmux(got) {
 			t.Errorf("EncodeBranch(%q) = %q, decoded %q", in, got, back)
+			bad++
 		}
 	}
 	if got := SessionName("proj", "fix/v1.2"); got != "proj/fix/v1%2e2" {
@@ -191,7 +192,9 @@ func TestEncodeBranch(t *testing.T) {
 // whole: valid UTF-8 with no control character, C1 included, none of
 // the characters tmux changes or reads, and no U+2063, of which Sep is
 // made. A "$" counts as changed, as tmux 3.2 to 3.4 change one before a
-// letter, "_" or "{".
+// letter, "_" or "{". It does not know what a tmux 3.3 built without
+// utf8proc has no width for, a noncharacter or an unassigned code point
+// say, which such a tmux escapes too.
 func keptByTmux(name string) bool {
 	return utf8.ValidString(name) && !strings.ContainsAny(name, ".:#;$\\") &&
 		!strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || strings.ContainsRune(Sep, r) })
@@ -339,7 +342,9 @@ func TestNewSessionEncodedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Fields(string(out))
+	// By line: strings.Fields would split a name at U+0085, which it
+	// takes for a space.
+	got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	for _, name := range got {
 		if !want[name] {
 			t.Errorf("session %q, not a computed name", name)

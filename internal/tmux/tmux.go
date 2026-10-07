@@ -670,11 +670,11 @@ func FormatLiteral(s string) string {
 // and locale, and a name then does not depend on the tmux it is made
 // on. Nothing else changes, any other multibyte UTF-8 character
 // included; a tmux 3.3 built without utf8proc also escapes a character
-// its C library has no width for, U+FFFE say, which cannot be told from
-// here. git takes no "\", C0 control byte or DEL in a branch, but a
-// detached worktree's session is named by its directory, encoded the
-// same way. Distinct branches give distinct names and the encoding is
-// exact.
+// its C library has no width for, one newer than its Unicode tables, a
+// recent emoji say, which cannot be told from here. git takes no "\",
+// C0 control byte or DEL in a branch, but a detached worktree's session
+// is named by its directory, encoded the same way. Distinct branches
+// give distinct names and the encoding is exact.
 func EncodeBranch(branch string) string {
 	const hex = "0123456789abcdef"
 	var b strings.Builder
