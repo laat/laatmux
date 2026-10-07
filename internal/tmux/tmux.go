@@ -1025,7 +1025,10 @@ func (s Server) KillSessionID(ctx context.Context, id string, serverPID int) err
 	if serverPID <= 0 {
 		return fmt.Errorf("tmux: %d is not a server pid", serverPID)
 	}
-	_, err := s.Run(ctx, "if-shell", "-F", "#{==:#{pid},"+strconv.Itoa(serverPID)+"}", "kill-session -t "+id)
+	// The kill is a command string, which tmux parses as a config line
+	// would and where it expands a $ and a name from the environment;
+	// quoted, the id is kept as it is.
+	_, err := s.Run(ctx, "if-shell", "-F", "#{==:#{pid},"+strconv.Itoa(serverPID)+"}", "kill-session -t '"+id+"'")
 	var te *Error
 	if NoServer(err) || errors.As(err, &te) && (te.Msg == "can't find session: "+id || te.Msg == "no current target") {
 		return nil

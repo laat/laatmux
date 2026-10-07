@@ -858,8 +858,8 @@ func TestRmPrunableWorktree(t *testing.T) {
 // it was listed on, and once when it has two panes there: a session
 // made by hand can be called c:d, which tmux 3.7 keeps and no target
 // reaches by name, or $1, which a target reads as the id of another
-// session, here one at another root that rm leaves. By name, c:d was refused after git had
-// removed the worktree, and rm failed.
+// session, here one at another root that rm leaves. By name, c:d was
+// refused after git had removed the worktree, and rm failed.
 func TestRmKillsSessionsByID(t *testing.T) {
 	d, ft, store, remote := newAddDaemon(t)
 	ctx := context.Background()
