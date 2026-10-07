@@ -658,9 +658,9 @@ func FormatLiteral(s string) string {
 // changes, a valid multibyte UTF-8 character included. git takes no
 // "\" or control byte in a branch, but a detached worktree's session is
 // named by its directory, encoded the same way. Distinct branches give
-// distinct names and the encoding is exact. tmux 3.4 and older also
-// store a "$" before a letter, "_" or "{" escaped, which this leaves
-// as it is (#220).
+// distinct names and the encoding is exact. tmux 3.2 to 3.4 also store
+// a "$" before a letter, "_" or "{" escaped, which this leaves as it is
+// (#220).
 func EncodeBranch(branch string) string {
 	const hex = "0123456789abcdef"
 	var b strings.Builder
