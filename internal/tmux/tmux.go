@@ -716,8 +716,10 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	// Each session is named by its id, which reaches it whatever its
 	// name: a hand-made session can have a name no target reaches
 	// (CheckTarget), c:d say on tmux 3.7, which =c:d: takes for window
-	// d: of session c.
-	if out, err := s.Query(ctx, "#{session_id}", "list-sessions"); err == nil {
+	// d: of session c. A listing that a session's own after-list-sessions
+	// hook, which the removal above leaves, failed after is read all the
+	// same.
+	if out, err := s.Query(ctx, "#{session_id}", "list-sessions"); err == nil || HookOnly(err) {
 		for _, id := range strings.Fields(string(out)) {
 			for _, opt := range []string{"prefix", "prefix2", "status", "mouse"} {
 				_, _ = s.Run(ctx, "set-option", "-u", "-t", id, opt)

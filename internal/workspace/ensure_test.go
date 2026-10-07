@@ -115,76 +115,127 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 }
 
 // A user's after-list-sessions and after-list-panes hooks that fail
-// after their listings printed: Ensure makes the session, and finds it
-// again with its attach pane moved to the spec's managed session, as
-// the listing of its panes has them, or left as it is, each time with a
-// *tmux.HookError; list-panes' alone once the other hook is gone. A
-// step that fails is the error returned, not the hook's: the adoption
-// of a plain attachment lists its panes through Run, and fails on the
-// hook as before.
+// after their listings printed. With list-sessions' alone, Ensure makes
+// the session, finds it again, and adopts a plain attachment, under the
+// spec's name or under the one an older build gave it, each time with
+// list-sessions' *tmux.HookError. With list-panes' alone, it moves the
+// attach pane to the spec's managed session, leaves it when it is
+// there, makes a new one when it is gone, and adopts a plain attachment,
+// as the listings of the panes have them, each time with list-panes'
+// HookError; AttachPane finds the pane. A step that fails after a
+// listing a hook failed after, an adoption's set-option failed by a
+// hook of its own, is the error returned, not the listing's.
 func TestEnsureHookFails(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"s1", "s2"} {
+	for _, name := range []string{"s1", "s2", "s3", "s4"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	hooks := func(args ...string) {
+	run := func(args ...string) string {
 		t.Helper()
-		if _, err := Server.Run(ctx, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A session for list-sessions to print before its hook fails: on a
-	// server with none, it prints nothing, and that fails as any listing.
-	hooks("new-session", "-d", "-s", "boot", "sleep 600",
-		tmux.Next, "set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9",
-		tmux.Next, "set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
-	// The attach pane's target, read by show-options, which no hook
-	// follows.
-	target := func() string {
-		t.Helper()
-		out, err := Server.Run(ctx, "show-options", "-p", "-v", "-t", "=mac/w:", "@laatmux_attach_target")
+		out, err := Server.Run(ctx, args...)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return strings.TrimSpace(string(out))
 	}
-	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "s1", Name: "mac/w", Key: "env//w", Branch: "w"}
-	if name, created, err := Ensure(ctx, spec); name != "mac/w" || !created || !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux list-sessions ") {
-		t.Fatalf("made with the hooks: %q %v %v, want mac/w made and list-sessions' HookError", name, created, err)
+	const fails = "select-window -t nosuch:9"
+	// A session for list-sessions to print before its hook fails: on a
+	// server with none, it prints nothing, and that fails as any listing.
+	run("new-session", "-d", "-s", "boot", "sleep 600", tmux.Next, "set-hook", "-g", "after-list-sessions", fails)
+	hooked := func(what, listing string, err error) {
+		t.Helper()
+		if !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux "+listing+" ") {
+			t.Fatalf("%s: %v, want %s' HookError", what, err, listing)
+		}
+	}
+	keyed := func(name, key string) {
+		t.Helper()
+		if v := run("show-options", "-v", "-t", "="+name+":", "@laatmux_workspace"); v != key {
+			t.Fatalf("%s keyed %q after the adoption, want %q", name, v, key)
+		}
+	}
+	host := peer.Host{Name: "mac"}
+	spec := Spec{Host: host, Managed: "s1", Name: "mac/w", Key: "env//w", Branch: "w"}
+	name, created, err := Ensure(ctx, spec)
+	if name != "mac/w" || !created {
+		t.Fatalf("made: %q %v %v, want mac/w made", name, created, err)
+	}
+	hooked("made", "list-sessions", err)
+	name, created, err = Ensure(ctx, spec)
+	if name != "mac/w" || created {
+		t.Fatalf("found: %q %v %v, want mac/w found", name, created, err)
+	}
+	hooked("found", "list-sessions", err)
+	adopt := func(what, listing string, plain Spec, key string) {
+		t.Helper()
+		if _, created, err := Ensure(ctx, Spec{Host: host, Managed: plain.Managed, Name: plain.Name}); !created {
+			t.Fatalf("%s: the plain attachment not made: %v", what, err)
+		}
+		plain.Key = key
+		name, created, err := Ensure(ctx, plain)
+		if created {
+			t.Fatalf("%s: %q made, want adopted", what, name)
+		}
+		hooked(what, listing, err)
+		keyed(name, key)
+	}
+	adopt("adopted by name", "list-sessions", Spec{Host: host, Managed: "s2", Name: "mac/s2"}, "env//s2")
+	// One an older build named after the session as listed, a $ kept,
+	// which tmux 3.2 to 3.4 store escaped: there it is not made at all.
+	if _, err := Server.Run(ctx, "new-session", "-d", "-s", "mac/proj/fix$HOME", "sleep 600", tmux.Next, "set-option", "-t", "=mac/proj/fix$HOME:", "@laatmux_attach", "mac/proj/fix$HOME"); err != nil {
+		t.Logf("no session of the older build's name: %v", err)
+	} else {
+		legacy := Spec{Host: host, Managed: "proj/fix$HOME", Name: AttachName("mac", "proj/fix$HOME"), Key: "env//r/fix$HOME", Branch: "fix$HOME"}
+		name, created, err := Ensure(ctx, legacy)
+		if name != "mac/proj/fix$HOME" || created {
+			t.Fatalf("adopted under the older build's name: %q %v %v", name, created, err)
+		}
+		hooked("adopted under the older build's name", "list-sessions", err)
+		keyed(name, legacy.Key)
+	}
+
+	gone := AttachPane(ctx, "mac/w")
+	// A window beside the attach pane's, so the session stays when the
+	// pane goes.
+	run("new-window", "-d", "-t", "=mac/w:", "sleep 600",
+		tmux.Next, "set-hook", "-gu", "after-list-sessions", tmux.Next, "set-hook", "-g", "after-list-panes", fails)
+	// The attach pane's target, read by show-options, which no hook
+	// follows.
+	target := func() string {
+		t.Helper()
+		return run("show-options", "-p", "-v", "-t", AttachPane(ctx, "mac/w"), "@laatmux_attach_target")
 	}
 	spec.Managed = "s2"
-	if name, created, err := Ensure(ctx, spec); name != "mac/w" || created || !tmux.HookOnly(err) {
-		t.Fatalf("found with the hooks: %q %v %v, want mac/w and a HookError", name, created, err)
-	}
+	_, _, err = Ensure(ctx, spec)
+	hooked("moved", "list-panes", err)
 	if got := target(); got != "s2" {
-		t.Fatalf("attach pane on %q after the retarget, want s2", got)
+		t.Fatalf("attach pane on %q after the move, want s2", got)
 	}
-	hooks("set-hook", "-gu", "after-list-sessions")
-	spec.Managed = "s1"
-	if _, _, err := Ensure(ctx, spec); !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux list-panes ") {
-		t.Fatalf("found with the list-panes hook alone: %v, want its HookError", err)
+	_, _, err = Ensure(ctx, spec)
+	hooked("left as it is", "list-panes", err)
+	run("kill-pane", "-t", gone)
+	_, _, err = Ensure(ctx, spec)
+	hooked("made again", "list-panes", err)
+	if p := AttachPane(ctx, "mac/w"); p == "" || p == gone {
+		t.Fatalf("attach pane %q after it went, want a new one", p)
 	}
-	if got := target(); got != "s1" {
-		t.Fatalf("attach pane on %q after the second retarget, want s1", got)
-	}
-	// Its attach pane live on the spec's session: nothing to respawn.
-	if _, _, err := Ensure(ctx, spec); !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux list-panes ") {
-		t.Fatalf("found as it should be with the list-panes hook: %v, want its HookError", err)
-	}
-	hooks("set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9")
-	plain := Spec{Host: peer.Host{Name: "mac"}, Managed: "s2", Name: "mac/s2"}
+	adopt("adopted with list-panes' hook", "list-panes", Spec{Host: host, Managed: "s3", Name: "mac/s3"}, "env//s3")
+
+	run("set-hook", "-g", "after-list-sessions", fails)
+	plain := Spec{Host: host, Managed: "s4", Name: "mac/s4"}
 	if _, created, err := Ensure(ctx, plain); !created || !tmux.HookOnly(err) {
-		t.Fatalf("plain attachment: %v %v, want made with a HookError", created, err)
+		t.Fatalf("the last plain attachment: %v %v, want it made with a HookError", created, err)
 	}
-	plain.Key = "env//s2"
-	if _, _, err := Ensure(ctx, plain); err == nil || tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux list-panes -s -t ") {
-		t.Fatalf("adoption with the hooks: %v, want adopt's list-panes failure", err)
+	run("set-hook", "-g", "after-set-option", fails)
+	plain.Key = "env//s4"
+	if _, _, err := Ensure(ctx, plain); err == nil || tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux set-option ") {
+		t.Fatalf("an adoption whose set-option fails: %v, want its error", err)
 	}
 }
 

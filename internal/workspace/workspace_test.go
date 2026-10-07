@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -89,7 +91,9 @@ func TestListHookFails(t *testing.T) {
 
 // A user's after-display-message hook that fails after display-message
 // printed the session: Current returns it, and PaneSession it and the
-// pane's directory, each with the *tmux.HookError.
+// pane's directory, each with the *tmux.HookError. Inside still finds
+// the process inside the default server, and Kill of the session the
+// process runs in switches its client away first, so the client stays.
 func TestCurrentHookFails(t *testing.T) {
 	startServers(t)
 	ctx := context.Background()
@@ -114,6 +118,36 @@ func TestCurrentHookFails(t *testing.T) {
 	l, cwd, err := PaneSession(ctx, pane)
 	if l.Name != "w" || l.Key != "env//w" || cwd != dir || !tmux.HookOnly(err) {
 		t.Errorf("PaneSession with the hook: %+v %q %v, want w, %q and a HookError", l, cwd, err, dir)
+	}
+	if !Inside(ctx) {
+		t.Error("Inside with the hook: false")
+	}
+	// A control-mode client stands in for the user's terminal, on w.
+	run("new-session", "-d", "-s", "a", "sleep 600")
+	cmd := exec.Command("tmux", "-L", "default", "-C", "attach-session", "-t", "=w")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); cmd.Process.Kill(); cmd.Wait() })
+	session := func() string {
+		t.Helper()
+		return run("list-clients", "-F", "#{client_session}")
+	}
+	for i := 0; i < 100 && session() != "w"; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := session(); got != "w" {
+		t.Fatalf("the client is on %q, want w", got)
+	}
+	if err := Kill(ctx, "w"); err != nil {
+		t.Fatal(err)
+	}
+	if got := session(); got != "a" {
+		t.Errorf("after the kill with the hook the client is on %q, want a", got)
 	}
 }
 

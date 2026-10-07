@@ -943,7 +943,10 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	log := filepath.Join(dir, "tmux.log")
 	// A tmux that answers as the default server whichever server is
 	// asked: the view is inside it, and enter switches the client.
-	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncase \"$*\" in *display-message*) echo /tmp/lmx-fake/default ;; esac\n"
+	// display-message prints its format, the last argument, with the
+	// socket path for #{socket_path}, frame and all, as Records reads
+	// it. PATH has nothing else, so the shell does it alone.
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncase \"$*\" in *display-message*) for a; do f=$a; done; printf '%s\\n' \"/tmp/lmx-fake/default${f#'#{socket_path}'}\" ;; esac\n"
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

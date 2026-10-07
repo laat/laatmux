@@ -291,9 +291,10 @@ type Spec struct {
 // it. A plain attachment to be made under a name tmux would not store
 // as given is refused. The name of the session, existing or new, and
 // whether it was created are returned. A listing a user's hook failed
-// after, list-sessions' or the attach pane's list-panes', is read all
-// the same: the session is returned with its *tmux.HookError, unless a
-// step failed, whose error is the one returned.
+// after, list-sessions' or a list-panes' of the session, is read all
+// the same: the session is returned with its *tmux.HookError, the later
+// listing's when both failed, unless a step failed, whose error is the
+// one returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
 	// The attach tags and the attach command have the managed session's
 	// name, so one that cannot be in them is refused before any is
@@ -414,10 +415,12 @@ func withHook(err, hook error) error {
 // with the identity tags. An adopt cut short before the flip is met as
 // it was again and redone whole; one cut short after it is a workspace
 // with its pane tagged, as Ensure then finds it by key. Last, the
-// attach pane is respawned or made as for a reuse.
+// attach pane is respawned or made as for a reuse. A listing of its
+// panes a user's after-list-panes hook failed after is read all the
+// same; ensureAttach lists them again, and returns the hook's error.
 func adopt(ctx context.Context, name string, s Spec) error {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", tmux.SessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep))
-	if err != nil {
+	out, err := Server.Query(ctx, strings.Join([]string{"#{pane_id}", "#{@laatmux_attach_pane}", "#{@laatmux_attach_target}"}, tmux.Sep), "list-panes", "-s", "-t", tmux.SessionTarget(name))
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -541,15 +544,19 @@ func Inside(ctx context.Context) bool {
 	if os.Getenv("TMUX") == "" {
 		return false
 	}
-	here, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "#{socket_path}")
-	if err != nil {
-		return false
+	here := socketPath(ctx, tmux.Server{})
+	return here != "" && here == socketPath(ctx, Server)
+}
+
+// socketPath is the server's socket as tmux reports it, "" when the
+// server cannot be asked. A lookup a user's after-display-message hook
+// failed after has it all the same.
+func socketPath(ctx context.Context, s tmux.Server) string {
+	recs, err := s.Records(ctx, tmux.NewFields("#{socket_path}"), "display-message", "-p")
+	if err != nil && !tmux.HookOnly(err) || len(recs) != 1 {
+		return ""
 	}
-	def, err := Server.Run(ctx, "display-message", "-p", "#{socket_path}")
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(here)) == strings.TrimSpace(string(def))
+	return recs[0][0]
 }
 
 // Switch makes the session current for the calling client.
@@ -572,9 +579,11 @@ func AttachHint(name string) string {
 }
 
 // Kill kills the session, switching the calling client away first when it
-// is the current one, so the client is not left without a session.
+// is the current one, so the client is not left without a session. A
+// lookup a user's hook failed after has the current session all the
+// same.
 func Kill(ctx context.Context, name string) error {
-	if cur, err := Current(ctx); err == nil && cur.Name == name && Inside(ctx) {
+	if cur, err := Current(ctx); (err == nil || tmux.HookOnly(err)) && cur.Name == name && Inside(ctx) {
 		// switch-client -l picks the last session; -n the next. Either
 		// fails when this is the only session, and kill-session then
 		// detaches the client, which is what tmux does anyway.
@@ -600,10 +609,12 @@ func SetSettled(ctx context.Context, name string, settled bool) error {
 
 // AttachPane is the id of a local session's live attach pane, "" when
 // it has none: the pane a jump to an agent's pane selects, so the
-// session shows the attach whatever window the user left it on.
+// session shows the attach whatever window the user left it on. A
+// listing a user's after-list-panes hook failed after is read all the
+// same.
 func AttachPane(ctx context.Context, name string) string {
-	out, err := Server.Run(ctx, "list-panes", "-s", "-t", tmux.SessionTarget(name), "-F", strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep))
-	if err != nil {
+	out, err := Server.Query(ctx, strings.Join([]string{"#{pane_id}", "#{pane_dead}", "#{@laatmux_attach_pane}"}, tmux.Sep), "list-panes", "-s", "-t", tmux.SessionTarget(name))
+	if err != nil && !tmux.HookOnly(err) {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {

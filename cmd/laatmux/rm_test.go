@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -141,11 +144,14 @@ func TestRmWithoutTmux(t *testing.T) {
 // A user's after-list-sessions, after-display-message and
 // after-list-panes hooks that fail after their listings printed: the
 // commands run from a shell go on with what the listings printed and
-// print each hook's error once, as a note. settle by name and unsettle
-// in the session settle it; split, shell, run and rm in the session
-// split it, open its shell window, run in its root and remove it; jump
-// makes the worktree's session; rm by name finds the root from the
-// session's tags and kills it; explain finds the pane.
+// print each hook's error once, as a note through warnHook (command.Rm's
+// own note is TestRmAddHookFails'). settle by name and unsettle in the
+// session settle it; split, shell, run and rm in the session split it,
+// open its shell window, run in its root and remove it, the client on
+// it switched to another session first; jump makes the worktree's
+// session and switches the client there; rm by name finds the root
+// from the session's tags and kills it; explain finds the pane. A
+// control-mode client stands in for the user's terminal.
 func TestCommandsHookFails(t *testing.T) {
 	const src = "git@x:o/proj.git"
 	isolatedDefault(t)
@@ -207,6 +213,24 @@ func TestCommandsHookFails(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	panes, windows := count("panes"), count("windows")
+	c := exec.Command("tmux", "-L", "default", "-C", "attach-session", "-t", "=mac/proj/s")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	// The client's session, by list-clients, which no hook follows.
+	client := func() string { return run("list-clients", "-F", "#{client_session}") }
+	for i := 0; i < 100 && client() != "mac/proj/s"; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := client(); got != "mac/proj/s" {
+		t.Fatalf("the client is on %q, want mac/proj/s", got)
+	}
 	run("set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9", tmux.Next, "set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
 	// Gone before isolatedDefault's check lists the panes.
 	t.Cleanup(func() {
@@ -249,9 +273,14 @@ func TestCommandsHookFails(t *testing.T) {
 	if has("mac/proj/s") {
 		t.Error("rm in the session left it")
 	}
+	if got := client(); got == "" || got == "mac/proj/s" {
+		t.Errorf("after rm in the session the client is on %q, want another session", got)
+	}
+	// jump runs from the client's pane.
+	t.Setenv("TMUX_PANE", run("list-clients", "-F", "#{pane_id}"))
 	noted("jump", cmdJump(ctx, []string{"mac/proj/b"}))
-	if !has("mac/proj/b") {
-		t.Error("jump made no session")
+	if got := client(); got != "mac/proj/b" {
+		t.Errorf("after jump the client is on %q, want mac/proj/b", got)
 	}
 	noted("rm by name", cmdRm(ctx, []string{"proj/gone", "--host", "mac"}))
 	if has("mac/proj/gone") {

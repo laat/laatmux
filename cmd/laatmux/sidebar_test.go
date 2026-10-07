@@ -768,6 +768,76 @@ func TestSidebarReap(t *testing.T) {
 	}
 }
 
+// A user's after-list-panes hook that fails after list-panes printed:
+// the sidebar's own listings go on with the panes, and say nothing of
+// the hook. add leaves a window that has a live sidebar as it is, fit
+// puts a sidebar back to its width, on --session kills the sidebar in
+// the other session, reap kills one alone in its window, and off kills
+// the rest. add is not run on a window without one: its split would
+// start this binary as the sidebar.
+func TestSidebarListingsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	t.Setenv("TMUX", "")
+	// The session display-message names with no client attached is
+	// tmux's choice: the other session is whichever it did not.
+	target, err := scopeSidebar(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	here, elsewhere := "boot", "other"
+	if run("display", "-p", "-t", "other", "#{session_id}") == target {
+		here, elsewhere = "other", "boot"
+	}
+	sidebar := func(session string) (window, pane string) {
+		t.Helper()
+		window = run("new-window", "-d", "-t", session+":", "-P", "-F", "#{window_id}", "sleep 1000")
+		pane = run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
+		run("set-option", "-p", "-t", pane, sidebarTag, "1")
+		return window, pane
+	}
+	fitted, fittedPane := sidebar(here)
+	_, otherPane := sidebar(elsewhere)
+	alone, alonePane := sidebar(here)
+	run("kill-pane", "-t", run("display", "-p", "-t", alone+".1", "#{pane_id}"))
+	run("resize-window", "-t", fitted, "-x", "172", "-y", "40")
+	width := func() string { return run("display", "-p", "-t", fittedPane, "#{pane_width}") }
+	if w := width(); w == "35" {
+		t.Fatalf("the window grew and the sidebar did not: %s", w)
+	}
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-panes") })
+	// display-message prints no values for a pane that is gone.
+	exists := func(pane string) bool {
+		out, _ := workspace.Server.Run(ctx, "display", "-p", "-t", pane, "#{pane_id}")
+		return strings.TrimSpace(string(out)) == pane
+	}
+	if panes, err := sidebarPanes(ctx); !tmux.HookOnly(err) || !slices.ContainsFunc(panes, func(p paneInfo) bool { return p.id == fittedPane && p.sidebar }) {
+		t.Errorf("the panes: %+v %v, want the sidebars and a HookError", panes, err)
+	}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
+	if err := sidebarAdd(ctx, cfg, fitted); err != nil {
+		t.Errorf("add to a window with a sidebar: %v", err)
+	}
+	if err := sidebarFit(ctx, cfg, fitted); err != nil || width() != "35" {
+		t.Errorf("fit: %v, the sidebar %s wide, want 35", err, width())
+	}
+	if again, err := scopeSidebar(ctx, true); err != nil || again != target || exists(otherPane) || !exists(fittedPane) {
+		t.Errorf("on --session: %q %v, want %q; the other session's sidebar there %v, this one's %v", again, err, target, exists(otherPane), exists(fittedPane))
+	}
+	if err := sidebarReap(ctx); err != nil || exists(alonePane) {
+		t.Errorf("reap: %v, the sidebar alone in its window there %v", err, exists(alonePane))
+	}
+	if err := sidebarOff(ctx); err != nil || exists(fittedPane) {
+		t.Errorf("off: %v, a sidebar there %v", err, exists(fittedPane))
+	}
+}
+
 // The jump keys: on binds M-1..M-9 in the root table to a jump with
 // the window and client, off unbinds them and leaves a user's M-0 and
 // a user's M-5 bound to something else alone.
