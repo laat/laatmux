@@ -260,5 +260,5 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 		roots[i] = tmux.Printable(w.Root)
 	}
 	sort.Strings(roots)
-	return protocol.Worktree{}, false, fmt.Errorf("%s/%s has worktrees at %s, in two clones of the repository", repo.Name, branch, strings.Join(roots, " and "))
+	return protocol.Worktree{}, false, fmt.Errorf("%s has worktrees at %s, in two clones of the repository", tmux.Printable(repo.Name+"/"+branch), strings.Join(roots, " and "))
 }

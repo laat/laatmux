@@ -70,7 +70,9 @@ func cmdAdd(ctx context.Context, args []string) error {
 	// result that failed may still name a root, a removed one say, and
 	// that is not ready.
 	if res.Done {
-		fmt.Printf("%s/%s ready: %s, session %s\n", repo.Name, res.Branch, tmux.Printable(res.Root), res.Managed)
+		// git takes a C1 control character and a byte that is not UTF-8
+		// in a branch, and the root has the branch in it.
+		fmt.Printf("%s ready: %s, session %s\n", tmux.Printable(repo.Name+"/"+res.Branch), tmux.Printable(res.Root), res.Managed)
 	}
 	// The delivery state is printed as soon as the host has said it,
 	// before any local failure, and the exit is 0 whatever it says when

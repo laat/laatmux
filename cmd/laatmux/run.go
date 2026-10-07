@@ -12,6 +12,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -74,7 +75,7 @@ func cmdRun(ctx context.Context, args []string) error {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("no worktree for %s/%s on %s", repo.Name, branch, run.Host.Name)
+			return fmt.Errorf("no worktree for %s on %s", tmux.Printable(repo.Name+"/"+branch), run.Host.Name)
 		}
 		run.Repo, run.Branch, run.Root = repo, branch, w.Root
 	} else {

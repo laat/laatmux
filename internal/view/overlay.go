@@ -3,6 +3,7 @@ package view
 import (
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/term"
@@ -301,10 +302,10 @@ func (l *Log) Render(w, h int) []Line {
 
 // wrap splits s into lines of at most w cells, at spaces where one
 // falls in the last third of the line, else mid-word. Control
-// characters are dropped first, line breaks and tabs becoming spaces:
-// an error that quotes a setup command's output may carry an escape
-// sequence, and drawn raw it could clear the screen it is meant to
-// stay on.
+// characters, C1 among them, are dropped first, line breaks and tabs
+// becoming spaces: an error that quotes a setup command's output may
+// carry an escape sequence, and drawn raw it could clear the screen it
+// is meant to stay on. A byte that is not UTF-8 becomes U+FFFD.
 func wrap(s string, w int) []string {
 	if w < 1 {
 		return nil
@@ -313,7 +314,7 @@ func wrap(s string, w int) []string {
 		switch {
 		case r == '\n' || r == '\r' || r == '\t':
 			return ' '
-		case r < 0x20 || r == 0x7f:
+		case unicode.IsControl(r):
 			return -1
 		}
 		return r

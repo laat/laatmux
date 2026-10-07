@@ -88,11 +88,12 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	return out, nil
 }
 
-// Describe names what the rm removes: <repo>/<branch>, or the root as
-// tmux.Printable shows it.
+// Describe names what the rm removes: <repo>/<branch>, or the root, as
+// tmux.Printable shows it; git takes a C1 control character and a byte
+// that is not UTF-8 in a branch.
 func (m Rm) Describe() string {
 	if m.Repo.Name != "" && m.Branch != "" {
-		return m.Repo.Name + "/" + m.Branch
+		return tmux.Printable(m.Repo.Name + "/" + m.Branch)
 	}
 	return tmux.Printable(m.Root)
 }

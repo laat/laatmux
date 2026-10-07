@@ -134,8 +134,10 @@ func worktreeSpec(h config.Host, w protocol.Worktree) workspace.Spec {
 // addHint says a worktree has no managed session and how add makes one,
 // in the words z uses for a homeless worktree's line (addsSession). A
 // detached worktree has no <repo>/<branch> and is named by its root.
+// Either is put as tmux.Printable shows it: git takes a C1 control
+// character and a byte that is not UTF-8 in a branch.
 func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
-	name := h.Name + "/" + w.Repo + "/" + w.Branch
+	name := tmux.Printable(h.Name + "/" + w.Repo + "/" + w.Branch)
 	if w.Branch == "" {
 		name = tmux.Printable(w.Root) + " on " + h.Name
 	}
@@ -149,6 +151,9 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 // line is for pasting into a shell, and git takes branches such as it's
 // and a$(x): each word is quoted as ShellJoin quotes it, only when it
 // needs to be, and the placeholder the reader replaces is left as it is.
+// git takes a C1 control character and a byte that is not UTF-8 in a
+// branch too, which no plain quoting keeps from the terminal; such a
+// branch is written as dollarQuote writes it.
 // It names an agent only where add would refuse to pick one: no agent
 // last used for the repository is still configured (in last, last.json
 // as add reads it, by the config's source), there is no default_agent,
@@ -160,13 +165,39 @@ func addCommand(cfg config.Config, h config.Host, w protocol.Worktree, last home
 	if r := localRepoArg(cfg, w); r != "" {
 		repo = quote(r)
 	}
-	line := fmt.Sprintf("laatmux add %s --repo %s --host %s", quote(w.Branch), repo, quote(h.Name))
+	branch := quote(w.Branch)
+	if tmux.Printable(w.Branch) != w.Branch {
+		branch = dollarQuote(w.Branch)
+	}
+	line := fmt.Sprintf("laatmux add %s --repo %s --host %s", branch, repo, quote(h.Name))
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		if _, _, err := cfg.DefaultAgent("", last.Get(r.Source).Agent); err != nil && len(cfg.Agents) > 0 {
 			line += " --agent " + quote(cfg.AgentNames()[0])
 		}
 	}
 	return line
+}
+
+// dollarQuote is s as a $'...' word, which bash, zsh and ksh read back
+// byte for byte: a ' and a \ escaped, and every byte that is not
+// printable ASCII written \xHH, so the line has no control character
+// and no byte that is not UTF-8 in it.
+func dollarQuote(s string) string {
+	var b strings.Builder
+	b.WriteString("$'")
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\'' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 0x20 || c >= 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // localRepoArg is the record's repository as this machine names it: its
@@ -227,7 +258,7 @@ func matchWorktree(ws []protocol.Worktree, cfg config.Config, rest string) (prot
 			roots[i] = tmux.Printable(w.Root)
 		}
 		sort.Strings(roots)
-		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", rest, strings.Join(roots, " and "))
+		return protocol.Worktree{}, false, fmt.Errorf("%s matches worktrees at %s, in two clones of the repository; name one by the host's label for its clone", tmux.Printable(rest), strings.Join(roots, " and "))
 	}
 	if local, ok := cfg.RepoByName(label); ok && branch != "" {
 		if w, ok, err := pass(func(w protocol.Worktree) bool { return w.Branch == branch && source.Same(w.Source, local.Source) }); ok || err != nil {

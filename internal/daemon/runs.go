@@ -216,7 +216,7 @@ func (rn *taskRunner) runRun(ctx context.Context, m protocol.Message, c *command
 			}
 		}
 		if m.Branch != "" && rec.Branch != m.Branch {
-			return fmt.Errorf("%s is the worktree for %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), m.Branch)
+			return fmt.Errorf("%s is the worktree for %s, not %s", tmux.Printable(root), branchOrDetached(rec.Branch), tmux.Printable(m.Branch))
 		}
 		if err := rn.registerRun(r, gen); err != nil {
 			return err

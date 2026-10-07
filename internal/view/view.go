@@ -1146,7 +1146,8 @@ func cellWidth(rs []rune, i int, r rune) int {
 
 func runeWidth(r rune) int {
 	switch {
-	case r < 0x20, r == 0x7f:
+	case r < 0x20, r >= 0x7f && r < 0xa0:
+		// C0, DEL and C1, which fit drops.
 		return 0
 	case r < 0x300:
 		return 1
@@ -1188,16 +1189,19 @@ func emojiWide(r rune) bool {
 	return false
 }
 
-// fit trims s to at most w cells, dropping control characters.
+// fit trims s to at most w cells, dropping control characters, C1
+// among them: git takes a C1 control character in a branch, and U+009B
+// is a CSI to a terminal that acts on C1. A byte that is not UTF-8 is
+// drawn as U+FFFD.
 func fit(s string, w int) string {
 	var b strings.Builder
 	n := 0
 	rs := []rune(s)
 	for i, r := range rs {
-		rw := cellWidth(rs, i, r)
-		if rw == 0 && r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			continue
 		}
+		rw := cellWidth(rs, i, r)
 		if n+rw > w {
 			break
 		}

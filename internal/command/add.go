@@ -12,6 +12,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 )
 
@@ -152,9 +153,11 @@ func (a Add) Needs() []string {
 }
 
 // Describe is the one line that says what the add is: "add
-// <repo>/<branch> on <host> with <agent>".
+// <repo>/<branch> on <host> with <agent>", the <repo>/<branch> as
+// tmux.Printable shows it, since git takes a C1 control character and a
+// byte that is not UTF-8 in a branch.
 func (a Add) Describe() string {
-	s := fmt.Sprintf("add %s/%s on %s", a.Repo.Name, a.Branch, a.Host.Name)
+	s := fmt.Sprintf("add %s on %s", tmux.Printable(a.Repo.Name+"/"+a.Branch), a.Host.Name)
 	if a.Generated {
 		s += " (or the next free name)"
 	}

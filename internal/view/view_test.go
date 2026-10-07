@@ -338,6 +338,15 @@ func TestWidth(t *testing.T) {
 	if got := fit("a\x1bb", 5); got != "ab" {
 		t.Errorf("control dropped: %q", got)
 	}
+	// A C1 control character, U+009B a CSI, is dropped too and takes no
+	// cell; a byte that is not UTF-8 is drawn as U+FFFD. git takes
+	// either in a branch.
+	if got, w := fit("a\u009b31mb\u0085c", 6), width("a\u009b31mb\u0085c"); got != "a31mbc" || w != 6 {
+		t.Errorf("C1 dropped: %q, width %d", got, w)
+	}
+	if got := fit("a\x9bb", 5); got != "a�b" {
+		t.Errorf("not UTF-8: %q", got)
+	}
 	if l, err := ParseLayout(""); err != nil || l != Tiles {
 		t.Error("ParseLayout empty")
 	}

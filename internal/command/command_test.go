@@ -100,6 +100,15 @@ func TestDescribe(t *testing.T) {
 	if got := (Rm{Root: "/r/a\tb"}).Describe(); got != `"/r/a\tb"` {
 		t.Error(got)
 	}
+	// git takes a C1 control character and a byte that is not UTF-8 in
+	// a branch: <repo>/<branch> is quoted then, the CLI prints it.
+	a.Branch, a.Generated = "x\u009b31m\xff", true
+	if got := a.Describe(); got != `add "proj/x\u009b31m\xff" on vm (or the next free name) running sh -c true` {
+		t.Error(got)
+	}
+	if got := (Rm{Repo: config.Repo{Name: "proj"}, Branch: "x\u009b31m\xff", Root: "/r/x"}).Describe(); got != `"proj/x\u009b31m\xff"` {
+		t.Error(got)
+	}
 }
 
 // A cancelled run is told apart from other refusals.

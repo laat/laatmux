@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1533,6 +1534,51 @@ func TestPendingKeys(t *testing.T) {
 	finish()
 	if dismissed != "add-1" || !strings.Contains(m.Message, "dismissed proj/fix on vm") {
 		t.Fatalf("dismissed %q message %q", dismissed, m.Message)
+	}
+}
+
+// x's question on a worktree and on a task, and the message a dismiss
+// ends with, name a branch with a C1 control character, which git
+// takes, by its <repo>/<branch> as tmux.Printable shows it.
+func TestConfirmsQuoteBranch(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	wb, pb := "w\u009b31m", "p\u009b31m"
+	in := rows.Input{
+		Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/proj/w", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: wb, Root: "/w/proj/w"}},
+		Pendings: []protocol.Pending{{ID: "add-1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: pb, Root: "/w/proj/p",
+			Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "not ready", SubmittedAt: time.Now()}},
+	}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	treeView(m)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), dismiss: func(string) error { return nil }}
+
+	selectRow(t, m, "proj/"+wb)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if want := "remove " + strconv.Quote("proj/"+wb) + " on vm (/w/proj/w)? y/n"; m.Confirm != want {
+		t.Errorf("rm: confirm %q, want %q", m.Confirm, want)
+	}
+	m.Handle(term.Key{Rune: 'n'})
+
+	selectRow(t, m, "proj/"+pb)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if want := "dismiss " + strconv.Quote("proj/"+pb) + " on vm (prompt not delivered)? y/n"; m.Confirm != want {
+		t.Errorf("dismiss: confirm %q, want %q", m.Confirm, want)
+	}
+	d.act(m, m.Handle(term.Key{Rune: 'y'}))
+	log, ok := m.Overlay.(*view.Log)
+	if !ok {
+		t.Fatalf("no log: %v", m.Overlay)
+	}
+	for i := 0; i < 200 && !log.Done(); i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	d.act(m, m.Poll())
+	if want := "dismissed " + strconv.Quote("proj/"+pb) + " on vm"; m.Message != want {
+		t.Errorf("dismiss: message %q, want %q", m.Message, want)
 	}
 }
 

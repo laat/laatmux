@@ -185,6 +185,11 @@ func TestAddHintCanRun(t *testing.T) {
 	subst.ID, subst.Branch, subst.Root = "venv/worktree//w/s", "a$(x)", "/w/s"
 	eq := bv
 	eq.ID, eq.Branch, eq.Root = "venv/worktree//w/e", "a==ls", "/w/e"
+	// git takes a C1 control character in a branch: the name is quoted
+	// as tmux.Printable quotes it, and the add line has the branch as a
+	// $'...' word, which the shell reads back byte for byte.
+	ctl := bv
+	ctl.ID, ctl.Branch, ctl.Root = "venv/worktree//w/c", "it's\u009b31m\\x", "/w/c"
 	noSrc := bv
 	noSrc.Source = ""
 	host := func(name, env string) rows.Host {
@@ -227,6 +232,7 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("vm", "venv"), subst, onSubst},
 		// zsh's magic_equal_subst would read a bare a==ls as a=/bin/ls.
 		{host("vm", "venv"), eq, "vm/proj/a==ls has no managed session; laatmux add 'a==ls' --repo proj --host vm --agent claude makes one"},
+		{host("vm", "venv"), ctl, `"vm/proj/it's\u009b31m\\x" has no managed session; laatmux add $'it\'s\xc2\x9b31m\\x' --repo proj --host vm --agent claude makes one`},
 		{host("vm", "venv"), noSrc, "vm/proj/b has no managed session; laatmux add b --repo <repo> --host vm makes one"},
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},

@@ -164,3 +164,23 @@ func TestTaskReportQuotesRoot(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// A pending record's <repo>/<branch>, and the listed worktree a task
+// handed over to, are named as tmux.Printable shows them: git takes a
+// C1 control character in a branch, a CSI to the terminal printed raw.
+func TestTaskReportQuotesBranch(t *testing.T) {
+	m := merged.New()
+	odd := "a\u009b31mb"
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.Local)
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
+		Hosts:     []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv"}},
+		Worktrees: []protocol.Worktree{{ID: "venv/worktree//w/x", EnvironmentID: "venv", Repo: "proj", Branch: odd, Root: "/w/x"}},
+		Handoffs:  []protocol.Handoff{{ID: "t1", ReplacedBy: "venv/worktree//w/x"}},
+		Pendings:  []protocol.Pending{{ID: "p1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: odd, SubmittedAt: at}},
+	})
+	want := "p1  " + strconv.Quote("proj/"+odd) + " on vm  " + at.Format(time.DateTime) + "  submitted\n" +
+		"t1  handed over to " + strconv.Quote("proj/"+odd+" on vm") + "; laatmux tasks show t1 prints its prompt, tasks dismiss drops it\n"
+	if got := taskReport(m.Status("")); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

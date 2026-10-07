@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/laat/laatmux/internal/config"
@@ -841,6 +842,106 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(markers, 0o755) })
 	if _, _, err := f.add("first"); !quoted(err, "open "+openQuote(markers+"/setup-")) || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("add with a marker that cannot be written: %v", err)
+	}
+}
+
+// rawByte is whether s has a control character, C1 among them, or a
+// byte that is not UTF-8: what tmux.Printable quotes.
+func rawByte(s string) bool {
+	return !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// A branch with a C1 control character, which git takes, is named in
+// add's progress and refusals and in ByBranch's and Allocate's errors as
+// tmux.Printable shows it: raw, U+009B is a CSI to a terminal that acts
+// on C1. A lone 0x9b byte, which is not UTF-8, is the same CSI to a
+// terminal that is not in UTF-8 mode; a filesystem that takes only
+// UTF-8 names, macOS's, refuses that branch's ref and root, so it is
+// added only where the filesystem takes it.
+func TestBranchWithC1Quoted(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.add("first"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.checkout()
+	q := strconv.Quote
+	csi := "\u009b31m"
+	fresh, pushed, hand := "new"+csi, "remote"+csi, "hand"+csi
+	run(t, c, "git", "push", "-q", "origin", "main:refs/heads/"+pushed)
+	run(t, c, "git", "branch", hand, "main")
+	cases := []struct {
+		branch string
+		want   []step
+	}{
+		{fresh, []step{
+			{protocol.StageWorktree, protocol.StateStart, "git branch --no-track " + q(fresh) + " origin/HEAD"},
+			{protocol.StageWorktree, protocol.StateDone, "branch " + q(fresh) + " from origin/HEAD"},
+			{protocol.StageWorktree, protocol.StateStart, "git worktree add " + q(f.store.Dirs.Worktree("proj", fresh)) + " " + q(fresh)},
+		}},
+		{pushed, []step{
+			{protocol.StageWorktree, protocol.StateStart, "git branch --track " + q(pushed) + " " + q("origin/"+pushed)},
+			{protocol.StageWorktree, protocol.StateDone, "branch " + q(pushed) + " tracks " + q("origin/"+pushed)},
+		}},
+		{hand, []step{{protocol.StageWorktree, protocol.StateSkip, "branch " + q(hand) + " exists, used as is"}}},
+	}
+	invalid := "raw\x9b31m"
+	if err := os.Mkdir(filepath.Join(t.TempDir(), invalid), 0o755); err == nil {
+		cases = append(cases, struct {
+			branch string
+			want   []step
+		}{invalid, []step{{protocol.StageWorktree, protocol.StateDone, "branch " + q(invalid) + " from origin/HEAD"}}})
+	} else {
+		t.Logf("the filesystem refuses a name that is not UTF-8: %q", err.Error())
+	}
+	for _, tc := range cases {
+		_, steps, err := f.add(tc.branch)
+		if err != nil {
+			t.Fatalf("add %q: %v", tc.branch, err)
+		}
+		for _, want := range tc.want {
+			if !hasStep(steps, want.stage, want.state, want.detail) {
+				t.Errorf("missing %q in %+v", want, steps)
+			}
+		}
+		for _, s := range steps {
+			if rawByte(s.detail) {
+				t.Errorf("step with a raw byte: %q", s.detail)
+			}
+		}
+	}
+
+	quoted := func(err error, want string) bool {
+		return err != nil && strings.Contains(err.Error(), want) && !rawByte(err.Error())
+	}
+	// The branch checked out at a worktree outside the worktrees
+	// directory, and the root of the branch's worktree taken by one on
+	// another branch.
+	out, squatter, wanted := "out"+csi, "squat"+csi, "wanted"+csi
+	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "elsewhere")
+	run(t, c, "git", "worktree", "add", "-q", "-b", out, elsewhere, "main")
+	if _, _, err := f.add(out); !quoted(err, "branch "+q(out)+" is checked out at "+elsewhere) {
+		t.Errorf("add %q: %v", out, err)
+	}
+	wantedRoot := f.store.Dirs.Worktree("proj", wanted)
+	run(t, c, "git", "worktree", "add", "-q", "-b", squatter, wantedRoot, "main")
+	if _, _, err := f.add(wanted); !quoted(err, q(wantedRoot)+" is a worktree on branch "+q(squatter)+", not "+q(wanted)) {
+		t.Errorf("add %q: %v", wanted, err)
+	}
+	// The branch in two clones of the repository.
+	second := filepath.Join(f.store.Dirs.Repos, "proj2")
+	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, second)
+	run(t, second, "git", "worktree", "add", "-q", "-b", fresh, f.store.Dirs.Worktree("proj2", fresh))
+	if _, _, _, err := f.store.ByBranch(f.ctx, f.repo, fresh); !quoted(err, "branch "+q(fresh)+" of proj has worktrees at ") {
+		t.Errorf("by branch in two clones: %v", err)
+	}
+	if _, err := Allocate(fresh, func(string) bool { return true }); !quoted(err, "no free name for "+q(fresh)+":") {
+		t.Errorf("allocate: %v", err)
+	}
+	// The branch checked out in the main checkout.
+	inMain := "main" + csi
+	run(t, c, "git", "checkout", "-q", "-b", inMain)
+	if _, _, err := f.add(inMain); !quoted(err, "branch "+q(inMain)+" is checked out in the main checkout "+c) {
+		t.Errorf("add %q: %v", inMain, err)
 	}
 }
 

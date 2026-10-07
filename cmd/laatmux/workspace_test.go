@@ -134,6 +134,13 @@ func TestFindWorktreeBySource(t *testing.T) {
 	if _, _, err := findWorktree(esc, mine, "fix"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
 		t.Errorf("two clones, a root with an ESC: %v", err)
 	}
+	// A branch with a C1 control character, which git takes, is named
+	// quoted with its repository.
+	c1 := []protocol.Worktree{two[0], two[1]}
+	c1[0].Branch, c1[1].Branch = "f\u009b31m", "f\u009b31m"
+	if _, _, err := findWorktree(c1, mine, "f\u009b31m"); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote("mine/f\u009b31m")+" has worktrees at /r/a and /r/b") {
+		t.Errorf("two clones, a branch with a C1 control: %v", err)
+	}
 }
 
 // ls pairs a worktree with the agent in its managed session, lists a
@@ -558,6 +565,13 @@ func TestMatchWorktreeAmbiguous(t *testing.T) {
 	esc[0].Root = "/r/a\x1b]0;x\x07"
 	if _, _, err := matchWorktree(esc, cfg, "mine/topic"); err == nil || !strings.Contains(err.Error(), strconv.Quote(esc[0].Root)+" and /r/b") {
 		t.Errorf("two clones, a root with an ESC: %v", err)
+	}
+	// The target with a branch that has a C1 control character, which
+	// git takes, is named quoted.
+	c1 := []protocol.Worktree{two[0], two[1]}
+	c1[0].Branch, c1[1].Branch = "t\u009b31m", "t\u009b31m"
+	if _, _, err := matchWorktree(c1, cfg, "mine/t\u009b31m"); err == nil || !strings.HasPrefix(err.Error(), strconv.Quote("mine/t\u009b31m")+" matches worktrees at /r/a and /r/b") {
+		t.Errorf("two clones, a branch with a C1 control: %v", err)
 	}
 	// This machine's name is one clone's host label: the target is that
 	// clone's, not a dead end.
