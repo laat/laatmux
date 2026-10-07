@@ -921,16 +921,29 @@ func TestMain(m *testing.M) {
 	// passes: the start leaves a marker here, and the run fails on it.
 	// Only on a marker there when m.Run returns: a start no test waits
 	// for, such as a detached daemon after a cancelled dial, can come
-	// later, and a pane or hook start dies unrecorded when its server is
-	// killed first, as isolatedDefault kills its own at the end of the
-	// test. Those run no test all the same: the guard or the kill ends
-	// them.
+	// later, and runs no test all the same. A pane or hook start dies
+	// unrecorded when its server is killed first, so what a server can
+	// still start is looked at before the kill: isolatedDefault fails
+	// the test on what selfStarts finds on the test's server, and the
+	// run fails below on what it finds on the run's default server, one
+	// a test started without isolatedDefault.
 	marks := filepath.Join(dir, "refused")
 	if err := os.Mkdir(marks, 0o700); err != nil {
 		panic(err)
 	}
 	os.Setenv("LAATMUX_TEST_REFUSED", marks)
 	code := m.Run()
+	// m.Run's timeout is over: a tmux that hangs is ended, and its error
+	// fails the run.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	starts := selfStarts(ctx)
+	cancel()
+	for _, l := range starts {
+		fmt.Fprintln(os.Stderr, selfStartRun, l)
+	}
+	if len(starts) > 0 && code == 0 {
+		code = 1
+	}
 	exec.Command("tmux", "-L", "default", "kill-server").Run()
 	if refusedStarts(marks) && code == 0 {
 		code = 1

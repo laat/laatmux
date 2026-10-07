@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +23,8 @@ import (
 // of the test's own, starts it with no config at all, not the user's
 // nor a system-wide one that might source it, and kills it at the end.
 // HOME and the state directory are the test's too. The directory is
-// under /tmp: a unix socket's path is short on macOS.
+// under /tmp: a unix socket's path is short on macOS. Before the kill,
+// the test fails on anything selfStarts finds on the server.
 func isolatedDefault(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
@@ -36,6 +40,9 @@ func isolatedDefault(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", dir)
 	t.Setenv("TMUX", "")
 	t.Cleanup(func() {
+		for _, l := range selfStarts(context.Background()) {
+			t.Errorf("%s %s", selfStartTest, l)
+		}
 		_, _ = workspace.Server.Run(context.Background(), "kill-server")
 		os.RemoveAll(dir)
 	})
@@ -43,6 +50,284 @@ func isolatedDefault(t *testing.T) {
 	// reaches it through workspace.Server's socket and reads no config.
 	if out, err := exec.Command("tmux", "-L", "default", "-f", "/dev/null", "new-session", "-d", "-s", "boot", "sleep 1000").CombinedOutput(); err != nil {
 		t.Fatalf("start tmux: %v: %s", err, out)
+	}
+}
+
+// selfStarts is what the default tmux server can still start as this
+// test binary: the lines that name it in the panes' start commands, a
+// pane running or kept dead by remain-on-exit, in the global session
+// and window hooks, where the sidebar sets its own, and in the key
+// bindings of every table. TestMain's guard ends such a start, and its
+// marker fails the run, but only a start that gets that far: one in a
+// pane or a hook's job dies unrecorded when its server is killed first.
+// These lines are there before the kill, and a hook or a key that never
+// fired is a start waiting to happen. No tmux at all, or no server,
+// starts nothing: the first listing that finds no server ends the look.
+// Any other error is a line, since the server was not seen. -N on each:
+// list-keys would start a server where none runs, and with it read the
+// config under HOME, the user's in TestMain.
+func selfStarts(ctx context.Context) []string {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return []string{err.Error()}
+	}
+	var found []string
+	for _, args := range [][]string{
+		{"list-panes", "-a", "-F", "#{pane_start_command}"},
+		{"show-hooks", "-g"},
+		{"show-hooks", "-gw"},
+		{"list-keys"},
+	} {
+		out, err := workspace.Server.Run(ctx, append([]string{"-N"}, args...)...)
+		if tmux.NoServer(err) {
+			return found
+		}
+		if err != nil {
+			found = append(found, err.Error())
+			continue
+		}
+		for _, l := range strings.Split(string(out), "\n") {
+			if namesPath(l, self) {
+				found = append(found, l)
+			}
+		}
+	}
+	return found
+}
+
+// namesPath reports whether a line tmux printed names path. Both are
+// compared bare of what the quoting adds: tmux prints a value in double
+// quotes with a \ before a ", \ or $, ShellJoin closes its single quote
+// before a ' and escapes it with a \, and the sidebar's hooks and keys
+// have the path as a format literal, each # doubled but before a [. So
+// a path that differs from it only in those, such as a##b for a#b, is
+// taken for it, and a path with a control character, which tmux prints
+// as an escape, is not found.
+func namesPath(l, path string) bool {
+	return strings.Contains(bare(l), bare(path))
+}
+
+// bare is s without a \, ' or ", and with each run of # as one #.
+func bare(s string) string {
+	return hashRun.ReplaceAllLiteralString(strings.NewReplacer(`\`, "", `'`, "", `"`, "").Replace(s), "#")
+}
+
+var hashRun = regexp.MustCompile(`#+`)
+
+// selfStartTest is what a test says, failed by isolatedDefault for a
+// line selfStarts found; selfStartRun is what the run says, failed by
+// TestMain for one on the run's own default server. selfStartReady is
+// what a run of TestSelfStarts logs once its setup is done.
+const (
+	selfStartTest  = "the test's tmux server can start this test binary:"
+	selfStartRun   = "the run fails: its default tmux server can start this test binary:"
+	selfStartReady = "the setup is done"
+)
+
+// A test whose server can still start this binary fails, whether or
+// not the start reaches TestMain's guard before the server is killed:
+// for a pane's start command, the sidebar's, in neither the current
+// window nor the current session, and once the guard has ended the
+// start, in a pane remain-on-exit keeps; for the sidebar's hooks,
+// session and window; and for its jump keys and a key of the prefix
+// table. The hooks and the keys never fire. A run whose own default
+// server, one started without isolatedDefault, has the jump keys fails
+// after its tests pass. Hooks and keys that name another binary of the
+// same name, or a path with a # where this one has none, pass. The
+// binary linked under a directory with a #, a quote, a \ and a $ in its
+// name is found as its pane and its keys print it. Each in a run of its
+// own, so the failure is that run's.
+func TestSelfStarts(t *testing.T) {
+	ctx := context.Background()
+	if mode := os.Getenv("LAATMUX_TEST_SELF_START"); mode != "" {
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch mode {
+		case "pane":
+			isolatedDefault(t)
+			must(workspace.Server.Run(ctx, "set-option", "-gw", "remain-on-exit", "on"))
+			w := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
+			id := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "split-window", "-d", "-t", w, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{self, "sidebar", "pane"})))))
+			dead := ""
+			for end := time.Now().Add(10 * time.Second); dead != "1" && time.Now().Before(end); {
+				time.Sleep(20 * time.Millisecond)
+				dead = strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", id, "#{pane_dead}"))))
+			}
+			if dead != "1" {
+				t.Fatal("the pane did not end in 10s")
+			}
+			// A later session is tmux's current one: the pane is in
+			// neither the current window nor the current session.
+			must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "later", "sleep 1000"))
+		case "hooks":
+			isolatedDefault(t)
+			if err := setSidebarHooks(ctx, self); err != nil {
+				t.Fatal(err)
+			}
+		case "keys":
+			isolatedDefault(t)
+			if err := bindJumpKeys(ctx, self); err != nil {
+				t.Fatal(err)
+			}
+			must(workspace.Server.Run(ctx, "bind-key", "-T", "prefix", "F12", jumpKeyCmd(self, 1)))
+		case "run":
+			// Under the run's TMUX_TMPDIR, which TestMain set.
+			if out, err := exec.Command("tmux", "-L", "default", "-f", "/dev/null", "new-session", "-d", "-s", "boot", "sleep 1000").CombinedOutput(); err != nil {
+				t.Fatalf("start tmux: %v: %s", err, out)
+			}
+			if err := bindJumpKeys(ctx, self); err != nil {
+				t.Fatal(err)
+			}
+		case "other":
+			isolatedDefault(t)
+			if err := setSidebarHooks(ctx, filepath.Join(t.TempDir(), filepath.Base(self))); err != nil {
+				t.Fatal(err)
+			}
+			// A # where this binary's path has none, before its name,
+			// which go test never starts with one, makes another path.
+			if err := bindJumpKeys(ctx, filepath.Join(filepath.Dir(self), "#"+filepath.Base(self))); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("mode %q", mode)
+		}
+		// In the output of a failed test: the failure is the check's,
+		// not the setup's.
+		t.Log(selfStartReady)
+		return
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("no tmux")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This binary under a directory whose name has what the shell's and
+	// tmux's quoting, and a format literal, write otherwise: a hard link,
+	// or a copy where it cannot link, as from another file system.
+	odd := filepath.Join(t.TempDir(), `a#b##c#[d'e"f\g$h`, filepath.Base(self))
+	if err := os.Mkdir(filepath.Dir(odd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(self, odd); err != nil {
+		b, err := os.ReadFile(self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(odd, b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// As its os.Executable names it on Linux, which reads /proc/self/exe:
+	// a temporary directory under a symlink resolved.
+	if odd, err = filepath.EvalSymlinks(odd); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		mode, exe string
+		// Each a line of the failure, with the binary's path in it; none
+		// for a run that passes.
+		want []string
+	}{
+		{"pane", self, []string{"sidebar pane"}},
+		{"hooks", self, []string{"after-new-window[9101]", "window-resized[9105]"}},
+		{"keys", self, []string{"-T root ", "-T prefix ", "M-1 ", "M-9 ", "F12 "}},
+		{"run", self, []string{"M-1 ", "M-9 "}},
+		{"other", self, nil},
+		{"pane", odd, []string{"sidebar pane"}},
+		{"keys", odd, []string{"-T root ", "-T prefix "}},
+	} {
+		run := exec.Command(c.exe, "-test.run=^TestSelfStarts$")
+		run.Env = append(os.Environ(), "LAATMUX_TEST_SELF_START="+c.mode)
+		b, err := run.CombinedOutput()
+		out := string(b)
+		if c.want == nil {
+			if err != nil || !strings.Contains(out, "PASS\n") {
+				t.Errorf("%s %s: %v\n%s", c.mode, c.exe, err, out)
+			}
+			continue
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			t.Errorf("%s %s: %v\n%s", c.mode, c.exe, err, out)
+			continue
+		}
+		// The test fails; with "run", the test passes and the run fails
+		// after it.
+		msg, test := selfStartTest, "--- FAIL: TestSelfStarts"
+		if c.mode == "run" {
+			msg, test = selfStartRun, "PASS\n"
+		}
+		if !strings.Contains(out, test) {
+			t.Errorf("%s %s: no %q\n%s", c.mode, c.exe, test, out)
+		}
+		if c.mode != "run" && !strings.Contains(out, selfStartReady) {
+			t.Errorf("%s %s: the setup failed\n%s", c.mode, c.exe, out)
+		}
+		for _, w := range c.want {
+			found := false
+			for _, l := range strings.Split(out, "\n") {
+				if i := strings.Index(l, msg); i >= 0 && namesPath(l[i:], c.exe) && strings.Contains(l[i:], w) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s %s: no line %q with the binary and %q\n%s", c.mode, c.exe, msg, w, out)
+			}
+		}
+	}
+}
+
+// selfStarts starts no server where none runs, so reads no config, and
+// finds nothing there; a server it cannot see, behind a socket
+// directory tmux refuses as unsafe, is a line for each listing.
+func TestSelfStartsUnseen(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("no tmux")
+	}
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("/tmp", "lmxt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	read := filepath.Join(dir, "read")
+	if err := os.WriteFile(filepath.Join(dir, ".tmux.conf"), []byte("run-shell "+tmux.ShellJoin([]string{"touch " + read})+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = workspace.Server.Run(context.Background(), "kill-server") })
+	if found := selfStarts(ctx); len(found) != 0 {
+		t.Errorf("with no server: %q", found)
+	}
+	if _, err := os.Stat(read); err == nil {
+		t.Error("a server started, and read the config")
+	}
+	unsafe := filepath.Join(dir, "unsafe")
+	sock := filepath.Join(unsafe, fmt.Sprintf("tmux-%d", os.Getuid()))
+	if err := os.MkdirAll(sock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sock, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", unsafe)
+	found := selfStarts(ctx)
+	if len(found) != 4 {
+		t.Errorf("behind an unsafe directory: %q, want a line for each listing", found)
+	}
+	for _, l := range found {
+		if !strings.HasPrefix(l, "tmux -N ") {
+			t.Errorf("behind an unsafe directory: %q, not a tmux error", l)
+		}
 	}
 }
 
