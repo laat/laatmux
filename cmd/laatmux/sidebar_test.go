@@ -102,7 +102,10 @@ func selfStarts(ctx context.Context) []string {
 // compared bare of what the quoting adds: tmux prints a value in double
 // quotes with a \ before a ", \ or $, ShellJoin closes its single quote
 // before a ' and escapes it with a \, and the sidebar's hooks and keys
-// have the path as a format literal, each # doubled but before a [.
+// have the path as a format literal, each # doubled but before a [. So
+// a path that differs from it only in those, such as a##b for a#b, is
+// taken for it, and a path with a control character, which tmux prints
+// as an escape, is not found.
 func namesPath(l, path string) bool {
 	return strings.Contains(bare(l), bare(path))
 }
@@ -124,16 +127,17 @@ const (
 
 // A test whose server can still start this binary fails, whether or
 // not the start reaches TestMain's guard before the server is killed:
-// for a pane's start command, the sidebar's, in a window that is not
-// the current one, and once the guard has ended the start, in a pane
-// remain-on-exit keeps; for the sidebar's hooks, session and window;
-// and for its jump keys and a key of the prefix table. The hooks and
-// the keys never fire. A run whose own default server, one started
-// without isolatedDefault, has the jump keys fails after its tests
-// pass. Hooks and keys that name another binary of the same name pass.
-// A copy of the binary under a directory with a #, a quote, a \ and a
-// $ in its name is found as its pane and its keys print it. Each in a
-// run of its own, so the failure is that run's.
+// for a pane's start command, the sidebar's, in neither the current
+// window nor the current session, and once the guard has ended the
+// start, in a pane remain-on-exit keeps; for the sidebar's hooks,
+// session and window; and for its jump keys and a key of the prefix
+// table. The hooks and the keys never fire. A run whose own default
+// server, one started without isolatedDefault, has the jump keys fails
+// after its tests pass. Hooks and keys that name another binary of the
+// same name, or a path with a # where this one has none, pass. The
+// binary linked under a directory with a #, a quote, a \ and a $ in its
+// name is found as its pane and its keys print it. Each in a run of its
+// own, so the failure is that run's.
 func TestSelfStarts(t *testing.T) {
 	ctx := context.Background()
 	if mode := os.Getenv("LAATMUX_TEST_SELF_START"); mode != "" {
@@ -147,9 +151,17 @@ func TestSelfStarts(t *testing.T) {
 			must(workspace.Server.Run(ctx, "set-option", "-gw", "remain-on-exit", "on"))
 			w := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "new-window", "-d", "-t", "boot:", "-P", "-F", "#{window_id}", "sleep 1000"))))
 			id := strings.TrimSpace(string(must(workspace.Server.Run(ctx, "split-window", "-d", "-t", w, "-P", "-F", "#{pane_id}", tmux.ShellJoin([]string{self, "sidebar", "pane"})))))
-			for i := 0; i < 500 && strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", id, "#{pane_dead}")))) != "1"; i++ {
+			dead := ""
+			for i := 0; i < 500 && dead != "1"; i++ {
 				time.Sleep(20 * time.Millisecond)
+				dead = strings.TrimSpace(string(must(workspace.Server.Run(ctx, "display", "-p", "-t", id, "#{pane_dead}"))))
 			}
+			if dead != "1" {
+				t.Fatal("the pane did not end in 10s")
+			}
+			// A later session is tmux's current one: the pane is in
+			// neither the current window nor the current session.
+			must(workspace.Server.Run(ctx, "new-session", "-d", "-s", "later", "sleep 1000"))
 		case "hooks":
 			isolatedDefault(t)
 			if err := setSidebarHooks(ctx, self); err != nil {
@@ -171,11 +183,11 @@ func TestSelfStarts(t *testing.T) {
 			}
 		case "other":
 			isolatedDefault(t)
-			other := filepath.Join(t.TempDir(), filepath.Base(self))
-			if err := setSidebarHooks(ctx, other); err != nil {
+			if err := setSidebarHooks(ctx, filepath.Join(t.TempDir(), filepath.Base(self))); err != nil {
 				t.Fatal(err)
 			}
-			if err := bindJumpKeys(ctx, other); err != nil {
+			// A # where this binary's path has none makes another path.
+			if err := bindJumpKeys(ctx, filepath.Join(filepath.Dir(self)+"#", filepath.Base(self))); err != nil {
 				t.Fatal(err)
 			}
 		default:
@@ -190,25 +202,25 @@ func TestSelfStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A copy of this binary under a directory whose name has what the
-	// shell's and tmux's quoting, and a format literal, write otherwise.
+	// This binary under a directory whose name has what the shell's and
+	// tmux's quoting, and a format literal, write otherwise: a hard link,
+	// or a copy from another file system.
 	odd := filepath.Join(t.TempDir(), `a#b##c#[d'e"f\g$h`, filepath.Base(self))
 	if err := os.Mkdir(filepath.Dir(odd), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	src, err := os.Open(self)
-	if err != nil {
-		t.Fatal(err)
+	if err := os.Link(self, odd); err != nil {
+		b, err := os.ReadFile(self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(odd, b, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	defer src.Close()
-	dst, err := os.OpenFile(odd, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		t.Fatal(err)
-	}
-	if err := dst.Close(); err != nil {
+	// As its os.Executable names it on Linux, which reads /proc/self/exe:
+	// a temporary directory under a symlink resolved.
+	if odd, err = filepath.EvalSymlinks(odd); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
