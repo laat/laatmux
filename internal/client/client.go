@@ -129,7 +129,10 @@ var HelloTimeout = 15 * time.Second
 // a bare name included, which the shell then finds on its PATH. The
 // bridge and upgrade's install use the same word, so the binary the
 // bridge runs is the one upgrade replaces. A word is quoted as
-// tmux.ShellJoin quotes it.
+// tmux.ShellJoin quotes it, and one that starts with + is quoted
+// whatever it holds: the shell reads a command that starts with + as
+// its own options, as it does one that starts with -, which the config
+// refuses.
 func RemoteBin(bin string) string {
 	if bin == "" {
 		bin = "laatmux"
@@ -137,6 +140,9 @@ func RemoteBin(bin string) string {
 	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
 	if rest, ok := strings.CutPrefix(bin, "~/"); ok {
 		return `"$HOME"/` + quote(rest)
+	}
+	if strings.HasPrefix(bin, "+") {
+		return "'" + strings.ReplaceAll(bin, "'", `'\''`) + "'"
 	}
 	return quote(bin)
 }

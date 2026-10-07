@@ -238,13 +238,15 @@ func TestParseSSHLeadingDash(t *testing.T) {
 }
 
 // A bin that starts with - is read as options by the host's login shell
-// running the bridge, and by the install script's tools, so the config
-// refuses one and says which host, however the host got its name. An
-// absolute path, a path under ~, a relative path, a path with a space,
-// a bare name and a - after the first character are binaries.
+// running the bridge, or by the install script's tools, so the config
+// refuses one on a host with ssh and says which host, however the host
+// got its name. An absolute path, a path under ~, a relative path, a
+// path with a space, a bare name and a - after the first character are
+// binaries, and the entry for this machine, whose bin nothing reads,
+// keeps whatever it has.
 func TestParseBinLeadingDash(t *testing.T) {
 	refused := map[string]string{
-		"hosts:\n  - name: mac\n  - name: vm\n    ssh: box\n    bin: -x\n": `hosts: bin "-x" for vm starts with -, which the host's shell reads as an option`,
+		"hosts:\n  - name: mac\n  - name: vm\n    ssh: box\n    bin: -x\n": `hosts: bin "-x" for vm starts with -, which the host's shell or upgrade's install script reads as an option`,
 		"hosts:\n  - name: vm\n    ssh: box\n    bin: -x/laatmux\n":        `hosts: bin "-x/laatmux" for vm starts with -`,
 		"hosts:\n  - ssh: box\n    bin: \"--\"\n":                          `hosts: bin "--" for box starts with -`,
 	}
@@ -262,7 +264,7 @@ func TestParseBinLeadingDash(t *testing.T) {
 		"bare":  "laatmux",
 		"dash":  "laatmux-",
 	}
-	in := "hosts:\n"
+	in := "hosts:\n  - name: mac\n    bin: -x\n"
 	for name, bin := range bins {
 		in += "  - name: " + name + "\n    ssh: " + name + "\n    bin: \"" + bin + "\"\n"
 	}
@@ -270,6 +272,7 @@ func TestParseBinLeadingDash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bins["mac"] = "-x"
 	for name, bin := range bins {
 		if h, ok := c.Find(name); !ok || h.Bin != bin {
 			t.Errorf("%s: %+v, want bin %q", name, h, bin)

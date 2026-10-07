@@ -72,8 +72,11 @@ func TestInstallScript(t *testing.T) {
 	if s := installScript("laat mux"); !strings.Contains(s, `command -v 'laat mux'`) {
 		t.Errorf("bare name with a space: %s", s)
 	}
+	if s := installScript("+x/laatmux"); !strings.Contains(s, `bin='+x/laatmux';`) {
+		t.Errorf("path that starts with +: %s", s)
+	}
 	// The install runs the same word the bridge does.
-	for _, bin := range []string{"~/.local/bin/laatmux", "/opt/my bin/laatmux", "laatmux"} {
+	for _, bin := range []string{"~/.local/bin/laatmux", "/opt/my bin/laatmux", "laatmux", "+x/laatmux"} {
 		if !strings.Contains(installScript(bin), client.RemoteBin(bin)) {
 			t.Errorf("%q: install and bridge disagree", bin)
 		}

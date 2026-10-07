@@ -152,10 +152,10 @@ A host named after its ssh alias or the machine's hostname, and a
 repository named from its source, must pass the same rule or the config
 is rejected asking for an explicit `name`. An `ssh` alias that starts
 with `-` is rejected whatever the host's name, without that advice,
-since ssh would read it as an option. A `bin` that starts with `-` is
-rejected naming the host, since the host's shell would read the bridge's
-command as its own options, and the tools in `upgrade`'s install script
-the path as theirs. `repos` and `worktrees` have no
+since ssh would read it as an option. A host's `bin` that starts with
+`-` is rejected naming the host, since the tools in `upgrade`'s install
+script would read the path as options, and so, unless the path needs
+quoting, would the host's shell running the bridge. `repos` and `worktrees` have no
 defaults, and must be absolute or start with `~`; a host without them
 cannot `add`. A repository's name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
