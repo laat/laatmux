@@ -112,9 +112,6 @@ func cmdServe(ctx context.Context, args []string) error {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
 	}
 	readRepos, appendRepo := configHooks()
-	if store == nil {
-		readRepos = nil
-	}
 	// The shutdown message ends the daemon the way a signal does.
 	ctx, shutdown := context.WithCancel(ctx)
 	defer shutdown()
@@ -185,11 +182,12 @@ func cmdServe(ctx context.Context, args []string) error {
 }
 
 // configHooks are the daemon's hooks on this machine's config file.
-// readRepos is the store's: the file is looked at before every worktree
-// poll and read again when it has changed, so a repository the task
-// form or add appended, or a hand edit, is listed without a restart.
-// appendRepo is the relay's, for an add of a repository new to the
-// config once the host's add has succeeded.
+// readRepos is the store's and the relay's: the file is looked at every
+// worktree interval and read again when it has changed, so a repository
+// the task form or add appended, or a hand edit, is listed without a
+// restart, and an append a broken file refused is tried again once the
+// file is fixed. appendRepo is the relay's, for an add of a repository
+// new to the config once the host's add has succeeded.
 func configHooks() (readRepos func() ([]worktree.Repo, bool, error), appendRepo func(src, name string) (bool, error)) {
 	var watch config.Watch
 	readRepos = func() ([]worktree.Repo, bool, error) {

@@ -163,12 +163,13 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
-	// Repos reads the repositories the config lists again, for Store,
-	// before every worktree poll: changed when the file changed since
-	// the last read, so the store follows repositories an add or the
-	// task form appended, and hand edits, without a restart. A file
-	// that does not read keeps the list as it was. nil keeps the list
-	// Store was made with.
+	// Repos reads the repositories the config lists again, every
+	// WorktreeInterval: changed when the file changed since the last
+	// read, so Store follows repositories an add or the task form
+	// appended, and hand edits, without a restart, and the relay retries
+	// the appends a config it could not take held. A file that does not
+	// read keeps the list as it was. nil keeps the list Store was made
+	// with, and retries the appends at start alone.
 	Repos func() (repos []worktree.Repo, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
@@ -243,10 +244,8 @@ type Config struct {
 //     with the poll's, so neither is applied after a newer one; taken
 //     before relay.mu and mu. lastHostsErr is under it.
 //   - pollMu holds the worktree poll and its publication together, so an
-//     older observation never overwrites a newer one; taken before
-//     relay.mu, which the poll takes to retry the config appends after
-//     the config changed, and before mu.
-//     lastListErr and lastReposErr are under it.
+//     older observation never overwrites a newer one; taken before mu.
+//     lastListErr is under it.
 //   - repos, and the keyed locks repoLock hands out, all held across mu
 //     and never taken under it. An add holds repos shared, then its
 //     repository's "repo/" lock, then its "name/" lock (holdRepos,
@@ -306,7 +305,8 @@ type Daemon struct {
 	listed       bool
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change; under pollMu
-	lastReposErr string            // the same for the config's repositories
+	lastReposErr string            // the same for the config file; runConfig's
+	configRead   bool              // runConfig has read the file once
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
@@ -621,6 +621,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d.relay != nil {
 		d.startRelays(ctx)
 		go d.runRelaySweep(ctx)
+	}
+	if d.cfg.Repos != nil {
+		go d.runConfig(ctx)
 	}
 	if d.attn != nil {
 		// The entries of hosts gone from the config go at start, as

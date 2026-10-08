@@ -194,6 +194,88 @@ func TestFormReloadsRepos(t *testing.T) {
 	}
 }
 
+// A pasted candidate kept over a reload is named again among the
+// repositories listed now: one whose name another repository took since
+// gets a name of its own, so the add never carries a name the config
+// gives another source.
+func TestFormRefreshRenames(t *testing.T) {
+	cfg := dashConfig(t)
+	fresh := cfg
+	fresh.Repos = append(append([]config.Repo(nil), cfg.Repos...), config.Repo{Source: "git@github.com:b/scripts.git", Name: "scripts"})
+	reads := 0
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts[:2], agents: cfg.AgentNames(), reload: func() (config.Config, error) {
+		reads++
+		if reads == 1 {
+			return cfg, nil
+		}
+		return fresh, nil
+	}}
+	form := buildForm(cfg, f, home.Last{}, "proj", "", "", nil)
+	pick(form, "git@github.com:a/scripts.git")
+	if form.Chips[0].Label() != "scripts" {
+		t.Fatalf("pasted as %q", form.Chips[0].Label())
+	}
+	for form.Focus() != 0 {
+		form.Handle(term.Key{Kind: term.KeyShiftTab})
+	}
+	form.Handle(term.Key{Kind: term.KeyEnter}) // the picker opens, the config read again
+	form.Handle(term.Key{Kind: term.KeyEsc})
+	c := form.Chips[0]
+	if len(c.Choices) != 4 || c.Choices[2].Label != "scripts" || c.Choices[3].Label != "a-scripts" || c.Selected != 3 {
+		t.Fatalf("after the reload: %+v", c)
+	}
+	if repo, isNew := f.repo(form, c.Selected); !isNew || repo.Name != "a-scripts" || repo.Source != "git@github.com:a/scripts.git" {
+		t.Fatalf("repo %+v new %v", repo, isNew)
+	}
+}
+
+// A reload keeps the selection on its repository by source, wherever
+// the config puts it now; a selected repository the config no longer
+// lists gives way to the first, and the host and agent follow it; a chip
+// that had nothing to choose from has nothing chosen after.
+func TestFormRefreshSelection(t *testing.T) {
+	cfg := dashConfig(t)
+	var last home.Last
+	last.Set("git@github.com:laat/laatmux.git", home.LastRepo{Host: "vm", Agent: "codex"})
+	var next config.Config
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts[:2], agents: cfg.AgentNames(), reload: func() (config.Config, error) { return next, nil }}
+	open := func(form *view.Form) {
+		for form.Focus() != 0 {
+			form.Handle(term.Key{Kind: term.KeyShiftTab})
+		}
+		form.Handle(term.Key{Kind: term.KeyEnter})
+		form.Handle(term.Key{Kind: term.KeyEsc})
+	}
+	form := buildForm(cfg, f, last, "proj", "", "", nil)
+	// A repository listed before proj: proj is still the one chosen.
+	next = cfg
+	next.Repos = append([]config.Repo{{Source: "git@github.com:laat/first.git", Name: "first"}}, cfg.Repos...)
+	open(form)
+	if form.Chips[0].Label() != "proj" || form.Chips[0].Selected != 2 {
+		t.Fatalf("after an entry before it: %+v", form.Chips[0])
+	}
+	// proj gone: the first, laatmux here, with its last host and agent.
+	next.Repos = []config.Repo{cfg.Repos[0]}
+	open(form)
+	if form.Chips[0].Label() != "laatmux" || form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("after proj went: %q %q %q", form.Chips[0].Label(), form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	// A chip that had nothing: nothing chosen, and a submit is refused.
+	empty := cfg
+	empty.Repos = nil
+	f = &addForm{hosts: cfg.Hosts[:2], agents: cfg.AgentNames(), reload: func() (config.Config, error) { return cfg, nil }}
+	form = buildForm(empty, f, last, "", "", "", nil)
+	open(form)
+	if len(form.Chips[0].Choices) != 2 || form.Chips[0].Label() != "" {
+		t.Fatalf("an empty chip after a reload: %+v", form.Chips[0])
+	}
+	form.SetPrompt("Fix it")
+	form.Handle(term.Key{Kind: term.KeyNewline})
+	if form.Done() || form.Error != "no repository chosen" {
+		t.Fatalf("submit: %v %q", form.Done(), form.Error)
+	}
+}
+
 // serve's hooks on the config file: the store's read answers the list
 // at first and after the relay's append, and not between.
 func TestConfigHooks(t *testing.T) {

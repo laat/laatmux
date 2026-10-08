@@ -101,12 +101,14 @@ local host's `repos` and `worktrees` are read by the daemon on the machine
 the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
 default server list is the managed `laatmux` server alone. The daemon
-follows the file's `repos`: before every worktree poll, every two
-seconds, it looks at the file, and reads the list again when the file
-has changed (another file renamed over it, or a new modification time or
-size), so a repository added by hand or by the task form shows in the
-listing without a restart. A file that does not parse keeps the list as
-it was, with one line in the daemon's log.
+follows the file's `repos`: every two seconds it looks at the file, and
+reads the list again when the file has changed (another file renamed
+over it, or a new modification time or size), so a repository added by
+hand or by the task form shows in the listing without a restart, and
+the relay retries the appends a broken file refused (below); a daemon
+whose own entry has no directories watches the file for the relay all
+the same. A file that does not parse keeps the list as it was, with one
+line in the daemon's log.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below
@@ -137,14 +139,16 @@ around the new line, comments and blank lines included: the line goes
 after the list's last item, in its indentation, or a `repos:` list is
 made; a file the line cannot go into, a list written `[a, b]` say, is
 written again from its parsed YAML, which keeps the content and the
-comments but not the layout. A file of more than one YAML document is
-refused, since laatmux reads the first and a rewrite would drop the
-rest. The result is parsed before it replaces the file, through a
-temporary renamed over it, the link's target when the config is a
-symlink, made with its directory when the link's target is not there,
-with the file's mode. The appends on one machine take turns under
-`config.lock` in the state directory, and a file another writer changed
-between the read and the rename is read again. A host's own daemon needs
+comments but not the layout. A file of more than one YAML document with
+content is refused, since laatmux reads the first and a rewrite would
+drop the rest; an empty one after it, a `---` at the end or one of
+comments alone, is kept as it is, the line going before its marker. The
+result is parsed before it replaces the file, through a temporary
+renamed over it, the link's target when the config is a symlink, made
+with its directory when the link's target is not there, with the file's
+mode. The appends on one machine take turns under `config.lock` in the
+state directory, waiting up to ten seconds for another, and a file
+another writer changed between the read and the rename is read again. A host's own daemon needs
 no `repos` entry for the add, since `repo_entry` carries the source; its
 listing labels the new checkout by its directory's name, the entry's
 name, with its origin as the source, until its own config names it.

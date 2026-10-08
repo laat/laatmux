@@ -48,28 +48,36 @@ func (a *appends) fail(err error) {
 // An append that fails holds the task where its row says why, not
 // handed over, and the user sees it as a task that needs them; a change
 // of the config file has the relay try again, and the task then hands
-// over as any other.
+// over as any other, and so does a record that handed over before with
+// its append still asked for. The laptop's daemon here has no store,
+// its own entry no directories: it watches the file all the same.
 func TestRelayRememberOnConfigChange(t *testing.T) {
 	f := newRelayFixture(t, nil)
 	other := filepath.Join(t.TempDir(), "other.git")
 	if out, err := exec.Command("git", "clone", "-q", "--bare", f.source(), other).CombinedOutput(); err != nil {
 		t.Fatalf("clone: %v %s", err, out)
 	}
-	store, _ := newStore(t)
 	var mu sync.Mutex
 	changed := false
 	a := &appends{err: errors.New("config.yaml: yaml: bad")}
 	dir := t.TempDir()
+	ret := pendingFile{Pending: protocol.Pending{ID: "ret", Host: "vm", EnvironmentID: "henv", Source: "/r/two.git", Repo: "two", Branch: "b", Agent: "argv",
+		Sent: true, Taken: true, Done: true, OK: true, Listed: true, Root: "/w/two/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
+		RepoEntry: &protocol.RepoEntry{Source: "/r/two.git", Name: "two"}, Remember: true, ReplacedBy: "henv/worktree//w/two/b", RetiredAt: time.Now()}
+	b, _ := json.Marshal(ret)
+	if err := os.WriteFile(filepath.Join(dir, FileName("ret")), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	local := New(Config{
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
-		AppendRepo: a.add, Store: store, WorktreeInterval: 30 * time.Millisecond,
+		AppendRepo: a.add, WorktreeInterval: 30 * time.Millisecond,
 		Repos: func() ([]worktree.Repo, bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			c := changed
 			changed = false
-			return store.Repos(), c, nil
+			return nil, c, nil
 		},
 	})
 	discovered(local)
@@ -102,8 +110,15 @@ func TestRelayRememberOnConfigChange(t *testing.T) {
 	if p.Remember || p.RememberError != "" {
 		t.Fatalf("record %+v", p)
 	}
-	if got := a.calls(); len(got) != n+1 || got[n] != [2]string{other, "sent"} {
-		t.Fatalf("appends %v", got)
+	for deadline := time.Now().Add(10 * time.Second); readPending(t, dir, "ret").Remember; {
+		if time.Now().After(deadline) {
+			t.Fatal("the retired record's ask was not retried on the change")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got := a.calls()[n:]
+	if len(got) != 2 || !slices.Contains(got, [2]string{other, "sent"}) || !slices.Contains(got, [2]string{"/r/two.git", "two"}) {
+		t.Fatalf("appends after the change %v", got)
 	}
 }
 
@@ -280,17 +295,19 @@ func TestPollReadsRepos(t *testing.T) {
 		}
 		return ""
 	}
+	d.readConfig(ctx)
 	d.pollWorktrees(ctx)
 	if label() != "sent" || len(store.Repos()) != 1 {
 		t.Fatalf("before: %q %v", label(), store.Repos())
 	}
 	for i, want := range []string{"listed", "listed", "listed", "listed"} {
+		d.readConfig(ctx)
 		d.pollWorktrees(ctx)
 		if label() != want || len(store.Repos()) != 2 {
 			t.Fatalf("poll %d: %q %v", i, label(), store.Repos())
 		}
 	}
-	if n := strings.Count(logged.String(), "worktrees: config: yaml: bad; the repositories stay as they were"); n != 1 {
+	if n := strings.Count(logged.String(), "config: yaml: bad; the repositories stay as they were"); n != 1 {
 		t.Fatalf("logged %d times:\n%s", n, logged.String())
 	}
 }

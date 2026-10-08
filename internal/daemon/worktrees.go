@@ -48,7 +48,6 @@ func (d *Daemon) runWorktrees(ctx context.Context) {
 func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.pollMu.Lock()
 	defer d.pollMu.Unlock()
-	d.readRepos(ctx)
 	d.mu.Lock()
 	stamp := protocol.Listing{Generation: d.generation, Revision: d.revision}
 	d.mu.Unlock()
@@ -92,23 +91,45 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.markDiscovered(&d.worktreesDiscovered)
 }
 
-// readRepos gives the store the config's repositories when the file
-// has changed, before a listing labels the checkouts by them, and has
-// the relay retry the appends still asked for, which the change may
-// let through. A file that does not read is logged once per change of
-// message, and the list stays as it was. Called with pollMu held.
-func (d *Daemon) readRepos(ctx context.Context) {
-	if d.cfg.Repos == nil {
-		return
+// runConfig looks at the config file every worktree interval until ctx
+// is done (readConfig), on a daemon with a store or without one: the
+// relay of a laptop whose own entry has no directories appends too.
+func (d *Daemon) runConfig(ctx context.Context) {
+	t := time.NewTicker(d.cfg.WorktreeInterval)
+	defer t.Stop()
+	for {
+		d.readConfig(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
+}
+
+// readConfig acts on a config file that has changed: the store takes
+// its repositories, and a poll at once labels the checkouts by them,
+// and the relay retries the appends still asked for, which the change
+// may let through; not on the first read, which finds the file as the
+// relay's start did. A file that does not read is logged once per
+// change of message, and the list stays as it was. lastReposErr and
+// configRead are runConfig's alone.
+func (d *Daemon) readConfig(ctx context.Context) {
 	repos, changed, err := d.cfg.Repos()
+	first := !d.configRead
+	d.configRead = true
 	switch {
 	case err != nil:
-		d.logOnce(&d.lastReposErr, "worktrees: config: %v; the repositories stay as they were", err)
+		d.logOnce(&d.lastReposErr, "config: %v; the repositories stay as they were", err)
 	case changed:
 		d.lastReposErr = ""
-		d.cfg.Store.SetRepos(repos)
-		d.rememberAgain(ctx)
+		if d.cfg.Store != nil {
+			d.cfg.Store.SetRepos(repos)
+			d.pokeWorktrees()
+		}
+		if !first {
+			d.rememberAgain(ctx)
+		}
 	}
 }
 

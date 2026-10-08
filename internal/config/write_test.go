@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,6 +207,27 @@ func TestAddRepoDanglingLink(t *testing.T) {
 	if b, _ := os.ReadFile(target); string(b) != "repos:\n  - git@x:o/p.git\n" {
 		t.Fatalf("target:\n%s", b)
 	}
+	// A relative target is from the link's own directory with the links
+	// in it resolved: config.yaml in real/nested, reached through the
+	// directory link alias, names ../missing.yaml, which is real's.
+	if err := os.MkdirAll(filepath.Join(dir, "real", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real", "nested"), filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../missing.yaml", filepath.Join(dir, "real", "nested", "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(filepath.Join(dir, "alias", "config.yaml"), "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("through the directory link: added %v, %v", added, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real", "missing.yaml")); err != nil {
+		t.Fatalf("the target is not real's: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Fatal("written beside the directory link")
+	}
 }
 
 // A file of two YAML documents is refused, as it was: the config is the
@@ -221,6 +243,32 @@ func TestAddRepoSecondDocument(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != in {
 		t.Fatalf("file changed to %q", b)
+	}
+	// A second document that does not parse is refused too, not taken
+	// for the end of the file.
+	bad := "repos: [git@x:o/a.git]\n---\nfoo: [\n"
+	if err := os.WriteFile(p, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); added || err == nil || !strings.Contains(err.Error(), "document 2") {
+		t.Fatalf("a bad second document: added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != bad {
+		t.Fatalf("file changed to %q", b)
+	}
+	// An empty document after the first, a --- at the end or one of
+	// comments alone, is none: the line goes before its marker, and the
+	// rest of the file stays as it was.
+	for _, tail := range []string{"---\n", "---\n# only a comment\n", "...\n"} {
+		if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"+tail), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if added, err := AddRepo(p, "git@x:o/p.git", "p"); !added || err != nil {
+			t.Fatalf("%q at the end: added %v, %v", tail, added, err)
+		}
+		if b, _ := os.ReadFile(p); string(b) != "repos:\n  - git@x:o/a.git\n  - git@x:o/p.git\n"+tail {
+			t.Fatalf("%q at the end: file %q", tail, b)
+		}
 	}
 	// One document with its start marker is one.
 	if err := os.WriteFile(p, []byte("---\nrepos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
@@ -276,6 +324,68 @@ func TestAddRepoConcurrent(t *testing.T) {
 	cfg, err := Parse(b)
 	if err != nil || len(cfg.Repos) != n+1 {
 		t.Fatalf("%d repos, %v:\n%s", len(cfg.Repos), err, b)
+	}
+}
+
+// Appends from two processes, the daemon's relay and add in the
+// foreground say, take turns: with a pause between each write's check
+// and its rename, in which two writers that did not would both pass the
+// check and the second rename would drop the first's entry, every
+// entry of both is there.
+func TestAddRepoTwoProcesses(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmds []*exec.Cmd
+	var outs []*strings.Builder
+	for _, srcs := range []string{"git@x:o/b1.git,git@x:o/b2.git", "git@x:o/c1.git,git@x:o/c2.git"} {
+		cmd := exec.Command(exe, "-test.run=^$")
+		cmd.Env = append(os.Environ(), "LAATMUX_TEST_APPEND="+p+"|"+srcs)
+		out := &strings.Builder{}
+		cmd.Stdout, cmd.Stderr = out, out
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		cmds, outs = append(cmds, cmd), append(outs, out)
+	}
+	for i, cmd := range cmds {
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, outs[i])
+		}
+	}
+	b, _ := os.ReadFile(p)
+	cfg, err := Parse(b)
+	if err != nil || len(cfg.Repos) != 5 {
+		t.Fatalf("%d repos, %v:\n%s", len(cfg.Repos), err, b)
+	}
+}
+
+// A file another writer changes while AddRepo edits it, an editor that
+// does not take the lock say, is read again and the edit made on what
+// it has: both entries are there.
+func TestAddRepoRetriesAChange(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	once := false
+	testAfterRead = func() {
+		if !once {
+			once = true
+			os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n  - git@x:o/hand.git\n"), 0o600)
+		}
+	}
+	defer func() { testAfterRead = nil }()
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "repos:\n  - git@x:o/a.git\n  - git@x:o/hand.git\n  - git@x:o/p.git\n" {
+		t.Fatalf("file %q", b)
 	}
 }
 

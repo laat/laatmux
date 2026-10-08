@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/source"
@@ -130,6 +132,12 @@ func asLabel(s string) string {
 // its rename: the edit is made again on what is there now.
 var errChanged = errors.New("the config file changed while it was written")
 
+// testBeforeRename, set by a test, runs in writeOver between the check
+// and the rename, to widen the window in which two writers that do not
+// take turns would both pass the check; testAfterRead runs in addRepo
+// after the read, for a test to change the file as another writer.
+var testBeforeRename, testAfterRead func()
+
 // AddRepo appends src to repos in the config file at path, under the
 // name given, and reports whether it did: a source the list has, in any
 // form source.Same takes as one, is not added again. The entry is the
@@ -173,7 +181,9 @@ func AddRepo(path, src, name string) (bool, error) {
 
 // linkTarget is the file path names, the links on the way followed,
 // whether or not it is there: EvalSymlinks's answer for one that is,
-// else the last link's target, as a write through the link makes it.
+// else the last link's target, as a write through the link makes it. A
+// relative target is taken from the link's own directory with the
+// links in it resolved, as the system takes it.
 func linkTarget(path string) (string, error) {
 	real, err := filepath.EvalSymlinks(path)
 	if !errors.Is(err, fs.ErrNotExist) {
@@ -196,7 +206,11 @@ func linkTarget(path string) (string, error) {
 			return "", err
 		}
 		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(p), target)
+			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+			if err != nil {
+				return "", err
+			}
+			target = filepath.Join(dir, target)
 		}
 		p = target
 	}
@@ -216,15 +230,32 @@ func lockAppends() (func(), error) {
 	if err != nil {
 		return nil, tmux.PrintablePath(err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
+	// Bounded: an append is a moment's work, and a holder stopped in it,
+	// a foreground add suspended say, must not hold the daemon's settle
+	// for good.
+	for deadline := time.Now().Add(lockWait); ; {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			f.Close()
+			if errors.Is(err, syscall.EWOULDBLOCK) {
+				return nil, fmt.Errorf("another laatmux has been appending to the config for %s", lockWait)
+			}
+			return nil, err
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
 }
+
+// lockWait is how long AddRepo waits for another append on this
+// machine to end.
+const lockWait = 10 * time.Second
 
 // addRepo is one try of AddRepo on the file at real.
 func addRepo(real, src, name string) (bool, error) {
@@ -235,6 +266,9 @@ func addRepo(real, src, name string) (bool, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, tmux.PrintablePath(err)
 	}
+	if testAfterRead != nil {
+		testAfterRead()
+	}
 	cfg, err := Parse(b)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
@@ -242,7 +276,9 @@ func addRepo(real, src, name string) (bool, error) {
 	if _, ok := cfg.RepoBySource(src); ok {
 		return false, nil
 	}
-	if n := documents(b); n > 1 {
+	if n, err := documents(b); err != nil {
+		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+	} else if n > 1 {
 		return false, fmt.Errorf("%s has %d YAML documents, of which laatmux reads the first; add %s to its repos by hand", tmux.Printable(real), n, src)
 	}
 	r, err := appended(cfg.Repos, src, name)
@@ -267,14 +303,24 @@ func addRepo(real, src, name string) (bool, error) {
 	return true, nil
 }
 
-// documents is how many YAML documents b has, as a decoder reads them.
-func documents(b []byte) int {
+// documents is how many YAML documents with content b has, as a
+// decoder reads them: an empty one, a --- at the end or one of comments
+// alone, is not counted. A document after the first that does not parse
+// is an error, since Parse reads the first alone.
+func documents(b []byte) (int, error) {
 	d := yaml.NewDecoder(bytes.NewReader(b))
 	n := 0
-	for {
+	for i := 1; ; i++ {
 		var node yaml.Node
-		if err := d.Decode(&node); err != nil {
-			return n
+		err := d.Decode(&node)
+		if errors.Is(err, io.EOF) {
+			return n, nil
+		}
+		if err != nil {
+			return n, fmt.Errorf("document %d: %w", i, err)
+		}
+		if len(node.Content) == 1 && node.Content[0].Kind == yaml.ScalarNode && node.Content[0].Tag == "!!null" && node.Content[0].Value == "" {
+			continue
 		}
 		n++
 	}
@@ -355,11 +401,18 @@ func insertRepo(b []byte, r Repo) ([]byte, bool) {
 			return at(top.Content[i].Line, list("  ")), true
 		case v.Kind == yaml.SequenceNode && v.Style&yaml.FlowStyle == 0 && len(v.Content) > 0:
 			// After the list's last line with content: the line before
-			// the next key's, or the file's end, less the blank and
-			// comment lines before it, which belong to what follows.
+			// the next key's, or the document's end, a marker or the
+			// file's end, less the blank and comment lines before it,
+			// which belong to what follows.
 			end := len(lines)
 			if i+2 < len(top.Content) {
 				end = top.Content[i+2].Line - 1
+			}
+			for j := v.Line; j < end; j++ {
+				if t := strings.TrimRight(lines[j], "\r\n"); t == "---" || t == "..." || strings.HasPrefix(t, "--- ") {
+					end = j
+					break
+				}
 			}
 			for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#")) {
 				end--
@@ -485,6 +538,9 @@ func writeOver(real string, data []byte, before fs.FileInfo) error {
 		case before == nil && serr == nil, before != nil && (serr != nil || !os.SameFile(before, now) || !now.ModTime().Equal(before.ModTime()) || now.Size() != before.Size()):
 			err = errChanged
 		}
+	}
+	if err == nil && testBeforeRename != nil {
+		testBeforeRename()
 	}
 	if err == nil {
 		err = os.Rename(tmp, real)

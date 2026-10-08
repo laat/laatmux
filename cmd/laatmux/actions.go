@@ -244,16 +244,19 @@ type addForm struct {
 
 // refresh brings the repository chip up to the config read again: its
 // listed candidates the config's now, a pasted one kept after them
-// while the config does not list it, and the selection on the
-// repository it was on, by source; the host is told when that is gone.
+// while the config does not list it, named again among the repositories
+// listed now, and the selection on the repository it was on, by source;
+// the host is told when that is gone. A chip that had none selected,
+// with nothing to choose from before, has none selected after: the user
+// picks.
 func (f *addForm) refresh(form *view.Form, cfg config.Config) {
 	c := &form.Chips[0]
 	was, _ := f.repo(form, c.Selected)
 	var pasted []view.Choice
 	if len(c.Choices) > len(f.repos) {
 		for _, ch := range c.Choices[len(f.repos):] {
-			if _, listed := cfg.RepoBySource(ch.Detail); !listed {
-				pasted = append(pasted, ch)
+			if r, err := cfg.NewRepo(ch.Detail); err == nil {
+				pasted = append(pasted, view.Choice{Label: r.Name, Detail: r.Source})
 			}
 		}
 	}
@@ -263,14 +266,17 @@ func (f *addForm) refresh(form *view.Form, cfg config.Config) {
 		c.Choices = append(c.Choices, view.Choice{Label: r.Name, Detail: r.Source})
 	}
 	c.Choices = append(c.Choices, pasted...)
-	found := false
+	if was.Source == "" {
+		c.Selected = -1
+		return
+	}
 	for i, ch := range c.Choices {
-		if was.Source != "" && source.Same(ch.Detail, was.Source) {
-			c.Selected, found = i, true
-			break
+		if source.Same(ch.Detail, was.Source) {
+			c.Selected = i
+			return
 		}
 	}
-	if !found && was.Source != "" && form.Changed != nil {
+	if form.Changed != nil {
 		form.Changed(form, 0)
 	}
 }
