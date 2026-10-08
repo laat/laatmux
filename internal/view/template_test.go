@@ -104,8 +104,8 @@ func TestTokens(t *testing.T) {
 	cur.Current = true
 	tm, _ = ParseTemplate("{primary} {pane_suffix}")
 	dark, _ := palette.New(true, nil)
-	kept := "\x1b[22m\x1b[1m" + dark.SGR(palette.CurrentWorktreeFg, false)
-	if got := ANSI(Line{Dim: true, Spans: m.line(Compiled{Template: tm}, cur, 80, 2)}, dark); !strings.Contains(got, kept+"fix-ls") || !strings.Contains(got, kept+"(2)") {
+	kept := "\x1b[1m" + dark.SGR(palette.CurrentWorktreeFg, false)
+	if got := ANSI(Line{Dim: true, Spans: m.line(Compiled{Template: tm}, cur, 80, 2)}, dark); !strings.Contains(got, kept+"fix-ls") || !strings.Contains(got, kept+"(2)") || strings.Contains(got, "\x1b[2") {
 		t.Errorf("the viewer's label and suffix on a dim line: %q", got)
 	}
 	// Tree tokens on tree nodes.

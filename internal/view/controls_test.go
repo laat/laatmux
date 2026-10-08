@@ -967,7 +967,7 @@ func TestStripDimChip(t *testing.T) {
 	if got := chip("remote-notes"); !strings.Contains(got, yellow+"remote-notes") {
 		t.Errorf("a fresh chip lost the template's background: %q", got)
 	}
-	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, "\x1b[2m"+dark.SGR(palette.Dimmed, false)+"dead") {
+	if got := chip("dead"); strings.Contains(got, yellow) || !strings.Contains(got, dark.SGR(palette.Dimmed, false)+"dead") || strings.Contains(got, "\x1b[2m") {
 		t.Errorf("a dim chip not drawn as its line: %q", got)
 	}
 	for _, it := range m.Visible() {
@@ -1059,7 +1059,7 @@ func TestStripDimChipAsLine(t *testing.T) {
 		th   palette.Theme
 		want string
 	}{
-		{dark, "\x1b[2m" + dark.SGR(palette.Dimmed, false) + "dead\x1b[0m"},
+		{dark, dark.SGR(palette.Dimmed, false) + "dead\x1b[0m"},
 		{mono, "\x1b[2mdead\x1b[0m"},
 	} {
 		if got := ANSI(line, c.th); got != c.want {
@@ -1079,9 +1079,9 @@ func TestStripDimChipAsLine(t *testing.T) {
 		th      palette.Theme
 		want    string
 	}{
-		{false, dark, "\x1b[2m" + dim + "x dead\x1b[0m"},
+		{false, dark, dim + "x dead\x1b[0m"},
 		{false, mono, "\x1b[2mx dead\x1b[0m"},
-		{true, dark, "\x1b[2m" + dim + "x \x1b[22m\x1b[1m" + label + "dead\x1b[0m"},
+		{true, dark, dim + "x \x1b[1m" + label + "dead\x1b[0m"},
 		{true, mono, "\x1b[2mx \x1b[22m\x1b[1mdead\x1b[0m"},
 	} {
 		line, _ := both(tinted, "dead", c.current)
