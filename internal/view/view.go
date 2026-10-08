@@ -1038,7 +1038,7 @@ func Text(lines []Line) string {
 // background.
 func ANSI(l Line, th palette.Theme) string {
 	colour := !th.Mono && th.SGR(palette.Text, false) != ""
-	band := colour && !th.Guessed && l.Reverse
+	band := colour && l.Reverse
 	if l.Reverse && !band {
 		// Reverse video swaps every colour into the background: the
 		// selection with a guessed background is the terminal's own
@@ -1091,9 +1091,10 @@ func ANSI(l Line, th palette.Theme) string {
 		if s.band {
 			// The band on the span alone, a strip's chip: the
 			// highlight background under the span's own colour, or
-			// reverse video without one, where a colour would land in
-			// the background: the attributes alone, as the list's band.
-			if colour && !th.Guessed {
+			// reverse video without colours, where a colour would land
+			// in the background: the attributes alone, as the list's
+			// band.
+			if colour {
 				pre = th.SGR(palette.HighlightRowBg, true) + th.SGR(palette.Text, false)
 			} else {
 				pre, fg, bg = "\x1b[7m", "", ""

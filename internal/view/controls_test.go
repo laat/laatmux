@@ -448,11 +448,6 @@ func TestChipANSI(t *testing.T) {
 	if !strings.Contains(s, bandBg) || !strings.Contains(s, warn) || strings.Index(s, bandBg) > strings.Index(s, warn) {
 		t.Errorf("a chip with the background known: %q", s)
 	}
-	guessed := th
-	guessed.Guessed = true
-	if s := ANSI(l, guessed); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, warn) {
-		t.Errorf("a chip with the background guessed: %q", s)
-	}
 	// A template's background stays off the band: the selected chip
 	// is told apart by the band alone.
 	tinted := Line{Spans: []Span{{Text: "x", Bg: palette.Accent, band: true}}}
@@ -460,7 +455,7 @@ func TestChipANSI(t *testing.T) {
 		t.Errorf("a template's background under the band: %q", s)
 	}
 	dim := Line{Spans: []Span{{Text: "x", Dim: true, band: true}}}
-	if s := ANSI(dim, guessed); strings.Contains(s, "\x1b[2m") {
+	if s := ANSI(dim, palette.Mono()); strings.Contains(s, "\x1b[2m") {
 		t.Errorf("a dim span faint under a reverse band: %q", s)
 	}
 	if s := ANSI(l, palette.Mono()); !strings.Contains(s, "\x1b[7m") || strings.Contains(s, "\x1b[38") {
@@ -987,7 +982,7 @@ func TestStripDimChip(t *testing.T) {
 
 // A dim row's chip is drawn cell for cell as the row's line in the list
 // under the same template: faint in the dimmed colour in a theme with
-// colours, dark, light or on a guessed background, and faint without
+// colours, dark or light, and faint without
 // them, a token's colour and a style's dropped, bold kept, no
 // background, and the viewer's own label in its colour, not faint. A
 // template's text in the label's colour is not the label: dimmed as
@@ -1032,9 +1027,7 @@ func TestStripDimChipAsLine(t *testing.T) {
 		return *line, *chip
 	}
 	light, _ := palette.New(false, nil)
-	guessed := dark
-	guessed.Guessed = true
-	themes := map[string]palette.Theme{"dark": dark, "light": light, "guessed": guessed, "mono": mono}
+	themes := map[string]palette.Theme{"dark": dark, "light": light, "mono": mono}
 	const tinted = "#[fg=current_worktree_fg]x {primary}"
 	// The dead agent's icon is blank; the down host's agent shows the
 	// spinner standing still, in the working colour.

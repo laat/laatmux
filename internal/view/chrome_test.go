@@ -225,11 +225,6 @@ func TestChromeEdges(t *testing.T) {
 	if got := ANSI(sel, th); !strings.HasPrefix(got, th.SGR(palette.HighlightRowBg, true)+th.SGR(palette.Text, false)) {
 		t.Errorf("selection with a known background: %q", got)
 	}
-	guessed := th
-	guessed.Guessed = true
-	if got := ANSI(sel, guessed); !strings.HasPrefix(got, "\x1b[7m") || strings.Contains(got, "48;") {
-		t.Errorf("selection with a guessed background: %q", got)
-	}
 	if got := ANSI(Line{Spans: []Span{{Text: "─", Fg: palette.Border, Dim: true}}}, th); strings.Contains(got, "\x1b[2m") {
 		t.Errorf("divider made faint on top of its colour: %q", got)
 	}
@@ -309,19 +304,20 @@ func TestFormFocusWithoutColour(t *testing.T) {
 	}
 }
 
-// Under a guessed background the selection is reverse video alone: no
-// span colours, no dimming, which would turn into the background.
-func TestGuessedSelection(t *testing.T) {
-	th, _ := palette.New(true, nil)
-	th.Guessed = true
+// Without colours the selection is reverse video alone: no span
+// colours, no dimming, which would turn into the background. With
+// colours it is the band whether or not the background was answered,
+// since the band sets both its colours.
+func TestMonoSelection(t *testing.T) {
+	th := palette.Mono()
 	l := Line{Reverse: true, Dim: true, Spans: []Span{{Text: "a", Fg: palette.Info}, {Text: "b", Dim: true}}}
 	got := ANSI(l, th)
 	if strings.Contains(got, "38;") || strings.Contains(got, "48;") || strings.Contains(got, "\x1b[2m") || !strings.Contains(got, "\x1b[7m") {
 		t.Errorf("%q", got)
 	}
-	l.Reverse = false
-	if got := ANSI(l, th); !strings.Contains(got, "38;") {
-		t.Errorf("unselected has no colour: %q", got)
+	dark, _ := palette.New(true, nil)
+	if got := ANSI(l, dark); !strings.HasPrefix(got, dark.SGR(palette.HighlightRowBg, true)) || strings.Contains(got, "\x1b[7m") {
+		t.Errorf("a selection with colours is the band, not reverse video: %q", got)
 	}
 }
 
