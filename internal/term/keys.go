@@ -831,6 +831,10 @@ func extended(code, alt, mod int) Key {
 		return Key{Rune: rune(code)}
 	case shift && alt >= 0x20:
 		return Key{Rune: rune(alt)}
+	case shift && code == ' ':
+		// Shift still held from the capital before it, as in "I ": a
+		// space is a space.
+		return Key{Rune: ' '}
 	case shift && unicode.IsLetter(rune(code)):
 		// tmux reports a shifted letter by its unshifted code; another
 		// shifted key's character is not known from its code, and is
