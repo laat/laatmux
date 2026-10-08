@@ -51,14 +51,21 @@ func (d *Daemon) worktreeRemovedLocked(worktreeID string, at *protocol.Listing) 
 }
 
 // dropRetiredAt drops the tasks that handed over to the worktree whose
-// adds the listing that found it gone reflects.
+// adds the listing that found it gone reflects, each under its own
+// remember lock (dropRetired); what a record that handed over says of
+// its worktree does not change, so the choice made under the relay's
+// mutex holds after it.
 func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
+	var ids []string
 	d.relay.mu.Lock()
-	defer d.relay.mu.Unlock()
 	for id, p := range d.relay.recs {
 		if p.retired() && p.ReplacedBy == worktreeID && p.Barrier != nil && at.Satisfies(*p.Barrier) {
-			d.dropRetiredLocked(id)
+			ids = append(ids, id)
 		}
+	}
+	d.relay.mu.Unlock()
+	for _, id := range ids {
+		d.dropRetired(id, "its worktree is removed")
 	}
 }
 
@@ -199,7 +206,7 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *proto
 		res.OK, res.Error = false, "this daemon has no relay capability"
 		return res
 	}
-	var ids []string
+	var ids, retired []string
 	d.relay.mu.Lock()
 	for id, p := range d.relay.recs {
 		if p.EnvironmentID != environmentID || p.Root != root {
@@ -207,13 +214,16 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *proto
 		}
 		if p.retired() {
 			if removed != nil && p.Barrier != nil && removed.Satisfies(*p.Barrier) {
-				d.dropRetiredLocked(id)
+				retired = append(retired, id)
 			}
 			continue
 		}
 		ids = append(ids, id)
 	}
 	d.relay.mu.Unlock()
+	for _, id := range retired {
+		d.dropRetired(id, "dismissed by rm of its worktree")
+	}
 	for _, id := range ids {
 		d.dismissEnded(id)
 	}
@@ -227,18 +237,32 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *proto
 // dropRetired.
 func (d *Daemon) worktreeGone(ctx context.Context, id string) {
 	if _, ok := d.persist(ctx, id, func(p *pendingFile) { p.Gone = true }); !ok {
-		d.dropRetired(id)
+		d.dropRetired(id, "its worktree is gone")
 	}
 }
 
-// dropRetired removes a record that had handed over, its worktree gone:
-// nothing is left for the prompt to say what it was made for. The
-// stream has no message for it; its handoff is absent from the next
-// snapshot.
-func (d *Daemon) dropRetired(id string) error {
+// dropRetired removes a record that had handed over, its worktree gone
+// or the user dismissing it: nothing is left for the prompt to say what
+// it was made for. The stream has no message for it; its handoff is
+// absent from the next snapshot. It runs under the record's remember
+// lock, so an append the record still asked for is not made after, and
+// is logged as dropped, why saying what dropped it; dropped is what the
+// log says.
+func (d *Daemon) dropRetired(id, why string) (dropped string, err error) {
+	rl := d.relay.rememberLock(id)
+	rl.Lock()
+	defer rl.Unlock()
 	d.relay.mu.Lock()
-	defer d.relay.mu.Unlock()
-	return d.dropRetiredLocked(id)
+	if p, ok := d.relay.recs[id]; ok && p.retired() {
+		dropped = droppedAppend(p)
+	}
+	err = d.dropRetiredLocked(id)
+	d.relay.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	d.logDropped(id, why, dropped)
+	return dropped, nil
 }
 
 // dropRetiredLocked is dropRetired with the relay's mutex held. A file

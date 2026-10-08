@@ -262,18 +262,23 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 }
 
 // Dismiss drops a pending record that needs the user from this
-// machine's daemon.
-func Dismiss(ctx context.Context, id string) error {
+// machine's daemon. dropped is what went with it, as the daemon says:
+// the append of the add's repository to the config, asked for and not
+// made, which the user may then make by hand; "" for nothing.
+func Dismiss(ctx context.Context, id string) (dropped string, err error) {
 	c, err := client.Dial(ctx, peer.Host{Name: "local"})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer c.Close()
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
-		return fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
+		return "", fmt.Errorf("the local daemon %s has no relay capability", c.Hello.Version)
 	}
-	_, err = c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, ID: id})
-	return err
+	res, err := c.Request(ctx, protocol.Message{Type: protocol.TypeDismiss, ID: id})
+	if err != nil {
+		return "", err
+	}
+	return res.Detail, nil
 }
 
 // DismissAt asks this machine's daemon, when one is running, to drop

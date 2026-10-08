@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -48,7 +49,9 @@ func cmdDashboard(ctx context.Context, args []string) error {
 			fixedLayout = true
 		}
 	})
-	cfg, err := config.Load()
+	// The watch's first read, which the view follows the file from.
+	var w config.Watch
+	cfg, _, err := w.Changed()
 	if err != nil {
 		return err
 	}
@@ -61,7 +64,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	}
 	// The dashboard starts in the view and, without --layout, the layout
 	// last chosen, from sidebar.json.
-	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true, LocalHost: localHostName(cfg),
+	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true,
 		Hint:      "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  F scope  v layout  / filter  ? help  q quit",
 		HelpTitle: "laatmux dashboard", Help: []string{
 			"a            add a worktree",
@@ -73,7 +76,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 		}}
 	// The dashboard starts at all: a scope the CLI set for the sidebar
 	// panes would empty a popup opened from an unrelated shell.
-	return runView(ctx, cfg, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
+	return runView(ctx, cfg, &w, c, m, viewOptions{exitOnJump: true, actions: true, fixedLayout: fixedLayout, fixedScope: true})
 }
 
 // templatesFor is the host's templates: the dashboard's defaults for
@@ -103,7 +106,9 @@ type viewOptions struct {
 	listen                                      bool // a sidebar pane: its socket
 }
 
-func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Model, o viewOptions) error {
+// The config is w's first read, cfg; the view follows the file from
+// there (watchConfig).
+func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.Conn, m *view.Model, o viewOptions) error {
 	exitOnJump, actions := o.exitOnJump, o.actions
 	current := ""
 	// A lookup a user's hook failed after has the session all the same;
@@ -121,16 +126,20 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 		return err
 	}
 	defer t.Close()
-	t.Theme, m.Icons = look(cfg, t)
+	d := &dash{ctx: ctx, st: st, exitOnJump: exitOnJump, reload: config.LoadSettled}
+	taker := &configTaker{d: d, st: st, o: o, current: current,
+		bg:    &background{ask: func() (bool, bool) { return t.Background(backgroundWait) }},
+		theme: func(th palette.Theme) { t.Theme = th }}
+	taker.take(m, cfg, false)
+	// The view reads the keys from here: the terminal is not asked
+	// again.
+	taker.bg.ask = nil
 	m.Machine, _ = os.Hostname()
-	m.SetTemplates(templatesFor(cfg, o))
-	m.AgentIcons = agentIcons(cfg)
-	m.JumpKeys = jumpKeysShown(cfg, o)
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds, host)
-	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, reload: config.Load}
+	watchConfig(ctx, w, configPoll, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, taker.failed)
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.

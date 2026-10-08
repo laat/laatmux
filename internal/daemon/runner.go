@@ -52,8 +52,9 @@ type taskRunner struct {
 
 // taskCore is what the runner asks of the daemon beside the state it
 // shares: the listing's stamp and pokes, the managed roots after a
-// launch, a git refresh, the run records, and the context a task
-// outlives its connection under.
+// launch, a git refresh, the run records, the context a task outlives
+// its connection under, and the agents' commands as the config last
+// read said.
 type taskCore interface {
 	stepRevision() protocol.Listing
 	pokeWorktrees()
@@ -62,6 +63,7 @@ type taskCore interface {
 	runStarted(r *runJob, at time.Time)
 	runEndedLocked(r *runJob)
 	runCtx() context.Context
+	agentCmds() map[string][]string
 }
 
 // newRunner is the daemon's runner, sharing what it shares; called by

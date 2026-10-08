@@ -494,6 +494,66 @@ func TestMergedHostsFollowConfig(t *testing.T) {
 	until(t, c2, pc2, hostStatus("box", listed))
 }
 
+// A host removed from the config, or added, reaches the subscribers
+// already there once the daemon sees the file changed, with no new
+// subscription: a view that stays up follows the file.
+func TestMergedHostsFollowConfigChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	var mu sync.Mutex
+	changed := true
+	f.local.cfg.Reread = func() (ConfigRead, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		c := changed
+		changed = false
+		return ConfigRead{}, c, nil
+	}
+	f.local.readConfig(ctx) // Run's first read
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	until(t, c, pc, hostStatus("vm", listed))
+	f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "box", SSH: "box"})
+	f.local.readConfig(ctx)
+	if n := f.hosts.readCount(); n != 1 {
+		t.Fatalf("the hosts read %d times with the file unchanged", n)
+	}
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	f.local.readConfig(ctx)
+	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.HostName == "vm" })
+	until(t, c, pc, hostStatus("box", listed))
+	// A read of the hosts that fails, a file being written say, keeps
+	// the host set.
+	f.hosts.mu.Lock()
+	f.hosts.hosts, f.hosts.err = nil, errors.New("the config file is empty while it is being written")
+	f.hosts.mu.Unlock()
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	f.local.readConfig(ctx)
+	f.local.mu.Lock()
+	_, kept := f.local.mhosts["box"]
+	f.local.mu.Unlock()
+	if !kept {
+		t.Fatal("a failed read of the hosts dropped box")
+	}
+	// The read is made again at the next look, the file unchanged to
+	// the watch, as one that settles empty is.
+	f.hosts.mu.Lock()
+	f.hosts.hosts, f.hosts.err = []peer.Host{{Name: "here"}, {Name: "box", SSH: "box"}, {Name: "vm", SSH: "vm"}}, nil
+	f.hosts.mu.Unlock()
+	f.local.readConfig(ctx)
+	until(t, c, pc, hostStatus("vm", listed))
+	reads := f.hosts.readCount()
+	f.local.readConfig(ctx)
+	if n := f.hosts.readCount(); n != reads {
+		t.Fatalf("the hosts read again after a read that succeeded: %d", n-reads)
+	}
+}
+
 // Remote subscriptions are dropped once no merged subscriber has been
 // around for the idle time, and taken up again by the next one, which
 // sees the cached records with the host neither connected nor failed.

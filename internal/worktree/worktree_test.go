@@ -86,6 +86,14 @@ func write(t testing.TB, path, content string) {
 	}
 }
 
+// setCopy gives the store the host's copy rules for every worktree,
+// its repositories kept.
+func setCopy(s *Store, rules ...string) {
+	l := s.Listed()
+	l.Copy = rules
+	s.SetListed(l)
+}
+
 type step struct{ stage, state, detail string }
 
 func (f *fixture) add(branch string) (Added, []step, error) {
@@ -1446,7 +1454,7 @@ func TestAddPersonalCopyAndSetup(t *testing.T) {
 	write(t, filepath.Join(checkout, "node_modules", "dep", ".envrc.cache.enc"), "never")
 	write(t, filepath.Join(checkout, "notes.txt"), "untracked")
 	write(t, filepath.Join(checkout, "config", "db.local"), "local")
-	f.store.Copy = []string{"**/.envrc.cache.enc", "nothing/*.here"}
+	setCopy(f.store, "**/.envrc.cache.enc", "nothing/*.here")
 	repos := f.store.Repos()
 	repos[0].Copy = []string{"notes.txt", "config/*.local"}
 	repos[0].Setup = []string{"echo personal >> log"}
@@ -1540,7 +1548,7 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 	run(t, sub, "git", "add", ".")
 	run(t, sub, "git", "commit", "-q", "-m", "sub")
 	run(t, checkout, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/lib")
-	f.store.Copy = []string{"**/*.enc", "vendor/**"}
+	setCopy(f.store, "**/*.enc", "vendor/**")
 	var reports []string
 	b, err := f.store.Add(f.ctx, f.repo, "second", func(stage, state, detail string) { reports = append(reports, stage+" "+state+" "+detail) })
 	if err != nil {
@@ -1555,19 +1563,19 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 		}
 	}
 	// A literal entry that is a symlink out of the checkout is refused.
-	f.store.Copy = []string{"direct.enc"}
+	setCopy(f.store, "direct.enc")
 	if _, err := f.store.Add(f.ctx, f.repo, "third", nil); err == nil || !strings.Contains(err.Error(), "outside the checkout") {
 		t.Errorf("literal symlink out of the checkout: %v", err)
 	}
 	// A target directory that is a symlink out of the worktree is
 	// refused: nothing lands outside.
-	f.store.Copy = []string{"real.enc"}
+	setCopy(f.store, "real.enc")
 	c, err := f.store.Add(f.ctx, f.repo, "fourth", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.Remove(filepath.Join(c.Root, "real.enc"))
-	f.store.Copy = []string{"esc/new/nested/real.enc"}
+	setCopy(f.store, "esc/new/nested/real.enc")
 	write(t, filepath.Join(checkout, "esc", "new", "nested", "real.enc"), "real")
 	os.Symlink(outside, filepath.Join(c.Root, "esc"))
 	if _, err := f.store.Add(f.ctx, f.repo, "fourth", nil); err == nil || !strings.Contains(err.Error(), "outside the worktree") {
@@ -1585,7 +1593,7 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.store.Copy = []string{"pipe.enc"}
+	setCopy(f.store, "pipe.enc")
 	done := make(chan error, 1)
 	go func() { _, err := f.store.Add(f.ctx, f.repo, "sixth", nil); done <- err }()
 	select {
@@ -1605,7 +1613,7 @@ func TestCopyStaysInsideRoots(t *testing.T) {
 		run(t, checkout, "git", "add", "-f", "locked/x.enc")
 		os.Chmod(locked, 0)
 		t.Cleanup(func() { os.Chmod(locked, 0o755) })
-		f.store.Copy = []string{"**/*.enc"}
+		setCopy(f.store, "**/*.enc")
 		if _, err := f.store.Add(f.ctx, f.repo, "fifth", nil); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Errorf("unreadable candidate: %v", err)
 		}

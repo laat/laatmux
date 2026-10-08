@@ -207,7 +207,11 @@ func (r *addRun) run(ctx context.Context) error {
 	// looking for a checkout it has not made yet.
 	r.unhold = rn.holdRepos()
 	stage := protocol.StageResolve
-	repo, err := rn.addRepo(m)
+	// One read of the config for the whole add: the repository, its
+	// steps and the copy rules for every worktree are of the list the
+	// daemon had now, whatever it reads while the clone runs.
+	listed := rn.cfg.Store.Listed()
+	repo, err := addRepo(m, listed.Repos)
 	if err != nil {
 		return stageErr(stage, err)
 	}
@@ -218,8 +222,10 @@ func (r *addRun) run(ctx context.Context) error {
 	r.repo = repo
 	r.cmd = m.Cmd
 	if len(r.cmd) == 0 {
+		// The agent's command as the config last read says, an agent
+		// added or edited since the daemon started included.
 		var ok bool
-		if r.cmd, ok = rn.cfg.Agents[m.AgentName]; !ok {
+		if r.cmd, ok = rn.core.agentCmds()[m.AgentName]; !ok {
 			return stageErr(stage, fmt.Errorf("unknown agent %q: not in this host's config", m.AgentName))
 		}
 	}
@@ -337,7 +343,7 @@ func (r *addRun) run(ctx context.Context) error {
 	r.res.Branch = branch
 	r.emit(protocol.Message{Stage: stage, State: state, Detail: detail, Branch: branch, Root: root})
 
-	added, err := rn.cfg.Store.Materialize(ctx, p.Checkout, repo, branch, root, r.report)
+	added, err := rn.cfg.Store.Materialize(ctx, p.Checkout, repo, branch, root, listed.Copy, r.report)
 	if err != nil {
 		return err
 	}
@@ -984,11 +990,14 @@ func (rn *taskRunner) runJournal(ctx context.Context) {
 // brought, which the machine the user sits at decides, checked as the
 // config checks its own: a name that places directories and is not
 // this host's name for another repository, copy rules that stay inside
-// the worktree, no empty setup command.
-func (rn *taskRunner) addRepo(m protocol.Message) (worktree.Repo, error) {
+// the worktree, no empty setup command. repos is the store's list, one
+// for every lookup: the daemon replaces it when the config changes, and
+// a repository listed between two lookups would be missed by the first
+// and collide in the second.
+func addRepo(m protocol.Message, repos worktree.Repos) (worktree.Repo, error) {
 	e := m.RepoEntry
 	if e == nil {
-		repo, ok := rn.cfg.Store.Repo(m.Repo)
+		repo, ok := repos.Find(m.Repo)
 		if !ok {
 			return worktree.Repo{}, fmt.Errorf("unknown repository %q: not in this host's config", m.Repo)
 		}
@@ -997,10 +1006,6 @@ func (rn *taskRunner) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if e.Source == "" || !source.Same(e.Source, m.Repo) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
 	}
-	// One list for every lookup: the daemon replaces it when the config
-	// changes, and a repository listed between two lookups would be
-	// missed by the first and collide in the second.
-	repos := rn.cfg.Store.Repos()
 	if repo, ok := repos.BySource(e.Source); ok {
 		return repo, nil
 	}

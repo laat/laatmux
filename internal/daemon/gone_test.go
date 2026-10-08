@@ -632,7 +632,7 @@ func TestRelayDropRetiredRetries(t *testing.T) {
 	if err := os.Chmod(f.dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	f.local.dropRetired("k5")
+	f.local.dropRetired("k5", "its worktree is gone")
 	os.Chmod(f.dir, 0o700)
 	f.local.relay.mu.Lock()
 	_, kept := f.local.relay.recs["k5"]
@@ -641,7 +641,7 @@ func TestRelayDropRetiredRetries(t *testing.T) {
 	if !kept || checked {
 		t.Fatalf("after a failed removal: kept %v, checked %v", kept, checked)
 	}
-	f.local.dropRetired("k5")
+	f.local.dropRetired("k5", "its worktree is gone")
 	if _, ok := f.local.relay.get("k5"); ok {
 		t.Fatal("kept after the directory was writable again")
 	}

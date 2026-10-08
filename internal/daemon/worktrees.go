@@ -110,29 +110,40 @@ func (d *Daemon) runConfig(ctx context.Context) {
 }
 
 // readConfig acts on a config file that has changed: the store takes
-// its repositories, and a poll at once labels the checkouts by them,
-// and the relay retries the appends still asked for, which the change
-// may let through; not on the first read, Run's before the relay
-// resumes its records, which then read the file as it found it or
-// later. A file that does not read is logged once per
-// change of message, and the list stays as it was. lastReposErr and
-// configRead are runConfig's alone.
+// its repositories with their steps and the copy rules for every
+// worktree, and the adds the agents' commands, so the next add uses
+// them, and a poll at once labels the checkouts by the repositories;
+// the merged subscribers get the hosts it lists (rereadHosts); and the
+// relay retries the appends still asked for, which the change may let
+// through. The last two not on the first read, Run's before any
+// subscription and before the relay resumes its records, which then
+// read the file as it found it or later. A file that does not read is
+// logged once per change of message, and the daemon keeps what it had.
+// A read of the hosts that failed last, a file being written as a
+// subscription read it say, is made again at every look, the file
+// changed or not, until it succeeds: a file that settles empty is no
+// change to the watch. lastReposErr and configRead are runConfig's
+// alone.
 func (d *Daemon) readConfig(ctx context.Context) {
-	repos, changed, err := d.cfg.Repos()
+	read, changed, err := d.cfg.Reread()
 	first := !d.configRead
 	d.configRead = true
 	switch {
 	case err != nil:
-		d.logOnce(&d.lastReposErr, "config: %v; the repositories stay as they were", err)
+		d.logOnce(&d.lastReposErr, "config: %v; the daemon keeps the config it had", err)
 	case changed:
 		d.lastReposErr = ""
+		d.commands.Store(&read.Agents)
 		if d.cfg.Store != nil {
-			d.cfg.Store.SetRepos(repos)
+			d.cfg.Store.SetListed(read.Listed)
 			d.pokeWorktrees()
 		}
 		if !first {
+			d.rereadHosts()
 			d.rememberAgain(ctx)
 		}
+	case !first && d.hostsFailed():
+		d.rereadHosts()
 	}
 }
 
