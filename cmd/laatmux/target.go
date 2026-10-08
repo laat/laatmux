@@ -90,10 +90,12 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (configured: %s)", tmux.Printable(cwd), repoList(cfg))
 }
 
-// labelUnder is the path component after the local host's repos or
-// worktrees directory when dir is under one of them. The more specific
-// directory is tried first: with worktrees nested under repos, a
-// worktree's label is the component after worktrees, not "worktrees".
+// labelUnder is the path component after one of the local host's repos
+// directories or its worktrees directory when dir is under one of them.
+// The more specific directory is tried first: with worktrees nested
+// under repos, a worktree's label is the component after worktrees, not
+// "worktrees", and with ~/code/group listed beside ~/code, a checkout's
+// in the group is the component after the group.
 func labelUnder(cfg config.Config, dir string) (string, bool) {
 	local, ok := cfg.Local()
 	if !ok {
@@ -104,10 +106,8 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 		return "", false
 	}
 	d = d.Expand()
-	bases := []string{d.Repos, d.Worktrees}
-	if len(d.Worktrees) > len(d.Repos) {
-		bases = []string{d.Worktrees, d.Repos}
-	}
+	bases := append(d.Repos, d.Worktrees)
+	sort.SliceStable(bases, func(i, j int) bool { return len(bases[i]) > len(bases[j]) })
 	for _, base := range bases {
 		if rest, ok := strings.CutPrefix(dir+"/", base+"/"); ok {
 			label, _, _ := strings.Cut(rest, "/")

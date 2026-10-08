@@ -77,8 +77,9 @@ type Prepared struct {
 }
 
 // Prepare runs resolve, clone and fetch: the main checkout is found by
-// its origin or cloned, then fetched, so what follows decides against
-// current branches. Nothing here depends on the branch.
+// its origin in any of the repos directories or cloned into the first,
+// then fetched, so what follows decides against current branches.
+// Nothing here depends on the branch.
 func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepared, error) {
 	if report == nil {
 		report = func(string, string, string) {}
@@ -111,11 +112,11 @@ func (s *Store) Prepare(ctx context.Context, repo Repo, report Reporter) (Prepar
 				return p, fail(stage, fmt.Errorf("%s exists and is not a checkout of %s", tmux.Printable(checkout), repo.Source))
 			}
 		}
-		if err := os.MkdirAll(s.Dirs.Repos, 0o755); err != nil {
+		if err := os.MkdirAll(s.Dirs.Clones(), 0o755); err != nil {
 			return p, fail(stage, tmux.PrintablePath(err))
 		}
 		report(stage, protocol.StateStart, "git clone "+repo.Source+" "+tmux.Printable(checkout))
-		if err := runStreaming(ctx, s.Dirs.Repos, report, stage, GitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
+		if err := runStreaming(ctx, s.Dirs.Clones(), report, stage, GitEnv(), "git", "clone", "--", repo.Source, checkout); err != nil {
 			return p, fail(stage, err)
 		}
 		report(stage, protocol.StateDone, "cloned")

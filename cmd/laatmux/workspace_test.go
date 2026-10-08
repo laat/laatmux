@@ -339,7 +339,7 @@ func TestHostDownKeepsIdentity(t *testing.T) {
 
 // The more specific directory wins when worktrees is nested under repos.
 func TestLabelUnderNested(t *testing.T) {
-	cfg := config.Config{Hosts: []config.Host{{Repos: "/src", Worktrees: "/src/worktrees"}}}
+	cfg := config.Config{Hosts: []config.Host{{Repos: config.Paths{"/src"}, Worktrees: "/src/worktrees"}}}
 	cases := map[string]string{
 		"/src/worktrees/proj/topic": "proj",
 		"/src/proj":                 "proj",
@@ -351,6 +351,23 @@ func TestLabelUnderNested(t *testing.T) {
 		got, ok := labelUnder(cfg, dir)
 		if got != want || ok != (want != "") {
 			t.Errorf("labelUnder(%q) = %q, %v; want %q", dir, got, ok, want)
+		}
+	}
+	// With a group directory listed after the one it is in, a checkout
+	// in the group is labelled from the group, and every repos directory
+	// counts, whatever its place in the list.
+	cfg.Hosts[0].Repos = config.Paths{"/src", "/src/group", "/other"}
+	cases = map[string]string{
+		"/src/group/svc/sub":        "svc",
+		"/src/group":                "",
+		"/src/proj":                 "proj",
+		"/other/tool":               "tool",
+		"/src/worktrees/proj/topic": "proj",
+	}
+	for dir, want := range cases {
+		got, ok := labelUnder(cfg, dir)
+		if got != want || ok != (want != "") {
+			t.Errorf("several repos directories: labelUnder(%q) = %q, %v; want %q", dir, got, ok, want)
 		}
 	}
 }
@@ -373,7 +390,7 @@ func TestLocalRepoArg(t *testing.T) {
 	}
 	// The hint for a record without a source leaves --repo to the reader
 	// rather than print it empty.
-	h := config.Host{Host: peer.Host{Name: "vm"}, Repos: "/r", Worktrees: "/w"}
+	h := config.Host{Host: peer.Host{Name: "vm"}, Repos: config.Paths{"/r"}, Worktrees: "/w"}
 	if got, want := addHint(cfg, h, protocol.Worktree{Repo: "proj", Branch: "fix"}), "vm/proj/fix has no managed session; laatmux add fix --repo <repo> --host vm makes one"; got != want {
 		t.Errorf("addHint = %q, want %q", got, want)
 	}
@@ -421,8 +438,8 @@ func TestHostFor(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	const src = "git@x:o/proj.git"
 	cfg := config.Config{Hosts: []config.Host{
-		{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"},
-		{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
+		{Host: peer.Host{Name: "mac"}, Repos: config.Paths{"/r"}, Worktrees: "/w"},
+		{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: config.Paths{"/r"}, Worktrees: "/w"},
 	}}
 	repo := config.Repo{Name: "proj", Source: src}
 	used := home.LastRepo{Host: "vm", Agent: "codex"}

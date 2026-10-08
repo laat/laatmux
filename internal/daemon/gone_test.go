@@ -728,7 +728,7 @@ func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 	}
 	other := filepath.Join(t.TempDir(), "other.git")
 	git("clone", "-q", "--bare", f.source(), other)
-	git("clone", "-q", other, filepath.Join(f.store.Dirs.Repos, "se.nt"))
+	git("clone", "-q", other, filepath.Join(f.store.Dirs.Repos[0], "se.nt"))
 	entry := &protocol.RepoEntry{Source: other, Name: "sent"}
 	sum := sha256.Sum256([]byte(source.Key(other)))
 	hashed := "se_nt-" + hex.EncodeToString(sum[:3])
@@ -747,7 +747,7 @@ func TestRelayTasksKeptAcrossLabelCollision(t *testing.T) {
 	twin := filepath.Join(t.TempDir(), "se_nt")
 	git("clone", "-q", f.source(), twin)
 	git("-C", twin, "remote", "set-url", "origin", "/elsewhere/twin.git")
-	if err := os.Rename(twin, filepath.Join(f.store.Dirs.Repos, "se_nt")); err != nil {
+	if err := os.Rename(twin, filepath.Join(f.store.Dirs.Repos[0], "se_nt")); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; ; i++ {

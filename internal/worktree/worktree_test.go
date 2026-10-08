@@ -59,7 +59,7 @@ func newFixture(t testing.TB) *fixture {
 	run(t, seed, "git", "add", ".")
 	run(t, seed, "git", "commit", "-q", "-m", "init")
 	run(t, seed, "git", "push", "-q", remote, "main")
-	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
+	dirs := config.Dirs{Repos: []string{filepath.Join(base, "repos")}, Worktrees: filepath.Join(base, "worktrees")}
 	store := New(dirs, []config.Repo{{Source: remote, Name: "proj"}})
 	return &fixture{t: t, remote: remote, store: store, repo: store.Repos()[0], ctx: context.Background()}
 }
@@ -206,12 +206,12 @@ func TestAddAgainSkipsEverything(t *testing.T) {
 // hand under another name is used, and no second clone is made.
 func TestCheckoutFoundByOrigin(t *testing.T) {
 	f := newFixture(t)
-	other := filepath.Join(f.store.Dirs.Repos, "elsewhere")
+	other := filepath.Join(f.store.Dirs.Repos[0], "elsewhere")
 	run(t, "", "git", "clone", "-q", f.remote, other)
 	// A directory with the label's name but a different origin must not be
 	// mistaken for the checkout, and must not be cloned over.
 	decoy := f.store.Dirs.Checkout("proj")
-	run(t, f.store.Dirs.Repos, "git", "init", "-q", decoy)
+	run(t, f.store.Dirs.Repos[0], "git", "init", "-q", decoy)
 	run(t, decoy, "git", "remote", "add", "origin", "https://example.com/x.git")
 	a, steps, err := f.add("task")
 	if err != nil {
@@ -277,7 +277,7 @@ func TestBranchCases(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	// checked out at a worktree outside the worktrees directory
-	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "elsewhere")
+	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos[0]), "elsewhere")
 	run(t, c, "git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
 	_, _, err = f.add("outside")
 	if stageOf(t, err) != protocol.StageWorktree || !strings.Contains(err.Error(), "checked out at "+elsewhere) {
@@ -500,7 +500,7 @@ func TestListAndFindAndRemove(t *testing.T) {
 	// listed with an empty branch; one outside the directory is not.
 	detached := f.store.Dirs.Worktree("proj", "detached")
 	run(t, c, "git", "worktree", "add", "-q", "--detach", detached)
-	run(t, c, "git", "worktree", "add", "-q", "--detach", filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside"))
+	run(t, c, "git", "worktree", "add", "-q", "--detach", filepath.Join(filepath.Dir(f.store.Dirs.Repos[0]), "outside"))
 	recs, err := f.store.List(f.ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +515,7 @@ func TestListAndFindAndRemove(t *testing.T) {
 	if _, _, ok, _ := f.store.Find(f.ctx, c); ok {
 		t.Fatal("main checkout found as a worktree")
 	}
-	if _, _, ok, _ := f.store.Find(f.ctx, filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")); ok {
+	if _, _, ok, _ := f.store.Find(f.ctx, filepath.Join(filepath.Dir(f.store.Dirs.Repos[0]), "outside")); ok {
 		t.Fatal("worktree outside the worktrees directory found")
 	}
 	// Dirty: refused without force, with git's message; removed with it.
@@ -604,8 +604,8 @@ func TestRunStreamingLongLine(t *testing.T) {
 // terminal of the client that prints it.
 func TestRootWithControlBytesQuoted(t *testing.T) {
 	f := newFixture(t)
-	base := filepath.Dir(f.store.Dirs.Repos)
-	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	f.store = New(config.Dirs{Repos: []string{filepath.Join(base, "re\tpos\x1b[32m")}, Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
 	f.repo = f.store.Repos()[0]
 	quoted := func(err error, want string) bool {
 		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
@@ -790,8 +790,8 @@ func openQuote(s string) string {
 // its lines kept, and an os error with its path quoted.
 func TestGitAndOSErrorsQuoted(t *testing.T) {
 	f := newFixture(t)
-	base := filepath.Dir(f.store.Dirs.Repos)
-	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	f.store = New(config.Dirs{Repos: []string{filepath.Join(base, "re\tpos\x1b[32m")}, Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
 	f.repo = f.store.Repos()[0]
 	a, _, err := f.add("first")
 	if err != nil {
@@ -894,7 +894,7 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	// A repos directory that cannot be read, a file.
 	file := filepath.Join(base, "fi\tle\x1b[34m")
 	write(t, file, "")
-	if _, err := New(config.Dirs{Repos: file, Worktrees: f.store.Dirs.Worktrees}, nil).List(f.ctx); !quoted(err, strconv.Quote(file)+": ") {
+	if _, err := New(config.Dirs{Repos: []string{file}, Worktrees: f.store.Dirs.Worktrees}, nil).List(f.ctx); !quoted(err, strconv.Quote(file)+": ") {
 		t.Errorf("list with the repos directory a file: %v", err)
 	}
 
@@ -908,7 +908,7 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(ro, 0o755) })
 	repos := filepath.Join(ro, "repos")
-	if _, err := New(config.Dirs{Repos: repos, Worktrees: f.store.Dirs.Worktrees}, nil).Prepare(f.ctx, f.repo, nil); !quoted(err, "mkdir "+strconv.Quote(repos)+": ") || !errors.Is(err, fs.ErrPermission) {
+	if _, err := New(config.Dirs{Repos: []string{repos}, Worktrees: f.store.Dirs.Worktrees}, nil).Prepare(f.ctx, f.repo, nil); !quoted(err, "mkdir "+strconv.Quote(repos)+": ") || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("prepare with a repos directory that cannot be made: %v", err)
 	}
 	// A setup marker that cannot be written, its directory read-only.
@@ -982,7 +982,7 @@ func TestBranchWithC1Quoted(t *testing.T) {
 	// directory, and the root of the branch's worktree taken by one on
 	// another branch.
 	out, squatter, wanted := "out"+csi, "squat"+csi, "wanted"+csi
-	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "elsewhere")
+	elsewhere := filepath.Join(filepath.Dir(f.store.Dirs.Repos[0]), "elsewhere")
 	run(t, c, "git", "worktree", "add", "-q", "-b", out, elsewhere, "main")
 	if _, _, err := f.add(out); !quoted(err, "branch "+q(out)+" is checked out at "+elsewhere) {
 		t.Errorf("add %q: %v", out, err)
@@ -993,8 +993,8 @@ func TestBranchWithC1Quoted(t *testing.T) {
 		t.Errorf("add %q: %v", wanted, err)
 	}
 	// The branch in two clones of the repository.
-	second := filepath.Join(f.store.Dirs.Repos, "proj2")
-	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, second)
+	second := filepath.Join(f.store.Dirs.Repos[0], "proj2")
+	run(t, filepath.Dir(f.store.Dirs.Repos[0]), "git", "clone", "-q", f.remote, second)
 	run(t, second, "git", "worktree", "add", "-q", "-b", fresh, f.store.Dirs.Worktree("proj2", fresh))
 	if _, _, _, err := f.store.ByBranch(f.ctx, f.repo, fresh); !quoted(err, "branch "+q(fresh)+" of proj has worktrees at ") {
 		t.Errorf("by branch in two clones: %v", err)
@@ -1040,7 +1040,7 @@ func TestCheckoutStatErrorPropagates(t *testing.T) {
 }
 
 func TestOwns(t *testing.T) {
-	s := New(config.Dirs{Repos: "/r", Worktrees: "/w/trees/"}, nil)
+	s := New(config.Dirs{Repos: []string{"/r"}, Worktrees: "/w/trees/"}, nil)
 	cases := map[string]bool{
 		"/w/trees/proj/task":        true,
 		"/w/trees/proj/a/../b":      true,
@@ -1109,7 +1109,7 @@ func TestOwnsResolvesSymlinks(t *testing.T) {
 	os.Symlink(filepath.Join(wt, "missing"), filepath.Join(wt, "dangling"))
 	os.Symlink(filepath.Join(wt, "loop2"), filepath.Join(wt, "loop1"))
 	os.Symlink(filepath.Join(wt, "loop1"), filepath.Join(wt, "loop2"))
-	s := New(config.Dirs{Repos: base, Worktrees: filepath.Join(base, "alias")}, nil)
+	s := New(config.Dirs{Repos: []string{base}, Worktrees: filepath.Join(base, "alias")}, nil)
 	cases := map[string]bool{
 		// A prefix that exists but cannot be resolved fails closed.
 		filepath.Join(wt, "dangling", "task"):        false,
@@ -1145,7 +1145,7 @@ func TestAddRefusesSymlinkedRepoDir(t *testing.T) {
 	if _, _, err := f.add("first"); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(filepath.Dir(f.store.Dirs.Repos), "outside")
+	outside := filepath.Join(filepath.Dir(f.store.Dirs.Repos[0]), "outside")
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1224,9 +1224,9 @@ func TestListAllMainCheckouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Dir(f.store.Dirs.Repos)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
 	clone := func(name, branch string) string {
-		dir := filepath.Join(f.store.Dirs.Repos, name)
+		dir := filepath.Join(f.store.Dirs.Repos[0], name)
 		run(t, base, "git", "clone", "-q", f.remote, dir)
 		run(t, dir, "git", "remote", "set-url", "origin", filepath.Join(base, name+".git"))
 		if branch == "" {
@@ -1243,7 +1243,7 @@ func TestListAllMainCheckouts(t *testing.T) {
 		{Repo: "proj", Source: f.remote, Branch: "main", Root: f.checkout(), Main: true, Configured: true, Linked: true},
 	}
 	if err := exec.Command("git", "init", "-q", "--ref-format=reftable", filepath.Join(base, "probe")).Run(); err == nil {
-		dir := filepath.Join(f.store.Dirs.Repos, "table")
+		dir := filepath.Join(f.store.Dirs.Repos[0], "table")
 		run(t, base, "git", "clone", "-q", "--ref-format=reftable", f.remote, dir)
 		run(t, dir, "git", "checkout", "-q", "-b", "tabled")
 		want = append(want, Record{Repo: "proj", Source: f.remote, Branch: "tabled", Root: dir, Main: true, Configured: true})
@@ -1274,16 +1274,16 @@ func TestListAllHeadEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Dir(f.store.Dirs.Repos)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
 	want := map[string]string{}
 	for i, branch := range []string{"nel\u0085", "nbsp\u00a0"} {
-		dir := filepath.Join(f.store.Dirs.Repos, "c"+strconv.Itoa(i))
+		dir := filepath.Join(f.store.Dirs.Repos[0], "c"+strconv.Itoa(i))
 		run(t, base, "git", "clone", "-q", f.remote, dir)
 		run(t, dir, "git", "checkout", "-q", "-b", branch)
 		want[dir] = branch
 	}
 	if err := exec.Command("git", "init", "-q", "--ref-format=reftable", filepath.Join(base, "probe")).Run(); err == nil {
-		dir := filepath.Join(f.store.Dirs.Repos, "table")
+		dir := filepath.Join(f.store.Dirs.Repos[0], "table")
 		run(t, base, "git", "clone", "-q", "--ref-format=reftable", f.remote, dir)
 		run(t, dir, "git", "checkout", "-q", "-b", "tab\u0085")
 		want[dir] = "tab\u0085"
@@ -1299,7 +1299,7 @@ func TestListAllHeadEdges(t *testing.T) {
 	}
 	// A clone with no worktree: a checkout with one fails the listing
 	// all the same, as git worktree list cannot find its repository.
-	unread := filepath.Join(f.store.Dirs.Repos, "c0")
+	unread := filepath.Join(f.store.Dirs.Repos[0], "c0")
 	head := filepath.Join(unread, ".git", "HEAD")
 	if err := os.Chmod(head, 0); err != nil {
 		t.Fatal(err)
@@ -1337,7 +1337,7 @@ func TestListAllHeadEdges(t *testing.T) {
 // which Owns takes: it is the main checkout's record, not a worktree.
 func TestListAllSymlinkedReposUnderWorktrees(t *testing.T) {
 	f := newFixture(t)
-	base := filepath.Dir(f.store.Dirs.Repos)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
 	real := filepath.Join(f.store.Dirs.Worktrees, "checkouts")
 	if err := os.MkdirAll(real, 0o755); err != nil {
 		t.Fatal(err)
@@ -1346,7 +1346,7 @@ func TestListAllSymlinkedReposUnderWorktrees(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	f.store.Dirs.Repos = link
+	f.store.Dirs.Repos = []string{link}
 	a, _, err := f.add("task")
 	if err != nil {
 		t.Fatal(err)
@@ -1364,7 +1364,7 @@ func TestListAllSymlinkedReposUnderWorktrees(t *testing.T) {
 // satisfies Owns but is not a worktree: it is not listed.
 func TestMainCheckoutNotListed(t *testing.T) {
 	f := newFixture(t)
-	f.store.Dirs.Repos = filepath.Join(f.store.Dirs.Worktrees, "checkouts")
+	f.store.Dirs.Repos = []string{filepath.Join(f.store.Dirs.Worktrees, "checkouts")}
 	a, _, err := f.add("task")
 	if err != nil {
 		t.Fatal(err)
@@ -1694,8 +1694,8 @@ func TestUnlistedCheckoutListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(f.store.Dirs.Repos, "other")
-	run(t, f.store.Dirs.Repos, "git", "clone", "-q", f.remote, other)
+	other := filepath.Join(f.store.Dirs.Repos[0], "other")
+	run(t, f.store.Dirs.Repos[0], "git", "clone", "-q", f.remote, other)
 	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
 	root := f.store.Dirs.Worktree("other", "side")
 	run(t, other, "git", "worktree", "add", "-q", "-b", "side", root)
@@ -1767,8 +1767,8 @@ func TestUnlistedCheckoutNotALabel(t *testing.T) {
 	}
 	name := "hand\tmade\x1b[31m"
 	const label = "hand_made__31m"
-	hand := filepath.Join(f.store.Dirs.Repos, name)
-	run(t, f.store.Dirs.Repos, "git", "clone", "-q", f.remote, hand)
+	hand := filepath.Join(f.store.Dirs.Repos[0], name)
+	run(t, f.store.Dirs.Repos[0], "git", "clone", "-q", f.remote, hand)
 	run(t, hand, "git", "remote", "set-url", "origin", "/elsewhere/hand.git")
 	root := f.store.Dirs.Worktree("hand", "side")
 	run(t, hand, "git", "worktree", "add", "-q", "-b", "side", root)
@@ -1813,8 +1813,8 @@ func TestUnlistedLabelCollision(t *testing.T) {
 	f.store.Log = log.New(&logged, "", 0)
 	clone := func(name, origin, branch string) (dir, root string) {
 		t.Helper()
-		dir = filepath.Join(f.store.Dirs.Repos, name)
-		run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, dir)
+		dir = filepath.Join(f.store.Dirs.Repos[0], name)
+		run(t, filepath.Dir(f.store.Dirs.Repos[0]), "git", "clone", "-q", f.remote, dir)
 		run(t, dir, "git", "remote", "set-url", "origin", origin)
 		if branch != "" {
 			root = f.store.Dirs.Worktree(branch, "w")
@@ -1947,8 +1947,8 @@ func TestSourceFormsShareCheckout(t *testing.T) {
 // them elsewhere, which a repos directory of many checkouts relies on.
 func TestCheckoutWithoutWorktreesNotAsked(t *testing.T) {
 	f := newFixture(t)
-	base := filepath.Dir(f.store.Dirs.Repos)
-	c := filepath.Join(f.store.Dirs.Repos, "plain")
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	c := filepath.Join(f.store.Dirs.Repos[0], "plain")
 	run(t, base, "git", "clone", "-q", f.remote, c)
 	if f.store.linked(c) {
 		t.Fatal("a fresh clone is asked")
@@ -1991,8 +1991,8 @@ func TestDuplicateClones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := filepath.Join(f.store.Dirs.Repos, "proj2")
-	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, second)
+	second := filepath.Join(f.store.Dirs.Repos[0], "proj2")
+	run(t, filepath.Dir(f.store.Dirs.Repos[0]), "git", "clone", "-q", f.remote, second)
 	topic := f.store.Dirs.Worktree("proj2", "topic")
 	run(t, second, "git", "worktree", "add", "-q", "-b", "topic", topic)
 	rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "topic")
@@ -2077,15 +2077,15 @@ func TestKnownAmbiguousLabel(t *testing.T) {
 	if _, _, err := f.add("one"); err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(f.store.Dirs.Repos, "renamed")
-	run(t, filepath.Dir(f.store.Dirs.Repos), "git", "clone", "-q", f.remote, other)
+	other := filepath.Join(f.store.Dirs.Repos[0], "renamed")
+	run(t, filepath.Dir(f.store.Dirs.Repos[0]), "git", "clone", "-q", f.remote, other)
 	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
 	// The listed repository's checkout is proj; the unlisted one's
 	// directory is renamed to take the listed name.
-	if err := os.Rename(f.checkout(), filepath.Join(f.store.Dirs.Repos, "listed")); err != nil {
+	if err := os.Rename(f.checkout(), filepath.Join(f.store.Dirs.Repos[0], "listed")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(other, filepath.Join(f.store.Dirs.Repos, "proj")); err != nil {
+	if err := os.Rename(other, filepath.Join(f.store.Dirs.Repos[0], "proj")); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := f.store.Known(f.ctx, "proj"); err == nil || !strings.Contains(err.Error(), "names both") {
@@ -2211,4 +2211,156 @@ func TestAddRepoEnv(t *testing.T) {
 	if st := run(t, a.Root, "git", "status", "--porcelain", "--untracked-files=no"); st != "" {
 		t.Errorf("the worktree's status: %q", st)
 	}
+}
+
+// A host's repos is a list of directories (#339), each scanned as the
+// one was. A checkout in a group directory listed after the directory
+// it is in is the repository's: add makes the worktree from it and
+// clones no second copy, a worktree made from it by hand is listed, and
+// the lookups find it. A checkout in the first directory is listed
+// before it. A directory listed twice is scanned once, and one that is
+// not there is passed over.
+func TestSeveralReposDirs(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	code := filepath.Join(base, "code")
+	group := filepath.Join(code, "group")
+	f.store.Dirs.Repos = []string{code, group}
+	nested := filepath.Join(group, "service")
+	run(t, base, "git", "clone", "-q", f.remote, nested)
+	a, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Checkout != nested || a.Root != f.store.Dirs.Worktree("proj", "task") || !hasStep(steps, protocol.StageClone, protocol.StateSkip, "checkout exists") {
+		t.Fatalf("added %+v, steps %+v", a, steps)
+	}
+	if _, err := os.Stat(f.store.Dirs.Checkout("proj")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a second copy at %s: %v", f.store.Dirs.Checkout("proj"), err)
+	}
+	hand := filepath.Join(f.store.Dirs.Worktrees, "by-hand")
+	run(t, nested, "git", "worktree", "add", "-q", "-b", "hand", hand)
+	other := filepath.Join(code, "other")
+	run(t, base, "git", "clone", "-q", f.remote, other)
+	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
+	recs := []Record{
+		{Repo: "proj", Source: f.remote, Branch: "hand", Root: hand},
+		{Repo: "proj", Source: f.remote, Branch: "task", Root: a.Root},
+	}
+	mains := []Record{
+		{Repo: "other", Source: "/elsewhere/other.git", Branch: "main", Root: other, Main: true},
+		{Repo: "proj", Source: f.remote, Branch: "main", Root: nested, Main: true, Configured: true, Linked: true},
+	}
+	for _, dirs := range [][]string{{code, group}, {filepath.Join(base, "absent"), code, group, code + "/"}} {
+		f.store.Dirs.Repos = dirs
+		gotRecs, gotMains, err := f.store.ListAll(f.ctx)
+		if err != nil || !slices.Equal(gotRecs, recs) || !slices.Equal(gotMains, mains) {
+			t.Fatalf("%q: worktrees %+v\nmains %+v\n%v", dirs, gotRecs, gotMains, err)
+		}
+	}
+	if rec, co, ok, err := f.store.Find(f.ctx, hand); err != nil || !ok || co != nested || rec != recs[0] {
+		t.Fatalf("find: %+v %s %v %v", rec, co, ok, err)
+	}
+	if rec, co, ok, err := f.store.ByBranch(f.ctx, f.repo, "task"); err != nil || !ok || co != nested || rec != recs[1] {
+		t.Fatalf("by branch: %+v %s %v %v", rec, co, ok, err)
+	}
+	if r, ok, err := f.store.Known(f.ctx, "other"); err != nil || !ok || r.Source != "/elsewhere/other.git" {
+		t.Fatalf("known other: %+v %v %v", r, ok, err)
+	}
+	if ok, err := f.store.IsCheckout(f.ctx, nested); err != nil || !ok {
+		t.Fatalf("is checkout: %v %v", ok, err)
+	}
+}
+
+// A repository found in none of the repos directories is cloned into
+// the first, made when it is not there, whatever the others hold, and
+// the next add finds it there.
+func TestCloneIntoFirstReposDir(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	other := filepath.Join(second, "other")
+	run(t, base, "git", "clone", "-q", f.remote, other)
+	run(t, other, "git", "remote", "set-url", "origin", "/elsewhere/other.git")
+	f.store.Dirs.Repos = []string{first, second}
+	a, steps, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(first, "proj")
+	if a.Checkout != want || f.checkout() != want || !hasStep(steps, protocol.StageClone, protocol.StateStart, "git clone "+f.remote+" "+want) {
+		t.Fatalf("added %+v, steps %+v", a, steps)
+	}
+	if _, err := os.Stat(filepath.Join(second, "proj")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a clone in the second directory: %v", err)
+	}
+	if _, steps, err := f.add("next"); err != nil || !hasStep(steps, protocol.StageClone, protocol.StateSkip, "checkout exists") {
+		t.Fatalf("the next add: %v %+v", err, steps)
+	}
+}
+
+// Checkouts of two repositories named alike in two repos directories:
+// the one in the earlier directory keeps the plain label, the later one
+// gets the hash of its origin after it, logged once, as a made label
+// does, and a clone of the first repository in a third directory shares
+// the plain label. The directories' order decides. A made label in an
+// earlier directory still gives way to a directory named as the label
+// in a later one.
+func TestReposDirsLabelCollision(t *testing.T) {
+	f := newFixture(t)
+	var logged bytes.Buffer
+	f.store.Log = log.New(&logged, "", 0)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	a, b, c := filepath.Join(base, "a"), filepath.Join(base, "b"), filepath.Join(base, "c")
+	f.store.Dirs.Repos = []string{a, b, c}
+	clone := func(in, name, origin, branch string) (dir, root string) {
+		t.Helper()
+		dir = filepath.Join(in, name)
+		run(t, base, "git", "clone", "-q", f.remote, dir)
+		run(t, dir, "git", "remote", "set-url", "origin", origin)
+		root = f.store.Dirs.Worktree(branch, "w")
+		run(t, dir, "git", "worktree", "add", "-q", "-b", branch, root)
+		return dir, root
+	}
+	list := func(want ...Record) {
+		t.Helper()
+		recs, err := f.store.List(f.ctx)
+		if err != nil || !slices.Equal(recs, want) {
+			t.Fatalf("list %+v, want %+v: %v", recs, want, err)
+		}
+	}
+	known := func(by, name, src string) {
+		t.Helper()
+		if r, ok, err := f.store.Known(f.ctx, by); err != nil || !ok || r.Name != name || r.Source != src {
+			t.Fatalf("known %s: %+v %v %v, want %s of %s", by, r, ok, err, name, src)
+		}
+	}
+	apiA, one := clone(a, "api", "/elsewhere/one.git", "one")
+	apiB, two := clone(b, "api", "/elsewhere/two.git", "two")
+	_, again := clone(c, "api", "/elsewhere/one.git", "again")
+	oneRec := Record{Repo: "api", Source: "/elsewhere/one.git", Branch: "one", Root: one}
+	twoRec := Record{Repo: "api-f16526", Source: "/elsewhere/two.git", Branch: "two", Root: two}
+	againRec := Record{Repo: "api", Source: "/elsewhere/one.git", Branch: "again", Root: again}
+	for range 2 {
+		list(againRec, oneRec, twoRec)
+	}
+	line := apiB + " is labelled api-f16526: the label its name makes is " + apiA + "'s"
+	if strings.Count(logged.String(), "\n") != 1 || !strings.Contains(logged.String(), line) {
+		t.Fatalf("logged %q, want once %q", logged.String(), line)
+	}
+	known("api", "api", "/elsewhere/one.git")
+	known("api-f16526", "api-f16526", "/elsewhere/two.git")
+	if rec, co, ok, err := f.store.Find(f.ctx, two); err != nil || !ok || co != apiB || rec != twoRec {
+		t.Fatalf("find the later checkout's worktree: %+v %q %v %v", rec, co, ok, err)
+	}
+
+	f.store.Dirs.Repos = []string{b, a, c}
+	oneRec.Repo, againRec.Repo, twoRec.Repo = "api-caef38", "api-caef38", "api"
+	list(againRec, oneRec, twoRec)
+	known("api", "api", "/elsewhere/two.git")
+
+	_, dot := clone(a, "next.js", "/elsewhere/hand.git", "dot")
+	_, plain := clone(c, "next_js", "/elsewhere/five.git", "plain")
+	list(againRec, Record{Repo: "next_js-06a376", Source: "/elsewhere/hand.git", Branch: "dot", Root: dot}, oneRec,
+		Record{Repo: "next_js", Source: "/elsewhere/five.git", Branch: "plain", Root: plain}, twoRec)
 }

@@ -7,7 +7,8 @@
 //	  - name: box
 //	    ssh: box              # ssh alias, ControlMaster assumed
 //	    bin: ~/.local/bin/laatmux   # optional, default "laatmux" on PATH
-//	    repos: ~/src
+//	    repos: [~/src, ~/src/work]  # or several: checkouts found in each,
+//	                                # a clone for add made in the first
 //	    worktrees: ~/src/worktrees
 //	tmux_servers: [laatmux, default]  # what this machine's daemon watches
 //	agents:
@@ -60,33 +61,66 @@ import (
 // checkouts and worktrees.
 type Host struct {
 	peer.Host `yaml:",inline"`
-	// Repos is the directory of main checkouts on the host; a checkout is
-	// <Repos>/<name>. Worktrees is the directory of worktrees; a worktree
-	// is <Worktrees>/<name>/<branch>. Both are as written in the file, so
+	// Repos is the directories of main checkouts on the host, one or
+	// more: a checkout is a direct child of one of them, and a clone
+	// add makes of a repository found in none is <first>/<name>.
+	// Worktrees is the directory of worktrees; a worktree is
+	// <Worktrees>/<name>/<branch>. Both are as written in the file, so
 	// "~" is expanded only on the host itself; see Dirs.Expand.
-	Repos     string `yaml:"repos"`
+	Repos     Paths  `yaml:"repos"`
 	Worktrees string `yaml:"worktrees"`
 }
 
-// Dirs is a host's checkout and worktree directories.
+// Paths is a list of directories; a config may write one as a string,
+// and an empty string is none.
+type Paths []string
+
+// UnmarshalYAML reads a list, or a scalar as a list of one.
+func (p *Paths) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		*p = nil
+		if s != "" {
+			*p = Paths{s}
+		}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return err
+	}
+	*p = list
+	return nil
+}
+
+// Dirs is a host's checkout and worktree directories: one repos
+// directory or more, the first the one add clones into (Clones).
 type Dirs struct {
-	Repos, Worktrees string
+	Repos     []string
+	Worktrees string
 }
 
 // Dirs returns the host's directories, or an error naming the host when it
 // has none: such a host cannot add.
 func (h Host) Dirs() (Dirs, error) {
-	if h.Repos == "" || h.Worktrees == "" {
+	if !h.CanAdd() {
 		return Dirs{}, fmt.Errorf("host %s has no repos and worktrees directories configured", h.Name)
 	}
-	return Dirs{Repos: h.Repos, Worktrees: h.Worktrees}, nil
+	return Dirs{Repos: slices.Clone(h.Repos), Worktrees: h.Worktrees}, nil
 }
 
 // CanAdd reports whether the host has both directories.
-func (h Host) CanAdd() bool { return h.Repos != "" && h.Worktrees != "" }
+func (h Host) CanAdd() bool { return len(h.Repos) > 0 && h.Worktrees != "" }
+
+// Clones is the repos directory add clones a repository found in none
+// of them into: the first.
+func (d Dirs) Clones() string { return d.Repos[0] }
 
 // Checkout is where a clone of the named repository lands.
-func (d Dirs) Checkout(name string) string { return d.Repos + "/" + name }
+func (d Dirs) Checkout(name string) string { return d.Clones() + "/" + name }
 
 // Worktree is where a new worktree for the branch lands.
 func (d Dirs) Worktree(name, branch string) string {
@@ -96,7 +130,11 @@ func (d Dirs) Worktree(name, branch string) string {
 // Expand returns the directories with a leading "~" replaced by this
 // machine's home directory. Only meaningful on the host the entry is for.
 func (d Dirs) Expand() Dirs {
-	return Dirs{Repos: ExpandHome(d.Repos), Worktrees: ExpandHome(d.Worktrees)}
+	repos := make([]string, len(d.Repos))
+	for i, r := range d.Repos {
+		repos[i] = ExpandHome(r)
+	}
+	return Dirs{Repos: repos, Worktrees: ExpandHome(d.Worktrees)}
 }
 
 // ExpandHome replaces a leading "~" or "~/" with the user's home directory.
@@ -533,14 +571,22 @@ func (c *Config) validateHosts() error {
 		if h.Local() {
 			locals++
 		}
-		if (h.Repos == "") != (h.Worktrees == "") {
+		hasRepos := len(h.Repos) > 0
+		if hasRepos != (h.Worktrees != "") {
 			return fmt.Errorf("hosts: %s has %s but not %s; set both or neither", h.Name,
-				pick(h.Repos != "", "repos", "worktrees"), pick(h.Repos != "", "worktrees", "repos"))
+				pick(hasRepos, "repos", "worktrees"), pick(hasRepos, "worktrees", "repos"))
 		}
 		// The daemon has no meaningful working directory, and git
 		// registers absolute paths, so a relative directory could never
 		// match what git reports.
-		for _, kv := range [][2]string{{"repos", h.Repos}, {"worktrees", h.Worktrees}} {
+		var dirs [][2]string
+		for j, r := range h.Repos {
+			if r == "" {
+				return fmt.Errorf("hosts: %s: repos entry %d is empty", h.Name, j+1)
+			}
+			dirs = append(dirs, [2]string{"repos", r})
+		}
+		for _, kv := range append(dirs, [2]string{"worktrees", h.Worktrees}) {
 			if kv[1] != "" && !filepath.IsAbs(kv[1]) && kv[1] != "~" && !strings.HasPrefix(kv[1], "~/") {
 				return fmt.Errorf("hosts: %s: %s %q must be absolute or start with ~", h.Name, kv[0], kv[1])
 			}

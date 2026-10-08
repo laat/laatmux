@@ -1214,7 +1214,7 @@ func TestRmFor(t *testing.T) {
 	m := dashModel(cfg)
 	selectRow(t, m, "proj/task")
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
-	want := command.Rm{Host: config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"},
+	want := command.Rm{Host: config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: config.Paths{"/r"}, Worktrees: "/w"},
 		Repo: cfg.Repos[1], Branch: "task", Root: "/w/proj/task"}
 	if d.rm.Host.Name != want.Host.Name || d.rm.Repo.Source != want.Repo.Source || d.rm.Branch != want.Branch || d.rm.Root != want.Root || d.rm.Force {
 		t.Errorf("rm = %+v", d.rm)
@@ -1498,7 +1498,7 @@ func TestPresetForWorkspace(t *testing.T) {
 
 func TestBuildForm(t *testing.T) {
 	cfg := config.Config{
-		Hosts:  []config.Host{{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
+		Hosts:  []config.Host{{Host: peer.Host{Name: "mac"}, Repos: config.Paths{"/r"}, Worktrees: "/w"}, {Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: config.Paths{"/r"}, Worktrees: "/w"}},
 		Repos:  []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}, {Source: "git@x:o/other.git", Name: "other"}},
 		Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}, "codex": {Cmd: []string{"codex"}}},
 	}
