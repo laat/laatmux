@@ -211,7 +211,8 @@
         "number": 1,
         "state": "state",
         "draft": true,
-        "url": "url"
+        "url": "url",
+        "base": "base"
       },
       "checks": {
         "state": "state",
@@ -233,7 +234,8 @@
       "number": 1,
       "state": "state",
       "draft": true,
-      "url": "url"
+      "url": "url",
+      "base": "base"
     },
     "checks": {
       "state": "state",
@@ -427,6 +429,7 @@
   "root": "root",
   "force": true,
   "head": "head",
+  "unused": true,
   "delete_branch": true,
   "roots": [
     "x"
@@ -437,6 +440,11 @@
       "branch": "branch",
       "head": "head",
       "changed": 1,
+      "ignored": 1,
+      "ignored_dirs": 1,
+      "locked": true,
+      "lock_reason": "lock_reason",
+      "submodules": true,
       "base": "base",
       "ahead": 1,
       "on_origin": true,

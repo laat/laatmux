@@ -355,6 +355,9 @@ type Daemon struct {
 	sessionsHookErr string
 	// The worktrees' git status refreshes, by root; see gitstatus.go.
 	gits map[string]*gitEntry
+	// factSlots bounds the roots the facts messages of every connection
+	// read at once; see prune.go.
+	factSlots chan struct{}
 	// The branch records and the state of asking GitHub about them,
 	// nil without the branches capability. See branches.go.
 	branches   *branches
@@ -516,6 +519,7 @@ func New(cfg Config) *Daemon {
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
+		factSlots:    make(chan struct{}, factWorkers),
 		paths:        newResolver(),
 
 		msubs:     map[*subscriber]struct{}{},

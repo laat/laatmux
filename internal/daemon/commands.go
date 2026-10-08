@@ -424,6 +424,18 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		// between the mark and the drop.
 		unlockDeliveries := rn.lockDeliveries(root)
 		defer unlockDeliveries()
+		if m.Unused {
+			// prune found nothing running in the worktree; something
+			// started there since, while its question was open say, is
+			// not what it decided to remove.
+			what, err := rn.inUse(ctx, root)
+			if err != nil {
+				return err
+			}
+			if what != "" {
+				return fmt.Errorf("%s is in use since it was read, by %s; not removed", tmux.Printable(root), what)
+			}
+		}
 		if checkout != "" && m.Head != "" {
 			// prune read the worktree at this commit: one made in it
 			// since is not what it decided to remove. Git's own check
@@ -432,6 +444,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return err
 			}
 		}
+		removedFrom := ""
 		if checkout != "" {
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
 			if err != nil {
@@ -444,10 +457,11 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				// the tasks from before it.
 				l := rn.core.stepRevision()
 				res.Listing = &l
+				removedFrom = checkout
 			}
 		}
 		if m.DeleteBranch {
-			rn.deleteBranch(ctx, c, m, checkout)
+			rn.deleteBranch(ctx, c, m, removedFrom)
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait

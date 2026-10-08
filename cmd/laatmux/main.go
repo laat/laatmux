@@ -148,8 +148,8 @@ func usage() {
             laatmux rm [--force]           inside a workspace session: that workspace
   prune     laatmux prune [--host h] [--repo r] [-n|--dry-run] [--branches] [--yes]
             remove the worktrees with no session that are clean and have no commits
-            beyond the default branch or a merged PR; -n prints the plan alone
-  path     laatmux path <repo>/<branch> [--host h]             the worktree root on the host
+            beyond the default branch or a PR merged into it; -n prints the plan alone
+  path      laatmux path <repo>/<branch> [--host h]             the worktree root on the host
   ls        workspaces and agents across configured hosts
   watch     live list, redraws on change, for a plain terminal
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window

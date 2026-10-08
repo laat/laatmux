@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -41,7 +42,12 @@ func ReadFacts(ctx context.Context, root string) (protocol.RootFacts, error) {
 		return protocol.RootFacts{Root: root}, err
 	}
 	f.Head = strings.TrimSpace(out)
-	if f.Changed, _, err = readChanges(ctx, root); err != nil {
+	ch, err := readChanges(ctx, root, true)
+	if err != nil {
+		return protocol.RootFacts{Root: root}, err
+	}
+	f.Changed, f.Ignored, f.IgnoredDirs = ch.changed, ch.ignored, ch.ignoredDirs
+	if f.Locked, f.LockReason, f.Submodules, err = removable(ctx, root); err != nil {
 		return protocol.RootFacts{Root: root}, err
 	}
 	base, baseOID, err := defaultBase(ctx, root)
@@ -62,8 +68,11 @@ func ReadFacts(ctx context.Context, root string) (protocol.RootFacts, error) {
 		return f, nil
 	}
 	remote, ok, err := commitOf(ctx, root, "refs/remotes/origin/"+branch)
-	if err != nil || !ok {
-		return f, err
+	switch {
+	case err != nil:
+		return protocol.RootFacts{Root: root}, err
+	case !ok:
+		return f, nil
 	}
 	f.OnOrigin = true
 	_, err = g("merge-base", "--is-ancestor", f.Head, remote)
@@ -75,6 +84,40 @@ func ReadFacts(ctx context.Context, root string) (protocol.RootFacts, error) {
 		return protocol.RootFacts{Root: root}, err
 	}
 	return f, nil
+}
+
+// removable is what git worktree remove refuses without force, as git
+// itself checks it: a lock, the locked file in the worktree's git dir,
+// with its reason; and a submodule, a modules directory there or a
+// submodule of the index with its own .git in the working tree.
+func removable(ctx context.Context, root string) (locked bool, reason string, submodules bool, err error) {
+	out, err := statusGit(ctx, root, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return false, "", false, err
+	}
+	gitDir := strings.TrimSuffix(out, "\n")
+	if b, err := os.ReadFile(filepath.Join(gitDir, "locked")); err == nil {
+		locked, reason = true, strings.TrimSpace(string(b))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, "", false, tmux.PrintablePath(err)
+	}
+	if fi, err := os.Stat(filepath.Join(gitDir, "modules")); err == nil && fi.IsDir() {
+		return locked, reason, true, nil
+	}
+	out, err = statusGit(ctx, root, "ls-files", "--stage", "-z")
+	if err != nil {
+		return false, "", false, err
+	}
+	for _, e := range strings.Split(out, "\x00") {
+		meta, path, ok := strings.Cut(e, "\t")
+		if !ok || !strings.HasPrefix(meta, "160000 ") {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(root, path, ".git")); err == nil {
+			return locked, reason, true, nil
+		}
+	}
+	return locked, reason, false, nil
 }
 
 // defaultBase is the repository's default branch as prune compares
@@ -89,7 +132,9 @@ func defaultBase(ctx context.Context, root string) (name, oid string, err error)
 	if timedOut(err) {
 		return "", "", err
 	}
-	if ref := strings.TrimSpace(out); err == nil && strings.HasPrefix(ref, "refs/remotes/origin/") {
+	// Only the line end is git's: a branch may end in U+00A0, which
+	// TrimSpace would take.
+	if ref := strings.TrimSuffix(out, "\n"); err == nil && strings.HasPrefix(ref, "refs/remotes/origin/") {
 		candidates = append(candidates, ref)
 	}
 	candidates = append(candidates, "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master")
@@ -145,12 +190,14 @@ func HeadIs(ctx context.Context, root, head string) error {
 }
 
 // DeleteBranch deletes a branch of the checkout when it is still at
-// head, as git branch -D does, its config section with it; git refuses
-// a branch some worktree has checked out. Not deleted with no error is
-// a branch already gone. A branch at another commit is an error saying
-// where it is.
+// head, with its reflog and then its config section, as git branch -D
+// deletes them. A branch some worktree of the checkout has checked
+// out, the main one included, stays, as git branch -D keeps it. Not
+// deleted with no error is a branch already gone. A branch at another
+// commit is an error saying where it is.
 func DeleteBranch(ctx context.Context, checkout, branch, head string) (deleted bool, err error) {
-	out, err := git(ctx, checkout, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	ref := "refs/heads/" + branch
+	out, err := git(ctx, checkout, "rev-parse", "--verify", "--quiet", ref)
 	var ee *exec.ExitError
 	switch {
 	case errors.As(err, &ee) && ee.ExitCode() == 1:
@@ -161,13 +208,36 @@ func DeleteBranch(ctx context.Context, checkout, branch, head string) (deleted b
 	if now := strings.TrimSpace(out); now != head {
 		return false, fmt.Errorf("it is at %s now, not %s", short(now), short(head))
 	}
-	// Between the check and the deletion the branch could move only by
-	// a git of the user's: no worktree has it checked out, or git
-	// refuses, and the daemon holds every repository.
-	if _, err := git(ctx, checkout, "branch", "-D", "--", branch); err != nil {
+	entries, err := ListWorktrees(ctx, checkout)
+	if err != nil {
 		return false, err
 	}
+	for _, e := range entries {
+		if e.Branch == branch {
+			return false, fmt.Errorf("it is checked out at %s", tmux.Printable(e.Root))
+		}
+	}
+	if err := deleteRefAt(ctx, checkout, ref, head); err != nil {
+		return false, err
+	}
+	// Best effort, as the ref is gone: a branch with no config has no
+	// section, which git reports as an error.
+	_, _ = git(ctx, checkout, "config", "--remove-section", "branch."+branch)
 	return true, nil
+}
+
+// deleteRefAt deletes a ref that is at head. With the old value git
+// deletes it only if it is still there under the ref's lock: a commit
+// made on the branch since DeleteBranch looked, by a git of the
+// user's, is refused rather than deleted.
+func deleteRefAt(ctx context.Context, checkout, ref, head string) error {
+	if _, err := git(ctx, checkout, "update-ref", "-d", ref, head); err != nil {
+		if out, rerr := git(ctx, checkout, "rev-parse", "--verify", "--quiet", ref); rerr == nil && strings.TrimSpace(out) != head {
+			return fmt.Errorf("it is at %s now, not %s", short(strings.TrimSpace(out)), short(head))
+		}
+		return err
+	}
+	return nil
 }
 
 // short is a commit as git abbreviates it by default, for a message.

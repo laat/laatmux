@@ -163,12 +163,13 @@ const (
 	// reads for each root it names whether the worktree is clean, how
 	// many commits it has beyond the repository's default branch and
 	// whether its branch is on origin; and on rm, head, which refuses
-	// the removal of a worktree whose HEAD is at another commit, and
-	// delete_branch, which deletes the branch once the worktree is gone
-	// when it is still at head. A daemon without it reads an rm without
-	// the two fields and removes the worktree whatever its HEAD is; a
-	// client sends them only to a daemon with it. A daemon with prune
-	// has rm.
+	// the removal of a worktree whose HEAD is at another commit, unused,
+	// which refuses one that a pane or a run is in, and delete_branch,
+	// which deletes the branch once the worktree is gone when it is
+	// still at head. A daemon without it reads an rm without the three
+	// fields and removes the worktree whatever its HEAD is and whatever
+	// runs in it; a client sends them only to a daemon with it. A daemon
+	// with prune has rm.
 	CapPrune = "prune"
 )
 
@@ -513,12 +514,14 @@ type BranchStatus struct {
 
 // PullRequest is a branch's PR: an open one, else the newest merged or
 // closed, from the source's own repository. State is open, merged or
-// closed.
+// closed; Base is the branch it was opened against, "" from a daemon
+// that did not ask.
 type PullRequest struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
 	Draft  bool   `json:"draft,omitempty"`
 	URL    string `json:"url"`
+	Base   string `json:"base,omitempty"`
 }
 
 // Checks is the head commit's check rollup, counted from its aggregates:
@@ -545,23 +548,33 @@ const (
 // a daemon with prune: the branch git has checked out there, "" when
 // detached, and HEAD's commit; Changed, the files git status lists as
 // the status refresh reads it, untracked ones included, 0 when clean;
-// Base, the repository's default branch, origin/HEAD's, else
-// origin/main, origin/master, main or master, the first that is a
-// commit, "" when none is, and Ahead, the commits HEAD has that Base
-// does not; OnOrigin, that origin's branch of the name is there as the
-// last fetch left it, and Pushed, that HEAD is in it. Error is why the
+// Ignored and IgnoredDirs, the ignored files and directories git
+// status lists with --ignored=matching, which a removal deletes with
+// the worktree; Locked, a worktree git keeps from removal, with the
+// reason given to git worktree lock, and Submodules, one with a
+// submodule in it, which git removes only by force; Base, the
+// repository's default branch, origin/HEAD's, else origin/main,
+// origin/master, main or master, the first that is a commit, "" when
+// none is, and Ahead, the commits HEAD has that Base does not;
+// OnOrigin, that origin's branch of the name is there as the last
+// fetch left it, and Pushed, that HEAD is in it. Error is why the
 // facts could not be read, a root that is no worktree of the host's
 // under the worktrees directory say; the rest is then empty.
 type RootFacts struct {
-	Root     string `json:"root"`
-	Branch   string `json:"branch,omitempty"`
-	Head     string `json:"head,omitempty"`
-	Changed  int    `json:"changed,omitempty"`
-	Base     string `json:"base,omitempty"`
-	Ahead    int    `json:"ahead,omitempty"`
-	OnOrigin bool   `json:"on_origin,omitempty"`
-	Pushed   bool   `json:"pushed,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Root        string `json:"root"`
+	Branch      string `json:"branch,omitempty"`
+	Head        string `json:"head,omitempty"`
+	Changed     int    `json:"changed,omitempty"`
+	Ignored     int    `json:"ignored,omitempty"`
+	IgnoredDirs int    `json:"ignored_dirs,omitempty"`
+	Locked      bool   `json:"locked,omitempty"`
+	LockReason  string `json:"lock_reason,omitempty"`
+	Submodules  bool   `json:"submodules,omitempty"`
+	Base        string `json:"base,omitempty"`
+	Ahead       int    `json:"ahead,omitempty"`
+	OnOrigin    bool   `json:"on_origin,omitempty"`
+	Pushed      bool   `json:"pushed,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Worktree is one git worktree on one host, under the host's configured
@@ -853,11 +866,15 @@ type Message struct {
 	Force bool   `json:"force,omitempty"` // rm: remove a dirty or locked worktree
 	// Head on rm, to a daemon with prune, is the commit the worktree's
 	// HEAD must be at for the removal: prune decided on it, and a
-	// worktree with a commit made since is refused. DeleteBranch asks
-	// for the branch to be deleted too, once the worktree is gone, when
-	// it is still at Head; how that went is a progress message of the
-	// branch stage, and the result is the removal's.
+	// worktree with a commit made since is refused. Unused refuses a
+	// worktree that a run, or a pane of a server the daemon watches, is
+	// in: prune found it unused, and one in use since is not what it
+	// decided to remove. DeleteBranch asks for the branch to be deleted
+	// too, once the worktree is gone, when it is still at Head; how that
+	// went is a progress message of the branch stage, and the result is
+	// the removal's.
 	Head         string `json:"head,omitempty"`
+	Unused       bool   `json:"unused,omitempty"`
 	DeleteBranch bool   `json:"delete_branch,omitempty"`
 	// Roots on facts names the worktrees to read; Facts on its result
 	// is one record per root, in the order asked.

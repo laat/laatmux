@@ -40,20 +40,29 @@ func TestReadFacts(t *testing.T) {
 	run(t, c, "git", "commit", "-q", "--allow-empty", "-m", "two")
 	facts(protocol.RootFacts{Branch: "feature", Base: "origin/main", Ahead: 2, OnOrigin: true})
 
-	// An untracked file and a changed one; an ignored one is no change.
+	// An untracked file and a changed one; ignored ones are no change,
+	// and counted apart, a directory once whatever is in it.
 	write(t, filepath.Join(c, "new.txt"), "x\n")
 	write(t, filepath.Join(c, "README"), "changed\n")
-	write(t, filepath.Join(c, ".git", "info", "exclude"), "ignored.txt\n")
+	write(t, filepath.Join(c, ".git", "info", "exclude"), "ignored.txt\nsub/*.log\ncache/\n")
 	write(t, filepath.Join(c, "ignored.txt"), "x\n")
-	facts(protocol.RootFacts{Branch: "feature", Base: "origin/main", Ahead: 2, OnOrigin: true, Changed: 2})
+	write(t, filepath.Join(c, "sub", "a.log"), "x\n")
+	write(t, filepath.Join(c, "cache", "one", "two"), "x\n")
+	write(t, filepath.Join(c, "cache", "three"), "x\n")
+	facts(protocol.RootFacts{Branch: "feature", Base: "origin/main", Ahead: 2, OnOrigin: true, Changed: 2, Ignored: 2, IgnoredDirs: 1})
 	run(t, c, "git", "checkout", "-q", "README")
-	os.Remove(filepath.Join(c, "new.txt"))
+	for _, p := range []string{"new.txt", "ignored.txt", "sub", "cache"} {
+		os.RemoveAll(filepath.Join(c, p))
+	}
 
-	// origin/HEAD decides; without it origin/main; without a remote
-	// branch the local main.
+	// origin/HEAD decides, by the ref's name to the last byte; without
+	// it origin/main; without a remote branch the local main.
 	run(t, c, "git", "push", "-q", "origin", "feature:trunk")
 	run(t, c, "git", "remote", "set-head", "origin", "trunk")
 	facts(protocol.RootFacts{Branch: "feature", Base: "origin/trunk", OnOrigin: true})
+	run(t, c, "git", "push", "-q", "origin", "main:trunk\u00a0")
+	run(t, c, "git", "remote", "set-head", "origin", "trunk\u00a0")
+	facts(protocol.RootFacts{Branch: "feature", Base: "origin/trunk\u00a0", Ahead: 2, OnOrigin: true})
 	run(t, c, "git", "remote", "set-head", "origin", "-d")
 	facts(protocol.RootFacts{Branch: "feature", Base: "origin/main", Ahead: 2, OnOrigin: true})
 	run(t, c, "git", "update-ref", "-d", "refs/remotes/origin/main")
@@ -71,6 +80,53 @@ func TestReadFacts(t *testing.T) {
 
 	if _, err := ReadFacts(ctx, t.TempDir()); err == nil {
 		t.Error("facts outside a repository")
+	}
+}
+
+// What git worktree remove refuses without force, read as git checks
+// it: a lock with its reason, or without one; a submodule checked out
+// in the worktree. A worktree with neither has neither.
+func TestRemovable(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	c := filepath.Join(t.TempDir(), "clone")
+	run(t, filepath.Dir(c), "git", "clone", "-q", f.remote, c)
+	gitCfg(t, c)
+	wt := func(name string) string {
+		// The real path, as git registers it, which Remove matches.
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Join(dir, name)
+		run(t, c, "git", "worktree", "add", "-q", "-b", name, root, "main")
+		return root
+	}
+	plain, locked, bare, sub := wt("plain"), wt("locked"), wt("bare-lock"), wt("sub")
+	run(t, c, "git", "worktree", "lock", "--reason", "keep me", locked)
+	run(t, c, "git", "worktree", "lock", bare)
+	run(t, sub, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", f.remote, "vendor/proj")
+	for _, k := range []struct {
+		root       string
+		locked     bool
+		reason     string
+		submodules bool
+	}{
+		{plain, false, "", false}, {locked, true, "keep me", false}, {bare, true, "", false}, {sub, false, "", true},
+	} {
+		got, err := ReadFacts(ctx, k.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Locked != k.locked || got.LockReason != k.reason || got.Submodules != k.submodules {
+			t.Errorf("%s: locked %v %q, submodules %v", filepath.Base(k.root), got.Locked, got.LockReason, got.Submodules)
+		}
+	}
+	// git agrees: each one read as kept is refused without force.
+	for _, root := range []string{locked, bare, sub} {
+		if _, err := Remove(ctx, c, root, false); err == nil {
+			t.Errorf("%s: removed without force", filepath.Base(root))
+		}
 	}
 }
 
@@ -134,5 +190,17 @@ func TestDeleteBranch(t *testing.T) {
 	}
 	if _, err := git(ctx, c, "rev-parse", "--verify", "refs/heads/used"); err != nil {
 		t.Fatal("the checked-out branch went")
+	}
+	if deleted, err := DeleteBranch(ctx, c, "main", head); err == nil || deleted || !strings.Contains(err.Error(), "checked out at") {
+		t.Fatalf("the main checkout's branch: %v %v", deleted, err)
+	}
+
+	// The deletion itself is conditional: a branch moved between the
+	// look and the deletion stays.
+	if err := deleteRefAt(ctx, c, "refs/heads/moved", head); err == nil || !strings.Contains(err.Error(), "not "+head[:7]) {
+		t.Fatalf("deleteRefAt of a moved branch: %v", err)
+	}
+	if _, err := git(ctx, c, "rev-parse", "--verify", "refs/heads/moved"); err != nil {
+		t.Fatal("the moved branch went")
 	}
 }

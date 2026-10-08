@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
@@ -19,12 +20,14 @@ import (
 
 // The decision table: what stays whatever the host reads (the main
 // checkout, a detached HEAD, a branch laatmux cannot carry, an open
-// local session), what stays for want of facts (a host without prune,
-// a read that failed, a branch changed since the listing), and over
-// the facts and the branch record: dirty stays; clean with nothing
-// beyond the default branch goes; clean and ahead goes only with its
-// PR merged at HEAD; anything else ahead stays, said with whether it
-// is pushed and its PR.
+// local session, a listing that cannot tell what runs in it), what
+// stays for want of facts (a host without prune, a read that failed, a
+// branch changed since the listing), and over the facts and the branch
+// record: dirty stays, and so do a locked worktree and one with
+// submodules, which git keeps; clean with nothing beyond the default
+// branch goes, its ignored files said; clean and ahead goes only with
+// its PR merged into the default branch at HEAD; anything else ahead
+// stays, said with whether it is pushed and its PR.
 func TestPruneDecide(t *testing.T) {
 	w := protocol.Worktree{Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Source: "git@x:o/proj.git"}
 	facts := func(change func(*protocol.RootFacts)) *protocol.RootFacts {
@@ -35,8 +38,11 @@ func TestPruneDecide(t *testing.T) {
 		return f
 	}
 	ahead := func(n int) func(*protocol.RootFacts) { return func(f *protocol.RootFacts) { f.Ahead = n } }
+	prOn := func(state string, draft bool, head, base string) *protocol.BranchStatus {
+		return &protocol.BranchStatus{HeadOID: head, PR: &protocol.PullRequest{Number: 7, State: state, Draft: draft, Base: base}}
+	}
 	pr := func(state string, draft bool, head string) *protocol.BranchStatus {
-		return &protocol.BranchStatus{HeadOID: head, PR: &protocol.PullRequest{Number: 7, State: state, Draft: draft}}
+		return prOn(state, draft, head, "main")
 	}
 	with := func(change func(*protocol.Worktree)) protocol.Worktree {
 		c := w
@@ -53,6 +59,7 @@ func TestPruneDecide(t *testing.T) {
 		{"detached", pruneInput{Worktree: with(func(w *protocol.Worktree) { w.Branch = "" }), Facts: facts(nil)}, false, "detached HEAD"},
 		{"display only", pruneInput{Worktree: with(func(w *protocol.Worktree) { w.BranchDisplayOnly = true }), Facts: facts(nil)}, false, "a branch laatmux cannot carry; rm --root removes it"},
 		{"local session", pruneInput{Worktree: w, Local: &protocol.Session{Name: "vm/proj/fix"}, Facts: facts(nil)}, false, "local session vm/proj/fix is open"},
+		{"unseen", pruneInput{Worktree: w, Unseen: "local sessions not listed: boom", Facts: facts(nil)}, false, "local sessions not listed: boom"},
 		{"no capability", pruneInput{Worktree: w, NoFacts: "the daemon on vm, v1, has no prune"}, false, "the daemon on vm, v1, has no prune"},
 		{"read failed", pruneInput{Worktree: w, Facts: &protocol.RootFacts{Root: w.Root, Error: "git status: timeout"}}, false, "git status: timeout"},
 		{"branch changed", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Branch = "other" })}, false, "the branch is other now"},
@@ -60,11 +67,21 @@ func TestPruneDecide(t *testing.T) {
 		{"dirty", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 3 })}, false, "dirty: 3 changed files"},
 		{"dirty, one file", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 1 })}, false, "dirty: 1 changed file"},
 		{"dirty and merged", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 1; f.Ahead = 2 }), Branch: pr("merged", false, "abc")}, false, "dirty: 1 changed file"},
+		{"dirty and locked", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed, f.Locked = 1, true })}, false, "dirty: 1 changed file"},
+		{"locked", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Locked, f.LockReason = true, "keep me" })}, false, "locked: keep me"},
+		{"locked, no reason", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Locked = true })}, false, "locked"},
+		{"submodules", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Submodules = true })}, false, "has submodules, which git removes only by force; rm --force removes it"},
 		{"no base", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Base = "" })}, false, "no default branch to compare with: no origin/HEAD, main or master"},
 		{"the default branch", pruneInput{Worktree: with(func(w *protocol.Worktree) { w.Branch = "main" }), Facts: facts(func(f *protocol.RootFacts) { f.Branch = "main" })}, false, "the default branch"},
 		{"nothing ahead", pruneInput{Worktree: w, Facts: facts(nil)}, true, "clean, no commits beyond origin/main"},
 		{"nothing ahead, PR open", pruneInput{Worktree: w, Facts: facts(nil), Branch: pr("open", false, "abc")}, true, "clean, no commits beyond origin/main"},
+		{"nothing ahead, ignored files", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ignored = 3 })}, true, "clean, 3 ignored files, no commits beyond origin/main"},
+		{"nothing ahead, ignored ones of each", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ignored, f.IgnoredDirs = 1, 2 })}, true, "clean, 1 ignored file and 2 ignored directories, no commits beyond origin/main"},
 		{"merged at HEAD", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: pr("merged", false, "abc")}, true, "clean, PR #7 merged"},
+		{"merged at HEAD, an ignored directory", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ahead, f.IgnoredDirs = 2, 1 }), Branch: pr("merged", false, "abc")}, true, "clean, 1 ignored directory, PR #7 merged"},
+		{"merged into another branch", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "feature")}, false, "2 commits ahead of origin/main; PR #7 is merged into feature, not main"},
+		{"merged, base not known", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "")}, false, "2 commits ahead of origin/main; PR #7 is merged, into a branch not known yet"},
+		{"merged into a local default", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ahead, f.Base = 2, "master" }), Branch: prOn("merged", false, "abc", "master")}, true, "clean, PR #7 merged"},
 		{"merged, HEAD moved on", pruneInput{Worktree: w, Facts: facts(ahead(3)), Branch: pr("merged", false, "old")}, false, "3 commits ahead of origin/main; PR #7 is merged, but HEAD is not its last commit"},
 		{"merged, last commit unknown", pruneInput{Worktree: w, Facts: facts(ahead(1)), Branch: pr("merged", false, "")}, false, "1 commit ahead of origin/main; PR #7 is merged, its last commit not known"},
 		{"ahead, not on origin", pruneInput{Worktree: w, Facts: facts(ahead(1))}, false, "1 commit ahead of origin/main, not on origin"},
@@ -122,11 +139,33 @@ func TestPruneCandidates(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if got := names(pruneCandidates(rows.Tree(s.Input), listed, config.Repo{})); !slices.Equal(got, []string{"other/elsewhere@mac", "proj (detached) /w/d@mac", "proj/plain@mac"}) {
+	cfg := config.Config{Repos: []config.Repo{{Name: "mine", Source: src}}}
+	candidates := func(flag string) []string {
+		t.Helper()
+		match, ok := matchRepo(cfg, flag, s.Input.Worktrees)
+		if !ok {
+			t.Fatalf("--repo %q unknown", flag)
+		}
+		return names(pruneCandidates(rows.Tree(s.Input), listed, match))
+	}
+	if got := candidates(""); !slices.Equal(got, []string{"other/elsewhere@mac", "proj (detached) /w/d@mac", "proj/plain@mac"}) {
 		t.Errorf("candidates: %q", got)
 	}
-	if got := names(pruneCandidates(rows.Tree(s.Input), listed, config.Repo{Name: "proj", Source: src})); !slices.Equal(got, []string{"proj (detached) /w/d@mac", "proj/plain@mac"}) {
-		t.Errorf("candidates of proj: %q", got)
+	// By this machine's name for a repository, by the source, and, for
+	// one this machine's config does not list, by a host's label or
+	// its source.
+	for _, flag := range []string{"mine", src} {
+		if got := candidates(flag); !slices.Equal(got, []string{"proj (detached) /w/d@mac", "proj/plain@mac"}) {
+			t.Errorf("candidates of %s: %q", flag, got)
+		}
+	}
+	for _, flag := range []string{"other", other} {
+		if got := candidates(flag); !slices.Equal(got, []string{"other/elsewhere@mac"}) {
+			t.Errorf("candidates of %s: %q", flag, got)
+		}
+	}
+	if _, ok := matchRepo(cfg, "nope", s.Input.Worktrees); ok {
+		t.Error("--repo nope known")
 	}
 }
 
@@ -135,8 +174,11 @@ func TestPruneCandidates(t *testing.T) {
 // goes or stays; the facts are asked only for those the host decides,
 // on the host's environment; -n removes nothing, nor does a no to the
 // question or no terminal to ask in; --yes removes the ones the plan
-// removes through rm, each held to the commit read and, with
-// --branches, its branch with it.
+// removes through rm, each held to the commit read and to nothing
+// running there since and, with --branches, its branch with it; a
+// local session opened since the plan keeps its worktree. A local
+// session listing that failed, or records without attribution, keep
+// every worktree, since what runs in them is not known.
 func TestPrune(t *testing.T) {
 	const src = "git@x:o/proj.git"
 	wt := func(branch string) protocol.Worktree {
@@ -145,7 +187,7 @@ func TestPrune(t *testing.T) {
 	busy := wt("busy")
 	busy.Session = "proj/busy"
 	facts := map[string]protocol.RootFacts{
-		"/w/proj/fresh":  {Branch: "fresh", Head: "f1", Base: "origin/main"},
+		"/w/proj/fresh":  {Branch: "fresh", Head: "f1", Base: "origin/main", Ignored: 2},
 		"/w/proj/merged": {Branch: "merged", Head: "m1", Base: "origin/main", Ahead: 2, OnOrigin: true, Pushed: true},
 		"/w/proj/wip":    {Branch: "wip", Head: "w1", Base: "origin/main", Changed: 2},
 		"/w/proj/ahead":  {Branch: "ahead", Head: "a1", Base: "origin/main", Ahead: 1},
@@ -153,19 +195,20 @@ func TestPrune(t *testing.T) {
 	var mu sync.Mutex
 	var asked [][]string
 	var rms []protocol.Message
-	refuse := ""
-	caps := []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapWorktrees, protocol.CapRm, protocol.CapPrune}
+	refuse, sessionsErr := "", ""
+	caps := []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapRm, protocol.CapPrune}
+	hostCaps := caps
 	startFakeDaemon(t, caps, func(pc *protocol.Conn, m protocol.Message) bool {
 		mu.Lock()
 		defer mu.Unlock()
 		switch m.Type {
 		case protocol.TypeSubscribe:
-			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1,
-				Hosts:     []protocol.HostStatus{{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Version: "fake", Capabilities: caps}},
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, SessionsError: sessionsErr,
+				Hosts:     []protocol.HostStatus{{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Version: "fake", Capabilities: hostCaps}},
 				Worktrees: []protocol.Worktree{wt("fresh"), wt("merged"), wt("wip"), wt("ahead"), wt("open"), busy},
 				Sessions:  []protocol.Session{{Name: "mac/proj/open", Key: "lenv//w/proj/open", Host: "mac", Source: src, Branch: "open"}},
 				BranchStatuses: []protocol.BranchStatus{{BranchKey: protocol.BranchKey{Source: source.Key(src), Branch: "merged"}, HeadOID: "m1",
-					PR: &protocol.PullRequest{Number: 9, State: "merged"}}},
+					PR: &protocol.PullRequest{Number: 9, State: "merged", Base: "main"}}},
 			})
 		case protocol.TypeFacts:
 			asked = append(asked, m.Roots)
@@ -182,7 +225,9 @@ func TestPrune(t *testing.T) {
 				pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: "HEAD moved"})
 				break
 			}
-			pc.Write(protocol.Message{Type: protocol.TypeProgress, ID: m.ID, N: 1, Stage: protocol.StageBranch, State: protocol.StateDone, Detail: "deleted branch " + m.Branch})
+			if m.DeleteBranch {
+				pc.Write(protocol.Message{Type: protocol.TypeProgress, ID: m.ID, N: 1, Stage: protocol.StageBranch, State: protocol.StateDone, Detail: "deleted branch " + m.Branch})
+			}
 			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: m.Root})
 		}
 		return true
@@ -194,8 +239,8 @@ func TestPrune(t *testing.T) {
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	was := confirm
-	t.Cleanup(func() { confirm = was })
+	was, wasLocals := confirm, pruneLocals
+	t.Cleanup(func() { confirm, pruneLocals = was, wasLocals })
 	var prompts []string
 	answer := func(yes bool, err error) {
 		confirm = func(_ context.Context, prompt string) (bool, error) {
@@ -226,7 +271,7 @@ func TestPrune(t *testing.T) {
 	}
 	plan := "" +
 		"keep    proj/ahead (mac)                     1 commit ahead of origin/main, not on origin\n" +
-		"remove  proj/fresh (mac)                     clean, no commits beyond origin/main\n" +
+		"remove  proj/fresh (mac)                     clean, 2 ignored files, no commits beyond origin/main\n" +
 		"remove  proj/merged (mac)                    clean, PR #9 merged\n" +
 		"keep    proj/open (mac)                      local session mac/proj/open is open\n" +
 		"keep    proj/wip (mac)                       dirty: 2 changed files\n"
@@ -260,8 +305,8 @@ func TestPrune(t *testing.T) {
 	if err != nil || len(prompts) != 0 {
 		t.Fatalf("--yes: %v, prompts %q\n%s", err, prompts, out)
 	}
-	if len(r) != 2 || r[0].Root != "/w/proj/fresh" || r[0].Head != "f1" || r[0].Branch != "fresh" || r[0].Repo != src || !r[0].DeleteBranch ||
-		r[1].Root != "/w/proj/merged" || r[1].Head != "m1" || !r[1].DeleteBranch {
+	if len(r) != 2 || r[0].Root != "/w/proj/fresh" || r[0].Head != "f1" || r[0].Branch != "fresh" || r[0].Repo != src || !r[0].Unused || !r[0].DeleteBranch ||
+		r[1].Root != "/w/proj/merged" || r[1].Head != "m1" || !r[1].Unused || !r[1].DeleteBranch {
 		t.Fatalf("rms %+v", r)
 	}
 	want := plan +
@@ -270,6 +315,7 @@ func TestPrune(t *testing.T) {
 	if out != want {
 		t.Errorf("--yes output:\n%s\nwant:\n%s", out, want)
 	}
+
 	// A removal refused is said, the others go on, and the command
 	// fails with the count.
 	mu.Lock()
@@ -279,9 +325,58 @@ func TestPrune(t *testing.T) {
 	if _, r = sent(); err == nil || err.Error() != "1 of 2 worktrees not removed" || len(r) != 2 || r[1].DeleteBranch {
 		t.Fatalf("a refusal: %v, rms %+v", err, r)
 	}
-	if !strings.HasSuffix(out, "proj/fresh on mac not removed: HEAD moved\nbranch    done  deleted branch merged\nremoved proj/merged on mac (/w/proj/merged)\n") {
+	if !strings.HasSuffix(out, "proj/fresh on mac not removed: HEAD moved\nremoved proj/merged on mac (/w/proj/merged)\n") {
 		t.Errorf("a refusal:\n%s", out)
 	}
+	mu.Lock()
+	refuse = ""
+	mu.Unlock()
+
+	// A local session opened for one since the plan keeps it, and is
+	// said; nothing is sent for it.
+	pruneLocals = func(context.Context) ([]protocol.Session, error) {
+		return []protocol.Session{{Name: "mac/proj/merged", Key: "lenv//w/proj/merged"}}, nil
+	}
+	out, err = run("--yes")
+	if _, r = sent(); err == nil || err.Error() != "1 of 2 worktrees not removed" || len(r) != 1 || r[0].Root != "/w/proj/fresh" {
+		t.Fatalf("a local session since: %v, rms %+v", err, r)
+	}
+	if !strings.HasSuffix(out, "proj/merged on mac not removed: local session mac/proj/merged is open since the plan\n") {
+		t.Errorf("a local session since:\n%s", out)
+	}
+	pruneLocals = func(context.Context) ([]protocol.Session, error) { return nil, errors.New("tmux: boom") }
+	if out, err = run("--yes"); err == nil || !strings.Contains(out, "proj/fresh on mac not removed: local sessions not listed: tmux: boom\n") {
+		t.Errorf("local sessions not listed before the removal: %v\n%s", err, out)
+	}
+	if _, r = sent(); len(r) != 0 {
+		t.Errorf("sent with the local sessions not listed: %+v", r)
+	}
+	pruneLocals = wasLocals
+
+	// What runs in the worktrees cannot be told: every one stays, and
+	// the host is not asked.
+	for _, k := range []struct {
+		sessionsErr string
+		caps        []string
+		reason      string
+	}{
+		{"tmux: boom", caps, "local sessions not listed: tmux: boom"},
+		{"", slices.DeleteFunc(slices.Clone(caps), func(c string) bool { return c == protocol.CapAttribution }),
+			"the daemon on mac, fake, does not say which worktree each agent is in; laatmux upgrade mac installs one that does"},
+	} {
+		mu.Lock()
+		sessionsErr, hostCaps = k.sessionsErr, k.caps
+		mu.Unlock()
+		out, err = run("--yes")
+		a, r = sent()
+		if err != nil || len(a) != 0 || len(r) != 0 || !strings.Contains(out, "keep    proj/fresh (mac)                     "+k.reason+"\n") || !strings.HasSuffix(out, "nothing to remove\n") {
+			t.Errorf("%s: %v, facts %q, rms %+v\n%s", k.reason, err, a, r, out)
+		}
+	}
+	mu.Lock()
+	sessionsErr, hostCaps = "", caps
+	mu.Unlock()
+
 	if _, err := run("--yes", "--repo", "nope"); err == nil || !strings.Contains(err.Error(), `unknown repository "nope"`) {
 		t.Errorf("--repo nope: %v", err)
 	}
@@ -290,5 +385,84 @@ func TestPrune(t *testing.T) {
 	}
 	if _, err := run("extra"); err == nil || !strings.Contains(err.Error(), "usage: laatmux prune") {
 		t.Errorf("extra argument: %v", err)
+	}
+}
+
+// The environment guards: facts asked of a host that answers as
+// another machine than the one its records are of keep every worktree
+// there, said, with nothing sent; and an rm, its facts read, goes only
+// to the environment the records are of, refused before it is sent.
+func TestPruneEnvironment(t *testing.T) {
+	const src = "git@x:o/proj.git"
+	var mu sync.Mutex
+	var sent []protocol.Message
+	caps := []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapRm, protocol.CapPrune}
+	startFakeDaemonAs(t, "lenv", caps, func(pc *protocol.Conn, m protocol.Message) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, m)
+		if m.Type == protocol.TypeSubscribe {
+			// The host's records are of another machine than the one
+			// that answers a dial now.
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1,
+				Hosts:     []protocol.HostStatus{{Name: "mac", EnvironmentID: "oenv", Connected: true, Listed: true, Version: "fake", Capabilities: caps}},
+				Worktrees: []protocol.Worktree{{ID: "oenv/worktree//w/proj/fresh", EnvironmentID: "oenv", Repo: "proj", Branch: "fresh", Root: "/w/proj/fresh", Source: src}},
+			})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(os.Getenv("LAATMUX_HOME"), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	run := func() (string, error) {
+		t.Helper()
+		f, ferr := os.Create(filepath.Join(t.TempDir(), "stdout"))
+		if ferr != nil {
+			t.Fatal(ferr)
+		}
+		stdout := os.Stdout
+		os.Stdout = f
+		err := cmdPrune(context.Background(), []string{"--yes"})
+		os.Stdout = stdout
+		f.Close()
+		out, _ := os.ReadFile(f.Name())
+		return string(out), err
+	}
+	commands := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, m := range sent {
+			if m.Type != protocol.TypeSubscribe && m.Type != protocol.TypeHello {
+				out = append(out, m.Type)
+			}
+		}
+		sent = nil
+		return out
+	}
+
+	out, err := run()
+	if err != nil || !strings.Contains(out, "keep    proj/fresh (mac)                     mac: answers as environment lenv, not oenv its worktrees were listed for\n") {
+		t.Errorf("facts from another machine: %v\n%s", err, out)
+	}
+	if got := commands(); len(got) != 0 {
+		t.Errorf("sent %q", got)
+	}
+
+	was := hostFacts
+	t.Cleanup(func() { hostFacts = was })
+	hostFacts = func(_ context.Context, _ peer.Host, env string, roots []string) ([]protocol.RootFacts, error) {
+		return []protocol.RootFacts{{Root: roots[0], Branch: "fresh", Head: "f1", Base: "origin/main"}}, nil
+	}
+	out, err = run()
+	if err == nil || !strings.Contains(out, "proj/fresh on mac not removed: mac: answers as environment lenv, not oenv the request was resolved for\n") {
+		t.Errorf("rm to another machine: %v\n%s", err, out)
+	}
+	if got := commands(); len(got) != 0 {
+		t.Errorf("sent %q", got)
 	}
 }

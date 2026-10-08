@@ -75,7 +75,7 @@ func TestQueryVariablesAndChunks(t *testing.T) {
 // with a merged PR keeps the PR; one with none has no ref.
 func TestParse(t *testing.T) {
 	pr := func(n int, state string, cross bool, oid, rl string) string {
-		return fmt.Sprintf(`{"number":%d,"state":%q,"isDraft":false,"url":"https://github.com/o/r/pull/%d","isCrossRepository":%v,"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":%s}}]}}`, n, state, n, cross, oid, rl)
+		return fmt.Sprintf(`{"number":%d,"state":%q,"isDraft":false,"url":"https://github.com/o/r/pull/%d","baseRefName":"base-%d","isCrossRepository":%v,"commits":{"nodes":[{"commit":{"oid":%q,"statusCheckRollup":%s}}]}}`, n, state, n, n, cross, oid, rl)
 	}
 	ok := rollupJSON("R1", "SUCCESS", map[string]int{"SUCCESS": 2}, nil)
 	body := func(ref string, prs ...string) string {
@@ -94,12 +94,12 @@ func TestParse(t *testing.T) {
 		want       Result
 	}{
 		{"fork excluded, open first", body(ref, pr(9, "OPEN", true, "f", ok), pr(8, "MERGED", false, "m", ok), pr(7, "OPEN", false, "p", ok)),
-			Result{HeadOID: "p", PR: &protocol.PullRequest{Number: 7, State: "open", URL: "https://github.com/o/r/pull/7"}}},
+			Result{HeadOID: "p", PR: &protocol.PullRequest{Number: 7, State: "open", URL: "https://github.com/o/r/pull/7", Base: "base-7"}}},
 		{"newest closed, where the branch is", body(`{"target":{"oid":"c","statusCheckRollup":null}}`, pr(8, "CLOSED", false, "c", ok), pr(6, "MERGED", false, "m", ok)),
-			Result{HeadOID: "c", PR: &protocol.PullRequest{Number: 8, State: "closed", URL: "https://github.com/o/r/pull/8"}}},
+			Result{HeadOID: "c", PR: &protocol.PullRequest{Number: 8, State: "closed", URL: "https://github.com/o/r/pull/8", Base: "base-8"}}},
 		{"a branch moved on from its merged PR", body(ref, pr(8, "MERGED", false, "old", ok)), Result{HeadOID: "own"}},
 		{"deleted after merge", body("null", pr(5, "MERGED", false, "m", ok)),
-			Result{HeadOID: "m", PR: &protocol.PullRequest{Number: 5, State: "merged", URL: "https://github.com/o/r/pull/5"}}},
+			Result{HeadOID: "m", PR: &protocol.PullRequest{Number: 5, State: "merged", URL: "https://github.com/o/r/pull/5", Base: "base-5"}}},
 		{"gone", body("null"), Result{NoRef: true}},
 		{"only a fork's", body(ref, pr(9, "OPEN", true, "f", ok)), Result{HeadOID: "own"}},
 	} {

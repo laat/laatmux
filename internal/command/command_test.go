@@ -249,12 +249,13 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	}
 }
 
-// prune's rm, with head and delete_branch, goes only to a daemon with
-// prune: one without would remove the worktree whatever its HEAD, and
-// is refused before anything is sent; one with it gets both fields.
+// prune's rm, with head, unused and delete_branch, goes only to a
+// daemon with prune: one without would remove the worktree whatever its
+// HEAD and whatever runs in it, and is refused before anything is
+// sent; one with it gets the three fields.
 func TestRmHeadNeedsPrune(t *testing.T) {
 	caps := []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}
-	rm := Rm{Host: config.Host{Host: peer.Host{Name: "local"}}, Root: "/r/x", Branch: "x", Head: "abc", DeleteBranch: true}
+	rm := Rm{Host: config.Host{Host: peer.Host{Name: "local"}}, Root: "/r/x", Branch: "x", Head: "abc", Unused: true, DeleteBranch: true}
 	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
 	var ns *NotSent
 	if _, err := rm.Run(context.Background(), Discard{}); err == nil || !strings.Contains(err.Error(), "does not support prune") || !errors.As(err, &ns) {
@@ -267,7 +268,7 @@ func TestRmHeadNeedsPrune(t *testing.T) {
 	if res, err := rm.Run(context.Background(), Discard{}); err != nil || res.Root != "/r/x" {
 		t.Fatalf("with prune: %+v %v", res, err)
 	}
-	if got := f.commands(); len(got) != 1 || got[0].Head != "abc" || !got[0].DeleteBranch {
+	if got := f.commands(); len(got) != 1 || got[0].Head != "abc" || !got[0].Unused || !got[0].DeleteBranch {
 		t.Fatalf("sent %+v", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/laat/laatmux/internal/client"
@@ -20,18 +21,21 @@ import (
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
-// cmdPrune removes the worktrees nothing uses that hold nothing a
-// removal would lose: the ones ls shows with no session, no agent and
-// nothing else in them, that are clean, and whose commits are all in
-// the repository's default branch or whose PR is merged. The listing
-// is the merged stream's, as ls reads it; what the worktree holds is
-// read on its host, by the facts message; the PR state is this
-// machine's branch records, which {pr_state} draws. The plan is
-// printed, a line per worktree with why it goes or stays; -n stops
-// there, and without --yes the plan is confirmed once, in a terminal.
-// Each removal is an rm, held to the commit the plan read.
+// cmdPrune removes the worktrees nothing uses whose work is in the
+// repository's default branch: the ones ls shows with no session, no
+// agent and nothing else in them, that are clean, and whose commits
+// are all in the default branch or whose PR is merged into it. Their
+// ignored files go with them, as with rm, and the plan says how many.
+// The listing is the merged stream's, as ls reads it; what the
+// worktree holds is read on its host, by the facts message; the PR
+// state is this machine's branch records, which {pr_state} draws. The
+// plan is printed, a line per worktree with why it goes or stays; -n
+// stops there, and without --yes the plan is confirmed once, in a
+// terminal. Each removal is an rm, held to the commit the plan read and
+// to nothing running in the worktree since.
 func cmdPrune(ctx context.Context, args []string) error {
 	a, err := parsePruneArgs(args)
 	if err != nil {
@@ -42,17 +46,13 @@ func cmdPrune(ctx context.Context, args []string) error {
 		return err
 	}
 	if a.host != "" {
-		if _, ok := cfg.Find(a.host); !ok {
+		// By the name the merged stream has it, which an ssh alias
+		// found it by is not.
+		h, ok := cfg.Find(a.host)
+		if !ok {
 			return fmt.Errorf("unknown host %q", a.host)
 		}
-	}
-	var repo config.Repo
-	if a.repo != "" {
-		r, ok := cfg.Repo(a.repo)
-		if !ok {
-			return fmt.Errorf("unknown repository %q; configured: %s", a.repo, repoList(cfg))
-		}
-		repo = r
+		a.host = h.Name
 	}
 	m := merged.New()
 	m.Configure(cfg)
@@ -61,13 +61,32 @@ func cmdPrune(ctx context.Context, args []string) error {
 		return err
 	}
 	defer c.Close()
-	waiting, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool { return len(waiting) == 0 })
+	// With --host only that host is waited on: another one that does
+	// not answer holds nothing up.
+	waiting, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool {
+		return len(waiting) == 0 || a.host != "" && !slices.Contains(waiting, a.host)
+	})
 	if err != nil {
 		return err
 	}
 	m.TimedOut(waiting, snapshotTimeout)
 	c.Close()
-	return prune(ctx, cfg, a, repo, m.Status(""), os.Stdout)
+	return prune(ctx, cfg, a, m.Status(""), os.Stdout)
+}
+
+// matchRepo is --repo as a worktree is matched by it: a repository
+// this machine's config lists, by its source; else a host's label or a
+// source as the listing has them, for a checkout a host found by its
+// origin. Not ok when neither knows the name.
+func matchRepo(cfg config.Config, flag string, ws []protocol.Worktree) (func(protocol.Worktree) bool, bool) {
+	if flag == "" {
+		return func(protocol.Worktree) bool { return true }, true
+	}
+	if r, ok := cfg.Repo(flag); ok {
+		return func(w protocol.Worktree) bool { return source.Same(w.Source, r.Source) }, true
+	}
+	match := func(w protocol.Worktree) bool { return w.Repo == flag || w.Source != "" && source.Same(w.Source, flag) }
+	return match, slices.ContainsFunc(ws, match)
 }
 
 // pruneArgs is prune's command line.
@@ -109,12 +128,13 @@ type pruneItem struct {
 }
 
 // pruneInput is what prune decides one worktree on: its record, the
-// local workspace session for it, the facts its host read for it or
-// why there are none, and this machine's branch record for its
-// branch, nil when there is none.
+// local workspace session for it, why what runs in it cannot be told
+// from here, the facts its host read for it or why there are none, and
+// this machine's branch record for its branch, nil when there is none.
 type pruneInput struct {
 	Worktree protocol.Worktree
 	Local    *protocol.Session
+	Unseen   string
 	Facts    *protocol.RootFacts
 	NoFacts  string
 	Branch   *protocol.BranchStatus
@@ -123,11 +143,12 @@ type pruneInput struct {
 // keepBefore is why a worktree stays whatever its host would read
 // about it, "" when that is what decides: a main checkout, which git
 // keeps; a detached HEAD, which has no branch to judge it by; a
-// branch laatmux cannot carry, which no command names; and a local
+// branch laatmux cannot carry, which no command names; a local
 // workspace session, which rm kills with what runs in it, a shell
 // over ssh on a remote host that the host does not see among its
-// panes.
-func keepBefore(w protocol.Worktree, local *protocol.Session) string {
+// panes; and a listing that cannot say nothing runs in it.
+func keepBefore(in pruneInput) string {
+	w := in.Worktree
 	switch {
 	case w.Main:
 		return "the main checkout"
@@ -135,21 +156,26 @@ func keepBefore(w protocol.Worktree, local *protocol.Session) string {
 		return "detached HEAD"
 	case w.BranchDisplayOnly:
 		return "a branch laatmux cannot carry; rm --root removes it"
-	case local != nil:
-		return "local session " + tmux.Printable(local.Name) + " is open"
+	case in.Local != nil:
+		return "local session " + tmux.Printable(in.Local.Name) + " is open"
+	case in.Unseen != "":
+		return in.Unseen
 	}
 	return ""
 }
 
 // decide is whether the worktree goes, and why or why not. It goes
 // when it is clean and either has no commit its repository's default
-// branch lacks, or its branch's PR is merged with HEAD at the PR's
-// last commit: a squash or a rebase merge leaves the branch's commits
-// ahead of the default branch, and a commit made after the merge is in
-// no PR. Everything else stays, said with why.
+// branch lacks, or its branch's PR is merged into the default branch
+// with HEAD at the PR's last commit: a squash or a rebase merge leaves
+// the branch's commits ahead of the default branch, a commit made
+// after the merge is in no PR, and a PR merged into another branch,
+// one under it in a stack say, has not put its work in the default
+// branch. Everything else stays, said with why: a worktree git keeps
+// from removal, locked or with submodules, too, as rm would fail on it.
 func decide(in pruneInput) (remove bool, reason string) {
 	w, f := in.Worktree, in.Facts
-	if r := keepBefore(w, in.Local); r != "" {
+	if r := keepBefore(in); r != "" {
 		return false, r
 	}
 	switch {
@@ -161,12 +187,21 @@ func decide(in pruneInput) (remove bool, reason string) {
 		return false, "the branch is " + branchOrDetachedName(f.Branch) + " now"
 	case f.Changed > 0:
 		return false, "dirty: " + plural(f.Changed, "changed file")
+	case f.Locked && f.LockReason != "":
+		return false, "locked: " + tmux.Printable(f.LockReason)
+	case f.Locked:
+		return false, "locked"
+	case f.Submodules:
+		return false, "has submodules, which git removes only by force; rm --force removes it"
 	case f.Base == "":
 		return false, "no default branch to compare with: no origin/HEAD, main or master"
-	case strings.TrimPrefix(f.Base, "origin/") == w.Branch:
+	}
+	def := strings.TrimPrefix(f.Base, "origin/")
+	switch {
+	case def == w.Branch:
 		return false, "the default branch"
 	case f.Ahead == 0:
-		return true, "clean, no commits beyond " + tmux.Printable(f.Base)
+		return true, clean(f) + ", no commits beyond " + tmux.Printable(f.Base)
 	}
 	ahead := plural(f.Ahead, "commit") + " ahead of " + tmux.Printable(f.Base)
 	var pr *protocol.PullRequest
@@ -174,11 +209,15 @@ func decide(in pruneInput) (remove bool, reason string) {
 		pr = in.Branch.PR
 	}
 	if pr != nil && pr.State == "merged" {
-		switch in.Branch.HeadOID {
-		case "":
+		switch {
+		case pr.Base == "":
+			return false, fmt.Sprintf("%s; PR #%d is merged, into a branch not known yet", ahead, pr.Number)
+		case pr.Base != def:
+			return false, fmt.Sprintf("%s; PR #%d is merged into %s, not %s", ahead, pr.Number, tmux.Printable(pr.Base), tmux.Printable(def))
+		case in.Branch.HeadOID == "":
 			return false, fmt.Sprintf("%s; PR #%d is merged, its last commit not known", ahead, pr.Number)
-		case f.Head:
-			return true, fmt.Sprintf("clean, PR #%d merged", pr.Number)
+		case in.Branch.HeadOID == f.Head:
+			return true, fmt.Sprintf("%s, PR #%d merged", clean(f), pr.Number)
 		}
 		return false, fmt.Sprintf("%s; PR #%d is merged, but HEAD is not its last commit", ahead, pr.Number)
 	}
@@ -200,6 +239,22 @@ func decide(in pruneInput) (remove bool, reason string) {
 	return false, ahead
 }
 
+// clean is how a removal's reason calls a clean worktree: with the
+// ignored files and directories that go with it, when there are any.
+func clean(f *protocol.RootFacts) string {
+	var ignored []string
+	if f.Ignored > 0 {
+		ignored = append(ignored, plural(f.Ignored, "ignored file"))
+	}
+	if f.IgnoredDirs > 0 {
+		ignored = append(ignored, plural(f.IgnoredDirs, "ignored directory"))
+	}
+	if len(ignored) == 0 {
+		return "clean"
+	}
+	return "clean, " + strings.Join(ignored, " and ")
+}
+
 // branchOrDetachedName is a branch as a reason names it.
 func branchOrDetachedName(b string) string {
 	if b == "" {
@@ -208,10 +263,13 @@ func branchOrDetachedName(b string) string {
 	return tmux.Printable(b)
 }
 
-// plural is n and the noun, with an s past one.
+// plural is n and the noun, made plural past one: directory, directories.
 func plural(n int, noun string) string {
-	if n == 1 {
+	switch {
+	case n == 1:
 		return "1 " + noun
+	case strings.HasSuffix(noun, "y"):
+		return fmt.Sprintf("%d %sies", n, strings.TrimSuffix(noun, "y"))
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
@@ -220,19 +278,16 @@ func plural(n int, noun string) string {
 // no session and nothing under them: no agent, no managed session on
 // the host, no pane and no run; not a main checkout, nor a task's
 // line, which stands for an add. Only a host listed decides, as only
-// its records are all of them; repo, when given, is the one
-// repository.
-func pruneCandidates(tree []rows.Row, listed func(host string) bool, repo config.Repo) []pruneItem {
+// its records are all of them; repo is whether the worktree is of the
+// repository --repo names.
+func pruneCandidates(tree []rows.Row, listed func(host string) bool, repo func(protocol.Worktree) bool) []pruneItem {
 	var out []pruneItem
 	for _, n := range tree {
 		w := n.Worktree
 		if n.Kind != rows.KindWorktree || n.Pending != nil || w == nil || n.Orphaned || w.Main {
 			continue
 		}
-		if n.Agent != nil || n.Children > 0 || w.Session != "" || !listed(n.Host) {
-			continue
-		}
-		if repo.Source != "" && !source.Same(w.Source, repo.Source) {
+		if n.Agent != nil || n.Children > 0 || w.Session != "" || !listed(n.Host) || !repo(*w) {
 			continue
 		}
 		out = append(out, pruneItem{host: n.Host, name: n.Name, in: pruneInput{Worktree: *w, Local: n.Local, Branch: n.Branch}})
@@ -284,10 +339,37 @@ var confirm = func(ctx context.Context, prompt string) (bool, error) {
 	}
 }
 
+// pruneLocals lists this machine's sessions before each removal, a
+// variable for tests.
+var pruneLocals = workspace.List
+
 // prune is the command over the merged status read: the hosts not
 // looked at said, the plan printed, and the removals once confirmed.
-func prune(ctx context.Context, cfg config.Config, a pruneArgs, repo config.Repo, s merged.Status, out io.Writer) error {
+func prune(ctx context.Context, cfg config.Config, a pruneArgs, s merged.Status, out io.Writer) error {
+	repo, ok := matchRepo(cfg, a.repo, s.Input.Worktrees)
+	if !ok {
+		return fmt.Errorf("unknown repository %q; configured: %s, and no host lists one by that name or source", a.repo, repoList(cfg))
+	}
+	// What runs in a worktree is known from here only through a
+	// listing of the local sessions that worked, and through records
+	// that carry their worktree: a merging daemon of a build before
+	// attribution drops it, and the panes and runs.
+	attributed := map[string]bool{}
+	for _, h := range s.Input.Hosts {
+		attributed[h.Name] = h.Attribution
+	}
 	listed := map[string]merged.Host{}
+	unseen := func(host string) string {
+		switch {
+		case s.SessionsErr != "":
+			return "local sessions not listed: " + tmux.Printable(s.SessionsErr)
+		case !listed[host].Attribution:
+			return fmt.Sprintf("the daemon on %s, %s, does not say which worktree each agent is in; laatmux upgrade %s installs one that does", host, listed[host].Version, host)
+		case !attributed[host]:
+			return "the records of " + host + " come without the worktree each agent is in: the local daemon is an older build; laatmux stop ends it, and the next command starts this one"
+		}
+		return ""
+	}
 	for _, h := range s.Hosts {
 		if a.host != "" && h.Name != a.host {
 			continue
@@ -308,6 +390,9 @@ func prune(ctx context.Context, cfg config.Config, a pruneArgs, repo config.Repo
 		fmt.Fprintln(out, "no worktree without a session to look at")
 		return nil
 	}
+	for i := range items {
+		items[i].in.Unseen = unseen(items[i].host)
+	}
 	hosts := map[string]config.Host{}
 	for _, h := range s.Hosts {
 		host := h.Name
@@ -318,7 +403,7 @@ func prune(ctx context.Context, cfg config.Config, a pruneArgs, repo config.Repo
 		var asked []*pruneItem
 		for i := range items {
 			it := &items[i]
-			if it.host == host && keepBefore(it.in.Worktree, it.in.Local) == "" {
+			if it.host == host && keepBefore(it.in) == "" {
 				roots = append(roots, it.in.Worktree.Root)
 				asked = append(asked, it)
 			}
@@ -389,7 +474,25 @@ func prune(ctx context.Context, cfg config.Config, a pruneArgs, repo config.Repo
 	for _, it := range remove {
 		w := it.in.Worktree
 		rm := command.Rm{Host: hosts[it.host], Repo: config.Repo{Name: w.Repo, Source: w.Source}, Branch: w.Branch, Root: w.Root,
-			Environment: w.EnvironmentID, Head: it.in.Facts.Head, DeleteBranch: a.branches}
+			Environment: w.EnvironmentID, Head: it.in.Facts.Head, Unused: true, DeleteBranch: a.branches}
+		// The host refuses a worktree something runs in since the plan;
+		// a local session opened for it meanwhile is this machine's to
+		// see, and rm would kill it.
+		locals, err := pruneLocals(ctx)
+		if err == nil || tmux.HookOnly(err) {
+			if l, ok := workspace.Find(locals, protocol.SessionKey(w.EnvironmentID, w.Root), ""); ok {
+				err = fmt.Errorf("local session %s is open since the plan", tmux.Printable(l.Name))
+			} else {
+				err = nil
+			}
+		} else {
+			err = fmt.Errorf("local sessions not listed: %w", err)
+		}
+		if err != nil {
+			failed++
+			fmt.Fprintf(out, "%s on %s not removed: %v\n", rm.Describe(), it.host, err)
+			continue
+		}
 		res, err := rm.Run(ctx, prunePrinter{out})
 		if err == nil || res.Root != "" {
 			fmt.Fprintf(out, "removed %s on %s (%s)\n", rm.Describe(), it.host, tmux.Printable(w.Root))

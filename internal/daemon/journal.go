@@ -291,6 +291,24 @@ func (j *journal) reserved(src, id string) []string {
 	return names
 }
 
+// liveAt is the id of an add at root with no outcome yet, running or
+// interrupted and to be resumed, for prune's rm; "" when there is none.
+func (j *journal) liveAt(root string) string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var ids []string
+	for _, e := range j.byID {
+		if e.Root == root && !e.terminal() {
+			ids = append(ids, e.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	return ids[0]
+}
+
 // markRemoved makes every entry at root terminal as removed, and
 // returns their ids. A tombstone that cannot be written is an error
 // for rm: without it a follow would answer the old outcome and an
