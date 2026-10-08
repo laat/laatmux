@@ -712,6 +712,16 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 		// The most recent client sizes the window, so a second attachment
 		// from a smaller terminal does not shrink the first.
 		{"set-option", "-g", "window-size", "latest"},
+		// Modified keys reach the agent, Shift-Enter for a newline in
+		// Claude Code say: the server asks its clients for xterm's
+		// extended keys and forwards them when an application asks. Its
+		// clients are the attach panes, an outer tmux (TERM tmux-*,
+		// locally or through ssh -t) whose own extended-keys setting
+		// and terminal decide the rest; tmux does not take an outer
+		// tmux for one that has them, so the feature is set for it at a
+		// fixed index, idempotent on every reconciliation.
+		{"set-option", "-s", "extended-keys", "on"},
+		{"set-option", "-s", "terminal-features[9100]", "tmux*:extkeys"},
 		// tmux's own list, which has no locale variable: a hand-started
 		// server's could copy the daemon's LC_ALL=C into a session, or
 		// remove the LANG ensureLocale set, since new-session takes the

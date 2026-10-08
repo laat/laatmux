@@ -1257,6 +1257,18 @@ func TestEnsureConfiguredRemovesHooksFirst(t *testing.T) {
 			t.Errorf("%s is %q %v, want %s", opt, out, err, want)
 		}
 	}
+	// Extended keys on, with an outer tmux taken for a terminal that
+	// has them; the feature at its fixed index, once however many
+	// times the server is reconciled.
+	if err := s.EnsureConfigured(ctx); err != nil {
+		t.Fatalf("second EnsureConfigured: %v", err)
+	}
+	if out, err := s.Run(ctx, "show-options", "-sv", "extended-keys"); err != nil || strings.TrimSpace(string(out)) != "on" {
+		t.Errorf("extended-keys is %q %v, want on", out, err)
+	}
+	if out, err := s.Run(ctx, "show-options", "-s", "terminal-features"); err != nil || strings.Count(string(out), "tmux*:extkeys") != 1 {
+		t.Errorf("terminal-features %q %v, want tmux*:extkeys once", out, err)
+	}
 	if out, err := s.Run(ctx, "show-options", "-t", id, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
 		t.Errorf("session %s keeps %q %v", id, out, err)
 	}
