@@ -17,7 +17,11 @@ regex = ['^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] ']
 id = "live_turn_working"
 state = "working"
 priority = 970
-region = "bottom_non_empty_lines(12)"
+# 24, not 12: the agents panel under the footer ("← for agents" opened)
+# lists the subagents, a line each plus "↓ N more", and with it and a
+# tip under the spinner line the spinner sits 13 or more non-empty lines
+# from the bottom (laatmux, 2026-10-08).
+region = "bottom_non_empty_lines(24)"
 visible_working = true
 any = [
   { line_regex = ['^\s*[⏸⏵].*esc to interrupt(?:\s|·|$)'] },
