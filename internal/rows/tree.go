@@ -1037,23 +1037,34 @@ func Agents(in Input, tree []Row) Rows {
 			viewer["t:"+n.Pending.ID] = true
 		}
 	}
-	var owner string // the task or worktree line the agents below are under
+	var owner string   // the task or worktree line the agents below are under
+	var carried string // the agent the task's tile carries, drawn once
 	for _, n := range tree {
 		switch n.Kind {
 		case KindTask:
-			owner = "t:" + n.Pending.ID
+			owner, carried = "t:"+n.Pending.ID, ""
+			if n.Agent != nil {
+				carried = n.Agent.ID
+			}
 			t := n
 			t.Kind, t.Node, t.Depth, t.Children = KindTile, n.Pending.ID, 0, 0
 			// Own as its line is.
 			t.Current = viewer["t:"+n.Pending.ID]
 			rows = append(rows, t)
 		case KindWorktree:
+			carried = ""
 			if n.Worktree != nil {
 				owner = "w:" + n.Worktree.ID
 			} else {
 				owner = ""
 			}
 		case KindAgent:
+			if n.Agent.ID == carried {
+				// The add's agent is on the task's tile already, with
+				// the task's state: a tile of its own would show the
+				// one add twice while it runs.
+				continue
+			}
 			// The tile's id is the agent's, as the node's is: a worktree
 			// with two agents is two tiles.
 			t := n
