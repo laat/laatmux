@@ -1164,6 +1164,28 @@ func TestLabels(t *testing.T) {
 	}
 }
 
+// The tile's lines: the repository titles a worktree and a task, the
+// branch is the subtitle, main and master too; a detached worktree's
+// subtitle is its root's last element and detached; a row that is no
+// worktree's is its session's name with no subtitle.
+func TestTitles(t *testing.T) {
+	for _, c := range []struct {
+		r          Row
+		title, sub string
+	}{
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Branch: "fix-ls", Root: "/w/fix-ls"}}, "laatmux", "fix-ls"},
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Branch: "main", Root: "/w/main"}}, "laatmux", "main"},
+		{Row{Worktree: &protocol.Worktree{Repo: "laatmux", Root: "/w/probe"}}, "laatmux", "probe detached"},
+		{Row{Pending: &protocol.Pending{Repo: "proj", Branch: "task"}}, "proj", "task"},
+		{Row{Name: "scratch", Agent: &protocol.Agent{Session: "scratch"}}, "scratch", ""},
+		{Row{Name: "vm/proj/gone", Orphaned: true}, "vm/proj/gone", ""},
+	} {
+		if title, sub := c.r.Titles(); title != c.title || sub != c.sub {
+			t.Errorf("%+v: %q %q, want %q %q", c.r, title, sub, c.title, c.sub)
+		}
+	}
+}
+
 // Precedence: done beats stale, blocked is never stale, a settled
 // workspace's blocked or done agent stays in place and is not dim, and a
 // settled one that does not want the user folds away; a stale agent is

@@ -396,6 +396,26 @@ func (r Row) Labels() (primary, secondary string) {
 	return r.Name, ""
 }
 
+// Titles is a row's lines on a tile: the title, the repository of a
+// worktree or a task, and the subtitle, the branch, "" on a row that is
+// no worktree's, which is titled by its session's name alone; a
+// detached worktree's subtitle is its root's last element and
+// "detached". Labels order the same names for a line: the tree's
+// worktree lines sit under their repository and the compact line reads
+// them in one breath, so there the branch leads; a column of tiles
+// reads by the name that groups them.
+func (r Row) Titles() (title, subtitle string) {
+	switch {
+	case r.Pending != nil:
+		return r.Pending.Repo, r.Pending.Branch
+	case r.Worktree != nil && r.Worktree.Branch == "":
+		return r.Worktree.Repo, path.Base(r.Worktree.Root) + " detached"
+	case r.Worktree != nil:
+		return r.Worktree.Repo, r.Worktree.Branch
+	}
+	return r.Name, ""
+}
+
 // mainless is the labels of a branch of a repository.
 func mainless(branch, repo string) (string, string) {
 	if branch == "main" || branch == "master" {
