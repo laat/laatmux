@@ -16,7 +16,7 @@ import (
 // runtime file under a scratch LAATMUX_HOME points at, answering the
 // hello with the merged capability and every subscribe through serve.
 // Dial finds it as it would the real one, and never starts one.
-func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn) bool) func() int {
+func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn, m protocol.Message) bool) func() int {
 	t.Helper()
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -44,7 +44,7 @@ func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn) bool) func() int {
 				pc.Write(protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: []string{protocol.CapStatus, protocol.CapMerged}})
 				for {
 					m, err := pc.Read()
-					if err != nil || m.Type == protocol.TypeSubscribe && !serve(pc) {
+					if err != nil || m.Type == protocol.TypeSubscribe && !serve(pc, m) {
 						return
 					}
 				}
@@ -63,7 +63,7 @@ func fakeDaemon(t *testing.T, serve func(pc *protocol.Conn) bool) func() int {
 // host still waited on and no error; a daemon that answers the hello
 // but never sends the snapshot is a timeout, not an empty listing.
 func TestRead(t *testing.T) {
-	fakeDaemon(t, func(pc *protocol.Conn) bool {
+	fakeDaemon(t, func(pc *protocol.Conn, _ protocol.Message) bool {
 		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm"}, {Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true}}})
 		return true
 	})
@@ -99,7 +99,7 @@ func TestRead(t *testing.T) {
 		t.Error("ready at once waited for the timeout")
 	}
 
-	fakeDaemon(t, func(pc *protocol.Conn) bool { return true })
+	fakeDaemon(t, func(pc *protocol.Conn, _ protocol.Message) bool { return true })
 	c3, ok := Dial(context.Background())
 	if !ok {
 		t.Fatal("Dial failed")
@@ -110,13 +110,45 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// Read and Follow, a one-shot client's and the sidebar's and dashboard's,
+// subscribe to the merged stream asking for the main checkouts' records.
+func TestSubscribesForCheckouts(t *testing.T) {
+	subs := make(chan protocol.Message, 8)
+	fakeDaemon(t, func(pc *protocol.Conn, m protocol.Message) bool {
+		subs <- m
+		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1})
+		return true
+	})
+	c, ok := Dial(context.Background())
+	if !ok {
+		t.Fatal("Dial failed")
+	}
+	defer c.Close()
+	if _, err := New().Read(context.Background(), c, time.Second, func([]string) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go New().Follow(ctx, nil)
+	for _, who := range []string{"Read", "Follow"} {
+		select {
+		case m := <-subs:
+			if !m.Merged || !m.Checkouts {
+				t.Errorf("%s subscribed with %+v", who, m)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s did not subscribe", who)
+		}
+	}
+}
+
 // Follow backs off after a subscription the daemon drops, not only
 // after a failed dial, marks the daemon row while reconnecting, and
 // stops when its context ends.
 func TestFollowBacksOff(t *testing.T) {
 	followBackoffMin = 300 * time.Millisecond
 	defer func() { followBackoffMin = time.Second }()
-	connections := fakeDaemon(t, func(pc *protocol.Conn) bool { return false }) // hang up on subscribe
+	connections := fakeDaemon(t, func(pc *protocol.Conn, _ protocol.Message) bool { return false }) // hang up on subscribe
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	m := New()

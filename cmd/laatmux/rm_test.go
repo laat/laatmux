@@ -151,7 +151,7 @@ func TestMainCheckoutCommands(t *testing.T) {
 	const src = "git@x:o/proj.git"
 	var sent []protocol.Message
 	var mu sync.Mutex
-	main := protocol.Worktree{ID: "lenv/worktree//r/proj", EnvironmentID: "lenv", Repo: "proj", Branch: "main", Root: "/r/proj", Source: src, Main: true}
+	main := protocol.Worktree{ID: "lenv/checkout//r/proj", EnvironmentID: "lenv", Repo: "proj", Branch: "main", Root: "/r/proj", Source: src, Main: true}
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm, protocol.CapRun, protocol.CapCheckouts}, func(pc *protocol.Conn, m protocol.Message) bool {
 		mu.Lock()
 		sent = append(sent, m)
@@ -202,6 +202,22 @@ func TestMainCheckoutCommands(t *testing.T) {
 	}
 	if w, ok, err := findRecord([]protocol.Worktree{main}, repo, "main"); err != nil || !ok || !w.Main {
 		t.Errorf("findRecord, the main checkout alone: %+v %v %v", w, ok, err)
+	}
+	// Two clones of the configured repository, both on main, both with
+	// its name: the error names both roots, and jump's how to reach an
+	// agent's session in either.
+	clone := main
+	clone.ID, clone.Root = "lenv/checkout//r/proj-2", "/r/proj-2"
+	two := []protocol.Worktree{main, clone}
+	if _, _, err := findRecord(two, repo, "main"); err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj and /r/proj-2, two clones of the repository" {
+		t.Errorf("findRecord, two clones: %v", err)
+	}
+	cfg := config.Config{Repos: []config.Repo{repo}}
+	if _, _, err := matchMain(two, cfg, "mac", "proj/main"); err == nil || !strings.HasSuffix(err.Error(), "two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either") || !strings.Contains(err.Error(), "/r/proj and /r/proj-2") {
+		t.Errorf("matchMain, two clones: %v", err)
+	}
+	if w, ok, err := matchMain(two[:1], cfg, "mac", "proj/main"); err != nil || !ok || w.Root != "/r/proj" {
+		t.Errorf("matchMain, one: %+v %v %v", w, ok, err)
 	}
 }
 

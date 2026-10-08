@@ -48,7 +48,7 @@ type Repo struct {
 // Store is one host's checkouts and worktrees. Copy is the host's own
 // copy rules for every worktree, from its config, applied after a
 // repository's own. Log, when set, says why a checkout's label has a
-// hash (see labels).
+// hash (see labels) and that a checkout's HEAD cannot be read.
 type Store struct {
 	Dirs  config.Dirs // expanded for this host
 	Repos []Repo
@@ -57,7 +57,7 @@ type Store struct {
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
-	logged  map[string]bool        // the collisions logged, by directory and holder
+	logged  map[string]bool        // the lines logged, by key: a collision by directory and holder, a HEAD by directory
 }
 
 type originEntry struct {
@@ -298,6 +298,22 @@ func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]che
 // because another repository has its plain label, and what settles it.
 func (s *Store) collided(co, holder checkout, label string) {
 	key := co.dir + "\x00" + holder.dir + "\x00" + holder.origin
+	if holder.dir == "" {
+		s.logOnce(key, "worktrees: %s is labelled %s: the label its name makes is this host's config's name for %s; a name for it in the config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.origin))
+		return
+	}
+	s.logOnce(key, "worktrees: %s is labelled %s: the label its name makes is %s's, of another repository; a name for either in this host's config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.dir))
+}
+
+// forget lets logOnce log under the key again.
+func (s *Store) forget(key string) {
+	s.mu.Lock()
+	delete(s.logged, key)
+	s.mu.Unlock()
+}
+
+// logOnce logs a line the first time its key is seen.
+func (s *Store) logOnce(key, format string, args ...any) {
 	s.mu.Lock()
 	seen := s.logged[key]
 	if !seen {
@@ -310,11 +326,7 @@ func (s *Store) collided(co, holder checkout, label string) {
 	if seen || s.Log == nil {
 		return
 	}
-	if holder.dir == "" {
-		s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is this host's config's name for %s; a name for it in the config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.origin))
-		return
-	}
-	s.Log.Printf("worktrees: %s is labelled %s: the label its name makes is %s's, of another repository; a name for either in this host's config settles it", tmux.Printable(co.dir), label, tmux.Printable(holder.dir))
+	s.Log.Printf(format, args...)
 }
 
 // linked reports whether git must be asked for a main checkout's
@@ -485,8 +497,8 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 // ListAll is List's worktrees and a record of every main checkout the
 // scan finds, by root, labelled as its worktrees are, its branch read
 // from its HEAD (headBranch): the daemon publishes those in use. A
-// checkout whose HEAD cannot be read is an error, as one git cannot
-// list is, and has no record.
+// checkout whose HEAD cannot be read has no record, and the error is
+// logged once rather than returned.
 func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err error) {
 	cos, err := s.scan(ctx)
 	if err != nil {
@@ -512,9 +524,14 @@ func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err e
 		}
 		branch, err := headBranch(ctx, co.dir)
 		if err != nil {
-			errs = append(errs, err)
+			// Not the listing's failure: one checkout of many, in no use
+			// as a rule, would hold every worktree's change. It has no
+			// record until its HEAD reads again; the error is logged
+			// once until then, as a git status error is.
+			s.logOnce("head\x00"+co.dir, "worktrees: %v", err)
 			continue
 		}
+		s.forget("head\x00" + co.dir)
 		main.Branch = branch
 		checkouts = append(checkouts, main)
 	}
@@ -531,11 +548,14 @@ func (s *Store) worktreesOf(ctx context.Context, co checkout, r Repo, seen map[s
 		return nil, fmt.Errorf("%s: %w", tmux.Printable(co.dir), err)
 	}
 	var records []Record
-	for _, e := range entries {
+	for i, e := range entries {
+		// git lists the main worktree first, by its real path, which a
+		// symlink on the way to the repos directory makes another than
+		// the checkout's as scanned: it is the main checkout's record.
 		// A root two checkouts register, one after the other's
 		// directory was deleted by hand, is listed once, for the
 		// checkout the worktree points back to, as Find finds it.
-		if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
+		if i == 0 || e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
 			continue
 		}
 		// A root whose owner cannot be told, its .git unreadable or
@@ -556,17 +576,20 @@ func (s *Store) worktreesOf(ctx context.Context, co checkout, r Repo, seen map[s
 // headBranch is the branch a main checkout has checked out, read from
 // its .git/HEAD, which costs no process on a poll over many checkouts:
 // "" for a detached HEAD. A checkout on the reftable backend keeps a
-// stub there, refs/heads/.invalid, and git is asked.
+// stub there, refs/heads/.invalid, and git is asked. Only ASCII white
+// space is trimmed, as git trims it: a branch can end in U+0085 or
+// U+00A0, which strings.TrimSpace would take.
 func headBranch(ctx context.Context, dir string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", tmux.Printable(dir), tmux.PrintablePath(err))
 	}
-	ref, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "ref:")
+	const space = " \t\n\v\f\r"
+	ref, ok := strings.CutPrefix(strings.TrimRight(string(b), space), "ref:")
 	if !ok {
 		return "", nil
 	}
-	ref = strings.TrimSpace(ref)
+	ref = strings.TrimLeft(ref, space)
 	if ref == "refs/heads/.invalid" {
 		out, err := git(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
 		var ee *exec.ExitError
@@ -577,7 +600,7 @@ func headBranch(ctx context.Context, dir string) (string, error) {
 		case err != nil:
 			return "", fmt.Errorf("%s: %w", tmux.Printable(dir), err)
 		}
-		ref = strings.TrimSpace(out)
+		ref = strings.TrimRight(out, space)
 	}
 	branch, ok := strings.CutPrefix(ref, "refs/heads/")
 	if !ok {

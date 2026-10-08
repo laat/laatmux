@@ -160,7 +160,7 @@ func TestJumpRowMainCheckout(t *testing.T) {
 	mac := config.Host{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}
 	vm := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
 	cfg := config.Config{Hosts: []config.Host{mac, vm}}
-	w := protocol.Worktree{ID: "menv/worktree//r/proj", EnvironmentID: "menv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
+	w := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
 	a := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", WorktreeID: w.ID}
 	spec, session, err := rowSpec(cfg, mac, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w, Agent: &a})
 	if err != nil || session != "work" || spec.Key != "" {

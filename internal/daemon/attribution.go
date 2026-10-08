@@ -104,33 +104,39 @@ func (d *Daemon) setRootsLocked(roots []root, now time.Time) {
 	d.reattributeLocked(now)
 }
 
-// worktreeOfLocked is the id of the worktree whose root contains the
-// resolved path, "" when none does; with main, of the main checkout
-// whose directory does, unless a worktree root inside it does too.
+// worktreeOfLocked is the id of the worktree whose root is the deepest
+// to contain the resolved path, "" when none does. A main checkout's
+// directory is such a root too: with main its id, else "", not the id of
+// a worktree around the checkout, since the pane is in the checkout.
 // Called with d.mu held.
 func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 	if path == "" {
 		return ""
 	}
 	for _, r := range d.roots {
-		if r.main && !main {
+		if !inside(path, r.real) && !inside(path, r.root) {
 			continue
 		}
-		if inside(path, r.real) || inside(path, r.root) {
-			return d.worktreeID(r.root)
+		if r.main && !main {
+			return ""
 		}
+		return d.recordID(r)
 	}
 	return ""
 }
 
 // attributeLocked is the worktree an observed pane's agent belongs to:
 // the deepest listed root its path is in, a main checkout's directory
-// only for a pane on the default server that is not laatmux's own, the
-// user's plain session there. A session new made in a main checkout, on
-// the managed server, keeps a row of its own; a pane record is never a
-// main checkout's (publishPaneLocked). Called with d.mu held.
-func (d *Daemon) attributeLocked(st *paneState) string {
-	return d.worktreeOfLocked(st.path, st.target.Label == protocol.ServerDefault && !st.pane.Own)
+// only for a live, named agent, claude or codex, in a pane on the
+// default server that is not laatmux's own, the user's plain session
+// there. A session new made in a main checkout, on the managed server,
+// keeps a row of its own; a shell, an identified pane with no named
+// agent or one left after its agent quit, puts no checkout in use, nor
+// keeps one, so a record never follows a shell's cd; a pane record is
+// never a main checkout's (publishPaneLocked). Called with d.mu held.
+func (d *Daemon) attributeLocked(st *paneState, a protocol.Agent) string {
+	main := a.Agent != "" && a.Liveness != protocol.Gone && st.target.Label == protocol.ServerDefault && !st.pane.Own
+	return d.worktreeOfLocked(st.path, main)
 }
 
 // within reports whether path is inside root, as written or resolved;
@@ -242,7 +248,7 @@ func (d *Daemon) reattributeLocked(now time.Time) {
 			continue
 		}
 		if a, ok := d.agents[key]; ok {
-			wid := d.attributeLocked(st)
+			wid := d.attributeLocked(st, a)
 			if a.WorktreeID == wid {
 				continue
 			}

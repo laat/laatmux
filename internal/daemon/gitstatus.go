@@ -158,7 +158,7 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 			continue
 		}
 		every := gitIdleEvery
-		if d.worktrees[root].Session != "" || d.mainAgents[d.worktreeID(root)] {
+		if w := d.worktrees[root]; w.Session != "" || d.mainAgents[w.ID] {
 			every = gitSessionEvery
 		}
 		if e.due || now.Sub(e.last) >= every {

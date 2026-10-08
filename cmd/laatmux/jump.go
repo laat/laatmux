@@ -82,7 +82,7 @@ func cmdJump(ctx context.Context, args []string) error {
 	worktrees, mains := splitMains(snap.Worktrees)
 	w, ok, err := matchWorktree(worktrees, cfg, rest)
 	if err == nil && !ok {
-		w, ok, err = matchWorktree(mains, cfg, rest)
+		w, ok, err = matchMain(mains, cfg, h.Name, rest)
 	}
 	if err != nil {
 		return err
@@ -156,6 +156,26 @@ func mainName(host string, w protocol.Worktree) string {
 		return tmux.Printable(w.Root) + " on " + host
 	}
 	return tmux.Printable(host + "/" + w.Repo + "/" + w.Branch)
+}
+
+// matchMain is matchWorktree over the main checkouts, whose ambiguity is
+// two clones' checkouts on the branch: no label tells them apart, both
+// clones of a repository the config lists carrying its name, but their
+// agents' sessions do, which the error says how to reach.
+func matchMain(mains []protocol.Worktree, cfg config.Config, host, rest string) (protocol.Worktree, bool, error) {
+	w, ok, err := matchWorktree(mains, cfg, rest)
+	if err == nil {
+		return w, ok, nil
+	}
+	label, branch, _ := strings.Cut(rest, "/")
+	local, known := cfg.RepoByName(label)
+	var found []protocol.Worktree
+	for _, m := range mains {
+		if m.Branch == branch && (m.Repo == label || known && source.Same(m.Source, local.Source)) {
+			found = append(found, m)
+		}
+	}
+	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in either", twoMains(tmux.Printable(rest), found), host)
 }
 
 // splitMains is the records that are worktrees and those that are main

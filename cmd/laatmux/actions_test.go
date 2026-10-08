@@ -1254,7 +1254,7 @@ func TestRmFor(t *testing.T) {
 func TestMainCheckoutRefused(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
-	w := protocol.Worktree{ID: "menv/worktree//r/proj", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "main", Root: "/r/proj", Main: true}
+	w := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "main", Root: "/r/proj", Main: true}
 	in := rows.Input{
 		Hosts: []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
 		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", Agent: "claude",
@@ -1290,6 +1290,14 @@ func TestMainCheckoutRefused(t *testing.T) {
 		if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
 			t.Errorf("z on %v: %q", m.Selection().Kind, m.Message)
 		}
+		// a preselects the repository and host, not the branch, which
+		// git keeps checked out in the checkout.
+		press('a')
+		f, ok := m.Overlay.(*view.Form)
+		if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "mac" || f.Branch() != "" {
+			t.Errorf("a on %v: form %+v, message %q", m.Selection().Kind, m.Overlay, m.Message)
+		}
+		m.Overlay, d.add = nil, nil
 	}
 }
 

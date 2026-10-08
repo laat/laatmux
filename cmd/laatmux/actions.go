@@ -260,12 +260,13 @@ func (d *dash) startAdd(m *view.Model) {
 	// tile or any tree line under one, with the branch when the worktree
 	// has no session yet, so an agent can be started in it, unless the
 	// branch is only shown and add could not name it; a repository line
-	// names its repository.
+	// names its repository. A main checkout's branch is not: git keeps
+	// it checked out there, and the form proposes one from the prompt.
 	preRepo, preHost, branch := "", "", ""
 	switch r := m.Selection(); {
 	case r != nil && r.Worktree != nil && !r.Orphaned:
 		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
-		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly {
+		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly && !r.Worktree.Main {
 			branch = r.Worktree.Branch
 		}
 	case r != nil && r.Kind == rows.KindRepo:

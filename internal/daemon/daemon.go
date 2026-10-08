@@ -281,11 +281,11 @@ type Daemon struct {
 	// the published join of the two.
 	worktrees map[string]protocol.Worktree // by root, the main checkouts in use among them
 	lastList  []worktree.Record
-	// lastMains is every main checkout of the last listing, mainIDs
-	// their ids, and mainAgents the ids of those an agent is
-	// attributed to, which are in use (inUseLocked).
+	// lastMains is every main checkout of the last listing, and
+	// mainAgents the ids of those an agent is attributed to, which are
+	// in use (inUseLocked), a checkout gone from the listing among them
+	// until its agents are attributed again.
 	lastMains    []worktree.Record
-	mainIDs      map[string]bool
 	mainAgents   map[string]bool
 	listed       bool
 	managedRoots map[string]string // root -> session
@@ -855,7 +855,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
 	}
 	st.pane, st.path, st.observed, st.bare = p, path, true, false
-	a.WorktreeID = d.attributeLocked(st)
+	a.WorktreeID = d.attributeLocked(st, a)
 	d.dropPaneLocked(key)
 	if had && sameRecord(prev, a) {
 		return
@@ -968,17 +968,41 @@ func fanout(subs map[*subscriber]struct{}, m protocol.Message, gone func(*subscr
 	}
 }
 
-// sees is what of m the subscriber is sent: all of it, but a main
-// checkout's record to one that did not ask for them, which is taken
-// out, and the message not sent when nothing is left. The remove of
-// such a record goes to every subscriber; one that never had it passes
-// over it.
+// sees is what of m the subscriber is sent: all of it, but to one that
+// did not ask for the main checkouts, a main checkout's record is taken
+// out, the message not sent when nothing is left, and an agent's
+// attribution to one, so it names no record the subscriber has not had
+// and the agent is one of no worktree as before. The remove of such a
+// record goes to every subscriber; one that never had it passes over it.
 func (s *subscriber) sees(m protocol.Message) (protocol.Message, bool) {
-	if s.checkouts || m.Worktree == nil || !m.Worktree.Main {
+	if s.checkouts {
+		return m, true
+	}
+	if a := m.Agent; a != nil && isCheckoutID(a.WorktreeID) {
+		c := *a
+		c.WorktreeID = ""
+		m.Agent = &c
+	}
+	if m.Worktree == nil || !m.Worktree.Main {
 		return m, true
 	}
 	m.Worktree = nil
 	return m, m.Agent != nil || m.Pane != nil || m.Run != nil
+}
+
+// agentsFor is agent records for a snapshot of a subscriber: as they are
+// for one that asked for the main checkouts, else with an attribution to
+// one taken out, as sees takes it out of an upsert.
+func agentsFor(agents []protocol.Agent, checkouts bool) []protocol.Agent {
+	if checkouts {
+		return agents
+	}
+	for i := range agents {
+		if isCheckoutID(agents[i].WorktreeID) {
+			agents[i].WorktreeID = ""
+		}
+	}
+	return agents
 }
 
 // goneLocked drops a plain subscriber that fell behind: out of the set,
@@ -1002,7 +1026,7 @@ func (d *Daemon) subscribe(drop func(), checkouts bool) (*subscriber, protocol.M
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(checkouts),
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agentsFor(agents, checkouts), Worktrees: d.worktreesLocked(checkouts),
 		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr}
 	if d.listed {
 		l := d.listing

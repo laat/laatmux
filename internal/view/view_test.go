@@ -1205,7 +1205,7 @@ func TestRenderTree(t *testing.T) {
 func TestRenderMainCheckout(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	src := "https://github.com/laat/laatmux"
-	main := "menv/worktree//code/laatmux"
+	main := "menv/checkout//code/laatmux"
 	plain := func(id, session string, act protocol.Activity, at time.Duration, title string) protocol.Agent {
 		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: act,
 			ActivityAt: now.Add(-at), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 1, StartUnix: 1}, WorktreeID: main, Title: title}

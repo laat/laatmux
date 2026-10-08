@@ -1231,7 +1231,7 @@ func TestNewer(t *testing.T) {
 // clone outside the repos directory, in none.
 func mainInput(now time.Time) Input {
 	src := "https://github.com/laat/laatmux"
-	main := "menv/worktree//code/laatmux"
+	main := "menv/checkout//code/laatmux"
 	plain := func(id, session string, act protocol.Activity, at time.Duration, wt string) protocol.Agent {
 		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: act,
 			ActivityAt: now.Add(-at), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 1, StartUnix: 1}, WorktreeID: wt}
@@ -1259,9 +1259,10 @@ func mainInput(now time.Time) Input {
 // A main checkout is a line under its repository, first, with the agents
 // the host attributed to it, from plain sessions on the default server;
 // the line jumps through the most recently active, one working before
-// one idle, and is the viewer's by its own session only through that
-// agent's. Its agents are tiles titled by the repository with the branch
-// under it. It has no session add named, and with no agent it says so.
+// one idle, and is the viewer's by its own session when the viewer sits
+// with any of them, whichever the jump goes through. Its agents are
+// tiles titled by the repository with the branch under it. It has no
+// session add named, and with no agent it says so.
 // An agent in a clone the host does not publish stays in other sessions.
 func TestMainCheckoutLine(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
@@ -1280,8 +1281,8 @@ other sessions
 		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
 	}
 	line := nodes[1]
-	if line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.Local == nil || line.Local.Name != "notes" || line.Own {
-		t.Fatalf("the line jumps through the working agent, in notes: %+v", line)
+	if line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.Local == nil || line.Local.Name != "notes" || !line.Own {
+		t.Fatalf("the line jumps through the working agent, in notes, and is the viewer's, in laatmux: %+v", line)
 	}
 	if line.Children != 2 || line.Worktree.Git == nil {
 		t.Fatalf("line %+v", line)
@@ -1290,8 +1291,7 @@ other sessions
 		t.Error("a managed session named as add would name the main checkout's is its")
 	}
 	// The working one goes idle before the other did: the other is the
-	// most recently active, and the viewer, in its session, is on the
-	// line by its own session.
+	// most recently active, the viewer's.
 	in.Agents[1].Activity = protocol.Idle
 	nodes = Tree(in)
 	if line := nodes[1]; line.Agent == nil || line.Agent.ID != "menv/default/%1" || line.Local.Name != "laatmux" || !line.Own {

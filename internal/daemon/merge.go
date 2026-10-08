@@ -244,8 +244,8 @@ func (d *Daemon) dropHostLocked(mh *mergedHost) {
 		for key := range d.agents {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: d.agentID(key)})
 		}
-		for root := range d.worktrees {
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root)})
+		for _, w := range d.worktrees {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
 		}
 		for key := range d.paneRecs {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: d.paneRecordID(key)})
@@ -347,6 +347,7 @@ func (d *Daemon) mergedSnapshotLocked(checkouts bool) protocol.Message {
 	for _, s := range d.msessions {
 		m.Sessions = append(m.Sessions, s)
 	}
+	m.Agents = agentsFor(m.Agents, checkouts)
 	sort.Slice(m.Sessions, func(i, j int) bool { return m.Sessions[i].Name < m.Sessions[j].Name })
 	if d.relay != nil {
 		m.Pendings, m.Handoffs = d.relay.pendingsLocked()

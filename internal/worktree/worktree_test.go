@@ -1214,8 +1214,6 @@ func TestSetupFileErrorsNameTheirStage(t *testing.T) {
 	}
 }
 
-// With the repos directory under the worktrees one, the main checkout
-// satisfies Owns but is not a worktree: it is not listed.
 // ListAll has a record of every main checkout it scans, labelled as its
 // worktrees are, its branch read from HEAD, "" when detached, on the
 // reftable backend too; whether the config lists its repository, and
@@ -1266,6 +1264,100 @@ func TestListAllMainCheckouts(t *testing.T) {
 	}
 }
 
+// A branch ending in U+0085 or U+00A0, which git takes, is read from
+// HEAD as it is, on either backend; a checkout whose HEAD cannot be read
+// has no record and fails nothing, its worktree still listed.
+func TestListAllHeadEdges(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Dir(f.store.Dirs.Repos)
+	want := map[string]string{}
+	for i, branch := range []string{"nel\u0085", "nbsp\u00a0"} {
+		dir := filepath.Join(f.store.Dirs.Repos, "c"+strconv.Itoa(i))
+		run(t, base, "git", "clone", "-q", f.remote, dir)
+		run(t, dir, "git", "checkout", "-q", "-b", branch)
+		want[dir] = branch
+	}
+	if err := exec.Command("git", "init", "-q", "--ref-format=reftable", filepath.Join(base, "probe")).Run(); err == nil {
+		dir := filepath.Join(f.store.Dirs.Repos, "table")
+		run(t, base, "git", "clone", "-q", "--ref-format=reftable", f.remote, dir)
+		run(t, dir, "git", "checkout", "-q", "-b", "tab\u0085")
+		want[dir] = "tab\u0085"
+	}
+	_, checkouts, err := f.store.ListAll(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range checkouts {
+		if b, ok := want[c.Root]; ok && c.Branch != b {
+			t.Errorf("%s: branch %q, want %q", c.Root, c.Branch, b)
+		}
+	}
+	head := filepath.Join(f.checkout(), ".git", "HEAD")
+	if err := os.Chmod(head, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(head, 0o644) })
+	if _, err := os.ReadFile(head); err == nil {
+		t.Skip("HEAD readable without permission (root)")
+	}
+	var logged strings.Builder
+	f.store.Log = log.New(&logged, "", 0)
+	recs, checkouts, err := f.store.ListAll(f.ctx)
+	if err != nil || len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("with a HEAD unreadable: %+v %v", recs, err)
+	}
+	if slices.ContainsFunc(checkouts, func(c Record) bool { return c.Root == f.checkout() }) || !strings.Contains(logged.String(), "HEAD") {
+		t.Fatalf("the checkout whose HEAD is unreadable: %+v, log %q", checkouts, logged.String())
+	}
+	// Logged once while it fails, and once more after it has read again.
+	count := func() int { return strings.Count(logged.String(), "HEAD") }
+	f.store.ListAll(f.ctx)
+	if count() != 1 {
+		t.Fatalf("logged again while it fails: %q", logged.String())
+	}
+	os.Chmod(head, 0o644)
+	f.store.ListAll(f.ctx)
+	os.Chmod(head, 0)
+	f.store.ListAll(f.ctx)
+	if count() != 2 {
+		t.Fatalf("not logged after it read again: %q", logged.String())
+	}
+}
+
+// Where the repos directory is reached through a symlink into the
+// worktrees directory, git lists the main worktree by its real path,
+// which Owns takes: it is the main checkout's record, not a worktree.
+func TestListAllSymlinkedReposUnderWorktrees(t *testing.T) {
+	f := newFixture(t)
+	base := filepath.Dir(f.store.Dirs.Repos)
+	real := filepath.Join(f.store.Dirs.Worktrees, "checkouts")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	f.store.Dirs.Repos = link
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, checkouts, err := f.store.ListAll(f.ctx)
+	if err != nil || len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("worktrees %+v %v", recs, err)
+	}
+	if len(checkouts) != 1 || checkouts[0].Root != filepath.Join(link, "proj") {
+		t.Fatalf("checkouts %+v", checkouts)
+	}
+}
+
+// With the repos directory under the worktrees one, the main checkout
+// satisfies Owns but is not a worktree: it is not listed.
 func TestMainCheckoutNotListed(t *testing.T) {
 	f := newFixture(t)
 	f.store.Dirs.Repos = filepath.Join(f.store.Dirs.Worktrees, "checkouts")

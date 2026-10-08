@@ -358,7 +358,34 @@ func findRecord(ws []protocol.Worktree, repo config.Repo, branch string) (protoc
 	if w, ok, err := findWorktree(worktrees, repo, branch); ok || err != nil {
 		return w, ok, err
 	}
-	return findWorktree(mains, repo, branch)
+	// A main checkout is named by the branch it has as shown: no
+	// command takes its root, so findWorktree's word about --root does
+	// not hold for it.
+	var found []protocol.Worktree
+	for _, w := range mains {
+		if w.Branch == branch && branch != "" && source.Same(w.Source, repo.Source) {
+			found = append(found, w)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return protocol.Worktree{}, false, nil
+	case 1:
+		return found[0], true, nil
+	}
+	return protocol.Worktree{}, false, twoMains(tmux.Printable(repo.Name+"/"+branch), found)
+}
+
+// twoMains says the branch a target names is checked out in the main
+// checkouts of two clones of the repository, which no label tells
+// apart: both clones of a repository the config lists carry its name.
+func twoMains(target string, found []protocol.Worktree) error {
+	roots := make([]string, len(found))
+	for i, w := range found {
+		roots[i] = tmux.Printable(w.Root)
+	}
+	sort.Strings(roots)
+	return fmt.Errorf("%s is checked out in the main checkouts at %s, two clones of the repository", target, strings.Join(roots, " and "))
 }
 
 // onMain is rm's and run's refusal of a main checkout, which git keeps

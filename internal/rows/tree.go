@@ -391,6 +391,18 @@ func (b *builder) worktrees() {
 				}
 			}
 		}
+		if w.Main && in.Current != "" {
+			// A main checkout has no session of its own: the viewer in
+			// the plain session of any of its agents is on its line by
+			// its own session, not only in its jump agent's, which turns
+			// with activity, so the following band does not move with
+			// another agent's work.
+			for _, c := range children {
+				if c.Local != nil && !c.Local.Laatmux() && c.Local.Name == in.Current {
+					line.Current, line.Own = true, true
+				}
+			}
+		}
 		line.Settled = line.Local != nil && line.Local.Workspace() && line.Local.Settled
 		for k := range children {
 			c := &children[k]

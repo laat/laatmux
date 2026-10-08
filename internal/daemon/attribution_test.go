@@ -43,14 +43,16 @@ func TestAttributionTable(t *testing.T) {
 	foo2 := filepath.Join(base, "worktrees", "proj", "foo-2")
 	nested := filepath.Join(foo, "vendor", "lib")
 	main := filepath.Join(base, "repos", "proj")
-	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main)
+	// A main checkout inside a worktree, its repos directory there.
+	inner := filepath.Join(foo, "repos", "p")
+	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main, filepath.Join(inner, "src"))
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(foo, link); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Config{EnvironmentID: "env"})
 	d.mu.Lock()
-	d.roots = resolveRoots([]string{foo, foo2, nested}, nil)
+	d.roots = resolveRoots([]string{foo, foo2, nested}, []string{inner})
 	d.mu.Unlock()
 	id := func(root string) string { return "env/worktree/" + root }
 	for _, c := range []struct {
@@ -67,6 +69,9 @@ func TestAttributionTable(t *testing.T) {
 		{"path reaching the root through a symlink", tmux.Pane{CurrentPath: filepath.Join(link, "src")}, id(foo)},
 		{"a path that is gone", tmux.Pane{CurrentPath: filepath.Join(foo, "gone")}, id(foo)},
 		{"a recorded path on a pane laatmux did not make", tmux.Pane{Cwd: foo, CurrentPath: main}, ""},
+		// The checkout's, which only an agent in a plain session takes,
+		// not the worktree's around it.
+		{"a main checkout inside a worktree", tmux.Pane{CurrentPath: filepath.Join(inner, "src")}, ""},
 	} {
 		// A pane's path is resolved off the poll: the answer is there
 		// by a later one.
@@ -83,6 +88,12 @@ func TestAttributionTable(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+	d.mu.Lock()
+	got := d.worktreeOfLocked(filepath.Join(inner, "src"), true)
+	d.mu.Unlock()
+	if got != "env/checkout/"+inner {
+		t.Errorf("an agent in a plain session in the checkout: %q", got)
 	}
 }
 

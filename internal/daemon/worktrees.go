@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -77,10 +78,6 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		d.lastListErr = ""
 		d.mu.Lock()
 		d.lastList, d.lastMains = recs, mains
-		d.mainIDs = make(map[string]bool, len(mains))
-		for _, r := range mains {
-			d.mainIDs[d.worktreeID(r.Root)] = true
-		}
 		d.listed = true
 		d.listing, d.listErr = stamp, ""
 		now := time.Now()
@@ -164,7 +161,11 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		}
 	}
 	for root, w := range d.worktrees {
-		if seen[root] {
+		if seen[root] || w.Main && d.mainAgents[w.ID] {
+			// A main checkout gone from the listing while an agent
+			// still names it stays until the agents are attributed
+			// again, which a listing that changes the roots does next,
+			// so no agent names a record gone.
 			continue
 		}
 		delete(d.worktrees, root)
@@ -172,7 +173,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		if w.Main {
 			// Out of use, or gone: no task's worktree, and nothing the
 			// listing removed.
-			d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root)})
+			d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
 			continue
 		}
 		l := d.listing
@@ -188,7 +189,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[string]bool) {
 	seen[r.Root] = true
 	w := protocol.Worktree{
-		ID:            d.worktreeID(r.Root),
+		ID:            d.recordID(root{root: r.Root, main: r.Main}),
 		EnvironmentID: d.cfg.EnvironmentID,
 		Repo:          r.Repo,
 		Source:        r.Source,
@@ -228,7 +229,7 @@ func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[
 // repos directory, many on a machine that clones there by hand, have no
 // record, no line and no git status refresh. Called with d.mu held.
 func (d *Daemon) inUseLocked(r worktree.Record) bool {
-	return r.Configured || r.Linked || d.mainAgents[d.worktreeID(r.Root)]
+	return r.Configured || r.Linked || d.mainAgents[d.checkoutID(r.Root)]
 }
 
 // syncMainsLocked publishes the main checkouts again when the set with
@@ -239,11 +240,11 @@ func (d *Daemon) inUseLocked(r worktree.Record) bool {
 // more. Called with d.mu held.
 func (d *Daemon) syncMainsLocked(now time.Time, also string) {
 	in := map[string]bool{}
-	if d.mainIDs[also] {
+	if isCheckoutID(also) {
 		in[also] = true
 	}
 	for _, a := range d.agents {
-		if d.mainIDs[a.WorktreeID] {
+		if isCheckoutID(a.WorktreeID) {
 			in[a.WorktreeID] = true
 		}
 	}
@@ -275,6 +276,29 @@ func (d *Daemon) branchNameLocked(w protocol.Worktree) string {
 // and unique on its host, and the environment id is hex, so the id parses
 // from the left.
 func (d *Daemon) worktreeID(root string) string { return d.cfg.EnvironmentID + "/worktree/" + root }
+
+// checkoutID is <environment_id>/checkout/<root>, a main checkout's id:
+// a worktree's has worktree in its place, so an agent's attribution to a
+// main checkout is told by the id alone, on this host's agents and on a
+// host's a merging daemon forwards, and taken out for a subscriber that
+// did not ask for the main checkouts (subscriber.sees).
+func (d *Daemon) checkoutID(root string) string { return d.cfg.EnvironmentID + "/checkout/" + root }
+
+// isCheckoutID reports whether a record id, of any host, is a main
+// checkout's.
+func isCheckoutID(id string) bool {
+	_, rest, _ := strings.Cut(id, "/")
+	return strings.HasPrefix(rest, "checkout/")
+}
+
+// recordID is the id of a listed root's record, a worktree's or a main
+// checkout's.
+func (d *Daemon) recordID(r root) string {
+	if r.main {
+		return d.checkoutID(r.root)
+	}
+	return d.worktreeID(r.root)
+}
 
 // worktreesLocked is the published records for a snapshot, the main
 // checkouts' only for a subscriber that asked for them. Called with d.mu

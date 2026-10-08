@@ -750,7 +750,7 @@ func TestMergedMainCheckouts(t *testing.T) {
 	defer cancel()
 	f := newMergedFixture(t, ctx, nil)
 	rd := f.remote.d
-	main := protocol.Worktree{ID: "renv/worktree//r/proj", EnvironmentID: "renv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
+	main := protocol.Worktree{ID: "renv/checkout//r/proj", EnvironmentID: "renv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
 	rd.mu.Lock()
 	rd.worktrees["/r/proj"] = main
 	rd.worktrees["/w/a"] = protocol.Worktree{ID: "renv/worktree//w/a", EnvironmentID: "renv", Repo: "proj", Branch: "a", Root: "/w/a"}
@@ -787,13 +787,25 @@ func TestMergedMainCheckouts(t *testing.T) {
 	rd.agents["default/%9"] = a
 	rd.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 	rd.mu.Unlock()
-	if got := until(t, c, pc, hasAgent(a.ID)); !slices.ContainsFunc(got, func(m protocol.Message) bool { return m.Worktree != nil && m.Worktree.Branch == "feature" }) {
-		t.Fatalf("the checkout's upsert not forwarded: %+v", got)
+	got := until(t, c, pc, hasAgent(a.ID))
+	if !slices.ContainsFunc(got, func(m protocol.Message) bool { return m.Worktree != nil && m.Worktree.Branch == "feature" }) || got[len(got)-1].Agent.WorktreeID != main.ID {
+		t.Fatalf("the checkout's upsert and the agent in it: %+v", got)
 	}
-	for _, m := range until(t, c2, pc2, hasAgent(a.ID)) {
+	got = until(t, c2, pc2, hasAgent(a.ID))
+	for _, m := range got {
 		if m.Worktree != nil {
 			t.Fatalf("forwarded to a subscriber that did not ask: %+v", m)
 		}
+	}
+	// The agent is one of no worktree there, as before, in the upsert
+	// and in a snapshot.
+	if got[len(got)-1].Agent.WorktreeID != "" {
+		t.Fatalf("the attribution forwarded to a subscriber that did not ask: %+v", got[len(got)-1].Agent)
+	}
+	c5, _, snap3 := f.subscribeAsking(t, ctx, false)
+	c5.Close()
+	if i := slices.IndexFunc(snap3.Agents, func(x protocol.Agent) bool { return x.ID == a.ID }); i < 0 || snap3.Agents[i].WorktreeID != "" {
+		t.Fatalf("the attribution in a snapshot that did not ask: %+v", snap3.Agents)
 	}
 }
 
