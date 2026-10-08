@@ -2516,3 +2516,60 @@ func TestCompactTitlesDivider(t *testing.T) {
 		t.Errorf("a divider in compact without titles:\n%s", txt)
 	}
 }
+
+// A message, or a confirm question, is wrapped over the lines it needs
+// at the width, up to a third of the height, the body giving way; a
+// short one stays one line, and the hint line is as it was.
+func TestFooterWraps(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Width, m.Height, m.Header = 20, 18, nil
+	m.Message = "mac/laatmux/look-at-the-search-impl has no managed session; laatmux add makes one"
+	out := m.Render()
+	if len(out) != 18 {
+		t.Fatalf("%d lines, want 18", len(out))
+	}
+	var foot []string
+	for _, l := range out {
+		if l.Bold {
+			foot = append(foot, Text([]Line{l}))
+		}
+	}
+	if len(foot) < 4 || len(foot) > 6 {
+		t.Fatalf("footer lines %d:\n%s", len(foot), strings.Join(foot, ""))
+	}
+	for _, l := range foot {
+		if width(strings.TrimRight(l, "\n")) > 20 {
+			t.Errorf("footer line over the width: %q", l)
+		}
+	}
+	if whole := strings.ReplaceAll(strings.Join(foot, " "), "\n", ""); !strings.Contains(whole, "mac/laatmux/look-at-") || !strings.Contains(whole, "makes one") {
+		t.Errorf("the message not whole:\n%s", strings.Join(foot, ""))
+	}
+	// Too long for a third of the height: cut with an ellipsis.
+	m.Message = strings.Repeat("word ", 40)
+	foot = foot[:0]
+	for _, l := range m.Render() {
+		if l.Bold {
+			foot = append(foot, Text([]Line{l}))
+		}
+	}
+	if len(foot) != 6 || !strings.HasSuffix(strings.TrimRight(foot[5], "\n"), "…") {
+		t.Errorf("a long message: %d lines, last %q", len(foot), foot[len(foot)-1])
+	}
+	m.Message = "short"
+	if got := m.Render(); !got[17].Bold || Text(got[17:]) != "short\n" || got[16].Bold {
+		t.Errorf("a short message: %q", Text(got[16:]))
+	}
+	m.Message = ""
+	m.Confirm, m.ConfirmTag = "remove mac/laatmux/look-at-the-search-impl and its worktree? (y/n)", "rm"
+	n := 0
+	for _, l := range m.Render() {
+		if l.Bold {
+			n++
+		}
+	}
+	if n < 3 {
+		t.Errorf("the confirm question on %d lines", n)
+	}
+}

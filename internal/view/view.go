@@ -531,7 +531,8 @@ func (m *Model) Render() []Line {
 		}
 		out = append(out, Line{Spans: []Span{{Text: fit(h.Text, m.Width), Fg: fg}}, Bold: true})
 	}
-	body := m.Height - len(out) - 1
+	foot := m.footerLines()
+	body := m.Height - len(out) - len(foot)
 	if body < 1 {
 		body = 1
 	}
@@ -677,10 +678,10 @@ func (m *Model) Render() []Line {
 			out = append(out, plain(""))
 		}
 	}
-	for len(out) < m.Height-1 {
+	for len(out) < m.Height-len(foot) {
 		out = append(out, plain(""))
 	}
-	out = append(out, m.footer())
+	out = append(out, foot...)
 	out = out[:m.Height]
 	// What spins is what is drawn: a body line the height cuts off
 	// below the header lines does not count.
@@ -695,6 +696,81 @@ func (m *Model) Render() []Line {
 		}
 	}
 	return out
+}
+
+// footerLines is the footer: a message or a question wrapped over as
+// many lines as it needs, up to a third of the height, so a jump's
+// refusal reads whole in a sidebar pane 35 columns wide rather than
+// cut after its first words; a line otherwise.
+func (m *Model) footerLines() []Line {
+	text := ""
+	switch {
+	case m.mode() == modeConfirm:
+		text = m.Confirm
+	case m.Message != "":
+		text = m.Message
+	default:
+		return []Line{m.footer()}
+	}
+	var out []Line
+	for _, l := range wrapLines(text, m.Width, max(1, m.Height/3)) {
+		out = append(out, bold(l, m.Width))
+	}
+	return out
+}
+
+// wrapLines breaks s into at most n lines of w cells, at spaces and at
+// line breaks, a word longer than a line cut; the last line is cut with
+// an ellipsis when more would follow.
+func wrapLines(s string, w, n int) []string {
+	if w <= 0 {
+		return []string{""}
+	}
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		line := ""
+		for _, word := range strings.Fields(para) {
+			for width(word) > w {
+				// A word longer than a line: what is left of the line,
+				// then the word in pieces.
+				if line != "" {
+					lines = append(lines, line)
+					line = ""
+				}
+				rs := visible(word)
+				cut, cells := 0, 0
+				for i, r := range rs {
+					if c := cellWidth(rs, i, r); cells+c > w {
+						break
+					} else {
+						cells += c
+					}
+					cut = i + 1
+				}
+				if cut == 0 {
+					cut = 1
+				}
+				lines = append(lines, string(rs[:cut]))
+				word = string(rs[cut:])
+			}
+			switch {
+			case word == "":
+			case line == "":
+				line = word
+			case width(line)+1+width(word) <= w:
+				line += " " + word
+			default:
+				lines = append(lines, line)
+				line = word
+			}
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) > n {
+		lines = lines[:n]
+		lines[n-1] = fit(lines[n-1]+"…", w)
+	}
+	return lines
 }
 
 func (m *Model) footer() Line {
