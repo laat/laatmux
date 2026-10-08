@@ -1772,7 +1772,11 @@ records:
 - **Managed server** reconciliation runs on discovery, once per tmux server
   pid: global options, every global hook, session-level overrides of the
   isolation options, both key tables, `update-environment` (back to
-  tmux's own list), extended keys (`extended-keys on`, and an outer tmux
+  tmux's own list), the user's login shell from the password database
+  as `default-shell` and as `SHELL` in the global environment (the
+  daemon's own SHELL is whatever shell started it, bash under a
+  sandbox on a zsh machine, and would otherwise be every new pane's),
+  extended keys (`extended-keys on`, and an outer tmux
   taken for a terminal that has them, `terminal-features[9100]
   tmux*:extkeys`, since its clients are the attach panes, an outer tmux
   locally or through `ssh -t`, which tmux does not credit with them by
