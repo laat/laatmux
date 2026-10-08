@@ -107,10 +107,14 @@ func TestCurrentHookFails(t *testing.T) {
 	}
 	pane := run("new-session", "-d", "-s", "w", "-c", t.TempDir(), "-P", "-F", "#{pane_id}", "sleep 600")
 	run("set-option", "-t", "=w:", "@laatmux_workspace", "env//w")
-	t.Setenv("TMUX", run("display-message", "-p", "#{socket_path}")+",0,0")
+	sock := run("display-message", "-p", "#{socket_path}")
+	t.Setenv("TMUX", sock+",0,0")
 	t.Setenv("TMUX_PANE", pane)
 	dir := run("display-message", "-p", "-t", pane, "#{pane_current_path}")
 	run("set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	if v, err := Server.Display(ctx, "#{socket_path}"); v != sock || !tmux.HookOnly(err) {
+		t.Errorf("Display with the hook: %q %v, want %q and a HookError", v, err, sock)
+	}
 	cur, err := Current(ctx)
 	if cur.Name != "w" || cur.Key != "env//w" || !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux display-message -p -t "+pane+" -F ") {
 		t.Errorf("Current with the hook: %+v %v, want w and display-message's HookError", cur, err)

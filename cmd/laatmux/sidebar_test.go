@@ -770,11 +770,13 @@ func TestSidebarReap(t *testing.T) {
 
 // A user's after-list-panes hook that fails after list-panes printed:
 // the sidebar's own listings go on with the panes, and say nothing of
-// the hook. add leaves a window that has a live sidebar as it is, fit
-// puts a sidebar back to its width, on --session kills the sidebar in
-// the other session, reap kills one alone in its window, and off kills
-// the rest. add is not run on a window without one: its split would
-// start this binary as the sidebar.
+// the hook. add leaves a window that has a live sidebar as it is, and
+// gets as far as the split in one without a sidebar and too narrow for
+// it; fit puts a sidebar back to its width, on --session kills the
+// sidebar in the other session, reap kills one alone in its window, and
+// off kills the rest. add is not run on a window with room for a
+// sidebar and none in it: its split would start this binary as the
+// sidebar.
 func TestSidebarListingsHookFails(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -823,6 +825,14 @@ func TestSidebarListingsHookFails(t *testing.T) {
 	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
 	if err := sidebarAdd(ctx, cfg, fitted); err != nil {
 		t.Errorf("add to a window with a sidebar: %v", err)
+	}
+	// A window with no sidebar, too narrow for one: add gets past its
+	// listing to the split, whose own error says there is no room, and
+	// nothing is started.
+	tiny := run("new-window", "-d", "-t", here+":", "-P", "-F", "#{window_id}", "sleep 1000")
+	run("resize-window", "-t", tiny, "-x", "2", "-y", "2")
+	if err := sidebarAdd(ctx, cfg, tiny); err == nil || !strings.Contains(err.Error(), "split-window") {
+		t.Errorf("add to a window too narrow for a sidebar: %v, want split-window's error", err)
 	}
 	if err := sidebarFit(ctx, cfg, fitted); err != nil || width() != "35" {
 		t.Errorf("fit: %v, the sidebar %s wide, want 35", err, width())

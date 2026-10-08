@@ -124,16 +124,18 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 // as the listings of the panes have them, each time with list-panes'
 // HookError, also when the hook fails at adopt's listing alone;
 // AttachPane finds the pane. A step that fails after a listing a hook
-// failed after, the attach pane's respawn or an adoption's set-option,
-// failed by an after-set-option hook, is the error returned, not the
-// listing's.
+// failed after, failed by an after-set-option hook, is the error
+// returned, not the listing's: the attach pane's respawn, of a session
+// found by key or adopted by name; a new attach pane's tags, of a
+// session found by key or adopted under the older build's name; and an
+// adoption's set-option.
 func TestEnsureHookFails(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
 	ctx := context.Background()
 	startServers(t)
-	for _, name := range []string{"s1", "s2", "s3", "s4", "s5"} {
+	for _, name := range []string{"s1", "s2", "s3", "s4", "s5", "s6"} {
 		if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", name, "sleep", "600"); err != nil {
 			t.Fatal(err)
 		}
@@ -231,15 +233,49 @@ func TestEnsureHookFails(t *testing.T) {
 	if p := AttachPane(ctx, "mac/w"); p == "" || p == gone {
 		t.Fatalf("attach pane %q after it went, want a new one", p)
 	}
-	// A respawn that fails, by an after-set-option hook that fails for
-	// a pane's option alone, so tagArgs' session options are set, is the
-	// error returned, not list-panes'.
-	run("set-hook", "-g", "after-set-option", `if-shell -F "#{hook_flag_p}" "`+fails+`"`)
-	spec.Managed = "s1"
-	if _, _, err := Ensure(ctx, spec); err == nil || tmux.HookOnly(err) || !strings.Contains(err.Error(), " respawn-pane ") {
-		t.Fatalf("a respawn that fails: %v, want its error", err)
+	// Made before the hook below that fails a pane's option: a plain
+	// attachment whose attach pane's target is not its session's, so its
+	// adoption respawns the pane, and a session of the older build's name
+	// with no attach pane, so its adoption makes one.
+	if _, created, err := Ensure(ctx, Spec{Host: host, Managed: "s6", Name: "mac/s6"}); !created {
+		t.Fatalf("the plain attachment to retarget not made: %v", err)
 	}
-	run("set-hook", "-gu", "after-set-option")
+	retarget := AttachPane(ctx, "mac/s6")
+	if retarget == "" {
+		t.Fatal("no attach pane in mac/s6")
+	}
+	run("set-option", "-p", "-t", retarget, "@laatmux_attach_target", "elsewhere")
+	_, legacyErr := Server.Run(ctx, "new-session", "-d", "-s", "mac/proj/fix2$HOME", "sleep 600", tmux.Next, "set-option", "-t", "=mac/proj/fix2$HOME:", "@laatmux_attach", "mac/proj/fix2$HOME")
+	// A step that fails is the error returned, not a listing's HookError,
+	// list-sessions' or list-panes', whichever of Ensure's returns it
+	// comes back through. The steps fail by an after-set-option hook that
+	// fails for a pane's option alone, so tagArgs' session options are
+	// set: the attach pane's respawn, of a session found by key and of an
+	// adopted one, and a new attach pane's tags, of a session found by key
+	// whose pane is gone and of one adopted under the older build's name.
+	run("set-hook", "-g", "after-set-option", `if-shell -F "#{hook_flag_p}" "`+fails+`"`, tmux.Next, "set-hook", "-g", "after-list-sessions", fails)
+	failed := func(what string, s Spec) {
+		t.Helper()
+		if _, _, err := Ensure(ctx, s); err == nil || tmux.HookOnly(err) || !strings.Contains(err.Error(), " respawn-pane ") {
+			t.Fatalf("%s: %v, want its error", what, err)
+		}
+	}
+	spec.Managed = "s1"
+	failed("a respawn that fails", spec)
+	if p := AttachPane(ctx, "mac/w"); p == "" {
+		t.Fatal("no attach pane in mac/w to kill")
+	} else {
+		run("kill-pane", "-t", p)
+	}
+	failed("a new attach pane whose tags fail", spec)
+	failed("an adoption whose respawn fails", Spec{Host: host, Managed: "s6", Name: "mac/s6", Key: "env//s6"})
+	if legacyErr != nil {
+		t.Logf("no second session of the older build's name: %v", legacyErr)
+	} else {
+		failed("an adoption under the older build's name whose new attach pane fails",
+			Spec{Host: host, Managed: "proj/fix2$HOME", Name: AttachName("mac", "proj/fix2$HOME"), Key: "env//r/fix2$HOME", Branch: "fix2$HOME"})
+	}
+	run("set-hook", "-gu", "after-set-option", tmux.Next, "set-hook", "-gu", "after-list-sessions")
 	adopt("adopted with list-panes' hook", "list-panes", Spec{Host: host, Managed: "s3", Name: "mac/s3"}, "env//s3")
 	// A hook that fails once, at adopt's listing and not at ensureAttach's
 	// after it, is said all the same.
