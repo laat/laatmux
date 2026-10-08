@@ -712,16 +712,23 @@ func (m *Model) footerLines() []Line {
 	default:
 		return []Line{m.footer()}
 	}
-	var out []Line
+	// A rule above, then the text: a question bold, a message plain,
+	// a block of bold being a wall to read.
+	out := []Line{{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}}}
 	for _, l := range wrapLines(text, m.Width, max(1, m.Height/3)) {
-		out = append(out, bold(l, m.Width))
+		if m.mode() == modeConfirm {
+			out = append(out, bold(l, m.Width))
+		} else {
+			out = append(out, plain(fit(l, m.Width)))
+		}
 	}
 	return out
 }
 
 // wrapLines breaks s into at most n lines of w cells, at spaces and at
-// line breaks, a word longer than a line cut; the last line is cut with
-// an ellipsis when more would follow.
+// line breaks; a word longer than a line is broken after its last - or
+// / that fits, a path or a branch name reading in its parts, else cut;
+// the last line is cut with an ellipsis when more would follow.
 func wrapLines(s string, w, n int) []string {
 	if w <= 0 {
 		return []string{""}
@@ -738,7 +745,7 @@ func wrapLines(s string, w, n int) []string {
 					line = ""
 				}
 				rs := visible(word)
-				cut, cells := 0, 0
+				cut, cells, sep := 0, 0, 0
 				for i, r := range rs {
 					if c := cellWidth(rs, i, r); cells+c > w {
 						break
@@ -746,6 +753,12 @@ func wrapLines(s string, w, n int) []string {
 						cells += c
 					}
 					cut = i + 1
+					if r == '-' || r == '/' {
+						sep = cut
+					}
+				}
+				if sep > 0 && sep < len(rs) {
+					cut = sep
 				}
 				if cut == 0 {
 					cut = 1
