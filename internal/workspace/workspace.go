@@ -446,10 +446,12 @@ func adopt(ctx context.Context, name string, s Spec) error {
 // is set on it. The attach command, which may exit at once when ssh fails
 // or the managed session is gone, replaces it in the same sequence as the
 // tags. remain-on-exit is `failed` (tmux 3.2): an attach that fails, ssh
-// refused say, stays dead with its message for jump to respawn; one that
-// ends well, the managed session having ended with its agent, closes the
-// pane and with it the workspace session, so the user is not left on a
-// dead pane after quitting the agent.
+// refused or a managed session that is not there, exits 1 and stays dead
+// with its message for jump to respawn; a connected attach ends with
+// status 0 whether the managed session ended with its agent or was
+// killed under it, and then the pane closes and with it the workspace
+// session, so the user is not left on a dead pane after quitting the
+// agent; the next jump makes the session again.
 const placeholder = "sleep 2147483647"
 
 // startAttach tags the pane and replaces its placeholder with the attach
