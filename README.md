@@ -14,7 +14,7 @@ at workmux's level. All of it is built.
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain`, `version` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `prune`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain`, `version` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, pane, run, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -61,6 +61,8 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux settle                              # collapse this workspace in ls; unsettle brings it back
 ./laatmux rm proj/fix-ls [--force]            # remove the worktree, its managed session and the local session
 ./laatmux rm                                  # inside a workspace session: that workspace
+./laatmux prune -n                            # the worktrees with no session: which would go, which stay, and why
+./laatmux prune --host vm --repo proj --branches  # remove them after one question, their local branches too
 ./laatmux explain --tmux-socket default %12   # detection inputs and decision for one pane
 ./laatmux new work --cwd ~/code/foo -- claude # managed session without a worktree
 ./laatmux jump mac/work                       # a local session attached to it
@@ -310,7 +312,7 @@ the two sections below.
 ## Worktrees and add, daemon side
 
 The daemon on a host with `repos` and `worktrees` advertises `worktrees`,
-and with the managed server also `add` and `rm`. Git is the source of
+and with the managed server also `add`, `rm` and `prune`. Git is the source of
 truth; labels only place new things.
 
 - **Git status**, capability `git-status` (milestone five, step 4): each
@@ -511,6 +513,33 @@ truth; labels only place new things.
   worktree with the root alone. With `root`, `branch` must be the
   root's: its name, or for a record with `branch_display_only`, the
   quoted form the record carries.
+  From a daemon with `prune`, `rm` also takes `head`, the commit the
+  worktree's HEAD must be at: one at another commit is refused before
+  git is asked, so a commit made since the client read the worktree
+  keeps it. A root whose directory is gone has nothing to lose and
+  passes. With `delete_branch` too, once git has removed the worktree,
+  the branch is deleted as `git branch -D` deletes it, its config with
+  it, when it is still at `head`; one at another commit, or that
+  another worktree has checked out, stays. That is a progress line of
+  stage `branch`, `done` or `skip` with why, and the result stays the
+  removal's. An `rm` that removes no worktree, one already gone when it
+  runs, leaves the branch, since which clone it was in is not known.
+- **`facts`** `{type: facts, id, roots}`, capability `prune`, answers
+  `{type: result, id, ok, facts}` with one record per root, in order:
+  `root`; `branch` and `head` as git has them at the root, the branch
+  empty when detached; `changed`, the paths git status lists as the git
+  status refresh reads it, untracked ones included and ignored ones not,
+  0 when clean; `base`, the repository's default branch, `origin/HEAD`'s
+  branch, else `origin/main`, `origin/master`, `main`, `master`, the
+  first that is a commit, and `ahead`, the commits HEAD has that it does
+  not; `on_origin`, that `refs/remotes/origin/<branch>` is there as the
+  last fetch left it, and `pushed`, that HEAD is in it. Unlike the git
+  status object's base, a branch's `laatmux-base` key does not count:
+  what a branch was made from need not be where its work lands. Only a
+  root git lists as a worktree under `worktrees/` is read, a main
+  checkout's not; any other has `error`, as does a root whose read
+  failed. Every git call is `--no-optional-locks` with the refresh's
+  timeout, and none goes to the network; four roots are read at once.
 - **`run`** `{type: run, id, repo, branch, root, cmd}`, capability `run`,
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
@@ -746,6 +775,32 @@ workspace session; the next `jump` makes it again.
   `--root` does. That is how the dashboard's `x` resolves a row, and
   what a binding needs:
   `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
+- **`prune [--host h] [--repo r] [-n|--dry-run] [--branches] [--yes]`**
+  removes the worktrees nothing uses that hold nothing a removal would
+  lose. It reads the merged stream as `ls` does, and looks at the
+  worktree lines `ls` shows with `no session` and nothing under them: no
+  agent, no home session on the host, no pane and no run, not a main
+  checkout and not a task's line, on hosts that are listed; a host down
+  or still connecting is said and left. A worktree with a detached HEAD,
+  with a branch laatmux cannot carry, or with a local workspace session
+  open (a shell over ssh in it is no pane the host sees) stays. For the
+  rest it sends `facts` to each host with `prune` and decides on the
+  answer and this machine's branch records, the ones `{pr_state}` draws
+  from: a clean worktree goes when it has no commit the default branch
+  lacks, or when its branch's PR is merged and HEAD is the PR's last
+  commit, since a squash or rebase merge leaves the branch's commits
+  ahead of the default branch and a commit made after the merge is in no
+  PR. A dirty one stays with the count of changed files, one ahead
+  without a merged PR with the count, whether it is pushed and its PR,
+  the default branch's own worktree stays, and so does every worktree of
+  a host without `prune`. The plan is a line per worktree, `remove` or
+  `keep`, with why; `-n` stops there, and without `--yes` the question
+  is asked once, for the whole list, on a terminal: no terminal is an
+  error naming `--yes`. Each removal is an `rm` with the root, the
+  repository and branch, the environment the records are of and `head`
+  from the facts, so a worktree with a commit made since the plan stays;
+  `--branches` sends `delete_branch` too. A removal that fails is said
+  and the rest go on; the command then fails with the count.
 - **`path <repo>/<branch>`** prints the root from the host's records,
   or with no worktree on the branch the directory of the main checkout
   that has it checked out. Records are matched by source, since the
@@ -832,9 +887,9 @@ workspace session; the next `jump` makes it again.
   snapshot has not arrived, or whose daemon does not publish worktrees,
   says nothing about its workspaces. Agents in no worktree, observed
   ones naming their server, are under `other sessions`.
-  `ls`, `watch`, `jump`, `path`, `rm` and `run` read the local daemon's
+  `ls`, `watch`, `prune`, `jump`, `path`, `rm` and `run` read the local daemon's
   merged stream, see below, each starting the daemon when it is not
-  running. `ls` and `watch` fail when it cannot be started or is an
+  running. `ls`, `watch` and `prune` fail when it cannot be started or is an
   older build without the stream, saying so; `jump`, `path`, `rm` and
   `run` then dial the host themselves, as they do for a host the
   daemon's config lacks.

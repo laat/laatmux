@@ -576,7 +576,7 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Store != nil {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
 		if d.managed != nil {
-			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
+			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry, protocol.CapPrune)
 		}
 		if d.journal != nil {
 			caps = append(caps, protocol.CapTask)
@@ -1204,6 +1204,7 @@ var handlers = map[string]func(*clientConn, protocol.Message) error{
 	protocol.TypeFollow:    (*clientConn).follow,
 	protocol.TypeCancel:    (*clientConn).cancel,
 	protocol.TypeSelect:    (*clientConn).selectPane,
+	protocol.TypeFacts:     (*clientConn).facts,
 	protocol.TypePoke:      (*clientConn).poke,
 	protocol.TypeShutdown:  (*clientConn).shutdown,
 }

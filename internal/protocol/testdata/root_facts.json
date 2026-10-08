@@ -1,0 +1,11 @@
+{
+  "root": "root",
+  "branch": "branch",
+  "head": "head",
+  "changed": 1,
+  "base": "base",
+  "ahead": 1,
+  "on_origin": true,
+  "pushed": true,
+  "error": "error"
+}

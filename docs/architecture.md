@@ -34,10 +34,11 @@ One binary, three roles:
   the PR and check state from GitHub are kept there too.
 - **Clients** are the other commands. The listings, the views and the
   commands that find a host through the stream (`ls`, `watch`, the
-  sidebar pane, the dashboard popup, `compose`, `tasks`, `jump`, `path`;
-  `hosts` for its GitHub line, dialling every host itself for the rest)
-  dial the local daemon, starting it on demand, and read the merged
-  stream; `add`, `rm`, `run` and `new` go through the local daemon's
+  sidebar pane, the dashboard popup, `compose`, `tasks`, `jump`, `path`,
+  `prune`; `hosts` for its GitHub line, dialling every host itself for
+  the rest) dial the local daemon, starting it on demand, and read the
+  merged stream; `add`, `rm`, `run` and `new`, and `prune` for its facts
+  and removals, go through the local daemon's
   relay or dial the host themselves through the bridge (a `jump` to the
   user's default server switches through tmux alone). `sidebar
   on|off|attach|reap|fit`, `split`, `settle`, `unsettle`, `shell` (a
@@ -89,7 +90,7 @@ its file:
 | worktrees | worktrees.go | the git listing, the managed sessions by root, the published join |
 | attribution | attribution.go, resolve.go | which worktree a pane is in, by its path under the listed roots, with a cache of resolved paths |
 | git status | gitstatus.go | diff stats per worktree, refreshed when due |
-| the task runner | runner.go, commands.go, task.go, runs.go, trust.go | `add`, `rm`, `run`, prompt delivery, the trust watchers; the command table and the keyed locks |
+| the task runner | runner.go, commands.go, task.go, runs.go, trust.go, prune.go | `add`, `rm`, `run`, prompt delivery, the trust watchers, prune's facts and rm's branch deletion; the command table and the keyed locks |
 | the journal | journal.go | one file per task on the host, what a restart recovers |
 | the merge | merge.go | the hosts dialled, their records kept, the merged stream |
 | the relay | relay.go, gone.go | the pending tasks, their delivery to a host, their handoff to the worktree they became, and what is left of a task once that worktree goes (gone.go) |

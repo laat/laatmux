@@ -187,29 +187,11 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 	// staged change the working tree undoes included, and for the
 	// untracked files that are not ignored; the diff against HEAD for
 	// the counts.
-	// --no-renames: rename detection reads blobs a partial clone may
-	// lack, and dirty needs no pairing.
-	status, err := g("status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames")
+	changed, untracked, err := readChanges(ctx, root)
 	if err != nil {
 		return st, head, paths, err
 	}
-	var untracked []string
-	entries := strings.Split(status, "\x00")
-	for i := 0; i < len(entries); i++ {
-		e := entries[i]
-		switch {
-		case e == "" || strings.HasPrefix(e, "# "):
-		case strings.HasPrefix(e, "? "):
-			untracked = append(untracked, e[2:])
-			st.Dirty = true
-		case strings.HasPrefix(e, "2 "):
-			// A rename or copy: its original path is the next entry.
-			st.Dirty = true
-			i++
-		default:
-			st.Dirty = true
-		}
-	}
+	st.Dirty = changed > 0
 	diff, err := g("-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD")
 	var ee *exec.ExitError
 	switch {
@@ -232,6 +214,32 @@ func Status(ctx context.Context, root, branch string, cache *StatusCache) (st pr
 		}
 	}
 	return st, head, paths, nil
+}
+
+// readChanges is git status at root: how many paths it lists, changed
+// in the index or the working tree or untracked and not ignored, and
+// the untracked ones. --no-renames: rename detection reads blobs a
+// partial clone may lack, and dirty needs no pairing.
+func readChanges(ctx context.Context, root string) (changed int, untracked []string, err error) {
+	status, err := statusGit(ctx, root, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames")
+	if err != nil {
+		return 0, nil, err
+	}
+	entries := strings.Split(status, "\x00")
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		switch {
+		case e == "" || strings.HasPrefix(e, "# "):
+			continue
+		case strings.HasPrefix(e, "? "):
+			untracked = append(untracked, e[2:])
+		case strings.HasPrefix(e, "2 "):
+			// A rename or copy: its original path is the next entry.
+			i++
+		}
+		changed++
+	}
+	return changed, untracked, nil
 }
 
 // Head is HEAD's commit, for the check that a refresh's HEAD has not

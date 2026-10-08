@@ -426,6 +426,24 @@
   },
   "root": "root",
   "force": true,
+  "head": "head",
+  "delete_branch": true,
+  "roots": [
+    "x"
+  ],
+  "facts": [
+    {
+      "root": "root",
+      "branch": "branch",
+      "head": "head",
+      "changed": 1,
+      "base": "base",
+      "ahead": 1,
+      "on_origin": true,
+      "pushed": true,
+      "error": "error"
+    }
+  ],
   "stage": "stage",
   "state": "state",
   "detail": "detail",

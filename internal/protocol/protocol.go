@@ -36,6 +36,7 @@ const (
 	TypePoke      = "poke"      // client -> merging daemon with attention, list this machine's tmux clients now; not answered
 	TypeSelect    = "select"    // client -> daemon with select, make a pane and its window the managed server's current; answered with a result
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
+	TypeFacts     = "facts"     // client -> daemon with prune, what prune decides on for each of roots; answered with a result carrying facts
 	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user, or one that handed over; with environment_id and root, the finished ones at that worktree, the id then the request's own, and with listing, rm's stamp, the handed-over ones whose add it is after
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
@@ -158,6 +159,17 @@ const (
 	// A merging daemon with it asks its hosts and forwards the records
 	// to a merged subscriber that asks.
 	CapCheckouts = "checkouts"
+	// CapPrune is what prune needs of a host: the facts message, which
+	// reads for each root it names whether the worktree is clean, how
+	// many commits it has beyond the repository's default branch and
+	// whether its branch is on origin; and on rm, head, which refuses
+	// the removal of a worktree whose HEAD is at another commit, and
+	// delete_branch, which deletes the branch once the worktree is gone
+	// when it is still at head. A daemon without it reads an rm without
+	// the two fields and removes the worktree whatever its HEAD is; a
+	// client sends them only to a daemon with it. A daemon with prune
+	// has rm.
+	CapPrune = "prune"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -192,6 +204,9 @@ const (
 	// StageRun is every progress message of a run: start with the root
 	// as detail, output with FD, gap.
 	StageRun = "run"
+	// StageBranch is rm's deletion of the branch, asked for with
+	// delete_branch: done when it went, skip with why when it stays.
+	StageBranch = "branch"
 )
 
 // ErrUnknownCommand is the result error a follow gets for an id the
@@ -526,6 +541,29 @@ const (
 	ChecksPending = "pending"
 )
 
+// RootFacts is what a host reads for prune at one worktree root, from
+// a daemon with prune: the branch git has checked out there, "" when
+// detached, and HEAD's commit; Changed, the files git status lists as
+// the status refresh reads it, untracked ones included, 0 when clean;
+// Base, the repository's default branch, origin/HEAD's, else
+// origin/main, origin/master, main or master, the first that is a
+// commit, "" when none is, and Ahead, the commits HEAD has that Base
+// does not; OnOrigin, that origin's branch of the name is there as the
+// last fetch left it, and Pushed, that HEAD is in it. Error is why the
+// facts could not be read, a root that is no worktree of the host's
+// under the worktrees directory say; the rest is then empty.
+type RootFacts struct {
+	Root     string `json:"root"`
+	Branch   string `json:"branch,omitempty"`
+	Head     string `json:"head,omitempty"`
+	Changed  int    `json:"changed,omitempty"`
+	Base     string `json:"base,omitempty"`
+	Ahead    int    `json:"ahead,omitempty"`
+	OnOrigin bool   `json:"on_origin,omitempty"`
+	Pushed   bool   `json:"pushed,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 // Worktree is one git worktree on one host, under the host's configured
 // worktree directory, in a checkout of a known repository. Git is the
 // source of truth: a worktree made by hand is listed, one removed by hand
@@ -813,6 +851,18 @@ type Message struct {
 	// Alone, it removes a detached worktree. On a result: the worktree root.
 	Root  string `json:"root,omitempty"`
 	Force bool   `json:"force,omitempty"` // rm: remove a dirty or locked worktree
+	// Head on rm, to a daemon with prune, is the commit the worktree's
+	// HEAD must be at for the removal: prune decided on it, and a
+	// worktree with a commit made since is refused. DeleteBranch asks
+	// for the branch to be deleted too, once the worktree is gone, when
+	// it is still at Head; how that went is a progress message of the
+	// branch stage, and the result is the removal's.
+	Head         string `json:"head,omitempty"`
+	DeleteBranch bool   `json:"delete_branch,omitempty"`
+	// Roots on facts names the worktrees to read; Facts on its result
+	// is one record per root, in the order asked.
+	Roots []string    `json:"roots,omitempty"`
+	Facts []RootFacts `json:"facts,omitempty"`
 
 	// progress, and the failed stage in a result
 	Stage  string `json:"stage,omitempty"`

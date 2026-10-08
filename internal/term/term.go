@@ -26,6 +26,12 @@ type Term struct {
 	unanswered bool
 }
 
+// IsTerminal reports whether f is a terminal, as Open judges one.
+func IsTerminal(f *os.File) bool {
+	_, err := unix.IoctlGetTermios(int(f.Fd()), ioctlGetTermios)
+	return err == nil
+}
+
 // Open puts the terminal into raw mode. Not a terminal is an error.
 func Open(in, out *os.File) (*Term, error) {
 	t := &Term{in: in, out: out}
