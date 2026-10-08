@@ -404,6 +404,7 @@
       "x"
     ]
   },
+  "remember": true,
   "agent_name": "agent_name",
   "prompt": "prompt",
   "generated": true,

@@ -115,7 +115,7 @@ func (f *relayFixture) awaitQuiet(t *testing.T) {
 }
 
 // source is the host's repository source.
-func (f *relayFixture) source() string { return f.store.Repos[0].Source }
+func (f *relayFixture) source() string { return f.store.Repos()[0].Source }
 
 // merged subscribes to the local daemon's merged stream.
 func (f *relayFixture) merged(t *testing.T) (net.Conn, *protocol.Conn, protocol.Message) {

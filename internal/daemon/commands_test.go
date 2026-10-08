@@ -1217,7 +1217,7 @@ func TestRmWaitsForOtherRepositories(t *testing.T) {
 // config decides, as before.
 func TestAddFromRepoEntry(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
-	store.Repos = nil
+	store.SetRepos(nil)
 	ctx := context.Background()
 	pc := conn(t, d)
 	if !protocol.Has(d.capabilities(), protocol.CapRepoEntry) {
@@ -1282,7 +1282,7 @@ func TestAddEntryForListedRepository(t *testing.T) {
 	// form fails.
 	os.WriteFile(global, []byte(fmt.Sprintf("[url %q]\n\tinsteadOf = %s\n", remote, https)), 0o644)
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	store.Repos = []worktree.Repo{{Source: https, Name: "proj", Setup: []string{"echo host >> log"}}}
+	store.SetRepos([]worktree.Repo{{Source: https, Name: "proj", Setup: []string{"echo host >> log"}}})
 	pc := conn(t, d)
 	entry := &protocol.RepoEntry{Source: ssh, Name: "sent", Setup: []string{"echo sent >> log"}}
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: ssh, RepoEntry: entry, Branch: "task", AgentName: "claude"})
@@ -1310,7 +1310,7 @@ func TestAddEntryForListedRepository(t *testing.T) {
 // protection and all.
 func TestRmUnlistedRepository(t *testing.T) {
 	d, ft, store, remote := newAddDaemon(t)
-	store.Repos = nil
+	store.SetRepos(nil)
 	pc := conn(t, d)
 	entry := &protocol.RepoEntry{Source: remote, Name: "sent"}
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a1", Repo: remote, RepoEntry: entry, Branch: "task", AgentName: "claude"})

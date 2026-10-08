@@ -50,6 +50,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux add -p 'make ls sort by host'          # branch proposed from the prompt, made unique on the host; the agent gets the prompt
 ./laatmux add fix-ls -p 'make ls sort by host'   # the same with the branch given
 ./laatmux add -p 'make ls sort by host' --detach # hand it to the local daemon and return; laatmux tasks shows it
+./laatmux add -p 'try it' --repo git@github.com:nrkno/pin-scripts.git  # a repository not in the config: added to repos once the worktree is made
 ./laatmux tasks                                  # the background adds and their state; tasks show|dismiss|prompt <id>
 ./laatmux path proj/fix-ls                    # the worktree root on its host
 ./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
@@ -99,7 +100,38 @@ copy: ["**/.envrc.cache.enc"] # copy rules for every worktree this machine adds 
 local host's `repos` and `worktrees` are read by the daemon on the machine
 the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
-default server list is the managed `laatmux` server alone.
+default server list is the managed `laatmux` server alone. The daemon
+follows the file's `repos`: before every worktree poll, every two
+seconds, it looks at the file, and reads the list again when the file
+has changed (another file renamed over it, or a new modification time or
+size), so a repository added by hand or by the task form shows in the
+listing without a restart. A file that does not parse keeps the list as
+it was, with one line in the daemon's log.
+
+A repository the config does not list is added from the task form or
+from `add`: a source in one of the forge forms below
+(`git@github.com:nrkno/pin-scripts.git`, `ssh://…`, `https://…`) pasted
+into the repository chip's picker, or given to `--repo`, is the add's
+repository, named as the list would derive it (`pin-scripts`), or, when
+that name would rename a listed repository or is no label, under a name
+of its own written with it (`nrkno-scripts`, `next_js`). The add carries
+it as its `repo_entry`, and once the host has made the worktree the
+source is appended to `repos`: by `add` itself in the foreground, and by
+the local daemon's relay for the form and `add --detach`, which keeps
+the ask in the task's pending file until the append is made, across a
+restart. An add the host refuses, a clone that fails say, leaves the
+config as it was. A source the list has in another form is that
+repository and is not added again. The append keeps the file as it was
+around the new line, comments and blank lines included: the line goes
+after the list's last item, in its indentation, or a `repos:` list is
+made; a file the line cannot go into, a list written `[a, b]` say, is
+written again from its parsed YAML, which keeps the content and the
+comments but not the layout. The result is parsed before it replaces
+the file, through a temporary renamed over it, the link's target when
+the config is a symlink, with the file's mode. A host's own daemon needs
+no `repos` entry for the add, since `repo_entry` carries the source; its
+listing labels the new checkout by its directory's name, the entry's
+name, with its origin as the source, until its own config names it.
 
 The repositories are the laptop's to decide. An add carries the repository
 as the sending machine's config has it: source, name, `copy` and `setup`,
@@ -359,6 +391,12 @@ truth; labels only place new things.
   `repo_entry` the repository as the sender's config has it, which a
   daemon with `repo-entry` resolves the add against. Without an entry
   `repo` is the source or the label as the daemon's own config knows it.
+  `remember`, on an add relayed through the local daemon, asks a daemon
+  with the `remember` capability to append `repo_entry` to its config's
+  `repos` once the host's add has succeeded; a client sends it only to a
+  daemon with the capability, and an older daemon, which would read the
+  add without the field and add nothing, is refused with a hint to stop
+  it so the current build starts.
   The key is `agent_name` because `agent` is the upsert's record in the
   same envelope. A branch that is not valid UTF-8, or has U+FFFD, is
   refused: the connection turns such a byte into U+FFFD, so the daemon
@@ -575,7 +613,9 @@ attach ends with status 0 whether the managed session ended with its
 agent or was killed under it, and then the pane closes and so the
 workspace session; the next `jump` makes it again.
 
-- **`add <branch>`** resolves the repository from `--repo`, else from the
+- **`add <branch>`** resolves the repository from `--repo`, a listed
+  name or source, or a source in a forge form the config does not list,
+  which is added to it (see the config above), else from the
   current directory: its git origin is matched against the known sources,
   since identity is the source and a checkout keeps its directory after a
   label change; an origin that is not configured is an error rather than
@@ -1117,7 +1157,16 @@ orphaned row's session exists locally and is switched to.
   escape and the key in one read, is not `Esc` and is dropped.
   Bracketed paste is on, so a pasted line break is a newline, never a
   submit, and a paste goes into the prompt wherever the focus is but
-  the branch line. A paste whose bytes stop for a second is shown as
+  the branch line; in a chip's open picker a paste goes into its filter.
+  A repository's source pasted into the repository picker is that
+  repository: a listed one in whatever form, else a new one, shown
+  marked `new` and taken by `Enter` or a click even where its text is
+  part of a listed source; the host and agent chips then take what a
+  repository without a last use gets, the footer says the repository
+  is added to the config's `repos` once its worktree is made, and the
+  submit carries it as the add's `repo_entry` (see the config above).
+  With no repository configured the form still opens, saying so, and a
+  submit without a repository is refused. A paste whose bytes stop for a second is shown as
   far as it came, with its framing kept, and one whose end marker
   never comes is ended by `Esc` or `Ctrl-C` pressed alone after that
   and left for a second, the key spent on ending it. On a worktree row

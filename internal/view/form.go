@@ -56,11 +56,14 @@ type Form struct {
 }
 
 // Chip is one of the form's choices: a title, the candidates, and the
-// one selected.
+// one selected. Other, when set, is the picker's: an entry made of a
+// filter no candidate matches, a repository's source pasted say, which
+// taken is added to the candidates and selected.
 type Chip struct {
 	Title    string
 	Choices  []Choice
 	Selected int
+	Other    func(filter string) (Choice, bool)
 }
 
 // Label is the selected candidate's label.
@@ -144,7 +147,11 @@ func (f *Form) Handle(k term.Key) {
 			if f.picker.Chosen >= 0 {
 				// Picking is the user's choice even when it is the
 				// value already shown: the host is told either way.
-				f.Chips[f.focus].Selected = f.picker.Chosen
+				c := &f.Chips[f.focus]
+				if f.picker.Chosen == len(c.Choices) {
+					c.Choices = append(c.Choices, f.picker.Taken)
+				}
+				c.Selected = f.picker.Chosen
 				if f.Changed != nil {
 					f.Changed(f, f.focus)
 				}
@@ -208,8 +215,9 @@ func (f *Form) chipKey(k term.Key) {
 			f.setChip(f.focus, (c.Selected+1)%n)
 		}
 	case term.KeyEnter:
-		if n > 0 {
+		if n > 0 || c.Other != nil {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
+			f.picker.Other = c.Other
 		}
 	case term.KeyNewline:
 		// Ctrl-J or Shift-Enter on a chip submits, as from the prompt
@@ -404,9 +412,16 @@ func (f *Form) branchKey(k term.Key) {
 	}
 }
 
-// submit ends the form when the branch passes validation; a generated
-// branch from an empty prompt is empty, and refused as such.
+// submit ends the form when every chip has a candidate selected and
+// the branch passes validation; a generated branch from an empty prompt
+// is empty, and refused as such.
 func (f *Form) submit() {
+	for _, c := range f.Chips {
+		if c.Selected < 0 || c.Selected >= len(c.Choices) {
+			f.Error = "no " + c.Title + " chosen"
+			return
+		}
+	}
 	if f.branch == "" {
 		f.Error = "no branch name; give one"
 		return

@@ -1003,7 +1003,7 @@ func (rn *taskRunner) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if !config.ValidLabel(e.Name) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label (%s)", e.Name, config.LabelRule)
 	}
-	for _, other := range rn.cfg.Store.Repos {
+	for _, other := range rn.cfg.Store.Repos() {
 		if other.Name == e.Name {
 			return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
 		}

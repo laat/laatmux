@@ -163,6 +163,13 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
+	// Repos reads the repositories the config lists again, for Store,
+	// before every worktree poll: changed when the file changed since
+	// the last read, so the store follows repositories an add or the
+	// task form appended, and hand edits, without a restart. A file
+	// that does not read keeps the list as it was. nil keeps the list
+	// Store was made with.
+	Repos func() (repos []worktree.Repo, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
 	// capability; "" means none.
@@ -193,8 +200,12 @@ type Config struct {
 	Timings Timings
 
 	// Pending is the directory of the relay's pending files, which with
-	// Hosts is the relay capability; "" means none.
-	Pending string
+	// Hosts is the relay capability; "" means none. AppendRepo appends
+	// a repository to this machine's config, reporting whether it was
+	// not listed yet, for a relayed add with remember; with the relay
+	// it is the remember capability, and nil means none.
+	Pending    string
+	AppendRepo func(src, name string) (bool, error)
 
 	// Attention is the file the attention state is kept in, which with
 	// Hosts is the attention capability; "" means none. Clients lists
@@ -233,7 +244,7 @@ type Config struct {
 //     before relay.mu and mu. lastHostsErr is under it.
 //   - pollMu holds the worktree poll and its publication together, so an
 //     older observation never overwrites a newer one; taken before mu.
-//     lastListErr is under it.
+//     lastListErr and lastReposErr are under it.
 //   - repos, and the keyed locks repoLock hands out, all held across mu
 //     and never taken under it. An add holds repos shared, then its
 //     repository's "repo/" lock, then its "name/" lock (holdRepos,
@@ -293,6 +304,7 @@ type Daemon struct {
 	listed       bool
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change; under pollMu
+	lastReposErr string            // the same for the config's repositories
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
@@ -556,6 +568,9 @@ func (d *Daemon) capabilities() []string {
 	}
 	if d.relay != nil {
 		caps = append(caps, protocol.CapRelay, protocol.CapDismissRoot)
+		if d.cfg.AppendRepo != nil {
+			caps = append(caps, protocol.CapRemember)
+		}
 	}
 	if d.attn != nil {
 		caps = append(caps, protocol.CapAttention)

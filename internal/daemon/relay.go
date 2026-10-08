@@ -70,6 +70,10 @@ type pendingFile struct {
 	// it; a file from before entries has none, and the host resolves
 	// the source against its own config.
 	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
+	// Remember is the add's ask to have its repository entry appended
+	// to the config once the add has succeeded, cleared once it is
+	// there.
+	Remember bool `json:"remember,omitempty"`
 	// ReplacedBy is the worktree id the record retired into, and
 	// RetiredAt when.
 	ReplacedBy string    `json:"replaced_by,omitempty"`
@@ -310,6 +314,10 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = wireErr.Error()
 	case m.RepoEntry != nil && !source.Same(m.RepoEntry.Source, m.Repo):
 		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
+	case m.Remember && m.RepoEntry == nil:
+		res.Error = "remember needs the add's repository entry"
+	case m.Remember && d.cfg.AppendRepo == nil:
+		res.Error = "this daemon cannot add a repository to the config"
 	}
 	if res.Error != "" {
 		return res
@@ -346,7 +354,7 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 	p := pendingFile{Pending: protocol.Pending{
 		ID: m.ID, Host: h.Name, EnvironmentID: env, Source: m.Repo, Repo: name, Branch: m.Branch, Generated: m.Generated,
 		Agent: m.AgentName, Cmd: m.Cmd, SubmittedAt: submitted, UpdatedAt: time.Now(),
-	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry}
+	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry, Remember: m.Remember}
 	d.relay.mu.Lock()
 	fresh, err := d.relay.createLocked(p)
 	if err == nil && fresh {
@@ -814,7 +822,13 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	l.Lock()
 	defer l.Unlock()
 	p, ok := d.relay.get(id)
-	if !ok || !p.Done || !p.OK || p.retired() || ctx.Err() != nil {
+	if !ok || !p.Done || !p.OK || ctx.Err() != nil {
+		return
+	}
+	if p.Remember {
+		d.remember(ctx, id, p)
+	}
+	if p.retired() {
 		return
 	}
 	if !p.Listed {
@@ -827,6 +841,38 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	}
 	if p.Complete() && p.Listed && !p.Gone && !p.retired() {
 		d.handoff(ctx, id, p.WorktreeID())
+	}
+}
+
+// remember appends the repository of a successful add to the config,
+// as the add asked, and clears the ask once it is there; it is settle's
+// first step, so a daemon that died before it does it at start. A
+// config that cannot take the entry, one that does not parse say, is
+// logged, and the ask is kept for the next settle.
+func (d *Daemon) remember(ctx context.Context, id string, p pendingFile) {
+	if e := p.RepoEntry; e != nil {
+		added, err := d.cfg.AppendRepo(e.Source, e.Name)
+		if err != nil {
+			d.cfg.Logger.Printf("relay %s: %s not added to the config's repos: %v", id, e.Source, err)
+			return
+		}
+		if added {
+			d.cfg.Logger.Printf("relay %s: %s added to the config's repos as %s", id, e.Source, e.Name)
+			if d.cfg.Store != nil {
+				d.pokeWorktrees()
+			}
+		}
+	}
+	done := func(p *pendingFile) { p.Remember = false }
+	if _, ok := d.persist(ctx, id, done); !ok {
+		// A record kept for its handoff alone takes no published
+		// change; the ask is cleared in its file, which is all that
+		// carries it.
+		d.relay.mu.Lock()
+		if _, err := d.relay.updateLocked(id, true, done); err != nil {
+			d.cfg.Logger.Printf("pending: %s: %v", id, err)
+		}
+		d.relay.mu.Unlock()
 	}
 }
 

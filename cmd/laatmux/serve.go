@@ -107,9 +107,24 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	logger.Printf("serve %s env=%s tmux=%s listen=%s", version, envID, strings.Join(labels, ","), tmux.Printable(rt.Address))
 	if store != nil {
-		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", tmux.Printable(store.Dirs.Repos), tmux.Printable(store.Dirs.Worktrees), len(store.Repos))
+		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", tmux.Printable(store.Dirs.Repos), tmux.Printable(store.Dirs.Worktrees), len(store.Repos()))
 	} else {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
+	}
+	// The store follows the config's repos: the file is looked at
+	// before every worktree poll and read again when it has changed, so
+	// a repository the task form or add appended, or a hand edit, is
+	// listed without a restart.
+	var readRepos func() ([]worktree.Repo, bool, error)
+	if store != nil {
+		var watch config.Watch
+		readRepos = func() ([]worktree.Repo, bool, error) {
+			cfg, changed, err := watch.Changed()
+			if !changed || err != nil {
+				return nil, false, err
+			}
+			return worktree.FromConfig(cfg.Repos), true, nil
+		}
 	}
 	// The shutdown message ends the daemon the way a signal does.
 	ctx, shutdown := context.WithCancel(ctx)
@@ -117,9 +132,12 @@ func cmdServe(ctx context.Context, args []string) error {
 	d := daemon.New(daemon.Config{
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
-		Store: store, Agents: agents, Shutdown: shutdown,
+		Store: store, Repos: readRepos, Agents: agents, Shutdown: shutdown,
 		Commands: filepath.Join(home.Dir(), "commands"),
 		Pending:  filepath.Join(home.Dir(), "pending"),
+		// A relayed add of a repository new to the config appends it
+		// once the host's add has succeeded.
+		AppendRepo: func(src, name string) (bool, error) { return config.AddRepo(config.Path(), src, name) },
 		// What the user has seen, kept across restarts, and what this
 		// machine's tmux clients show.
 		Attention: filepath.Join(home.Dir(), "attention.json"),

@@ -1,6 +1,7 @@
 package view
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -39,8 +40,18 @@ type Picker struct {
 	Filter  string
 	// Selected is the index into the matching entries.
 	Selected int
-	// Chosen is the index into Choices once Done, -1 when cancelled.
+	// Chosen is the index into Choices once Done, -1 when cancelled,
+	// len(Choices) when the entry Other made of the filter was taken,
+	// which Taken then is.
 	Chosen int
+	// Other, when set, makes an entry of a filter that names one, a
+	// repository's source pasted say: the list shows it alone, in place
+	// of the choices the filter's text is in, since a source of another
+	// repository can be part of a listed one's; it is the choice it
+	// names when it is one of them, in whatever form, and else marked
+	// new; and Enter or a click takes it.
+	Other  func(filter string) (Choice, bool)
+	Taken  Choice
 	done   bool
 	scroll int
 	hits   []int // screen line -> index into Choices, -1 for none
@@ -90,7 +101,9 @@ func (p *Picker) Handle(k term.Key) {
 	case term.KeyEsc, term.KeyCtrlC:
 		p.Chosen, p.done = -1, true
 	case term.KeyEnter, term.KeyNewline:
-		if len(m) > 0 {
+		if c, ok := p.other(); ok {
+			p.take(c)
+		} else if len(m) > 0 {
 			p.Chosen, p.done = m[p.Selected], true
 		}
 	case term.KeyUp:
@@ -109,6 +122,13 @@ func (p *Picker) Handle(k term.Key) {
 			break
 		}
 		if i := k.Y - 1 - p.top; i >= 0 && i < len(p.hits) && p.hits[i] >= 0 {
+			if p.hits[i] == len(p.Choices) {
+				// The entry Other made, if the filter still makes it.
+				if c, ok := p.other(); ok {
+					p.take(c)
+				}
+				break
+			}
 			p.Chosen, p.done = p.hits[i], true
 		}
 	case term.KeyRune, term.KeyPaste:
@@ -116,6 +136,25 @@ func (p *Picker) Handle(k term.Key) {
 		p.keep(m)
 	}
 	clamp()
+}
+
+// other is the entry Other makes of the filter, when there is one.
+func (p *Picker) other() (Choice, bool) {
+	if p.Other == nil {
+		return Choice{}, false
+	}
+	return p.Other(p.Filter)
+}
+
+// take ends the picker on the entry Other made: the choice it is, when
+// it is one, else a new one in Taken.
+func (p *Picker) take(c Choice) {
+	p.done = true
+	if i := slices.Index(p.Choices, c); i >= 0 {
+		p.Chosen = i
+		return
+	}
+	p.Chosen, p.Taken = len(p.Choices), c
 }
 
 // keep moves the selection to the same entry under the new filter when
@@ -148,6 +187,10 @@ func (p *Picker) Render(w, h int) []Line {
 		body = 1
 	}
 	m := p.Matches()
+	entry, other := p.other()
+	if other {
+		m = nil
+	}
 	if p.Selected >= len(m) {
 		p.Selected = len(m) - 1
 	}
@@ -185,6 +228,21 @@ func (p *Picker) Render(w, h int) []Line {
 	}
 	if len(m) == 0 {
 		out[p.top] = dim("  no match", w)
+		if other {
+			// The entry the filter makes, selected, as Enter takes it;
+			// a new one says so.
+			label := fit("  "+entry.Label, w)
+			l := Line{Spans: []Span{{Text: label}}, Reverse: true}
+			detail := entry.Detail
+			if !slices.Contains(p.Choices, entry) {
+				detail = strings.TrimSpace(detail + "  new")
+			}
+			if w-width(label) > 4 {
+				l.Spans = append(l.Spans, Span{Text: fit("  "+detail, w-width(label)), Dim: true})
+			}
+			out[p.top] = l
+			p.hits[0] = len(p.Choices)
+		}
 	}
 	if len(out) >= h {
 		// Too short for the hint: the entry is worth more.

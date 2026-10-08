@@ -103,6 +103,15 @@ const (
 	// source is refused. A daemon without it ignores the entry and
 	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
+	// CapRemember is the relay listing a new repository in this
+	// machine's config: a relayed add with remember has its repo_entry
+	// appended to the config's repos, under the entry's name, once the
+	// host's add has succeeded, and a refused add leaves the config as
+	// it was. A source the config lists in any form is not added again.
+	// A daemon without it reads such an add without the field, and adds
+	// nothing to the config; a client sends remember only to a daemon
+	// with it.
+	CapRemember = "remember"
 	// CapAttribution is the host attributing what runs to its worktrees:
 	// every agent record carries the worktree_id of the worktree whose
 	// root contains its pane's path, so a worktree has any number of
@@ -747,6 +756,11 @@ type Message struct {
 	// it, its source Repo's: a daemon with repo-entry resolves the add
 	// against it when its own config does not list the repository.
 	RepoEntry *RepoEntry `json:"repo_entry,omitempty"`
+	// Remember on a relayed add asks a daemon with remember to append
+	// the repo_entry to its config's repos once the add has succeeded:
+	// the repository is new to the config, a source pasted into the
+	// task form or given to add's --repo.
+	Remember bool `json:"remember,omitempty"`
 	// AgentName is the configured agent to start; Cmd, when set, is the
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.

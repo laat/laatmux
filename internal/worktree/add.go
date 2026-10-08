@@ -204,7 +204,10 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	for _, e := range entries {
 		if e.Root == checkout {
 			if e.Branch == branch {
-				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s", b, tmux.Printable(checkout)))
+				// The default branch of a fresh clone is: what to give
+				// instead is said, since the first add of a repository
+				// new to the config names it as often as not.
+				return a, fail(stage, fmt.Errorf("branch %s is checked out in the main checkout %s; a worktree needs another branch: a new name, or a prompt to propose one", b, tmux.Printable(checkout)))
 			}
 			continue
 		}

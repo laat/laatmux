@@ -48,6 +48,7 @@ func (d *Daemon) runWorktrees(ctx context.Context) {
 func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.pollMu.Lock()
 	defer d.pollMu.Unlock()
+	d.readRepos()
 	d.mu.Lock()
 	stamp := protocol.Listing{Generation: d.generation, Revision: d.revision}
 	d.mu.Unlock()
@@ -89,6 +90,24 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		d.mu.Unlock()
 	}
 	d.markDiscovered(&d.worktreesDiscovered)
+}
+
+// readRepos gives the store the config's repositories when the file
+// has changed, before a listing labels the checkouts by them. A file
+// that does not read is logged once per change of message, and the list
+// stays as it was. Called with pollMu held.
+func (d *Daemon) readRepos() {
+	if d.cfg.Repos == nil {
+		return
+	}
+	repos, changed, err := d.cfg.Repos()
+	switch {
+	case err != nil:
+		d.logOnce(&d.lastReposErr, "worktrees: config: %v; the repositories stay as they were", err)
+	case changed:
+		d.lastReposErr = ""
+		d.cfg.Store.SetRepos(repos)
+	}
 }
 
 // stepRevision counts one observation owed: an add that succeeded, or

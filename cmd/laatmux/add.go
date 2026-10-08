@@ -11,6 +11,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
 	"github.com/laat/laatmux/internal/worktree"
@@ -34,7 +35,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, err := resolveRepo(ctx, cfg, a.repo)
+	repo, isNew, err := addRepo(ctx, cfg, a.repo)
 	if err != nil {
 		return err
 	}
@@ -49,8 +50,11 @@ func cmdAdd(ctx context.Context, args []string) error {
 		}
 	}
 	branch, prompt := a.branch, a.prompt
-	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
+	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated, Remember: isNew}
 	fmt.Println(add.Describe())
+	if isNew {
+		fmt.Printf("%s is new to the config: added to its repos as %s once the host has made the worktree\n", repo.Source, repo.Name)
+	}
 	if a.detach {
 		// The daemon has the task once an id comes back, whatever the
 		// local bookkeeping after; a retry would submit another.
@@ -87,6 +91,27 @@ func cmdAdd(ctx context.Context, args []string) error {
 		return err
 	}
 	return focus(ctx, res.Session, res.Created)
+}
+
+// addRepo is add's repository: resolveRepo's, or a repository's source
+// --repo gives that the config does not list in any form, new to it, as
+// NewRepo names it, which the add carries as its repository entry and
+// appends to the config's repos once the host has made the worktree. A
+// --repo that is neither a listed repository nor a source is
+// resolveRepo's refusal.
+func addRepo(ctx context.Context, cfg config.Config, flag string) (config.Repo, bool, error) {
+	repo, err := resolveRepo(ctx, cfg, flag)
+	if err == nil || flag == "" {
+		return repo, false, err
+	}
+	if _, _, ok := source.Forge(flag); !ok {
+		return config.Repo{}, false, err
+	}
+	repo, err = cfg.NewRepo(flag)
+	if err != nil {
+		return config.Repo{}, false, err
+	}
+	return repo, true, nil
 }
 
 // readyLine is add's line for an add the host finished: <repo>/<branch>

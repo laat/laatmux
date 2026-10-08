@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,10 +51,13 @@ type Repo struct {
 // repository's own. Log, when set, says why a checkout's label has a
 // hash (see labels) and that a checkout's HEAD cannot be read.
 type Store struct {
-	Dirs  config.Dirs // expanded for this host
-	Repos []Repo
-	Copy  []string
-	Log   *log.Logger
+	Dirs config.Dirs // expanded for this host
+	Copy []string
+	Log  *log.Logger
+
+	// repos is the repositories this host's config lists, replaced
+	// whole when the daemon reads the file again (SetRepos).
+	repos atomic.Pointer[[]Repo]
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
@@ -69,18 +73,39 @@ type originEntry struct {
 // New makes a store for the host's directories and known repositories.
 func New(dirs config.Dirs, repos []config.Repo) *Store {
 	s := &Store{Dirs: dirs, origins: map[string]originEntry{}}
-	for _, r := range repos {
-		s.Repos = append(s.Repos, Repo{Source: r.Source, Name: r.Name, Copy: r.Copy, Setup: r.Setup})
-	}
+	s.SetRepos(FromConfig(repos))
 	return s
 }
+
+// FromConfig is the config's repositories as the store keeps them.
+func FromConfig(repos []config.Repo) []Repo {
+	out := make([]Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, Repo{Source: r.Source, Name: r.Name, Copy: r.Copy, Setup: r.Setup})
+	}
+	return out
+}
+
+// Repos is the repositories this host's config lists, as last set; the
+// slice is the store's and is not to be changed.
+func (s *Store) Repos() []Repo {
+	if p := s.repos.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetRepos replaces the repositories this host's config lists, for a
+// daemon that read the file again: a lookup or a listing under way
+// finishes on the list it started with.
+func (s *Store) SetRepos(repos []Repo) { s.repos.Store(&repos) }
 
 // Repo finds a repository this host's config lists by name, else by
 // source, in any form source.Same takes as one: the same order as
 // config.Config.Repo, since a bare local source can equal another
 // entry's label.
 func (s *Store) Repo(nameOrSource string) (Repo, bool) {
-	for _, r := range s.Repos {
+	for _, r := range s.Repos() {
 		if r.Name == nameOrSource {
 			return r, true
 		}
@@ -91,12 +116,13 @@ func (s *Store) Repo(nameOrSource string) (Repo, bool) {
 // BySource finds a repository this host's config lists by its source,
 // in any form source.Same takes as one.
 func (s *Store) BySource(src string) (Repo, bool) {
-	for _, r := range s.Repos {
+	repos := s.Repos()
+	for _, r := range repos {
 		if r.Source == src {
 			return r, true
 		}
 	}
-	for _, r := range s.Repos {
+	for _, r := range repos {
 		if source.Same(r.Source, src) {
 			return r, true
 		}
@@ -117,7 +143,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 		return Repo{}, false, err
 	}
 	var named []Repo
-	for _, r := range s.Repos {
+	for _, r := range s.Repos() {
 		if r.Name == nameOrSource {
 			named = append(named, r)
 		}
@@ -259,7 +285,7 @@ func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]che
 	out = make(map[string]Repo, len(cos))
 	held = map[string]checkout{}
 	holders := map[string]checkout{} // by label, what has it
-	for _, r := range s.Repos {
+	for _, r := range s.Repos() {
 		holders[r.Name] = checkout{origin: r.Source}
 	}
 	var made []checkout // unlisted checkouts whose name is not a label

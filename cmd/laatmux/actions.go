@@ -222,11 +222,43 @@ func (r logReporter) Note(s string) {
 // the popup was opened from, the host and agent last used for it, else
 // the config's defaults. a on a worktree row that has no session
 // pre-fills the repository, host and branch from the record, the
-// branch explicit.
+// branch explicit. A repository's source pasted into the repository
+// chip's picker that no candidate matches is a candidate after the
+// config's, new to it (pastedRepo).
 type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
+}
+
+// repo is the repository of the repository chip's candidate i: the
+// config's entry, or after them a source pasted into the picker, new to
+// the config, under the name pastedRepo gave it; none for a chip with
+// nothing selected.
+func (f *addForm) repo(form *view.Form, i int) (r config.Repo, isNew bool) {
+	switch c := form.Chips[0].Choices; {
+	case i >= 0 && i < len(f.repos):
+		return f.repos[i], false
+	case i >= len(f.repos) && i < len(c):
+		return config.Repo{Source: c[i].Detail, Name: c[i].Label}, true
+	}
+	return config.Repo{}, false
+}
+
+// pastedRepo is the repository chip's entry for a picker filter no
+// candidate matches: the listed repository a source names in another
+// of its forms, else a source new to the config, named as it will be
+// listed; nothing for a filter that is no repository's source.
+func pastedRepo(cfg config.Config, filter string) (view.Choice, bool) {
+	src := strings.TrimSpace(filter)
+	if r, ok := cfg.RepoBySource(src); ok {
+		return view.Choice{Label: r.Name, Detail: r.Source}, true
+	}
+	r, err := cfg.NewRepo(src)
+	if err != nil {
+		return view.Choice{}, false
+	}
+	return view.Choice{Label: r.Name, Detail: r.Source}, true
 }
 
 func (d *dash) startAdd(m *view.Model) {
@@ -237,13 +269,11 @@ func (d *dash) startAdd(m *view.Model) {
 		}
 	}
 	// A field with nothing to choose from refuses before the form is
-	// up. So does last.json that cannot be read: the submit's own
+	// up, but the repository, which a source pasted into its picker
+	// gives. So does last.json that cannot be read: the submit's own
 	// update of it would fail after the daemon has the task. The error
 	// names the file.
 	switch {
-	case len(f.repos) == 0:
-		m.Message = "no repositories configured"
-		return
 	case len(f.hosts) == 0:
 		m.Message = "no host has repos and worktrees configured"
 		return
@@ -298,17 +328,24 @@ func (d *dash) startAdd(m *view.Model) {
 // buildForm makes the task form over the candidates, preselecting the
 // repository named, the host and agent last used for it, else the
 // config's defaults. caps, when set, gives a host's cached daemon
-// capabilities for the note about tasks not being supported.
+// capabilities for the note about tasks not being supported. The
+// repository chip's picker takes a repository's source no candidate
+// matches as a candidate of its own (pastedRepo), which the host and
+// agent chips treat as a repository without a last use.
 func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
 	var chips [3]view.Chip
 	chips[0].Title = "repository"
+	chips[0].Other = func(filter string) (view.Choice, bool) { return pastedRepo(cfg, filter) }
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
 		if r.Name == preRepo || source.Same(r.Source, preRepo) {
 			chips[0].Selected = i
 		}
 	}
-	repo := f.repos[chips[0].Selected]
+	var repo config.Repo
+	if len(f.repos) > 0 {
+		repo = f.repos[chips[0].Selected]
+	}
 	chips[1].Title = "host"
 	wantHost := preHost
 	if wantHost == "" {
@@ -351,7 +388,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 		}
 		// As at build: the last used, else the config's default, else
 		// the first candidate.
-		repo := f.repos[form.Chips[0].Selected]
+		repo, _ := f.repo(form, form.Chips[0].Selected)
 		if !userSet[1] {
 			form.Chips[1].Selected = 0
 			if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
@@ -373,14 +410,22 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 			}
 		}
 	}
-	if caps != nil {
-		form.Note = func(form *view.Form) string {
-			host := form.Chips[1].Label()
+	// The note: a host whose daemon would refuse the task, else what
+	// the repository chip needs or will do.
+	form.Note = func(form *view.Form) string {
+		host := form.Chips[1].Label()
+		if caps != nil {
 			if c, ok := caps(host); ok && !protocol.Has(c, protocol.CapTask) {
 				return "tasks not supported by " + host + "'s daemon"
 			}
-			return ""
 		}
+		if len(form.Chips[0].Choices) == 0 {
+			return "no repositories configured; enter on the repository takes a pasted source"
+		}
+		if _, isNew := f.repo(form, form.Chips[0].Selected); isNew {
+			return "a new repository, added to the config's repos once its worktree is made"
+		}
+		return ""
 	}
 	return form
 }
@@ -392,9 +437,10 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 // drops the form and keeps the view with the id in the message, so
 // nothing is submitted twice.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
+	repo, isNew := f.repo(o, o.Chips[0].Selected)
 	add := command.Add{
-		Host: f.hosts[o.Chips[1].Selected], Repo: f.repos[o.Chips[0].Selected], Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
-		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
+		Host: f.hosts[o.Chips[1].Selected], Repo: repo, Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
+		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(), Remember: isNew,
 	}
 	submit := d.submit
 	if submit == nil {
