@@ -129,7 +129,7 @@ func runView(ctx context.Context, cfg config.Config, c *client.Conn, m *view.Mod
 	host := settingsHost{dashboard: o.actions, fixedLayout: o.fixedLayout, fixedView: o.fixedView, fixedScope: o.fixedScope}
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
-	watchSettings(ctx, seen, cmds)
+	watchSettings(ctx, seen, cmds, host)
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: exitOnJump, reload: config.Load}
 	if o.listen {
 		// The pane's socket: a command names the client its jump

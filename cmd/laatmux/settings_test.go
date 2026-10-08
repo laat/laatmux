@@ -178,7 +178,9 @@ func TestSettings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmds := make(chan func(*view.Model) view.Action, 1)
-	watchSettings(ctx, home.SidebarMtime(), cmds)
+	watchSettings(ctx, home.SidebarMtime(), cmds, settingsHost{})
+	dashCmds := make(chan func(*view.Model) view.Action, 1)
+	watchSettings(ctx, home.SidebarMtime(), dashCmds, settingsHost{dashboard: true})
 	time.Sleep(50 * time.Millisecond)
 	// mtime has second resolution on some file systems: a write a
 	// second on.
@@ -194,6 +196,32 @@ func TestSettings(t *testing.T) {
 	}
 	if folds := m.ToggledFolds(); !folds["repo/z"] {
 		t.Errorf("the other pane's fold not taken: %v", folds)
+	}
+	// Another pane's view reaches a sidebar pane the same way, and is
+	// not written back as its own choice; the dashboard keeps its own.
+	m.View = view.ViewAgents
+	dashM := &view.Model{View: view.ViewAgents, Width: 60, Height: 20}
+	time.Sleep(1100 * time.Millisecond)
+	if err := home.UpdateSidebar(now, func(s *home.Sidebar) { s.View = "tree" }); err != nil {
+		t.Fatal(err)
+	}
+	for _, vc := range []struct {
+		ch   chan func(*view.Model) view.Action
+		m    *view.Model
+		want view.View
+	}{{cmds, m, view.ViewTree}, {dashCmds, dashM, view.ViewAgents}} {
+		select {
+		case f := <-vc.ch:
+			f(vc.m)
+		case <-time.After(5 * time.Second):
+			t.Fatal("no poll after another pane's view write")
+		}
+		if vc.m.View != vc.want {
+			t.Errorf("view %q, want %q", vc.m.View, vc.want)
+		}
+	}
+	if viewSet, _ := m.ChangedDefaults(); viewSet {
+		t.Error("a view taken from the file counts as the pane's own choice")
 	}
 }
 
