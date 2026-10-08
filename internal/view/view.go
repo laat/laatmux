@@ -550,10 +550,11 @@ func (m *Model) Render() []Line {
 			}
 			ls = m.row(*it.Row, idx)
 			if it.Index == m.Selected {
-				// The divider after a tile is not the tile: a short
-				// pane shows the tile's lines, its head first.
+				// The divider after a tile, or a titled compact row, is
+				// not the row: a short pane shows the row's lines, its
+				// head first.
 				selStart, selEnd = len(lines), len(lines)+len(ls)
-				if m.Layout != Compact && len(ls) > 1 {
+				if m.divided() && len(ls) > 1 {
 					selEnd--
 				}
 				for i := range ls {
@@ -951,17 +952,33 @@ func (m *Model) tile(r rows.Row, idx int) []Line {
 		}
 		out = append(out, Line{Dim: r.Dim, Spans: m.line(t, r, m.Width, idx)})
 	}
-	return append(out, Line{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}})
+	return append(out, m.divider())
+}
+
+// divider is the line drawn after a tile and after a compact row with
+// titles, so two-line rows are told apart.
+func (m *Model) divider() Line {
+	return Line{Spans: []Span{{Text: strings.Repeat("─", m.Width), Fg: palette.Border, Dim: true}}}
+}
+
+// divided reports whether a row ends in a divider: a tile, or a
+// compact row with titles, two lines that would run into the next
+// row's without one.
+func (m *Model) divided() bool {
+	return m.Layout != Compact || m.Titles
 }
 
 // compact is the compact template's one line: the head with the
 // secondary label and host tag after the primary. With Titles, the
-// third tile line follows.
+// third tile line follows, and a divider after it.
 func (m *Model) compact(r rows.Row, idx int) []Line {
 	t := m.templates()
 	lines := []Line{{Dim: r.Dim, Spans: m.line(t.Compact, r, m.Width, idx)}}
 	if m.Titles && len(t.Tiles) >= 3 && !t.Tiles[2].Blank() {
 		lines = append(lines, Line{Dim: r.Dim, Spans: m.line(t.Tiles[2], r, m.Width, idx)})
+	}
+	if m.Titles {
+		lines = append(lines, m.divider())
 	}
 	return lines
 }
