@@ -243,6 +243,20 @@ func TestAddRepoDanglingLink(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dir, "gone.yaml")); err == nil {
 		t.Fatal("the .. taken before the link")
 	}
+	// The same with a directory after the .. that is not there yet: it
+	// is made under real, not beside the link.
+	if err := os.Symlink("alias/../new/config.yaml", filepath.Join(dir, "third.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(filepath.Join(dir, "third.yaml"), "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("a missing directory after a link: added %v, %v", added, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real", "new", "config.yaml")); err != nil {
+		t.Fatalf("the target is not real/new/config.yaml: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "new")); err == nil {
+		t.Fatal("the missing directory made beside the link")
+	}
 }
 
 // A file of two YAML documents is refused, as it was: the config is the
@@ -306,6 +320,17 @@ func TestAddRepoSecondDocument(t *testing.T) {
 		t.Fatalf("a flow list and an empty document: added %v, %v", added, err)
 	}
 	if b, _ := os.ReadFile(p); string(b) != flow {
+		t.Fatalf("file changed to %q", b)
+	}
+	// A marker before a tab is one too.
+	tabbed := "repos: [git@x:o/a.git]\n---\t# tail\n# keep me\n"
+	if err := os.WriteFile(p, []byte(tabbed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); added || err == nil || !strings.Contains(err.Error(), "a document marker after its first document") {
+		t.Fatalf("a marker before a tab: added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != tabbed {
 		t.Fatalf("file changed to %q", b)
 	}
 	// One document with its start marker is one.

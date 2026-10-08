@@ -211,20 +211,35 @@ func linkTarget(path string) (string, error) {
 			target = filepath.Dir(p) + string(filepath.Separator) + target
 		}
 		// The directory unjoined, so EvalSymlinks takes a .. after the
-		// link before it; one not there yet is made by the write, and
-		// has no links to resolve past the part that is.
+		// link before it.
 		i := strings.LastIndexByte(target, filepath.Separator)
-		dir, err := filepath.EvalSymlinks(target[:max(i, 1)])
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			p = filepath.Clean(target)
-		case err != nil:
+		dir, err := resolveDir(target[:max(i, 1)])
+		if err != nil {
 			return "", err
-		default:
-			p = filepath.Join(dir, target[i+1:])
 		}
+		p = filepath.Join(dir, target[i+1:])
 	}
 	return "", &fs.PathError{Op: "readlink", Path: path, Err: syscall.ELOOP}
+}
+
+// resolveDir is dir with its links resolved as far as it is there, and
+// the part that is not, which the write makes and which has no links,
+// after that as it is: alias/../new, with alias a link to real/nested
+// and real/new not there yet, is real/new.
+func resolveDir(dir string) (string, error) {
+	var missing []string
+	for d := dir; ; {
+		r, err := filepath.EvalSymlinks(d)
+		if err == nil {
+			return filepath.Join(append([]string{r}, missing...)...), nil
+		}
+		i := strings.LastIndexByte(d, filepath.Separator)
+		if !errors.Is(err, fs.ErrNotExist) || i <= 0 {
+			return "", err
+		}
+		missing = append([]string{d[i+1:]}, missing...)
+		d = d[:i]
+	}
 }
 
 // lockAppends takes the lock AddRepo's appends on this machine take
@@ -443,7 +458,7 @@ func firstDocEnd(lines []string) int {
 	content := false
 	for i, l := range lines {
 		t := strings.TrimRight(l, "\r\n")
-		marker := t == "---" || t == "..." || strings.HasPrefix(t, "--- ")
+		marker := isMarker(t)
 		switch {
 		case marker && content:
 			return i
@@ -454,6 +469,17 @@ func firstDocEnd(lines []string) int {
 		}
 	}
 	return len(lines)
+}
+
+// isMarker reports whether a line is a document marker: --- or ...,
+// alone or before a space or a tab.
+func isMarker(line string) bool {
+	for _, m := range []string{"---", "..."} {
+		if rest, ok := strings.CutPrefix(line, m); ok && (rest == "" || rest[0] == ' ' || rest[0] == '\t') {
+			return true
+		}
+	}
+	return false
 }
 
 // laterDocument reports whether b has a document marker after its first
