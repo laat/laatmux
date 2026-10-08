@@ -119,7 +119,11 @@ func (d *Daemon) runConfig(ctx context.Context) {
 // subscription and before the relay resumes its records, which then
 // read the file as it found it or later. A file that does not read is
 // logged once per change of message, and the daemon keeps what it had.
-// lastReposErr and configRead are runConfig's alone.
+// A read of the hosts that failed last, a file being written as a
+// subscription read it say, is made again at every look, the file
+// changed or not, until it succeeds: a file that settles empty is no
+// change to the watch. lastReposErr and configRead are runConfig's
+// alone.
 func (d *Daemon) readConfig(ctx context.Context) {
 	read, changed, err := d.cfg.Reread()
 	first := !d.configRead
@@ -138,6 +142,8 @@ func (d *Daemon) readConfig(ctx context.Context) {
 			d.rereadHosts()
 			d.rememberAgain(ctx)
 		}
+	case !first && d.hostsFailed():
+		d.rereadHosts()
 	}
 }
 

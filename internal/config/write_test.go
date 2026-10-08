@@ -552,21 +552,26 @@ func TestWatch(t *testing.T) {
 	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 1 || cfg.Repos[0].Name != "s" {
 		t.Fatalf("written after the truncation: %v %v %v", cfg.Repos, changed, err)
 	}
-	// Emptied, and left so past the settling time: the default config,
-	// for the watch and LoadSettled alike.
+	// Emptied, and left so, untouched, past the settling time: the
+	// default config, for the watch and LoadSettled alike.
 	os.WriteFile(p, nil, 0o600)
 	if _, changed, _ := w.Changed(); changed {
 		t.Fatal("an empty file taken at once")
 	}
-	old := time.Now().Add(-2 * settling)
-	if err := os.Chtimes(p, old, old); err != nil {
-		t.Fatal(err)
-	}
+	time.Sleep(settling + 100*time.Millisecond)
 	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 0 || len(cfg.Hosts) != 1 {
 		t.Fatalf("an emptied file: %v %v %v", cfg.Repos, changed, err)
 	}
 	if cfg, err := LoadSettled(); err != nil || len(cfg.Hosts) != 1 {
 		t.Fatalf("LoadSettled of an emptied file: %v %v", cfg.Hosts, err)
+	}
+	// An empty file dated ahead of the clock is no write under way.
+	ahead := time.Now().Add(time.Hour)
+	if err := os.Chtimes(p, ahead, ahead); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := LoadSettled(); err != nil || len(cfg.Hosts) != 1 {
+		t.Fatalf("LoadSettled of an empty file dated ahead: %v %v", cfg.Hosts, err)
 	}
 	// An empty file at the first look is the default config, as Load
 	// reads it.

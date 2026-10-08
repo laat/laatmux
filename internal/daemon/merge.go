@@ -144,6 +144,14 @@ func (d *Daemon) rereadHosts() {
 	}
 }
 
+// hostsFailed reports whether the last read of the hosts, a
+// subscription's or rereadHosts', failed.
+func (d *Daemon) hostsFailed() bool {
+	d.subMu.Lock()
+	defer d.subMu.Unlock()
+	return d.lastHostsErr != ""
+}
+
 // mergedUnsubscribe removes a subscriber whose connection ended.
 func (d *Daemon) mergedUnsubscribe(s *subscriber) {
 	d.mu.Lock()

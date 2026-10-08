@@ -83,8 +83,14 @@ func LoadSettled() (Config, error) {
 const settling = 2 * time.Second
 
 // beingWritten reports whether the config file, read empty, is being
-// written: it has content again, or it changed within settling.
+// written: it has content again, or it changed within settling. A
+// modification time ahead of the clock is no write under way, or the
+// file would be kept from being taken until that time.
 func beingWritten() bool {
 	fi, err := os.Stat(Path())
-	return err == nil && (fi.Size() > 0 || time.Since(fi.ModTime()) < settling)
+	if err != nil {
+		return false
+	}
+	age := time.Since(fi.ModTime())
+	return fi.Size() > 0 || age >= 0 && age < settling
 }

@@ -540,6 +540,18 @@ func TestMergedHostsFollowConfigChange(t *testing.T) {
 	if !kept {
 		t.Fatal("a failed read of the hosts dropped box")
 	}
+	// The read is made again at the next look, the file unchanged to
+	// the watch, as one that settles empty is.
+	f.hosts.mu.Lock()
+	f.hosts.hosts, f.hosts.err = []peer.Host{{Name: "here"}, {Name: "box", SSH: "box"}, {Name: "vm", SSH: "vm"}}, nil
+	f.hosts.mu.Unlock()
+	f.local.readConfig(ctx)
+	until(t, c, pc, hostStatus("vm", listed))
+	reads := f.hosts.readCount()
+	f.local.readConfig(ctx)
+	if n := f.hosts.readCount(); n != reads {
+		t.Fatalf("the hosts read again after a read that succeeded: %d", n-reads)
+	}
 }
 
 // Remote subscriptions are dropped once no merged subscriber has been
