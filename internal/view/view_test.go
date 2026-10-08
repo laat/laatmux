@@ -214,23 +214,31 @@ func TestHandle(t *testing.T) {
 	}
 	// The digits count the numbered rows whatever the fold: 1 is the
 	// first tile from anywhere.
+	// A jump by a digit or a click goes to that row and leaves the
+	// selection following the viewer's own row, here proj/task.
 	m.Handle(term.Key{Rune: 'G'})
-	if a := m.Handle(term.Key{Rune: '1'}); a.Kind != ActionJump || m.Selection().Name != "laatmux/fix-ls" {
-		t.Errorf("1 = %+v on %q", a, m.Selection().Name)
+	if a := m.Handle(term.Key{Rune: '1'}); a.Kind != ActionJump || a.Row.Name != "laatmux/fix-ls" || !m.Follow || m.Selection().Name != "proj/task" {
+		t.Errorf("1 = %+v on %q, follow %v", a, m.Selection().Name, m.Follow)
 	}
 	m.Handle(term.Key{Rune: 'f'})
 	m.Handle(term.Key{Rune: 'g'})
 	m.Layout = Compact
 	m.Render()
-	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 1 + len(m.Header) + 2}); a.Kind != ActionJump || m.Selected != 2 {
-		t.Errorf("click on the third row = %+v selected %d", a, m.Selected)
+	own := -1
+	for _, it := range m.Visible() {
+		if it.Row.Name == "proj/task" {
+			own = it.Index
+		}
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 1 + len(m.Header) + 2}); a.Kind != ActionJump || a.Row.ID() != m.Visible()[2].Row.ID() || m.Selected != own || !m.Follow {
+		t.Errorf("click on the third row = %+v selected %d, want the jump with the selection following on %d", a, m.Selected, own)
 	}
 	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 1 + len(m.Header) + n + 5}); a.Kind != ActionNone {
 		t.Errorf("click below the list = %+v", a)
 	}
 	m.Handle(term.Key{Kind: term.KeyMouse, Wheel: 1})
-	if m.Selected != 3 {
-		t.Errorf("wheel down = %d", m.Selected)
+	if m.Selected != own+1 || m.Follow {
+		t.Errorf("wheel down = %d following %v, want %d and the user's", m.Selected, m.Follow, own+1)
 	}
 	if a := m.Handle(term.Key{Rune: 'x'}); a.Kind != ActionOther || a.Key.Rune != 'x' {
 		t.Errorf("unknown key = %+v", a)
@@ -920,12 +928,17 @@ func TestClickJumpKeepsFollow(t *testing.T) {
 	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || !a.Mouse || !m.Follow || m.Selected != own {
 		t.Fatalf("click while following: %+v selected %d follow %v", a, m.Selected, m.Follow)
 	}
-	// The user's own selection: j, then a click, moves it there.
+	// The user's own selection: j, then a click, follows again, so the
+	// band is on the viewer's own row and not on the one clicked, here
+	// and in the pane the viewer arrives at.
 	m.Handle(term.Key{Rune: 'j'})
+	if m.Follow {
+		t.Fatal("j did not take the selection")
+	}
 	m.Render()
 	a = m.Handle(term.Key{Kind: term.KeyMouse, Y: y})
-	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || m.Follow || m.Selected != m.hitRow(y, time.Time{}) {
-		t.Fatalf("click with the user's selection: %+v selected %d follow %v", a, m.Selected, m.Follow)
+	if a.Kind != ActionJump || a.Row == nil || a.Row.Name != target || !m.Follow || m.Selected != own {
+		t.Fatalf("click with the user's selection: %+v selected %d follow %v, want following on %d", a, m.Selected, m.Follow, own)
 	}
 	// What was clicked is what was drawn: rows that moved since the last
 	// render, or a filter typed since, do not change the target; a row

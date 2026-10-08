@@ -92,7 +92,8 @@ type Model struct {
 	// Follow keeps the selection on the viewer's own row, wherever the
 	// sort moves it, and on nothing when there is no such row, until a
 	// key or the wheel moves the selection; from then on the selection
-	// is the user's and stays on the row it was put on.
+	// is the user's and stays on the row it was put on, until a jump by
+	// a click or a digit, which follows again.
 	Follow  bool
 	Message string
 	// Confirm is a question in the footer; y answers it and any other
