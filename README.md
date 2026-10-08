@@ -1576,8 +1576,16 @@ records:
 - **Managed server** reconciliation runs on discovery, once per tmux server
   pid: global options, every global hook, session-level overrides of the
   isolation options, both key tables, `update-environment` (back to
-  tmux's own list), and the locale of the global environment that new
-  panes start with. That locale is the daemon's when its character set is
+  tmux's own list), extended keys (`extended-keys on`, and an outer tmux
+  taken for a terminal that has them, `terminal-features[9100]
+  tmux*:extkeys`, since its clients are the attach panes, an outer tmux
+  locally or through `ssh -t`, which tmux does not credit with them by
+  itself; so Shift-Enter reaches Claude Code in a managed session as
+  it does in a plain one, given the outer server's own `extended-keys
+  on` and its terminal's `extkeys` feature; an attach made before the
+  server was reconciled this way must be made again, by a jump after
+  the attach pane dies or by hand), and the locale of the global
+  environment that new panes start with. That locale is the daemon's when its character set is
   UTF-8 on the host, else the server's own when that one is, else
   `LANG=C.UTF-8` (en_US.UTF-8 or another UTF-8 locale the host has where
   C.UTF-8 is missing). Each locale variable is kept only when it is C,
