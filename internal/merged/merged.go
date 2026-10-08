@@ -450,9 +450,10 @@ func (m *State) localsLocked() []protocol.Session {
 // of the host would have fetched it: a hello built from the host record
 // and a snapshot of its records. Not ok when the host is not in the
 // stream; an error when the host is down, as the direct dial would have
-// failed. A host still reconnecting when the caller stopped waiting is
-// down with its error as well; the caller names it as still waited on
-// first.
+// failed, and when its snapshot has not been listed yet, a host whose
+// entry changed say, since the records then are not all of them. A host
+// still reconnecting when the caller stopped waiting is down with its
+// error as well; the caller names it as still waited on first.
 func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -462,6 +463,11 @@ func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool
 	}
 	if st.Error != "" {
 		return hello, snap, true, fmt.Errorf("%s: %s", name, st.Down())
+	}
+	if !st.Listed {
+		// Records may have come before the snapshot: a part of them is
+		// not what a direct dial would have had.
+		return hello, snap, true, fmt.Errorf("%s: snapshot pending", name)
 	}
 	hello = protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: st.EnvID, Version: st.Version, Host: name, Capabilities: st.Caps}
 	snap.Type = protocol.TypeSnapshot

@@ -189,8 +189,9 @@ func making(host string) string { return "making a session on " + host + "…" }
 // where they are, the message saying the session is there for enter. A
 // view that ends first leaves the jump undone. before is the host's
 // records shellable read at enter, which a name in use is judged by
-// when the stream has the host down by the answer; else by the records
-// the stream has then.
+// unless the stream has a listing of the worktree's machine by the
+// answer: it may have the host down, or listing again after its entry
+// changed, or the entry may reach another machine now.
 func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
 	ctx, st, host := d.ctx, d.st, nh.h.Name
 	at := d.clientAt
@@ -202,7 +203,7 @@ func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
 	m.Message = making(host)
 	go func() {
 		made, err := newHome(ctx, nh.h, nh.w, nh.name, func() protocol.Message {
-			if _, snap, ok, err := st.HostSnapshot(host); ok && err == nil {
+			if hello, snap, ok, err := st.HostSnapshot(host); ok && err == nil && hello.EnvironmentID == nh.w.EnvironmentID {
 				return snap
 			}
 			return before

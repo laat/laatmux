@@ -282,11 +282,14 @@ func shellSession(r rows.Row) string {
 // reads them then, place elsewhere (elsewhere) is refused as add refuses
 // it; any other, one made at the root since the records were read, an
 // add's say, is the worktree's to attach, and nothing is said made. A
-// daemon without new is a *noNewError. The round trip is bounded.
+// daemon without new is a *noNewError; one that answers as another
+// environment than the worktree's is refused before anything is asked,
+// the host entry having moved to another machine since the records. The
+// round trip is bounded.
 func newHome(ctx context.Context, h config.Host, w protocol.Worktree, name string, records func() protocol.Message) (made string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, newTimeout)
 	defer cancel()
-	_, err = newSession(ctx, h, protocol.Message{Name: name, Cwd: w.Root})
+	_, err = newSession(ctx, h, w.EnvironmentID, protocol.Message{Name: name, Cwd: w.Root})
 	switch {
 	case err == nil:
 		return fmt.Sprintf("made session %s on %s, a shell at %s", tmux.Printable(name), h.Name, tmux.Printable(w.Root)), nil

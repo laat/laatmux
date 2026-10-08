@@ -68,6 +68,9 @@ func TestApply(t *testing.T) {
 	if caps, ok := m.HostCaps("vm"); !ok || !slices.Equal(caps, []string{"status", "worktrees"}) {
 		t.Errorf("HostCaps = %v %v", caps, ok)
 	}
+	if _, snap, ok, err := m.HostSnapshot("vm"); !ok || err == nil || err.Error() != "vm: snapshot pending" || len(snap.Worktrees) != 0 {
+		t.Errorf("HostSnapshot before the listing = %+v %v %v", snap, ok, err)
+	}
 	if _, ok := m.HostCaps("box"); ok {
 		t.Error("HostCaps of a host not in the stream")
 	}

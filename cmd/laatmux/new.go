@@ -25,7 +25,7 @@ func cmdNew(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", a.host)
 	}
-	res, err := newSession(ctx, h, protocol.Message{Name: a.name, Cwd: a.cwd, Cmd: a.cmd})
+	res, err := newSession(ctx, h, "", protocol.Message{Name: a.name, Cwd: a.cwd, Cmd: a.cmd})
 	if err != nil {
 		return err
 	}
@@ -36,8 +36,11 @@ func cmdNew(ctx context.Context, args []string) error {
 // newSession asks the host's daemon to make a managed session, as new
 // does and as a jump does for a worktree with none (newHome): m's name,
 // cwd and command, the session tagged with the host's name here. A
-// daemon without the capability is a *noNewError, and nothing is asked.
-func newSession(ctx context.Context, h config.Host, m protocol.Message) (protocol.Message, error) {
+// daemon without the capability is a *noNewError, and nothing is asked;
+// so is one that answers as another environment than env, when env is
+// set: the host entry has moved to another machine since the records the
+// request was resolved from.
+func newSession(ctx context.Context, h config.Host, env string, m protocol.Message) (protocol.Message, error) {
 	c, err := client.Dial(ctx, h.Host)
 	if err != nil {
 		return protocol.Message{}, err
@@ -45,6 +48,9 @@ func newSession(ctx context.Context, h config.Host, m protocol.Message) (protoco
 	defer c.Close()
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapNew) {
 		return protocol.Message{}, &noNewError{host: h.Name, version: c.Hello.Version}
+	}
+	if env != "" && c.Hello.EnvironmentID != env {
+		return protocol.Message{}, fmt.Errorf("answers as environment %s, not %s the request was resolved for", c.Hello.EnvironmentID, env)
 	}
 	m.Type, m.Host = protocol.TypeNew, h.Name
 	return c.Request(ctx, m)

@@ -536,7 +536,7 @@ func TestJumpMakesShellSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn", "proj/split", "proj/sub", "proj/loose", "proj/nest", "proj/rs"))
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn", "proj/split", "proj/sub", "proj/loose", "proj/nest", "proj/rs"))
 	jump := func(target string) (out, cmds, req string, err error) {
 		t.Helper()
 		os.Remove(log)
@@ -603,10 +603,17 @@ func TestJumpMakesShellSession(t *testing.T) {
 	}
 	// A daemon whose hello lacks new, the records' notwithstanding: an
 	// older build answering since.
-	requests = fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged}, &snap, nil)
+	requests = fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged}, &snap, nil)
 	want := "mac/proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one"
 	if out, cmds, req, err := jump("mac/proj/b"); err == nil || err.Error() != want || req != "" || out != "" || cmds != "" {
 		t.Errorf("jump with no new in the hello: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
+	}
+	// A daemon that answers as another machine than the records', the
+	// host entry moved since: nothing is asked of it.
+	requests = fakeNew(t, "other", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, nil)
+	want = "mac: new proj/b: answers as environment other, not menv the request was resolved for"
+	if out, cmds, req, err := jump("mac/proj/b"); err == nil || err.Error() != want || req != "" || out != "" || cmds != "" {
+		t.Errorf("jump to another machine: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
 	}
 }
 

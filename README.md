@@ -776,8 +776,11 @@ workspace session; the next `jump` makes it again.
   agent or a pane of another worktree runs in, or one outside the root;
   that is refused as `add` refuses it, `session <name> runs in <dir>,
   not <root>; name in use`. The view reads the records once `new` has
-  answered, those it had at enter when the stream has the host down by
-  then. A host whose daemon lacks `new`, a branch only shown, a name
+  answered, those it had at enter when the stream has no listing of the
+  worktree's machine by then: the host down, listing again after its
+  entry changed, or the entry reaching another machine. A daemon that
+  answers as another machine than the worktree's is asked nothing. A
+  host whose daemon lacks `new`, a branch only shown, a name
   tmux would not store as given, and a worktree whose agent is
   elsewhere keep the refusal that says how `add` makes one. The shell
   session is the worktree's home from then

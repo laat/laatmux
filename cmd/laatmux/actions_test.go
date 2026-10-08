@@ -1114,15 +1114,15 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 	}
 }
 
-// fakeNew is a fake local daemon with the capabilities given that
-// answers a subscribe with snap, when given, and new: each request goes
-// on the channel returned, then the hook for its name runs, when there
-// is one, and says whether tmux refuses the name as a duplicate; one
-// with no hook is made.
-func fakeNew(t *testing.T, caps []string, snap *protocol.Message, hooks map[string]func() bool) <-chan protocol.Message {
+// fakeNew is a fake local daemon answering as environment env with the
+// capabilities given that answers a subscribe with snap, when given,
+// and new: each request goes on the channel returned, then the hook for
+// its name runs, when there is one, and says whether tmux refuses the
+// name as a duplicate; one with no hook is made.
+func fakeNew(t *testing.T, env string, caps []string, snap *protocol.Message, hooks map[string]func() bool) <-chan protocol.Message {
 	t.Helper()
 	requests := make(chan protocol.Message, 16)
-	startFakeDaemon(t, caps, func(pc *protocol.Conn, m protocol.Message) bool {
+	startFakeDaemonAs(t, env, caps, func(pc *protocol.Conn, m protocol.Message) bool {
 		switch m.Type {
 		case protocol.TypeSubscribe:
 			if snap != nil {
@@ -1175,13 +1175,14 @@ func asked(c <-chan protocol.Message) string {
 // meanwhile, have the add's agent at the root; one another worktree has
 // as its home, or in which an agent or a pane of another worktree runs,
 // by the records once the host has answered, another clone's add's made
-// meanwhile too, is refused as add refuses it, by the records at enter when the stream
-// has the host down by the answer. A user who has moved on meanwhile, to
-// a form or a question or with the client to another session, is left
-// there, the message saying the session is there. A detached worktree, a
-// host whose cached capabilities lack new, and a host the merged state
-// has as down keep the add hint, and nothing is asked; so does a host
-// whose hello lacks new.
+// meanwhile too, is refused as add refuses it, by the records at enter
+// when the stream has no listing of the worktree's machine by the
+// answer. A user who has moved on meanwhile, to a form or a question or
+// with the client to another session, is left there, the message saying
+// the session is there. A detached worktree, a host whose cached
+// capabilities lack new, and a host the merged state has as down keep
+// the add hint, and nothing is asked; so does a host whose hello lacks
+// new. A host that answers as another machine is asked nothing.
 func TestEnterMakesShellSession(t *testing.T) {
 	log := fakeDefaultTmux(t)
 	src, fork := "git@github.com:laat/proj.git", "git@github.com:fork/proj.git"
@@ -1225,16 +1226,16 @@ func TestEnterMakesShellSession(t *testing.T) {
 	hooks := inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn")
 	hooks["proj/race"] = func() bool { d.st.Apply(raced); return true }
 	hooks["proj/late"] = func() bool { d.st.Apply(lated); return true }
-	var downAtAnswer atomic.Bool
-	downAtAnswer.Store(true)
+	// The records the stream has by dc's answer, nil for those at enter.
+	var dcAnswer atomic.Pointer[protocol.Message]
 	hooks["proj/dc"] = func() bool {
-		if downAtAnswer.Load() {
-			d.st.Apply(down)
+		if s := dcAnswer.Load(); s != nil {
+			d.st.Apply(*s)
 		}
 		return true
 	}
 	hooks["proj/slow"] = func() bool { <-release; return false }
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, hooks)
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapNew}, nil, hooks)
 	ends := make(chan func(*view.Model) view.Action, 1)
 	where := "work"
 	d = &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: ends, clientAt: func(context.Context) string { return where }}
@@ -1418,26 +1419,48 @@ func TestEnterMakesShellSession(t *testing.T) {
 			t.Errorf("z on %s: message %q, tmux %q, asked %q", k.w.ID, msg, cmds, req)
 		}
 	}
-	// The stream has the host down by the answer, or already by the
-	// look at the client at enter: the records shellable read place the
-	// session elsewhere.
-	for _, early := range []bool{false, true} {
-		if early {
-			downAtAnswer.Store(false)
+	// The stream has no listing of the worktree's machine by the
+	// answer: the host down, already by the look at the client at enter
+	// or only by the answer; listing again after its entry changed; or
+	// the entry reaching another machine. The records shellable read
+	// place the session elsewhere.
+	relisting, moved := snap, snap
+	relisting.Hosts, moved.Hosts = slices.Clone(snap.Hosts), slices.Clone(snap.Hosts)
+	relisting.Hosts[0].Listed = false
+	relisting.Worktrees, relisting.Agents, relisting.Panes = nil, nil, nil
+	moved.Hosts[0].EnvironmentID = "menv2"
+	for _, c := range []struct {
+		name   string
+		answer *protocol.Message
+		look   bool
+	}{
+		{"down by the look", nil, true},
+		{"down by the answer", &down, false},
+		{"listing again", &relisting, false},
+		{"another machine", &moved, false},
+	} {
+		dcAnswer.Store(c.answer)
+		if c.look {
 			d.clientAt = func(context.Context) string {
 				d.st.Apply(down)
 				return where
 			}
 		}
 		if p := enter(true, dc.ID); p.req != `proj/dc /w/dc mac []` || p.msg != "mac: session proj/dc runs in /w2/dc, not /w/dc; name in use" || p.cmds != "" {
-			t.Errorf("down by the answer, early %v: %+v", early, p)
+			t.Errorf("%s: %+v", c.name, p)
 		}
 		d.st.Apply(snap)
+		d.clientAt = func(context.Context) string { return where }
 	}
-	d.clientAt = func(context.Context) string { return where }
+	// A daemon that answers as another machine than the records', the
+	// host entry moved since: nothing is asked of it.
+	requests = fakeNew(t, "other", []string{protocol.CapStatus, protocol.CapNew}, nil, nil)
+	if p := enter(true, b.ID); p.msg != "mac: new proj/b: answers as environment other, not menv the request was resolved for" || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
+		t.Errorf("another machine: %+v", p)
+	}
 	// A daemon whose hello lacks new, the cached capabilities
 	// notwithstanding: an older build answering since.
-	requests = fakeNew(t, []string{protocol.CapStatus}, nil, nil)
+	requests = fakeNew(t, "menv", []string{protocol.CapStatus}, nil, nil)
 	if p := enter(true, b.ID); p.msg != "mac/proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one" || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
 		t.Errorf("no new in the hello: %+v", p)
 	}

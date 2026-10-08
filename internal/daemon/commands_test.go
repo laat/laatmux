@@ -513,6 +513,7 @@ func TestAgentRunsBesidePolls(t *testing.T) {
 			return
 		default:
 			d.tasks.agentRuns(pane)
+			runtime.Gosched()
 		}
 	}
 }

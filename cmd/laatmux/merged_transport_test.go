@@ -24,8 +24,14 @@ import (
 // the runtime file under a scratch LAATMUX_HOME points at, answering
 // the hello with the given capabilities and every later message
 // through serve, false ending the connection. Dial finds it as it
-// would the real one, and never starts one.
+// would the real one, and never starts one. It answers as environment
+// lenv; startFakeDaemonAs as the one given.
 func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, m protocol.Message) bool) {
+	t.Helper()
+	startFakeDaemonAs(t, "lenv", caps, serve)
+}
+
+func startFakeDaemonAs(t *testing.T, env string, caps []string, serve func(pc *protocol.Conn, m protocol.Message) bool) {
 	t.Helper()
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -33,10 +39,10 @@ func startFakeDaemon(t *testing.T, caps []string, serve func(pc *protocol.Conn, 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	if err := home.WriteRuntime(home.Runtime{Address: "tcp:" + ln.Addr().String(), PID: os.Getpid(), Version: "fake", EnvironmentID: "lenv"}); err != nil {
+	if err := home.WriteRuntime(home.Runtime{Address: "tcp:" + ln.Addr().String(), PID: os.Getpid(), Version: "fake", EnvironmentID: env}); err != nil {
 		t.Fatal(err)
 	}
-	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: "lenv", Version: "fake", Capabilities: caps}, serve)
+	go serveFake(ln, protocol.Message{Type: protocol.TypeHello, Protocol: protocol.Version, EnvironmentID: env, Version: "fake", Capabilities: caps}, serve)
 }
 
 // serveFake accepts on ln until it closes, answering each connection
