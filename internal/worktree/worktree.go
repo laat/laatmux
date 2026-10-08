@@ -229,47 +229,56 @@ type checkout struct{ dir, origin string }
 
 // scan is every main checkout with an origin directly under one of the
 // repos directories, in scan order: the directories in the config's
-// order, each in directory order. A directory listed twice, as written
-// or through a symlink, is scanned once, and a checkout reached twice,
-// through a symlink in a repos directory to another's checkout say, is
-// listed once: each by the path scanned first. A directory that does
-// not exist has no checkouts. Only a symlink is resolved per entry, so
-// a poll over many checkouts costs no more than one directory's.
+// order, each in directory order. A directory that does not exist has
+// no checkouts. A checkout reached twice, by a directory listed twice,
+// as written or through a symlink, or by a symlink in a repos directory
+// to another's checkout, a link left from before the list say, is
+// listed once: by its own path where a repos directory has it as an
+// entry that is no symlink, else by the path scanned first. A symlink
+// leading to it would otherwise label it by the link's name, which the
+// config's name for it does not hold (labels). Only a symlink is
+// resolved per entry, so a poll over many checkouts costs no more than
+// it did.
 func (s *Store) scan(ctx context.Context) ([]checkout, error) {
-	var out []checkout
-	scanned := map[string]bool{} // repos directories, by real path
-	found := map[string]bool{}   // checkouts, by real path
+	type entry struct {
+		dir, real string
+		link      bool
+	}
+	var entries []entry
+	own := map[string]bool{} // by real path, the entries that are no symlink
 	for _, repos := range s.Dirs.Repos {
 		repos = filepath.Clean(repos)
-		real := realPath(repos)
-		if scanned[real] {
-			continue
-		}
-		scanned[real] = true
-		entries, err := os.ReadDir(repos)
+		des, err := os.ReadDir(repos)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, tmux.PrintablePath(err)
 		}
-		for _, e := range entries {
-			dir := filepath.Join(repos, e.Name())
-			key := filepath.Join(real, e.Name())
+		real := realPath(repos)
+		for _, e := range des {
+			en := entry{dir: filepath.Join(repos, e.Name()), real: filepath.Join(real, e.Name())}
 			if e.Type()&fs.ModeSymlink != 0 {
-				key = realPath(dir)
+				en.real, en.link = realPath(en.dir), true
+			} else {
+				own[en.real] = true
 			}
-			if found[key] {
-				continue
-			}
-			url, ok, err := s.origin(ctx, dir)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				found[key] = true
-				out = append(out, checkout{dir, url})
-			}
+			entries = append(entries, en)
+		}
+	}
+	var out []checkout
+	found := map[string]bool{} // by real path
+	for _, en := range entries {
+		if found[en.real] || en.link && own[en.real] {
+			continue
+		}
+		url, ok, err := s.origin(ctx, en.dir)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			found[en.real] = true
+			out = append(out, checkout{en.dir, url})
 		}
 	}
 	return out, nil

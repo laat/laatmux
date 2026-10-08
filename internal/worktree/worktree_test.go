@@ -2276,12 +2276,10 @@ func TestSeveralReposDirs(t *testing.T) {
 	}
 	// A symlink to the nested checkout in the first directory, left from
 	// working around the scan's one level: the checkout is listed once,
-	// by the path scanned first, its worktrees as before.
-	link := filepath.Join(code, "service")
-	if err := os.Symlink(nested, link); err != nil {
+	// by its own path, which the group has, its worktrees as before.
+	if err := os.Symlink(nested, filepath.Join(code, "service")); err != nil {
 		t.Fatal(err)
 	}
-	mains[1].Root = link
 	gotRecs, gotMains, err := f.store.ListAll(f.ctx)
 	if err != nil || !slices.Equal(gotRecs, recs) || !slices.Equal(gotMains, mains) {
 		t.Fatalf("with a symlink to the checkout: worktrees %+v\nmains %+v\n%v", gotRecs, gotMains, err)
@@ -2405,7 +2403,17 @@ func TestReposDirsListedKeepsName(t *testing.T) {
 		{Repo: "proj", Source: f.remote, Branch: "mine", Root: mine},
 		{Repo: "proj-f16526", Source: "/elsewhere/two.git", Branch: "theirs", Root: theirs},
 	}
-	for _, dirs := range [][]string{{a, b}, {b, a}} {
+	// A symlink to the listed checkout in a directory scanned before
+	// either does not take the checkout's place: under the link's name
+	// the config's name would hold nothing.
+	links := filepath.Join(base, "links")
+	if err := os.MkdirAll(links, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(listed, filepath.Join(links, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, dirs := range [][]string{{a, b}, {b, a}, {links, b, a}} {
 		f.store.Dirs.Repos = dirs
 		if recs, err := f.store.List(f.ctx); err != nil || !slices.Equal(recs, want) {
 			t.Fatalf("%q: list %+v, want %+v: %v", dirs, recs, want, err)

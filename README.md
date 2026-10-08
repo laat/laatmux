@@ -218,10 +218,10 @@ checkouts kept in a directory that groups related repositories: each
 is scanned as one is, its direct children with an `origin`, and no
 deeper, so a group is listed by name. A repository found in none of
 them is cloned into the first; worktrees go under the one `worktrees`
-directory whichever directory has the checkout. A directory listed
-twice, also through a symlink, is scanned once, and a checkout reached
-twice, through a symlink in one directory to a checkout in another say,
-is listed once, by the path scanned first. A repository's
+directory whichever directory has the checkout. A checkout reached
+twice, by a directory listed twice or through a symlink, a link in one
+directory to a checkout in another say, is listed once: by its own path
+where a `repos` directory has it, else by the path scanned first. A repository's
 name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
 (`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
