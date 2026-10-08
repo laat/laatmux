@@ -760,11 +760,45 @@ func TestSidebarReap(t *testing.T) {
 			want = append(want, id)
 		}
 	}
-	if err := sidebarReap(ctx); err != nil {
+	if err := sidebarReap(ctx, config.Config{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Fields(run("list-panes", "-a", "-F", "#{pane_id}")); !slices.Equal(got, want) {
 		t.Errorf("panes after reap: %q, want %q", got, want)
+	}
+}
+
+// A pane killed next to the sidebar gives it its columns; reap, which
+// the pane-exited and after-kill-pane hooks run, puts the sidebar back
+// to its width, and leaves one already at it alone.
+func TestSidebarReapRefits(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	window := run("new-session", "-d", "-s", "s", "-x", "160", "-y", "24", "-P", "-F", "#{window_id}", "sleep 1000")
+	main := run("display-message", "-p", "-t", window, "#{pane_id}")
+	side := run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", side, sidebarTag, "1")
+	// A pane between the sidebar and the main pane, then killed: the
+	// sidebar takes its columns.
+	between := run("split-window", "-d", "-h", "-b", "-t", main, "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("kill-pane", "-t", between)
+	width := func() string { return run("display", "-p", "-t", side, "#{pane_width}") }
+	if w := width(); w == "35" {
+		t.Fatalf("the killed pane's columns did not go to the sidebar: %s", w)
+	}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
+	if err := sidebarReap(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if w := width(); w != "35" {
+		t.Fatalf("after reap: %s, want 35", w)
+	}
+	if got := strings.Fields(run("list-panes", "-t", window, "-F", "#{pane_id}")); len(got) != 2 {
+		t.Fatalf("panes after reap: %q", got)
 	}
 }
 
@@ -840,7 +874,7 @@ func TestSidebarListingsHookFails(t *testing.T) {
 	if again, err := scopeSidebar(ctx, true); err != nil || again != target || exists(otherPane) || !exists(fittedPane) {
 		t.Errorf("on --session: %q %v, want %q; the other session's sidebar there %v, this one's %v", again, err, target, exists(otherPane), exists(fittedPane))
 	}
-	if err := sidebarReap(ctx); err != nil || exists(alonePane) {
+	if err := sidebarReap(ctx, config.Config{}); err != nil || exists(alonePane) {
 		t.Errorf("reap: %v, the sidebar alone in its window there %v", err, exists(alonePane))
 	}
 	if err := sidebarOff(ctx); err != nil || exists(fittedPane) {

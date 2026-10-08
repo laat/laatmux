@@ -56,6 +56,8 @@ const sessionsTag = "@laatmux_sidebar_sessions"
 var sidebarHooks = []struct{ hook, cmd string }{
 	{"after-new-window[9101]", "sidebar attach '#{window_id}' '#{session_id}'"},
 	{"after-new-session[9102]", "sidebar attach '#{window_id}' '#{session_id}'"},
+	// A pane that goes gives its columns to a neighbour, the sidebar
+	// when it sat next to it: reap fits the sidebars back as well.
 	{"pane-exited[9103]", "sidebar reap"},
 	{"after-kill-pane[9104]", "sidebar reap"},
 	{"window-resized[9105]", "sidebar fit '#{window_id}'"},
@@ -117,7 +119,14 @@ func cmdSidebar(ctx context.Context, args []string) error {
 		}
 		return sidebarFit(ctx, cfg, args[0])
 	case "reap":
-		return sidebarReap(ctx)
+		// As fit: a broken config must not open an error over the
+		// user's pane on every pane that goes; the sidebars are then
+		// reaped and not refitted.
+		cfg, err := config.Load()
+		if err != nil {
+			cfg = config.Config{}
+		}
+		return sidebarReap(ctx, cfg)
 	case "seen":
 		return sidebarSeen(ctx)
 	}
@@ -405,11 +414,14 @@ func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 
 // sidebarReap kills a sidebar pane that is alone in its window, so a
 // window whose real pane exited closes at once instead of surviving as
-// a sidebar. A dead pane kept by remain-on-exit, such as a workspace's
-// attach pane, still counts as the window's: jump respawns it. It takes
-// the lock so it never runs between a split and its tag, where it
-// would see a live untagged pane, leave the window, and not run again.
-func sidebarReap(ctx context.Context) error {
+// a sidebar, and puts the sidebars that stay back to their width: a
+// pane that goes gives its columns to a neighbour, and when that was
+// the sidebar it would keep them. A dead pane kept by remain-on-exit,
+// such as a workspace's attach pane, still counts as the window's: jump
+// respawns it. It takes the lock so it never runs between a split and
+// its tag, where it would see a live untagged pane, leave the window,
+// and not run again.
+func sidebarReap(ctx context.Context, cfg config.Config) error {
 	unlock, err := sidebarLock()
 	if err != nil {
 		return err
@@ -425,12 +437,18 @@ func sidebarReap(ctx context.Context) error {
 			alive[p.window] = true
 		}
 	}
+	var kept []string
 	for _, p := range panes {
 		// A dead sidebar pane is never wanted: its process is gone and
 		// the tag would keep attach from adding a live one.
 		if p.sidebar && (!alive[p.window] || p.dead) {
 			_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", p.id)
+		} else if p.sidebar {
+			kept = append(kept, p.window)
 		}
+	}
+	for _, w := range kept {
+		_ = fitWindow(ctx, cfg, w)
 	}
 	reapSockets(ctx)
 	return nil
@@ -483,6 +501,12 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 		return err
 	}
 	defer unlock()
+	return fitWindow(ctx, cfg, window)
+}
+
+// fitWindow is sidebarFit under a lock already held: reap's, after a
+// pane went.
+func fitWindow(ctx context.Context, cfg config.Config, window string) error {
 	size := "#{pane_width}"
 	if cfg.Sidebar.Top() {
 		size = "#{pane_height}"
