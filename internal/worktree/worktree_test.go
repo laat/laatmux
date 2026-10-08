@@ -2251,7 +2251,11 @@ func TestSeveralReposDirs(t *testing.T) {
 		{Repo: "other", Source: "/elsewhere/other.git", Branch: "main", Root: other, Main: true},
 		{Repo: "proj", Source: f.remote, Branch: "main", Root: nested, Main: true, Configured: true, Linked: true},
 	}
-	for _, dirs := range [][]string{{code, group}, {filepath.Join(base, "absent"), code, group, code + "/"}} {
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(code, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, dirs := range [][]string{{code, group}, {filepath.Join(base, "absent"), code, group, code + "/", alias}} {
 		f.store.Dirs.Repos = dirs
 		gotRecs, gotMains, err := f.store.ListAll(f.ctx)
 		if err != nil || !slices.Equal(gotRecs, recs) || !slices.Equal(gotMains, mains) {
@@ -2269,6 +2273,18 @@ func TestSeveralReposDirs(t *testing.T) {
 	}
 	if ok, err := f.store.IsCheckout(f.ctx, nested); err != nil || !ok {
 		t.Fatalf("is checkout: %v %v", ok, err)
+	}
+	// A symlink to the nested checkout in the first directory, left from
+	// working around the scan's one level: the checkout is listed once,
+	// by the path scanned first, its worktrees as before.
+	link := filepath.Join(code, "service")
+	if err := os.Symlink(nested, link); err != nil {
+		t.Fatal(err)
+	}
+	mains[1].Root = link
+	gotRecs, gotMains, err := f.store.ListAll(f.ctx)
+	if err != nil || !slices.Equal(gotRecs, recs) || !slices.Equal(gotMains, mains) {
+		t.Fatalf("with a symlink to the checkout: worktrees %+v\nmains %+v\n%v", gotRecs, gotMains, err)
 	}
 }
 
@@ -2363,4 +2379,43 @@ func TestReposDirsLabelCollision(t *testing.T) {
 	_, plain := clone(c, "next_js", "/elsewhere/five.git", "plain")
 	list(againRec, Record{Repo: "next_js-06a376", Source: "/elsewhere/hand.git", Branch: "dot", Root: dot}, oneRec,
 		Record{Repo: "next_js", Source: "/elsewhere/five.git", Branch: "plain", Root: plain}, twoRec)
+}
+
+// A checkout of the config's repository whose directory is named as the
+// config names it keeps the name against a checkout of another
+// repository named so in another repos directory, whichever directory
+// is first: the other gets the hash, logged once, and Known by the name
+// is the config's repository rather than a refusal.
+func TestReposDirsListedKeepsName(t *testing.T) {
+	f := newFixture(t)
+	var logged bytes.Buffer
+	f.store.Log = log.New(&logged, "", 0)
+	base := filepath.Dir(f.store.Dirs.Repos[0])
+	a, b := filepath.Join(base, "a"), filepath.Join(base, "b")
+	listed := filepath.Join(a, "proj")
+	run(t, base, "git", "clone", "-q", f.remote, listed)
+	mine := f.store.Dirs.Worktree("proj", "mine")
+	run(t, listed, "git", "worktree", "add", "-q", "-b", "mine", mine)
+	hand := filepath.Join(b, "proj")
+	run(t, base, "git", "clone", "-q", f.remote, hand)
+	run(t, hand, "git", "remote", "set-url", "origin", "/elsewhere/two.git")
+	theirs := f.store.Dirs.Worktree("theirs", "w")
+	run(t, hand, "git", "worktree", "add", "-q", "-b", "theirs", theirs)
+	want := []Record{
+		{Repo: "proj", Source: f.remote, Branch: "mine", Root: mine},
+		{Repo: "proj-f16526", Source: "/elsewhere/two.git", Branch: "theirs", Root: theirs},
+	}
+	for _, dirs := range [][]string{{a, b}, {b, a}} {
+		f.store.Dirs.Repos = dirs
+		if recs, err := f.store.List(f.ctx); err != nil || !slices.Equal(recs, want) {
+			t.Fatalf("%q: list %+v, want %+v: %v", dirs, recs, want, err)
+		}
+		if r, ok, err := f.store.Known(f.ctx, "proj"); err != nil || !ok || r.Source != f.remote {
+			t.Fatalf("%q: known proj: %+v %v %v", dirs, r, ok, err)
+		}
+	}
+	line := hand + " is labelled proj-f16526: the label its name makes is " + listed + "'s"
+	if strings.Count(logged.String(), "\n") != 1 || !strings.Contains(logged.String(), line) {
+		t.Fatalf("logged %q, want once %q", logged.String(), line)
+	}
 }

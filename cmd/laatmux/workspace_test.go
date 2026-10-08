@@ -355,8 +355,8 @@ func TestLabelUnderNested(t *testing.T) {
 	}
 	// With a group directory listed after the one it is in, a checkout
 	// in the group is labelled from the group, and every repos directory
-	// counts, whatever its place in the list.
-	cfg.Hosts[0].Repos = config.Paths{"/src", "/src/group", "/other"}
+	// counts, whatever its place in the list, written with a trailing /
+	// or not.
 	cases = map[string]string{
 		"/src/group/svc/sub":        "svc",
 		"/src/group":                "",
@@ -364,10 +364,13 @@ func TestLabelUnderNested(t *testing.T) {
 		"/other/tool":               "tool",
 		"/src/worktrees/proj/topic": "proj",
 	}
-	for dir, want := range cases {
-		got, ok := labelUnder(cfg, dir)
-		if got != want || ok != (want != "") {
-			t.Errorf("several repos directories: labelUnder(%q) = %q, %v; want %q", dir, got, ok, want)
+	for _, repos := range []config.Paths{{"/src", "/src/group", "/other"}, {"/src/", "/src/group/", "/other/"}} {
+		cfg.Hosts[0].Repos = repos
+		for dir, want := range cases {
+			got, ok := labelUnder(cfg, dir)
+			if got != want || ok != (want != "") {
+				t.Errorf("%q: labelUnder(%q) = %q, %v; want %q", repos, dir, got, ok, want)
+			}
 		}
 	}
 }

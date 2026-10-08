@@ -106,7 +106,12 @@ func labelUnder(cfg config.Config, dir string) (string, bool) {
 		return "", false
 	}
 	d = d.Expand()
-	bases := append(d.Repos, d.Worktrees)
+	// Cleaned, so a directory written with a trailing / is matched, and
+	// is longer than the one it is in only by the path between them.
+	var bases []string
+	for _, b := range append(d.Repos, d.Worktrees) {
+		bases = append(bases, filepath.Clean(b))
+	}
 	sort.SliceStable(bases, func(i, j int) bool { return len(bases[i]) > len(bases[j]) })
 	for _, base := range bases {
 		if rest, ok := strings.CutPrefix(dir+"/", base+"/"); ok {

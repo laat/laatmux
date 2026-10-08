@@ -75,9 +75,13 @@ type Host struct {
 // and an empty string is none.
 type Paths []string
 
-// UnmarshalYAML reads a list, or a scalar as a list of one.
+// UnmarshalYAML reads a list, or a scalar as a list of one. A list's
+// items are read one by one, a null one as "" in its place, which
+// validation refuses: decoded as a []string, yaml would drop it, and
+// add would clone into what was the second directory.
 func (p *Paths) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode {
+	switch value.Kind {
+	case yaml.ScalarNode:
 		var s string
 		if err := value.Decode(&s); err != nil {
 			return err
@@ -87,13 +91,19 @@ func (p *Paths) UnmarshalYAML(value *yaml.Node) error {
 			*p = Paths{s}
 		}
 		return nil
+	case yaml.SequenceNode:
+		list := make(Paths, len(value.Content))
+		for i, n := range value.Content {
+			if err := n.Decode(&list[i]); err != nil {
+				return err
+			}
+		}
+		*p = list
+		return nil
 	}
+	// A mapping: yaml's error says what it is.
 	var list []string
-	if err := value.Decode(&list); err != nil {
-		return err
-	}
-	*p = list
-	return nil
+	return value.Decode(&list)
 }
 
 // Dirs is a host's checkout and worktree directories: one repos
@@ -582,7 +592,7 @@ func (c *Config) validateHosts() error {
 		var dirs [][2]string
 		for j, r := range h.Repos {
 			if r == "" {
-				return fmt.Errorf("hosts: %s: repos entry %d is empty", h.Name, j+1)
+				return fmt.Errorf("hosts: %s: repos entry %d is empty; a bare ~ is YAML's null, the home directory is \"~\"", h.Name, j+1)
 			}
 			dirs = append(dirs, [2]string{"repos", r})
 		}

@@ -218,7 +218,10 @@ checkouts kept in a directory that groups related repositories: each
 is scanned as one is, its direct children with an `origin`, and no
 deeper, so a group is listed by name. A repository found in none of
 them is cloned into the first; worktrees go under the one `worktrees`
-directory whichever directory has the checkout. A repository's
+directory whichever directory has the checkout. A directory listed
+twice, also through a symlink, is scanned once, and a checkout reached
+twice, through a symlink in one directory to a checkout in another say,
+is listed once, by the path scanned first. A repository's
 name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
 (`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
@@ -318,10 +321,11 @@ truth; labels only place new things.
   and six hex digits of a hash of its origin after it, which the daemon
   logs once. Two checkouts of different repositories named alike in two
   `repos` directories, `~/code/api` and `~/code/group/api` say, are
-  told apart the same way: the one in the directory listed first keeps
-  `api`, the other gets the hash. Clones of one repository share their
-  label. Listing either repository in the host's config with a `name`
-  settles it. The laptop's views show the
+  told apart the same way: a checkout of the config's repository named
+  `api` whose directory is named `api` keeps the label, else the one in
+  the directory listed first, and the other gets the hash. Clones of
+  one repository share their label. Listing either repository in the
+  host's config with a `name` settles it. The laptop's views show the
   laptop's own name for a source it knows. Prunable entries, whose
   directory is gone, are not published; a detached worktree has an
   empty branch. A branch checked out by hand that laatmux cannot carry,
@@ -414,7 +418,7 @@ truth; labels only place new things.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
   stages in the note, each step skipped by inspection: resolve (a
   checkout in any `repos` directory), clone (into the first `repos`
-  directory, refused when `<repos>/<name>` exists with another origin),
+  directory, refused when `<first>/<name>` exists with another origin),
   fetch,
   worktree (`set-head --auto` and prune; a remote branch is tracked, an
   existing local branch used as is, a new one made with `--no-track` from

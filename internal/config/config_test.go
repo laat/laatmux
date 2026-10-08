@@ -188,14 +188,17 @@ func TestParseReposDirs(t *testing.T) {
 		t.Errorf("an empty repos: %q, can add %v", h.Repos, h.CanAdd())
 	}
 	rejects := map[string]string{
-		"repos: []\n    worktrees: ~/wt":                 "h has worktrees but not repos",
-		"repos: [~/code, group]\n    worktrees: ~/wt":    "h: repos \"group\" must be absolute or start with ~",
-		"repos: [~/code, \"\"]\n    worktrees: ~/wt":     "h: repos entry 2 is empty",
-		"repos: {dir: ~/code}\n    worktrees: ~/wt":      "cannot unmarshal",
-		"repos: [~/code, [~/x]]\n    worktrees: ~/wt":    "cannot unmarshal",
-		"repos: [~/code, /src]\n    worktrees: wt":       "h: worktrees \"wt\" must be absolute or start with ~",
-		"repos: [~/code, /src]":                          "h has repos but not worktrees",
-		"repos: [~/code, ~user/src]\n    worktrees: ~/w": "repos \"~user/src\" must be absolute",
+		"repos: []\n    worktrees: ~/wt":                     "h has worktrees but not repos",
+		"repos: [~/code, group]\n    worktrees: ~/wt":        "h: repos \"group\" must be absolute or start with ~",
+		"repos: [~/code, \"\"]\n    worktrees: ~/wt":         "h: repos entry 2 is empty",
+		"repos: [null, /src]\n    worktrees: ~/wt":           "h: repos entry 1 is empty",
+		"repos:\n      -\n      - /src\n    worktrees: ~/wt": "h: repos entry 1 is empty",
+		"repos: [/src, ~]\n    worktrees: ~/wt":              "h: repos entry 2 is empty; a bare ~ is YAML's null, the home directory is \"~\"",
+		"repos: {dir: ~/code}\n    worktrees: ~/wt":          "cannot unmarshal",
+		"repos: [~/code, [~/x]]\n    worktrees: ~/wt":        "cannot unmarshal",
+		"repos: [~/code, /src]\n    worktrees: wt":           "h: worktrees \"wt\" must be absolute or start with ~",
+		"repos: [~/code, /src]":                              "h has repos but not worktrees",
+		"repos: [~/code, ~user/src]\n    worktrees: ~/w":     "repos \"~user/src\" must be absolute",
 	}
 	for in, want := range rejects {
 		_, err := Parse([]byte("hosts:\n  - name: h\n    " + in + "\n"))

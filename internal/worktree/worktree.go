@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -228,17 +229,23 @@ type checkout struct{ dir, origin string }
 
 // scan is every main checkout with an origin directly under one of the
 // repos directories, in scan order: the directories in the config's
-// order, each in directory order. A directory listed twice is scanned
-// once; one that does not exist has no checkouts.
+// order, each in directory order. A directory listed twice, as written
+// or through a symlink, is scanned once, and a checkout reached twice,
+// through a symlink in a repos directory to another's checkout say, is
+// listed once: each by the path scanned first. A directory that does
+// not exist has no checkouts. Only a symlink is resolved per entry, so
+// a poll over many checkouts costs no more than one directory's.
 func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 	var out []checkout
-	scanned := map[string]bool{}
+	scanned := map[string]bool{} // repos directories, by real path
+	found := map[string]bool{}   // checkouts, by real path
 	for _, repos := range s.Dirs.Repos {
 		repos = filepath.Clean(repos)
-		if scanned[repos] {
+		real := realPath(repos)
+		if scanned[real] {
 			continue
 		}
-		scanned[repos] = true
+		scanned[real] = true
 		entries, err := os.ReadDir(repos)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -248,16 +255,33 @@ func (s *Store) scan(ctx context.Context) ([]checkout, error) {
 		}
 		for _, e := range entries {
 			dir := filepath.Join(repos, e.Name())
+			key := filepath.Join(real, e.Name())
+			if e.Type()&fs.ModeSymlink != 0 {
+				key = realPath(dir)
+			}
+			if found[key] {
+				continue
+			}
 			url, ok, err := s.origin(ctx, dir)
 			if err != nil {
 				return nil, err
 			}
 			if ok {
+				found[key] = true
 				out = append(out, checkout{dir, url})
 			}
 		}
 	}
 	return out, nil
+}
+
+// realPath is p with its symlinks resolved, as resolveExisting resolves
+// them, or p as it is where they cannot be.
+func realPath(p string) string {
+	if real, ok := resolveExisting(p); ok {
+		return real
+	}
+	return p
 }
 
 // dirLabel is the label of a checkout the config does not list, from
@@ -306,9 +330,10 @@ func dirLabel(name string) string {
 // whose own name is the config's name for another repository keeps it,
 // as the user named it: Known refuses that label, naming both sources.
 // A name that is a label is the checkout's own but where a checkout of
-// another repository in an earlier repos directory is named so too, as
-// one directory cannot have two: the later one's label then has the
-// hash after it, the earlier keeping the plain label.
+// another repository in another repos directory is named so too, as one
+// directory cannot have two: a checkout of the config's repository
+// named as the config names it keeps the plain label, else the first in
+// scan order, and the other's label has the hash after it.
 func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held map[string]checkout) {
 	out = make(map[string]Repo, len(cos))
 	held = map[string]checkout{}
@@ -316,8 +341,19 @@ func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held m
 	for _, r := range repos {
 		holders[r.Name] = checkout{origin: r.Source}
 	}
-	named := map[string]checkout{} // by name, the first unlisted checkout named so
-	var made []checkout            // unlisted checkouts whose name is not a label
+	// By name, the checkout named so that keeps it against one named so
+	// in another repos directory: a checkout of the config's repository
+	// whose directory is named as the config names it, wherever it is,
+	// else the first in scan order.
+	named := map[string]checkout{}
+	for _, co := range cos {
+		if r, listed := repos.BySource(co.origin); listed && filepath.Base(co.dir) == r.Name {
+			if _, ok := named[r.Name]; !ok {
+				named[r.Name] = co
+			}
+		}
+	}
+	var made []checkout // unlisted checkouts whose name is not a label
 	for _, co := range cos {
 		if r, listed := repos.BySource(co.origin); listed {
 			out[co.dir] = r
@@ -331,7 +367,7 @@ func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held m
 		if f, ok := named[name]; !ok {
 			named[name] = co
 		} else if !source.Same(f.origin, co.origin) {
-			// A checkout of another repository named so in an earlier
+			// A checkout of another repository named so in another
 			// repos directory: one directory cannot have two.
 			held[co.dir] = f
 			out[co.dir] = Repo{Source: co.origin, Name: hashed(name, co.origin)}
