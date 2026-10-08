@@ -383,6 +383,25 @@ func edited(s string, k term.Key) string {
 		if r := []rune(s); len(r) > 0 {
 			return string(r[:len(r)-1])
 		}
+	case term.KeyCtrl:
+		// The readline chords of a one-line field whose cursor is at
+		// its end: Ctrl-U clears it, Ctrl-W takes the last word, a
+		// branch's last segment after its - or /.
+		switch k.Rune {
+		case 'u':
+			return ""
+		case 'w':
+			r := []rune(s)
+			i := len(r)
+			sep := func(c rune) bool { return c == ' ' || c == '-' || c == '/' }
+			for i > 0 && sep(r[i-1]) {
+				i--
+			}
+			for i > 0 && !sep(r[i-1]) {
+				i--
+			}
+			return string(r[:i])
+		}
 	}
 	return s
 }
