@@ -140,6 +140,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds, host)
 	watchConfig(ctx, w, configPoll, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, taker.failed)
+	d.cmds = cmds
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.
@@ -349,71 +350,53 @@ func fill(v *view.Model, s merged.Status) {
 // does the same through a plain attachment; an observed agent on this
 // machine's default server is a switch-client; one on a remote host's
 // default server is refused as jump refuses it. A worktree with no
-// session and no agent gets a managed session with a shell at its root
-// first, on a host whose daemon has new by the capabilities st has
-// cached for it (shellable); elsewhere it cannot be jumped to, and the
-// message says how add would start one. What was made is returned for
-// the message, and is said before an error after it, since the session
-// is there. A orphaned row's session exists locally and is switched to.
-// The view is meant to run inside the default tmux server, where
-// switch-client is allowed; run elsewhere, a dashboard in a plain
-// terminal say, the message says how to attach instead.
-func jumpRow(ctx context.Context, cfg config.Config, st *merged.State, r rows.Row) (made string, err error) {
+// session and no agent is refused here, the refusal saying how add would
+// start one (*noHome); the view makes its managed session instead where
+// the host can (dash.makeHome). A orphaned row's session exists locally
+// and is switched to. The view is meant to run inside the default tmux
+// server, where switch-client is allowed; run elsewhere, a dashboard in a
+// plain terminal say, the message says how to attach instead.
+func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Orphaned {
-		return "", switchTo(ctx, r.Local.Name)
+		return switchTo(ctx, r.Local.Name)
 	}
 	spec, session, err := jumpTarget(cfg, r)
-	if nh, records, ok := shellable(st, err); ok {
-		made, err = newHome(ctx, nh.h, nh.w, nh.name, records)
-		if noNew(err) {
-			// An older build answers for the host since its hello was
-			// cached: the refusal stands.
-			err = nh
-		}
-		w := nh.w
-		w.Session = nh.name
-		spec = worktreeSpec(nh.h, w)
-	}
 	if err != nil {
-		return "", err
+		return err
 	}
 	if session != "" {
-		return "", switchTo(ctx, session)
+		return switchTo(ctx, session)
 	}
-	after := func(err error) error {
-		if made == "" {
-			return err
-		}
-		return fmt.Errorf("%s; %w", made, err)
-	}
-	// A session Ensure read from a listing a user's hook failed after is
-	// there; the view has no line for the hook's error (warnHook).
+	return ensureSwitch(ctx, spec)
+}
+
+// ensureSwitch makes or finds the workspace session and switches to it,
+// the end of a jump to one. A session Ensure read from a listing a
+// user's hook failed after is there; the view has no line for the hook's
+// error (warnHook).
+func ensureSwitch(ctx context.Context, spec workspace.Spec) error {
 	name, _, err := workspace.Ensure(ctx, spec)
 	if err != nil && !tmux.HookOnly(err) {
-		return "", after(err)
+		return err
 	}
-	if err := switchTo(ctx, name); err != nil {
-		return "", after(err)
-	}
-	return made, nil
+	return switchTo(ctx, name)
 }
 
 // shellable is a jump's refusal of a worktree with no home and no agent
-// that the jump makes a managed session for instead: one shellSession
+// that the view makes a managed session for instead: one shellSession
 // names a session for, on a host whose daemon has new by the
-// capabilities st has cached for it, with the host's records, which
-// newHome reads a name in use by. A host st has as down, or that never
-// answered, is not dialled, and the refusal stands.
-func shellable(st *merged.State, err error) (*noHome, []protocol.Worktree, bool) {
+// capabilities st has cached for it. A host st has as down, or that
+// never answered, is not dialled, and the refusal stands.
+func shellable(st *merged.State, err error) (*noHome, bool) {
 	var nh *noHome
 	if st == nil || !errors.As(err, &nh) || nh.name == "" {
-		return nil, nil, false
+		return nil, false
 	}
-	hello, snap, ok, err := st.HostSnapshot(nh.h.Name)
+	hello, _, ok, err := st.HostSnapshot(nh.h.Name)
 	if !ok || err != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
-		return nil, nil, false
+		return nil, false
 	}
-	return nh, snap.Worktrees, true
+	return nh, true
 }
 
 // jumpTarget is where jumpRow takes a row that is not orphaned: what
@@ -488,7 +471,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 }
 
 // noHome is rowSpec's refusal of a worktree with no home and no agent,
-// which says how add makes one (addHint). jumpRow makes one instead,
+// which says how add makes one (addHint). The view makes one instead,
 // with a shell, where the host's daemon can (shellable); name is the
 // session it makes, shellSession's, "" for none.
 type noHome struct {

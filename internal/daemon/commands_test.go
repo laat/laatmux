@@ -419,6 +419,35 @@ func TestAddThenRm(t *testing.T) {
 	}
 }
 
+// A session in the root made with the user's shell, as a jump makes one
+// for a worktree with none, is not taken up while no agent has been
+// identified in it: add refuses at the agent stage, saying how to start
+// the agent there, and the worktree is left. One whose shell runs an
+// agent the daemon has identified is taken up as any session in the
+// root is.
+func TestAddShellSession(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	root := store.Dirs.Worktree("proj", "task")
+	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%9", Cwd: root, Managed: true, NoCmd: true}}
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, _ := result(t, pc, "c1")
+	if want := "session proj/task in " + root + " has a shell and no agent; start claude in it, or exit that shell and add again"; res.OK || res.Stage != protocol.StageAgent || !strings.Contains(res.Error, want) || res.Root != root {
+		t.Fatalf("result %+v, want %q", res, want)
+	}
+	if len(ft.panes) != 1 {
+		t.Fatalf("panes %+v", ft.panes)
+	}
+	d.mu.Lock()
+	d.panes[paneKey("laatmux", "%9")] = &paneState{observed: true}
+	d.mu.Unlock()
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, progress := result(t, pc, "c2")
+	if !res.OK || res.Session != "proj/task" || res.PaneID != "%9" || !hasProgress(progress, protocol.StageAgent, protocol.StateSkip, "session proj/task runs in "+root) {
+		t.Fatalf("with an agent: result %+v progress %+v", res, progress)
+	}
+}
+
 // A session with the intended name whose pane records another root is a
 // name in use; nothing is adopted and the worktree is left for a retry.
 func TestAddNameInUse(t *testing.T) {

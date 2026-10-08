@@ -142,11 +142,11 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	cfg := config.Config{Hosts: []config.Host{{Host: peer.Host{Name: "vm", SSH: "vm"}}}}
 	w := protocol.Worktree{ID: "venv/worktree//w/a", EnvironmentID: "venv", Repo: "proj", Branch: "a", Root: "/w/a"}
 	a := protocol.Agent{ID: "venv/default/%1", EnvironmentID: "venv", Server: "default", Session: "notes", WorktreeID: w.ID}
-	_, err := jumpRow(context.Background(), cfg, nil, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
+	err := jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w, Agent: &a})
 	if err == nil || !strings.Contains(err.Error(), "only observes") {
 		t.Fatalf("jump through the agent: %v", err)
 	}
-	_, err = jumpRow(context.Background(), cfg, nil, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w})
+	err = jumpRow(context.Background(), cfg, rows.Row{Host: "vm", Name: "proj/a", Worktree: &w})
 	if err == nil || !strings.Contains(err.Error(), "has no managed session") {
 		t.Fatalf("no agent: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestJumpRowMainCheckout(t *testing.T) {
 	if _, _, err := rowSpec(cfg, vm, rows.Row{Kind: rows.KindWorktree, Host: "vm", Worktree: &w, Agent: &a}); err == nil || !strings.Contains(err.Error(), "only observes") {
 		t.Fatalf("remote: %v", err)
 	}
-	_, err = jumpRow(context.Background(), cfg, nil, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/main", Worktree: &w})
+	err = jumpRow(context.Background(), cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/main", Worktree: &w})
 	if err == nil || err.Error() != "mac/proj/main is the main checkout, and no agent runs in it" {
 		t.Fatalf("no agent: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestDashEnsureHookFails(t *testing.T) {
 		root := "/w/proj/" + branch
 		return &protocol.Worktree{ID: "menv/worktree/" + root, EnvironmentID: "menv", Repo: "proj", Branch: branch, Root: root, Session: "proj/" + branch}
 	}
-	if _, err := jumpRow(ctx, cfg, nil, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/a", Worktree: worktree("a")}); err == nil || !strings.Contains(err.Error(), "; attach with: ") {
+	if err := jumpRow(ctx, cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/a", Worktree: worktree("a")}); err == nil || !strings.Contains(err.Error(), "; attach with: ") {
 		t.Errorf("jump: %v, want the attach hint", err)
 	}
 	a := &protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", PaneID: "%1"}
@@ -466,36 +466,52 @@ func TestAddHintCanRun(t *testing.T) {
 // host's daemon for one, named as add names it, by the host's label and
 // the branch encoded, at the root, with no command; then makes the
 // workspace session attached to it, switches there, and says what it
-// made. A name in use, a session made since the listing, is attached,
-// but not one the records have as another worktree's home. A branch
-// only shown, a worktree whose agent is elsewhere, a host whose daemon
-// lacks new, by the records or by its hello, keep the add hint, and
-// nothing is made.
+// made. A name in use that no record places elsewhere, a session made
+// since the listing, is attached; one another worktree has as its home,
+// or in which an agent or a pane of another worktree runs, is refused as
+// add refuses it. A branch only shown, flagged or with U+FFFD from an
+// older daemon, a name tmux would not store as given, a worktree whose
+// agent is on a default server or in a managed session that lost its
+// home, a host whose daemon lacks new, by the records or by its hello,
+// keep the add hint, and nothing is made.
 func TestJumpMakesShellSession(t *testing.T) {
 	log := fakeDefaultTmux(t)
-	src := "git@github.com:laat/proj.git"
+	src, fork := "git@github.com:laat/proj.git", "git@github.com:fork/proj.git"
 	wt := func(env, repo, branch, root string) protocol.Worktree {
 		return protocol.Worktree{ID: env + "/worktree/" + root, EnvironmentID: env, Repo: repo, Source: src, Branch: branch, Root: root}
 	}
-	b, dotted, taken, clone, busy := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "a.b$c", "/w/ab"), wt("menv", "proj", "taken", "/w/taken"), wt("menv", "proj", "clone", "/w/clone"), wt("menv", "proj", "busy", "/w/busy")
+	b, dotted, taken, busy, rooted := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "a.b$c", "/w/ab"), wt("menv", "proj", "taken", "/w/taken"), wt("menv", "proj", "busy", "/w/busy"), wt("menv", "proj", "rooted", "/w/rooted")
 	c := wt("menv", "proj-host", "c", "/w/c")
-	other := wt("menv", "proj", "clone", "/w2/clone")
-	other.Source, other.Session = "git@github.com:fork/proj.git", "proj/clone"
+	// Another clone's worktrees on the branches of clone, lost and pn,
+	// whose sessions are named as theirs would be: its home, its agent
+	// with the home lost, a pane of it.
+	clone, lost, pn := wt("menv", "proj", "clone", "/w/clone"), wt("menv", "proj", "lost", "/w/lost"), wt("menv", "proj", "pn", "/w/pn")
+	other, otherLost, otherPn := wt("menv", "proj", "clone", "/w2/clone"), wt("menv", "proj", "lost", "/w2/lost"), wt("menv", "proj", "pn", "/w2/pn")
+	other.Source, otherLost.Source, otherPn.Source, other.Session = fork, fork, fork, "proj/clone"
 	shown := wt("menv", "proj", `"a\xffb"`, "/w/hand")
 	shown.BranchDisplayOnly = true
+	mangled := wt("menv", "proj", "a�b", "/w/mangled")
+	// An older host labels a checkout its config does not list by its
+	// directory, a . kept.
+	dir := wt("menv", "next.js", "nb", "/w/nb")
 	onBox := wt("benv", "proj", "b", "/w/b")
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
 		{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: caps[:3]},
-	}, Worktrees: []protocol.Worktree{b, dotted, taken, clone, busy, c, other, shown, onBox},
-		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: busy.ID, Cwd: busy.Root}}}
+	}, Worktrees: []protocol.Worktree{b, dotted, taken, busy, rooted, c, clone, lost, pn, other, otherLost, otherPn, shown, mangled, dir, onBox},
+		Agents: []protocol.Agent{
+			{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: busy.ID, Cwd: busy.Root},
+			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "old/rooted", Agent: "claude", Managed: true, WorktreeID: rooted.ID, Cwd: rooted.Root},
+			{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/lost", Agent: "claude", Managed: true, WorktreeID: otherLost.ID, Cwd: otherLost.Root},
+		},
+		Panes: []protocol.Pane{{ID: "menv/pane/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "proj/pn", PaneID: "%4", Cwd: "/w2/pn/src", WorktreeID: otherPn.ID}}}
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nagents:\n  claude: {cmd: [claude]}\n  codex: {cmd: [codex]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, "proj/taken", "proj/clone")
+	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, "proj/taken", "proj/clone", "proj/lost", "proj/pn")
 	jump := func(target string) (out, cmds, req string, err error) {
 		t.Helper()
 		os.Remove(log)
@@ -531,12 +547,22 @@ func TestJumpMakesShellSession(t *testing.T) {
 			}
 		}
 	}
-	if out, cmds, req, err := jump("mac/proj/clone"); err == nil || err.Error() != "mac: session proj/clone is the worktree's at /w2/clone; name in use" || req != `proj/clone /w/clone mac []` || out != "" || cmds != "" {
-		t.Errorf("another worktree's home: %v, asked %q, printed %q, tmux %q", err, req, out, cmds)
+	for _, k := range []struct{ target, req, in, root string }{
+		{"mac/proj/clone", `proj/clone /w/clone mac []`, "/w2/clone", "/w/clone"},
+		{"mac/proj/lost", `proj/lost /w/lost mac []`, "/w2/lost", "/w/lost"},
+		{"mac/proj/pn", `proj/pn /w/pn mac []`, "/w2/pn/src", "/w/pn"},
+	} {
+		want := "mac: session " + strings.TrimPrefix(k.target, "mac/") + " runs in " + k.in + ", not " + k.root + "; name in use"
+		if out, cmds, req, err := jump(k.target); err == nil || err.Error() != want || req != k.req || out != "" || cmds != "" {
+			t.Errorf("jump %s: %v, asked %q, printed %q, tmux %q; want %q", k.target, err, req, out, cmds, want)
+		}
 	}
 	hints := map[string]string{
 		"mac/proj/busy":     "mac/proj/busy has no managed session; laatmux add busy --repo proj --host mac --agent claude makes one",
+		"mac/proj/rooted":   "mac/proj/rooted has no managed session; laatmux add rooted --repo proj --host mac --agent claude makes one",
 		`mac/proj/"a\xffb"`: `mac/proj/"a\xffb" has no managed session; laatmux add makes one once a branch laatmux can carry, valid UTF-8 without U+FFFD, is checked out in /w/hand instead of "a\xffb"`,
+		"mac/proj/a�b":      "mac/proj/a�b has no managed session; laatmux add a�b --repo proj --host mac --agent claude makes one",
+		"mac/next.js/nb":    "mac/next.js/nb has no managed session; laatmux add nb --repo proj --host mac --agent claude makes one",
 		"box/proj/b":        "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config",
 	}
 	for target, want := range hints {

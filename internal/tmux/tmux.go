@@ -495,6 +495,7 @@ type Pane struct {
 	Host           string // @laatmux_host pane option, "" when unset
 	Cwd            string // @laatmux_cwd pane option, "" when unset
 	Managed        bool   // @laatmux_managed pane option set
+	NoCmd          bool   // @laatmux_nocmd pane option set: NewSession made it with no command, the user's shell
 	ServerPID      int    // pid of the tmux server; changes when the server restarts
 	// InMode is a pane in a tmux mode, copy-mode or a chooser: keys sent
 	// to it reach the mode, not the program, while a capture still
@@ -596,6 +597,7 @@ var paneVars = []string{
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
 	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}", "#{session_id}",
+	"#{@laatmux_nocmd}",
 }
 
 // ListPanes returns every pane on the server in one call. A server
@@ -634,6 +636,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.InMode = f[15] == "1"
 		p.Own = f[16] != "" || f[17] != ""
 		p.SessionID = f[18]
+		p.NoCmd = f[19] != ""
 		panes = append(panes, p)
 	}
 	return panes, err
@@ -825,7 +828,7 @@ func widthless(r rune) bool {
 type NewSessionOpts struct {
 	Name string
 	Cwd  string
-	Cmd  []string // empty: the user's shell
+	Cmd  []string // empty: the user's shell, the pane tagged @laatmux_nocmd
 	Host string   // recorded in @laatmux_host
 	Env  map[string]string
 }
@@ -894,6 +897,11 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	opts := [][2]string{{"@laatmux_managed", "1"}, {"@laatmux_cwd", o.Cwd}}
 	if o.Host != "" {
 		opts = append(opts, [2]string{"@laatmux_host", o.Host})
+	}
+	if len(o.Cmd) == 0 {
+		// The user's shell, which add tells from an agent's pane whose
+		// agent the daemon has not identified yet.
+		opts = append(opts, [2]string{"@laatmux_nocmd", "1"})
 	}
 	for _, kv := range opts {
 		args = append(args, Next, "set-option", "-p", "-t", target, kv[0], kv[1])

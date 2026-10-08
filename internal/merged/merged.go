@@ -475,6 +475,11 @@ func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool
 			snap.Worktrees = append(snap.Worktrees, w)
 		}
 	}
+	for _, p := range m.panes {
+		if m.hostOfLocked(p.EnvironmentID) == name {
+			snap.Panes = append(snap.Panes, p)
+		}
+	}
 	return hello, snap, true, nil
 }
 

@@ -58,6 +58,11 @@ type dash struct {
 	// command with -c; "" is the view's own.
 	client  string
 	refocus func()
+	// cmds is the view's commands, through which a jump that waited on a
+	// host ends on the view's goroutine (makeHome); making is the host
+	// such a jump waits on, "" for none.
+	cmds   chan<- func(*view.Model) view.Action
+	making string
 }
 
 // running is a command under way: what to do when it ends; its log is
@@ -108,23 +113,22 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 }
 
 // jumpRow runs the jump and says whether it happened: jumped is false
-// for a task still running and for a jump refused, whose message is in
-// the footer; exit is that the view ends. A jump that made a managed
-// session says so in the footer.
+// for a task still running, for a jump refused, whose message is in the
+// footer, and while another waits on a host; exit is that the view ends.
+// A jump that waits on a host for a managed session (makeHome) is under
+// way, and ends the view, when it does, once the host has answered.
 func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	if r.Pending != nil && !r.Pending.Done {
 		// A task still running has nothing to jump to yet.
 		return false, false
 	}
+	if d.making != "" {
+		m.Message = making(d.making)
+		return false, false
+	}
 	jump := d.jumper
 	if jump == nil {
-		jump = func(r rows.Row) error {
-			made, err := jumpRow(d.ctx, d.cfg, d.st, r)
-			if made != "" {
-				m.Message = made
-			}
-			return err
-		}
+		jump = func(r rows.Row) error { return jumpRow(d.ctx, d.cfg, r) }
 	}
 	if p, ok := paneOf(r); ok && d.jumper == nil {
 		// A tile, or an agent or a pane in the tree: to the pane, the
@@ -156,11 +160,69 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 			r.Kind, r.Run = rows.KindWorktree, nil
 		}
 	}
-	if err := jump(r); err != nil {
+	err := jump(r)
+	if nh, ok := shellable(d.st, err); ok && d.jumper == nil && d.cmds != nil {
+		d.makeHome(m, nh)
+		return false, true
+	}
+	if err != nil {
 		m.Message = err.Error()
 		return false, false
 	}
 	return d.exitOnJump, true
+}
+
+// making is the message line while a jump waits on the host.
+func making(host string) string { return "making a session on " + host + "…" }
+
+// makeHome has the host's daemon make the managed session of a worktree
+// with no home and no agent (newHome), with the user's shell at its
+// root, and then ends the jump on the view's goroutine as a jump to the
+// workspace session ends, through the view's commands: the view does not
+// wait on the host, and says meanwhile that a session is being made,
+// which a jump meanwhile is refused with. The jump switches the client
+// it would have, and says what was made, before an error after it, since
+// the session is there. A view that ends first leaves the jump undone.
+func (d *dash) makeHome(m *view.Model, nh *noHome) {
+	ctx, st, host := d.ctx, d.st, nh.h.Name
+	d.making = host
+	m.Message = making(host)
+	go func() {
+		// The records are read once new has answered, the stream having
+		// gone on meanwhile.
+		made, err := newHome(ctx, nh.h, nh.w, nh.name, func() protocol.Message {
+			_, snap, _, _ := st.HostSnapshot(host)
+			return snap
+		})
+		end := func(m *view.Model) view.Action {
+			d.making = ""
+			if noNew(err) {
+				// An older build answers for the host since its hello
+				// was cached: the refusal stands.
+				err = nh
+			}
+			if err == nil {
+				w := nh.w
+				w.Session = nh.name
+				if err = ensureSwitch(ctx, worktreeSpec(nh.h, w)); err != nil && made != "" {
+					err = fmt.Errorf("%s; %w", made, err)
+				}
+			}
+			if err != nil {
+				m.Message = err.Error()
+				return view.Action{}
+			}
+			m.Message = made
+			if d.exitOnJump {
+				return view.Action{Kind: view.ActionQuit}
+			}
+			return view.Action{}
+		}
+		select {
+		case d.cmds <- end:
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // overlayDone reads what the finished overlay decided and moves on:
@@ -1050,7 +1112,7 @@ func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolve
 	case err == nil:
 		hint = fmt.Sprintf("%s jumps to %s, its agent's session", enter, session)
 	default:
-		if nh, _, ok := shellable(st, err); ok {
+		if nh, ok := shellable(st, err); ok {
 			return enter + " creates one with a shell; " + addsSession(cfg, nh.h, nh.w, true)
 		}
 		hint = err.Error()

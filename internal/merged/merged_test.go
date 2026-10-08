@@ -30,6 +30,8 @@ func TestApply(t *testing.T) {
 		Agents:    []protocol.Agent{{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "proj/x", Agent: "claude", Activity: protocol.Working}},
 		Worktrees: []protocol.Worktree{{ID: "menv/worktree//w/proj/x", EnvironmentID: "menv", Repo: "proj", Branch: "x", Root: "/w/proj/x", Session: "proj/x"}},
 		Sessions:  []protocol.Session{{Name: "mac/proj/x", Key: "menv//w/proj/x", Host: "mac", Settled: true}},
+		// A pane of each machine's, vm's before vm has answered.
+		Panes: []protocol.Pane{{ID: "menv/pane/laatmux/%2", EnvironmentID: "menv"}, {ID: "venv/pane/laatmux/%3", EnvironmentID: "venv"}},
 	})
 	if got := m.Waiting(); len(got) != 1 || got[0] != "vm" {
 		t.Errorf("waiting = %v, want [vm]", got)
@@ -77,7 +79,7 @@ func TestApply(t *testing.T) {
 	if !ok || err != nil || hello.EnvironmentID != "venv" || hello.Host != "vm" || hello.Version != "v1" || !protocol.Has(hello.Capabilities, protocol.CapWorktrees) {
 		t.Fatalf("HostSnapshot = %+v %v %v", hello, ok, err)
 	}
-	if len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != "/r/proj/y" || len(snap.Agents) != 0 {
+	if len(snap.Worktrees) != 1 || snap.Worktrees[0].Root != "/r/proj/y" || len(snap.Agents) != 0 || len(snap.Panes) != 1 || snap.Panes[0].ID != "venv/pane/laatmux/%3" {
 		t.Errorf("vm snapshot = %+v", snap)
 	}
 	if _, _, ok, _ := m.HostSnapshot("box"); ok {

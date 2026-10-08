@@ -1114,11 +1114,12 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 }
 
 // fakeNew is a fake local daemon with the capabilities given that
-// answers new: each request goes on the channel returned, and is made,
-// but for a name in names, which tmux refuses as a duplicate.
+// answers a subscribe with snap, when given, and new: each request goes
+// on the channel returned, and is made, but for a name in names, which
+// tmux refuses as a duplicate.
 func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...string) <-chan protocol.Message {
 	t.Helper()
-	asked := make(chan protocol.Message, 16)
+	requests := make(chan protocol.Message, 16)
 	startFakeDaemon(t, caps, func(pc *protocol.Conn, m protocol.Message) bool {
 		switch m.Type {
 		case protocol.TypeSubscribe:
@@ -1126,7 +1127,7 @@ func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...strin
 				pc.Write(*snap)
 			}
 		case protocol.TypeNew:
-			asked <- m
+			requests <- m
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Session: m.Name, PaneID: "%7"}
 			if slices.Contains(names, m.Name) {
 				res = protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: "tmux new-session -d -s " + m.Name + " -c /w: duplicate session: " + m.Name}
@@ -1135,7 +1136,7 @@ func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...strin
 		}
 		return true
 	})
-	return asked
+	return requests
 }
 
 // asked is the new request on the channel, as "<name> <cwd> <host>
@@ -1152,86 +1153,158 @@ func asked(c <-chan protocol.Message) string {
 // Enter on a worktree line with no managed session and no agent, in the
 // dashboard and in the sidebar alike, has the host's daemon make one,
 // named as add names it, by the host's label, at the root, with no
-// command, then makes the workspace session attached to it and
-// switches there, and says what it made; z on the line says enter does
-// that and add makes one with an agent. A name in use, a session made
-// since the records were read, is attached, but not one the records
-// have as another worktree's home. A detached worktree, a host whose
-// cached capabilities lack new, and a host the merged state has as
-// down keep the add hint, and nothing is asked.
+// command, without the view waiting on it: the message line says a
+// session is being made, and a jump meanwhile is refused with it. Then,
+// on the view's goroutine, the jump makes the workspace session attached
+// to it, switches there, says what it made, and ends the dashboard; a
+// switch that fails says what was made before its error. z on the line
+// says enter does that and add makes one with an agent. A name in use
+// that no record places elsewhere, a session made since the records
+// were read, is attached; one another worktree has as its home, or in
+// which an agent or a pane of another worktree runs, is refused as add
+// refuses it. A detached worktree, a host whose cached capabilities
+// lack new, and a host the merged state has as down keep the add hint,
+// and nothing is asked; so does a host whose hello lacks new.
 func TestEnterMakesShellSession(t *testing.T) {
 	log := fakeDefaultTmux(t)
-	src := "git@github.com:laat/proj.git"
+	src, fork := "git@github.com:laat/proj.git", "git@github.com:fork/proj.git"
 	wt := func(env, repo, branch, root string) protocol.Worktree {
 		return protocol.Worktree{ID: env + "/worktree/" + root, EnvironmentID: env, Repo: repo, Source: src, Branch: branch, Root: root}
 	}
-	b, det, taken, clone := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "", "/w/det"), wt("menv", "proj", "taken", "/w/taken"), wt("menv", "proj", "clone", "/w/clone")
+	b, det, taken := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "", "/w/det"), wt("menv", "proj", "taken", "/w/taken")
 	// The host labels c's repository otherwise, which this machine's
-	// view shows by its own label; another clone's worktree on clone's
-	// branch has the session clone's name would be.
+	// view shows by its own label.
 	c := wt("menv", "proj-host", "c", "/w/c")
-	other := wt("menv", "proj", "clone", "/w2/clone")
-	other.Source, other.Session = "git@github.com:fork/proj.git", "proj/clone"
+	// Another clone's worktrees on the branches of clone, lost and pn,
+	// whose sessions are named as theirs would be: its home, its agent
+	// with the home lost, a pane of it.
+	clone, lost, pn := wt("menv", "proj", "clone", "/w/clone"), wt("menv", "proj", "lost", "/w/lost"), wt("menv", "proj", "pn", "/w/pn")
+	other, otherLost, otherPn := wt("menv", "proj", "clone", "/w2/clone"), wt("menv", "proj", "lost", "/w2/lost"), wt("menv", "proj", "pn", "/w2/pn")
+	other.Source, otherLost.Source, otherPn.Source, other.Session = fork, fork, fork, "proj/clone"
 	onVM, onBox := wt("venv", "proj", "b", "/w/b"), wt("benv", "proj", "b", "/w/b")
-	records := []protocol.Worktree{b, det, taken, clone, c, other, onVM, onBox}
+	records := []protocol.Worktree{b, det, taken, c, clone, lost, pn, other, otherLost, otherPn, onVM, onBox}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
 		{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: caps[:3]},
 		{Name: "box", SSH: "box", EnvironmentID: "benv", Error: "ssh: connection refused", Capabilities: caps},
-	}, Worktrees: records}
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, "proj/taken", "proj/clone")
-	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New()}
+	}, Worktrees: records,
+		Agents: []protocol.Agent{{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/lost", Agent: "claude", Managed: true, Cwd: "/w2/lost", WorktreeID: otherLost.ID}},
+		Panes:  []protocol.Pane{{ID: "menv/pane/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "proj/pn", PaneID: "%4", Cwd: "/w2/pn/src", WorktreeID: otherPn.ID}}}
+	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, "proj/taken", "proj/clone", "proj/lost", "proj/pn")
+	ends := make(chan func(*view.Model) view.Action, 1)
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: ends}
 	d.st.Apply(snap)
 	viewed := slices.Clone(records)
-	viewed[4].Repo = "proj" // merged.State's relabelling
+	viewed[3].Repo = "proj" // merged.State's relabelling
 	in := rows.Input{Hosts: []rows.Host{
 		{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
 		{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
 		{Name: "box", EnvironmentID: "benv", Listed: true, Worktrees: true, Attribution: true},
-	}, Worktrees: viewed, HostRepos: map[string]string{c.ID: "proj-host"}}
-	press := func(exitOnJump bool, id string, enter bool) (msg, cmds, req string, exit bool) {
+	}, Worktrees: viewed, Agents: snap.Agents, Panes: snap.Panes, HostRepos: map[string]string{c.ID: "proj-host"}}
+	model := func(id string) *view.Model {
 		t.Helper()
-		m := &view.Model{Width: 100, Height: 30, ShowHidden: true, View: view.ViewTree}
+		m := &view.Model{Width: 100, Height: 40, ShowHidden: true, View: view.ViewTree}
 		m.SetTree(rows.Tree(in))
 		m.SetRows(rows.Agents(in, rows.Tree(in)))
 		m.Render()
 		if !m.Select(id) {
 			t.Fatalf("no line %s", id)
 		}
+		return m
+	}
+	type pressed struct {
+		exit                    bool
+		waiting, msg, cmds, req string
+		end                     view.Action
+	}
+	// enter is enter on the line, and the end of a jump that waits on
+	// the host run as the view runs it: the message while it waits, and
+	// after the end, the end's action, the message, the tmux commands
+	// run and the new request.
+	enter := func(exitOnJump bool, id string) pressed {
+		t.Helper()
+		m := model(id)
 		os.Remove(log)
 		d.exitOnJump = exitOnJump
-		if enter {
-			exit = d.jumpAction(m, view.Action{Kind: view.ActionJump})
-		} else {
-			d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		var p pressed
+		p.exit = d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		p.waiting = m.Message
+		if d.making != "" {
+			select {
+			case end := <-ends:
+				p.end = end(m)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("enter on %s: the jump did not end", id)
+			}
 		}
 		got, _ := os.ReadFile(log)
-		return m.Message, string(got), asked(requests), exit
+		p.msg, p.cmds, p.req = m.Message, string(got), asked(requests)
+		return p
+	}
+	z := func(id string) (msg, cmds, req string) {
+		t.Helper()
+		m := model(id)
+		os.Remove(log)
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'z'}})
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got), asked(requests)
 	}
 	for _, sidebar := range []bool{false, true} {
-		msg, cmds, req, exit := press(!sidebar, b.ID, true)
-		if req != `proj/b /w/b mac []` || msg != "made session proj/b on mac, a shell at /w/b" || exit == sidebar {
-			t.Errorf("sidebar %v: enter: asked %q, message %q, exit %v", sidebar, req, msg, exit)
+		p := enter(!sidebar, b.ID)
+		if p.waiting != "making a session on mac…" || p.exit || p.req != `proj/b /w/b mac []` || p.msg != "made session proj/b on mac, a shell at /w/b" || (p.end.Kind == view.ActionQuit) == sidebar {
+			t.Errorf("sidebar %v: enter: %+v", sidebar, p)
 		}
 		for _, want := range []string{"new-session -d -s mac/proj/b ", "@laatmux_attach_target proj/b ", "switch-client -t =mac/proj/b:"} {
-			if !strings.Contains(cmds, want) {
-				t.Errorf("sidebar %v: enter ran %q, want %q in it", sidebar, cmds, want)
+			if !strings.Contains(p.cmds, want) {
+				t.Errorf("sidebar %v: enter ran %q, want %q in it", sidebar, p.cmds, want)
 			}
 		}
 	}
-	if msg, cmds, req, _ := press(true, b.ID, false); msg != "proj/b: no local workspace session; enter creates one with a shell; laatmux add b --repo proj --host mac --agent claude makes one with an agent" || cmds != "" || req != "" {
+	// A jump while one waits on the host is refused with its message.
+	m := model(b.ID)
+	d.jumpAction(m, view.Action{Kind: view.ActionJump})
+	if again := model(c.ID); d.jumpAction(again, view.Action{Kind: view.ActionJump}) || again.Message != "making a session on mac…" {
+		t.Errorf("a jump meanwhile: message %q", again.Message)
+	}
+	select {
+	case end := <-ends:
+		end(m)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the jump did not end")
+	}
+	if req := asked(requests); req != `proj/b /w/b mac []` || asked(requests) != "" {
+		t.Errorf("a jump meanwhile asked: %q", req)
+	}
+	if msg, cmds, req := z(b.ID); msg != "proj/b: no local workspace session; enter creates one with a shell; laatmux add b --repo proj --host mac --agent claude makes one with an agent" || cmds != "" || req != "" {
 		t.Errorf("z: message %q, tmux %q, asked %q", msg, cmds, req)
 	}
-	if msg, cmds, req, _ := press(true, c.ID, true); req != `proj-host/c /w/c mac []` || !strings.Contains(cmds, "switch-client -t =mac/proj-host/c:") {
-		t.Errorf("by the host's label: asked %q, message %q, tmux %q", req, msg, cmds)
+	if p := enter(true, c.ID); p.req != `proj-host/c /w/c mac []` || !strings.Contains(p.cmds, "switch-client -t =mac/proj-host/c:") {
+		t.Errorf("by the host's label: %+v", p)
 	}
-	if msg, cmds, req, _ := press(true, taken.ID, true); req != `proj/taken /w/taken mac []` || msg != "" || !strings.Contains(cmds, "@laatmux_attach_target proj/taken ") || !strings.Contains(cmds, "switch-client -t =mac/proj/taken:") {
-		t.Errorf("a name in use: asked %q, message %q, tmux %q", req, msg, cmds)
+	if p := enter(true, taken.ID); p.req != `proj/taken /w/taken mac []` || p.msg != "" || p.end.Kind != view.ActionQuit || !strings.Contains(p.cmds, "@laatmux_attach_target proj/taken ") || !strings.Contains(p.cmds, "switch-client -t =mac/proj/taken:") {
+		t.Errorf("a name in use, no record elsewhere: %+v", p)
 	}
-	if msg, cmds, req, _ := press(true, clone.ID, true); req != `proj/clone /w/clone mac []` || msg != "mac: session proj/clone is the worktree's at /w2/clone; name in use" || cmds != "" {
-		t.Errorf("another worktree's home: asked %q, message %q, tmux %q", req, msg, cmds)
+	for _, k := range []struct {
+		w    protocol.Worktree
+		name string
+		in   string
+	}{
+		{clone, "proj/clone", "/w2/clone"},
+		{lost, "proj/lost", "/w2/lost"},
+		{pn, "proj/pn", "/w2/pn/src"},
+	} {
+		want := "mac: session " + k.name + " runs in " + k.in + ", not " + k.w.Root + "; name in use"
+		if p := enter(true, k.w.ID); p.req != k.name+" "+k.w.Root+` mac []` || p.msg != want || p.end.Kind != view.ActionNone || p.cmds != "" {
+			t.Errorf("a name in use elsewhere: %+v, want %q", p, want)
+		}
 	}
+	// A switch that fails, outside tmux, says what was made first.
+	t.Setenv("TMUX", "")
+	if p := enter(true, b.ID); !strings.HasPrefix(p.msg, "made session proj/b on mac, a shell at /w/b; mac/proj/b is on the default tmux server; attach with: ") || p.end.Kind != view.ActionNone {
+		t.Errorf("a switch that fails: %+v", p)
+	}
+	t.Setenv("TMUX", "/tmp/lmx-fake/default,1,0")
 	for _, k := range []struct {
 		w    protocol.Worktree
 		hint string
@@ -1240,19 +1313,18 @@ func TestEnterMakesShellSession(t *testing.T) {
 		{onVM, "vm/proj/b has no managed session; laatmux add b --repo proj --host vm --agent claude makes one"},
 		{onBox, "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"},
 	} {
-		if msg, cmds, req, _ := press(true, k.w.ID, true); msg != k.hint || cmds != "" || req != "" {
-			t.Errorf("enter on %s: message %q, tmux %q, asked %q", k.w.ID, msg, cmds, req)
+		if p := enter(true, k.w.ID); p.waiting != k.hint || p.msg != k.hint || p.cmds != "" || p.req != "" {
+			t.Errorf("enter on %s: %+v", k.w.ID, p)
 		}
-		if msg, cmds, req, _ := press(true, k.w.ID, false); !strings.HasSuffix(msg, ": no local workspace session; "+k.hint) || cmds != "" || req != "" {
+		if msg, cmds, req := z(k.w.ID); !strings.HasSuffix(msg, ": no local workspace session; "+k.hint) || cmds != "" || req != "" {
 			t.Errorf("z on %s: message %q, tmux %q, asked %q", k.w.ID, msg, cmds, req)
 		}
 	}
 	// A daemon whose hello lacks new, the cached capabilities
 	// notwithstanding: an older build answering since.
 	requests = fakeNew(t, []string{protocol.CapStatus}, nil)
-	want := "proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one"
-	if msg, cmds, req, _ := press(true, b.ID, true); msg != "mac/"+want || cmds != "" || req != "" {
-		t.Errorf("no new in the hello: message %q, tmux %q, asked %q", msg, cmds, req)
+	if p := enter(true, b.ID); p.msg != "mac/proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one" || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
+		t.Errorf("no new in the hello: %+v", p)
 	}
 }
 
