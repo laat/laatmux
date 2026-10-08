@@ -146,6 +146,8 @@ func TaskState(p protocol.Pending, configured bool) string {
 		return "prompt not delivered: " + tmux.Printable(p.Error)
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
 		return "prompt delivery unknown: " + tmux.Printable(p.Error)
+	case p.Done && p.RememberError != "":
+		return "done; not added to the config's repos: " + tmux.Printable(p.RememberError)
 	case p.Done && !p.Listed && p.ListingError != "":
 		return "done, awaiting the listing: " + tmux.Printable(p.ListingError)
 	case p.Done && !p.Listed:

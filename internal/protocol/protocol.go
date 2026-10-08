@@ -103,6 +103,15 @@ const (
 	// source is refused. A daemon without it ignores the entry and
 	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
+	// CapRemember is the relay listing a new repository in this
+	// machine's config: a relayed add with remember has its repo_entry
+	// appended to the config's repos, under the entry's name, once the
+	// host's add has succeeded, and a refused add leaves the config as
+	// it was. A source the config lists in any form is not added again.
+	// A daemon without it reads such an add without the field, and adds
+	// nothing to the config; a client sends remember only to a daemon
+	// with it.
+	CapRemember = "remember"
 	// CapAttribution is the host attributing what runs to its worktrees:
 	// every agent record carries the worktree_id of the worktree whose
 	// root contains its pane's path, so a worktree has any number of
@@ -282,11 +291,16 @@ type Pending struct {
 	AttemptOpen bool   `json:"attempt_open,omitempty"`
 	// AttemptError is the host's refusal of the last attempt, recovery
 	// expired say, kept apart from Error, the add's own outcome.
-	AttemptError string    `json:"attempt_error,omitempty"`
-	Listed       bool      `json:"listed,omitempty"`
-	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
-	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
-	UpdatedAt    time.Time `json:"updated_at"`
+	AttemptError string `json:"attempt_error,omitempty"`
+	Listed       bool   `json:"listed,omitempty"`
+	ListingError string `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
+	Gone         bool   `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
+	// RememberError is why the add's repository, new to this machine's
+	// config, could not be appended to it after the add succeeded, while
+	// it cannot: the relay holds the handoff and tries again at start
+	// and whenever the config file changes.
+	RememberError string    `json:"remember_error,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Complete reports whether nothing about the add needs the user: it
@@ -747,6 +761,11 @@ type Message struct {
 	// it, its source Repo's: a daemon with repo-entry resolves the add
 	// against it when its own config does not list the repository.
 	RepoEntry *RepoEntry `json:"repo_entry,omitempty"`
+	// Remember on a relayed add asks a daemon with remember to append
+	// the repo_entry to its config's repos once the add has succeeded:
+	// the repository is new to the config, a source pasted into the
+	// task form or given to add's --repo.
+	Remember bool `json:"remember,omitempty"`
 	// AgentName is the configured agent to start; Cmd, when set, is the
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.

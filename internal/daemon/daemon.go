@@ -163,6 +163,14 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
+	// Repos reads the repositories the config lists again, every
+	// WorktreeInterval: changed when the file changed since the last
+	// read, so Store follows repositories an add or the task form
+	// appended, and hand edits, without a restart, and the relay retries
+	// the appends a config it could not take held. A file that does not
+	// read keeps the list as it was. nil keeps the list Store was made
+	// with, and retries the appends at start alone.
+	Repos func() (repos []worktree.Repo, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
 	// capability; "" means none.
@@ -193,8 +201,12 @@ type Config struct {
 	Timings Timings
 
 	// Pending is the directory of the relay's pending files, which with
-	// Hosts is the relay capability; "" means none.
-	Pending string
+	// Hosts is the relay capability; "" means none. AppendRepo appends
+	// a repository to this machine's config, reporting whether it was
+	// not listed yet, for a relayed add with remember; with the relay
+	// it is the remember capability, and nil means none.
+	Pending    string
+	AppendRepo func(src, name string) (bool, error)
 
 	// Attention is the file the attention state is kept in, which with
 	// Hosts is the attention capability; "" means none. Clients lists
@@ -293,6 +305,8 @@ type Daemon struct {
 	listed       bool
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change; under pollMu
+	lastReposErr string            // the same for the config file; runConfig's
+	configRead   bool              // runConfig has read the file once
 	poke         chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
@@ -556,6 +570,9 @@ func (d *Daemon) capabilities() []string {
 	}
 	if d.relay != nil {
 		caps = append(caps, protocol.CapRelay, protocol.CapDismissRoot)
+		if d.cfg.AppendRepo != nil {
+			caps = append(caps, protocol.CapRemember)
+		}
 	}
 	if d.attn != nil {
 		caps = append(caps, protocol.CapAttention)
@@ -591,6 +608,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.mu.Lock()
 	d.ctx = ctx
 	d.mu.Unlock()
+	if d.cfg.Repos != nil {
+		// The config's first look, before the poll and the relay start.
+		d.readConfig(ctx)
+	}
 	if d.cfg.Store != nil {
 		go d.runWorktrees(ctx)
 		go d.runGitStatus(ctx)
@@ -604,6 +625,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d.relay != nil {
 		d.startRelays(ctx)
 		go d.runRelaySweep(ctx)
+	}
+	if d.cfg.Repos != nil {
+		go d.runConfig(ctx)
 	}
 	if d.attn != nil {
 		// The entries of hosts gone from the config go at start, as

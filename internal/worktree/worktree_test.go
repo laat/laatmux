@@ -61,7 +61,7 @@ func newFixture(t testing.TB) *fixture {
 	run(t, seed, "git", "push", "-q", remote, "main")
 	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
 	store := New(dirs, []config.Repo{{Source: remote, Name: "proj"}})
-	return &fixture{t: t, remote: remote, store: store, repo: store.Repos[0], ctx: context.Background()}
+	return &fixture{t: t, remote: remote, store: store, repo: store.Repos()[0], ctx: context.Background()}
 }
 
 func run(t testing.TB, dir string, name string, args ...string) string {
@@ -606,7 +606,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	f := newFixture(t)
 	base := filepath.Dir(f.store.Dirs.Repos)
 	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
-	f.repo = f.store.Repos[0]
+	f.repo = f.store.Repos()[0]
 	quoted := func(err error, want string) bool {
 		return err != nil && strings.Contains(err.Error(), want) && !strings.ContainsAny(err.Error(), "\t\x1b")
 	}
@@ -718,7 +718,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	write(t, cfgFile, string(cfg))
 	f.store.origins = map[string]originEntry{}
 
-	if _, _, err := f.add("main"); !quoted(err, "branch main is checked out in the main checkout "+qc) {
+	if _, _, err := f.add("main"); !quoted(err, "branch main is checked out in the main checkout "+qc+"; a worktree needs another branch: a new name, or a prompt to propose one") {
 		t.Errorf("add main: %v", err)
 	}
 	elsewhere := filepath.Join(base, "else\twhere\x1b[31m")
@@ -792,7 +792,7 @@ func TestGitAndOSErrorsQuoted(t *testing.T) {
 	f := newFixture(t)
 	base := filepath.Dir(f.store.Dirs.Repos)
 	f.store = New(config.Dirs{Repos: filepath.Join(base, "re\tpos\x1b[32m"), Worktrees: filepath.Join(base, "work\ttrees\x1b[31m")}, []config.Repo{{Source: f.remote, Name: "proj"}})
-	f.repo = f.store.Repos[0]
+	f.repo = f.store.Repos()[0]
 	a, _, err := f.add("first")
 	if err != nil {
 		t.Fatal(err)
@@ -1386,7 +1386,7 @@ func TestCheckoutsScannedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 50; i++ {
-		f.store.Repos = append(f.store.Repos, Repo{Source: fmt.Sprintf("/nowhere/%d.git", i), Name: fmt.Sprintf("r%d", i)})
+		f.store.SetRepos(append(f.store.Repos(), Repo{Source: fmt.Sprintf("/nowhere/%d.git", i), Name: fmt.Sprintf("r%d", i)}))
 	}
 	checkouts, err := f.store.Checkouts(f.ctx)
 	if err != nil || len(checkouts) != 1 {
@@ -1447,9 +1447,11 @@ func TestAddPersonalCopyAndSetup(t *testing.T) {
 	write(t, filepath.Join(checkout, "notes.txt"), "untracked")
 	write(t, filepath.Join(checkout, "config", "db.local"), "local")
 	f.store.Copy = []string{"**/.envrc.cache.enc", "nothing/*.here"}
-	f.store.Repos[0].Copy = []string{"notes.txt", "config/*.local"}
-	f.store.Repos[0].Setup = []string{"echo personal >> log"}
-	repo := f.store.Repos[0]
+	repos := f.store.Repos()
+	repos[0].Copy = []string{"notes.txt", "config/*.local"}
+	repos[0].Setup = []string{"echo personal >> log"}
+	f.store.SetRepos(repos)
+	repo := repos[0]
 	var reports []string
 	a, err := f.store.Add(f.ctx, repo, "task", func(stage, state, detail string) {
 		reports = append(reports, stage+" "+state+" "+detail)
@@ -1499,8 +1501,9 @@ func TestAddPersonalCopyAndSetup(t *testing.T) {
 	}
 	// A personal command changed at the same index runs; the one that
 	// moved does not run again.
-	f.store.Repos[0].Setup = []string{"echo first >> log", "echo personal >> log"}
-	repo = f.store.Repos[0]
+	repos[0].Setup = []string{"echo first >> log", "echo personal >> log"}
+	f.store.SetRepos(repos)
+	repo = repos[0]
 	if _, err := f.store.Add(f.ctx, repo, "task", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1881,7 +1884,7 @@ func TestUnlistedLabelCollision(t *testing.T) {
 	// A made label that is the config's name for another repository,
 	// which has no checkout here, gets the hash too, and Known by that
 	// name is the config's.
-	f.store.Repos = append(f.store.Repos, Repo{Source: "/elsewhere/four.git", Name: "c_d"})
+	f.store.SetRepos(append(f.store.Repos(), Repo{Source: "/elsewhere/four.git", Name: "c_d"}))
 	_, cd := clone("c.d", "/elsewhere/hand.git", "cd")
 	list(againRec, Record{Repo: "c_d-06a376", Source: "/elsewhere/hand.git", Branch: "cd", Root: cd}, oneRec, Record{Repo: "a_b", Source: "/elsewhere/three.git", Branch: "three", Root: three}, twoRec)
 	if lines() != 6 || !strings.Contains(logged.String(), " is labelled c_d-06a376: the label its name makes is this host's config's name for /elsewhere/four.git") {

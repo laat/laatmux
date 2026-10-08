@@ -70,6 +70,10 @@ type pendingFile struct {
 	// it; a file from before entries has none, and the host resolves
 	// the source against its own config.
 	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
+	// Remember is the add's ask to have its repository entry appended
+	// to the config once the add has succeeded, cleared once it is
+	// there.
+	Remember bool `json:"remember,omitempty"`
 	// ReplacedBy is the worktree id the record retired into, and
 	// RetiredAt when.
 	ReplacedBy string    `json:"replaced_by,omitempty"`
@@ -310,6 +314,10 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = wireErr.Error()
 	case m.RepoEntry != nil && !source.Same(m.RepoEntry.Source, m.Repo):
 		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
+	case m.Remember && m.RepoEntry == nil:
+		res.Error = "remember needs the add's repository entry"
+	case m.Remember && d.cfg.AppendRepo == nil:
+		res.Error = "this daemon cannot add a repository to the config"
 	}
 	if res.Error != "" {
 		return res
@@ -346,7 +354,7 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 	p := pendingFile{Pending: protocol.Pending{
 		ID: m.ID, Host: h.Name, EnvironmentID: env, Source: m.Repo, Repo: name, Branch: m.Branch, Generated: m.Generated,
 		Agent: m.AgentName, Cmd: m.Cmd, SubmittedAt: submitted, UpdatedAt: time.Now(),
-	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry}
+	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry, Remember: m.Remember}
 	d.relay.mu.Lock()
 	fresh, err := d.relay.createLocked(p)
 	if err == nil && fresh {
@@ -507,6 +515,16 @@ func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFil
 // before anything else, a success whose listing has not been seen is
 // waited on, and a retired record is kept for its worktree's life.
 func (d *Daemon) startRelays(ctx context.Context) {
+	// A retired record whose repository is still to be appended to the
+	// config, an append that failed before the handoff, makes it now;
+	// the others make it as they settle.
+	d.relay.mu.Lock()
+	for id, p := range d.relay.recs {
+		if p.retired() && p.Remember {
+			d.startRunnerLocked(ctx, id, d.settle)
+		}
+	}
+	d.relay.mu.Unlock()
 	ps, _ := d.relay.pendings()
 	for _, p := range ps {
 		switch {
@@ -802,19 +820,34 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 	}
 }
 
-// settle brings a record with a successful outcome to rest: the
-// listing after the result is waited for once, and a record that is
-// complete, prompt delivered or none, whose worktree that listing
-// showed is handed over. It is called after the result, after every
-// attempt and at start, serialized per record, and decides on the
-// record as it is when each step ends, so a listing that completes
-// while an attempt delivers, or the other way round, strands nothing.
+// settle brings a record with a successful outcome to rest: the add's
+// repository appended to the config first when the add asked for it,
+// then the listing after the result waited for once, and a record that
+// is complete, prompt delivered or none, whose worktree that listing
+// showed handed over. It is called after the result, after every
+// attempt, at start, and for a record still asking for its append when
+// the config file changes (rememberAgain), serialized per record, and
+// decides on the record as it is when each step ends, so a listing
+// that completes while an attempt delivers, or the other way round,
+// strands nothing. An append that fails holds the rest: the task's row
+// says why until the append is made or the task dismissed.
 func (d *Daemon) settle(ctx context.Context, id string) {
 	l := d.relay.settleLock(id)
 	l.Lock()
 	defer l.Unlock()
 	p, ok := d.relay.get(id)
-	if !ok || !p.Done || !p.OK || p.retired() || ctx.Err() != nil {
+	if !ok || !p.Done || !p.OK || ctx.Err() != nil {
+		return
+	}
+	if p.Remember {
+		if !d.remember(ctx, id, p) {
+			return
+		}
+		if p, ok = d.relay.get(id); !ok {
+			return
+		}
+	}
+	if p.retired() {
 		return
 	}
 	if !p.Listed {
@@ -828,6 +861,57 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	if p.Complete() && p.Listed && !p.Gone && !p.retired() {
 		d.handoff(ctx, id, p.WorktreeID())
 	}
+}
+
+// rememberAgain settles every successful record still asking for its
+// append, after the config file changed: a config that could not take
+// the entry, one that did not parse say, may take it now. Without the
+// remember capability there are none.
+func (d *Daemon) rememberAgain(ctx context.Context) {
+	if d.relay == nil || d.cfg.AppendRepo == nil {
+		return
+	}
+	d.relay.mu.Lock()
+	defer d.relay.mu.Unlock()
+	for id, p := range d.relay.recs {
+		if p.Done && p.OK && p.Remember {
+			d.startRunnerLocked(ctx, id, d.settle)
+		}
+	}
+}
+
+// remember appends the add's repository entry to the config, as the
+// add asked, and reports whether it is there: the ask is cleared then,
+// and so is the error of an earlier try. A failure is logged and put
+// on the record as RememberError, which its row shows, and the ask is
+// kept for the next settle. Called by settle, with its lock held.
+func (d *Daemon) remember(ctx context.Context, id string, p pendingFile) bool {
+	if e := p.RepoEntry; e != nil {
+		added, err := d.cfg.AppendRepo(e.Source, e.Name)
+		if err != nil {
+			d.cfg.Logger.Printf("relay %s: %s not added to the config's repos: %v", id, e.Source, err)
+			d.setPending(id, false, func(p *pendingFile) { p.RememberError = err.Error() })
+			return false
+		}
+		if added {
+			d.cfg.Logger.Printf("relay %s: %s added to the config's repos as %s", id, e.Source, e.Name)
+			if d.cfg.Store != nil {
+				d.pokeWorktrees()
+			}
+		}
+	}
+	done := func(p *pendingFile) { p.Remember, p.RememberError = false, "" }
+	if _, ok := d.persist(ctx, id, done); !ok {
+		// A record kept for its handoff alone takes no published
+		// change; the ask is cleared in its file, which is all that
+		// carries it.
+		d.relay.mu.Lock()
+		if _, err := d.relay.updateLocked(id, true, done); err != nil {
+			d.cfg.Logger.Printf("pending: %s: %v", id, err)
+		}
+		d.relay.mu.Unlock()
+	}
+	return true
 }
 
 // retire waits for the host's listing to reflect a successful add, on

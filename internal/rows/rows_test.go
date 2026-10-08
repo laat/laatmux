@@ -437,6 +437,7 @@ func TestPendingState(t *testing.T) {
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "sent, not seen"}, false, "prompt delivery unknown", "sent, not seen"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "recovery expired", Error: "x"}, false, "prompt not delivered", "recovery expired"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, ListingError: "git failed"}, false, "done, awaiting the listing", "git failed"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad"}, false, "done, not added to the config", "yaml: bad"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}, false, "done", ""},
 		{protocol.Pending{Unreachable: "ssh: timeout"}, false, "host unreachable, retrying", "ssh: timeout"},
 		{protocol.Pending{}, false, "submitted", ""},
@@ -447,6 +448,19 @@ func TestPendingState(t *testing.T) {
 		if s != c.state || d != c.detail {
 			t.Errorf("%+v: %q %q, want %q %q", c.p, s, d, c.state, c.detail)
 		}
+	}
+}
+
+// A task whose repository could not be appended to the config needs
+// the user, though its add is complete: they fix the file or dismiss it.
+func TestNeedsUserRememberError(t *testing.T) {
+	p := protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}
+	if (Row{Pending: &p}).NeedsUser() {
+		t.Fatal("a complete task needs the user")
+	}
+	p.RememberError = "yaml: bad"
+	if !(Row{Pending: &p}).NeedsUser() {
+		t.Fatal("a failed append does not need the user")
 	}
 }
 

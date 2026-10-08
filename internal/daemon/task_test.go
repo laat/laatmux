@@ -288,7 +288,7 @@ func TestAddGenerated(t *testing.T) {
 	}
 	// A branch that occupies the proposal's ref namespace takes the
 	// name too: task/sub rules out task.
-	checkout, _, _ := store.Checkout(context.Background(), store.Repos[0])
+	checkout, _, _ := store.Checkout(context.Background(), store.Repos()[0])
 	if out, err := exec.Command("git", "-C", checkout, "branch", "other/sub", "origin/HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
@@ -701,7 +701,7 @@ func TestJournalStartup(t *testing.T) {
 		t.Fatal("task capability without a journal")
 	}
 	pc := conn(t, d2)
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: store.Repos[0].Source, Branch: "b", Cmd: []string{"true"}, Prompt: "p"})
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: store.Repos()[0].Source, Branch: "b", Cmd: []string{"true"}, Prompt: "p"})
 	if res, _ := result(t, pc, "c1"); res.OK || res.Stage != protocol.StageResolve || !strings.Contains(res.Error, "task capability") {
 		t.Fatalf("no task: %+v", res)
 	}

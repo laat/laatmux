@@ -111,7 +111,7 @@ func TestRunRepoBySourceFirst(t *testing.T) {
 	d, _, store, remote := newAddDaemon(t)
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
-	store.Repos = append(store.Repos, worktree.Repo{Source: "/nowhere/other.git", Name: remote})
+	store.SetRepos(append(store.Repos(), worktree.Repo{Source: "/nowhere/other.git", Name: remote}))
 	pc.Write(protocol.Message{Type: protocol.TypeRun, ID: "r1", Repo: remote, Root: root, Cmd: []string{"true"}})
 	if res, _ := result(t, pc, "r1"); !res.OK {
 		t.Fatalf("run by source: %+v", res)

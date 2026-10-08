@@ -43,6 +43,12 @@ type Add struct {
 	Prompt      string
 	Generated   bool
 	SubmittedAt time.Time
+	// Remember is that Repo is new to this machine's config, a source
+	// pasted into the task form or given to --repo: it is appended to
+	// the config's repos once the host's add has succeeded, by Run
+	// itself or, for Submit, by the daemon that relays the add, so an
+	// add the host refuses leaves the config as it was.
+	Remember bool
 }
 
 // Added is what an add left behind.
@@ -98,6 +104,15 @@ func (a Add) Run(ctx context.Context, r Reporter) (Added, error) {
 			out.Reason = ""
 		}
 		return out, failed("add", res, err)
+	}
+	if a.Remember {
+		// The worktree is there whatever the config says; a file that
+		// cannot take the entry is a note, not the add's failure.
+		if added, err := config.AddRepo(config.Path(), a.Repo.Source, a.Repo.Name); err != nil {
+			r.Note(fmt.Sprintf("%s not added to the config's repos: %v", a.Repo.Source, err))
+		} else if added {
+			r.Note(fmt.Sprintf("%s added to the config's repos as %s", a.Repo.Source, a.Repo.Name))
+		}
 	}
 	if err := home.UpdateLast(func(l *home.Last) {
 		cur := l.Get(a.Repo.Source)
@@ -212,8 +227,11 @@ func (a Add) Submit(ctx context.Context) (string, error) {
 	if !protocol.Has(c.Hello.Capabilities, protocol.CapRelay) {
 		return "", fmt.Errorf("the local daemon %s has no relay capability; the add can only run in the foreground", c.Hello.Version)
 	}
+	if a.Remember && !protocol.Has(c.Hello.Capabilities, protocol.CapRemember) {
+		return "", fmt.Errorf("the local daemon %s cannot add %s to the config's repos, an older build; stop it with: laatmux stop; the next client starts the current build", c.Hello.Version, a.Repo.Source)
+	}
 	req := a.Request(id)
-	req.Relay, req.Name = a.Host.Name, a.Repo.Name
+	req.Relay, req.Name, req.Remember = a.Host.Name, a.Repo.Name, a.Remember
 	// The id is this submit's whatever happens: the daemon accepts it
 	// again and starts it if it is not running, so a lost answer is
 	// asked for again on a fresh connection, and an error after that

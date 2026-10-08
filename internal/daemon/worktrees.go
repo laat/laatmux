@@ -91,6 +91,51 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.markDiscovered(&d.worktreesDiscovered)
 }
 
+// runConfig looks at the config file every worktree interval until ctx
+// is done (readConfig), on a daemon with a store or without one: the
+// relay of a laptop whose own entry has no directories appends too.
+// The first look is Run's, before the relay resumes its records, so a
+// change after a resumed append's read is one the loop sees.
+func (d *Daemon) runConfig(ctx context.Context) {
+	t := time.NewTicker(d.cfg.WorktreeInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.readConfig(ctx)
+		}
+	}
+}
+
+// readConfig acts on a config file that has changed: the store takes
+// its repositories, and a poll at once labels the checkouts by them,
+// and the relay retries the appends still asked for, which the change
+// may let through; not on the first read, Run's before the relay
+// resumes its records, which then read the file as it found it or
+// later. A file that does not read is logged once per
+// change of message, and the list stays as it was. lastReposErr and
+// configRead are runConfig's alone.
+func (d *Daemon) readConfig(ctx context.Context) {
+	repos, changed, err := d.cfg.Repos()
+	first := !d.configRead
+	d.configRead = true
+	switch {
+	case err != nil:
+		d.logOnce(&d.lastReposErr, "config: %v; the repositories stay as they were", err)
+	case changed:
+		d.lastReposErr = ""
+		if d.cfg.Store != nil {
+			d.cfg.Store.SetRepos(repos)
+			d.pokeWorktrees()
+		}
+		if !first {
+			d.rememberAgain(ctx)
+		}
+	}
+}
+
 // stepRevision counts one observation owed: an add that succeeded, or
 // an rm that removed a worktree, so a listing read before it cannot
 // stand for its outcome. The listing returned is the barrier such a

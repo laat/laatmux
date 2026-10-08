@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,10 +51,13 @@ type Repo struct {
 // repository's own. Log, when set, says why a checkout's label has a
 // hash (see labels) and that a checkout's HEAD cannot be read.
 type Store struct {
-	Dirs  config.Dirs // expanded for this host
-	Repos []Repo
-	Copy  []string
-	Log   *log.Logger
+	Dirs config.Dirs // expanded for this host
+	Copy []string
+	Log  *log.Logger
+
+	// repos is the repositories this host's config lists, replaced
+	// whole when the daemon reads the file again (SetRepos).
+	repos atomic.Pointer[Repos]
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
@@ -69,34 +73,69 @@ type originEntry struct {
 // New makes a store for the host's directories and known repositories.
 func New(dirs config.Dirs, repos []config.Repo) *Store {
 	s := &Store{Dirs: dirs, origins: map[string]originEntry{}}
-	for _, r := range repos {
-		s.Repos = append(s.Repos, Repo{Source: r.Source, Name: r.Name, Copy: r.Copy, Setup: r.Setup})
-	}
+	s.SetRepos(FromConfig(repos))
 	return s
 }
+
+// FromConfig is the config's repositories as the store keeps them.
+func FromConfig(repos []config.Repo) []Repo {
+	out := make([]Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, Repo{Source: r.Source, Name: r.Name, Copy: r.Copy, Setup: r.Setup})
+	}
+	return out
+}
+
+// Repos is the repositories this host's config lists, as last set; the
+// slice is the store's and is not to be changed. A caller that looks a
+// repository up more than once takes it once, so every lookup is on
+// one list.
+func (s *Store) Repos() Repos {
+	if p := s.repos.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetRepos replaces the repositories this host's config lists, for a
+// daemon that read the file again: a lookup or a listing under way
+// finishes on the list it started with.
+func (s *Store) SetRepos(repos []Repo) {
+	rs := Repos(repos)
+	s.repos.Store(&rs)
+}
+
+// Repos is a list of the repositories a host's config lists.
+type Repos []Repo
 
 // Repo finds a repository this host's config lists by name, else by
 // source, in any form source.Same takes as one: the same order as
 // config.Config.Repo, since a bare local source can equal another
 // entry's label.
-func (s *Store) Repo(nameOrSource string) (Repo, bool) {
-	for _, r := range s.Repos {
+func (s *Store) Repo(nameOrSource string) (Repo, bool) { return s.Repos().Find(nameOrSource) }
+
+// BySource finds a repository this host's config lists by its source,
+// in any form source.Same takes as one.
+func (s *Store) BySource(src string) (Repo, bool) { return s.Repos().BySource(src) }
+
+// Find is Store.Repo on the list.
+func (rs Repos) Find(nameOrSource string) (Repo, bool) {
+	for _, r := range rs {
 		if r.Name == nameOrSource {
 			return r, true
 		}
 	}
-	return s.BySource(nameOrSource)
+	return rs.BySource(nameOrSource)
 }
 
-// BySource finds a repository this host's config lists by its source,
-// in any form source.Same takes as one.
-func (s *Store) BySource(src string) (Repo, bool) {
-	for _, r := range s.Repos {
+// BySource is Store.BySource on the list.
+func (rs Repos) BySource(src string) (Repo, bool) {
+	for _, r := range rs {
 		if r.Source == src {
 			return r, true
 		}
 	}
-	for _, r := range s.Repos {
+	for _, r := range rs {
 		if source.Same(r.Source, src) {
 			return r, true
 		}
@@ -116,15 +155,16 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 	if err != nil {
 		return Repo{}, false, err
 	}
+	repos := s.Repos()
 	var named []Repo
-	for _, r := range s.Repos {
+	for _, r := range repos {
 		if r.Name == nameOrSource {
 			named = append(named, r)
 		}
 	}
-	labels, _ := s.labels(cos)
+	labels, _ := s.labels(repos, cos)
 	for _, co := range cos {
-		if _, listed := s.BySource(co.origin); listed {
+		if _, listed := repos.BySource(co.origin); listed {
 			continue
 		}
 		if r := labels[co.dir]; r.Name == nameOrSource {
@@ -139,7 +179,7 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 	if len(named) > 0 {
 		return named[0], true, nil
 	}
-	if r, ok := s.BySource(nameOrSource); ok {
+	if r, ok := repos.BySource(nameOrSource); ok {
 		return r, true, nil
 	}
 	for _, co := range cos {
@@ -255,16 +295,16 @@ func dirLabel(name string) string {
 // listing, which the daemon would take for their removal. A directory
 // whose own name is the config's name for another repository keeps it,
 // as the user named it: Known refuses that label, naming both sources.
-func (s *Store) labels(cos []checkout) (out map[string]Repo, held map[string]checkout) {
+func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held map[string]checkout) {
 	out = make(map[string]Repo, len(cos))
 	held = map[string]checkout{}
 	holders := map[string]checkout{} // by label, what has it
-	for _, r := range s.Repos {
+	for _, r := range repos {
 		holders[r.Name] = checkout{origin: r.Source}
 	}
 	var made []checkout // unlisted checkouts whose name is not a label
 	for _, co := range cos {
-		if r, listed := s.BySource(co.origin); listed {
+		if r, listed := repos.BySource(co.origin); listed {
 			out[co.dir] = r
 			continue
 		}
@@ -511,12 +551,13 @@ func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err e
 	if err != nil {
 		return nil, nil, err
 	}
-	labels, held := s.labels(cos)
+	repos := s.Repos()
+	labels, held := s.labels(repos, cos)
 	var errs []error
 	seen := map[string]bool{}
 	for _, co := range cos {
 		r := labels[co.dir]
-		_, configured := s.BySource(co.origin)
+		_, configured := repos.BySource(co.origin)
 		main := Record{Repo: r.Name, Source: r.Source, Root: co.dir, Main: true, Configured: configured}
 		if s.linked(co.dir) {
 			if h, ok := held[co.dir]; ok {
@@ -770,7 +811,7 @@ func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, er
 			if mine, err := pointsBack(root, co.dir); err != nil {
 				return Record{}, "", false, err
 			} else if mine {
-				labels, _ := s.labels(cos)
+				labels, _ := s.labels(s.Repos(), cos)
 				r := labels[co.dir]
 				return Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root}, co.dir, true, nil
 			}
