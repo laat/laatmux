@@ -548,10 +548,11 @@ func TestFormChipNewlineSubmits(t *testing.T) {
 }
 
 // A click focuses the field under it, by the layout the last Render
-// drew: a chip by its columns on the framed row, the prompt box, the
-// branch line; a click on the title or the footer changes nothing, and
-// the wheel never does. One chip a line when the form is narrow, and
-// the top cut to a short height is accounted for.
+// drew: a chip by its columns on the framed row, which also opens its
+// picker, the prompt box, the branch line; a click on the title or the
+// footer changes nothing, and the wheel never does. One chip a line
+// when the form is narrow, and the top cut to a short height is
+// accounted for.
 func TestFormClickFocuses(t *testing.T) {
 	f := NewForm("add a task", chips(), "")
 	f.Render(80, 12)
@@ -572,6 +573,13 @@ func TestFormClickFocuses(t *testing.T) {
 		if f.Focus() != c.want {
 			t.Errorf("click at %d,%d: focus %d, want %d", c.x, c.y, f.Focus(), c.want)
 		}
+		if opened := f.picker != nil; opened != (c.want < fieldPrompt) {
+			t.Errorf("click at %d,%d: picker open %v", c.x, c.y, opened)
+		}
+		if f.picker != nil {
+			f.Handle(term.Key{Kind: term.KeyEsc})
+			f.Render(80, 12)
+		}
 	}
 	f.focus = fieldHost
 	for _, k := range []term.Key{{Kind: term.KeyMouse, X: 5, Y: 1}, {Kind: term.KeyMouse, X: 5, Y: 12}, {Kind: term.KeyMouse, X: 29, Y: 3}, {Kind: term.KeyMouse, X: 10, Y: 6, Wheel: 1}} {
@@ -584,16 +592,16 @@ func TestFormClickFocuses(t *testing.T) {
 	n := NewForm("t", chips(), "")
 	n.Render(12, 12)
 	n.Handle(term.Key{Kind: term.KeyMouse, X: 1, Y: 4})
-	if n.Focus() != fieldAgent {
-		t.Errorf("narrow click on the third chip line: focus %d", n.Focus())
+	if n.Focus() != fieldAgent || n.picker == nil {
+		t.Errorf("narrow click on the third chip line: focus %d, picker %v", n.Focus(), n.picker != nil)
 	}
 	// Short: nine lines are needed and eight given, so the title is
 	// cut and the first line is the chips' top frame.
 	s := NewForm("t", chips(), "")
 	s.Render(80, 8)
 	s.Handle(term.Key{Kind: term.KeyMouse, X: 30, Y: 1})
-	if s.Focus() != fieldHost {
-		t.Errorf("short form, click on the first line: focus %d, want the host chip", s.Focus())
+	if s.Focus() != fieldHost || s.picker == nil {
+		t.Errorf("short form, click on the first line: focus %d, want the host chip with its picker", s.Focus())
 	}
 }
 
