@@ -1,0 +1,57 @@
+  - Issue #363, "general: a chat thread to talk to the agents across the machines": a general view in the dashboard (and laatmux general), a prompt box, lines
+    addressed to agents by row (@plattform-lock-search/*, @vm, @all, the current workspace), delivered into their panes the way a task's prompt is, with each agent's
+    next finish and its last screen lines coming back into the transcript. The pieces exist (deliver, attention records, explain's capture); it is the thread, the
+    addressing and a say message to the host daemons.
+  - VM cleanup: both worktrees and their sessions are gone; the VM's managed server has no sessions left. It took two tries, and the first exposed a bug: the agents
+    had switched their worktrees to feat/… branches, and laatmux rm by the old branch name said "removed" while only killing the local attach session and leaving the
+    worktree and the agent. Filed as #364 (rm should refuse and name the branch the worktree is on now); the second rm by the current branch names removed them.
+  - Footer box: refined after your screenshot: a rule above the message, plain text instead of a wall of bold, and a long path or branch breaks after -// instead of
+    mid-word. Installed on mac and vm (890e958); PR #361 has CI running with the merge queued (#360 merged before it).
+
+  Running: #357, #339 (its PR is #362), #358.
+
+⏺ Background command "Wait for CI on PR #361, merge only when every check succeeded" completed (exit code 0)
+
+  Ran 1 shell command
+
+⏺ PR #361 merged as 7589af4; local main is on it, both hosts already run that code. Nothing queued from your pokes; the #357, #339 (PR #362) and #358 agents are still
+  running.
+
+❯ ok, I think we can merge laatmux onto main in the dotfiles, and create a workmux branch for emergency fallback. this works as my daily driver
+
+  Ran 2 shell commands
+
+⏺ Done in ~/.dotfiles:
+
+  - master is now the laatmux setup (fast-forwarded to dbc2db9: the tmux package with the S/T/W/C-s/C-t bindings and the claude window-name rule), pushed to origin.
+  - workmux is the old master (ba91caa), pushed, for the emergency fallback: git -C ~/.dotfiles checkout workmux && stow --restow --no-folding ~/.dotfiles/tmux &&
+    tmux source-file ~/.tmux.conf && laatmux sidebar off && tmux run-shell 'workmux sidebar on', then laatmux stop.
+  - The laatmux branch is deleted locally and on origin; origin/HEAD points at master. Your working tree is on master with nothing changed by this (your three
+    uncommitted edits to skel/.bash_profile, skel/.profile and zsh/.zprofile are untouched and still uncommitted).
+
+  Memory updated: laatmux is the daily driver, with the fallback recipe. Agents still running: #357, #339 (PR #362), #358.
+
+⏺ bang-run: hooks.json changed — names no hooks module now; hooks/register.tsx unloaded
+
+❯ this session isn't listed as working, no progress, why?
+
+⏺ Capturing this pane as a fixture, widen the working rule's window past the agents panel, and running the detect tests
+  ⎿  $ git checkout -q -b fix-detect-agents-panel origin/main && tmux capture-pane -p -t %0 > internal/detect/testdata/claude-working-agents-panel.screen && tmux
+     display -p -t %0 '#{pane_title}' > internal/detect/testdata/claude-working-agents-panel.title && grep -c . internal/detect/testdata/claude-wor…
+
+✽ Kneading… (50s · ↓ 2.7k tokens)
+  ⎿  Tip: Share Claude Code and earn $10 in usage credits · /passes
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  󰪡 Fable 5.1[1M] ctx 21% │ 5h 79% 7d 82% F 84% ↻ 3d 2h │ laatmux/ (main)
+  ⏵⏵ auto mode on · PR #362 · 1 shell · ← for agents
+
+  ⏺ main
+  ◯ iss357         Checking flushAttentionLocked in attention.go                                                                            43m 8s · ↓ 436.4k tokens
+  ◯ iss339         Waiting on opus-1.md review report                                                                                      41m 31s · ↓ 251.0k tokens
+  ◯ iss358         Checking findWorktree's CheckWire handling                                                                               39m 3s · ↓ 294.8k tokens
+  ◯ opus-iss339-1  Opus review of PR 362 round 1                                                                                                                idle
+  ◯ opus-iss358-1  Opus review round 1 of PR 365                                                                                           12m 51s · ↓ 185.5k tokens
+  ↓ 1 more
