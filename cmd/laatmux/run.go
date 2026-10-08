@@ -69,12 +69,14 @@ func cmdRun(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		w, ok, err := findWorktree(snap.Worktrees, repo, branch)
-		if err != nil {
+		w, ok, err := findRecord(snap.Worktrees, repo, branch)
+		switch {
+		case err != nil:
 			return err
-		}
-		if !ok {
+		case !ok:
 			return noWorktree(repo, branch, run.Host.Name)
+		case w.Main:
+			return onMain(repo, w, run.Host.Name, "run runs in worktrees")
 		}
 		run.Repo, run.Branch, run.Root = repo, branch, w.Root
 	} else {

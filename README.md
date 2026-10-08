@@ -221,7 +221,8 @@ truth; labels only place new things.
     later), `rebasing`, and `stale` when the last refresh timed out.
 
   Two workers beside the listing refresh it: every 5 s for a worktree
-  with a home session, every 30 s otherwise, and at once after an add, a
+  with a home session or a main checkout with an agent in it, every
+  30 s otherwise, and at once after an add, a
   run ending, or a change to `HEAD`, `index` or the refs of the branch
   and its base. A refresh is at least 2 s after the last one, never waits
   on the listing, and upserts only when a value changed. Git runs with
@@ -276,13 +277,50 @@ truth; labels only place new things.
   `.git/config`, and a checkout with no linked worktree under
   `worktrees/` is not asked, so an idle poll spawns one git process per
   checkout that has one. The id is `<environment_id>/worktree/<root>`.
+- **Main checkouts**, capability `checkouts` (issue #338): the same
+  poll reads each main checkout's branch from its `.git/HEAD`, empty
+  when detached, asking git only on the reftable backend, whose HEAD is
+  a stub, and publishes a worktree record with `main` for each checkout
+  in use: one whose repository the host's config lists, one with a
+  worktree listed, or one an agent is attributed to (below). Its id is
+  `<environment_id>/checkout/<root>`, its root the checkout's
+  directory, its branch the one checked out, and it has no `session`;
+  its `git` object is read as a worktree's, every 5 s while an agent is
+  in it. The rest of the checkouts under `repos`, many on a machine
+  that clones there by hand, have no record, line or refresh. A HEAD
+  that cannot be read, in a checkout with no worktree whose origin the
+  daemon has read, leaves that checkout without a record, logged once,
+  and fails no listing; no pane in it is a worktree's around it either.
+  git itself finds no repository there, so a checkout with a worktree
+  fails the listing as before, and one whose origin is not read yet is
+  not scanned. The main worktree git lists first is never a worktree
+  record, also where a symlink makes its path another than the
+  checkout's as scanned. The records go only to a subscriber
+  that asks for them with `checkouts` on `subscribe`, as this build's
+  clients and merging daemon do: an older client or merging daemon
+  never sees one, and gets an agent attributed to one as an agent of
+  no worktree, as before, so none takes a main checkout for a worktree
+  it may remove. A live, named agent (claude, codex) whose pane is on
+  the host's default server, not laatmux's own, with its path in a
+  main checkout and under no worktree root inside it, is attributed to
+  the checkout's record, which is published before the agent names it
+  and taken back, when no other reason holds it, after the last such
+  agent has left or quit, also when the checkout leaves the listing; a
+  shell, one left after its agent quit among them, puts no checkout in
+  use, so a record never follows a shell's `cd`. A pane laatmux made in a
+  checkout, a `new` session's, keeps a row of its own, even where the
+  checkout is inside a worktree, and a pane with no agent in a checkout
+  has no pane record. `rm` refuses a main checkout's root, also where
+  the repos directory is under the worktrees one, and `run` takes
+  registered worktrees only, as before.
 - **Attribution**, capability `attribution` (issue #55): every polled
   pane, on every server in `tmux_servers`, belongs to the worktree whose
   root contains its path, the recorded `@laatmux_cwd` of a pane laatmux
   made and `pane_current_path` otherwise. Paths are compared with
   symlinks resolved, on path separators (`/w/foo-2` is not inside
-  `/w/foo`), the deepest root winning; a pane under no root, the main
-  checkout's included, belongs to none. An agent record carries
+  `/w/foo`), the deepest root winning; a pane under no root belongs to
+  none, and a pane in a main checkout to its record only as said
+  above. An agent record carries
   `worktree_id`, so a worktree has any number of agents. A pane with no
   agent inside a root is a pane record, `{id, environment_id, server,
   session, window, pane_id, command, pid, cwd, worktree_id}`, upserted
@@ -558,7 +596,9 @@ workspace session; the next `jump` makes it again.
   of the local session found by its source and branch tags; a session
   found by name is accepted only when it carries no identity tags at all,
   never when they name another workspace. Git's refusal of a dirty worktree comes back as the error
-  with everything left in place; `--force` removes it. After an `ok` the
+  with everything left in place; `--force` removes it. A branch only a
+  main checkout has checked out is refused as the main checkout, with
+  nothing sent; a worktree on it in another clone is found first. After an `ok` the
   local session with that key is killed, switching away first if it is the
   current one. `rm --root <path> --host h` removes a detached worktree.
 - **`rm`** with no target, inside a workspace session, removes that
@@ -575,9 +615,10 @@ workspace session; the next `jump` makes it again.
   `--root` does. That is how the dashboard's `x` resolves a row, and
   what a binding needs:
   `bind-key W confirm-before -p "remove this workspace? (y/n)" "run-shell 'laatmux rm'"`.
-- **`path <repo>/<branch>`** prints the root from the host's records.
-  Records are matched by source, since the host's label for a source may
-  differ from this machine's. `rm` finds its record the same way. A
+- **`path <repo>/<branch>`** prints the root from the host's records,
+  or with no worktree on the branch the directory of the main checkout
+  that has it checked out. Records are matched by source, since the
+  host's label for a source may differ from this machine's. `rm` finds its record the same way. A
   branch that is not valid UTF-8 is refused before any daemon is asked,
   by `path`, `rm` and `run` alike, naming the quoted form a host lists a
   worktree on it under. That form, and a branch with U+FFFD, `ls` can
@@ -612,13 +653,23 @@ workspace session; the next `jump` makes it again.
   may also be the managed session's name, with the branch encoded, which
   is how a worktree detached in place is still reached. The local
   session's name follows the managed session's. `--server default` still
-  switches to an observed session on this machine's tmux.
+  switches to an observed session on this machine's tmux. A
+  repository's main checkout, `<host>/<repo>/<branch>` for the branch
+  it has checked out, has no workspace session: the jump switches to
+  the session of its agent on this machine's default server, the most
+  recently active of several, one working or blocked first, and says
+  so when no agent runs there; one on a remote host's default server
+  is refused as any session there is. Two clones' main checkouts on
+  the branch, which no label tells apart, are named with their roots,
+  and, on this machine, `--server default <host>/<session>` reaches an
+  agent in any of them.
 - **`ls`** prints the tree the sidebar's tree view shows, see below: a
-  repository per line, its worktrees with their host under it, and
-  under each its agents with mark, state (`done` and `stale` among
-  them), name, age and title, its other panes and its runs. A worktree
-  with nothing under it shows `no agent` when its session has no
-  identified agent and `no session` when it has none; on a host that
+  repository per line, its main checkouts in use and its worktrees with
+  their host under it, and under each its agents with mark, state
+  (`done` and `stale` among them), name, age and title, its other panes
+  and its runs. A worktree with nothing under it shows `no agent` when
+  its session has no identified agent and `no session` when it has
+  none, a main checkout `no agent`; on a host that
   attributes panes the session's shell is a pane under the line, so
   those notes are for older hosts and worktrees with no pane at all. A
   settled worktree says `settled`, and a local
@@ -652,8 +703,9 @@ workspace session; the next `jump` makes it again.
 - **`run [<repo>/<branch>] [--host h] -- <cmd>...`** runs the command in
   the worktree root on its host: inside a workspace session that
   workspace, from the session's key and tags; elsewhere the record found
-  as `path` finds it. stdout lines go to stdout and stderr lines to
-  stderr, so `laatmux run proj/x -- go test ./... | tail` behaves, and
+  as `path` finds it, a main checkout's refused. stdout lines go to
+  stdout and stderr lines to stderr, so `laatmux run proj/x -- go test
+  ./... | tail` behaves, and
   the exit status is the process's; 255 means the outcome is unknown, a
   lost connection whose follow found the daemon no longer knew the run;
   130 is cancelled. Ctrl-C sends `cancel` and waits for the result; a
@@ -729,6 +781,12 @@ list that `Tab` or a click switches:
   parentheses, with the git stats and the PR on the line; under each
   its agents by start time, its other panes (`$ zsh`) and its runs (`▶
   make test 0:42`), from the pane and run records the client now keeps.
+  A main checkout in use is a line under its repository like a
+  worktree's, before them, with its git stats and the agents in plain
+  sessions on its host's default server in it; `Enter` on it goes to
+  the session of the most recently active, the line is the viewer's
+  when the viewer sits in the session of any of them, and its agents'
+  tiles are titled by the repository, with the branch under it.
   A pending task sits where its worktree will be, holding the worktree's
   children while it stands for it, the newest of several owning them.
   An orphaned session sits under its repository by its source tag,
@@ -863,9 +921,12 @@ the same selection locally; a pane on a remote host's default server is
 refused as `jump` refuses it. A run's line jumps to its worktree's
 session. `x` and `X` on a tile or an agent remove the agent's worktree,
 the question saying how many agents go with it, and say what they
-remove on a pane, a run, a repository line or the stale fold; `a`
-preselects the repository and host of the selected row's worktree, and
-a repository line's repository when this machine knows its source. The
+remove on a pane, a run, a repository line or the stale fold; on a
+main checkout's line or one of its agents they refuse it as the main
+checkout, and `z` and `S` say it has no workspace session; `a`
+preselects the repository and host of the selected row's worktree, a
+main checkout's without its branch, and a repository line's repository
+when this machine knows its source. The
 host daemon leaves laatmux's own panes, the sidebar
 panes and the attach panes of workspace sessions, out of its pane
 records by their tags.
@@ -876,8 +937,9 @@ the record when missing; a `new` session's row does the same through a
 plain attachment; an observed agent on this machine's default server is
 a `switch-client`; one on a remote host's default server is refused with
 `jump`'s message; a worktree with no session says in the footer how `add`
-would start one: its command line, or what add needs first. An orphaned
-row's session exists locally and is switched to.
+would start one: its command line, or what add needs first; a main
+checkout goes as `jump` takes it, and with no agent says so. An
+orphaned row's session exists locally and is switched to.
 
 - **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
   eight server hooks at indexes laatmux owns, `after-new-window[9101]`

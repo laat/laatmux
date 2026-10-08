@@ -373,6 +373,27 @@ func TestExchangeAndRefused(t *testing.T) {
 	}
 }
 
+// Snapshot subscribes asking for the main checkouts' records: rm, path
+// and jump against a host the local daemon does not follow see them.
+func TestSnapshotAsksForCheckouts(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	c := &Conn{Host: peer.Host{Name: "t"}, pc: protocol.NewConn(client), close: func() { client.Close() }}
+	sub := make(chan protocol.Message, 1)
+	go func() {
+		sc := protocol.NewConn(server)
+		m, _ := sc.Read()
+		sub <- m
+		sc.Write(protocol.Message{Type: protocol.TypeSnapshot})
+	}()
+	if _, err := c.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if m := <-sub; m.Type != protocol.TypeSubscribe || !m.Checkouts || m.Merged {
+		t.Fatalf("subscribe %+v", m)
+	}
+}
+
 // SSH's argv for each kind of command laatmux runs over ssh, as the
 // sites wrote them by hand before: the options in a fixed order, --, the
 // alias, the command as one argument.

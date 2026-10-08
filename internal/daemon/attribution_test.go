@@ -43,14 +43,16 @@ func TestAttributionTable(t *testing.T) {
 	foo2 := filepath.Join(base, "worktrees", "proj", "foo-2")
 	nested := filepath.Join(foo, "vendor", "lib")
 	main := filepath.Join(base, "repos", "proj")
-	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main)
+	// A main checkout inside a worktree, its repos directory there.
+	inner, unread := filepath.Join(foo, "repos", "p"), filepath.Join(foo, "repos", "q")
+	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main, filepath.Join(inner, "src"), unread)
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(foo, link); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Config{EnvironmentID: "env"})
 	d.mu.Lock()
-	d.roots = resolveRoots([]string{foo, foo2, nested})
+	d.roots = resolveRoots([]string{foo, foo2, nested}, []root{{root: inner}, {root: unread, unread: true}})
 	d.mu.Unlock()
 	id := func(root string) string { return "env/worktree/" + root }
 	for _, c := range []struct {
@@ -67,13 +69,17 @@ func TestAttributionTable(t *testing.T) {
 		{"path reaching the root through a symlink", tmux.Pane{CurrentPath: filepath.Join(link, "src")}, id(foo)},
 		{"a path that is gone", tmux.Pane{CurrentPath: filepath.Join(foo, "gone")}, id(foo)},
 		{"a recorded path on a pane laatmux did not make", tmux.Pane{Cwd: foo, CurrentPath: main}, ""},
+		// The checkout's, which only an agent in a plain session takes,
+		// not the worktree's around it.
+		{"a main checkout inside a worktree", tmux.Pane{CurrentPath: filepath.Join(inner, "src")}, ""},
+		{"a main checkout unread inside a worktree", tmux.Pane{CurrentPath: unread}, ""},
 	} {
 		// A pane's path is resolved off the poll: the answer is there
 		// by a later one.
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)))
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), false)
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -83,6 +89,18 @@ func TestAttributionTable(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+	d.mu.Lock()
+	got := d.worktreeOfLocked(filepath.Join(inner, "src"), true)
+	// One whose HEAD could not be read has no record: neither it nor
+	// the worktree around it takes the agent.
+	gotUnread := d.worktreeOfLocked(unread, true)
+	d.mu.Unlock()
+	if got != "env/checkout/"+inner {
+		t.Errorf("an agent in a plain session in the checkout: %q", got)
+	}
+	if gotUnread != "" {
+		t.Errorf("an agent in a plain session in a checkout unread: %q", gotUnread)
 	}
 }
 
@@ -191,7 +209,7 @@ func newAttrFixture(t *testing.T) *attrFixture {
 func (f *attrFixture) list(roots ...string) {
 	f.d.mu.Lock()
 	defer f.d.mu.Unlock()
-	f.d.setRootsLocked(resolveRoots(roots), time.Now())
+	f.d.setRootsLocked(resolveRoots(roots, nil), time.Now())
 }
 
 // drain returns what the subscriber got until the stream is quiet.

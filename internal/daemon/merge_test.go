@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -249,13 +250,20 @@ func idleTimerGen(t *testing.T, d *Daemon, not uint64) uint64 {
 // the connection and the snapshot.
 func (f *mergedFixture) subscribe(t *testing.T, ctx context.Context) (net.Conn, *protocol.Conn, protocol.Message) {
 	t.Helper()
+	return f.subscribeAsking(t, ctx, false)
+}
+
+// subscribeAsking is subscribe, asking for the main checkouts' records
+// or not.
+func (f *mergedFixture) subscribeAsking(t *testing.T, ctx context.Context, checkouts bool) (net.Conn, *protocol.Conn, protocol.Message) {
+	t.Helper()
 	server, cl := net.Pipe()
 	go f.local.HandleConn(ctx, server, func() { server.Close() })
 	pc := protocol.NewConn(cl)
 	if _, err := pc.Read(); err != nil {
 		t.Fatal(err)
 	}
-	if err := pc.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err != nil {
+	if err := pc.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true, Checkouts: checkouts}); err != nil {
 		t.Fatal(err)
 	}
 	snap := next(t, cl, pc)
@@ -731,6 +739,81 @@ func TestMergedPaneAndRunRecords(t *testing.T) {
 	if m := got[len(got)-1]; m.Type != protocol.TypeRemove {
 		t.Fatalf("pane remove %+v", m)
 	}
+}
+
+// The merging daemon asks its hosts for their main checkouts' records
+// and forwards them, in the snapshot and as upserts, to a merged
+// subscriber that asked for them, and to no other, which still gets the
+// worktree and the agent naming the checkout.
+func TestMergedMainCheckouts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	rd := f.remote.d
+	main := protocol.Worktree{ID: "renv/checkout//r/proj", EnvironmentID: "renv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
+	rd.mu.Lock()
+	rd.worktrees["/r/proj"] = main
+	rd.worktrees["/w/a"] = protocol.Worktree{ID: "renv/worktree//w/a", EnvironmentID: "renv", Repo: "proj", Branch: "a", Root: "/w/a"}
+	rd.mu.Unlock()
+	hasMain := func(ws []protocol.Worktree) bool {
+		return slices.ContainsFunc(ws, func(w protocol.Worktree) bool { return w.Main })
+	}
+	c, pc, _ := f.subscribeAsking(t, ctx, true)
+	defer c.Close()
+	msgs := until(t, c, pc, hostStatus("vm", listed))
+	if !slices.ContainsFunc(msgs, func(m protocol.Message) bool { return m.Worktree != nil && m.Worktree.ID == main.ID }) {
+		t.Fatalf("the main checkout not forwarded: %+v", msgs)
+	}
+	// Subscribed once the host is listed, so its snapshot is checked
+	// below with the others, and its upserts from here on.
+	c2, pc2, _ := f.subscribeAsking(t, ctx, false)
+	defer c2.Close()
+	c3, _, snap := f.subscribeAsking(t, ctx, true)
+	c3.Close()
+	c4, _, snap2 := f.subscribeAsking(t, ctx, false)
+	c4.Close()
+	if !hasMain(snap.Worktrees) || hasMain(snap2.Worktrees) || len(snap2.Worktrees) != 1 {
+		t.Fatalf("snapshots: asked %+v, not %+v", snap.Worktrees, snap2.Worktrees)
+	}
+	// An upsert of the checkout, then the agent in it.
+	main.Branch = "feature"
+	a := protocol.Agent{ID: "renv/default/%9", EnvironmentID: "renv", Server: "default", Session: "work", WorktreeID: main.ID}
+	rd.mu.Lock()
+	rd.worktrees["/r/proj"] = main
+	rd.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &main})
+	rd.agents["default/%9"] = a
+	rd.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
+	rd.mu.Unlock()
+	got := until(t, c, pc, hasAgent(a.ID))
+	if !slices.ContainsFunc(got, func(m protocol.Message) bool { return m.Worktree != nil && m.Worktree.Branch == "feature" }) || got[len(got)-1].Agent.WorktreeID != main.ID {
+		t.Fatalf("the checkout's upsert and the agent in it: %+v", got)
+	}
+	got = until(t, c2, pc2, hasAgent(a.ID))
+	for _, m := range got {
+		if m.Worktree != nil {
+			t.Fatalf("forwarded to a subscriber that did not ask: %+v", m)
+		}
+	}
+	// The agent is one of no worktree there, as before, in the upsert
+	// and in a snapshot.
+	if got[len(got)-1].Agent.WorktreeID != "" {
+		t.Fatalf("the attribution forwarded to a subscriber that did not ask: %+v", got[len(got)-1].Agent)
+	}
+	c5, _, snap3 := f.subscribeAsking(t, ctx, false)
+	c5.Close()
+	if i := slices.IndexFunc(snap3.Agents, func(x protocol.Agent) bool { return x.ID == a.ID }); i < 0 || snap3.Agents[i].WorktreeID != "" {
+		t.Fatalf("the attribution in a snapshot that did not ask: %+v", snap3.Agents)
+	}
+	// This machine dropped from the hosts: its main checkout's record
+	// goes by its own id.
+	lmain := protocol.Worktree{ID: "lenv/checkout//code/x", EnvironmentID: "lenv", Repo: "x", Branch: "main", Root: "/code/x", Main: true}
+	f.local.mu.Lock()
+	f.local.worktrees["/code/x"] = lmain
+	f.local.mu.Unlock()
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
+	c6, _, _ := f.subscribeAsking(t, ctx, true)
+	c6.Close()
+	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.WorktreeID == lmain.ID })
 }
 
 // A reconnect's snapshot is forwarded in the host's own order: the

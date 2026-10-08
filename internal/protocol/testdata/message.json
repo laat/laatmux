@@ -10,6 +10,7 @@
   ],
   "pid": 1,
   "merged": true,
+  "checkouts": true,
   "seq": 1,
   "agents": [
     {
@@ -76,6 +77,7 @@
       "root": "root",
       "branch_display_only": true,
       "session": "session",
+      "main": true,
       "git": {
         "base": "base",
         "committed": [
@@ -107,6 +109,7 @@
     "root": "root",
     "branch_display_only": true,
     "session": "session",
+    "main": true,
     "git": {
       "base": "base",
       "committed": [

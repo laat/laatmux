@@ -297,13 +297,21 @@ func TestServeToRender(t *testing.T) {
 	if agents := view.Text(v.Render()); !strings.HasPrefix(agents, "No agents running") {
 		t.Errorf("the agent view:\n%s", agents)
 	}
-	// The worktree the store added is the one the stream carries.
-	var roots, branches []string
+	// The worktree the store added is the one the stream carries, beside
+	// the main checkout of its repository, which the config lists.
+	var roots, branches, mains []string
 	for _, w := range m.Status("").Input.Worktrees {
+		if w.Main {
+			mains = append(mains, w.Branch)
+			continue
+		}
 		roots, branches = append(roots, w.Root), append(branches, w.Branch)
 	}
 	if len(roots) != 1 || roots[0] != s.added.Root || branches[0] != "task" {
 		t.Errorf("worktrees in the merged state: %v %v, want %s task", roots, branches, s.added.Root)
+	}
+	if len(mains) != 1 || mains[0] != "main" {
+		t.Errorf("main checkouts in the merged state: %v, want one on main", mains)
 	}
 }
 

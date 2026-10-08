@@ -139,6 +139,16 @@ const (
 	// a view lands on the pane, not only the session. A pane gone
 	// answers an error.
 	CapSelect = "select"
+	// CapCheckouts is the main checkouts' records: a host publishes a
+	// worktree record with main set for each main checkout under its
+	// repos directory in use, to a subscriber that asks with checkouts
+	// on subscribe, and attributes to it the agents in plain sessions
+	// on its default server whose pane is in the checkout. A subscriber
+	// that does not ask, an older client or merging daemon, never gets
+	// one, so none takes a main checkout for a worktree it may remove.
+	// A merging daemon with it asks its hosts and forwards the records
+	// to a merged subscriber that asks.
+	CapCheckouts = "checkouts"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -394,6 +404,8 @@ type Agent struct {
 	// worktree whose root contains the pane's path: the recorded one of
 	// a pane laatmux made, the current one otherwise. "" when the pane
 	// is in no listed worktree, or the worktree has not been listed yet.
+	// From a daemon with checkouts, to a subscriber that asked for them,
+	// it may be a main checkout's record's instead (Worktree.Main).
 	WorktreeID string    `json:"worktree_id,omitempty"`
 	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -500,8 +512,9 @@ const (
 // worktree directory, in a checkout of a known repository. Git is the
 // source of truth: a worktree made by hand is listed, one removed by hand
 // disappears, and one whose directory is gone (prunable) is not published.
+// With Main it is a main checkout under the repos directory instead.
 type Worktree struct {
-	ID            string `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
+	ID            string `json:"id"` // "<environment_id>/worktree/<root>", "<environment_id>/checkout/<root>" with Main; opaque to clients
 	EnvironmentID string `json:"environment_id"`
 	Repo          string `json:"repo"`             // repository label from the host's config
 	Source        string `json:"source,omitempty"` // repository source, the identity; "" from older daemons
@@ -519,6 +532,13 @@ type Worktree struct {
 	// jump attaches to it. "" when there is none. A daemon without
 	// attribution names it only while it has that single pane.
 	Session string `json:"session,omitempty"`
+	// Main, from a daemon with checkouts, is that the record is a
+	// repository's main checkout under the repos directory, not a
+	// worktree: Root is the checkout's directory and Branch the branch
+	// it has checked out. It has no home session and no workspace
+	// session; its agents are those in plain sessions on the host's
+	// default server, and rm refuses it.
+	Main bool `json:"main,omitempty"`
 	// Git, from a daemon with git-status, is the worktree's git state;
 	// nil until its first refresh.
 	Git       *GitStatus `json:"git,omitempty"`
@@ -639,7 +659,10 @@ type Message struct {
 
 	// subscribe. Merged asks for every configured host's records in one
 	// stream; without it the daemon sends its own host's records only.
-	Merged bool `json:"merged,omitempty"`
+	// Checkouts asks for the main checkouts' records too, from a daemon
+	// with checkouts; without it none is sent.
+	Merged    bool `json:"merged,omitempty"`
+	Checkouts bool `json:"checkouts,omitempty"`
 
 	// snapshot / upsert / remove
 	Seq        uint64     `json:"seq,omitempty"`

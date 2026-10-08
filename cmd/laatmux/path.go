@@ -11,7 +11,8 @@ import (
 )
 
 // cmdPath prints the worktree root of a branch on its host, from the
-// host's records.
+// host's records, or the directory of the main checkout that has the
+// branch checked out when no worktree is on it.
 func cmdPath(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("path", flag.ContinueOnError)
 	hostFlag := fs.String("host", "", "host name; default the last used for the repository")
@@ -45,7 +46,7 @@ func cmdPath(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	w, ok, err := findWorktree(snap.Worktrees, repo, branch)
+	w, ok, err := findRecord(snap.Worktrees, repo, branch)
 	if err != nil {
 		return err
 	}

@@ -191,9 +191,11 @@ func (j *join) worktreeAgents(w *protocol.Worktree) []*protocol.Agent {
 	return out
 }
 
-// Tree is the tree view: repositories by name, their worktrees by branch
-// with their agents, panes and runs under them, tasks and orphaned
-// sessions where they belong, and other sessions last. Depth is the
+// Tree is the tree view: repositories by name, their main checkouts in
+// use first, with the agents in plain sessions on the default server in
+// each, then their worktrees by branch with their agents, panes and runs
+// under them, tasks and orphaned sessions where they belong, and other
+// sessions last. Depth is the
 // node's level, Children how many nodes are under a foldable one.
 func Tree(in Input) []Row {
 	b := newBuilder(sorted(in))
@@ -334,8 +336,16 @@ func (b *builder) worktrees() {
 		} else {
 			line.Name = w.Repo + "/" + w.Branch
 		}
+		// The workspace session by the worktree's key. A main checkout
+		// has none: one left at its root, from a worktree there before,
+		// is no session of its and stays an orphaned line.
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
-		b.seenKey[key] = true
+		ws := j.byKey[key]
+		if w.Main {
+			ws = nil
+		} else {
+			b.seenKey[key] = true
+		}
 		agents := j.worktreeAgents(w)
 		// The line's agent is the one its jump goes through: in the home
 		// session; with the home lost, the one laatmux made at the root,
@@ -358,13 +368,13 @@ func (b *builder) worktrees() {
 			// (visitors).
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
 			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
-				c.Local = j.byKey[key]
+				c.Local = ws
 			}
 			if c.Local == nil {
 				c.Local = j.agentLocal(host, a)
 			}
 			if c.Local == nil {
-				c.Local = j.byKey[key]
+				c.Local = ws
 			}
 			children = append(children, c)
 		}
@@ -383,13 +393,27 @@ func (b *builder) worktrees() {
 		// The settled state is a workspace session's only, not one set
 		// by hand on a plain session or attachment. The most pressing
 		// agent is kept apart, for the folded line's icon.
-		line.Local = j.byKey[key]
+		line.Local = ws
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
-			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() {
+			// A main checkout's plain session only, as below: an
+			// attachment's tag makes its session another line's.
+			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() && !(w.Main && l.Laatmux()) {
 				if line.Local == nil {
 					line.Local = l
 				}
 				if in.Current != "" && l.Name == in.Current {
+					line.Current, line.Own = true, true
+				}
+			}
+		}
+		if w.Main && in.Current != "" {
+			// A main checkout has no session of its own: the viewer in
+			// the plain session of any of its agents is on its line by
+			// its own session, not only in its jump agent's, which turns
+			// with activity, so the following band does not move with
+			// another agent's work.
+			for _, c := range children {
+				if c.Local != nil && !c.Local.Laatmux() && c.Local.Name == in.Current {
 					line.Current, line.Own = true, true
 				}
 			}
@@ -563,8 +587,9 @@ func (b *builder) nameRepos() {
 }
 
 // repoLines is the repositories by name, each line followed by its
-// groups: worktrees by branch, tasks and orphaned lines among them by
-// their name, tasks of one name the newest first.
+// groups: the main checkouts first, then worktrees by branch, tasks and
+// orphaned lines among them by their name, tasks of one name the newest
+// first.
 func (b *builder) repoLines() []Row {
 	var out []Row
 	keys := make([]string, 0, len(b.repos))
@@ -580,6 +605,9 @@ func (b *builder) repoLines() []Row {
 	for _, k := range keys {
 		rp := b.repos[k]
 		sort.SliceStable(rp.nodes, func(x, y int) bool {
+			if ma, mb := rp.nodes[x][0].mainCheckout(), rp.nodes[y][0].mainCheckout(); ma != mb {
+				return ma
+			}
 			la, _ := rp.nodes[x][0].Labels()
 			lb, _ := rp.nodes[y][0].Labels()
 			if la != lb {
@@ -603,6 +631,11 @@ func (b *builder) repoLines() []Row {
 		}
 	}
 	return out
+}
+
+// mainCheckout reports whether a line is a main checkout's.
+func (r Row) mainCheckout() bool {
+	return r.Kind == KindWorktree && r.Worktree != nil && r.Worktree.Main
 }
 
 // attachedHome marks the lines whose home the viewer's plain attachment
@@ -973,10 +1006,11 @@ func (r Row) namedAfter(session string) bool {
 // named is the name add gives the managed session of the line's
 // worktree, tmux.SessionName of the host's label, which this machine's
 // configuration may name otherwise, and the branch. "" for a detached
-// worktree, which add does not make, and for a line of none.
+// worktree, which add does not make, for a main checkout, which add
+// makes no session for, and for a line of none.
 func (r Row) named() string {
 	w := r.Worktree
-	if w == nil || w.Branch == "" {
+	if w == nil || w.Branch == "" || w.Main {
 		return ""
 	}
 	return tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)

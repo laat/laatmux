@@ -61,8 +61,9 @@ type mergedHost struct {
 // added to the file shows up on the next ls without a restart, and one
 // removed gets a remove for its host record. The local sessions are
 // listed once, synchronously, so the snapshot's sessions are as fresh as
-// the connection whether the poll had been idle or never started.
-func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber, protocol.Message) {
+// the connection whether the poll had been idle or never started. checkouts
+// is that the subscriber asked for the main checkouts' records.
+func (d *Daemon) mergedSubscribe(ctx context.Context, drop func(), checkouts bool) (*subscriber, protocol.Message) {
 	// The config read and the listing are serialized with their
 	// application, against the poll and against another subscription,
 	// so neither is ever applied after a newer one.
@@ -100,9 +101,9 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func()) (*subscriber,
 	}
 	d.applySessionsLocked(sessions, serr)
 	d.subMu.Unlock()
-	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop, merged: true}
+	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop, merged: true, checkouts: checkouts}
 	d.msubs[s] = struct{}{}
-	snap := d.mergedSnapshotLocked()
+	snap := d.mergedSnapshotLocked(checkouts)
 	d.mu.Unlock()
 	return s, snap
 }
@@ -243,8 +244,8 @@ func (d *Daemon) dropHostLocked(mh *mergedHost) {
 		for key := range d.agents {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: d.agentID(key)})
 		}
-		for root := range d.worktrees {
-			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root)})
+		for _, w := range d.worktrees {
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
 		}
 		for key := range d.paneRecs {
 			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeRemove, PaneRecordID: d.paneRecordID(key)})
@@ -311,9 +312,10 @@ func (d *Daemon) mbroadcastLocked(m protocol.Message) {
 }
 
 // mergedSnapshotLocked is the merged state: every host's record in config
-// order, all cached records, and the local sessions by name. Called
-// with relay.mu and d.mu held.
-func (d *Daemon) mergedSnapshotLocked() protocol.Message {
+// order, all cached records, and the local sessions by name. The main
+// checkouts' records are in it with checkouts. Called with relay.mu and
+// d.mu held.
+func (d *Daemon) mergedSnapshotLocked(checkouts bool) protocol.Message {
 	m := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.mseq, SessionsError: d.sessionsErr}
 	for _, name := range d.mnames {
 		mh := d.mhosts[name]
@@ -322,7 +324,7 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 			for _, a := range d.agents {
 				m.Agents = append(m.Agents, a)
 			}
-			m.Worktrees = append(m.Worktrees, d.worktreesLocked()...)
+			m.Worktrees = append(m.Worktrees, d.worktreesLocked(checkouts)...)
 			m.Panes = append(m.Panes, d.paneRecsLocked()...)
 			m.Runs = append(m.Runs, d.runRecsLocked()...)
 			continue
@@ -331,7 +333,9 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 			m.Agents = append(m.Agents, a)
 		}
 		for _, w := range mh.worktrees {
-			m.Worktrees = append(m.Worktrees, w)
+			if !w.Main || checkouts {
+				m.Worktrees = append(m.Worktrees, w)
+			}
 		}
 		for _, p := range mh.panes {
 			m.Panes = append(m.Panes, p)
@@ -343,6 +347,7 @@ func (d *Daemon) mergedSnapshotLocked() protocol.Message {
 	for _, s := range d.msessions {
 		m.Sessions = append(m.Sessions, s)
 	}
+	m.Agents = agentsFor(m.Agents, checkouts)
 	sort.Slice(m.Sessions, func(i, j int) bool { return m.Sessions[i].Name < m.Sessions[j].Name })
 	if d.relay != nil {
 		m.Pendings, m.Handoffs = d.relay.pendingsLocked()
@@ -393,7 +398,10 @@ func (d *Daemon) follow(ctx context.Context, mh *mergedHost) {
 			})
 			backoff = d.cfg.ReconnectMin
 			stop := c.CloseOnDone(ctx)
-			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe}); err == nil {
+			// The main checkouts' records too, which a merged subscriber
+			// that asks for them gets; a host without checkouts passes
+			// over the field.
+			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Checkouts: true}); err == nil {
 				for {
 					msg, err := c.Read()
 					if err != nil {
@@ -523,10 +531,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 		// older listing's, and it is not the connection's listing.
 		mh.listed = msg.Listing != nil && msg.ListingError == ""
 		if mh.listed {
-			listed := map[string]bool{}
-			for id := range mh.worktrees {
-				listed[id] = true
-			}
+			listed := listedIDs(mh.worktrees)
 			d.hostListedLocked(mh.status.EnvironmentID, listed, true)
 		}
 		mh.status.Listed = true
@@ -538,10 +543,7 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			// A poll that succeeded, after the removals it made: a
 			// listing that failed for a while and came back finds what
 			// went meanwhile.
-			listed := map[string]bool{}
-			for id := range mh.worktrees {
-				listed[id] = true
-			}
+			listed := listedIDs(mh.worktrees)
 			// The connection's first listing, after a snapshot a failing
 			// listing left without its stamp, is fresh as a stamped
 			// snapshot is.
@@ -573,8 +575,12 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			delete(mh.agents, msg.AgentID)
 		}
 		if msg.WorktreeID != "" {
+			// A main checkout's record out of use is no worktree's
+			// removal.
+			if !mh.worktrees[msg.WorktreeID].Main {
+				d.worktreeRemovedLocked(msg.WorktreeID, msg.RemovedIn)
+			}
 			delete(mh.worktrees, msg.WorktreeID)
-			d.worktreeRemovedLocked(msg.WorktreeID, msg.RemovedIn)
 		}
 		if msg.PaneRecordID != "" {
 			delete(mh.panes, msg.PaneRecordID)

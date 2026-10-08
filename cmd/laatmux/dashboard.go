@@ -398,6 +398,10 @@ func worktreeSessionName(h config.Host, w protocol.Worktree) string {
 // find, or the session on this machine's default server to switch to.
 func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec, session string, err error) {
 	switch {
+	case r.Worktree != nil && r.Worktree.Main && r.Agent == nil:
+		// A main checkout's line goes to its agent's session, the
+		// default server's: no workspace session is made for it.
+		return spec, "", errors.New(mainNoAgent(h, *r.Worktree))
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
 		if r.Worktree.Session == "" {
 			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))

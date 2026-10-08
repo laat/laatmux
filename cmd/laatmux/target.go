@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -347,6 +348,57 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 	}
 	sort.Strings(roots)
 	return protocol.Worktree{}, false, fmt.Errorf("%s has worktrees at %s, in two clones of the repository", tmux.Printable(repo.Name+"/"+branch), strings.Join(roots, " and "))
+}
+
+// findRecord is findWorktree over the worktrees, then over the main
+// checkouts, which another clone of the repository can have on the
+// branch a worktree is for: path prints a main checkout's root, and rm
+// and run refuse it (onMain).
+func findRecord(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool, error) {
+	worktrees, mains := splitMains(ws)
+	if w, ok, err := findWorktree(worktrees, repo, branch); ok || err != nil {
+		return w, ok, err
+	}
+	// A main checkout is named by the branch it has as shown: no
+	// command takes its root, so findWorktree's word about --root does
+	// not hold for it.
+	var found []protocol.Worktree
+	for _, w := range mains {
+		if w.Branch == branch && branch != "" && source.Same(w.Source, repo.Source) {
+			found = append(found, w)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return protocol.Worktree{}, false, nil
+	case 1:
+		return found[0], true, nil
+	}
+	return protocol.Worktree{}, false, twoMains(tmux.Printable(repo.Name+"/"+branch), found)
+}
+
+// twoMains says the branch a target names is checked out in the main
+// checkouts of two clones of the repository, which no label tells
+// apart: both clones of a repository the config lists carry its name.
+func twoMains(target string, found []protocol.Worktree) error {
+	roots := make([]string, len(found))
+	for i, w := range found {
+		roots[i] = tmux.Printable(w.Root)
+	}
+	sort.Strings(roots)
+	n := len(roots)
+	clones, at := "two clones", strings.Join(roots, " and ")
+	if n > 2 {
+		clones, at = strconv.Itoa(n)+" clones", strings.Join(roots[:n-1], ", ")+" and "+roots[n-1]
+	}
+	return fmt.Errorf("%s is checked out in the main checkouts at %s, %s of the repository", target, at, clones)
+}
+
+// onMain is rm's and run's refusal of a main checkout, which git keeps
+// and run's root is not: what names it, its host and its root, and what
+// the command takes instead.
+func onMain(repo config.Repo, w protocol.Worktree, host, takes string) error {
+	return fmt.Errorf("%s on %s is the main checkout, at %s; %s", tmux.Printable(repo.Name+"/"+w.Branch), host, tmux.Printable(w.Root), takes)
 }
 
 // noWorktree is run's and path's error for a branch with no worktree on

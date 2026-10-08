@@ -526,7 +526,7 @@ func TestAttentionSeenLoop(t *testing.T) {
 
 	// A view opens: the loop lists, and it sees the user come back. The
 	// poke's listing comes after the tick's has moved what it moves.
-	s, _ := d.mergedSubscribe(ctx, nil)
+	s, _ := d.mergedSubscribe(ctx, nil, false)
 	listed("no listing with a view open")
 	n := listings.Load()
 	d.Poke()

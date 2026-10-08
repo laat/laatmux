@@ -15,7 +15,8 @@ import (
 // hosts in the config and republishes one stream over the local socket
 // with every host's records, a host record per host, and the local
 // workspace sessions, so a client per window is one local connection
-// rather than an ssh channel per host.
+// rather than an ssh channel per host. A client subscribes to the main
+// checkouts' records too: this build knows them from worktrees.
 
 // Dial connects to the local daemon when it has the merged capability.
 // False is a daemon that could not be reached or started, or an older
@@ -44,7 +45,7 @@ func (m *State) Read(ctx context.Context, c *client.Conn, wait time.Duration, re
 	defer cancel()
 	defer c.CloseOnDone(ctx)()
 	m.via(c)
-	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err != nil {
+	if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true, Checkouts: true}); err != nil {
 		return nil, err
 	}
 	snapshot := false
@@ -100,7 +101,7 @@ func (m *State) Follow(ctx context.Context, c *client.Conn) {
 			// does not answer at all.
 			stop := c.CloseOnDone(ctx)
 			m.via(c)
-			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true}); err == nil {
+			if err := c.Write(protocol.Message{Type: protocol.TypeSubscribe, Merged: true, Checkouts: true}); err == nil {
 				for {
 					msg, err := c.Read()
 					if err != nil {

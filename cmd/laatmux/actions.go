@@ -260,12 +260,13 @@ func (d *dash) startAdd(m *view.Model) {
 	// tile or any tree line under one, with the branch when the worktree
 	// has no session yet, so an agent can be started in it, unless the
 	// branch is only shown and add could not name it; a repository line
-	// names its repository.
+	// names its repository. A main checkout's branch is not: git keeps
+	// it checked out there, and the form proposes one from the prompt.
 	preRepo, preHost, branch := "", "", ""
 	switch r := m.Selection(); {
 	case r != nil && r.Worktree != nil && !r.Orphaned:
 		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
-		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly {
+		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly && !r.Worktree.Main {
 			branch = r.Worktree.Branch
 		}
 	case r != nil && r.Kind == rows.KindRepo:
@@ -598,6 +599,10 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 	}
 	rm := command.Rm{Host: h}
 	switch {
+	case r.Worktree != nil && r.Worktree.Main:
+		// From its line or an agent's tile or line: git keeps the
+		// main checkout, and so does laatmux.
+		return command.Rm{}, errors.New(mainName(h.Name, *r.Worktree) + " is the main checkout; x removes worktrees")
 	case r.Worktree != nil:
 		rm.Root, rm.Branch, rm.Environment = r.Worktree.Root, r.Worktree.Branch, r.Worktree.EnvironmentID
 		if repo, ok := d.cfg.RepoBySource(r.Worktree.Source); ok {
@@ -732,6 +737,12 @@ func (d *dash) settle(m *view.Model) {
 		// add's agent before the host lists the worktree: z settles
 		// the worktree row it becomes.
 		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
+		return
+	}
+	if w := line.Worktree; w != nil && w.Main {
+		// Its line, or a tile or a line of an agent in it: settled is a
+		// workspace session's state, and a main checkout has none.
+		m.Message = mainName(line.HostName(), *w) + " is the main checkout, which has no workspace session"
 		return
 	}
 	if !resolved && r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
@@ -947,6 +958,9 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Orphaned {
 		return protocol.Session{}, errors.New(r.Name + ": its worktree is gone")
 	}
+	if r.Worktree != nil && r.Worktree.Main {
+		return protocol.Session{}, errors.New(mainName(r.HostName(), *r.Worktree) + " is the main checkout, which has no workspace session")
+	}
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
 		env, _ := protocol.SplitSessionKey(l.Key)
@@ -976,6 +990,9 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 func localSpec(cfg config.Config, r rows.Row) (workspace.Spec, error) {
 	if r.Worktree == nil {
 		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	}
+	if r.Worktree.Main {
+		return workspace.Spec{}, errors.New(mainName(r.HostName(), *r.Worktree) + " is the main checkout, which has no workspace session")
 	}
 	h, ok := cfg.Find(r.Host)
 	if !ok {

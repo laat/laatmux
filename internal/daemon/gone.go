@@ -62,6 +62,20 @@ func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
 	}
 }
 
+// listedIDs is the ids of a host's worktree records, for
+// hostListedLocked: the worktrees alone, since a task's worktree is never
+// a main checkout, and a main checkout whose record comes and goes with
+// its agents is no change of listing for the tasks.
+func listedIDs(ws map[string]protocol.Worktree) map[string]bool {
+	out := make(map[string]bool, len(ws))
+	for _, w := range ws {
+		if !w.Main {
+			out[w.ID] = true
+		}
+	}
+	return out
+}
+
 // hostListedLocked is a host's successful listing of worktrees: a task
 // on the environment whose worktree it lacks is checked, once per
 // listing that differs, since polls repeat a listing many times over. A
