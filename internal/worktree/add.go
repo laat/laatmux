@@ -50,11 +50,13 @@ type Added struct {
 // is not. A failed stage stops the sequence with a StageError and leaves
 // the worktree in place for a retry. The daemon runs the three parts
 // itself, with its allocate stage between Prepare and Place; Add is the
-// composition for a branch decided in advance.
+// composition for a branch decided in advance, with the store's copy
+// rules for every worktree as it starts.
 func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Reporter) (Added, error) {
 	if report == nil {
 		report = func(string, string, string) {}
 	}
+	hostCopy := s.Listed().Copy
 	if err := CheckBranch(ctx, branch); err != nil {
 		return Added{}, fail(protocol.StageResolve, err)
 	}
@@ -66,7 +68,7 @@ func (s *Store) Add(ctx context.Context, repo Repo, branch string, report Report
 	if err != nil {
 		return Added{Checkout: p.Checkout}, fail(protocol.StageResolve, err)
 	}
-	return s.Materialize(ctx, p.Checkout, repo, branch, root, report)
+	return s.Materialize(ctx, p.Checkout, repo, branch, root, hostCopy, report)
 }
 
 // Prepared is what the resolve, clone and fetch stages leave: the main
@@ -155,8 +157,9 @@ func (s *Store) Place(ctx context.Context, p Prepared, repo Repo, branch string)
 }
 
 // Materialize runs the worktree, copy and setup stages for branch at
-// root in the prepared checkout.
-func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, branch, root string, report Reporter) (Added, error) {
+// root in the prepared checkout. hostCopy is the host's copy rules for
+// every worktree, of the Listed the add took repo from.
+func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, branch, root string, hostCopy []string, report Reporter) (Added, error) {
 	if report == nil {
 		report = func(string, string, string) {}
 	}
@@ -275,7 +278,7 @@ func (s *Store) Materialize(ctx context.Context, checkout string, repo Repo, bra
 	var rules []string
 	rules = append(rules, setup.Copy...)
 	rules = append(rules, repo.Copy...)
-	rules = append(rules, s.Copy...)
+	rules = append(rules, hostCopy...)
 	var listed []string
 	listedOnce := false // an empty listing is a listing too
 	for _, entry := range rules {

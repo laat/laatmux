@@ -38,8 +38,9 @@ import (
 // Repo is a known repository: its source, the identity, and its label,
 // which places new clones and worktrees; Copy and Setup are the personal
 // steps for its worktrees, run after the committed ones and before the
-// store's own Copy. They come from this host's config, or from the add's
-// repository entry for a repository the config does not list.
+// host's own copy rules for every worktree (Listed.Copy). They come
+// from this host's config, or from the add's repository entry for a
+// repository the config does not list.
 type Repo struct {
 	Source string
 	Name   string
@@ -47,18 +48,16 @@ type Repo struct {
 	Setup  []string
 }
 
-// Store is one host's checkouts and worktrees. Copy is the host's own
-// copy rules for every worktree, from its config, applied after a
-// repository's own. Log, when set, says why a checkout's label has a
-// hash (see labels) and that a checkout's HEAD cannot be read.
+// Store is one host's checkouts and worktrees. Log, when set, says why
+// a checkout's label has a hash (see labels) and that a checkout's HEAD
+// cannot be read.
 type Store struct {
 	Dirs config.Dirs // expanded for this host
-	Copy []string
 	Log  *log.Logger
 
-	// repos is the repositories this host's config lists, replaced
-	// whole when the daemon reads the file again (SetRepos).
-	repos atomic.Pointer[Repos]
+	// listed is what this host's config lists for the store, replaced
+	// whole when the daemon reads the file again (SetListed).
+	listed atomic.Pointer[Listed]
 
 	mu      sync.Mutex
 	origins map[string]originEntry // by checkout directory
@@ -71,11 +70,28 @@ type originEntry struct {
 	url   string
 }
 
-// New makes a store for the host's directories and known repositories.
+// New makes a store for the host's directories and known repositories,
+// with no copy rules for every worktree; SetListed sets both.
 func New(dirs config.Dirs, repos []config.Repo) *Store {
 	s := &Store{Dirs: dirs, origins: map[string]originEntry{}}
-	s.SetRepos(FromConfig(repos))
+	s.SetListed(Listed{Repos: FromConfig(repos)})
 	return s
+}
+
+// Listed is what a host's config lists for its store, from one read of
+// the file: the repositories, and Copy, the host's own copy rules for
+// every worktree it makes, applied after a repository's own. An add
+// takes one, so its repository's steps and the rules after them are of
+// one read.
+type Listed struct {
+	Repos Repos
+	Copy  []string
+}
+
+// ListedFrom is the config's repositories and copy rules as the store
+// keeps them.
+func ListedFrom(cfg config.Config) Listed {
+	return Listed{Repos: FromConfig(cfg.Repos), Copy: cfg.Copy}
 }
 
 // FromConfig is the config's repositories as the store keeps them.
@@ -87,23 +103,39 @@ func FromConfig(repos []config.Repo) []Repo {
 	return out
 }
 
+// Listed is what this host's config lists, as last set; its slices are
+// the store's and are not to be changed.
+func (s *Store) Listed() Listed {
+	if p := s.listed.Load(); p != nil {
+		return *p
+	}
+	return Listed{}
+}
+
+// SetListed replaces what this host's config lists, for a daemon that
+// read the file again: a lookup, a listing or an add under way finishes
+// on what it started with.
+func (s *Store) SetListed(l Listed) { s.listed.Store(&l) }
+
 // Repos is the repositories this host's config lists, as last set; the
 // slice is the store's and is not to be changed. A caller that looks a
 // repository up more than once takes it once, so every lookup is on
 // one list.
-func (s *Store) Repos() Repos {
-	if p := s.repos.Load(); p != nil {
-		return *p
-	}
-	return nil
-}
+func (s *Store) Repos() Repos { return s.Listed().Repos }
 
-// SetRepos replaces the repositories this host's config lists, for a
-// daemon that read the file again: a lookup or a listing under way
-// finishes on the list it started with.
+// SetRepos replaces the repositories this host's config lists and keeps
+// its copy rules, in one step against a SetListed at the same time.
 func (s *Store) SetRepos(repos []Repo) {
-	rs := Repos(repos)
-	s.repos.Store(&rs)
+	for {
+		old := s.listed.Load()
+		l := Listed{Repos: repos}
+		if old != nil {
+			l.Copy = old.Copy
+		}
+		if s.listed.CompareAndSwap(old, &l) {
+			return
+		}
+	}
 }
 
 // Repos is a list of the repositories a host's config lists.

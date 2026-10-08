@@ -41,7 +41,17 @@ func cmdTasks(ctx context.Context, args []string) error {
 	case "show":
 		return showTask(id)
 	case "dismiss":
-		return command.Dismiss(ctx, id)
+		// What went with the record, the append of a repository new to
+		// the config, is said: the user adds it by hand, or pastes the
+		// source again.
+		dropped, err := command.Dismiss(ctx, id)
+		if err != nil {
+			return err
+		}
+		if dropped != "" {
+			fmt.Printf("dismissed %s; %s\n", id, dropped)
+		}
+		return nil
 	case "prompt":
 		state, reason, err := command.DeliverPending(ctx, id)
 		if err != nil {

@@ -33,7 +33,10 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux compose")
 	}
-	cfg, err := config.Load()
+	// The watch's first read: the theme follows the file from there, and
+	// the form reads it again as a picker opens.
+	var w config.Watch
+	cfg, _, err := w.Changed()
 	if err != nil {
 		return err
 	}
@@ -51,12 +54,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.Follow(ctx, c)
-	f := &addForm{repos: cfg.Repos, agents: cfg.AgentNames(), reload: config.Load}
-	for _, h := range cfg.Hosts {
-		if h.CanAdd() {
-			f.hosts = append(f.hosts, h)
-		}
-	}
+	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: config.Load}
 	// No repository configured is the form with a picker for a pasted
 	// source, as the dashboard's a has.
 	switch {
@@ -84,14 +82,21 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	t.Theme, _ = look(cfg, t)
+	bg := &background{ask: func() (bool, bool) { return t.Background(backgroundWait) }}
+	t.Theme, _ = lookWith(cfg, bg.get)
+	// The view reads the keys from here: the terminal is not asked
+	// again.
+	bg.ask = nil
 	m := &view.Model{Layout: view.Compact, Overlay: form}
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, add: f}
 	c2 := &composer{d: d, f: f}
+	cmds := make(chan func(*view.Model) view.Action)
+	watchConfig(ctx, &w, configPoll, cmds, func(_ *view.Model, cfg config.Config) { t.Theme, _ = lookWith(cfg, bg.get) }, nil)
 	err = view.Run(ctx, t, m, view.Host{
-		Changed: st.Changed(),
-		Refresh: func(*view.Model) {},
-		Act:     c2.act,
+		Changed:  st.Changed(),
+		Refresh:  func(*view.Model) {},
+		Act:      c2.act,
+		Commands: cmds,
 	})
 	// The terminal is restored before the outcome is printed, so it is
 	// not lost with the alternate screen.

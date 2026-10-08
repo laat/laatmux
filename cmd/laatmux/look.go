@@ -8,22 +8,12 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/palette"
-	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 )
 
 // backgroundWait is how long a view waits for the terminal's answer to
 // the background query before it takes the dark theme.
 const backgroundWait = 150 * time.Millisecond
-
-// look is the theme and the icons a view draws with, from the config.
-// NO_COLOR, set to anything, draws with the attributes alone; a mode of
-// auto asks the terminal for its background, dark when it does not say.
-// The config was validated when it was read, so the custom colours
-// parse.
-func look(cfg config.Config, t *term.Term) (palette.Theme, view.Icons) {
-	return lookWith(cfg, func() (bool, bool) { return t.Background(backgroundWait) })
-}
 
 // templates compiles the config's line templates, the host's defaults
 // for what it leaves out: the dashboard's carry the git and PR columns
@@ -50,8 +40,11 @@ func agentIcons(cfg config.Config) map[string]view.AgentIcon {
 	return out
 }
 
-// lookWith is look with the terminal's background asked through
-// background, which only a mode of auto calls.
+// lookWith is the theme and the icons a view draws with, from the
+// config. NO_COLOR, set to anything, draws with the attributes alone; a
+// mode of auto asks the terminal for its background through background,
+// which only that mode calls, dark when it does not say. The config was
+// validated when it was read, so the custom colours parse.
 func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.Theme, view.Icons) {
 	icons := view.Icons{Set: cfg.Icons, Working: cfg.StatusIcons["working"], Waiting: cfg.StatusIcons["waiting"],
 		Done: cfg.StatusIcons["done"], Stale: cfg.StatusIcons["stale"]}

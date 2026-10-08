@@ -15,6 +15,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // A merging daemon under test dials a second daemon in-process over
@@ -492,6 +493,39 @@ func TestMergedHostsFollowConfig(t *testing.T) {
 	}
 	until(t, c, pc, hostStatus("box", func(st protocol.HostStatus) bool { return true }))
 	until(t, c2, pc2, hostStatus("box", listed))
+}
+
+// A host removed from the config, or added, reaches the subscribers
+// already there once the daemon sees the file changed, with no new
+// subscription: a view that stays up follows the file.
+func TestMergedHostsFollowConfigChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	var mu sync.Mutex
+	changed := true
+	f.local.cfg.Repos = func() (worktree.Listed, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		c := changed
+		changed = false
+		return worktree.Listed{}, c, nil
+	}
+	f.local.readConfig(ctx) // Run's first read
+	c, pc, _ := f.subscribe(t, ctx)
+	defer c.Close()
+	until(t, c, pc, hostStatus("vm", listed))
+	f.hosts.set(peer.Host{Name: "here"}, peer.Host{Name: "box", SSH: "box"})
+	f.local.readConfig(ctx)
+	if n := f.hosts.readCount(); n != 1 {
+		t.Fatalf("the hosts read %d times with the file unchanged", n)
+	}
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	f.local.readConfig(ctx)
+	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.HostName == "vm" })
+	until(t, c, pc, hostStatus("box", listed))
 }
 
 // Remote subscriptions are dropped once no merged subscriber has been

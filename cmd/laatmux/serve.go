@@ -85,8 +85,8 @@ func cmdServe(ctx context.Context, args []string) error {
 	if local, ok := cfg.Local(); ok {
 		hostname = local.Name
 		if dirs, err := local.Dirs(); err == nil {
-			store = worktree.New(dirs.Expand(), cfg.Repos)
-			store.Copy = cfg.Copy
+			store = worktree.New(dirs.Expand(), nil)
+			store.SetListed(worktree.ListedFrom(cfg))
 		}
 	}
 	for name, a := range cfg.Agents {
@@ -189,17 +189,18 @@ func cmdServe(ctx context.Context, args []string) error {
 // readRepos is the store's and the relay's: the file is looked at every
 // worktree interval and read again when it has changed, so a repository
 // the task form or add appended, or a hand edit, is listed without a
-// restart, and an append a broken file refused is tried again once the
+// restart, a copy rule or a repository's setup edited is used by the
+// next add, and an append a broken file refused is tried again once the
 // file is fixed. appendRepo is the relay's, for an add of a repository
 // new to the config once the host's add has succeeded.
-func configHooks() (readRepos func() ([]worktree.Repo, bool, error), appendRepo func(src, name string) (bool, error)) {
+func configHooks() (readRepos func() (worktree.Listed, bool, error), appendRepo func(src, name string) (bool, error)) {
 	var watch config.Watch
-	readRepos = func() ([]worktree.Repo, bool, error) {
+	readRepos = func() (worktree.Listed, bool, error) {
 		cfg, changed, err := watch.Changed()
 		if !changed || err != nil {
-			return nil, false, err
+			return worktree.Listed{}, false, err
 		}
-		return worktree.FromConfig(cfg.Repos), true, nil
+		return worktree.ListedFrom(cfg), true, nil
 	}
 	appendRepo = func(src, name string) (bool, error) { return config.AddRepo(config.Path(), src, name) }
 	return readRepos, appendRepo

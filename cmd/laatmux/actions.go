@@ -35,7 +35,7 @@ type dash struct {
 	// submit hands an add to the local daemon; a test replaces it, as
 	// it does dismiss and deliver, a pending task's x and p.
 	submit  func(command.Add) (string, error)
-	dismiss func(id string) error
+	dismiss func(id string) (dropped string, err error)
 	deliver func(id string) (state, reason string, err error)
 	// pending is the task a confirm line asks to dismiss.
 	pending *protocol.Pending
@@ -232,14 +232,30 @@ type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
-	// reload reads the config again as the repository picker opens, so
-	// a repository added since the form was made, by an earlier add of a
-	// pasted source say, is a listed candidate and not offered as new;
-	// nil keeps the candidates the form was made with. uncredentialed
-	// is the pasted sources whose credential NewRepo left out, for the
-	// note.
+	// cfg is the config the candidates were last taken from, whose
+	// defaults the chips follow and whose copy rules the submit sends.
+	// reload reads the config again as a chip's picker opens, so a
+	// repository added since the form was made, by an earlier add of a
+	// pasted source say, is a listed candidate and not offered as new,
+	// and a host or an agent added or gone, or a default changed, is
+	// taken by a form left up; nil keeps the candidates the form was made
+	// with. uncredentialed is the pasted sources whose credential
+	// NewRepo left out, for the note.
+	cfg            config.Config
 	reload         func() (config.Config, error)
 	uncredentialed map[string]bool
+}
+
+// addHosts is the hosts the task form offers: those with the
+// directories an add needs.
+func addHosts(cfg config.Config) []config.Host {
+	var hosts []config.Host
+	for _, h := range cfg.Hosts {
+		if h.CanAdd() {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
 }
 
 // refresh brings the repository chip up to the config read again: its
@@ -313,12 +329,7 @@ func pastedRepo(cfg config.Config, filter string) (c view.Choice, uncredentialed
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addForm{repos: d.cfg.Repos, agents: d.cfg.AgentNames(), reload: d.reload}
-	for _, h := range d.cfg.Hosts {
-		if h.CanAdd() {
-			f.hosts = append(f.hosts, h)
-		}
-	}
+	f := &addForm{repos: d.cfg.Repos, hosts: addHosts(d.cfg), agents: d.cfg.AgentNames(), reload: d.reload}
 	// A field with nothing to choose from refuses before the form is
 	// up, but the repository, which a source pasted into its picker
 	// gives. So does last.json that cannot be read: the submit's own
@@ -413,15 +424,18 @@ func presetFor(s protocol.Session, hosts []config.Host) (repo, host string) {
 // capabilities for the note about tasks not being supported. The
 // repository chip's picker takes a repository's source no candidate
 // matches as a candidate of its own (pastedRepo), which the host and
-// agent chips treat as a repository without a last use.
+// agent chips treat as a repository without a last use. A picker
+// opening reads the config again (addForm.reload) and brings every chip
+// up to it, so a form left up while the file changes offers what it
+// lists now.
 func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
+	// The config as a picker last read it: a pasted source is named
+	// among the repositories listed now, and the defaults are its.
+	f.cfg = cfg
 	var chips [3]view.Chip
 	chips[0].Title = "repository"
-	// The config as the repository picker last read it: a pasted source
-	// is named among the repositories listed now.
-	listed := cfg
 	chips[0].Other = func(filter string) (view.Choice, bool) {
-		c, uncredentialed, ok := pastedRepo(listed, filter)
+		c, uncredentialed, ok := pastedRepo(f.cfg, filter)
 		if uncredentialed {
 			if f.uncredentialed == nil {
 				f.uncredentialed = map[string]bool{}
@@ -440,44 +454,51 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	if len(f.repos) > 0 {
 		repo = f.repos[chips[0].Selected]
 	}
+	// The host and agent a repository brings: the last used for it,
+	// else the config's default; "" for none, which is the first.
+	defaultHost := func(repo config.Repo) string {
+		if h, err := f.cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
+			return h.Name
+		}
+		return ""
+	}
+	defaultAgent := func(repo config.Repo) string {
+		if name, _, err := f.cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
+			return name
+		}
+		return ""
+	}
 	chips[1].Title = "host"
+	chips[1].Choices = hostChoices(f.hosts)
 	wantHost := preHost
 	if wantHost == "" {
-		if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
-			wantHost = h.Name
-		}
+		wantHost = defaultHost(repo)
 	}
-	for i, h := range f.hosts {
-		detail := h.Worktrees
-		if h.SSH != "" {
-			detail = "ssh " + h.SSH + "  " + detail
-		}
-		chips[1].Choices = append(chips[1].Choices, view.Choice{Label: h.Name, Detail: detail})
-		if h.Name == wantHost {
-			chips[1].Selected = i
-		}
-	}
+	chips[1].Selected = choiceIndex(chips[1].Choices, wantHost)
 	chips[2].Title = "agent"
-	wantAgent := ""
-	if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
-		wantAgent = name
-	}
-	for i, name := range f.agents {
-		chips[2].Choices = append(chips[2].Choices, view.Choice{Label: name, Detail: strings.Join(cfg.Agents[name].Cmd, " ")})
-		if name == wantAgent {
-			chips[2].Selected = i
-		}
-	}
+	chips[2].Choices = agentChoices(f.cfg, f.agents)
+	chips[2].Selected = choiceIndex(chips[2].Choices, defaultAgent(repo))
 	form := view.NewForm("add a task", chips, branch)
 	form.Propose = worktree.ProposeBranch
 	form.Opening = func(form *view.Form, chip int) {
-		if chip != 0 || f.reload == nil {
+		if f.reload == nil {
 			return
 		}
-		if fresh, err := f.reload(); err == nil {
-			listed = fresh
-			f.refresh(form, fresh)
+		fresh, err := f.reload()
+		if err != nil {
+			return
 		}
+		f.cfg = fresh
+		// The host and agent chips first, each kept on its candidate by
+		// name, else on the default for the repository chosen; then the
+		// repository chip, whose refresh tells Changed when its
+		// repository is gone, which derives the others from these.
+		repo, _ := f.repo(form, form.Chips[0].Selected)
+		f.hosts = addHosts(fresh)
+		keepChoice(&form.Chips[1], hostChoices(f.hosts), defaultHost(repo))
+		f.agents = fresh.AgentNames()
+		keepChoice(&form.Chips[2], agentChoices(fresh, f.agents), defaultAgent(repo))
+		f.refresh(form, fresh)
 	}
 	// A repository chosen later brings its own last-used host and
 	// agent, unless the user has set those chips themselves; a host
@@ -493,24 +514,10 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 		// the first candidate.
 		repo, _ := f.repo(form, form.Chips[0].Selected)
 		if !userSet[1] {
-			form.Chips[1].Selected = 0
-			if h, err := cfg.DefaultHost("", last.Get(repo.Source).Host); err == nil {
-				for i, c := range f.hosts {
-					if c.Name == h.Name {
-						form.Chips[1].Selected = i
-					}
-				}
-			}
+			form.Chips[1].Selected = choiceIndex(form.Chips[1].Choices, defaultHost(repo))
 		}
 		if !userSet[2] {
-			form.Chips[2].Selected = 0
-			if name, _, err := cfg.DefaultAgent("", last.Get(repo.Source).Agent); err == nil {
-				for i, a := range f.agents {
-					if a == name {
-						form.Chips[2].Selected = i
-					}
-				}
-			}
+			form.Chips[2].Selected = choiceIndex(form.Chips[2].Choices, defaultAgent(repo))
 		}
 	}
 	// The note: a host whose daemon would refuse the task, else what
@@ -536,6 +543,53 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	return form
 }
 
+// hostChoices is the host chip's candidates: each host by name, with
+// where it is reached and where its worktrees go.
+func hostChoices(hosts []config.Host) []view.Choice {
+	var out []view.Choice
+	for _, h := range hosts {
+		detail := h.Worktrees
+		if h.SSH != "" {
+			detail = "ssh " + h.SSH + "  " + detail
+		}
+		out = append(out, view.Choice{Label: h.Name, Detail: detail})
+	}
+	return out
+}
+
+// agentChoices is the agent chip's candidates: each agent by name, with
+// its command.
+func agentChoices(cfg config.Config, agents []string) []view.Choice {
+	var out []view.Choice
+	for _, name := range agents {
+		out = append(out, view.Choice{Label: name, Detail: strings.Join(cfg.Agents[name].Cmd, " ")})
+	}
+	return out
+}
+
+// choiceIndex is the candidate labelled name, else the first.
+func choiceIndex(choices []view.Choice, name string) int {
+	for i, c := range choices {
+		if c.Label == name {
+			return i
+		}
+	}
+	return 0
+}
+
+// keepChoice gives a chip new candidates, its selection kept on the one
+// of the same name, else on want's.
+func keepChoice(c *view.Chip, choices []view.Choice, want string) {
+	was := c.Label()
+	c.Choices = choices
+	c.Selected = choiceIndex(choices, want)
+	for i, ch := range choices {
+		if was != "" && ch.Label == was {
+			c.Selected = i
+		}
+	}
+}
+
 // submitForm hands the add the form asked for to the local daemon's
 // relay, and the view ends once it is accepted; a refusal, a host whose
 // daemon does not support tasks say, keeps the form up with the error,
@@ -545,7 +599,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 	repo, isNew := f.repo(o, o.Chips[0].Selected)
 	add := command.Add{
-		Host: f.hosts[o.Chips[1].Selected], Repo: repo, Copy: d.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
+		Host: f.hosts[o.Chips[1].Selected], Repo: repo, Copy: f.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
 		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(), Remember: isNew,
 	}
 	submit := d.submit
@@ -667,13 +721,21 @@ func (d *dash) startDismiss(m *view.Model) {
 	}
 	dismiss := d.dismiss
 	if dismiss == nil {
-		dismiss = func(id string) error { return command.Dismiss(d.ctx, id) }
+		dismiss = func(id string) (string, error) { return command.Dismiss(d.ctx, id) }
 	}
 	what := tmux.Printable(p.Repo+"/"+p.Branch) + " on " + p.Host
+	var dropped string
 	d.start(m, "dismiss "+what, func(command.Reporter) error {
-		return dismiss(p.ID)
+		var err error
+		dropped, err = dismiss(p.ID)
+		return err
 	}, func(m *view.Model) bool {
+		// The append of a repository new to the config goes with the
+		// task, and the message says so.
 		m.Message = "dismissed " + what
+		if dropped != "" {
+			m.Message += "; " + dropped
+		}
 		return false
 	})
 }

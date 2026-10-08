@@ -96,11 +96,13 @@ func cmdSidebar(ctx context.Context, args []string) error {
 	case "toggle", "on", "off":
 		return sidebarSwitch(ctx, sub, session)
 	case "pane":
-		cfg, err := config.Load()
+		// The watch's first read, which the pane follows the file from.
+		var w config.Watch
+		cfg, _, err := w.Changed()
 		if err != nil {
 			return err
 		}
-		return sidebarPane(ctx, cfg)
+		return sidebarPane(ctx, cfg, &w)
 	case "attach":
 		if len(args) != 1 {
 			return usage
@@ -607,7 +609,9 @@ func sidebarLock() (func(), error) {
 // configured layout, marking the session the pane sits in, staying after
 // a jump. q exits, which closes the pane; that is how one window's
 // sidebar is dismissed until a new window is made or on runs again.
-func sidebarPane(ctx context.Context, cfg config.Config) error {
+// The pane follows the config file from w's first read, cfg, but for
+// its place, its size and the layout, view and scope it starts in.
+func sidebarPane(ctx context.Context, cfg config.Config, w *config.Watch) error {
 	layout, err := view.ParseLayout(cfg.Sidebar.Layout)
 	if err != nil {
 		return err
@@ -620,8 +624,7 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, LocalHost: localHostName(cfg), AskQuit: true,
-		ItemWidth: cfg.Sidebar.ItemWidth(),
+	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, AskQuit: true,
 		Hint:      "tab view  s/h/l fold  f all  F scope  v layout  / filter  z settle  p/x task  ? help  q quit",
 		HelpTitle: "laatmux sidebar", Help: []string{
 			"p            deliver a task's prompt",
@@ -632,7 +635,7 @@ func sidebarPane(ctx context.Context, cfg config.Config) error {
 		// The strip: the agent view alone, chips along the top, no tab
 		// line; the layout and view are not the stored defaults'.
 		m.Layout, m.View, m.Tabs = view.Strip, view.ViewAgents, false
-		return runView(ctx, cfg, c, m, viewOptions{listen: true, fixedLayout: true, fixedView: true})
+		return runView(ctx, cfg, w, c, m, viewOptions{listen: true, fixedLayout: true, fixedView: true})
 	}
-	return runView(ctx, cfg, c, m, viewOptions{listen: true})
+	return runView(ctx, cfg, w, c, m, viewOptions{listen: true})
 }

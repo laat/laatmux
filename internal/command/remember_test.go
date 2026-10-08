@@ -95,3 +95,23 @@ func TestSubmitRemember(t *testing.T) {
 		t.Fatalf("commands %+v", got)
 	}
 }
+
+// Dismiss passes on what the daemon says went with the record, the
+// append of a repository new to the config, for the dismiss's message;
+// a refusal says nothing dropped.
+func TestDismissDropped(t *testing.T) {
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: []string{protocol.CapStatus, protocol.CapMerged, protocol.CapRelay}})
+	const dropped = "the append of git@x:o/p.git to the config's repos as p is dropped (yaml: bad); add it to the config by hand, or paste the source again"
+	f.answer = func(m protocol.Message) protocol.Message {
+		if m.ID == "running" {
+			return protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: "the add is still running"}
+		}
+		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Detail: dropped}
+	}
+	if got, err := Dismiss(context.Background(), "held"); err != nil || got != dropped {
+		t.Fatalf("dismiss: %q %v", got, err)
+	}
+	if got, err := Dismiss(context.Background(), "running"); err == nil || got != "" {
+		t.Fatalf("refused: %q %v", got, err)
+	}
+}

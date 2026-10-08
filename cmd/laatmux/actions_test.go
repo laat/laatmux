@@ -1692,7 +1692,7 @@ func TestPendingKeys(t *testing.T) {
 	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	var dismissed, delivered string
 	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(),
-		dismiss: func(id string) error { dismissed = id; return nil },
+		dismiss: func(id string) (string, error) { dismissed = id; return "", nil },
 		deliver: func(id string) (string, string, error) { delivered = id; return protocol.DeliveryDelivered, "", nil }}
 	finish := func() {
 		t.Helper()
@@ -1743,6 +1743,43 @@ func TestPendingKeys(t *testing.T) {
 	}
 }
 
+// x on a task whose append to the config failed asks to dismiss it, and
+// the message the dismiss ends with says what the daemon dropped with
+// it: the append, with its source, so the user can add it by hand.
+func TestDismissSaysDroppedAppend(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	held := protocol.Pending{ID: "add-1", Host: "vm", EnvironmentID: "venv", Source: "git@x:nrkno/scripts.git", Repo: "nrkno-scripts", Branch: "fix", Root: "/w/nrkno-scripts/fix",
+		Taken: true, Reachable: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad", SubmittedAt: time.Now()}
+	in := rows.Input{
+		Hosts:    []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+		Pendings: []protocol.Pending{held},
+	}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	const dropped = "the append of git@x:nrkno/scripts.git to the config's repos as nrkno-scripts is dropped (yaml: bad); add it to the config by hand, or paste the source again"
+	var dismissed string
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(),
+		dismiss: func(id string) (string, error) { dismissed = id; return dropped, nil }}
+	selectRow(t, m, "nrkno-scripts/fix")
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if !strings.HasPrefix(m.Confirm, "dismiss nrkno-scripts/fix on vm (done, not added to the config") {
+		t.Fatalf("x: confirm %q message %q", m.Confirm, m.Message)
+	}
+	d.act(m, m.Handle(term.Key{Rune: 'y'}))
+	log, ok := m.Overlay.(*view.Log)
+	if !ok {
+		t.Fatalf("no log: %v", m.Overlay)
+	}
+	for deadline := time.Now().Add(10 * time.Second); !log.Done() && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	d.act(m, m.Poll())
+	if want := "dismissed nrkno-scripts/fix on vm; " + dropped; dismissed != "add-1" || m.Message != want {
+		t.Fatalf("dismissed %q message %q, want %q", dismissed, m.Message, want)
+	}
+}
+
 // x's question on a worktree and on a task, and the message a dismiss
 // ends with, name a branch with a C1 control character, which git
 // takes, by its <repo>/<branch> as tmux.Printable shows it.
@@ -1760,7 +1797,7 @@ func TestConfirmsQuoteBranch(t *testing.T) {
 	m.SetTree(rows.Tree(in))
 	m.SetRows(rows.Agents(in, rows.Tree(in)))
 	treeView(m)
-	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), dismiss: func(string) error { return nil }}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), dismiss: func(string) (string, error) { return "", nil }}
 
 	selectRow(t, m, "proj/"+wb)
 	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})

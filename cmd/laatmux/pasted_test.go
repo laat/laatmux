@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,8 +277,83 @@ func TestFormRefreshSelection(t *testing.T) {
 	}
 }
 
+// A form left up while the config changes takes the change as a picker
+// opens: the host and agent chips offer the hosts and agents listed
+// now, each kept on its candidate by name, else on the default the
+// config gives now; the submit sends the copy rules of that read.
+func TestFormReloadsHostsAndAgents(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t)
+	next, err := config.Parse([]byte(`
+hosts:
+  - name: vm
+    ssh: vm
+    repos: /r
+    worktrees: /w
+  - name: pc
+    repos: /r
+    worktrees: /w
+agents:
+  claude: {cmd: [claude]}
+  gemini: {cmd: [gemini]}
+default_agent: gemini
+repos:
+  - git@github.com:laat/laatmux.git
+  - git@github.com:laat/proj.git
+copy: ["*.local"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: func() (config.Config, error) { return next, nil }}
+	form := buildForm(cfg, f, home.Last{}, "proj", "", "", nil)
+	if form.Chips[1].Label() != "mac" || form.Chips[2].Label() != "claude" {
+		t.Fatalf("at build: %q %q", form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	// The user picks vm and codex by cycling.
+	for form.Focus() != 1 {
+		form.Handle(term.Key{Kind: term.KeyShiftTab})
+	}
+	form.Handle(term.Key{Kind: term.KeyRight})
+	form.Handle(term.Key{Kind: term.KeyTab})
+	form.Handle(term.Key{Kind: term.KeyRight})
+	if form.Chips[1].Label() != "vm" || form.Chips[2].Label() != "codex" {
+		t.Fatalf("picked: %q %q", form.Chips[1].Label(), form.Chips[2].Label())
+	}
+	// The agent picker opens with the config changed: vm stays, codex
+	// is gone and the default is gemini now.
+	form.Handle(term.Key{Kind: term.KeyEnter})
+	form.Handle(term.Key{Kind: term.KeyEsc})
+	labels := func(c view.Chip) string {
+		var out []string
+		for _, ch := range c.Choices {
+			out = append(out, ch.Label)
+		}
+		return strings.Join(out, ",")
+	}
+	if labels(form.Chips[1]) != "vm,pc" || form.Chips[1].Label() != "vm" || labels(form.Chips[2]) != "claude,gemini" || form.Chips[2].Label() != "gemini" {
+		t.Fatalf("after the reload: hosts %s (%q) agents %s (%q)", labels(form.Chips[1]), form.Chips[1].Label(), labels(form.Chips[2]), form.Chips[2].Label())
+	}
+	form.SetPrompt("Fix it")
+	form.Handle(term.Key{Kind: term.KeyNewline})
+	if !form.Done() {
+		t.Fatalf("submit: %q", form.Error)
+	}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New(), add: f}
+	var got command.Add
+	d.submit = func(a command.Add) (string, error) { got = a; return "add-1", nil }
+	if !d.submitForm(&view.Model{}, f, form) {
+		t.Fatal("not accepted")
+	}
+	if got.Host.Name != "vm" || got.Agent != "gemini" || got.Repo.Name != "proj" || strings.Join(got.Copy, ",") != "*.local" {
+		t.Fatalf("add %+v", got)
+	}
+}
+
 // serve's hooks on the config file: the store's read answers the list
-// at first and after the relay's append, and not between.
+// at first and after the relay's append, and not between, with the
+// copy rules for every worktree and a repository's copy and setup as
+// the file has them at each read.
 func TestConfigHooks(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("LAATMUX_CONFIG", p)
@@ -286,8 +362,8 @@ func TestConfigHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	readRepos, appendRepo := configHooks()
-	if rs, changed, err := readRepos(); err != nil || !changed || len(rs) != 1 || rs[0].Name != "a" {
-		t.Fatalf("first read: %v %v %v", rs, changed, err)
+	if l, changed, err := readRepos(); err != nil || !changed || len(l.Repos) != 1 || l.Repos[0].Name != "a" || l.Copy != nil {
+		t.Fatalf("first read: %v %v %v", l, changed, err)
 	}
 	if _, changed, _ := readRepos(); changed {
 		t.Fatal("changed with no change")
@@ -295,7 +371,15 @@ func TestConfigHooks(t *testing.T) {
 	if added, err := appendRepo("git@x:o/p.git", "p"); err != nil || !added {
 		t.Fatalf("append: %v %v", added, err)
 	}
-	if rs, changed, err := readRepos(); err != nil || !changed || len(rs) != 2 || rs[1].Source != "git@x:o/p.git" || rs[1].Name != "p" {
-		t.Fatalf("after the append: %v %v %v", rs, changed, err)
+	if l, changed, err := readRepos(); err != nil || !changed || len(l.Repos) != 2 || l.Repos[1].Source != "git@x:o/p.git" || l.Repos[1].Name != "p" {
+		t.Fatalf("after the append: %v %v %v", l, changed, err)
+	}
+	edited := "copy: [\"*.local\"]\nrepos:\n  - source: git@x:o/a.git\n    copy: [.envrc]\n    setup: [make]\n"
+	if err := os.WriteFile(p, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, changed, err := readRepos()
+	if err != nil || !changed || len(l.Repos) != 1 || fmt.Sprint(l.Copy, l.Repos[0].Copy, l.Repos[0].Setup) != "[*.local] [.envrc] [make]" {
+		t.Fatalf("after the edit: %+v %v %v", l, changed, err)
 	}
 }

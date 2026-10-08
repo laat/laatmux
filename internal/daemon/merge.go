@@ -108,6 +108,42 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func(), checkouts boo
 	return s, snap
 }
 
+// rereadHosts brings the host set in line with the config for the
+// merged subscribers already there, the file having changed: a host
+// added is dialled and listed in their stream, and one removed gets a
+// remove for its records and its host record, as on a new subscription,
+// so a view that stays up follows the file. Nothing while no merged
+// subscription is up: the next one reads the hosts itself. The locks
+// are mergedSubscribe's, in its order.
+func (d *Daemon) rereadHosts() {
+	if d.cfg.Hosts == nil {
+		return
+	}
+	d.subMu.Lock()
+	defer d.subMu.Unlock()
+	hosts, err := d.cfg.Hosts()
+	if err != nil {
+		d.logOnce(&d.lastHostsErr, "hosts: %v", err)
+		return
+	}
+	d.lastHostsErr = ""
+	if d.relay != nil {
+		d.relay.mu.Lock()
+		defer d.relay.mu.Unlock()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.mctx == nil {
+		return
+	}
+	d.reconcileHostsLocked(hosts)
+	for _, mh := range d.mhosts {
+		if !mh.host.Local() && mh.cancel == nil {
+			d.startFollowLocked(mh)
+		}
+	}
+}
+
 // mergedUnsubscribe removes a subscriber whose connection ended.
 func (d *Daemon) mergedUnsubscribe(s *subscriber) {
 	d.mu.Lock()

@@ -163,14 +163,15 @@ type Config struct {
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
-	// Repos reads the repositories the config lists again, every
-	// WorktreeInterval: changed when the file changed since the last
-	// read, so Store follows repositories an add or the task form
-	// appended, and hand edits, without a restart, and the relay retries
-	// the appends a config it could not take held. A file that does not
-	// read keeps the list as it was. nil keeps the list Store was made
-	// with, and retries the appends at start alone.
-	Repos func() (repos []worktree.Repo, changed bool, err error)
+	// Repos reads what the config lists for Store again, every
+	// WorktreeInterval: the repositories, their copy and setup steps,
+	// and the copy rules for every worktree; changed when the file
+	// changed since the last read, so Store follows repositories an add
+	// or the task form appended, and hand edits, without a restart, and
+	// the relay retries the appends a config it could not take held. A
+	// file that does not read keeps what Store has. nil keeps what Store
+	// was made with, and retries the appends at start alone.
+	Repos func() (listed worktree.Listed, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
 	// capability; "" means none.

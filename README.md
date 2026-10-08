@@ -103,14 +103,38 @@ the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
 default server list is the managed `laatmux` server alone. The daemon
 reads its host's directories when it starts, and follows the file's
-top-level `repos` list: every two seconds it looks at the file, and
-reads the list again when the file has changed (another file renamed
-over it, or a new modification time or size), so a repository added by
-hand or by the task form shows in the listing without a restart, and
-the relay retries the appends a broken file refused (below); a daemon
-whose own entry has no directories watches the file for the relay all
-the same. A file that does not parse keeps the list as it was, with one
-line in the daemon's log.
+`repos` and `copy`: every two seconds it looks at the
+file, and reads it again when it has changed (another file renamed over
+it, or a new modification time or size), so a repository added by hand
+or by the task form shows in the listing without a restart, a `copy`
+rule or a repository's `copy` and `setup` edited are used by the next
+add, and the relay retries the appends a broken file refused (below); a
+daemon whose own entry has no directories watches the file for the relay
+all the same. An add takes the repository, its steps and the top-level
+`copy` from one read, the daemon's last as the add starts, whatever the
+file says while its clone runs. A file that does not parse keeps the
+list as it was, with one line in the daemon's log.
+
+The dashboard, the sidebar panes and `compose` follow the file the same
+way, every two seconds. The dashboard and a sidebar pane take the
+hosts, agents, `default_agent`, repositories and `copy` their keys and a
+task form opened from then on use, this machine's names for the
+repositories in the rows, the sidebar's `sort` and stale settings, the
+line templates, `icons`, `status_icons`, `agent_icons`, the theme,
+`jump_keys`' labels and the strip's `item_width`. A task form, the
+dashboard's or `compose`'s, reads the file again as a chip's picker
+opens: a form left up offers the repositories, hosts and agents listed
+then, each chip kept on its choice when that is still there, else on
+the default the file gives now, and its submit sends that read's `copy`.
+`compose` takes the theme too. What a running view does not take: the
+pane's place and size (`position`, `width`, `height`), which `sidebar
+on` and the hooks set, a width being put back by the next resize; the
+`layout`, `view` and `scope` it started in, which its keys and
+`sidebar.json` own from then on; the bindings `jump_keys` makes, which
+`sidebar on` sets; and the terminal's background, asked once as the view
+starts, so a theme turned to `auto` later takes that answer, else
+`COLORFGBG`, else dark. A file that does not parse leaves a view as it
+was, with the error in its footer once.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below
@@ -133,8 +157,12 @@ row then says `done, not added to the config` with the reason and needs
 the user, who may fix the file or dismiss the task with `x`; the relay
 tries again whenever the config file changes and at every start,
 handed-over tasks included, and the task hands over to its worktree row
-once the append is made. A source the list has in another form is that
-repository and is not added again. The repository picker reads the
+once the append is made. A dismiss, by `x` or `laatmux tasks dismiss`,
+drops the append for good: its message names the source, the name it
+would have had and why the append failed, so the entry can be added by
+hand or the source pasted again, and the daemon's log has it once. A
+source the list has in another form is that repository and is not added
+again. The repository picker reads the
 config again as it opens, so a repository an earlier add appended is a
 listed candidate, not a new one. The append keeps the file as it was
 around the new line, comments and blank lines included: the line goes
@@ -1551,7 +1579,12 @@ records:
   or answers as another machine. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
   retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
-  delivers it; its worktree removed meanwhile, by `rm` here or
+  delivers it. A dismiss's result has in `detail` what went with the
+  record: the append of a repository new to the config that the add
+  asked for (`remember`) and that was not made, with the source, the
+  name and why; the daemon logs it once, a dismiss through `rm` too. The
+  append is not made after the dismiss: the two take turns per record.
+  Its worktree removed meanwhile, by `rm` here or
   elsewhere or by hand, makes it `gone` too: a removal the host reports,
   and a host's successful listing that lacks the worktree, a
   reconnect's snapshot or a later poll's, have the host asked again, as
@@ -1575,7 +1608,12 @@ records:
   pending ones.
 - **Hosts follow the config file.** The daemon re-reads `hosts` on every
   merged subscription, so a host added shows up on the next `ls`; one
-  removed gets a `remove` for its records and then its host record.
+  removed gets a `remove` for its records and then its host record. It
+  does the same for the subscribers already there when it sees the file
+  changed, every two seconds, so a view that stays up, the dashboard or
+  a sidebar pane, lists a host added without a restart; the view reads
+  the file itself too, for its jumps, removals and task form (the config
+  section above says what else it takes).
 - **Held only while wanted.** Remote subscriptions are opened by the
   first merged subscriber and dropped 60 seconds after the last leaves,
   so a laptop with no sidebar open holds no ssh channels; each remote

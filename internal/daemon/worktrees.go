@@ -110,15 +110,18 @@ func (d *Daemon) runConfig(ctx context.Context) {
 }
 
 // readConfig acts on a config file that has changed: the store takes
-// its repositories, and a poll at once labels the checkouts by them,
-// and the relay retries the appends still asked for, which the change
-// may let through; not on the first read, Run's before the relay
-// resumes its records, which then read the file as it found it or
-// later. A file that does not read is logged once per
-// change of message, and the list stays as it was. lastReposErr and
-// configRead are runConfig's alone.
+// its repositories with their steps and the copy rules for every
+// worktree, so the next add uses them, and a poll at once labels the
+// checkouts by them; the merged subscribers get the hosts it lists
+// (rereadHosts); and the relay retries the appends still asked for,
+// which the change may let through. The last two not on the first read,
+// Run's before any subscription and before the relay resumes its
+// records, which then read the file as it found it or later. A file
+// that does not read is logged once per change of message, and the
+// list stays as it was. lastReposErr and configRead are runConfig's
+// alone.
 func (d *Daemon) readConfig(ctx context.Context) {
-	repos, changed, err := d.cfg.Repos()
+	listed, changed, err := d.cfg.Repos()
 	first := !d.configRead
 	d.configRead = true
 	switch {
@@ -127,10 +130,11 @@ func (d *Daemon) readConfig(ctx context.Context) {
 	case changed:
 		d.lastReposErr = ""
 		if d.cfg.Store != nil {
-			d.cfg.Store.SetRepos(repos)
+			d.cfg.Store.SetListed(listed)
 			d.pokeWorktrees()
 		}
 		if !first {
+			d.rereadHosts()
 			d.rememberAgain(ctx)
 		}
 	}
