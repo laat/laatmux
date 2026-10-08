@@ -163,8 +163,8 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 		}
 	}
 	err := jump(r)
-	if nh, ok := shellable(d.st, err); ok && d.jumper == nil && d.cmds != nil {
-		d.makeHome(m, nh)
+	if nh, before, ok := shellable(d.st, err); ok && d.jumper == nil && d.cmds != nil {
+		d.makeHome(m, nh, before)
 		return false, true
 	}
 	if err != nil {
@@ -187,18 +187,17 @@ func making(host string) string { return "making a session on " + host + "…" }
 // the session is there. A user who has moved on meanwhile, to a form or
 // a question in the view or with the client to another session, is left
 // where they are, the message saying the session is there for enter. A
-// view that ends first leaves the jump undone.
-func (d *dash) makeHome(m *view.Model, nh *noHome) {
+// view that ends first leaves the jump undone. before is the host's
+// records shellable read at enter, which a name in use is judged by
+// when the stream has the host down by the answer; else by the records
+// the stream has then.
+func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
 	ctx, st, host := d.ctx, d.st, nh.h.Name
 	at := d.clientAt
 	if at == nil {
 		at = clientSession
 	}
 	was := at(ctx)
-	// The records at enter, which shellable found: the host's as the
-	// stream has them once new has answered, unless the stream has the
-	// host down by then.
-	_, before, _, _ := st.HostSnapshot(host)
 	d.making = host
 	m.Message = making(host)
 	go func() {
@@ -1134,7 +1133,7 @@ func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolve
 	case err == nil:
 		hint = fmt.Sprintf("%s jumps to %s, its agent's session", enter, session)
 	default:
-		if nh, ok := shellable(st, err); ok {
+		if nh, _, ok := shellable(st, err); ok {
 			return enter + " creates one with a shell; " + addsSession(cfg, nh.h, nh.w, true)
 		}
 		hint = err.Error()

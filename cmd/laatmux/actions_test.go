@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1224,7 +1225,14 @@ func TestEnterMakesShellSession(t *testing.T) {
 	hooks := inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn")
 	hooks["proj/race"] = func() bool { d.st.Apply(raced); return true }
 	hooks["proj/late"] = func() bool { d.st.Apply(lated); return true }
-	hooks["proj/dc"] = func() bool { d.st.Apply(down); return true }
+	var downAtAnswer atomic.Bool
+	downAtAnswer.Store(true)
+	hooks["proj/dc"] = func() bool {
+		if downAtAnswer.Load() {
+			d.st.Apply(down)
+		}
+		return true
+	}
 	hooks["proj/slow"] = func() bool { <-release; return false }
 	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, hooks)
 	ends := make(chan func(*view.Model) view.Action, 1)
@@ -1410,12 +1418,23 @@ func TestEnterMakesShellSession(t *testing.T) {
 			t.Errorf("z on %s: message %q, tmux %q, asked %q", k.w.ID, msg, cmds, req)
 		}
 	}
-	// The stream has the host down by the answer: the records at enter
-	// place the session elsewhere.
-	if p := enter(true, dc.ID); p.req != `proj/dc /w/dc mac []` || p.msg != "mac: session proj/dc runs in /w2/dc, not /w/dc; name in use" || p.cmds != "" {
-		t.Errorf("down by the answer: %+v", p)
+	// The stream has the host down by the answer, or already by the
+	// look at the client at enter: the records shellable read place the
+	// session elsewhere.
+	for _, early := range []bool{false, true} {
+		if early {
+			downAtAnswer.Store(false)
+			d.clientAt = func(context.Context) string {
+				d.st.Apply(down)
+				return where
+			}
+		}
+		if p := enter(true, dc.ID); p.req != `proj/dc /w/dc mac []` || p.msg != "mac: session proj/dc runs in /w2/dc, not /w/dc; name in use" || p.cmds != "" {
+			t.Errorf("down by the answer, early %v: %+v", early, p)
+		}
+		d.st.Apply(snap)
 	}
-	d.st.Apply(snap)
+	d.clientAt = func(context.Context) string { return where }
 	// A daemon whose hello lacks new, the cached capabilities
 	// notwithstanding: an older build answering since.
 	requests = fakeNew(t, []string{protocol.CapStatus}, nil, nil)

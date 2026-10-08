@@ -431,17 +431,21 @@ type Agent struct {
 // changes, not on every poll. A pane outside every worktree root is not
 // published, and one whose agent is identified becomes an agent record.
 type Pane struct {
-	ID            string    `json:"id"` // "<environment_id>/pane/<server>/<pane_id>"; opaque to clients
-	EnvironmentID string    `json:"environment_id"`
-	Server        string    `json:"server"`
-	Session       string    `json:"session"`
-	Window        int       `json:"window"`
-	PaneID        string    `json:"pane_id"`
-	Command       string    `json:"command"` // the foreground command, as tmux names it
-	PID           int       `json:"pid"`     // the pane's first process
-	Cwd           string    `json:"cwd"`
-	WorktreeID    string    `json:"worktree_id"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"id"` // "<environment_id>/pane/<server>/<pane_id>"; opaque to clients
+	EnvironmentID string `json:"environment_id"`
+	Server        string `json:"server"`
+	Session       string `json:"session"`
+	Window        int    `json:"window"`
+	PaneID        string `json:"pane_id"`
+	Command       string `json:"command"` // the foreground command, as tmux names it
+	PID           int    `json:"pid"`     // the pane's first process
+	Cwd           string `json:"cwd"`
+	WorktreeID    string `json:"worktree_id"`
+	// Managed is a pane laatmux made, by new or add, whose cwd is the
+	// directory it was made at rather than where it is now; false from
+	// an older daemon.
+	Managed   bool      `json:"managed"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Run is one run job while it runs, from a daemon with attribution:

@@ -435,7 +435,9 @@ truth; labels only place new things.
   above. An agent record carries
   `worktree_id`, so a worktree has any number of agents. A pane with no
   agent inside a root is a pane record, `{id, environment_id, server,
-  session, window, pane_id, command, pid, cwd, worktree_id}`, upserted
+  session, window, pane_id, command, pid, cwd, worktree_id, managed}`,
+  `managed` for a pane laatmux made, whose `cwd` is the directory it was
+  made at, upserted
   when its command, path or place changes and removed when it leaves
   every root, goes, or has an agent identified in it: `panes` in a
   snapshot, `pane` in an upsert, `pane_record_id` in a remove. A `run`
@@ -770,14 +772,15 @@ workspace session; the next `jump` makes it again.
   use, is attached instead, as one made since the listing by an `add`
   say, unless the host's records place it elsewhere: another worktree's
   home, which two clones' worktrees on one branch can be, or, with no
-  record of a pane of it at the root, a session an agent or a pane of
-  another worktree runs in, or one outside the root; that is refused as
-  `add` refuses it, `session <name> runs in <dir>, not <root>; name in
-  use`. The view reads the records once `new` has answered, those it
-  had at enter when the stream has the host down by then. A host whose daemon lacks `new`, a
-  branch only shown, a name tmux would not store as given, and a
-  worktree whose agent is elsewhere keep the refusal that says how
-  `add` makes one. The shell session is the worktree's home from then
+  record of the managed pane laatmux made at the root, a session an
+  agent or a pane of another worktree runs in, or one outside the root;
+  that is refused as `add` refuses it, `session <name> runs in <dir>,
+  not <root>; name in use`. The view reads the records once `new` has
+  answered, those it had at enter when the stream has the host down by
+  then. A host whose daemon lacks `new`, a branch only shown, a name
+  tmux would not store as given, and a worktree whose agent is
+  elsewhere keep the refusal that says how `add` makes one. The shell
+  session is the worktree's home from then
   on: an agent started in it by hand is the worktree's, and `add` for
   the worktree refuses the session while no agent runs in it, saying so,
   rather than take it up and start none, on a host of this build. A
@@ -1093,8 +1096,8 @@ host answers the jump ends as any does, the footer saying what was made
 and the dashboard closing. A user who has moved on meanwhile, to a form
 or a question in the view, or with the client to another session, is
 left there: the footer says the session is there and enter on the line
-goes there. A click and a digit are jumps, so they make
-the session too. On another host, one that is down among them, and for
+goes there. A click and a digit are jumps, so they make the session
+too. On another host, one that is down among them, and for
 a detached worktree or a branch only shown, the footer says how `add`
 would start one: its command line, or what add needs first. `z` on such
 a line says which: that enter creates one with a shell and the `add`

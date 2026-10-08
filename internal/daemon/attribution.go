@@ -218,6 +218,7 @@ func (d *Daemon) publishPaneLocked(key string, st *paneState, now time.Time) {
 		PID:           p.PID,
 		Cwd:           panePath(p),
 		WorktreeID:    wid,
+		Managed:       p.Managed,
 		UpdatedAt:     now,
 	}
 	if prev, had := d.paneRecs[key]; had && samePane(prev, rec) {
@@ -239,7 +240,7 @@ func (d *Daemon) dropPaneLocked(key string) {
 
 func samePane(a, b protocol.Pane) bool {
 	return a.Session == b.Session && a.Window == b.Window && a.Command == b.Command &&
-		a.PID == b.PID && a.Cwd == b.Cwd && a.WorktreeID == b.WorktreeID
+		a.PID == b.PID && a.Cwd == b.Cwd && a.WorktreeID == b.WorktreeID && a.Managed == b.Managed
 }
 
 // reattributeLocked attributes every observed pane again, after a

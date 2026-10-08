@@ -468,15 +468,16 @@ func TestAddHintCanRun(t *testing.T) {
 // workspace session attached to it, switches there, and says what it
 // made. A name in use that no record places elsewhere, a session made
 // since the listing, is attached, and so is one the records have as the
-// worktree's: its own pane at the root beside a split gone elsewhere, a
-// pane of it under the root, agents attributed to none under the root or
-// with no directory. One another worktree has as its home, or in which
-// an agent or a pane of another worktree runs, one nested in the root
-// too, is refused as add refuses it. A branch only shown, flagged or with U+FFFD from an
-// older daemon, a name tmux would not store as given, a worktree whose
-// agent is on a default server or in a managed session that lost its
-// home, a host whose daemon lacks new, by the records or by its hello,
-// keep the add hint, and nothing is made.
+// worktree's: its own managed pane at the root beside a split gone
+// elsewhere, a pane of it under the root, agents attributed to none
+// under the root or with no directory. One another worktree has as its
+// home, or in which an agent or a pane of another worktree runs, one
+// nested in the root too, and another clone's whose split has gone to
+// the root, is refused as add refuses it. A branch only shown, flagged
+// or with U+FFFD from an older daemon, a name tmux would not store as
+// given, a worktree whose agent is on a default server or in a managed
+// session that lost its home, a host whose daemon lacks new, by the
+// records or by its hello, keep the add hint, and nothing is made.
 func TestJumpMakesShellSession(t *testing.T) {
 	log := fakeDefaultTmux(t)
 	src, fork := "git@github.com:laat/proj.git", "git@github.com:fork/proj.git"
@@ -502,18 +503,20 @@ func TestJumpMakesShellSession(t *testing.T) {
 	// pane at the root beside a split gone to c; a pane it has in a
 	// directory under the root; agents the host attributes to none, under
 	// the root and with no directory. And one of a worktree nested in
-	// nest's root, which is that worktree's.
-	split, sub, loose, nest := wt("menv", "proj", "split", "/w/split"), wt("menv", "proj", "sub", "/w/sub"), wt("menv", "proj", "loose", "/w/loose"), wt("menv", "proj", "nest", "/w/nest")
-	inner := wt("menv", "proj", "inner", "/w/nest/inner")
-	pane := func(n int, session, cwd, worktreeID string) protocol.Pane {
+	// nest's root, which is that worktree's; and another clone's, made at
+	// its own root, a split of which has gone to rs's root.
+	split, sub, loose, nest, rs := wt("menv", "proj", "split", "/w/split"), wt("menv", "proj", "sub", "/w/sub"), wt("menv", "proj", "loose", "/w/loose"), wt("menv", "proj", "nest", "/w/nest"), wt("menv", "proj", "rs", "/w/rs")
+	inner, otherRs := wt("menv", "proj", "inner", "/w/nest/inner"), wt("menv", "proj", "rs", "/w2/rs")
+	otherRs.Source = fork
+	pane := func(n int, session, cwd, worktreeID string, managed bool) protocol.Pane {
 		id := fmt.Sprintf("%%%d", n)
-		return protocol.Pane{ID: "menv/pane/laatmux/" + id, EnvironmentID: "menv", Server: "laatmux", Session: session, PaneID: id, Cwd: cwd, WorktreeID: worktreeID}
+		return protocol.Pane{ID: "menv/pane/laatmux/" + id, EnvironmentID: "menv", Server: "laatmux", Session: session, PaneID: id, Cwd: cwd, WorktreeID: worktreeID, Managed: managed}
 	}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
 		{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: caps[:3]},
-	}, Worktrees: []protocol.Worktree{b, dotted, taken, busy, rooted, c, clone, lost, pn, other, otherLost, otherPn, shown, mangled, dir, onBox, split, sub, loose, nest, inner},
+	}, Worktrees: []protocol.Worktree{b, dotted, taken, busy, rooted, c, clone, lost, pn, other, otherLost, otherPn, shown, mangled, dir, onBox, split, sub, loose, nest, inner, rs, otherRs},
 		Agents: []protocol.Agent{
 			{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: busy.ID, Cwd: busy.Root},
 			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "old/rooted", Agent: "claude", Managed: true, WorktreeID: rooted.ID, Cwd: rooted.Root},
@@ -522,17 +525,18 @@ func TestJumpMakesShellSession(t *testing.T) {
 			{ID: "menv/laatmux/%11", EnvironmentID: "menv", Server: "laatmux", Session: "proj/loose", Agent: "codex"},
 		},
 		Panes: []protocol.Pane{
-			pane(4, "proj/pn", "/w2/pn/src", otherPn.ID),
-			pane(5, "proj/split", "/w/split", split.ID), pane(6, "proj/split", "/w/c", c.ID),
-			pane(7, "proj/sub", "/w/sub/src", sub.ID),
-			pane(8, "proj/nest", "/w/nest/inner", inner.ID),
+			pane(4, "proj/pn", "/w2/pn/src", otherPn.ID, false),
+			pane(5, "proj/split", "/w/split", split.ID, true), pane(6, "proj/split", "/w/c", c.ID, false),
+			pane(7, "proj/sub", "/w/sub/src", sub.ID, false),
+			pane(8, "proj/nest", "/w/nest/inner", inner.ID, false),
+			pane(9, "proj/rs", "/w2/rs", otherRs.ID, true), pane(12, "proj/rs", "/w/rs", rs.ID, false),
 		}}
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nagents:\n  claude: {cmd: [claude]}\n  codex: {cmd: [codex]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn", "proj/split", "proj/sub", "proj/loose", "proj/nest"))
+	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn", "proj/split", "proj/sub", "proj/loose", "proj/nest", "proj/rs"))
 	jump := func(target string) (out, cmds, req string, err error) {
 		t.Helper()
 		os.Remove(log)
@@ -577,6 +581,7 @@ func TestJumpMakesShellSession(t *testing.T) {
 		{"mac/proj/lost", `proj/lost /w/lost mac []`, "/w2/lost", "/w/lost"},
 		{"mac/proj/pn", `proj/pn /w/pn mac []`, "/w2/pn/src", "/w/pn"},
 		{"mac/proj/nest", `proj/nest /w/nest mac []`, "/w/nest/inner", "/w/nest"},
+		{"mac/proj/rs", `proj/rs /w/rs mac []`, "/w2/rs", "/w/rs"},
 	} {
 		want := "mac: session " + strings.TrimPrefix(k.target, "mac/") + " runs in " + k.in + ", not " + k.root + "; name in use"
 		if out, cmds, req, err := jump(k.target); err == nil || err.Error() != want || req != k.req || out != "" || cmds != "" {

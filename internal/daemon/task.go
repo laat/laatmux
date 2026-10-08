@@ -747,13 +747,15 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 
 // agentRuns reports whether the daemon's last observation of the managed
 // pane, on the server instance it is listed on now, identified an agent
-// in it that has not gone since. A pane not observed yet, as on a server
-// restarted since or a daemon just started, has none known to run.
+// in it that had not gone. A pane not observed yet, as on a server
+// restarted since or a daemon just started, has none known to run, nor
+// has one observed bare. The observation is read as the poll wrote it
+// under the lock; the rest of the pane's state is the poll's own.
 func (rn *taskRunner) agentRuns(p tmux.Pane) bool {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
-	return ok && st.observed && !st.bare && !st.gone && st.obs.serverPID == p.ServerPID
+	return ok && st.obs.live && st.obs.serverPID == p.ServerPID
 }
 
 // adopt finds the target for an entry without one: the managed session

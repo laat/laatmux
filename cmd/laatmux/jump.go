@@ -314,34 +314,35 @@ const newTimeout = 10 * time.Second
 // is, two clones' worktrees on one branch being named alike; else the
 // directory of an agent or a pane in it that the host attributes to
 // another worktree, or, attributed to none, has outside the root, unless
-// a record has a pane of it at the root, the one laatmux made there,
-// whose record has the root it was made at: a split of the worktree's
-// own session gone elsewhere leaves the session the worktree's. Not ok
-// when none does, as for a session made at the root since the records
-// were read, which they do not have yet.
+// a record has the pane laatmux made at the root, a managed one whose
+// record has the directory it was made at: a split of the worktree's own
+// session gone elsewhere leaves the session the worktree's, where a
+// split of another's that has gone to the root does not make it this
+// worktree's. Not ok when none does, as for a session made at the root
+// since the records were read, which they do not have yet.
 func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string, bool) {
 	for _, o := range snap.Worktrees {
 		if o.Session == name && o.ID != w.ID {
 			return o.Root, true
 		}
 	}
-	type rec struct{ cwd, worktreeID string }
+	type rec struct {
+		cwd, worktreeID string
+		managed         bool
+	}
 	var in []rec
 	for _, a := range snap.Agents {
 		if a.Server == protocol.ServerLaatmux && a.Session == name {
-			in = append(in, rec{a.Cwd, a.WorktreeID})
+			in = append(in, rec{a.Cwd, a.WorktreeID, a.Managed})
 		}
 	}
 	for _, p := range snap.Panes {
 		if p.Server == protocol.ServerLaatmux && p.Session == name {
-			in = append(in, rec{p.Cwd, p.WorktreeID})
+			in = append(in, rec{p.Cwd, p.WorktreeID, p.Managed})
 		}
 	}
 	for _, r := range in {
-		// A record at the root is the worktree's whatever it is
-		// attributed to: the host attributes a path to the longest root
-		// it is in.
-		if r.cwd == w.Root {
+		if r.managed && r.cwd == w.Root {
 			return "", false
 		}
 	}

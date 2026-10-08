@@ -385,18 +385,19 @@ func ensureSwitch(ctx context.Context, spec workspace.Spec) error {
 // shellable is a jump's refusal of a worktree with no home and no agent
 // that the view makes a managed session for instead: one shellSession
 // names a session for, on a host whose daemon has new by the
-// capabilities st has cached for it. A host st has as down, or that
-// never answered, is not dialled, and the refusal stands.
-func shellable(st *merged.State, err error) (*noHome, bool) {
+// capabilities st has cached for it, with the host's records as st has
+// them then. A host st has as down, or that never answered, is not
+// dialled, and the refusal stands.
+func shellable(st *merged.State, err error) (*noHome, protocol.Message, bool) {
 	var nh *noHome
 	if st == nil || !errors.As(err, &nh) || nh.name == "" {
-		return nil, false
+		return nil, protocol.Message{}, false
 	}
-	hello, _, ok, err := st.HostSnapshot(nh.h.Name)
+	hello, snap, ok, err := st.HostSnapshot(nh.h.Name)
 	if !ok || err != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
-		return nil, false
+		return nil, protocol.Message{}, false
 	}
-	return nh, true
+	return nh, snap, true
 }
 
 // jumpTarget is where jumpRow takes a row that is not orphaned: what
