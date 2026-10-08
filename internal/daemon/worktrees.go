@@ -156,7 +156,12 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		d.publishRecordLocked(r, now, seen)
 	}
 	for _, r := range d.lastMains {
-		if d.inUseLocked(r) {
+		// A main checkout where a worktree was, one an agent or a
+		// pane record still names, is in use before the agents are
+		// attributed again: its record goes out first, so the old
+		// id's remove can wait for them (retireLocked).
+		prev, had := d.worktrees[r.Root]
+		if d.inUseLocked(r) || had && !prev.Main && d.namedLocked(prev.ID) {
 			d.publishRecordLocked(r, now, seen)
 		}
 	}
@@ -267,14 +272,16 @@ func (d *Daemon) removeRecordLocked(w protocol.Worktree) {
 	d.worktreeRemovedLocked(w.ID, &l)
 }
 
-// inUseLocked reports whether a main checkout's record is published: its
-// repository is in this host's config, a worktree of it is listed, or
-// an agent is attributed to it. The rest of the checkouts under the
-// repos directory, many on a machine that clones there by hand, have no
-// record, no line and no git status refresh, and so does one whose HEAD
-// could not be read. Called with d.mu held.
+// inUseLocked reports whether a main checkout's record is published: a
+// worktree of it is listed, or an agent is attributed to it. Being in
+// the host's config is not use: a config that lists every repository,
+// as one made from a directory of clones does, would publish a line for
+// each. The rest of the checkouts under the repos directory, many on a
+// machine that clones there by hand, have no record, no line and no git
+// status refresh, and so does one whose HEAD could not be read. Called
+// with d.mu held.
 func (d *Daemon) inUseLocked(r worktree.Record) bool {
-	return !r.Unread && (r.Configured || r.Linked || d.mainAgents[d.checkoutID(r.Root)])
+	return !r.Unread && (r.Linked || d.mainAgents[d.checkoutID(r.Root)])
 }
 
 // syncMainsLocked publishes the main checkouts again when the set with

@@ -138,10 +138,10 @@ func TestMainCheckoutRecords(t *testing.T) {
 
 	d.pollWorktrees(ctx)
 	ms := with.drain()
-	if i := recordAt(ms, projID); i < 0 {
-		t.Fatalf("the configured checkout is not published: %+v", ms)
-	} else if w := ms[i].Worktree; !w.Main || w.Branch != "main" || w.Root != proj || w.Repo != "proj" || w.Session != "" {
-		t.Fatalf("the configured checkout's record: %+v", w)
+	// Configured alone is not use: a config that lists every
+	// repository would publish a line for each.
+	if recordAt(ms, projID) >= 0 {
+		t.Fatalf("a configured checkout with no worktree and no agent is published: %+v", ms)
 	}
 	if recordAt(ms, otherID) >= 0 {
 		t.Fatalf("a checkout in no use is published: %+v", ms)
@@ -154,14 +154,14 @@ func TestMainCheckoutRecords(t *testing.T) {
 	}
 
 	// Its git status, read as a worktree's is.
-	if err := os.WriteFile(filepath.Join(proj, "notes"), []byte("a\nb\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(linked, "notes"), []byte("a\nb\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Two rounds: two workers, three records due.
 	refresh(t, d)
 	refresh(t, d)
 	ms = with.drain()
-	if i := recordAt(ms, projID); i < 0 || ms[i].Worktree.Git == nil || !ms[i].Worktree.Git.Dirty || ms[i].Worktree.Git.Uncommitted != [2]int{2, 0} {
+	if i := recordAt(ms, "env/checkout/"+linked); i < 0 || ms[i].Worktree.Git == nil || !ms[i].Worktree.Git.Dirty || ms[i].Worktree.Git.Uncommitted != [2]int{2, 0} {
 		t.Fatalf("no git status on the checkout's record: %+v", ms)
 	}
 	without.drain()
@@ -213,7 +213,7 @@ func TestMainCheckoutRecords(t *testing.T) {
 	}
 
 	// The agent leaves: its upsert, then the record goes; the
-	// configured checkout's stays.
+	// checkout with a worktree stays.
 	def.set(func() { def.panes[0].CurrentPath = "/" })
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
@@ -224,10 +224,10 @@ func TestMainCheckoutRecords(t *testing.T) {
 		t.Fatalf("the agent left, then the record went: %+v", ms)
 	}
 	d.mu.Lock()
-	_, kept := d.worktrees[proj]
+	_, kept := d.worktrees[linked]
 	d.mu.Unlock()
 	if !kept {
-		t.Fatal("the configured checkout's record went with the other's")
+		t.Fatal("the record of the checkout with a worktree went with the other's")
 	}
 
 	// Back in it, then the agent exits with its shell left in the pane:
