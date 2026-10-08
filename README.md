@@ -1111,10 +1111,11 @@ row's session exists locally and is switched to.
   always. The first key or
   wheel step that moves the selection makes it the user's: from then on
   it stays on the row it was put on across refreshes, as before. A click
-  on a row, or a digit, while the selection follows jumps to that row
-  and leaves the selection following, so back in this window it is on
-  the viewer's own row again, not on the one clicked; with the user's
-  own selection, the click or digit moves it there first, as before. In
+  on a row, or a digit, jumps to that row and leaves the selection
+  following, the user's own selection included: back in this window it
+  is on the viewer's own row again, not on the one clicked, and the
+  window the viewer arrives at shows its own row, not wherever a click
+  from it once left the band. In
   the sidebar, tmux's click binding makes the sidebar the active pane,
   so a click that jumps makes the pane that was active before it the
   active one again (`last-pane`), and typing goes where it went before

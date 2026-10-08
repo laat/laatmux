@@ -311,20 +311,20 @@ func (m *Model) Select(id string) bool {
 	return false
 }
 
-// jumpTo is a jump to the visible row at i, by a click or a digit. A
-// selection that follows the viewer's own row goes on following it: the
-// jump takes the viewer to that row's session, and when they are back
-// here the selection is on their own row again rather than on the one
-// they clicked. A selection that is the user's moves to the row, as a
-// key would move it.
+// jumpTo is a jump to the visible row at i, by a click or a digit. The
+// selection follows the viewer's own row from here, whether it did or
+// was the user's: the jump takes the viewer to that row's session, and
+// the band marks where the viewer is, in this pane their own row again
+// rather than the one they clicked, and in the pane they arrive at its
+// own row rather than wherever a click from it once left the band. A
+// key moves the selection; a jump does not.
 func (m *Model) jumpTo(i int) Action {
 	vis := m.Visible()
 	if i < 0 || i >= len(vis) {
 		return Action{}
 	}
-	if !m.Follow {
-		m.moveTo(i)
-	}
+	m.Follow, m.lost = true, false
+	m.commit()
 	return Action{Kind: ActionJump, Row: vis[i].Row}
 }
 
