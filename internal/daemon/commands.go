@@ -444,7 +444,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return err
 			}
 		}
-		panes, err := rn.managed.Tmux.ListPanes(ctx)
+		panes, err := rn.listManaged(ctx)
 		if err != nil {
 			if tmux.NoServer(err) {
 				return nil

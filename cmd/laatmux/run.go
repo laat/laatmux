@@ -82,7 +82,7 @@ func cmdRun(ctx context.Context, args []string) error {
 			return errors.New("--host goes with <repo>/<branch>; inside a workspace session the target is the workspace")
 		}
 		cur, err := workspace.Current(ctx)
-		if err != nil {
+		if err = warnHook(err); err != nil {
 			return fmt.Errorf("laatmux run must name <repo>/<branch> or run inside a workspace session: %w", err)
 		}
 		if !cur.Workspace() {

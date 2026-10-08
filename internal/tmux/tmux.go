@@ -221,6 +221,13 @@ func (e *HookError) Error() string {
 }
 func (e *HookError) Unwrap() error { return e.Err }
 
+// HookOnly reports whether err is a *HookError: the listing printed
+// every record, and only a command after it failed.
+func HookOnly(err error) bool {
+	var he *HookError
+	return errors.As(err, &he)
+}
+
 // lostServer is the line tmux ends its message with when its server
 // went away before the command finished.
 const lostServer = "server exited unexpectedly"
@@ -551,6 +558,21 @@ func (s Server) Records(ctx context.Context, f Fields, a ...string) ([][]string,
 	return f.Parse(out), err
 }
 
+// Display is the one value display-message -p prints for format, with
+// a as its other arguments (-t say): read through Records, so it is the
+// value as the server holds it. A lookup a user's after-display-message hook
+// failed after has the value, returned with the *HookError.
+func (s Server) Display(ctx context.Context, format string, a ...string) (string, error) {
+	recs, err := s.Records(ctx, NewFields(format), append([]string{"display-message", "-p"}, a...)...)
+	if err != nil && !HookOnly(err) {
+		return "", err
+	}
+	if len(recs) != 1 {
+		return "", fmt.Errorf("tmux display-message -p: %d values for %s", len(recs), format)
+	}
+	return recs[0][0], err
+}
+
 // Parse is what a command printed in the format: a record of the
 // values of each line, in the order of the vars. What a user's
 // after-list-panes or after-display-message hook prints comes after
@@ -709,8 +731,10 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 	// Each session is named by its id, which reaches it whatever its
 	// name: a hand-made session can have a name no target reaches
 	// (CheckTarget), c:d say on tmux 3.7, which =c:d: takes for window
-	// d: of session c.
-	if out, err := s.Query(ctx, "#{session_id}", "list-sessions"); err == nil {
+	// d: of session c. A listing that a session's own after-list-sessions
+	// hook, which the removal above leaves, failed after is read all the
+	// same.
+	if out, err := s.Query(ctx, "#{session_id}", "list-sessions"); err == nil || HookOnly(err) {
 		for _, id := range strings.Fields(string(out)) {
 			for _, opt := range []string{"prefix", "prefix2", "status", "mouse"} {
 				_, _ = s.Run(ctx, "set-option", "-u", "-t", id, opt)

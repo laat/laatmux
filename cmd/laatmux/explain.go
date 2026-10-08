@@ -26,7 +26,7 @@ func cmdExplain(ctx context.Context, args []string) error {
 	}
 	srv := tmux.Parse(*sock)
 	panes, err := srv.ListPanes(ctx)
-	if err != nil {
+	if err = warnHook(err); err != nil {
 		return err
 	}
 	var pane *tmux.Pane

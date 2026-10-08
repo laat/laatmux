@@ -768,6 +768,157 @@ func TestSidebarReap(t *testing.T) {
 	}
 }
 
+// A user's after-list-panes hook that fails after list-panes printed:
+// the sidebar's own listings go on with the panes, and say nothing of
+// the hook. add leaves a window that has a live sidebar as it is, and
+// gets as far as the split in one without a sidebar and too narrow for
+// it; fit puts a sidebar back to its width, on --session kills the
+// sidebar in the other session, reap kills one alone in its window, and
+// off kills the rest. add is not run on a window with room for a
+// sidebar and none in it: its split would start this binary as the
+// sidebar.
+func TestSidebarListingsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	run("new-session", "-d", "-s", "other", "sleep 1000")
+	t.Setenv("TMUX", "")
+	// The session display-message names with no client attached is
+	// tmux's choice: the other session is whichever it did not.
+	target, err := scopeSidebar(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	here, elsewhere := "boot", "other"
+	if run("display", "-p", "-t", "other", "#{session_id}") == target {
+		here, elsewhere = "other", "boot"
+	}
+	sidebar := func(session string) (window, pane string) {
+		t.Helper()
+		window = run("new-window", "-d", "-t", session+":", "-P", "-F", "#{window_id}", "sleep 1000")
+		pane = run("split-window", "-d", "-h", "-b", "-f", "-l", "35", "-t", window, "-P", "-F", "#{pane_id}", "sleep 1000")
+		run("set-option", "-p", "-t", pane, sidebarTag, "1")
+		return window, pane
+	}
+	fitted, fittedPane := sidebar(here)
+	_, otherPane := sidebar(elsewhere)
+	alone, alonePane := sidebar(here)
+	run("kill-pane", "-t", run("display", "-p", "-t", alone+".1", "#{pane_id}"))
+	run("resize-window", "-t", fitted, "-x", "172", "-y", "40")
+	width := func() string { return run("display", "-p", "-t", fittedPane, "#{pane_width}") }
+	if w := width(); w == "35" {
+		t.Fatalf("the window grew and the sidebar did not: %s", w)
+	}
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-panes") })
+	// display-message prints no values for a pane that is gone.
+	exists := func(pane string) bool {
+		out, _ := workspace.Server.Run(ctx, "display", "-p", "-t", pane, "#{pane_id}")
+		return strings.TrimSpace(string(out)) == pane
+	}
+	if panes, err := sidebarPanes(ctx); !tmux.HookOnly(err) || !slices.ContainsFunc(panes, func(p paneInfo) bool { return p.id == fittedPane && p.sidebar }) {
+		t.Errorf("the panes: %+v %v, want the sidebars and a HookError", panes, err)
+	}
+	cfg := config.Config{Sidebar: config.Sidebar{Width: "35"}}
+	if err := sidebarAdd(ctx, cfg, fitted); err != nil {
+		t.Errorf("add to a window with a sidebar: %v", err)
+	}
+	// A window with no sidebar, too narrow for one: add gets past its
+	// listing to the split, whose own error says there is no room, and
+	// nothing is started.
+	tiny := run("new-window", "-d", "-t", here+":", "-P", "-F", "#{window_id}", "sleep 1000")
+	run("resize-window", "-t", tiny, "-x", "2", "-y", "2")
+	if err := sidebarAdd(ctx, cfg, tiny); err == nil || !strings.Contains(err.Error(), "split-window") {
+		t.Errorf("add to a window too narrow for a sidebar: %v, want split-window's error", err)
+	}
+	if err := sidebarFit(ctx, cfg, fitted); err != nil || width() != "35" {
+		t.Errorf("fit: %v, the sidebar %s wide, want 35", err, width())
+	}
+	if again, err := scopeSidebar(ctx, true); err != nil || again != target || exists(otherPane) || !exists(fittedPane) {
+		t.Errorf("on --session: %q %v, want %q; the other session's sidebar there %v, this one's %v", again, err, target, exists(otherPane), exists(fittedPane))
+	}
+	if err := sidebarReap(ctx); err != nil || exists(alonePane) {
+		t.Errorf("reap: %v, the sidebar alone in its window there %v", err, exists(alonePane))
+	}
+	if err := sidebarOff(ctx); err != nil || exists(fittedPane) {
+		t.Errorf("off: %v, a sidebar there %v", err, exists(fittedPane))
+	}
+}
+
+// A user's after-display-message hook that fails after display-message
+// printed: the sidebar's lookups go on with the value. A sidebar pane
+// opens its socket by the server's pid; next with no -t reaches the
+// pane in the window the command runs in, and jump with no -c names the
+// client it runs from; on --session scopes the sidebar to the session.
+func TestSidebarLookupsHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(string(must(workspace.Server.Run(ctx, args...))))
+	}
+	sock, boot := run("display", "-p", "#{socket_path}"), run("display", "-p", "-t", "boot", "#{session_id}")
+	// A control-mode client on boot stands for the user's terminal.
+	c := exec.Command("tmux", "-L", "default", "-C", "attach", "-t", "boot")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	var client string
+	for i := 0; i < 50 && client == ""; i++ {
+		time.Sleep(100 * time.Millisecond)
+		client = run("list-clients", "-F", "#{client_name}")
+	}
+	pane := run("split-window", "-d", "-h", "-t", "boot:", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-p", "-t", pane, sidebarTag, "1")
+	t.Setenv("TMUX", sock+",1,0")
+	t.Setenv("TMUX_PANE", pane)
+	run("set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-display-message") })
+	got := make(chan view.Command, 8)
+	cmds := make(chan func(*view.Model) view.Action, 8)
+	stop, err := listenPane(ctx, cmds, func(c view.Command) func(*view.Model) view.Action {
+		got <- c
+		return func(*view.Model) view.Action { return view.Action{} }
+	})
+	if err != nil {
+		t.Fatalf("the pane's socket with the hook: %v", err)
+	}
+	defer stop()
+	recv := func(what string) view.Command {
+		t.Helper()
+		select {
+		case c := <-got:
+			<-cmds
+			return c
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s with the hook did not reach the pane", what)
+		}
+		return view.Command{}
+	}
+	if err := sidebarControl(ctx, "next", nil); err != nil {
+		t.Fatal(err)
+	}
+	recv("next")
+	if err := sidebarControl(ctx, "jump", []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := recv("jump"); c.Client != client {
+		t.Errorf("jump with the hook names client %q, want %q", c.Client, client)
+	}
+	if target, err := scopeSidebar(ctx, true); err != nil || target != boot {
+		t.Errorf("on --session with the hook: %q %v, want %s", target, err, boot)
+	}
+}
+
 // The jump keys: on binds M-1..M-9 in the root table to a jump with
 // the window and client, off unbinds them and leaves a user's M-0 and
 // a user's M-5 bound to something else alone.
@@ -911,7 +1062,8 @@ func TestNestedShell(t *testing.T) {
 // short, and a command reached neither. Each path has a $ before a
 // letter, which tmux 3.4 prints as \$ and Records reads back as
 // written. A sidebar pane not listening yet, and a pane with a socket
-// tag that is no sidebar's, are not listed.
+// tag that is no sidebar's, are not listed. A failing after-list-panes
+// hook does not change any of that.
 func TestSidebarSocketsWithSep(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -973,6 +1125,22 @@ func TestSidebarSocketsWithSep(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Errorf("next for %s did not reach the pane listening on %q", s.window, s.path)
 		}
+	}
+	// A user's after-list-panes hook that fails after list-panes printed:
+	// every socket is listed all the same, with the *tmux.HookError, and
+	// a command for a window still reaches its pane.
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-panes") })
+	if got, err := sidebarSockets(ctx, "", true); !tmux.HookOnly(err) || !slices.Equal(slices.Sorted(slices.Values(got)), want) {
+		t.Errorf("every socket with the hook: %q %v, want %q and a HookError", got, err, want)
+	}
+	if err := sidebarControl(ctx, "next", []string{"-t", sides[0].window}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sides[0].got:
+	case <-time.After(5 * time.Second):
+		t.Errorf("next for %s with the hook did not reach the pane listening on %q", sides[0].window, sides[0].path)
 	}
 }
 

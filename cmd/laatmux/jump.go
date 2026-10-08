@@ -99,7 +99,7 @@ func cmdJump(ctx context.Context, args []string) error {
 		spec = attachSpec(h, rest)
 	}
 	name, created, err := workspace.Ensure(ctx, spec)
-	if err != nil {
+	if err = warnHook(err); err != nil {
 		return err
 	}
 	return focus(ctx, name, created)

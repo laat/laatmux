@@ -268,7 +268,7 @@ func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.
 	if gone || !claude || id.PID != bound.PID || !id.Start.Equal(bound.Start) {
 		return false, gone || claude
 	}
-	panes, err := rn.managed.Tmux.ListPanes(ctx)
+	panes, err := rn.listManaged(ctx)
 	if err != nil {
 		return false, true
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 var version = "0.0.0-dev"
@@ -110,6 +111,24 @@ func report(w io.Writer, err error) (code int, exit bool) {
 		return 1, true
 	}
 	return 0, false
+}
+
+// warnings is where warnHook prints.
+var warnings io.Writer = os.Stderr
+
+// warnHook takes the error of a tmux listing a command reads, through
+// workspace say: a *tmux.HookError, a user's hook that failed after the
+// listing printed every record, is printed as a note, and nil returned,
+// so the command goes on with the records. Any other error is returned
+// as it is. A view has no line to print it on, and its callers take the
+// error with tmux.HookOnly instead; so does a sidebar binding, which says
+// nothing of any failure.
+func warnHook(err error) error {
+	if !tmux.HookOnly(err) {
+		return err
+	}
+	fmt.Fprintln(warnings, "laatmux:", err)
+	return nil
 }
 
 func usage() {

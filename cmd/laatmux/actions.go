@@ -959,8 +959,10 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if err != nil {
 		return protocol.Session{}, err
 	}
+	// A session Ensure read from a listing a user's hook failed after is
+	// there, as in jumpRow.
 	name, _, err := workspace.Ensure(d.ctx, spec)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return protocol.Session{}, err
 	}
 	return protocol.Session{Name: name, Key: spec.Key, Host: spec.Host.Name, Source: spec.Source, Branch: spec.Branch}, nil

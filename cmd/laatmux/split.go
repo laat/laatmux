@@ -50,7 +50,7 @@ func cmdSplit(ctx context.Context, args []string) error {
 		return errors.New("no pane: pass the pane id, as a run-shell binding does with '#{pane_id}'")
 	}
 	l, cwd, err := workspace.PaneSession(ctx, paneID)
-	if err != nil {
+	if err = warnHook(err); err != nil {
 		return err
 	}
 	var h config.Host

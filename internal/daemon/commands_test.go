@@ -55,7 +55,8 @@ type fakeServer struct {
 	// would.
 	keys   [][]string
 	onKeys func(f *fakeServer, keys []string)
-	// listErr fails ListPanes and captureErr Capture when set;
+	// listErr fails ListPanes and captureErr Capture when set; a
+	// *tmux.HookError comes with the panes, as the real one's does.
 	// configured counts EnsureConfigured.
 	listErr    error
 	captureErr error
@@ -75,10 +76,10 @@ func (f *fakeServer) set(change func()) {
 func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.listErr != nil {
+	if f.listErr != nil && !tmux.HookOnly(f.listErr) {
 		return nil, f.listErr
 	}
-	return append([]tmux.Pane(nil), f.panes...), nil
+	return append([]tmux.Pane(nil), f.panes...), f.listErr
 }
 func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	f.mu.Lock()

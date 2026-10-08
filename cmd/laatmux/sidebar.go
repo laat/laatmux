@@ -29,6 +29,12 @@ import (
 // Every check-and-create runs under an exclusive flock on
 // $LAATMUX_HOME/sidebar.lock: two attaches for the same window, or an
 // attach racing on, would each see no tagged pane and make two.
+//
+// A listing of the panes, or a display-message lookup, that a user's
+// after-list-panes or after-display-message hook failed after has what
+// it read, and the sidebar goes on with it, saying nothing of the hook:
+// its commands run from hooks and keys, where an error flashes. The
+// daemon's pane poll logs a failing after-list-panes hook's error.
 
 // sidebarTag is the pane option that marks a sidebar pane.
 const sidebarTag = "@laatmux_sidebar"
@@ -203,7 +209,7 @@ func sidebarOff(ctx context.Context) error {
 	unbindJumpKeys(ctx)
 	_, _ = workspace.Server.Run(ctx, "set-option", "-su", sessionsTag)
 	panes, err := sidebarPanes(ctx)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	for _, p := range panes {
@@ -231,11 +237,10 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 		// nested on the laatmux server, and kill the panes elsewhere.
 		return "", errors.New("sidebar on --session: run it in a session of the default tmux server")
 	}
-	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{session_id}")
-	if err != nil {
+	target, err := workspace.Server.Display(ctx, "#{session_id}")
+	if err != nil && !tmux.HookOnly(err) {
 		return "", err
 	}
-	target := strings.TrimSpace(string(out))
 	sessions, _ := sidebarSessions(ctx)
 	if !slices.Contains(sessions, target) {
 		sessions = append(sessions, target)
@@ -243,7 +248,7 @@ func scopeSidebar(ctx context.Context, session bool) (string, error) {
 	if _, err := workspace.Server.Run(ctx, "set-option", "-s", sessionsTag, strings.Join(sessions, " ")); err != nil {
 		return "", err
 	}
-	if recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{session_id}", "#{pane_id}", "#{"+sidebarTag+"}"), "list-panes", "-a"); err == nil {
+	if recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{session_id}", "#{pane_id}", "#{"+sidebarTag+"}"), "list-panes", "-a"); err == nil || tmux.HookOnly(err) {
 		for _, f := range recs {
 			if f[2] != "" && !slices.Contains(sessions, f[0]) {
 				_, _ = workspace.Server.Run(ctx, "kill-pane", "-t", f[1])
@@ -364,7 +369,7 @@ func sidebarAttach(ctx context.Context, window, session string) error {
 // killed and replaced. Called with the lock held.
 func sidebarAdd(ctx context.Context, cfg config.Config, window string) error {
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", "#{window_width}"), "list-panes", "-t", window)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	windowWidth := 0
@@ -411,7 +416,7 @@ func sidebarReap(ctx context.Context) error {
 	}
 	defer unlock()
 	panes, err := sidebarPanes(ctx)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	alive := map[string]bool{}
@@ -483,7 +488,7 @@ func sidebarFit(ctx context.Context, cfg config.Config, window string) error {
 		size = "#{pane_height}"
 	}
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", size, "#{window_zoomed_flag}", "#{pane_active}", "#{window_width}"), "list-panes", "-t", window)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		// Best effort, on every resize: a window killed while fit
 		// waited on the lock, or no server, is nothing to fit, and an
 		// error would open over the user's pane.
@@ -522,10 +527,12 @@ type paneInfo struct {
 }
 
 // sidebarPanes lists every pane on the default server with what reap
-// and off need. No server is no panes.
+// and off need. No server is no panes. A listing a user's
+// after-list-panes hook failed after has every pane, returned with the
+// *tmux.HookError.
 func sidebarPanes(ctx context.Context) ([]paneInfo, error) {
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{window_id}", "#{pane_id}", "#{"+sidebarTag+"}", "#{pane_dead}", "#{remain-on-exit}"), "list-panes", "-a")
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		if tmux.NoServer(err) {
 			return nil, nil
 		}
@@ -535,7 +542,7 @@ func sidebarPanes(ctx context.Context) ([]paneInfo, error) {
 	for _, f := range recs {
 		panes = append(panes, paneInfo{window: f[0], id: f[1], sidebar: f[2] != "", dead: f[3] == "1", remain: f[4] == "on"})
 	}
-	return panes, nil
+	return panes, err
 }
 
 // sidebarHooksSet reports whether laatmux's hooks are on the server. No

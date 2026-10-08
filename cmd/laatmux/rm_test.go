@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
@@ -15,6 +18,7 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/workspace"
 )
 
 // rm inside a workspace session takes the workspace from the session:
@@ -134,6 +138,160 @@ func TestRmWithoutTmux(t *testing.T) {
 	defer mu.Unlock()
 	if len(rms) != 2 || rms[0].Root != "/w/proj/b" || rms[1].Root != "" || rms[1].Branch != "gone" {
 		t.Errorf("rms sent: %+v", rms)
+	}
+}
+
+// A user's after-list-sessions, after-display-message and
+// after-list-panes hooks that fail after their listings printed: the
+// commands run from a shell go on with what the listings printed and
+// print each hook's error once, as a note through warnHook (command.Rm's
+// own note is TestRmAddHookFails'). settle by name and unsettle in the
+// session settle it; split, shell, run and rm in the session split it,
+// open its shell window, run in its root and remove it, the client on
+// it switched to another session first; jump makes the worktree's
+// session and switches the client there; rm by name finds the root
+// from the session's tags and kills it; explain finds the pane. A
+// control-mode client stands in for the user's terminal.
+func TestCommandsHookFails(t *testing.T) {
+	const src = "git@x:o/proj.git"
+	isolatedDefault(t)
+	var sent []protocol.Message
+	var mu sync.Mutex
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm, protocol.CapRun}, func(pc *protocol.Conn, m protocol.Message) bool {
+		switch m.Type {
+		case protocol.TypeSubscribe:
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRm, protocol.CapRun}},
+			}, Worktrees: []protocol.Worktree{{ID: "lenv/worktree//w/proj/b", EnvironmentID: "lenv", Repo: "proj", Branch: "b", Root: "/w/proj/b", Source: src, Session: "proj/b"}}})
+		case protocol.TypeRm, protocol.TypeRun:
+			mu.Lock()
+			sent = append(sent, m)
+			mu.Unlock()
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: m.Root})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := workspace.Server.Run(ctx, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	has := func(name string) bool { return workspace.Server.HasSession(ctx, name) }
+	run("set-option", "-g", "default-shell", "/bin/sh", tmux.Next, "set-option", "-g", "default-command", "exec sleep 1000")
+	pane := run("new-session", "-d", "-s", "mac/proj/s", "-P", "-F", "#{pane_id}")
+	tag := func(name, root, branch string) {
+		t.Helper()
+		run("set-option", "-t", "="+name+":", "@laatmux_workspace", protocol.SessionKey("lenv", root),
+			tmux.Next, "set-option", "-t", "="+name+":", "@laatmux_host", "mac",
+			tmux.Next, "set-option", "-t", "="+name+":", "@laatmux_repo", src,
+			tmux.Next, "set-option", "-t", "="+name+":", "@laatmux_branch", branch)
+	}
+	tag("mac/proj/s", "/w/proj/s", "s")
+	run("new-session", "-d", "-s", "mac/proj/gone")
+	tag("mac/proj/gone", "/w/proj/gone", "gone")
+	socket := run("display-message", "-p", "#{socket_path}")
+	boot := run("display-message", "-p", "-t", "boot", "#{pane_id}")
+	count := func(what string) int {
+		t.Helper()
+		if what == "panes" {
+			return len(strings.Fields(run("list-panes", "-s", "-t", "=mac/proj/s:", "-F", "#{pane_id}")))
+		}
+		return len(strings.Fields(run("list-windows", "-t", "=mac/proj/s:", "-F", "#{window_id}")))
+	}
+	settled := func() string {
+		t.Helper()
+		out, _ := workspace.Server.Run(ctx, "show-options", "-v", "-t", "=mac/proj/s:", "@laatmux_settled")
+		return strings.TrimSpace(string(out))
+	}
+	panes, windows := count("panes"), count("windows")
+	c := exec.Command("tmux", "-L", "default", "-C", "attach-session", "-t", "=mac/proj/s")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdout = io.Discard
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); _ = c.Process.Kill(); _ = c.Wait() })
+	// The client's session, by list-clients, which no hook follows.
+	client := func() string { return run("list-clients", "-F", "#{client_session}") }
+	for i := 0; i < 100 && client() != "mac/proj/s"; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := client(); got != "mac/proj/s" {
+		t.Fatalf("the client is on %q, want mac/proj/s", got)
+	}
+	run("set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9", tmux.Next, "set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	// Gone before isolatedDefault's check lists the panes.
+	t.Cleanup(func() {
+		workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-sessions", tmux.Next, "set-hook", "-gu", "after-display-message", tmux.Next, "set-hook", "-gu", "after-list-panes")
+	})
+	var notes strings.Builder
+	warnings = &notes
+	t.Cleanup(func() { warnings = os.Stderr })
+	noted := func(what string, err error) {
+		t.Helper()
+		got := notes.String()
+		notes.Reset()
+		if err != nil || strings.Count(got, "\n") != 1 || !strings.HasPrefix(got, "laatmux: tmux ") || !strings.HasSuffix(got, "(after the listing printed its records: a hook's error)\n") {
+			t.Errorf("%s: %v, noted %q; want no error and the hook's once", what, err, got)
+		}
+	}
+
+	noted("settle by name", cmdSettle(ctx, []string{"mac/proj/s"}))
+	if got := settled(); got != "1" {
+		t.Errorf("settle by name left @laatmux_settled %q", got)
+	}
+	t.Setenv("TMUX", socket+",0,0")
+	t.Setenv("TMUX_PANE", pane)
+	noted("unsettle in the session", cmdUnsettle(ctx, nil))
+	if got := settled(); got != "" {
+		t.Errorf("unsettle left @laatmux_settled %q", got)
+	}
+	noted("split", cmdSplit(ctx, []string{"-v", pane}))
+	noted("shell", cmdShell(ctx, nil))
+	run("set-hook", "-gu", "after-list-sessions")
+	if got := count("panes"); got != panes+2 {
+		t.Errorf("%d panes after split and shell, want %d", got, panes+2)
+	}
+	if got := count("windows"); got != windows+1 {
+		t.Errorf("%d windows after shell, want %d", got, windows+1)
+	}
+	run("set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9")
+	noted("run in the session", cmdRun(ctx, []string{"--", "true"}))
+	noted("rm in the session", cmdRm(ctx, nil))
+	if has("mac/proj/s") {
+		t.Error("rm in the session left it")
+	}
+	if got := client(); got == "" || got == "mac/proj/s" {
+		t.Errorf("after rm in the session the client is on %q, want another session", got)
+	}
+	// jump runs from the client's pane.
+	t.Setenv("TMUX_PANE", run("list-clients", "-F", "#{pane_id}"))
+	noted("jump", cmdJump(ctx, []string{"mac/proj/b"}))
+	if got := client(); got != "mac/proj/b" {
+		t.Errorf("after jump the client is on %q, want mac/proj/b", got)
+	}
+	noted("rm by name", cmdRm(ctx, []string{"proj/gone", "--host", "mac"}))
+	if has("mac/proj/gone") {
+		t.Error("rm by name left the session")
+	}
+	run("set-hook", "-g", "after-list-panes", "select-window -t nosuch:9")
+	noted("explain", cmdExplain(ctx, []string{"--tmux-socket", "default", boot}))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 3 || sent[0].Type != protocol.TypeRun || sent[0].Root != "/w/proj/s" || sent[1].Type != protocol.TypeRm || sent[1].Root != "/w/proj/s" || sent[2].Root != "/w/proj/gone" {
+		t.Errorf("sent %+v, want run and rm at /w/proj/s, then rm at /w/proj/gone", sent)
 	}
 }
 

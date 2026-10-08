@@ -21,7 +21,7 @@ func cmdShell(ctx context.Context, args []string) error {
 		return errors.New("usage: laatmux shell")
 	}
 	cur, err := workspace.Current(ctx)
-	if err != nil {
+	if err = warnHook(err); err != nil {
 		return fmt.Errorf("laatmux shell must run inside a workspace session: %w", err)
 	}
 	if !cur.Workspace() {

@@ -152,6 +152,42 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	}
 }
 
+// A user's after-list-sessions hook that fails after list-sessions
+// printed: the dashboard's jump, its pane jump and its shell's lookup
+// take the session Ensure made from the listing, and the view says
+// nothing of the hook. Run outside tmux, each jump gets as far as
+// saying how to attach.
+func TestDashEnsureHookFails(t *testing.T) {
+	isolatedDefault(t)
+	ctx := context.Background()
+	if _, err := workspace.Server.Run(ctx, "set-hook", "-g", "after-list-sessions", "select-window -t nosuch:9"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { workspace.Server.Run(context.Background(), "set-hook", "-gu", "after-list-sessions") })
+	h := config.Host{Host: peer.Host{Name: "mac"}}
+	cfg := config.Config{Hosts: []config.Host{h}}
+	worktree := func(branch string) *protocol.Worktree {
+		root := "/w/proj/" + branch
+		return &protocol.Worktree{ID: "menv/worktree/" + root, EnvironmentID: "menv", Repo: "proj", Branch: branch, Root: root, Session: "proj/" + branch}
+	}
+	if err := jumpRow(ctx, cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/a", Worktree: worktree("a")}); err == nil || !strings.Contains(err.Error(), "; attach with: ") {
+		t.Errorf("jump: %v, want the attach hint", err)
+	}
+	a := &protocol.Agent{ID: "menv/laatmux/%1", EnvironmentID: "menv", Server: "laatmux", Session: "scratch", PaneID: "%1"}
+	if _, err := jumpPane(ctx, cfg, nil, rows.Row{Kind: rows.KindAgent, Host: "mac", Name: "scratch", Agent: a}, paneTarget{"laatmux", "scratch", "%1"}); err == nil || !strings.Contains(err.Error(), "; attach with: ") {
+		t.Errorf("pane jump: %v, want the attach hint", err)
+	}
+	d := &dash{ctx: ctx, cfg: cfg, st: merged.New()}
+	if l, err := d.localFor(rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/b", Worktree: worktree("b")}); err != nil || l.Name != "mac/proj/b" {
+		t.Errorf("the shell's session: %+v %v, want mac/proj/b", l, err)
+	}
+	for _, name := range []string{"mac/proj/a", "mac/scratch", "mac/proj/b"} {
+		if !workspace.Server.HasSession(ctx, name) {
+			t.Errorf("no session %s", name)
+		}
+	}
+}
+
 // The preflight's "no such session" names the target quoted when it
 // has a C1 control character, as a branch can.
 func TestClassifyPreflightQuotes(t *testing.T) {

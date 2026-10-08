@@ -39,13 +39,14 @@ func socketPath(serverPID int, paneID string) string {
 	return filepath.Join(socketDir(), strconv.Itoa(serverPID)+"-"+strings.TrimPrefix(paneID, "%")+".sock")
 }
 
-// serverPID is the default server's pid.
+// serverPID is the default server's pid. A lookup a user's
+// after-display-message hook failed after has it all the same.
 func serverPID(ctx context.Context) (int, error) {
-	out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{pid}")
-	if err != nil {
+	pid, err := workspace.Server.Display(ctx, "#{pid}")
+	if err != nil && !tmux.HookOnly(err) {
 		return 0, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(out)))
+	return strconv.Atoi(pid)
 }
 
 // listenPane makes the pane's socket, unlinking a leftover of its name,
@@ -149,8 +150,8 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 		// The client the command ran from, when it is the default
 		// server's: a shell nested on another server, the laatmux one,
 		// would name a client the pane's switch-client cannot find.
-		if out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "#{client_name}"); err == nil {
-			client = strings.TrimSpace(string(out))
+		if c, err := (tmux.Server{}).Display(ctx, "#{client_name}"); err == nil || tmux.HookOnly(err) {
+			client = c
 		}
 	}
 	if client != "" {
@@ -176,14 +177,14 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 			// sidebar the user is not looking at.
 			return nil
 		}
-		out, err := workspace.Server.Run(ctx, "display-message", "-p", "#{window_id}")
-		if err != nil {
+		w, err := workspace.Server.Display(ctx, "#{window_id}")
+		if err != nil && !tmux.HookOnly(err) {
 			return nil // no server: nothing to control
 		}
-		window = strings.TrimSpace(string(out))
+		window = w
 	}
 	sockets, err := sidebarSockets(ctx, window, all)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return nil
 	}
 	for _, s := range sockets {
@@ -195,7 +196,8 @@ func sidebarControl(ctx context.Context, name string, args []string) error {
 // sidebarSockets is the socket paths of the sidebar panes: the window's,
 // or every one with all. A path is under the state directory, which can
 // have tmux.Sep or a newline in it, so the panes are read through
-// tmux.Fields.
+// tmux.Fields. A listing a user's after-list-panes hook failed after
+// has every path, returned with the *tmux.HookError.
 func sidebarSockets(ctx context.Context, window string, all bool) ([]string, error) {
 	args := []string{"list-panes"}
 	if all {
@@ -204,7 +206,7 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 		args = append(args, "-t", window)
 	}
 	recs, err := workspace.Server.Records(ctx, tmux.NewFields("#{"+sidebarTag+"}", "#{"+socketTag+"}"), args...)
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return nil, err
 	}
 	var paths []string
@@ -213,7 +215,7 @@ func sidebarSockets(ctx context.Context, window string, all bool) ([]string, err
 			paths = append(paths, f[1])
 		}
 	}
-	return paths, nil
+	return paths, err
 }
 
 // send writes one command line to a pane's socket and waits for its

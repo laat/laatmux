@@ -72,8 +72,10 @@ func jumpPane(ctx context.Context, cfg config.Config, line *rows.Row, r rows.Row
 		}
 		return "", nil
 	}
+	// A session Ensure read from a listing a user's hook failed after is
+	// there, as in jumpRow.
 	name, _, err := workspace.Ensure(ctx, paneSpec(cfg, h, line, r, p))
-	if err != nil {
+	if err != nil && !tmux.HookOnly(err) {
 		return "", err
 	}
 	if err := switchTo(ctx, name); err != nil {

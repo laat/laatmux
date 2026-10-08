@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -84,6 +86,84 @@ func TestListHookFails(t *testing.T) {
 	}
 	if slices.Sort(names); !slices.Equal(names, []string{"a", "b"}) {
 		t.Errorf("List with the hook listed %q, want a and b", names)
+	}
+}
+
+// A user's after-display-message hook that fails after display-message
+// printed the session: Current returns it, and PaneSession it and the
+// pane's directory, each with the *tmux.HookError. Inside still finds
+// the process inside the default server, and Kill of the session the
+// process runs in switches its client away first, so the client stays.
+func TestCurrentHookFails(t *testing.T) {
+	startServers(t)
+	ctx := context.Background()
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := Server.Run(ctx, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	pane := run("new-session", "-d", "-s", "w", "-c", t.TempDir(), "-P", "-F", "#{pane_id}", "sleep 600")
+	run("set-option", "-t", "=w:", "@laatmux_workspace", "env//w")
+	sock := run("display-message", "-p", "#{socket_path}")
+	t.Setenv("TMUX", sock+",0,0")
+	t.Setenv("TMUX_PANE", pane)
+	dir := run("display-message", "-p", "-t", pane, "#{pane_current_path}")
+	run("set-hook", "-g", "after-display-message", "select-window -t nosuch:9")
+	if v, err := Server.Display(ctx, "#{socket_path}"); v != sock || !tmux.HookOnly(err) {
+		t.Errorf("Display with the hook: %q %v, want %q and a HookError", v, err, sock)
+	}
+	cur, err := Current(ctx)
+	if cur.Name != "w" || cur.Key != "env//w" || !tmux.HookOnly(err) || !strings.HasPrefix(err.Error(), "tmux display-message -p -t "+pane+" -F ") {
+		t.Errorf("Current with the hook: %+v %v, want w and display-message's HookError", cur, err)
+	}
+	l, cwd, err := PaneSession(ctx, pane)
+	if l.Name != "w" || l.Key != "env//w" || cwd != dir || !tmux.HookOnly(err) {
+		t.Errorf("PaneSession with the hook: %+v %q %v, want w, %q and a HookError", l, cwd, err, dir)
+	}
+	if !Inside(ctx) {
+		t.Error("Inside with the hook: false")
+	}
+	// A control-mode client stands in for the user's terminal, on w.
+	run("new-session", "-d", "-s", "a", "sleep 600")
+	cmd := exec.Command("tmux", "-L", "default", "-C", "attach-session", "-t", "=w")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); cmd.Process.Kill(); cmd.Wait() })
+	session := func() string {
+		t.Helper()
+		return run("list-clients", "-F", "#{client_session}")
+	}
+	for i := 0; i < 100 && session() != "w"; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := session(); got != "w" {
+		t.Fatalf("the client is on %q, want w", got)
+	}
+	if err := Kill(ctx, "w"); err != nil {
+		t.Fatal(err)
+	}
+	if got := session(); got != "a" {
+		t.Errorf("after the kill with the hook the client is on %q, want a", got)
+	}
+}
+
+// TMUX naming a socket no server listens on, and no default server
+// either: Inside is false, though the two lookups that failed have the
+// same value, none.
+func TestInsideNoServer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("TMUX", filepath.Join(dir, "none")+",0,0")
+	if Inside(context.Background()) {
+		t.Error("inside with no server")
 	}
 }
 

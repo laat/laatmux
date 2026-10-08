@@ -1154,7 +1154,9 @@ func startManaged(t *testing.T) Server {
 // recent session; tmux 3.7 keeps c:d, which =c:d: takes for a window of
 // a session c; =$1: is the session with the id $1, b here; and n$m is
 // stored as n\$m by tmux 3.2 to 3.4, and listed as n\\$m by 3.4. The
-// test sets and reads each by its id too.
+// test sets and reads each by its id too. A failing after-list-sessions
+// hook of the sessions' own, which is not a global one to remove, does
+// not keep the listing from them.
 func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 	s := startManaged(t)
 	ctx := context.Background()
@@ -1170,6 +1172,17 @@ func TestEnsureConfiguredClearsEverySession(t *testing.T) {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)
+	}
+	// The sessions' own after-list-sessions hook that fails, which the
+	// removal of the global hooks leaves: the listing is read all the
+	// same.
+	for _, id := range ids {
+		if _, err := s.Run(ctx, "set-hook", "-t", id+":", "after-list-sessions", "select-window -t nosuch:9"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Query(ctx, "#{session_id}", "list-sessions"); !HookOnly(err) {
+		t.Fatalf("list-sessions with the session's hook: %v, want a HookError", err)
 	}
 	if err := s.EnsureConfigured(ctx); err != nil {
 		t.Fatal(err)
