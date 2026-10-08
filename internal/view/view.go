@@ -424,8 +424,12 @@ type Span struct {
 	Bold bool
 	Fg   string
 	Bg   string // a template's #[bg=…]; "" for the line's
-	own  bool   // the look is the span's own: a template's style leaves it
-	band bool   // the selection's band on this span alone: a strip's chip
+	// Link is a URL the span's text is a hyperlink to, an OSC 8 the
+	// terminal makes clickable where it shows them (under tmux with
+	// the hyperlinks feature): the PR's number to the PR.
+	Link string
+	own  bool // the look is the span's own: a template's style leaves it
+	band bool // the selection's band on this span alone: a strip's chip
 	// label marks the viewer's own label, what primary builds on the
 	// viewer's own row: the primary label and the pane's suffix, which
 	// a dim line leaves in their colour and not faint. The mark, not
@@ -1134,15 +1138,25 @@ func ANSI(l Line, th palette.Theme) string {
 			}
 			b.WriteString(fg)
 			b.WriteString(bg)
-			b.WriteString(s.Text)
+			b.WriteString(linked(s))
 			b.WriteString("\x1b[0m")
 			attrs()
 			continue
 		}
-		b.WriteString(s.Text)
+		b.WriteString(linked(s))
 	}
 	b.WriteString("\x1b[0m")
 	return b.String()
+}
+
+// linked is the span's text, wrapped as an OSC 8 hyperlink to its
+// Link when it has one: the link opens on the text, closed after it so
+// nothing drawn later is part of it.
+func linked(s Span) string {
+	if s.Link == "" {
+		return s.Text
+	}
+	return "\x1b]8;;" + s.Link + "\x1b\\" + s.Text + "\x1b]8;;\x1b\\"
 }
 
 // width is the number of terminal cells s takes: wide East Asian and

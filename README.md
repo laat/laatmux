@@ -1200,8 +1200,12 @@ alike; only the lines it leaves differ.
   against its base: `→base` when the base is not `main`, `master` or
   the branch itself, its `origin/` taken off and at most twelve cells,
   the conflict mark `!`, `↑2 ↓1`; when narrow the base is cut, then
-  goes, then `↓`, then `↑`, and the mark stays). PR: `{pr_number}`,
-  `{pr_checks}`, `{pr_state}` (the PR's state as an icon: `●` open in
+  goes, then `↓`, then `↑`, and the mark stays). PR: `{pr_number}` (an
+  OSC 8 hyperlink to the PR, clickable where the terminal shows them;
+  under tmux the outer terminal needs the `hyperlinks` feature, as
+  `set -as terminal-features 'xterm*:hyperlinks'`, or tmux drops the
+  link and the number is plain text), `{pr_checks}`, `{pr_state}` (the
+  PR's state as an icon: `●` open in
   green, `◌` a draft dim, `◆` merged in purple, `⊘` closed in red, a
   draft closed as one being closed; `o` `d` `m` `c` in ascii, octicons
   in nerdfont), `{pr_detail}` (pending checks: the time since this

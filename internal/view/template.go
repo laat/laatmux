@@ -1128,7 +1128,7 @@ func (m *Model) prNumber(r rows.Row) []Span {
 		return nil
 	}
 	sp := prStyle(prKind(b.PR))
-	sp.Text = fmt.Sprintf("#%d", b.PR.Number)
+	sp.Text, sp.Link = fmt.Sprintf("#%d", b.PR.Number), b.PR.URL
 	out := []Span{sp}
 	if b.Stale {
 		// Dim and plain, an open PR's bold gone too, with ? after;
