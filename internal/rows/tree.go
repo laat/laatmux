@@ -155,6 +155,11 @@ func (j *join) finish(r *Row) {
 	if a := r.Agent; a != nil && r.Pending == nil && a.Liveness != protocol.Gone && a.Activity == protocol.Idle {
 		r.Done = in.Attention[a.ID].Done()
 		r.Stale = !r.Done && in.StaleAfter > 0 && in.Now.Sub(a.ActivityAt) > in.StaleAfter
+		if b := r.Branch; !r.Done && b != nil && !b.Stale && b.Checks != nil && b.Checks.State == protocol.ChecksPending && !b.Checks.PendingSince.IsZero() {
+			// Waiting on CI, within the hour the checks are trusted to
+			// finish in.
+			r.Checking = in.Now.Sub(b.Checks.PendingSince) < CheckingFor
+		}
 	}
 	r.Dim = r.Agent == nil || r.Agent.Liveness == protocol.Gone || r.HostDown || r.Orphaned ||
 		r.Settled && !r.Pressing() || r.Stale && in.DimStale

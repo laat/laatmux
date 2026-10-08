@@ -1314,6 +1314,73 @@ func TestSortOrders(t *testing.T) {
 	}
 }
 
+// An idle agent whose PR has checks pending ranks with the working ones
+// for the first hour since the checks went pending: it waits on CI.
+// After the hour, with the checks failing or passing, with a stale
+// branch record, or for a done or a blocked agent, nothing changes.
+func TestCheckingRanksAsWorking(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	w := func(branch string) protocol.Worktree {
+		return protocol.Worktree{ID: "venv/worktree//w/" + branch, EnvironmentID: "venv", Repo: "proj", Branch: branch, Root: "/w/" + branch, Source: "git@github.com:laat/proj.git", Session: "proj/" + branch}
+	}
+	agent := func(pane, branch string, act protocol.Activity) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: "proj/" + branch, Cwd: "/w/" + branch, Agent: "claude",
+			Activity: act, ActivityAt: now.Add(-time.Minute), Liveness: protocol.Alive, Managed: true}
+	}
+	key := func(branch string) protocol.BranchKey {
+		return protocol.BranchKey{Source: source.Key("git@github.com:laat/proj.git"), Branch: branch}
+	}
+	checks := func(state string, since time.Duration) protocol.BranchStatus {
+		return protocol.BranchStatus{FetchedAt: now, Checks: &protocol.Checks{State: state, PendingSince: now.Add(-since)}}
+	}
+	in := Input{
+		Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+		Worktrees: []protocol.Worktree{w("ci"), w("old"), w("red"), w("plain"), w("gone")},
+		Agents:    []protocol.Agent{agent("%1", "ci", protocol.Idle), agent("%2", "old", protocol.Idle), agent("%3", "red", protocol.Idle), agent("%4", "plain", protocol.Idle), agent("%5", "gone", protocol.Idle)},
+		Branches: map[protocol.BranchKey]protocol.BranchStatus{
+			key("ci"):  checks(protocol.ChecksPending, 5*time.Minute),
+			key("old"): checks(protocol.ChecksPending, 2*time.Hour),
+			key("red"): checks(protocol.ChecksFailure, 5*time.Minute),
+			key("gone"): func() protocol.BranchStatus {
+				b := checks(protocol.ChecksPending, 5*time.Minute)
+				b.Stale = true
+				return b
+			}(),
+		},
+		Now: now,
+	}
+	ranks := map[string]int{}
+	for _, r := range Agents(in, Tree(in)).Main {
+		ranks[r.Name] = r.Rank()
+		if r.Name == "proj/ci" && !r.Checking {
+			t.Error("proj/ci not checking")
+		}
+	}
+	working := Row{Agent: &protocol.Agent{Activity: protocol.Working, Liveness: protocol.Alive}}.Rank()
+	idle := Row{Agent: &protocol.Agent{Activity: protocol.Idle, Liveness: protocol.Alive}}.Rank()
+	for name, want := range map[string]int{"proj/ci": working, "proj/old": idle, "proj/red": idle, "proj/plain": idle, "proj/gone": idle} {
+		if ranks[name] != want {
+			t.Errorf("%s: rank %d, want %d", name, ranks[name], want)
+		}
+	}
+	// Done and blocked stay what they are.
+	in.Attention = map[string]protocol.Attention{"venv/laatmux/%1": {AgentID: "venv/laatmux/%1", FinishedAt: now}}
+	in.Agents[1] = agent("%2", "old", protocol.Blocked)
+	in.Branches[key("old")] = checks(protocol.ChecksPending, 5*time.Minute)
+	for _, r := range Agents(in, Tree(in)).Main {
+		switch r.Name {
+		case "proj/ci":
+			if r.Checking || r.Rank() != (Row{Done: true, Agent: r.Agent}).Rank() {
+				t.Errorf("done agent on pending checks: checking %v rank %d", r.Checking, r.Rank())
+			}
+		case "proj/old":
+			if r.Checking || r.Rank() != 0 {
+				t.Errorf("blocked agent on pending checks: checking %v rank %d", r.Checking, r.Rank())
+			}
+		}
+	}
+}
+
 // A gone agent sorts after every live one of its group in priority
 // order, a stale or settled one too, whatever its last activity: a gone
 // blocked agent does not come before a live working one, nor a gone

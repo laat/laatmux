@@ -117,6 +117,12 @@ type Row struct {
 	// stale time. A done agent is never stale.
 	Done  bool
 	Stale bool
+	// Checking is an idle agent whose branch's PR has checks pending,
+	// for the first hour since they went pending: the agent waits on
+	// CI, which is work in flight, so the row ranks with the working
+	// ones; after an hour the checks are taken as never finishing (a
+	// job stuck or waiting on a runner) and the row is idle again.
+	Checking bool
 	// Branch is the PR and checks of the row's branch, nil when the
 	// daemon has none.
 	Branch *protocol.BranchStatus
@@ -229,9 +235,10 @@ func (r Row) NeedsUser() bool {
 }
 
 // Rank is the row's sort group in priority order: pending tasks, then
-// blocked, done, working, idle and unknown, stale or settled, then rows
-// without an agent or with a gone one: a gone agent's last activity,
-// which the daemon keeps, says nothing now.
+// blocked, done, working (an idle agent waiting on its PR's checks
+// among them, see Checking), idle and unknown, stale or settled, then
+// rows without an agent or with a gone one: a gone agent's last
+// activity, which the daemon keeps, says nothing now.
 func (r Row) Rank() int {
 	switch {
 	case r.Pending != nil:
@@ -244,11 +251,14 @@ func (r Row) Rank() int {
 		return 1
 	case r.Stale || r.Settled:
 		return 4
-	case r.Agent.Activity == protocol.Working:
+	case r.Agent.Activity == protocol.Working || r.Checking:
 		return 2
 	}
 	return 3
 }
+
+// CheckingFor is how long pending checks count as work in flight.
+const CheckingFor = time.Hour
 
 // Mark is the activity mark ls prints: "!" blocked, "*" working, "-"
 // idle, " " otherwise; a pending task is "!" when it needs the user and
