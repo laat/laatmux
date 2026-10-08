@@ -1148,11 +1148,11 @@ the defaults, `sidebar.templates` in the config:
 sidebar:
   templates:
     tiles:
-      - "{stripe} {status_icon} {primary} {pane_suffix}{fill}{elapsed}"
-      - "{stripe}    {secondary} @{host}{fill}{git_stats}"
+      - "{stripe} {status_icon} {title} {pane_suffix}{fill}{elapsed}"
+      - "{stripe}    {subtitle} @{host}{fill}{git_stats}"
       - "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
     compact: "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
-    top: "{status_icon} {primary} {pane_suffix}"
+    top: "{status_icon} {title} {pane_suffix}"
     tree:
       repo: "#[fg=header,bold]{fold}{repo}"
       worktree: "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
@@ -1168,7 +1168,10 @@ third, and both on the tree's worktree line before `{worst_status}`.
 A line the config sets applies to the sidebar and the dashboard
 alike; only the lines it leaves differ.
 
-- **Tokens.** Labels: `{primary}`, `{secondary}`, `{branch}`, `{repo}`,
+- **Tokens.** Labels: `{primary}`, `{secondary}` (the branch, then the
+  repository, as a line reads them), `{title}`, `{subtitle}` (the
+  repository, then the branch, as a tile reads them; a row that is no
+  worktree's is titled by its session's name with no subtitle), `{branch}`, `{repo}`,
   `{host}` (dim for every host but this machine, `?` when no host
   claims the record, with `/server` on a tile or an agent line for an
   agent observed off the managed server), `{session}`, `{window}`

@@ -152,7 +152,7 @@ func TestRenderScroll(t *testing.T) {
 	// Back to the top: the scroll follows.
 	m.Selected = 0
 	txt = Text(m.Render())
-	if !strings.HasPrefix(txt, "▌ 💬 fix-ls") {
+	if !strings.HasPrefix(txt, "▌ 💬 laatmux") {
 		t.Errorf("did not scroll back:\n%s", txt)
 	}
 }
@@ -2391,5 +2391,27 @@ func TestSetFollowsTheNewTree(t *testing.T) {
 	m.Set(tree, rows.Agents(in, tree), map[string]string{"add-1": wt.ID})
 	if r := m.Selection(); r == nil || r.ID() != a8.ID {
 		t.Fatalf("not on the worktree's first agent in the new tree's order: %+v", r)
+	}
+}
+
+// A compact row with titles is two lines that would run into the next
+// row's: a divider follows it, as after a tile, and the band covers it
+// as a tile's. Without titles the one-line rows need none.
+func TestCompactTitlesDivider(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Layout, m.Titles, m.Width, m.Height, m.Header = Compact, true, 60, 40, nil
+	m.Selected = 0
+	lines := m.Render()
+	rule := strings.Repeat("─", 60)
+	if len(lines) < 3 || Text(lines[2:3]) != rule+"\n" {
+		t.Fatalf("no divider after the first titled compact row:\n%s", Text(lines[:4]))
+	}
+	if !lines[0].Reverse || !lines[1].Reverse || !lines[2].Reverse || lines[3].Reverse {
+		t.Errorf("the band covers lines %v %v %v %v, want the row and its divider", lines[0].Reverse, lines[1].Reverse, lines[2].Reverse, lines[3].Reverse)
+	}
+	m.Titles = false
+	if txt := Text(m.Render()); strings.Contains(txt, rule) {
+		t.Errorf("a divider in compact without titles:\n%s", txt)
 	}
 }

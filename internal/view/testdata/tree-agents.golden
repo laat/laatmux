@@ -3,18 +3,18 @@
 ...|⟨accent:▌⟩    @‹vm/default›
 ...|⟨accent:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────────────────⟩›
-...|⟨accent:▌⟩ ⟨accent:💬⟩ batch-processing                                   1:00
-...|⟨accent:▌⟩    anki-llm @mac
+...|⟨accent:▌⟩ ⟨accent:💬⟩ anki-llm                                           1:00
+...|⟨accent:▌⟩    batch-processing @mac
 ...|⟨accent:▌⟩    Refactoring queue handling now
 ...|‹⟨border:────────────────────────────────────────────────────────────⟩›
-...|⟨success:▌⟩ ⟨success:✅⟩ auto-layout                                        1:00
-...|⟨success:▌⟩    laatmux @‹vm›                                    ‹⟨success:+318⟩› ‹⟨danger:-87⟩›
+...|⟨success:▌⟩ ⟨success:✅⟩ laatmux                                            1:00
+...|⟨success:▌⟩    auto-layout @‹vm›                                ‹⟨success:+318⟩› ‹⟨danger:-87⟩›
 ...|⟨success:▌⟩    done                                          «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:────────────────────────────────────────────────────────────⟩›
-S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:agents-config⟩» «⟨current_worktree_fg:(1)⟩»                                  1:00
-S..|⟨info:▌⟩    laatmux @‹vm›                            ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
+S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(1)⟩»                                        1:00
+S..|⟨info:▌⟩    agents-config @‹vm›                      ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 S..|⟨info:▌⟩    Adding per-agent config to the loader             «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:agents-config⟩» «⟨current_worktree_fg:(2)⟩»                                  1:00
-...|⟨border:▌⟩    laatmux @‹vm›                            ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
+...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(2)⟩»                                        1:00
+...|⟨border:▌⟩    agents-config @‹vm›                      ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 .D.|

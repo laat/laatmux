@@ -1011,7 +1011,7 @@ func TestColumns(t *testing.T) {
 	r.Worktree.Git.Conflict = &yes
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
 	lines := m.compact(r, 0)
-	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n" {
+	if got := Text(lines); got != "▌ 💬 fix-ls (2) laatmux @vm                                R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 2:00\n▌    Permission to run pnpm test                                     ● #52 × 3/5 test (macos-latest)\n"+strings.Repeat("─", 100)+"\n" {
 		t.Errorf("the dashboard's compact lines:\n%s", got)
 	}
 	// The worktree line with a long base, at widths going down: the
@@ -1040,7 +1040,7 @@ func TestColumns(t *testing.T) {
 	// The second tile line: the sync after the stats, the first to
 	// shrink.
 	r.Worktree.Git.Base = "origin/feature"
-	if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tiles[1], r, 50, 2)}}), "\n"); got != "▌    laatmux @vm +46 -11 ✎ +28 -3  →featu… ! ↑2 ↓1" {
+	if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tiles[1], r, 50, 2)}}), "\n"); got != "▌    fix-ls @vm +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1" {
 		t.Errorf("the dashboard's second tile line: %q", got)
 	}
 }
