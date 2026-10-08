@@ -427,12 +427,13 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	for _, s := range names {
 		ps := bySession[s]
 		if len(ps) == 1 && ps[0].Managed && ps[0].Cwd == r.root {
-			if ps[0].NoCmd && !rn.agentIn(ps[0]) {
+			if ps[0].NoCmd && !rn.agentRuns(ps[0]) {
 				// A session made with the user's shell, a jump's to a
-				// worktree with none say, in which no agent has been
-				// identified: taking it up would start no agent, and the
-				// prompt would reach the shell.
-				return r.failed(prompt, "launch refused", fmt.Errorf("session %s in %s has a shell and no agent; start %s in it, or exit that shell and add again", tmux.Printable(s), tmux.Printable(r.root), tmux.Printable(tmux.ShellJoin(r.cmd))))
+				// worktree with none say, in which no agent runs, none
+				// started there or one that has exited: taking it up
+				// would start no agent, and the prompt would reach the
+				// shell.
+				return r.failed(prompt, "launch refused", fmt.Errorf("session %s in %s has a shell and no agent running; start %s in it, or exit that shell and add again", tmux.Printable(s), tmux.Printable(r.root), tmux.Printable(tmux.ShellJoin(r.cmd))))
 			}
 			// s is any session of the managed server, one renamed by
 			// hand say, not SessionName's encoding; it is quoted with
@@ -744,13 +745,15 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 	return ""
 }
 
-// agentIn reports whether the daemon has identified an agent in the
-// managed pane, alive or gone since: its last observation was not bare.
-func (rn *taskRunner) agentIn(p tmux.Pane) bool {
+// agentRuns reports whether the daemon's last observation of the managed
+// pane, on the server instance it is listed on now, identified an agent
+// in it that has not gone since. A pane not observed yet, as on a server
+// restarted since or a daemon just started, has none known to run.
+func (rn *taskRunner) agentRuns(p tmux.Pane) bool {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
-	return ok && st.observed && !st.bare
+	return ok && st.observed && !st.bare && !st.gone && st.obs.serverPID == p.ServerPID
 }
 
 // adopt finds the target for an entry without one: the managed session

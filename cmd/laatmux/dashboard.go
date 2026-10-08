@@ -539,6 +539,22 @@ func switchTo(ctx context.Context, name string) error {
 	return workspace.Switch(ctx, name)
 }
 
+// clientSession is the session of the client a jump switches, the one
+// the context names or the calling one, as switch-client picks it: a
+// jump that waited on a host compares it, so it does not pull a client
+// the user has moved since. "" when tmux does not say, outside tmux say.
+func clientSession(ctx context.Context) string {
+	var a []string
+	if c, ok := ctx.Value(clientKey{}).(string); ok && c != "" {
+		a = []string{"-c", c}
+	}
+	s, err := workspace.Server.Display(ctx, "#{client_session}", a...)
+	if err != nil && !tmux.HookOnly(err) {
+		return ""
+	}
+	return s
+}
+
 // clientKey carries the tmux client a jump switches through a context.
 type clientKey struct{}
 

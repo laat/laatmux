@@ -60,9 +60,11 @@ type dash struct {
 	refocus func()
 	// cmds is the view's commands, through which a jump that waited on a
 	// host ends on the view's goroutine (makeHome); making is the host
-	// such a jump waits on, "" for none.
-	cmds   chan<- func(*view.Model) view.Action
-	making string
+	// such a jump waits on, "" for none. clientAt is the session of the
+	// client a jump switches, clientSession unless a test replaces it.
+	cmds     chan<- func(*view.Model) view.Action
+	making   string
+	clientAt func(context.Context) string
 }
 
 // running is a command under way: what to do when it ends; its log is
@@ -182,17 +184,29 @@ func making(host string) string { return "making a session on " + host + "…" }
 // wait on the host, and says meanwhile that a session is being made,
 // which a jump meanwhile is refused with. The jump switches the client
 // it would have, and says what was made, before an error after it, since
-// the session is there. A view that ends first leaves the jump undone.
+// the session is there. A user who has moved on meanwhile, to a form or
+// a question in the view or with the client to another session, is left
+// where they are, the message saying the session is there for enter. A
+// view that ends first leaves the jump undone.
 func (d *dash) makeHome(m *view.Model, nh *noHome) {
 	ctx, st, host := d.ctx, d.st, nh.h.Name
+	at := d.clientAt
+	if at == nil {
+		at = clientSession
+	}
+	was := at(ctx)
+	// The records at enter, which shellable found: the host's as the
+	// stream has them once new has answered, unless the stream has the
+	// host down by then.
+	_, before, _, _ := st.HostSnapshot(host)
 	d.making = host
 	m.Message = making(host)
 	go func() {
-		// The records are read once new has answered, the stream having
-		// gone on meanwhile.
 		made, err := newHome(ctx, nh.h, nh.w, nh.name, func() protocol.Message {
-			_, snap, _, _ := st.HostSnapshot(host)
-			return snap
+			if _, snap, ok, err := st.HostSnapshot(host); ok && err == nil {
+				return snap
+			}
+			return before
 		})
 		end := func(m *view.Model) view.Action {
 			d.making = ""
@@ -200,6 +214,14 @@ func (d *dash) makeHome(m *view.Model, nh *noHome) {
 				// An older build answers for the host since its hello
 				// was cached: the refusal stands.
 				err = nh
+			}
+			if err == nil && (m.Overlay != nil || m.Confirm != "" || at(ctx) != was) {
+				there := made
+				if there == "" {
+					there = "session " + tmux.Printable(nh.name) + " on " + host + " is there"
+				}
+				m.Message = there + "; enter on the line goes there"
+				return view.Action{}
 			}
 			if err == nil {
 				w := nh.w

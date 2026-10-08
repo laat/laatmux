@@ -420,29 +420,47 @@ func TestAddThenRm(t *testing.T) {
 }
 
 // A session in the root made with the user's shell, as a jump makes one
-// for a worktree with none, is not taken up while no agent has been
-// identified in it: add refuses at the agent stage, saying how to start
-// the agent there, and the worktree is left. One whose shell runs an
-// agent the daemon has identified is taken up as any session in the
-// root is.
+// for a worktree with none, is not taken up while no agent runs in it:
+// add refuses at the agent stage, saying how to start the agent there,
+// and the worktree is left. No agent runs in a pane with no state or one
+// not observed yet, one observed bare, one whose agent has gone, and one whose observation is
+// of another server instance, a pane id reused since. One whose shell
+// runs an agent the daemon has identified is taken up as any session in
+// the root is.
 func TestAddShellSession(t *testing.T) {
 	d, ft, store, remote := newAddDaemon(t)
 	root := store.Dirs.Worktree("proj", "task")
-	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%9", Cwd: root, Managed: true, NoCmd: true}}
+	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%9", Cwd: root, Managed: true, NoCmd: true, ServerPID: 7}}
 	pc := conn(t, d)
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c1", Repo: remote, Branch: "task", AgentName: "claude"})
-	res, _ := result(t, pc, "c1")
-	if want := "session proj/task in " + root + " has a shell and no agent; start claude in it, or exit that shell and add again"; res.OK || res.Stage != protocol.StageAgent || !strings.Contains(res.Error, want) || res.Root != root {
-		t.Fatalf("result %+v, want %q", res, want)
-	}
-	if len(ft.panes) != 1 {
-		t.Fatalf("panes %+v", ft.panes)
+	want := "session proj/task in " + root + " has a shell and no agent running; start claude in it, or exit that shell and add again"
+	for i, st := range []*paneState{
+		nil,
+		{hasIdentity: true, obs: observation{serverPID: 7}},
+		{observed: true, bare: true, obs: observation{serverPID: 7}},
+		{observed: true, hasIdentity: true, gone: true, obs: observation{serverPID: 7}},
+		{observed: true, hasIdentity: true, obs: observation{serverPID: 6}},
+	} {
+		d.mu.Lock()
+		if st == nil {
+			delete(d.panes, paneKey("laatmux", "%9"))
+		} else {
+			d.panes[paneKey("laatmux", "%9")] = st
+		}
+		d.mu.Unlock()
+		id := fmt.Sprintf("c%d", i)
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: "task", AgentName: "claude"})
+		if res, _ := result(t, pc, id); res.OK || res.Stage != protocol.StageAgent || !strings.Contains(res.Error, want) || res.Root != root {
+			t.Fatalf("state %+v: result %+v, want %q", st, res, want)
+		}
+		if len(ft.panes) != 1 {
+			t.Fatalf("panes %+v", ft.panes)
+		}
 	}
 	d.mu.Lock()
-	d.panes[paneKey("laatmux", "%9")] = &paneState{observed: true}
+	d.panes[paneKey("laatmux", "%9")] = &paneState{observed: true, hasIdentity: true, obs: observation{serverPID: 7}}
 	d.mu.Unlock()
-	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c2", Repo: remote, Branch: "task", AgentName: "claude"})
-	res, progress := result(t, pc, "c2")
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c9", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, progress := result(t, pc, "c9")
 	if !res.OK || res.Session != "proj/task" || res.PaneID != "%9" || !hasProgress(progress, protocol.StageAgent, protocol.StateSkip, "session proj/task runs in "+root) {
 		t.Fatalf("with an agent: result %+v progress %+v", res, progress)
 	}

@@ -467,9 +467,11 @@ truth; labels only place new things.
   skipped when a managed session already runs in the root, refused as a
   name in use when the intended name runs elsewhere; one in the root made
   with the user's shell, its pane tagged `@laatmux_nocmd` as `new` with
-  no command tags it, in which the daemon has identified no agent, is
-  refused too, saying to start the agent in it or exit that shell and
-  add again). Progress streams as
+  no command tags it, in which no agent runs by the daemon's last look
+  at the pane on the server instance it is on, none started or one
+  exited, is refused too, saying to start the agent in it or exit that
+  shell and add again; a shell session made by an older host, untagged,
+  is taken up as before). Progress streams as
   `{type: progress, id, stage, state, detail}` with state `start`, `done`,
   `skip` or `output`; the result carries `stage` on failure, and
   `session`, `pane_id` and `root` on success. `repo` is the source, and
@@ -767,16 +769,18 @@ workspace session; the next `jump` makes it again.
   what it made. A session of that name, which `new` refuses as a name in
   use, is attached instead, as one made since the listing by an `add`
   say, unless the host's records place it elsewhere: another worktree's
-  home, which two clones' worktrees on one branch can be, or a session
-  an agent or a pane of another worktree runs in, or one outside the
-  root; that is refused as `add` refuses it, `session <name> runs in
-  <dir>, not <root>; name in use`. A host whose daemon lacks `new`, a
+  home, which two clones' worktrees on one branch can be, or, with no
+  record of a pane of it at the root, a session an agent or a pane of
+  another worktree runs in, or one outside the root; that is refused as
+  `add` refuses it, `session <name> runs in <dir>, not <root>; name in
+  use`. The view reads the records once `new` has answered, those it
+  had at enter when the stream has the host down by then. A host whose daemon lacks `new`, a
   branch only shown, a name tmux would not store as given, and a
   worktree whose agent is elsewhere keep the refusal that says how
   `add` makes one. The shell session is the worktree's home from then
   on: an agent started in it by hand is the worktree's, and `add` for
   the worktree refuses the session while no agent runs in it, saying so,
-  rather than take it up and start none. A
+  rather than take it up and start none, on a host of this build. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. A session name the host's tmux lists escaped, one
@@ -1086,7 +1090,10 @@ daemon has `new` by the capabilities the merged stream has cached for
 it. The view does not wait on the host: the footer says `making a
 session on <host>…`, a jump meanwhile is refused with it, and when the
 host answers the jump ends as any does, the footer saying what was made
-and the dashboard closing. A click and a digit are jumps, so they make
+and the dashboard closing. A user who has moved on meanwhile, to a form
+or a question in the view, or with the client to another session, is
+left there: the footer says the session is there and enter on the line
+goes there. A click and a digit are jumps, so they make
 the session too. On another host, one that is down among them, and for
 a detached worktree or a branch only shown, the footer says how `add`
 would start one: its command line, or what add needs first. `z` on such

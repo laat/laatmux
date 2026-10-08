@@ -467,9 +467,12 @@ func TestAddHintCanRun(t *testing.T) {
 // the branch encoded, at the root, with no command; then makes the
 // workspace session attached to it, switches there, and says what it
 // made. A name in use that no record places elsewhere, a session made
-// since the listing, is attached; one another worktree has as its home,
-// or in which an agent or a pane of another worktree runs, is refused as
-// add refuses it. A branch only shown, flagged or with U+FFFD from an
+// since the listing, is attached, and so is one the records have as the
+// worktree's: its own pane at the root beside a split gone elsewhere, a
+// pane of it under the root, agents attributed to none under the root or
+// with no directory. One another worktree has as its home, or in which
+// an agent or a pane of another worktree runs, one nested in the root
+// too, is refused as add refuses it. A branch only shown, flagged or with U+FFFD from an
 // older daemon, a name tmux would not store as given, a worktree whose
 // agent is on a default server or in a managed session that lost its
 // home, a host whose daemon lacks new, by the records or by its hello,
@@ -495,23 +498,41 @@ func TestJumpMakesShellSession(t *testing.T) {
 	// directory, a . kept.
 	dir := wt("menv", "next.js", "nb", "/w/nb")
 	onBox := wt("benv", "proj", "b", "/w/b")
+	// Sessions in use that are the worktree's by their records: its own
+	// pane at the root beside a split gone to c; a pane it has in a
+	// directory under the root; agents the host attributes to none, under
+	// the root and with no directory. And one of a worktree nested in
+	// nest's root, which is that worktree's.
+	split, sub, loose, nest := wt("menv", "proj", "split", "/w/split"), wt("menv", "proj", "sub", "/w/sub"), wt("menv", "proj", "loose", "/w/loose"), wt("menv", "proj", "nest", "/w/nest")
+	inner := wt("menv", "proj", "inner", "/w/nest/inner")
+	pane := func(n int, session, cwd, worktreeID string) protocol.Pane {
+		id := fmt.Sprintf("%%%d", n)
+		return protocol.Pane{ID: "menv/pane/laatmux/" + id, EnvironmentID: "menv", Server: "laatmux", Session: session, PaneID: id, Cwd: cwd, WorktreeID: worktreeID}
+	}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
 		{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: caps[:3]},
-	}, Worktrees: []protocol.Worktree{b, dotted, taken, busy, rooted, c, clone, lost, pn, other, otherLost, otherPn, shown, mangled, dir, onBox},
+	}, Worktrees: []protocol.Worktree{b, dotted, taken, busy, rooted, c, clone, lost, pn, other, otherLost, otherPn, shown, mangled, dir, onBox, split, sub, loose, nest, inner},
 		Agents: []protocol.Agent{
 			{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: busy.ID, Cwd: busy.Root},
 			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "old/rooted", Agent: "claude", Managed: true, WorktreeID: rooted.ID, Cwd: rooted.Root},
 			{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/lost", Agent: "claude", Managed: true, WorktreeID: otherLost.ID, Cwd: otherLost.Root},
+			{ID: "menv/laatmux/%10", EnvironmentID: "menv", Server: "laatmux", Session: "proj/loose", Agent: "claude", Cwd: "/w/loose/x"},
+			{ID: "menv/laatmux/%11", EnvironmentID: "menv", Server: "laatmux", Session: "proj/loose", Agent: "codex"},
 		},
-		Panes: []protocol.Pane{{ID: "menv/pane/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "proj/pn", PaneID: "%4", Cwd: "/w2/pn/src", WorktreeID: otherPn.ID}}}
+		Panes: []protocol.Pane{
+			pane(4, "proj/pn", "/w2/pn/src", otherPn.ID),
+			pane(5, "proj/split", "/w/split", split.ID), pane(6, "proj/split", "/w/c", c.ID),
+			pane(7, "proj/sub", "/w/sub/src", sub.ID),
+			pane(8, "proj/nest", "/w/nest/inner", inner.ID),
+		}}
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\n  - name: box\n    ssh: box\nagents:\n  claude: {cmd: [claude]}\n  codex: {cmd: [codex]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, "proj/taken", "proj/clone", "proj/lost", "proj/pn")
+	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapNew}, &snap, inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn", "proj/split", "proj/sub", "proj/loose", "proj/nest"))
 	jump := func(target string) (out, cmds, req string, err error) {
 		t.Helper()
 		os.Remove(log)
@@ -536,6 +557,10 @@ func TestJumpMakesShellSession(t *testing.T) {
 		{"mac/proj/c", `proj-host/c /w/c mac []`, "made session proj-host/c on mac, a shell at /w/c\n", "mac/proj-host/c", "proj-host/c"},
 		// Made since the listing: attached, nothing said made.
 		{"mac/proj/taken", `proj/taken /w/taken mac []`, "", "mac/proj/taken", "proj/taken"},
+		// In use, and the worktree's by its records.
+		{"mac/proj/split", `proj/split /w/split mac []`, "", "mac/proj/split", "proj/split"},
+		{"mac/proj/sub", `proj/sub /w/sub mac []`, "", "mac/proj/sub", "proj/sub"},
+		{"mac/proj/loose", `proj/loose /w/loose mac []`, "", "mac/proj/loose", "proj/loose"},
 	} {
 		out, cmds, req, err := jump(k.target)
 		if err != nil || req != k.req || out != k.made {
@@ -551,6 +576,7 @@ func TestJumpMakesShellSession(t *testing.T) {
 		{"mac/proj/clone", `proj/clone /w/clone mac []`, "/w2/clone", "/w/clone"},
 		{"mac/proj/lost", `proj/lost /w/lost mac []`, "/w2/lost", "/w/lost"},
 		{"mac/proj/pn", `proj/pn /w/pn mac []`, "/w2/pn/src", "/w/pn"},
+		{"mac/proj/nest", `proj/nest /w/nest mac []`, "/w/nest/inner", "/w/nest"},
 	} {
 		want := "mac: session " + strings.TrimPrefix(k.target, "mac/") + " runs in " + k.in + ", not " + k.root + "; name in use"
 		if out, cmds, req, err := jump(k.target); err == nil || err.Error() != want || req != k.req || out != "" || cmds != "" {
@@ -572,7 +598,7 @@ func TestJumpMakesShellSession(t *testing.T) {
 	}
 	// A daemon whose hello lacks new, the records' notwithstanding: an
 	// older build answering since.
-	requests = fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged}, &snap)
+	requests = fakeNew(t, []string{protocol.CapStatus, protocol.CapMerged}, &snap, nil)
 	want := "mac/proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one"
 	if out, cmds, req, err := jump("mac/proj/b"); err == nil || err.Error() != want || req != "" || out != "" || cmds != "" {
 		t.Errorf("jump with no new in the hello: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)

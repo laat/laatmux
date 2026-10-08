@@ -311,9 +311,12 @@ const newTimeout = 10 * time.Second
 
 // elsewhere is where the host's records place the managed session name
 // other than in the worktree: the root of another worktree whose home it
-// is, two clones' worktrees on one branch being named alike; the
+// is, two clones' worktrees on one branch being named alike; else the
 // directory of an agent or a pane in it that the host attributes to
-// another worktree, or, attributed to none, has outside the root. Not ok
+// another worktree, or, attributed to none, has outside the root, unless
+// a record has a pane of it at the root, the one laatmux made there,
+// whose record has the root it was made at: a split of the worktree's
+// own session gone elsewhere leaves the session the worktree's. Not ok
 // when none does, as for a session made at the root since the records
 // were read, which they do not have yet.
 func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string, bool) {
@@ -322,20 +325,30 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 			return o.Root, true
 		}
 	}
-	place := func(server, session, cwd, worktreeID string) bool {
-		if server != protocol.ServerLaatmux || session != name || worktreeID == w.ID {
-			return false
-		}
-		return worktreeID != "" || cwd != "" && cwd != w.Root && !strings.HasPrefix(cwd, strings.TrimSuffix(w.Root, "/")+"/")
-	}
+	type rec struct{ cwd, worktreeID string }
+	var in []rec
 	for _, a := range snap.Agents {
-		if place(a.Server, a.Session, a.Cwd, a.WorktreeID) {
-			return a.Cwd, true
+		if a.Server == protocol.ServerLaatmux && a.Session == name {
+			in = append(in, rec{a.Cwd, a.WorktreeID})
 		}
 	}
 	for _, p := range snap.Panes {
-		if place(p.Server, p.Session, p.Cwd, p.WorktreeID) {
-			return p.Cwd, true
+		if p.Server == protocol.ServerLaatmux && p.Session == name {
+			in = append(in, rec{p.Cwd, p.WorktreeID})
+		}
+	}
+	for _, r := range in {
+		// A record at the root is the worktree's whatever it is
+		// attributed to: the host attributes a path to the longest root
+		// it is in.
+		if r.cwd == w.Root {
+			return "", false
+		}
+	}
+	for _, r := range in {
+		inside := r.cwd == w.Root || strings.HasPrefix(r.cwd, strings.TrimSuffix(w.Root, "/")+"/")
+		if r.worktreeID != w.ID && (r.worktreeID != "" || r.cwd != "" && !inside) {
+			return r.cwd, true
 		}
 	}
 	return "", false

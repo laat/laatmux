@@ -1115,9 +1115,10 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 
 // fakeNew is a fake local daemon with the capabilities given that
 // answers a subscribe with snap, when given, and new: each request goes
-// on the channel returned, and is made, but for a name in names, which
-// tmux refuses as a duplicate.
-func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...string) <-chan protocol.Message {
+// on the channel returned, then the hook for its name runs, when there
+// is one, and says whether tmux refuses the name as a duplicate; one
+// with no hook is made.
+func fakeNew(t *testing.T, caps []string, snap *protocol.Message, hooks map[string]func() bool) <-chan protocol.Message {
 	t.Helper()
 	requests := make(chan protocol.Message, 16)
 	startFakeDaemon(t, caps, func(pc *protocol.Conn, m protocol.Message) bool {
@@ -1129,7 +1130,7 @@ func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...strin
 		case protocol.TypeNew:
 			requests <- m
 			res := protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Session: m.Name, PaneID: "%7"}
-			if slices.Contains(names, m.Name) {
+			if hook := hooks[m.Name]; hook != nil && hook() {
 				res = protocol.Message{Type: protocol.TypeResult, ID: m.ID, Error: "tmux new-session -d -s " + m.Name + " -c /w: duplicate session: " + m.Name}
 			}
 			pc.Write(res)
@@ -1137,6 +1138,15 @@ func fakeNew(t *testing.T, caps []string, snap *protocol.Message, names ...strin
 		return true
 	})
 	return requests
+}
+
+// inUse is fakeNew's hooks for names tmux refuses as duplicates.
+func inUse(names ...string) map[string]func() bool {
+	hooks := map[string]func() bool{}
+	for _, n := range names {
+		hooks[n] = func() bool { return true }
+	}
+	return hooks
 }
 
 // asked is the new request on the channel, as "<name> <cwd> <host>
@@ -1160,29 +1170,38 @@ func asked(c <-chan protocol.Message) string {
 // switch that fails says what was made before its error. z on the line
 // says enter does that and add makes one with an agent. A name in use
 // that no record places elsewhere, a session made since the records
-// were read, is attached; one another worktree has as its home, or in
-// which an agent or a pane of another worktree runs, is refused as add
-// refuses it. A detached worktree, a host whose cached capabilities
-// lack new, and a host the merged state has as down keep the add hint,
-// and nothing is asked; so does a host whose hello lacks new.
+// were read, is attached, and so is one whose records, arriving
+// meanwhile, have the add's agent at the root; one another worktree has
+// as its home, or in which an agent or a pane of another worktree runs,
+// by the records once the host has answered, another clone's add's made
+// meanwhile too, is refused as add refuses it, by the records at enter when the stream
+// has the host down by the answer. A user who has moved on meanwhile, to
+// a form or a question or with the client to another session, is left
+// there, the message saying the session is there. A detached worktree, a
+// host whose cached capabilities lack new, and a host the merged state
+// has as down keep the add hint, and nothing is asked; so does a host
+// whose hello lacks new.
 func TestEnterMakesShellSession(t *testing.T) {
 	log := fakeDefaultTmux(t)
 	src, fork := "git@github.com:laat/proj.git", "git@github.com:fork/proj.git"
 	wt := func(env, repo, branch, root string) protocol.Worktree {
 		return protocol.Worktree{ID: env + "/worktree/" + root, EnvironmentID: env, Repo: repo, Source: src, Branch: branch, Root: root}
 	}
-	b, det, taken := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "", "/w/det"), wt("menv", "proj", "taken", "/w/taken")
+	b, det, taken, race, slow := wt("menv", "proj", "b", "/w/b"), wt("menv", "proj", "", "/w/det"), wt("menv", "proj", "taken", "/w/taken"), wt("menv", "proj", "race", "/w/race"), wt("menv", "proj", "slow", "/w/slow")
 	// The host labels c's repository otherwise, which this machine's
 	// view shows by its own label.
 	c := wt("menv", "proj-host", "c", "/w/c")
-	// Another clone's worktrees on the branches of clone, lost and pn,
-	// whose sessions are named as theirs would be: its home, its agent
-	// with the home lost, a pane of it.
-	clone, lost, pn := wt("menv", "proj", "clone", "/w/clone"), wt("menv", "proj", "lost", "/w/lost"), wt("menv", "proj", "pn", "/w/pn")
-	other, otherLost, otherPn := wt("menv", "proj", "clone", "/w2/clone"), wt("menv", "proj", "lost", "/w2/lost"), wt("menv", "proj", "pn", "/w2/pn")
-	other.Source, otherLost.Source, otherPn.Source, other.Session = fork, fork, fork, "proj/clone"
+	// Another clone's worktrees on the branches of clone, lost, pn and
+	// dc, whose sessions are named as theirs would be: its home, its
+	// agent with the home lost, a pane of it, its home again.
+	clone, lost, pn, dc := wt("menv", "proj", "clone", "/w/clone"), wt("menv", "proj", "lost", "/w/lost"), wt("menv", "proj", "pn", "/w/pn"), wt("menv", "proj", "dc", "/w/dc")
+	other, otherLost, otherPn, otherDc := wt("menv", "proj", "clone", "/w2/clone"), wt("menv", "proj", "lost", "/w2/lost"), wt("menv", "proj", "pn", "/w2/pn"), wt("menv", "proj", "dc", "/w2/dc")
+	other.Source, otherLost.Source, otherPn.Source, otherDc.Source, other.Session, otherDc.Session = fork, fork, fork, fork, "proj/clone", "proj/dc"
+	// And on late's, whose session an add makes meanwhile.
+	late, otherLate := wt("menv", "proj", "late", "/w/late"), wt("menv", "proj", "late", "/w2/late")
+	otherLate.Source = fork
 	onVM, onBox := wt("venv", "proj", "b", "/w/b"), wt("benv", "proj", "b", "/w/b")
-	records := []protocol.Worktree{b, det, taken, c, clone, lost, pn, other, otherLost, otherPn, onVM, onBox}
+	records := []protocol.Worktree{b, det, taken, c, race, slow, clone, lost, pn, dc, late, other, otherLost, otherPn, otherDc, otherLate, onVM, onBox}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
@@ -1191,9 +1210,26 @@ func TestEnterMakesShellSession(t *testing.T) {
 	}, Worktrees: records,
 		Agents: []protocol.Agent{{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/lost", Agent: "claude", Managed: true, Cwd: "/w2/lost", WorktreeID: otherLost.ID}},
 		Panes:  []protocol.Pane{{ID: "menv/pane/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "proj/pn", PaneID: "%4", Cwd: "/w2/pn/src", WorktreeID: otherPn.ID}}}
-	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, "proj/taken", "proj/clone", "proj/lost", "proj/pn")
+	// The records as the stream has them by the answer, which the
+	// records at enter lack: the add's agent in proj/race at its root;
+	// another clone's add's agent in proj/late at its own; mac down.
+	raced, lated := snap, snap
+	raced.Agents = append(slices.Clip(snap.Agents), protocol.Agent{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "proj/race", Agent: "claude", Managed: true, Cwd: race.Root, WorktreeID: race.ID})
+	lated.Agents = append(slices.Clip(snap.Agents), protocol.Agent{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "proj/late", Agent: "claude", Managed: true, Cwd: otherLate.Root, WorktreeID: otherLate.ID})
+	down := snap
+	down.Hosts = slices.Clone(snap.Hosts)
+	down.Hosts[0].Error, down.Hosts[0].Connected = "ssh: connection reset", false
+	var d *dash
+	release := make(chan struct{})
+	hooks := inUse("proj/taken", "proj/clone", "proj/lost", "proj/pn")
+	hooks["proj/race"] = func() bool { d.st.Apply(raced); return true }
+	hooks["proj/late"] = func() bool { d.st.Apply(lated); return true }
+	hooks["proj/dc"] = func() bool { d.st.Apply(down); return true }
+	hooks["proj/slow"] = func() bool { <-release; return false }
+	requests := fakeNew(t, []string{protocol.CapStatus, protocol.CapNew}, nil, hooks)
 	ends := make(chan func(*view.Model) view.Action, 1)
-	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: ends}
+	where := "work"
+	d = &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: ends, clientAt: func(context.Context) string { return where }}
 	d.st.Apply(snap)
 	viewed := slices.Clone(records)
 	viewed[3].Repo = "proj" // merged.State's relabelling
@@ -1218,11 +1254,11 @@ func TestEnterMakesShellSession(t *testing.T) {
 		waiting, msg, cmds, req string
 		end                     view.Action
 	}
-	// enter is enter on the line, and the end of a jump that waits on
-	// the host run as the view runs it: the message while it waits, and
-	// after the end, the end's action, the message, the tmux commands
-	// run and the new request.
-	enter := func(exitOnJump bool, id string) pressed {
+	// enterThen is enter on the line, what the user does meanwhile, and
+	// the end of a jump that waits on the host run as the view runs it:
+	// the message while it waits, and after the end, the end's action,
+	// the message, the tmux commands run and the new request.
+	enterThen := func(exitOnJump bool, id string, meanwhile func(m *view.Model)) pressed {
 		t.Helper()
 		m := model(id)
 		os.Remove(log)
@@ -1231,6 +1267,7 @@ func TestEnterMakesShellSession(t *testing.T) {
 		p.exit = d.jumpAction(m, view.Action{Kind: view.ActionJump})
 		p.waiting = m.Message
 		if d.making != "" {
+			meanwhile(m)
 			select {
 			case end := <-ends:
 				p.end = end(m)
@@ -1241,6 +1278,10 @@ func TestEnterMakesShellSession(t *testing.T) {
 		got, _ := os.ReadFile(log)
 		p.msg, p.cmds, p.req = m.Message, string(got), asked(requests)
 		return p
+	}
+	enter := func(exitOnJump bool, id string) pressed {
+		t.Helper()
+		return enterThen(exitOnJump, id, func(*view.Model) {})
 	}
 	z := func(id string) (msg, cmds, req string) {
 		t.Helper()
@@ -1282,9 +1323,57 @@ func TestEnterMakesShellSession(t *testing.T) {
 	if p := enter(true, c.ID); p.req != `proj-host/c /w/c mac []` || !strings.Contains(p.cmds, "switch-client -t =mac/proj-host/c:") {
 		t.Errorf("by the host's label: %+v", p)
 	}
-	if p := enter(true, taken.ID); p.req != `proj/taken /w/taken mac []` || p.msg != "" || p.end.Kind != view.ActionQuit || !strings.Contains(p.cmds, "@laatmux_attach_target proj/taken ") || !strings.Contains(p.cmds, "switch-client -t =mac/proj/taken:") {
-		t.Errorf("a name in use, no record elsewhere: %+v", p)
+	for _, w := range []protocol.Worktree{taken, race} {
+		name := "proj/" + w.Branch
+		if p := enter(true, w.ID); p.req != name+" "+w.Root+" mac []" || p.msg != "" || p.end.Kind != view.ActionQuit || !strings.Contains(p.cmds, "@laatmux_attach_target "+name+" ") || !strings.Contains(p.cmds, "switch-client -t =mac/"+name+":") {
+			t.Errorf("a name in use, no record elsewhere: %+v", p)
+		}
 	}
+	// The view does not wait on the host: enter returns with the host's
+	// answer held back, and the jump ends once it comes.
+	m = model(slow.ID)
+	os.Remove(log)
+	if d.jumpAction(m, view.Action{Kind: view.ActionJump}) || m.Message != "making a session on mac…" {
+		t.Errorf("enter while the host holds the answer: message %q", m.Message)
+	}
+	select {
+	case req := <-requests:
+		if req.Name != "proj/slow" {
+			t.Errorf("asked %+v", req)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the host was not asked")
+	}
+	select {
+	case <-ends:
+		t.Fatal("the jump ended before the host answered")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case end := <-ends:
+		if a := end(m); a.Kind != view.ActionQuit || m.Message != "made session proj/slow on mac, a shell at /w/slow" {
+			t.Errorf("the end once the host answered: %+v, message %q", a, m.Message)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the jump did not end")
+	}
+	// A user who has moved on meanwhile is left there.
+	for what, meanwhile := range map[string]func(m *view.Model){
+		"a form":          func(m *view.Model) { m.Overlay = view.NewHelp("help", false) },
+		"a question":      func(m *view.Model) { m.Ask("remove proj/b?", "rm") },
+		"another session": func(*view.Model) { where = "elsewhere" },
+	} {
+		p := enterThen(true, b.ID, meanwhile)
+		where = "work"
+		if p.req != `proj/b /w/b mac []` || p.msg != "made session proj/b on mac, a shell at /w/b; enter on the line goes there" || p.end.Kind != view.ActionNone || p.cmds != "" {
+			t.Errorf("moved on to %s: %+v", what, p)
+		}
+	}
+	if p := enterThen(true, taken.ID, func(*view.Model) { where = "elsewhere" }); p.msg != "session proj/taken on mac is there; enter on the line goes there" || p.cmds != "" {
+		t.Errorf("moved on, a name in use: %+v", p)
+	}
+	where = "work"
 	for _, k := range []struct {
 		w    protocol.Worktree
 		name string
@@ -1293,6 +1382,7 @@ func TestEnterMakesShellSession(t *testing.T) {
 		{clone, "proj/clone", "/w2/clone"},
 		{lost, "proj/lost", "/w2/lost"},
 		{pn, "proj/pn", "/w2/pn/src"},
+		{late, "proj/late", "/w2/late"},
 	} {
 		want := "mac: session " + k.name + " runs in " + k.in + ", not " + k.w.Root + "; name in use"
 		if p := enter(true, k.w.ID); p.req != k.name+" "+k.w.Root+` mac []` || p.msg != want || p.end.Kind != view.ActionNone || p.cmds != "" {
@@ -1320,9 +1410,15 @@ func TestEnterMakesShellSession(t *testing.T) {
 			t.Errorf("z on %s: message %q, tmux %q, asked %q", k.w.ID, msg, cmds, req)
 		}
 	}
+	// The stream has the host down by the answer: the records at enter
+	// place the session elsewhere.
+	if p := enter(true, dc.ID); p.req != `proj/dc /w/dc mac []` || p.msg != "mac: session proj/dc runs in /w2/dc, not /w/dc; name in use" || p.cmds != "" {
+		t.Errorf("down by the answer: %+v", p)
+	}
+	d.st.Apply(snap)
 	// A daemon whose hello lacks new, the cached capabilities
 	// notwithstanding: an older build answering since.
-	requests = fakeNew(t, []string{protocol.CapStatus}, nil)
+	requests = fakeNew(t, []string{protocol.CapStatus}, nil, nil)
 	if p := enter(true, b.ID); p.msg != "mac/proj/b has no managed session; laatmux add b --repo proj --host mac --agent claude makes one" || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
 		t.Errorf("no new in the hello: %+v", p)
 	}
