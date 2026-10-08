@@ -502,7 +502,10 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 // scan finds, by root, labelled as its worktrees are, its branch read
 // from its HEAD (headBranch): the daemon publishes those in use. A
 // checkout whose HEAD cannot be read is marked Unread, and the error is
-// logged once rather than returned.
+// logged once rather than returned. git finds no repository there, so
+// this holds for a checkout with no worktree, while its origin is
+// cached: one with a worktree fails git worktree list, an error as
+// before, and an origin not read yet leaves it unscanned.
 func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err error) {
 	cos, err := s.scan(ctx)
 	if err != nil {

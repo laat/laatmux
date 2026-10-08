@@ -1294,6 +1294,38 @@ func TestMainCheckoutLineInLaatmuxSessions(t *testing.T) {
 	}
 }
 
+// A workspace session left at a main checkout's root, from a worktree
+// there before, is no session of the checkout's: it stays an orphaned
+// line, and the viewer in it is not on the checkout's line.
+func TestMainCheckoutLeftWorkspace(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	in := mainInput(now)
+	left := protocol.Session{Name: "mac/laatmux/old", Key: "menv//code/laatmux", Host: "mac", Source: "https://github.com/laat/laatmux", Settled: true}
+	in.Locals = append(in.Locals, left)
+	in.Current = left.Name
+	nodes := Tree(in)
+	var main, orphan *Row
+	for i := range nodes {
+		switch n := &nodes[i]; {
+		case n.mainCheckout():
+			main = n
+		case n.Orphaned && n.Local != nil && n.Local.Name == left.Name:
+			orphan = n
+		}
+	}
+	if main == nil || main.Current || main.Own || main.Settled || main.Local != nil && main.Local.Name == left.Name {
+		t.Fatalf("the main line took the session left: %+v", main)
+	}
+	for _, n := range nodes {
+		if n.Depth == 2 && n.Worktree != nil && n.Worktree.Main && n.Local != nil && n.Local.Name == left.Name {
+			t.Fatalf("an agent of the checkout took the session left: %+v", n)
+		}
+	}
+	if orphan == nil || !orphan.Current {
+		t.Fatalf("the session left is no orphaned line, the viewer's: %+v", orphan)
+	}
+}
+
 // A main checkout is a line under its repository, first, with the agents
 // the host attributed to it, from plain sessions on the default server;
 // the line jumps through the most recently active, one working before

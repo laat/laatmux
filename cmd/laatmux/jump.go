@@ -180,7 +180,7 @@ func matchMain(mains []protocol.Worktree, cfg config.Config, h config.Host, rest
 		// A remote host's default server is not jumped to at all.
 		return protocol.Worktree{}, false, err
 	}
-	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in either", err, h.Name)
+	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in any of them", err, h.Name)
 }
 
 // splitMains is the records that are worktrees and those that are main

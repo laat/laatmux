@@ -216,9 +216,40 @@ func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[
 	if had && prev.ID != w.ID {
 		// A worktree where a main checkout was, or the other way
 		// round, with the repos directory under the worktrees one: the
-		// record the root had goes, after the one taking its place.
-		d.removeRecordLocked(prev)
+		// record the root had goes, after the one taking its place,
+		// and after the agents and panes naming it are attributed
+		// again, which the roots changing does next (retireLocked).
+		d.retiring[prev.ID] = prev
+		d.retireLocked()
 	}
+}
+
+// retireLocked removes the records replaced at their root that nothing
+// names any more, an agent or a pane record. Called with d.mu held.
+func (d *Daemon) retireLocked() {
+	for id, w := range d.retiring {
+		if d.namedLocked(id) {
+			continue
+		}
+		delete(d.retiring, id)
+		d.removeRecordLocked(w)
+	}
+}
+
+// namedLocked reports whether an agent or a pane record names a record
+// id. Called with d.mu held.
+func (d *Daemon) namedLocked(id string) bool {
+	for _, a := range d.agents {
+		if a.WorktreeID == id {
+			return true
+		}
+	}
+	for _, p := range d.paneRecs {
+		if p.WorktreeID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // removeRecordLocked tells subscribers a record is gone: a main
@@ -253,6 +284,8 @@ func (d *Daemon) inUseLocked(r worktree.Record) bool {
 // agents are published, it takes back the records no agent names any
 // more. Called with d.mu held.
 func (d *Daemon) syncMainsLocked(now time.Time, also string) {
+	// A record replaced at its root goes once the agents are past it.
+	defer d.retireLocked()
 	in := map[string]bool{}
 	if isCheckoutID(also) {
 		in[also] = true

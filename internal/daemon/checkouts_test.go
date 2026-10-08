@@ -275,8 +275,9 @@ func TestMainCheckoutRecords(t *testing.T) {
 
 // A root whose record changes kind, a worktree made where a main
 // checkout was with the repos directory under the worktrees one, or the
-// other way round: the new record goes out, then the old id's remove, a
-// worktree's with its listing stamp.
+// other way round: the new record goes out, then the agent in the root
+// takes it, then the old id's remove, a worktree's with its listing
+// stamp; the git object is not carried across.
 func TestRecordChangesKind(t *testing.T) {
 	d := New(Config{EnvironmentID: "env"})
 	s := &subscriber{ch: make(chan protocol.Message, 64), checkouts: true}
@@ -295,23 +296,54 @@ func TestRecordChangesKind(t *testing.T) {
 	defer d.mu.Unlock()
 	d.subs[s] = struct{}{}
 	d.listed = true
-	const root = "/w/repos/proj"
-	main := worktree.Record{Repo: "proj", Branch: "main", Root: root, Main: true, Configured: true}
-	wt := worktree.Record{Repo: "proj", Branch: "x", Root: root}
-	d.lastMains = []worktree.Record{main}
-	d.publishWorktreesLocked(time.Now())
-	drain()
-	d.lastList, d.lastMains = []worktree.Record{wt}, nil
-	d.publishWorktreesLocked(time.Now())
-	ms := drain()
-	if len(ms) != 2 || ms[0].Worktree == nil || ms[0].Worktree.ID != "env/worktree/"+root || ms[1].WorktreeID != "env/checkout/"+root || ms[1].RemovedIn != nil {
-		t.Fatalf("to a worktree: %+v", ms)
+	const dir = "/w/repos/proj"
+	main := worktree.Record{Repo: "proj", Branch: "main", Root: dir, Main: true, Configured: true}
+	wt := worktree.Record{Repo: "proj", Branch: "main", Root: dir}
+	checkoutID, worktreeID := "env/checkout/"+dir, "env/worktree/"+dir
+	// A live agent on the default server in the root.
+	key := "default/%1"
+	d.panes[key] = &paneState{target: &target{Target: Target{Label: "default"}}, observed: true, path: dir + "/src", pane: tmux.Pane{ID: "%1"}}
+	d.agents[key] = protocol.Agent{ID: "env/" + key, EnvironmentID: "env", Server: "default", PaneID: "%1", Agent: "claude", Liveness: protocol.Alive}
+	// list publishes a listing and attributes the agent again, as
+	// pollWorktrees does.
+	list := func(recs, mains []worktree.Record) []protocol.Message {
+		d.lastList, d.lastMains = recs, mains
+		now := time.Now()
+		d.publishWorktreesLocked(now)
+		var paths []string
+		var checkouts []root
+		for _, r := range recs {
+			paths = append(paths, r.Root)
+		}
+		for _, r := range mains {
+			checkouts = append(checkouts, root{root: r.Root})
+		}
+		d.setRootsLocked(resolveRoots(paths, checkouts), now)
+		return drain()
 	}
-	d.lastList, d.lastMains = nil, []worktree.Record{main}
-	d.publishWorktreesLocked(time.Now())
-	ms = drain()
-	if len(ms) != 2 || ms[0].Worktree == nil || ms[0].Worktree.ID != "env/checkout/"+root || ms[1].WorktreeID != "env/worktree/"+root || ms[1].RemovedIn == nil {
-		t.Fatalf("to a main checkout: %+v", ms)
+	if ms := list(nil, []worktree.Record{main}); recordAt(ms, checkoutID) < 0 || agentAt(ms, "%1") < 0 || d.agents[key].WorktreeID != checkoutID {
+		t.Fatalf("the main checkout with its agent: %+v", ms)
+	}
+	w := d.worktrees[dir]
+	w.Git = &protocol.GitStatus{Base: "origin/main", Dirty: true}
+	d.worktrees[dir] = w
+	for _, c := range []struct {
+		name         string
+		recs, mains  []worktree.Record
+		newID, oldID string
+		stamped      bool
+	}{
+		{"to a worktree", []worktree.Record{wt}, nil, worktreeID, checkoutID, false},
+		{"to a main checkout", nil, []worktree.Record{main}, checkoutID, worktreeID, true},
+	} {
+		ms := list(c.recs, c.mains)
+		rec, agent, gone := recordAt(ms, c.newID), agentAt(ms, "%1"), removedAt(ms, c.oldID)
+		if rec < 0 || agent < rec || gone < agent || ms[agent].Agent.WorktreeID != c.newID || (ms[gone].RemovedIn != nil) != c.stamped {
+			t.Fatalf("%s: the new record, the agent, then the old id's remove: %+v", c.name, ms)
+		}
+		if ms[rec].Worktree.Git != nil {
+			t.Fatalf("%s: the git object carried across: %+v", c.name, ms[rec].Worktree.Git)
+		}
 	}
 }
 
@@ -322,6 +354,10 @@ func TestMainCheckoutUnread(t *testing.T) {
 	base := filepath.Dir(store.Dirs.Repos)
 	proj := filepath.Join(store.Dirs.Repos, "proj")
 	sh(t, base, "git", "clone", "-q", remote, proj)
+	// A listing first, which reads the origin as a running daemon has
+	// it: git finds no repository whose HEAD it cannot open.
+	d := New(Config{EnvironmentID: "env", Store: store})
+	d.pollWorktrees(context.Background())
 	head := filepath.Join(proj, ".git", "HEAD")
 	if err := os.Chmod(head, 0); err != nil {
 		t.Fatal(err)
@@ -330,10 +366,12 @@ func TestMainCheckoutUnread(t *testing.T) {
 	if _, err := os.ReadFile(head); err == nil {
 		t.Skip("HEAD readable without permission (root)")
 	}
-	d := New(Config{EnvironmentID: "env", Store: store})
 	d.pollWorktrees(context.Background())
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if !slices.ContainsFunc(d.lastMains, func(r worktree.Record) bool { return r.Root == proj && r.Unread }) {
+		t.Fatalf("the checkout not listed unread: %+v", d.lastMains)
+	}
 	if _, ok := d.worktrees[proj]; ok || d.listErr != "" || !d.listed {
 		t.Fatalf("records %+v, listing error %q, listed %v", d.worktrees, d.listErr, d.listed)
 	}

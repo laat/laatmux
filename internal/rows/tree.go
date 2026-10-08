@@ -331,8 +331,16 @@ func (b *builder) worktrees() {
 		} else {
 			line.Name = w.Repo + "/" + w.Branch
 		}
+		// The workspace session by the worktree's key. A main checkout
+		// has none: one left at its root, from a worktree there before,
+		// is no session of its and stays an orphaned line.
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
-		b.seenKey[key] = true
+		ws := j.byKey[key]
+		if w.Main {
+			ws = nil
+		} else {
+			b.seenKey[key] = true
+		}
 		agents := j.worktreeAgents(w)
 		// The line's agent is the one its jump goes through: in the home
 		// session; with the home lost, the one laatmux made at the root,
@@ -355,13 +363,13 @@ func (b *builder) worktrees() {
 			// (visitors).
 			c := Row{Kind: KindAgent, Node: a.ID, Host: host, Name: a.Session, Worktree: w, Agent: a}
 			if a.Server == protocol.ServerLaatmux && home != "" && a.Session == home {
-				c.Local = j.byKey[key]
+				c.Local = ws
 			}
 			if c.Local == nil {
 				c.Local = j.agentLocal(host, a)
 			}
 			if c.Local == nil {
-				c.Local = j.byKey[key]
+				c.Local = ws
 			}
 			children = append(children, c)
 		}
@@ -380,7 +388,7 @@ func (b *builder) worktrees() {
 		// The settled state is a workspace session's only, not one set
 		// by hand on a plain session or attachment. The most pressing
 		// agent is kept apart, for the folded line's icon.
-		line.Local = j.byKey[key]
+		line.Local = ws
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
 			// A main checkout's plain session only, as below: an
 			// attachment's tag makes its session another line's.

@@ -214,7 +214,7 @@ func TestMainCheckoutCommands(t *testing.T) {
 	}
 	cfg := config.Config{Repos: []config.Repo{repo}}
 	mac, vm := config.Host{Host: peer.Host{Name: "mac"}}, config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
-	if _, _, err := matchMain(two, cfg, mac, "proj/main"); err == nil || !strings.HasSuffix(err.Error(), "two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either") || !strings.Contains(err.Error(), "/r/proj and /r/proj-2") {
+	if _, _, err := matchMain(two, cfg, mac, "proj/main"); err == nil || !strings.HasSuffix(err.Error(), "two clones of the repository; jump --server default mac/<session> goes to the session of an agent in any of them") || !strings.Contains(err.Error(), "/r/proj and /r/proj-2") {
 		t.Errorf("matchMain, two clones: %v", err)
 	}
 	// On a remote host, whose default server jump does not reach, the
@@ -254,7 +254,7 @@ func TestJumpTwoMainCheckouts(t *testing.T) {
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
 	t.Setenv("PATH", t.TempDir())
 	err := cmdJump(context.Background(), []string{"mac/proj/main"})
-	if err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj and /r/proj-2, two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either" {
+	if err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj and /r/proj-2, two clones of the repository; jump --server default mac/<session> goes to the session of an agent in any of them" {
 		t.Errorf("jump: %v", err)
 	}
 }

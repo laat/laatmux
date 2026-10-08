@@ -958,6 +958,9 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Orphaned {
 		return protocol.Session{}, errors.New(r.Name + ": its worktree is gone")
 	}
+	if r.Worktree != nil && r.Worktree.Main {
+		return protocol.Session{}, errors.New(mainName(r.HostName(), *r.Worktree) + " is the main checkout, which has no workspace session")
+	}
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
 		env, _ := protocol.SplitSessionKey(l.Key)

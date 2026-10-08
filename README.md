@@ -288,9 +288,12 @@ truth; labels only place new things.
   its `git` object is read as a worktree's, every 5 s while an agent is
   in it. The rest of the checkouts under `repos`, many on a machine
   that clones there by hand, have no record, line or refresh. A HEAD
-  that cannot be read leaves that checkout without a record, logged
-  once, and fails no listing; no pane in it is a worktree's around it
-  either. The main worktree git lists first is never a worktree
+  that cannot be read, in a checkout with no worktree whose origin the
+  daemon has read, leaves that checkout without a record, logged once,
+  and fails no listing; no pane in it is a worktree's around it either.
+  git itself finds no repository there, so a checkout with a worktree
+  fails the listing as before, and one whose origin is not read yet is
+  not scanned. The main worktree git lists first is never a worktree
   record, also where a symlink makes its path another than the
   checkout's as scanned. The records go only to a subscriber
   that asks for them with `checkouts` on `subscribe`, as this build's
@@ -659,7 +662,7 @@ workspace session; the next `jump` makes it again.
   is refused as any session there is. Two clones' main checkouts on
   the branch, which no label tells apart, are named with their roots,
   and, on this machine, `--server default <host>/<session>` reaches an
-  agent in either.
+  agent in any of them.
 - **`ls`** prints the tree the sidebar's tree view shows, see below: a
   repository per line, its main checkouts in use and its worktrees with
   their host under it, and under each its agents with mark, state

@@ -1249,8 +1249,9 @@ func TestRmFor(t *testing.T) {
 }
 
 // x and X refuse a main checkout, from its line in the tree and from
-// its agent's tile, with no question asked; z says it has no workspace
-// session to settle.
+// its agent's tile, with no question asked; z and S say it has no
+// workspace session, also with one left at its root; a preselects its
+// repository and host, not its branch.
 func TestMainCheckoutRefused(t *testing.T) {
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
@@ -1260,6 +1261,8 @@ func TestMainCheckoutRefused(t *testing.T) {
 		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", Agent: "claude",
 			Activity: protocol.Working, Liveness: protocol.Alive, WorktreeID: w.ID}},
 		Worktrees: []protocol.Worktree{w},
+		// A workspace session left at its root, from a worktree there before.
+		Locals: []protocol.Session{{Name: "mac/proj/old", Key: "menv//r/proj", Host: "mac"}},
 	}
 	m := &view.Model{Width: 80, Height: 20}
 	m.SetTree(rows.Tree(in))
@@ -1286,9 +1289,11 @@ func TestMainCheckoutRefused(t *testing.T) {
 				t.Errorf("%c on %v: confirm=%q message=%q", r, m.Selection().Kind, m.Confirm, m.Message)
 			}
 		}
-		press('z')
-		if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
-			t.Errorf("z on %v: %q", m.Selection().Kind, m.Message)
+		for _, r := range []rune{'z', 'S'} {
+			press(r)
+			if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
+				t.Errorf("%c on %v: %q", r, m.Selection().Kind, m.Message)
+			}
 		}
 		// a preselects the repository and host, not the branch, which
 		// git keeps checked out in the checkout.

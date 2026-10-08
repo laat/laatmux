@@ -285,8 +285,11 @@ type Daemon struct {
 	// mainAgents the ids of those an agent is attributed to, which are
 	// in use (inUseLocked), a checkout gone from the listing among them
 	// until its agents are attributed again.
-	lastMains    []worktree.Record
-	mainAgents   map[string]bool
+	lastMains  []worktree.Record
+	mainAgents map[string]bool
+	// retiring is the records replaced at their root, by id, until
+	// nothing names them (retireLocked).
+	retiring     map[string]protocol.Worktree
 	listed       bool
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change; under pollMu
@@ -473,6 +476,7 @@ func New(cfg Config) *Daemon {
 
 		worktrees:    map[string]protocol.Worktree{},
 		managedRoots: map[string]string{},
+		retiring:     map[string]protocol.Worktree{},
 		poke:         make(chan struct{}, 1),
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
