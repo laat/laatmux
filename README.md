@@ -1150,7 +1150,8 @@ orphaned row's session exists locally and is switched to.
   It exits on submit or cancel, the repository defaulting to the
   directory the popup was opened from.
 - In both, a background add from the form is a row of its own until it
-  hands over to its worktree row: a tile at the top of the agent view,
+  hands over to its worktree row, and the agent it starts is on that
+  row, not on a tile of its own: a tile at the top of the agent view,
   the newest first, and in the tree and `ls` a line under its
   repository where its worktree will be. Its mark spins while the add runs and is
   `!` once it needs the user, when the row is dim too. The second line

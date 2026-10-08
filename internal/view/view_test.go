@@ -1982,8 +1982,9 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	}
 	// The task's managed session other-n, and a working claude observed
 	// in a window of its workspace session vm/other-n: with the filter
-	// leaving the task's add agent and the observed one, not the task,
-	// the agent view follows the add agent, of the task's worktree.
+	// leaving the observed agent and not the task, whose tile carries
+	// the add agent, the agent view follows the observed agent, in the
+	// viewer's own session.
 	in := rows.Input{
 		Hosts:    hosts,
 		Agents:   []protocol.Agent{agent("venv/laatmux/%7", "other-n", "/w/proj/n", "", protocol.Idle, 10*time.Minute), {ID: "menv/default/%6", EnvironmentID: "menv", Server: "default", Session: "vm/other-n", Agent: "claude", Activity: protocol.Working, ActivityAt: now.Add(-time.Minute), Liveness: protocol.Alive, Cwd: "/Users/u"}},
@@ -1994,10 +1995,10 @@ func TestFollowWhatTheTreeFollows(t *testing.T) {
 	}
 	m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 30, Follow: true, Filter: "other"}
 	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
-	if r := m.Selection(); r == nil || r.ID() != "venv/laatmux/%7" {
+	if r := m.Selection(); r == nil || r.ID() != "menv/default/%6" {
 		t.Errorf("the task's tile filtered away: follows %+v; tiles:\n%s", r, ids(m))
-	} else if w, _, _ := m.viewerWorktree(); m.tileWorktree(r) != w {
-		t.Errorf("the task's tile filtered away: the followed tile's worktree %q, the scope's %q", m.tileWorktree(r), w)
+	} else if got := ids(m); strings.Contains(got, "add-1") || strings.Contains(got, "venv/laatmux/%7") {
+		t.Errorf("the task's tile, or its add agent as a tile of its own, drawn under the filter:\n%s", got)
 	}
 }
 
@@ -2318,7 +2319,9 @@ func TestHandoffStanding(t *testing.T) {
 	if m.closed(&m.Tree[m.indexOf("add-1")]) {
 		t.Error("the next owner did not take the fold")
 	}
-	// The same in the agent view: the first agent's tile, not add-1's.
+	// The same in the agent view: add-1's tile, which stands for the
+	// worktree now and carries its first agent, so there is no tile of
+	// the agent's own to land on.
 	a := &Model{Now: now, View: ViewAgents, Width: 60, Height: 30}
 	in.Pendings = []protocol.Pending{task("add-1", now.Add(-time.Minute)), task("add-2", now)}
 	in.Worktrees = in.Worktrees[:len(in.Worktrees)-1]
@@ -2331,7 +2334,7 @@ func TestHandoffStanding(t *testing.T) {
 	in.Pendings = in.Pendings[:1]
 	a.Handoffs = map[string]string{"add-2": "venv/worktree//r/new-one"}
 	set(a)
-	if r := a.Selection(); r == nil || r.ID() != "venv/laatmux/%9" {
+	if r := a.Selection(); r == nil || r.ID() != "add-1" || r.Agent == nil || r.Agent.ID != "venv/laatmux/%9" {
 		t.Errorf("selection in the agent view: %+v", r)
 	}
 	// add-1 owns the children now, open by the carried fold; the user

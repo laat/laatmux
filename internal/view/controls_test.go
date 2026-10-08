@@ -110,7 +110,8 @@ func TestScopes(t *testing.T) {
 	if !m.SettingsChanged() {
 		t.Error("F changed no setting")
 	}
-	want := "add-ac\nvenv/laatmux/%11\nvenv/laatmux/%1\nvenv/laatmux/%2"
+	// add-ac's tile carries the worktree's agent %1; no tile of its own.
+	want := "add-ac\nvenv/laatmux/%11\nvenv/laatmux/%2"
 	if got := ids(m); got != want || m.Scope != ScopeSession {
 		t.Errorf("session tiles:\n%s\nwant:\n%s", got, want)
 	}
@@ -221,11 +222,12 @@ func TestScopes(t *testing.T) {
 	in.Current = "vm/laatmux/new-one"
 	m.View = ViewAgents
 	set()
-	if got := ids(m); got != "add-new\nvenv/laatmux/%9" {
+	// The add's agent is on the task's tile, not one of its own.
+	if got := ids(m); got != "add-new" {
 		t.Errorf("the add's agent under session, tiles:\n%s", got)
 	}
 	m.Scope = ScopeProject
-	if got := ids(m); !strings.Contains(got, "venv/laatmux/%9") || !strings.Contains(got, "venv/laatmux/%1") || strings.Contains(got, "menv/laatmux/%3") {
+	if got := ids(m); !strings.HasPrefix(got, "add-new\n") || strings.Contains(got, "venv/laatmux/%9") || !strings.Contains(got, "venv/laatmux/%1") || strings.Contains(got, "menv/laatmux/%3") {
 		t.Errorf("the add's agent under project, tiles:\n%s", got)
 	}
 }

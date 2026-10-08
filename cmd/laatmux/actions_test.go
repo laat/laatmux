@@ -918,8 +918,13 @@ func TestSettleGoesByLine(t *testing.T) {
 			Locals:   locals,
 			Pendings: []protocol.Pending{loose},
 		}
+		// In the agent view the add's agent is on the task's tile.
 		for _, tree := range []bool{false, true} {
-			if got, cmds := press(show(in, tree), add.ID); !strings.HasPrefix(got, "proj/y: a pending task") || cmds != "" {
+			id := add.ID
+			if !tree {
+				id = loose.ID
+			}
+			if got, cmds := press(show(in, tree), id); !strings.HasPrefix(got, "proj/y: a pending task") || cmds != "" {
 				t.Errorf("%v tree %v: z on the add's agent: message %q, tmux %q", locals, tree, got, cmds)
 			}
 		}
@@ -1056,8 +1061,13 @@ func TestSettleHintGoesByEnter(t *testing.T) {
 		if c.agent == "" {
 			continue
 		}
-		// The agent, as its node and as its tile, says it of its line.
+		// The agent, as its node and as its tile, says it of its line;
+		// under a standing task it is on the task's tile, no tile of
+		// its own.
 		for _, tree := range []bool{false, true} {
+			if !tree && c.in.Pendings != nil {
+				continue
+			}
 			if got, cmds := press(show(c.in, tree), c.agent, false); got != hint("enter on the line") || cmds != "" {
 				t.Errorf("%s tree %v: z on the agent: message %q, tmux %q, want %q", c.name, tree, got, cmds, hint("enter on the line"))
 			}

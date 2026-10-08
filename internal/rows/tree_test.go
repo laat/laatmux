@@ -165,12 +165,13 @@ func TestAgents(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	in := treeInput(now)
 	rs := Agents(in, Tree(in))
-	// The task, then blocked (the newest activity first), working, idle.
+	// The task, then blocked (the newest activity first), working, idle;
+	// the add's agent, in laatmux/new-one, is on the task's tile and
+	// on none of its own.
 	want := `new-one
 scratch
 agents-config (1) *
 batch
-laatmux/new-one
 new
 agents-config (2) *
 `
@@ -1115,7 +1116,7 @@ func TestTwoAttachmentsOneTag(t *testing.T) {
 		{pair("proj/z"), seen{[]string{py.ID, pz.ID}, []string{pz.ID}, []string{inY.ID, visitor.ID, inZ.ID}, []string{visitor.ID}}},
 		{pair("other"), seen{[]string{pa.ID}, nil, []string{inOther.ID}, []string{inOther.ID}}},
 		{pair("scratch"), seen{[]string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}, []string{inScratch.ID}}},
-		{pair("proj/n"), seen{[]string{task.ID}, []string{task.ID}, []string{task.ID, inTask.ID}, []string{task.ID, inTask.ID}}},
+		{pair("proj/n"), seen{[]string{task.ID}, []string{task.ID}, []string{task.ID}, []string{task.ID}}},
 		{[]string{tagged.Name}, seen{[]string{orphan}, []string{orphan}, nil, nil}},
 		{[]string{"", "main"}, seen{}},
 	} {

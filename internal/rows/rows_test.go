@@ -299,9 +299,10 @@ func TestPending(t *testing.T) {
 	for _, r := range got.Main {
 		ids = append(ids, r.ID())
 	}
-	// The tasks, then the agents: the blocked one, then the worktree's,
-	// settled but the viewer's.
-	want := "add-3 add-1 add-2 add-4 venv/laatmux/%2 venv/laatmux/%1"
+	// The tasks, then the agents: the blocked one; the worktree's,
+	// settled but the viewer's, is on add-1's tile, which stands for
+	// the worktree, and on no tile of its own.
+	want := "add-3 add-1 add-2 add-4 venv/laatmux/%2"
 	if strings.Join(ids, " ") != want {
 		t.Fatalf("main %q, want %q", strings.Join(ids, " "), want)
 	}
@@ -863,7 +864,9 @@ func TestHomelessLineLocal(t *testing.T) {
 	if !reflect.DeepEqual(current, []string{"add-2", "add-1"}) {
 		t.Fatalf("standing tasks, viewer in the attachment: %v", current)
 	}
-	if got := tileCurrent(tasks); !reflect.DeepEqual(got, map[string]bool{"add-2": true, managed.ID: true, "add-1": true}) {
+	// The owner's tile carries the line's agent; the agent is no tile
+	// of its own.
+	if got := tileCurrent(tasks); !reflect.DeepEqual(got, map[string]bool{"add-2": true, "add-1": true}) {
 		t.Fatalf("standing tasks' tiles: %v", got)
 	}
 	// Another managed agent at the root in a session of its own, started
@@ -1310,6 +1313,52 @@ func TestSortOrders(t *testing.T) {
 		wantPanes := map[string]string{"": "%2 %3 %1 %4", SortPriority: "%2 %3 %1 %4", SortRecency: "%1 %3 %2 %4", SortWindow: "%4 %2 %3 %1", "not-an-order": "%2 %3 %1 %4"}[order]
 		if strings.Join(panes, " ") != wantPanes {
 			t.Errorf("%q: panes %v, want %s", order, panes, wantPanes)
+		}
+	}
+}
+
+// The add's agent is on the task's tile and on no tile of its own,
+// whether the task stands for its listed worktree or, before the host
+// lists it, holds the agent of its session loose; a second agent of the
+// worktree is a tile of its own.
+func TestTaskTileCarriesItsAgent(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	agent := func(pane string) protocol.Agent {
+		return protocol.Agent{ID: "venv/laatmux/" + pane, EnvironmentID: "venv", Server: "laatmux", Session: "proj/ci", Cwd: "/w/ci", Agent: "claude",
+			Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Managed: true}
+	}
+	w := protocol.Worktree{ID: "venv/worktree//w/ci", EnvironmentID: "venv", Repo: "proj", Branch: "ci", Root: "/w/ci", Source: "git@github.com:laat/proj.git", Session: "proj/ci"}
+	task := protocol.Pending{ID: "t1", Host: "vm", EnvironmentID: "venv", Repo: "proj", Branch: "ci", Root: "/w/ci", Session: "proj/ci", SubmittedAt: now, Taken: true}
+	for _, c := range []struct {
+		name      string
+		worktrees []protocol.Worktree
+		agents    []protocol.Agent
+		own       int // tiles of their own beside the task's
+	}{
+		{"loose", nil, []protocol.Agent{agent("%1")}, 0},
+		{"placed", []protocol.Worktree{w}, []protocol.Agent{agent("%1")}, 0},
+		{"placed, two agents", []protocol.Worktree{w}, []protocol.Agent{agent("%1"), agent("%2")}, 1},
+	} {
+		in := Input{
+			Hosts:     []Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true}},
+			Worktrees: c.worktrees, Agents: c.agents,
+			Pendings: []protocol.Pending{task},
+			Now:      now,
+		}
+		var tasks, own int
+		for _, r := range Agents(in, Tree(in)).Main {
+			switch {
+			case r.Pending != nil:
+				tasks++
+				if r.Agent == nil || r.Agent.ID != "venv/laatmux/%1" {
+					t.Errorf("%s: the task's tile carries %v, want the add's agent", c.name, r.Agent)
+				}
+			case r.Agent != nil:
+				own++
+			}
+		}
+		if tasks != 1 || own != c.own {
+			t.Errorf("%s: %d task tiles and %d agent tiles, want 1 and %d", c.name, tasks, own, c.own)
 		}
 	}
 }
