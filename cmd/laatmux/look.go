@@ -58,31 +58,27 @@ func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.The
 	if os.Getenv("NO_COLOR") != "" {
 		return palette.Mono(), icons
 	}
-	dark, known := true, true
+	dark := true
 	switch cfg.Theme.Mode {
 	case palette.ModeLight:
 		dark = false
 	case palette.ModeDark:
 	default:
 		// The terminal's answer, else COLORFGBG as some terminals and
-		// shells set it; a tmux popup gets no answer to the query.
+		// shells set it; with neither, a tmux popup say, the dark
+		// defaults. The selection band sets both its colours, so it
+		// reads whatever the background turns out to be, and nothing
+		// is drawn differently for a guess.
 		if d, ok := background(); ok {
 			dark = d
 		} else if d, ok := colorFgBg(os.Getenv("COLORFGBG")); ok {
 			dark = d
-		} else {
-			known = false
 		}
 	}
 	th, err := palette.New(dark, cfg.Theme.Custom)
 	if err != nil {
 		return palette.Mono(), icons
 	}
-	// Band colours the config sets itself do not depend on the
-	// background: they are used whatever it is.
-	_, bg := cfg.Theme.Custom[palette.HighlightRowBg]
-	_, fg := cfg.Theme.Custom[palette.Text]
-	th.Guessed = !known && !(bg && fg)
 	return th, icons
 }
 

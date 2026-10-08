@@ -40,28 +40,9 @@ func TestLook(t *testing.T) {
 		if th.SGR(palette.Text, false) != c.want.SGR(palette.Text, false) || th.Mono != c.want.Mono {
 			t.Errorf("%s: wrong theme", c.name)
 		}
-		if guessed := c.asks && !c.answered; th.Guessed != guessed {
-			t.Errorf("%s: guessed %v", c.name, th.Guessed)
-		}
 		if icons.Set != "ascii" || icons.Waiting != "?" {
 			t.Errorf("%s: icons %+v", c.name, icons)
 		}
-	}
-}
-
-// A band whose colours the config sets itself is drawn without an
-// answer: the colours do not depend on the background.
-func TestLookCustomBand(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("COLORFGBG", "")
-	no := func() (bool, bool) { return false, false }
-	both := config.Config{Theme: config.Theme{Custom: map[string]string{"highlight_row_bg": "#303030", "text": "#e0e0e0"}}}
-	if th, _ := lookWith(both, no); th.Guessed {
-		t.Error("both set: guessed")
-	}
-	one := config.Config{Theme: config.Theme{Custom: map[string]string{"highlight_row_bg": "#303030"}}}
-	if th, _ := lookWith(one, no); !th.Guessed {
-		t.Error("one set: not guessed")
 	}
 }
 
@@ -72,8 +53,8 @@ func TestLookColorFgBg(t *testing.T) {
 	t.Setenv("COLORFGBG", "0;15")
 	light, _ := palette.New(false, nil)
 	th, _ := lookWith(config.Config{}, func() (bool, bool) { return false, false })
-	if th.Guessed || th.SGR(palette.Text, false) != light.SGR(palette.Text, false) {
-		t.Errorf("COLORFGBG light: guessed %v", th.Guessed)
+	if th.SGR(palette.Text, false) != light.SGR(palette.Text, false) {
+		t.Error("COLORFGBG light: not the light theme")
 	}
 	for v, want := range map[string]bool{"15;0": true, "0;15": false, "7;default;0": true, "0;7": false, "15;8": true} {
 		if dark, ok := colorFgBg(v); !ok || dark != want {

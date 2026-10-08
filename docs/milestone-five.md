@@ -774,8 +774,8 @@ every worktree in the merged stream, keyed by source and branch.
 - **Line 3:** the pane title, then the PR number and checks against the
   right edge.
 - **The stripe:** `▌` on every line, in the status colour.
-- **The selection:** a background band when the background is known,
-  reverse video otherwise (below).
+- **The selection:** a background band in `highlight_row_bg` with the
+  text in `text`; reverse video only without colours (below).
 - **Dividers:** `─` between tiles, in `border`. The compact layout is
   line 1 with the secondary label and host tag after the primary, and
   the dashboard draws line 3 under it.
@@ -791,15 +791,17 @@ palette is #52's:
 dark and a light default. `theme.mode: auto` picks one from the
 terminal's background, asked with OSC 11 when the view starts, then
 from `COLORFGBG`; with neither, a tmux popup say, the dark defaults
-colour the accents while plain text keeps the terminal's foreground
-and the selection is reverse video with no colours on it, unless
-`theme.custom` sets both `highlight_row_bg` and `text`;
-`theme.custom` overrides any colour. A stale row is drawn in `dimmed`
+colour the accents while plain text keeps the terminal's foreground.
+The selection is the band whether or not the background was answered:
+it sets both its colours, so it reads on any background, and a sidebar
+pane that got no answer draws it as its neighbours do (it was reverse
+video without an answer until 2026-10-08, which made two panes of one
+sidebar differ). `theme.custom` overrides any colour. A stale row is drawn in `dimmed`
 with the dim attribute throughout, the stripe and the diff and PR
 colours included, and so is any other dim row but for the viewer's own
 row's label. A selected dim row is not faint: under the band its plain
 text is in `text` and its coloured spans keep their colours; under
-reverse video it has no colours. A task that needs the user is not
+reverse video, without colours, it has none. A task that needs the user is not
 dim, its waiting icon saying so. Plain text keeps the terminal's
 foreground, in `text` under the selection band; a host that is down is
 drawn in `danger`, one connecting in `warning`, and a group's header in

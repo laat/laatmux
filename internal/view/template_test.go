@@ -401,8 +401,6 @@ func TestDimOnBackground(t *testing.T) {
 	m := &Model{Now: now, LocalHost: "mac"}
 	dark, _ := palette.New(true, nil)
 	light, _ := palette.New(false, nil)
-	guessed := dark
-	guessed.Guessed = true
 	darkDim, lightDim := dark.SGR("#565f89", false), dark.SGR("#8990b3", false)
 	yellow, black := dark.SGR("#ffff00", true), dark.SGR("#000000", false)
 	draw := func(r rows.Row, src string, l Line, th palette.Theme) string {
@@ -413,7 +411,7 @@ func TestDimOnBackground(t *testing.T) {
 	r := tokenRow(now)
 	r.Branch.PR.Draft = true
 	want := darkDim + yellow + "vm\x1b[0m" + yellow + " \x1b[0m" + darkDim + yellow + "#52\x1b[0m" + yellow + " \x1b[0m" + darkDim + yellow + "x\x1b[0m\x1b[0m"
-	for _, th := range []palette.Theme{dark, light, guessed} {
+	for _, th := range []palette.Theme{dark, light} {
 		if got := draw(r, "#[bg=#ffff00]{host} {pr_number} #[dim]x", Line{}, th); got != want {
 			t.Errorf("a host, a draft and dim text on yellow:\n%q, want\n%q", got, want)
 		}
@@ -479,10 +477,10 @@ func TestDimOnBackground(t *testing.T) {
 		th   palette.Theme
 	}{
 		{"under the band", Line{Reverse: true}, false, dark},
-		{"under reverse video", Line{Reverse: true}, false, guessed},
+		{"under reverse video", Line{Reverse: true}, false, palette.Mono()},
 		{"on a dim line", Line{Dim: true}, false, dark},
 		{"on a chip's band", Line{}, true, dark},
-		{"on a chip's reverse band", Line{}, true, guessed},
+		{"on a chip's reverse band", Line{}, true, palette.Mono()},
 		{"without colours", Line{}, false, palette.Mono()},
 	} {
 		with, without := c.l, c.l

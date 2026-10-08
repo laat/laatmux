@@ -194,14 +194,8 @@ func ValidMode(mode string) bool {
 // Theme is the colours in use, or none: a monochrome theme draws with
 // the attributes alone, as the views did before colour, for NO_COLOR.
 type Theme struct {
-	Mono bool
-	// Guessed is that the terminal's background is not known: the
-	// query had no answer. The colours are the dark defaults, for the
-	// accents; the views then keep the terminal's own foreground and
-	// background under the selection too, which is right whatever the
-	// background.
-	Guessed bool
-	colors  map[string]Color
+	Mono   bool
+	colors map[string]Color
 }
 
 // New is the theme for a terminal background, dark or light, with the
