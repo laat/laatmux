@@ -79,7 +79,7 @@ func TestAttributionTable(t *testing.T) {
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), false)
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), nil)
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -90,17 +90,63 @@ func TestAttributionTable(t *testing.T) {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
+	every := func(string) bool { return true }
 	d.mu.Lock()
-	got := d.worktreeOfLocked(filepath.Join(inner, "src"), true)
+	got := d.worktreeOfLocked(filepath.Join(inner, "src"), every)
 	// One whose HEAD could not be read has no record: neither it nor
 	// the worktree around it takes the agent.
-	gotUnread := d.worktreeOfLocked(unread, true)
+	gotUnread := d.worktreeOfLocked(unread, every)
 	d.mu.Unlock()
 	if got != "env/checkout/"+inner {
 		t.Errorf("an agent in a plain session in the checkout: %q", got)
 	}
 	if gotUnread != "" {
 		t.Errorf("an agent in a plain session in a checkout unread: %q", gotUnread)
+	}
+}
+
+// An agent in a main checkout is the checkout's when it is a live,
+// named agent in a pane that is not laatmux's own, on the default
+// server, or on the managed server in the session that is the
+// checkout's home; not in another managed session there, not a shell,
+// not one gone, and not one in a sidebar or attach pane. In a worktree
+// any agent is the worktree's.
+func TestAttributeMainCheckout(t *testing.T) {
+	base := realTemp(t)
+	main, foo := filepath.Join(base, "repos", "proj"), filepath.Join(base, "worktrees", "proj", "foo")
+	mkdirs(t, main, foo)
+	d := New(Config{EnvironmentID: "env"})
+	managed := &target{Target: Target{Label: "laatmux", Managed: true}}
+	def := &target{Target: Target{Label: "default"}}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.roots = resolveRoots([]string{foo}, []root{{root: main}})
+	d.managedRoots = map[string]string{main: "proj/main", foo: "proj/foo"}
+	claude := protocol.Agent{Agent: "claude", Liveness: protocol.Alive}
+	gone := protocol.Agent{Agent: "claude", Liveness: protocol.Gone}
+	checkout, worktree := "env/checkout/"+main, "env/worktree/"+foo
+	for _, c := range []struct {
+		name    string
+		t       *target
+		session string
+		path    string
+		own     bool
+		a       protocol.Agent
+		want    string
+	}{
+		{"plain session", def, "work", main, false, claude, checkout},
+		{"the home session", managed, "proj/main", filepath.Join(main, "src"), false, claude, checkout},
+		{"another managed session", managed, "scratch", main, false, claude, ""},
+		{"the home of another root", managed, "proj/foo", main, false, claude, ""},
+		{"a shell in the home", managed, "proj/main", main, false, protocol.Agent{Liveness: protocol.Alive}, ""},
+		{"one gone in the home", managed, "proj/main", main, false, gone, ""},
+		{"laatmux's own pane in the home", managed, "proj/main", main, true, claude, ""},
+		{"a worktree's, in any session", managed, "scratch", foo, false, gone, worktree},
+	} {
+		st := &paneState{target: c.t, pane: tmux.Pane{Session: c.session, Own: c.own}, path: c.path}
+		if got := d.attributeLocked(st, c.a); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

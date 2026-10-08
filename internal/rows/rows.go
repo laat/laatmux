@@ -296,7 +296,8 @@ func (r Row) State() string {
 	case r.Agent != nil:
 		return ""
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Worktree.Main):
-		// A main checkout has no session of its own to lack.
+		// A main checkout lacks none: add makes it none, and enter one
+		// with a shell when asked.
 		return "no agent"
 	default:
 		return "no session"
@@ -470,9 +471,11 @@ func (r Row) HostName() string {
 // swap the row's agent and the others' rows as they work: a live agent
 // before a gone one, then the one that started first, then the id. The
 // rest keep rows of their own until the views show several agents per
-// worktree. A main checkout's line has its own choice (mainAgent).
+// worktree. A main checkout's line has its own choice (mainAgent) while
+// it has no home; with one, the shell session a jump made, it is a
+// worktree's, an agent in the home or none.
 func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
-	if w.Main {
+	if w.Main && w.Session == "" {
 		return mainAgent(agents)
 	}
 	var best *protocol.Agent
@@ -499,8 +502,8 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 // host gives it, the most recently active. One working or blocked is
 // active now and goes first, then the latest change of activity; a live
 // one before one gone. Unlike a worktree's, the choice turns on
-// activity: the checkout has no session of its own for enter to go to,
-// and goes where the work is.
+// activity: the checkout has no home session for enter to go to, and
+// goes where the work is.
 func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {

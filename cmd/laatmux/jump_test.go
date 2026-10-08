@@ -152,10 +152,14 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	}
 }
 
-// A main checkout's line jumps to its agent's session on this machine's
-// default server, with no workspace session; one on a remote host's
-// default server is refused as jump refuses it; with no agent the jump
-// says so, not how add would start one, and so do S's lookup.
+// A main checkout's line with no home jumps to its agent's session on
+// this machine's default server, with no workspace session; one on a
+// remote host's default server is refused as jump refuses it; with no
+// agent the jump says so, not how add would start one, and so does S's
+// lookup, each a refusal the view makes a home for where it can, named
+// as add would name a worktree's on the branch. With a home, the shell
+// session a jump made, the line goes to its workspace session, keyed by
+// the root, whatever agent runs in a plain session.
 func TestJumpRowMainCheckout(t *testing.T) {
 	mac := config.Host{Host: peer.Host{Name: "mac"}, Repos: config.Paths{"/r"}, Worktrees: "/w"}
 	vm := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
@@ -170,11 +174,31 @@ func TestJumpRowMainCheckout(t *testing.T) {
 		t.Fatalf("remote: %v", err)
 	}
 	err = jumpRow(context.Background(), cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/main", Worktree: &w})
-	if err == nil || err.Error() != "mac/proj/main is the main checkout, and no agent runs in it" {
+	var nh *noHome
+	if err == nil || err.Error() != "mac/proj/main is the main checkout, and no agent runs in it" || !errors.As(err, &nh) || nh.name != "proj/main" || nh.w.ID != w.ID {
 		t.Fatalf("no agent: %v", err)
 	}
-	if _, err := localSpec(cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w, Agent: &a}); err == nil || err.Error() != "mac/proj/main is the main checkout, which has no workspace session" {
-		t.Fatalf("shell: %v", err)
+	if _, err := localSpec(cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w, Agent: &a}); err == nil || err.Error() != "mac/proj/main is the main checkout, which has no workspace session" || errors.As(err, &nh) {
+		t.Fatalf("shell, an agent in a plain session: %v", err)
+	}
+	nh = nil
+	if _, err := localSpec(cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w}); err == nil || err.Error() != "mac/proj/main is the main checkout, which has no workspace session" || !errors.As(err, &nh) || nh.name != "proj/main" {
+		t.Fatalf("shell, no agent: %v", err)
+	}
+	// A detached checkout gets no name a jump would make.
+	detached := w
+	detached.Branch = ""
+	if err := jumpRow(context.Background(), cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &detached}); !errors.As(err, &nh) || nh.name != "" || err.Error() != "/r/proj on mac is the main checkout, and no agent runs in it" {
+		t.Fatalf("detached: %v", err)
+	}
+	homed := w
+	homed.Session = "proj/main"
+	spec, session, err = rowSpec(cfg, mac, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &homed, Agent: &a})
+	if err != nil || session != "" || spec.Managed != "proj/main" || spec.Name != "mac/proj/main" || spec.Key != "menv//r/proj" {
+		t.Fatalf("with a home: spec %+v session %q err %v", spec, session, err)
+	}
+	if spec, err := localSpec(cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &homed}); err != nil || spec.Key != "menv//r/proj" {
+		t.Fatalf("shell, with a home: %+v %v", spec, err)
 	}
 }
 
@@ -614,6 +638,87 @@ func TestJumpMakesShellSession(t *testing.T) {
 	want = "mac: new proj/b: answers as environment other, not menv the request was resolved for"
 	if out, cmds, req, err := jump("mac/proj/b"); err == nil || err.Error() != want || req != "" || out != "" || cmds != "" {
 		t.Errorf("jump to another machine: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
+	}
+}
+
+// jump to a main checkout with no home and no agent, <host>/<repo>/<the
+// branch it has>, asks the host's daemon for a session with a shell at
+// its root, named as add would name a worktree's on the branch, then
+// makes the workspace session keyed by the root attached to it,
+// switches there and says what it made; a name in use that no record
+// places elsewhere is attached, one in which an agent of another
+// worktree runs refused. One with a home goes to its workspace session
+// and asks nothing; one with an agent in a plain session and no home
+// switches to that session, as before. A host whose daemon lacks new
+// keeps the refusal that no agent runs in it (a detached checkout, which
+// no target names by a branch, is TestJumpRowMainCheckout's).
+func TestJumpMainCheckoutShell(t *testing.T) {
+	log := fakeDefaultTmux(t)
+	src := "git@github.com:laat/proj.git"
+	main := func(repo, branch, root string) protocol.Worktree {
+		return protocol.Worktree{ID: "menv/checkout/" + root, EnvironmentID: "menv", Repo: repo, Source: src, Branch: branch, Root: root, Main: true}
+	}
+	proj, taken, busy, homed, plain, det := main("proj", "main", "/r/proj"), main("lib", "dev", "/r/lib"), main("app", "main", "/r/app"), main("tool", "main", "/r/tool"), main("note", "main", "/r/note"), main("dots", "", "/r/dots")
+	homed.Session = "tool/main"
+	x := protocol.Worktree{ID: "menv/worktree//w/x", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "x", Root: "/w/x", Session: "proj/x"}
+	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps}},
+		Worktrees: []protocol.Worktree{proj, taken, busy, homed, plain, det, x},
+		Agents: []protocol.Agent{
+			// x's agent, moved by hand into the session app/main would be.
+			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "app/main", Agent: "claude", WorktreeID: x.ID, Cwd: "/w/x"},
+			{ID: "menv/default/%3", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: plain.ID, Cwd: plain.Root},
+		}}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts, protocol.CapNew}, &snap, inUse("lib/dev", "app/main"))
+	jump := func(target string) (out, cmds, req string, err error) {
+		t.Helper()
+		os.Remove(log)
+		f, ferr := os.Create(filepath.Join(t.TempDir(), "stdout"))
+		if ferr != nil {
+			t.Fatal(ferr)
+		}
+		was := os.Stdout
+		os.Stdout = f
+		err = cmdJump(context.Background(), []string{target})
+		os.Stdout = was
+		f.Close()
+		got, _ := os.ReadFile(f.Name())
+		tm, _ := os.ReadFile(log)
+		return string(got), string(tm), asked(requests), err
+	}
+	for _, k := range []struct{ target, req, made, managed string }{
+		{"mac/proj/main", `proj/main /r/proj mac []`, "made session proj/main on mac, a shell at /r/proj\n", "proj/main"},
+		// Made since the listing: attached, nothing said made.
+		{"mac/lib/dev", `lib/dev /r/lib mac []`, "", "lib/dev"},
+		// The home: nothing asked.
+		{"mac/tool/main", "", "", "tool/main"},
+	} {
+		out, cmds, req, err := jump(k.target)
+		if err != nil || req != k.req || out != k.made {
+			t.Errorf("jump %s: %v, asked %q, printed %q", k.target, err, req, out)
+		}
+		for _, want := range []string{"new-session -d -s mac/" + k.managed + " ", "@laatmux_attach_target " + k.managed + " ", "@laatmux_workspace menv//r/", "switch-client -t =mac/" + k.managed + ":"} {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("jump %s ran %q, want %q in it", k.target, cmds, want)
+			}
+		}
+	}
+	want := "mac: session app/main runs in /w/x, not /r/app; name in use"
+	if out, cmds, req, err := jump("mac/app/main"); err == nil || err.Error() != want || req != `app/main /r/app mac []` || out != "" || cmds != "" {
+		t.Errorf("jump to a name in use elsewhere: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
+	}
+	if out, cmds, req, err := jump("mac/note/main"); err != nil || req != "" || out != "" || !strings.Contains(cmds, "switch-client -t =notes:") || strings.Contains(cmds, "new-session") {
+		t.Errorf("jump with an agent in a plain session: %v, asked %q, printed %q, tmux %q", err, req, out, cmds)
+	}
+	requests = fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts}, &snap, nil)
+	want = "mac/proj/main is the main checkout, and no agent runs in it"
+	if out, cmds, req, err := jump("mac/proj/main"); err == nil || err.Error() != want || req != "" || out != "" || cmds != "" {
+		t.Errorf("jump with no new in the hello: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
 	}
 }
 

@@ -38,8 +38,10 @@ import (
 // a plain attachment rather than a workspace.
 //
 // A repository's main checkout, <host>/<repo>/<branch> for the branch it
-// has checked out, has no workspace session: the jump switches to the
-// session of its agent on this machine's default server (jumpMain).
+// has checked out, gets no session from add: with no home the jump
+// switches to the session of its agent on this machine's default server
+// (jumpMain), and with no agent either makes it a home with a shell as a
+// worktree gets one, which the jump goes to from then on.
 //
 // With --server default the session is one the daemon merely observes on
 // this machine's own tmux. It is already in the user's server, so jump is
@@ -92,19 +94,25 @@ func cmdJump(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if ok && w.Main {
-		return jumpMain(ctx, h, w, snap.Agents)
+	if ok && w.Main && w.Session == "" {
+		if a := rows.JumpAgent(snap.Agents, w); a != nil {
+			return jumpMain(ctx, h, *a)
+		}
 	}
 	if ok {
 		if w.Session == "" {
 			// The records are the host's, its label in them.
 			name := shellSession(rows.Row{Worktree: &w})
+			refusal := addHint(cfg, h, w)
+			if w.Main {
+				refusal = mainNoAgent(h, w)
+			}
 			if name == "" || rows.JumpAgent(snap.Agents, w) != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
-				return errors.New(addHint(cfg, h, w))
+				return errors.New(refusal)
 			}
 			made, err := newHome(ctx, h, w, name, func() protocol.Message { return snap })
 			if noNew(err) {
-				return errors.New(addHint(cfg, h, w))
+				return errors.New(refusal)
 			}
 			if err != nil {
 				return err
@@ -144,25 +152,20 @@ func switchDefault(ctx context.Context, h config.Host, session string) error {
 	return workspace.Switch(ctx, session)
 }
 
-// jumpMain goes to a main checkout's agent, in a plain session on its
-// host's default server: the most recently active of several, as the
-// checkout's line goes (rows.JumpAgent). No workspace session is made
-// for a main checkout, so one with no agent is refused, and an agent
-// on a remote host's default server is refused as any session there
-// is.
-func jumpMain(ctx context.Context, h config.Host, w protocol.Worktree, agents []protocol.Agent) error {
-	a := rows.JumpAgent(agents, w)
-	if a == nil {
-		return errors.New(mainNoAgent(h, w))
-	}
+// jumpMain goes to the agent a main checkout with no home jumps through,
+// in a plain session on its host's default server: the most recently
+// active of several, as the checkout's line goes (rows.JumpAgent). One
+// on a remote host's default server is refused as any session there is.
+func jumpMain(ctx context.Context, h config.Host, a protocol.Agent) error {
 	if _, err := jumpMode(h.Host, tmux.Parse(a.Server), a.Session); err != nil {
 		return err
 	}
 	return switchDefault(ctx, h, a.Session)
 }
 
-// mainNoAgent says a main checkout has no agent to jump to: jump makes
-// no workspace session for one, and add starts agents in worktrees.
+// mainNoAgent says a main checkout with no home has no agent to jump to,
+// where the jump makes it no home with a shell: add starts agents in
+// worktrees.
 func mainNoAgent(h config.Host, w protocol.Worktree) string {
 	return mainName(h.Name, w) + " is the main checkout, and no agent runs in it"
 }
@@ -258,16 +261,17 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	return name + " has no managed session; " + addsSession(cfg, h, w, false)
 }
 
-// shellSession is the managed session a jump makes for a worktree with
-// no home and no agent: the one add makes, by the name add gives it
-// (rows.Row.AddSession). "" where the jump makes none, as add makes
-// none: for a main checkout and a detached worktree; for a branch only
-// shown, which no command names, flagged so or, from an older daemon
-// that sends no flag, with U+FFFD in it (worktree.CheckWire); and for a
-// name new refuses, one tmux would not store as given, as an older
-// host's label for a checkout its config does not list can make it.
+// shellSession is the managed session a jump makes for a worktree or a
+// main checkout with no home and no agent: the one add makes, by the
+// name add gives it, a main checkout's in the same form
+// (rows.Row.ShellSession). "" where the jump makes none: for a detached
+// checkout, which add makes none for; for a branch only shown, which no
+// command names, flagged so or, from an older daemon that sends no
+// flag, with U+FFFD in it (worktree.CheckWire); and for a name new
+// refuses, one tmux would not store as given, as an older host's label
+// for a checkout its config does not list can make it.
 func shellSession(r rows.Row) string {
-	name := r.AddSession()
+	name := r.ShellSession()
 	if name == "" || r.Worktree.BranchDisplayOnly || worktree.CheckWire(r.Worktree.Branch) != nil || tmux.CheckSessionName(name) != nil {
 		return ""
 	}
@@ -275,8 +279,9 @@ func shellSession(r rows.Row) string {
 }
 
 // newHome asks the host's daemon for the managed session a jump makes
-// for a worktree with no home and no agent: name, at the root, with no
-// command, so the host's default-shell runs in it, as new makes one.
+// for a worktree or a main checkout with no home and no agent: name, at
+// the root, with no command, so the host's default-shell runs in it, as
+// new makes one.
 // What was made is returned, for the message. The daemon refuses a name
 // in use. A session of the name that the host's records, as records
 // reads them then, place elsewhere (elsewhere) is refused as add refuses

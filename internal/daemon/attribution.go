@@ -21,7 +21,8 @@ import (
 // root belongs to no worktree. An agent in a main checkout, under no
 // worktree root inside it, belongs to the checkout's record when its
 // pane is on the default server and not laatmux's own, the user's plain
-// session there; the record is published while an agent is so (see
+// session there, or in the checkout's home session on the managed
+// server; the record is published while an agent is so (see
 // syncMainsLocked), and first, so no agent names a record a subscriber
 // has not had. Any other pane in a main checkout belongs to none, and a
 // pane with no agent there has no pane record.
@@ -34,7 +35,8 @@ import (
 
 // root is a listed worktree root and its path with symlinks resolved,
 // or with main a main checkout's directory, of which only an agent in a
-// plain session on the default server is (attributeLocked); with unread
+// plain session on the default server or in the checkout's home session
+// is (attributeLocked); with unread
 // too, one whose HEAD could not be read, which has no record: no pane is
 // its, nor a worktree's around it.
 type root struct {
@@ -110,10 +112,11 @@ func (d *Daemon) setRootsLocked(roots []root, now time.Time) {
 
 // worktreeOfLocked is the id of the worktree whose root is the deepest
 // to contain the resolved path, "" when none does. A main checkout's
-// directory is such a root too: with main its id, else "", not the id of
-// a worktree around the checkout, since the pane is in the checkout; ""
-// too for one unread, which has no record. Called with d.mu held.
-func (d *Daemon) worktreeOfLocked(path string, main bool) string {
+// directory is such a root too: its id where main takes the checkout's
+// root, else "", not the id of a worktree around the checkout, since the
+// pane is in the checkout; "" too for one unread, which has no record.
+// A nil main takes none. Called with d.mu held.
+func (d *Daemon) worktreeOfLocked(path string, main func(root string) bool) string {
 	if path == "" {
 		return ""
 	}
@@ -121,7 +124,7 @@ func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 		if !inside(path, r.real) && !inside(path, r.root) {
 			continue
 		}
-		if r.main && (!main || r.unread) {
+		if r.main && (main == nil || r.unread || !main(r.root)) {
 			return ""
 		}
 		return d.recordID(r)
@@ -131,16 +134,25 @@ func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 
 // attributeLocked is the worktree an observed pane's agent belongs to:
 // the deepest listed root its path is in, a main checkout's directory
-// only for a live, named agent, claude or codex, in a pane on the
-// default server that is not laatmux's own, the user's plain session
-// there. A session new made in a main checkout, on the managed server,
-// keeps a row of its own; a shell, an identified pane with no named
-// agent or one left after its agent quit, puts no checkout in use, nor
-// keeps one, so a record never follows a shell's cd; a pane record is
-// never a main checkout's (publishPaneLocked). Called with d.mu held.
+// only for a live, named agent, claude or codex, in a pane that is not
+// laatmux's own: on the default server, the user's plain session there,
+// or on the managed server in the checkout's home session (homeSessions),
+// the shell session a jump made at the root, say, where the user started
+// it. Any other session new made in a main checkout keeps a row of its
+// own; a shell, an identified pane with no named agent or one left after
+// its agent quit, puts no checkout in use, nor keeps one, so a record
+// never follows a shell's cd; a pane record is never a main checkout's
+// (publishPaneLocked). Called with d.mu held.
 func (d *Daemon) attributeLocked(st *paneState, a protocol.Agent) string {
-	main := a.Agent != "" && a.Liveness != protocol.Gone && st.target.Label == protocol.ServerDefault && !st.pane.Own
-	return d.worktreeOfLocked(st.path, main)
+	if a.Agent == "" || a.Liveness == protocol.Gone || st.pane.Own {
+		return d.worktreeOfLocked(st.path, nil)
+	}
+	return d.worktreeOfLocked(st.path, func(root string) bool {
+		if st.target.Managed {
+			return st.pane.Session != "" && d.managedRoots[root] == st.pane.Session
+		}
+		return st.target.Label == protocol.ServerDefault
+	})
 }
 
 // within reports whether path is inside root, as written or resolved;
@@ -152,13 +164,14 @@ func within(path, root string, resolve func(string) string) bool {
 
 // homeSessions maps a root to its home session on the managed server:
 // the session with a pane laatmux made at the root, all of whose panes
-// are inside it, which jump attaches to. A split for a shell or a test
-// watcher keeps the home; a pane that has gone elsewhere takes it away,
-// the session being no longer the worktree's alone. rm kills every
-// managed session with a pane made at the root all the same, so no
-// agent is left in a removed directory. Two sessions on one root is not
-// a state add creates; the lexically first name wins so the record is
-// stable. resolve is d.paths.resolve.
+// are inside it, which jump attaches to: a worktree's root or a main
+// checkout's, whose home a jump makes with a shell. A split for a shell
+// or a test watcher keeps the home; a pane that has gone elsewhere takes
+// it away, the session being no longer the worktree's alone. rm kills
+// every managed session with a pane made at the root all the same, so
+// no agent is left in a removed directory. Two sessions on one root is
+// not a state add creates; the lexically first name wins so the record
+// is stable. resolve is d.paths.resolve.
 func homeSessions(panes []tmux.Pane, resolve func(string) string) map[string]string {
 	bySession := map[string][]tmux.Pane{}
 	for _, p := range panes {
@@ -199,7 +212,7 @@ func (d *Daemon) runRecordID(id string) string { return d.cfg.EnvironmentID + "/
 // what the record says has changed, removed when it has left every
 // worktree. Called with d.mu held.
 func (d *Daemon) publishPaneLocked(key string, st *paneState, now time.Time) {
-	wid := d.worktreeOfLocked(st.path, false)
+	wid := d.worktreeOfLocked(st.path, nil)
 	if wid == "" || st.pane.Own {
 		// Outside every worktree, or laatmux's own: a sidebar pane, or
 		// the attach pane of a workspace session.

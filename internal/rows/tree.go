@@ -336,16 +336,13 @@ func (b *builder) worktrees() {
 		} else {
 			line.Name = w.Repo + "/" + w.Branch
 		}
-		// The workspace session by the worktree's key. A main checkout
-		// has none: one left at its root, from a worktree there before,
-		// is no session of its and stays an orphaned line.
+		// The workspace session by the worktree's key, a main checkout's
+		// as any root's: the one a jump made for the shell session it
+		// made there, or one left at its root from a worktree there
+		// before, which a jump there takes up.
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
 		ws := j.byKey[key]
-		if w.Main {
-			ws = nil
-		} else {
-			b.seenKey[key] = true
-		}
+		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
 		// The line's agent is the one its jump goes through: in the home
 		// session; with the home lost, the one laatmux made at the root,
@@ -406,12 +403,13 @@ func (b *builder) worktrees() {
 				}
 			}
 		}
-		if w.Main && in.Current != "" {
-			// A main checkout has no session of its own: the viewer in
-			// the plain session of any of its agents is on its line by
-			// its own session, not only in its jump agent's, which turns
-			// with activity, so the following band does not move with
-			// another agent's work.
+		if w.Main && w.Session == "" && in.Current != "" {
+			// A main checkout with no home, enter going to the plain
+			// session of an agent: the viewer in the plain session of any
+			// of its agents is on its line by its own session, not only
+			// in its jump agent's, which turns with activity, so the
+			// following band does not move with another agent's work.
+			// With a home, enter goes there, as a worktree's does.
 			for _, c := range children {
 				if c.Local != nil && !c.Local.Laatmux() && c.Local.Name == in.Current {
 					line.Current, line.Own = true, true
@@ -1009,8 +1007,20 @@ func (r Row) namedAfter(session string) bool {
 // worktree, which add does not make, for a main checkout, which add
 // makes no session for, and for a line of none.
 func (r Row) AddSession() string {
+	if r.Worktree != nil && r.Worktree.Main {
+		return ""
+	}
+	return r.ShellSession()
+}
+
+// ShellSession is the name a jump gives the managed session it makes
+// with the user's shell for the line's worktree or main checkout when it
+// has none: AddSession's, and a main checkout's, which add makes none
+// for, in the same form. "" for a detached checkout and for a line of
+// none.
+func (r Row) ShellSession() string {
 	w := r.Worktree
-	if w == nil || w.Branch == "" || w.Main {
+	if w == nil || w.Branch == "" {
 		return ""
 	}
 	return tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)

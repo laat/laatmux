@@ -164,7 +164,7 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	}
 	err := jump(r)
 	if nh, before, ok := shellable(d.st, err); ok && d.jumper == nil && d.cmds != nil {
-		d.makeHome(m, nh, before)
+		d.makeHome(m, nh, before, false)
 		return false, true
 	}
 	if err != nil {
@@ -178,21 +178,23 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 func making(host string) string { return "making a session on " + host + "…" }
 
 // makeHome has the host's daemon make the managed session of a worktree
-// with no home and no agent (newHome), with the user's shell at its
-// root, and then ends the jump on the view's goroutine as a jump to the
-// workspace session ends, through the view's commands: the view does not
-// wait on the host, and says meanwhile that a session is being made,
-// which a jump meanwhile is refused with. The jump switches the client
-// it would have, and says what was made, before an error after it, since
+// or a main checkout with no home and no agent (newHome), with the
+// user's shell at its root, and then ends the jump on the view's
+// goroutine as a jump to the workspace session ends, through the view's
+// commands, with shell as S ends, the shell window opened in the
+// workspace session first (shellSwitch): the view does not wait on the
+// host, and says meanwhile that a session is being made, which a jump
+// or an S meanwhile is refused with. The jump switches the client it
+// would have, and says what was made, before an error after it, since
 // the session is there. A user who has moved on meanwhile, to a form or
 // a question in the view or with the client to another session, is left
-// where they are, the message saying the session is there for enter. A
-// view that ends first leaves the jump undone. before is the host's
-// records shellable read at enter, which a name in use is judged by
-// unless the stream has a listing of the worktree's machine by the
+// where they are, the message saying the session is there for enter, or
+// for S. A view that ends first leaves the jump undone. before is the
+// host's records shellable read at enter, which a name in use is judged
+// by unless the stream has a listing of the worktree's machine by the
 // answer: it may have the host down, or listing again after its entry
 // changed, or the entry may reach another machine now.
-func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
+func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message, shell bool) {
 	ctx, st, host := d.ctx, d.st, nh.h.Name
 	at := d.clientAt
 	if at == nil {
@@ -220,13 +222,21 @@ func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
 				if there == "" {
 					there = "session " + tmux.Printable(nh.name) + " on " + host + " is there"
 				}
-				m.Message = there + "; enter on the line goes there"
+				again := "; enter on the line goes there"
+				if shell {
+					again = "; S on the line opens the shell there"
+				}
+				m.Message = there + again
 				return view.Action{}
 			}
 			if err == nil {
 				w := nh.w
 				w.Session = nh.name
-				if err = ensureSwitch(ctx, worktreeSpec(nh.h, w)); err != nil && made != "" {
+				finish := ensureSwitch
+				if shell {
+					finish = func(ctx context.Context, spec workspace.Spec) error { return shellSwitch(ctx, nh.h, spec) }
+				}
+				if err = finish(ctx, worktreeSpec(nh.h, w)); err != nil && made != "" {
 					err = fmt.Errorf("%s; %w", made, err)
 				}
 			}
@@ -1057,12 +1067,6 @@ func (d *dash) settle(m *view.Model) {
 		m.Message = line.Name + ": a pending task; z settles its worktree row once it hands over"
 		return
 	}
-	if w := line.Worktree; w != nil && w.Main {
-		// Its line, or a tile or a line of an agent in it: settled is a
-		// workspace session's state, and a main checkout has none.
-		m.Message = mainName(line.HostName(), *w) + " is the main checkout, which has no workspace session"
-		return
-	}
 	if !resolved && r.Worktree == nil && (r.Local == nil || !r.Local.Workspace()) {
 		// A row of no worktree that no line holds, and of no workspace
 		// session: a repository line, the stale fold, or an agent in
@@ -1107,18 +1111,19 @@ func (d *dash) settle(m *view.Model) {
 
 // noWorkspaceHint says what enter on a line with no local workspace
 // session does about one, by where the line's jump goes: it makes the
-// session; or, for a worktree with no home and no agent, it makes the
-// managed session with a shell and the workspace session, where st
-// has the host's daemon able to (shellable), and add makes them with an
-// agent; or it jumps to the session of the line's agent on this
-// machine's default server; or it is refused, and the refusal is the
-// hint. A worktree with no home whose jump goes by such an agent, or by
-// one on another host's default server, gets its workspace session from
-// add, which starts a managed session at the root: the hint ends with
-// the add line, or what add needs first. A task still running has
-// nothing to jump to until it is done. A line of no worktree, which
-// settle does not pass, gets no add line: what add needs is the
-// worktree's.
+// session; or, for a worktree or a main checkout with no home and no
+// agent, it makes the managed session with a shell and the workspace
+// session, where st has the host's daemon able to (shellable), and for
+// a worktree add makes them with an agent; or it jumps to the session
+// of the line's agent on this machine's default server; or it is
+// refused, and the refusal is the hint. A worktree with no home whose
+// jump goes by such an agent, or by one on another host's default
+// server, gets its workspace session from add, which starts a managed
+// session at the root: the hint ends with the add line, or what add
+// needs first. A main checkout gets none from add, and no add line. A
+// task still running has nothing to jump to until it is done. A line of
+// no worktree, which settle does not pass, gets no add line: what add
+// needs is the worktree's.
 func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
@@ -1135,11 +1140,14 @@ func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolve
 		hint = fmt.Sprintf("%s jumps to %s, its agent's session", enter, session)
 	default:
 		if nh, _, ok := shellable(st, err); ok {
+			if nh.w.Main {
+				return enter + " creates one with a shell"
+			}
 			return enter + " creates one with a shell; " + addsSession(cfg, nh.h, nh.w, true)
 		}
 		hint = err.Error()
 	}
-	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil && line.Worktree != nil {
+	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil && line.Worktree != nil && !line.Worktree.Main {
 		// Enter went by the agent, which only the jump of a worktree
 		// with no home does: add gives it a home and the session.
 		hint += "; " + addsSession(cfg, h, *line.Worktree, false)
@@ -1200,12 +1208,23 @@ func (d *dash) shell(m *view.Model) bool {
 	if r == nil {
 		return false
 	}
+	if d.making != "" {
+		m.Message = making(d.making)
+		return false
+	}
 	row, err := shellRow(m, *r)
 	if err != nil {
 		m.Message = err.Error()
 		return false
 	}
 	l, err := d.localFor(row)
+	if nh, before, ok := shellable(d.st, err); ok && d.cmds != nil {
+		// A worktree or a main checkout with no home and no agent: the
+		// session is made as enter makes it, then the shell window
+		// opened in its workspace session.
+		d.makeHome(m, nh, before, true)
+		return false
+	}
 	if err != nil {
 		m.Message = err.Error()
 		return false
@@ -1231,6 +1250,23 @@ func (d *dash) shell(m *view.Model) bool {
 		return false
 	}
 	return d.exitOnJump
+}
+
+// shellSwitch makes or finds the workspace session of the host's managed
+// session spec names, opens the shell window in it and switches there:
+// the end of S on a row whose managed session the view made (makeHome).
+// A session Ensure read from a listing a user's hook failed after is
+// there, as in jumpRow.
+func shellSwitch(ctx context.Context, h config.Host, spec workspace.Spec) error {
+	name, _, err := workspace.Ensure(ctx, spec)
+	if err != nil && !tmux.HookOnly(err) {
+		return err
+	}
+	l := protocol.Session{Name: name, Key: spec.Key, Host: h.Name, Source: spec.Source, Branch: spec.Branch}
+	if err := command.Shell(ctx, h, l); err != nil {
+		return err
+	}
+	return switchTo(ctx, name)
 }
 
 // shellRow is the row whose workspace session the shell opens: an
@@ -1287,9 +1323,6 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Orphaned {
 		return protocol.Session{}, errors.New(r.Name + ": its worktree is gone")
 	}
-	if r.Worktree != nil && r.Worktree.Main {
-		return protocol.Session{}, errors.New(mainName(r.HostName(), *r.Worktree) + " is the main checkout, which has no workspace session")
-	}
 	if r.Local != nil && r.Local.Workspace() {
 		l := *r.Local
 		env, _ := protocol.SplitSessionKey(l.Key)
@@ -1315,21 +1348,31 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 // shell: the one the row's own jump makes, through the worktree's root
 // agent when the home is lost; a row whose jump is no workspace
 // session, a switch on this machine's default server or a plain
-// attachment, has none.
+// attachment, has none. A worktree or a main checkout with no home and
+// no agent, whose jump the view makes a home for, is the jump's
+// refusal (*noHome), which S makes the home for too where the host can
+// (shellable), and which says otherwise that the row is no workspace.
 func localSpec(cfg config.Config, r rows.Row) (workspace.Spec, error) {
 	if r.Worktree == nil {
 		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
-	}
-	if r.Worktree.Main {
-		return workspace.Spec{}, errors.New(mainName(r.HostName(), *r.Worktree) + " is the main checkout, which has no workspace session")
 	}
 	h, ok := cfg.Find(r.Host)
 	if !ok {
 		return workspace.Spec{}, fmt.Errorf("unknown host %q", r.Host)
 	}
+	refusal := r.Name + ": not a workspace"
+	if r.Worktree.Main {
+		refusal = mainName(h.Name, *r.Worktree) + " is the main checkout, which has no workspace session"
+	}
 	spec, session, err := rowSpec(cfg, h, r)
-	if err != nil || session != "" || spec.Key == "" {
-		return workspace.Spec{}, errors.New(r.Name + ": not a workspace")
+	var nh *noHome
+	switch {
+	case errors.As(err, &nh):
+		refused := *nh
+		refused.hint = refusal
+		return workspace.Spec{}, &refused
+	case err != nil || session != "" || spec.Key == "":
+		return workspace.Spec{}, errors.New(refusal)
 	}
 	return spec, nil
 }
