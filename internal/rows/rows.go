@@ -514,17 +514,19 @@ func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 	return best
 }
 
-// MainAgent is the agent a jump to a main checkout goes to, of the
-// records given: one its host attributed to it, chosen as its line's
-// (mainAgent); nil for none.
-func MainAgent(agents []protocol.Agent, w protocol.Worktree) *protocol.Agent {
+// JumpAgent is the agent a jump to a worktree or a main checkout goes
+// through, of the records given: one its host attributed to it, chosen
+// as its line's (rowAgent); nil for none. A host that attributes no
+// agent gives none, as its line has none while the worktree has no
+// home.
+func JumpAgent(agents []protocol.Agent, w protocol.Worktree) *protocol.Agent {
 	var of []*protocol.Agent
 	for i := range agents {
 		if a := &agents[i]; a.EnvironmentID == w.EnvironmentID && a.WorktreeID == w.ID {
 			of = append(of, a)
 		}
 	}
-	return mainAgent(of)
+	return rowAgent(of, &w)
 }
 
 // livelier is a ahead of b in mainAgent's choice.

@@ -349,29 +349,71 @@ func fill(v *view.Model, s merged.Status) {
 // does the same through a plain attachment; an observed agent on this
 // machine's default server is a switch-client; one on a remote host's
 // default server is refused as jump refuses it. A worktree with no
-// session cannot be jumped to: the message says how add would start
-// one. A orphaned row's session exists locally and is switched to.
+// session and no agent gets a managed session with a shell at its root
+// first, on a host whose daemon has new by the capabilities st has
+// cached for it (shellable); elsewhere it cannot be jumped to, and the
+// message says how add would start one. What was made is returned for
+// the message, and is said before an error after it, since the session
+// is there. A orphaned row's session exists locally and is switched to.
 // The view is meant to run inside the default tmux server, where
 // switch-client is allowed; run elsewhere, a dashboard in a plain
 // terminal say, the message says how to attach instead.
-func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
+func jumpRow(ctx context.Context, cfg config.Config, st *merged.State, r rows.Row) (made string, err error) {
 	if r.Orphaned {
-		return switchTo(ctx, r.Local.Name)
+		return "", switchTo(ctx, r.Local.Name)
 	}
 	spec, session, err := jumpTarget(cfg, r)
+	if nh, records, ok := shellable(st, err); ok {
+		made, err = newHome(ctx, nh.h, nh.w, nh.name, records)
+		if noNew(err) {
+			// An older build answers for the host since its hello was
+			// cached: the refusal stands.
+			err = nh
+		}
+		w := nh.w
+		w.Session = nh.name
+		spec = worktreeSpec(nh.h, w)
+	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if session != "" {
-		return switchTo(ctx, session)
+		return "", switchTo(ctx, session)
+	}
+	after := func(err error) error {
+		if made == "" {
+			return err
+		}
+		return fmt.Errorf("%s; %w", made, err)
 	}
 	// A session Ensure read from a listing a user's hook failed after is
 	// there; the view has no line for the hook's error (warnHook).
 	name, _, err := workspace.Ensure(ctx, spec)
 	if err != nil && !tmux.HookOnly(err) {
-		return err
+		return "", after(err)
 	}
-	return switchTo(ctx, name)
+	if err := switchTo(ctx, name); err != nil {
+		return "", after(err)
+	}
+	return made, nil
+}
+
+// shellable is a jump's refusal of a worktree with no home and no agent
+// that the jump makes a managed session for instead: one shellSession
+// names a session for, on a host whose daemon has new by the
+// capabilities st has cached for it, with the host's records, which
+// newHome reads a name in use by. A host st has as down, or that never
+// answered, is not dialled, and the refusal stands.
+func shellable(st *merged.State, err error) (*noHome, []protocol.Worktree, bool) {
+	var nh *noHome
+	if st == nil || !errors.As(err, &nh) || nh.name == "" {
+		return nil, nil, false
+	}
+	hello, snap, ok, err := st.HostSnapshot(nh.h.Name)
+	if !ok || err != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
+		return nil, nil, false
+	}
+	return nh, snap.Worktrees, true
 }
 
 // jumpTarget is where jumpRow takes a row that is not orphaned: what
@@ -413,7 +455,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		return spec, "", errors.New(mainNoAgent(h, *r.Worktree))
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
 		if r.Worktree.Session == "" {
-			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))
+			return spec, "", &noHome{h: h, w: *r.Worktree, name: shellSession(r), hint: addHint(cfg, h, *r.Worktree)}
 		}
 		return worktreeSpec(h, *r.Worktree), "", nil
 	case r.Worktree != nil && r.Agent.Server == protocol.ServerLaatmux:
@@ -444,6 +486,19 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 	}
 	return spec, "", errors.New(r.Name + ": nothing to jump to")
 }
+
+// noHome is rowSpec's refusal of a worktree with no home and no agent,
+// which says how add makes one (addHint). jumpRow makes one instead,
+// with a shell, where the host's daemon can (shellable); name is the
+// session it makes, shellSession's, "" for none.
+type noHome struct {
+	h    config.Host
+	w    protocol.Worktree
+	name string
+	hint string
+}
+
+func (e *noHome) Error() string { return e.hint }
 
 // pendingTarget is a pending task's row made ready for the jump: a
 // task whose host is gone or answers as another machine is refused,

@@ -755,7 +755,17 @@ workspace session; the next `jump` makes it again.
   attach pane on another managed session than the jump's, the worktree's
   agent having moved to another since, is restarted on the jump's; a
   pane from before the target was tagged is left as it is, and closing
-  it has the next jump make a tagged one. A
+  it has the next jump make a tagged one. A worktree with no managed
+  session and no agent gets one first, asked of the host's daemon
+  through `new` (capability `new`): named as `add` names the
+  worktree's, the host's label and the encoded branch, at the root, with
+  no command, so the host's `default-shell` runs in it; the jump prints
+  what it made. A session of that name made since the listing, by an
+  `add` say, which `new` refuses as a name in use, is attached instead,
+  unless the host's records have it as another worktree's home, which
+  two clones' worktrees on one branch can be. A host whose daemon lacks
+  `new`, a branch only shown and a worktree whose agent is elsewhere
+  keep the refusal that says how `add` makes one. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. A session name the host's tmux lists escaped, one
@@ -1059,9 +1069,15 @@ records: a workspace row switches to its local session, creating it from
 the record when missing; a `new` session's row does the same through a
 plain attachment; an observed agent on this machine's default server is
 a `switch-client`; one on a remote host's default server is refused with
-`jump`'s message; a worktree with no session says in the footer how `add`
-would start one: its command line, or what add needs first; a main
-checkout goes as `jump` takes it, and with no agent says so. An
+`jump`'s message; a worktree with no session and no agent gets a managed
+session with a shell at its root as `jump` makes one, on a host whose
+daemon has `new` by the capabilities the merged stream has cached for
+it, and the footer says what was made; on another host, one that is
+down among them, and for a detached worktree or a branch only shown, the
+footer says how `add` would start one: its command line, or what add
+needs first. `z` on such a line says which: that enter creates one with
+a shell and the `add` line makes one with an agent, or the refusal. A
+main checkout goes as `jump` takes it, and with no agent says so. An
 orphaned row's session exists locally and is switched to.
 
 - **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
