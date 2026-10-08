@@ -1089,7 +1089,11 @@ orphaned row's session exists locally and is switched to.
   under `display-popup -E` the popup closes:
   `bind-key C-s display-popup -E -w 90% -h 80% -d '#{pane_current_path}' -T ' laatmux ' 'laatmux dashboard'`.
   `-d` matters: the form's repository defaults to the repository of
-  the directory the popup runs in, which without it is the session's.
+  the directory the popup runs in, which without it is the session's;
+  opened from a workspace session the form is for that session's
+  repository on its host, read from the session's tags, since the
+  attach pane's directory says nothing of a worktree on another
+  machine.
   Actions: `a` opens the task form of
   [milestone four](docs/milestone-four.md): chips for the repository,
   the host and the agent, preselecting what `add` would take, a prompt
@@ -1147,7 +1151,8 @@ orphaned row's session exists locally and is switched to.
   from the doing.
 - **`compose`** is the form alone, for a binding from any window:
   `bind-key T display-popup -E -w 80% -h 60% -d '#{pane_current_path}' -T ' task ' 'laatmux compose'`.
-  It exits on submit or cancel, the repository defaulting to the
+  It exits on submit or cancel, the repository and host defaulting to
+  the workspace session it was opened from, else the repository to the
   directory the popup was opened from.
 - In both, a background add from the form is a row of its own until it
   hands over to its worktree row, and the agent it starts is on that

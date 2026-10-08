@@ -1459,6 +1459,43 @@ func TestRmRefusalHint(t *testing.T) {
 // defaults preselected: the repository named, the host and agent last
 // used for it, and a note when the host's cached daemon capabilities
 // lack tasks; a branch given is the user's.
+// The form opened from a workspace session preselects the session's
+// repository and host: the host when the form offers it, the
+// repository by its source whatever this machine names it; nothing
+// outside a workspace or for a session whose tags do not say.
+func TestPresetForWorkspace(t *testing.T) {
+	hosts := []config.Host{{Host: peer.Host{Name: "mac"}}, {Host: peer.Host{Name: "vm", SSH: "vm"}}}
+	for _, c := range []struct {
+		name       string
+		s          protocol.Session
+		repo, host string
+	}{
+		{"a workspace on vm", protocol.Session{Name: "vm/proj/x", Key: "venv//w/x", Host: "vm", Source: "git@x:o/proj.git", Branch: "x"}, "git@x:o/proj.git", "vm"},
+		{"a host the form does not offer", protocol.Session{Name: "box/proj/x", Key: "benv//w/x", Host: "box", Source: "git@x:o/proj.git"}, "git@x:o/proj.git", ""},
+		{"tags without a source", protocol.Session{Name: "vm/proj/x", Key: "venv//w/x", Host: "vm"}, "", "vm"},
+		{"a plain session", protocol.Session{Name: "work", Host: "vm", Source: "git@x:o/proj.git"}, "", ""},
+	} {
+		if repo, host := presetFor(c.s, hosts); repo != c.repo || host != c.host {
+			t.Errorf("%s: %q %q, want %q %q", c.name, repo, host, c.repo, c.host)
+		}
+	}
+	cfg := config.Config{
+		Hosts:  hosts,
+		Repos:  []config.Repo{{Source: "git@x:o/proj.git", Name: "proj"}, {Source: "git@x:o/other.git", Name: "other"}},
+		Agents: map[string]config.Agent{"claude": {Cmd: []string{"claude"}}},
+	}
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts, agents: cfg.AgentNames()}
+	var last home.Last
+	last.Set("git@x:o/proj.git", home.LastRepo{Host: "mac", Agent: "claude"})
+	// The session's source selects the repository, the session's host
+	// wins over the last used one.
+	repo, host := presetFor(protocol.Session{Name: "vm/proj/x", Key: "venv//w/x", Host: "vm", Source: "git@x:o/proj.git"}, hosts)
+	form := buildForm(cfg, f, last, repo, host, "", nil)
+	if form.Chips[0].Label() != "proj" || form.Chips[1].Label() != "vm" {
+		t.Errorf("chips %q %q, want proj vm", form.Chips[0].Label(), form.Chips[1].Label())
+	}
+}
+
 func TestBuildForm(t *testing.T) {
 	cfg := config.Config{
 		Hosts:  []config.Host{{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}, {Host: peer.Host{Name: "vm", SSH: "vm"}, Repos: "/r", Worktrees: "/w"}},
