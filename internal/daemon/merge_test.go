@@ -760,17 +760,14 @@ func TestMergedMainCheckouts(t *testing.T) {
 	}
 	c, pc, _ := f.subscribeAsking(t, ctx, true)
 	defer c.Close()
-	c2, pc2, _ := f.subscribeAsking(t, ctx, false)
-	defer c2.Close()
 	msgs := until(t, c, pc, hostStatus("vm", listed))
 	if !slices.ContainsFunc(msgs, func(m protocol.Message) bool { return m.Worktree != nil && m.Worktree.ID == main.ID }) {
 		t.Fatalf("the main checkout not forwarded: %+v", msgs)
 	}
-	for _, m := range until(t, c2, pc2, hostStatus("vm", listed)) {
-		if m.Worktree != nil && m.Worktree.Main {
-			t.Fatalf("forwarded to a subscriber that did not ask: %+v", m)
-		}
-	}
+	// Subscribed once the host is listed, so its snapshot is checked
+	// below with the others, and its upserts from here on.
+	c2, pc2, _ := f.subscribeAsking(t, ctx, false)
+	defer c2.Close()
 	c3, _, snap := f.subscribeAsking(t, ctx, true)
 	c3.Close()
 	c4, _, snap2 := f.subscribeAsking(t, ctx, false)

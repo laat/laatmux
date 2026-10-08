@@ -128,8 +128,17 @@ func TestSubscribesForCheckouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go New().Follow(ctx, nil)
+	done := make(chan struct{})
+	go func() {
+		New().Follow(ctx, nil)
+		close(done)
+	}()
+	// Follow ends before the test does: left going, it would dial the
+	// next test's daemon.
+	defer func() {
+		cancel()
+		<-done
+	}()
 	for _, who := range []string{"Read", "Follow"} {
 		select {
 		case m := <-subs:
