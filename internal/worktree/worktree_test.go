@@ -2280,6 +2280,16 @@ func TestSeveralReposDirs(t *testing.T) {
 	if err := os.Symlink(nested, filepath.Join(code, "service")); err != nil {
 		t.Fatal(err)
 	}
+	// A symlink to a checkout outside every repos directory is that
+	// checkout, by the link's path, as it was with one directory.
+	outside := filepath.Join(base, "outside")
+	run(t, base, "git", "clone", "-q", f.remote, outside)
+	run(t, outside, "git", "remote", "set-url", "origin", "/elsewhere/ext.git")
+	extlink := filepath.Join(code, "extlink")
+	if err := os.Symlink(outside, extlink); err != nil {
+		t.Fatal(err)
+	}
+	mains = append([]Record{{Repo: "extlink", Source: "/elsewhere/ext.git", Branch: "main", Root: extlink, Main: true}}, mains...)
 	gotRecs, gotMains, err := f.store.ListAll(f.ctx)
 	if err != nil || !slices.Equal(gotRecs, recs) || !slices.Equal(gotMains, mains) {
 		t.Fatalf("with a symlink to the checkout: worktrees %+v\nmains %+v\n%v", gotRecs, gotMains, err)
