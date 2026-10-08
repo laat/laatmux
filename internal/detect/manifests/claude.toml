@@ -32,6 +32,18 @@ any = [
 ]
 
 [[rules]]
+# The agents panel (2.1.29x, "← for agents" opened) under the footer:
+# a line per teammate, "◯ name  what it does  42m 27s · ↓" while it
+# runs; main's own turn is over, its prompt empty, but the session works
+# until they finish (laatmux, 2026-10-08).
+id = "teammates_working"
+state = "working"
+priority = 966
+region = "bottom_non_empty_lines(24)"
+visible_working = true
+line_regex = ['^\s*\x{25EF}\s+\S+\s+\S.*\s\d+[smh](?:\s\d+s)?\s+·']
+
+[[rules]]
 id = "background_agents_working"
 state = "working"
 priority = 965

@@ -55,6 +55,8 @@ func TestRealFixtures(t *testing.T) {
 			"Claude Code 2.1.284 in auto mode seven seconds into a turn streaming an essay: the title is '✳ <topic>' with no spinner, so osc_title_working misses it and the footer's 'esc to interrupt' carries working"},
 		{"claude-working-agents-panel", "claude", Working, "live_turn_working", false,
 			"Claude Code 2.1.29x mid-turn with the agents panel open under the footer: six subagent lines and '↓ 1 more' push the spinner line ('· Kneading… (26s · ↓ 1.4k tokens)') to the 13th non-empty line from the bottom, past the old 12-line window; the footer has no 'esc to interrupt'"},
+		{"claude-teammates-running", "claude", Working, "teammates_working", false,
+			"the same screen with main's turn over ('✻ Baked for 1m 12s · done'), its prompt empty, and the agents panel listing teammates with running timers: the session works until they finish"},
 		{"claude-api-wait", "claude", Working, "live_turn_working", false,
 			"Claude Code 2.1.29x waiting on the API: '✳ Waiting for API response · will retry in 3s' above the prompt box, no ellipsis on the line and no 'esc to interrupt' in the footer, the title '✳ <topic>' with no spinner"},
 		{"claude-interrupted", "claude", Idle, "live_prompt_box", false,
