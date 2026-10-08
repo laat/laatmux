@@ -53,6 +53,8 @@ func TestRealFixtures(t *testing.T) {
 			"a shell tool ran without a prompt in manual mode; back at the prompt box"},
 		{"claude-working-2.1.284", "claude", Working, "live_turn_working", false,
 			"Claude Code 2.1.284 in auto mode seven seconds into a turn streaming an essay: the title is '✳ <topic>' with no spinner, so osc_title_working misses it and the footer's 'esc to interrupt' carries working"},
+		{"claude-api-wait", "claude", Working, "live_turn_working", false,
+			"Claude Code 2.1.29x waiting on the API: '✳ Waiting for API response · will retry in 3s' above the prompt box, no ellipsis on the line and no 'esc to interrupt' in the footer, the title '✳ <topic>' with no spinner"},
 		{"claude-interrupted", "claude", Idle, "live_prompt_box", false,
 			"Esc during a turn, Claude Code 2.1.284 in auto mode: '⎿ Interrupted · What should Claude do instead?' above an empty prompt box, no 'esc to interrupt'"},
 		{"claude-permission-prompt", "claude", Blocked, "bash_permission_prompt", false,
