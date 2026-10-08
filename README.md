@@ -102,18 +102,24 @@ local host's `repos` and `worktrees` are read by the daemon on the machine
 the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
 default server list is the managed `laatmux` server alone. The daemon
-reads its host's directories when it starts, and follows the file's
-`repos` and `copy`: every two seconds it looks at the
-file, and reads it again when it has changed (another file renamed over
-it, or a new modification time or size), so a repository added by hand
-or by the task form shows in the listing without a restart, a `copy`
-rule or a repository's `copy` and `setup` edited are used by the next
-add, and the relay retries the appends a broken file refused (below); a
-daemon whose own entry has no directories watches the file for the relay
-all the same. An add takes the repository, its steps and the top-level
-`copy` from one read, the daemon's last as the add starts, whatever the
-file says while its clone runs. A file that does not parse keeps the
-list as it was, with one line in the daemon's log.
+follows the file's `repos`, `copy`, `agents` and `hosts`: every two
+seconds it looks at the file, and reads it again when it has changed
+(another file renamed over it, or a new modification time or size), so
+a repository added by hand or by the task form shows in the listing
+without a restart, a `copy` rule, a repository's `copy` and `setup`, or
+an agent added or edited is used by the next add, a host added or
+removed reaches the views already open, and the relay retries the
+appends a broken file refused (below); a daemon whose own entry has no
+directories watches the file for the relay all the same. An add takes
+the repository, its steps and the top-level `copy` from one read, the
+daemon's last as the add starts, whatever the file says while its clone
+runs. `tmux_servers`, `github_hosts` and the local host's directories
+are read when the daemon starts; `laatmux stop` makes the next one take
+an edit. A file that does not parse keeps what the daemon had, with one
+line in its log; a file read empty after the first read is one an editor
+has truncated to write it again in place, and is read again at the next
+look rather than taken as the default config. A missing file is the
+default config, as at start.
 
 The dashboard, the sidebar panes and `compose` follow the file the same
 way, every two seconds. The dashboard and a sidebar pane take the
@@ -134,7 +140,8 @@ on` and the hooks set, a width being put back by the next resize; the
 `sidebar on` sets; and the terminal's background, asked once as the view
 starts, so a theme turned to `auto` later takes that answer, else
 `COLORFGBG`, else dark. A file that does not parse leaves a view as it
-was, with the error in its footer once.
+was, with the error in its footer, and in the note of a task form that
+is up, until the file is put right.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below
@@ -161,10 +168,12 @@ once the append is made. A dismiss, by `x` or `laatmux tasks dismiss`,
 drops the append for good: its message names the source, the name it
 would have had and why the append failed, so the entry can be added by
 hand or the source pasted again, and the daemon's log has it once. A
-source the list has in another form is that repository and is not added
-again. The repository picker reads the
-config again as it opens, so a repository an earlier add appended is a
-listed candidate, not a new one. The append keeps the file as it was
+handed-over task still asking is kept past the day a handoff is kept
+for, and one dropped with its worktree, by `rm` or a listing that finds
+it gone, has the dropped append in the log. A source the list has in
+another form is that repository and is not added again. The repository
+picker reads the config again as it opens, so a repository an earlier
+add appended is a listed candidate, not a new one. The append keeps the file as it was
 around the new line, comments and blank lines included: the line goes
 after the list's last item, in its indentation, or a `repos:` list is
 made; a file the line cannot go into, a list written `[a, b]` say, is
@@ -1245,7 +1254,8 @@ orphaned row's session exists locally and is switched to.
   repository without a last use gets, the footer says the repository
   is added to the config's `repos` once its worktree is made, and the
   submit carries it as the add's `repo_entry` (see the config above).
-  The picker reads the config again as it opens.
+  Each chip's picker reads the config again as it opens, and every
+  chip takes it (see the config above).
   With no repository configured the form still opens, saying so, and a
   submit without a repository is refused. A paste whose bytes stop for a second is shown as
   far as it came, with its framing kept, and one whose end marker

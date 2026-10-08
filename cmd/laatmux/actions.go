@@ -240,10 +240,13 @@ type addForm struct {
 	// and a host or an agent added or gone, or a default changed, is
 	// taken by a form left up; nil keeps the candidates the form was made
 	// with. uncredentialed is the pasted sources whose credential
-	// NewRepo left out, for the note.
+	// NewRepo left out, for the note; configErr is the config file that
+	// did not load on the last read, the form's or the view's, for the
+	// note until a read succeeds.
 	cfg            config.Config
 	reload         func() (config.Config, error)
 	uncredentialed map[string]bool
+	configErr      string
 }
 
 // addHosts is the hosts the task form offers: those with the
@@ -485,7 +488,10 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 			return
 		}
 		fresh, err := f.reload()
+		f.configErr = formConfigErr(err)
 		if err != nil {
+			// The picker opens on what the form had, and the note says
+			// why.
 			return
 		}
 		f.cfg = fresh
@@ -520,9 +526,13 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 			form.Chips[2].Selected = choiceIndex(form.Chips[2].Choices, defaultAgent(repo))
 		}
 	}
-	// The note: a host whose daemon would refuse the task, else what
-	// the repository chip needs or will do.
+	// The note: a config file that does not load, else a host whose
+	// daemon would refuse the task, else what the repository chip needs
+	// or will do.
 	form.Note = func(form *view.Form) string {
+		if f.configErr != "" {
+			return f.configErr
+		}
 		host := form.Chips[1].Label()
 		if caps != nil {
 			if c, ok := caps(host); ok && !protocol.Has(c, protocol.CapTask) {

@@ -91,7 +91,12 @@ func cmdCompose(ctx context.Context, args []string) error {
 	d := &dash{ctx: ctx, cfg: cfg, st: st, exitOnJump: true, add: f}
 	c2 := &composer{d: d, f: f}
 	cmds := make(chan func(*view.Model) view.Action)
-	watchConfig(ctx, &w, configPoll, cmds, func(_ *view.Model, cfg config.Config) { t.Theme, _ = lookWith(cfg, bg.get) }, nil)
+	// The form is the whole view: a config that does not load is said in
+	// its note, until a read succeeds.
+	watchConfig(ctx, &w, configPoll, cmds, func(_ *view.Model, cfg config.Config) {
+		t.Theme, _ = lookWith(cfg, bg.get)
+		d.formConfig(nil)
+	}, func(_ *view.Model, err error) { d.formConfig(err) })
 	err = view.Run(ctx, t, m, view.Host{
 		Changed:  st.Changed(),
 		Refresh:  func(*view.Model) {},

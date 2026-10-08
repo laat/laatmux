@@ -15,7 +15,6 @@ import (
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
-	"github.com/laat/laatmux/internal/worktree"
 )
 
 // A merging daemon under test dials a second daemon in-process over
@@ -504,12 +503,12 @@ func TestMergedHostsFollowConfigChange(t *testing.T) {
 	f := newMergedFixture(t, ctx, nil)
 	var mu sync.Mutex
 	changed := true
-	f.local.cfg.Repos = func() (worktree.Listed, bool, error) {
+	f.local.cfg.Reread = func() (ConfigRead, bool, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		c := changed
 		changed = false
-		return worktree.Listed{}, c, nil
+		return ConfigRead{}, c, nil
 	}
 	f.local.readConfig(ctx) // Run's first read
 	c, pc, _ := f.subscribe(t, ctx)

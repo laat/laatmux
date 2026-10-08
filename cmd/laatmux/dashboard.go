@@ -139,7 +139,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 	seen := startSettings(cfg, m, host)
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds, host)
-	watchConfig(ctx, w, configPoll, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, configFailed)
+	watchConfig(ctx, w, configPoll, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, taker.failed)
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.

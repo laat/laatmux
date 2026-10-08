@@ -536,6 +536,25 @@ func TestWatch(t *testing.T) {
 	if _, changed, err := w.Changed(); err != nil || changed {
 		t.Fatalf("the bad file again: %v %v", changed, err)
 	}
+	// Truncated in place by a writer that has not written yet: no
+	// change, on every look until it has.
+	os.WriteFile(p, nil, 0o600)
+	for i := 0; i < 2; i++ {
+		if _, changed, err := w.Changed(); err != nil || changed {
+			t.Fatalf("an empty file, look %d: %v %v", i, changed, err)
+		}
+	}
+	os.WriteFile(p, []byte("repos: [git@x:o/s.git]\n"), 0o600)
+	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 1 || cfg.Repos[0].Name != "s" {
+		t.Fatalf("written after the truncation: %v %v %v", cfg.Repos, changed, err)
+	}
+	// An empty file at the first look is the default config, as Load
+	// reads it.
+	var fresh Watch
+	os.WriteFile(p, nil, 0o600)
+	if cfg, changed, err := fresh.Changed(); err != nil || !changed || len(cfg.Hosts) != 1 {
+		t.Fatalf("an empty file first: %v %v %v", cfg.Hosts, changed, err)
+	}
 }
 
 // A line that looks like a comment but is the end of a block scalar

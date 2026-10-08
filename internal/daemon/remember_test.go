@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -72,12 +73,12 @@ func TestRelayRememberOnConfigChange(t *testing.T) {
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 		AppendRepo: a.add, WorktreeInterval: 30 * time.Millisecond,
-		Repos: func() (worktree.Listed, bool, error) {
+		Reread: func() (ConfigRead, bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			c := changed
 			changed = false
-			return worktree.Listed{}, c, nil
+			return ConfigRead{}, c, nil
 		},
 	})
 	discovered(local)
@@ -147,7 +148,7 @@ func TestConfigReadBeforeResume(t *testing.T) {
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 		AppendRepo: func(string, string) (bool, error) { note("append"); return true, nil },
-		Repos:      func() (worktree.Listed, bool, error) { note("read"); return worktree.Listed{}, false, nil },
+		Reread:     func() (ConfigRead, bool, error) { note("read"); return ConfigRead{}, false, nil },
 	})
 	discovered(local)
 	go local.Run(f.ctx)
@@ -219,8 +220,12 @@ func TestRelayRemember(t *testing.T) {
 	if got := a.calls(); len(got) != 1 || got[0] != [2]string{other, "sent"} {
 		t.Fatalf("appends %v", got)
 	}
-	if p := readPending(t, dir, "rem"); p.Remember {
-		t.Fatalf("the ask is still in the file: %+v", p)
+	// The ask is cleared in memory first, then in the file.
+	for deadline := time.Now().Add(10 * time.Second); readPending(t, dir, "rem").Remember; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the ask is still in the file: %+v", readPending(t, dir, "rem"))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	// The host cannot clone it: nothing is appended.
@@ -311,9 +316,10 @@ func (l *lockedLog) String() string {
 // for good: the result's detail names the source, its name and why the
 // append failed, the log has it once, and neither an append after the
 // dismiss nor a change of the config file appends anything. A task that
-// handed over with its append still asked for says so too; a dismiss of
-// a task that asked for no append says nothing more, and waits for an
-// append under way.
+// handed over with its append still asked for says so too, and so does
+// one whose host is gone from the config; a dismiss of a task that asked
+// for no append, or whose add failed, says nothing more. Appends and
+// dismisses of one record take turns.
 func TestDismissDropsAppend(t *testing.T) {
 	f := newRelayFixture(t, nil)
 	dir := t.TempDir()
@@ -336,6 +342,14 @@ func TestDismissDropsAppend(t *testing.T) {
 	plain := done
 	plain.ID, plain.Source, plain.Prompt, plain.Error = "plain", "/r/new.git", protocol.DeliveryNotDelivered, "not ready"
 	write(pendingFile{Pending: plain, RepoEntry: &protocol.RepoEntry{Source: "/r/new.git", Name: "new"}})
+	// One on a host gone from the config, and an add that failed, which
+	// has nothing to append.
+	away := done
+	away.ID, away.Host, away.Source = "away", "box", "/r/away.git"
+	write(pendingFile{Pending: away, RepoEntry: &protocol.RepoEntry{Source: "/r/away.git", Name: "away"}, Remember: true})
+	failed := done
+	failed.ID, failed.Source, failed.OK, failed.Stage, failed.Error = "failed", "/r/failed.git", false, protocol.StageClone, "failed at clone: no such repository"
+	write(pendingFile{Pending: failed, RepoEntry: &protocol.RepoEntry{Source: "/r/failed.git", Name: "failed"}, Remember: true})
 	a := &appends{err: errors.New("config.yaml: yaml: bad")}
 	var mu sync.Mutex
 	changed := false
@@ -344,23 +358,42 @@ func TestDismissDropsAppend(t *testing.T) {
 		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
 		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
 		AppendRepo: a.add, WorktreeInterval: 30 * time.Millisecond, Logger: log.New(logged, "", 0),
-		Repos: func() (worktree.Listed, bool, error) {
+		Reread: func() (ConfigRead, bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			c := changed
 			changed = false
-			return worktree.Listed{}, c, nil
+			return ConfigRead{}, c, nil
 		},
 	})
 	discovered(local)
 	go local.Run(f.ctx)
 	f.setLocal(local)
-	f.awaitRecord(t, "held", 10*time.Second, func(p pendingFile) bool { return p.RememberError != "" })
-	for deadline := time.Now().Add(10 * time.Second); len(a.calls()) < 2; {
-		if time.Now().After(deadline) {
-			t.Fatalf("appends at start: %v", a.calls())
+	for _, id := range []string{"held", "ret", "away"} {
+		f.awaitRecord(t, id, 10*time.Second, func(p pendingFile) bool { return p.RememberError != "" })
+	}
+	// waits runs do under the record's remember lock, held as an append
+	// under way holds it: do must not end until the lock is let go.
+	waits := func(id string, do func()) {
+		t.Helper()
+		rl := local.relay.rememberLock(id)
+		rl.Lock()
+		ended := make(chan struct{})
+		go func() { do(); close(ended) }()
+		select {
+		case <-ended:
+			rl.Unlock()
+			t.Fatalf("%s: done with the remember lock held", id)
+		case <-time.After(100 * time.Millisecond):
 		}
-		time.Sleep(20 * time.Millisecond)
+		rl.Unlock()
+		<-ended
+	}
+	// An append waits for another under way, or a dismiss.
+	n := len(a.calls())
+	waits("held", func() { local.remember(f.ctx, "held") })
+	if len(a.calls()) != n+1 {
+		t.Fatalf("appends after the lock: %v", a.calls()[n:])
 	}
 
 	res := local.dismiss("held")
@@ -375,26 +408,32 @@ func TestDismissDropsAppend(t *testing.T) {
 	if n := strings.Count(logged.String(), line); n != 1 {
 		t.Fatalf("logged %d times:\n%s", n, logged.String())
 	}
-	if res := local.dismiss("ret"); !res.OK || res.Detail != "the append of /r/two.git to the config's repos as two is dropped (config.yaml: yaml: bad); add it to the config by hand, or paste the source again" {
+	// Every dismiss waits for an append under way, the handed-over and
+	// the host-gone paths' too.
+	waits("ret", func() { res = local.dismiss("ret") })
+	if !res.OK || res.Detail != "the append of /r/two.git to the config's repos as two is dropped (config.yaml: yaml: bad); add it to the config by hand, or paste the source again" {
 		t.Fatalf("dismiss of a handed-over task: %+v", res)
 	}
-	// A dismiss waits for an append under way, which holds the record's
-	// remember lock.
-	rl := local.relay.rememberLock("plain")
-	rl.Lock()
-	dismissed := make(chan protocol.Message, 1)
-	go func() { dismissed <- local.dismiss("plain") }()
-	select {
-	case res := <-dismissed:
-		rl.Unlock()
-		t.Fatalf("dismissed with an append under way: %+v", res)
-	case <-time.After(100 * time.Millisecond):
+	waits("away", func() { res = local.dismiss("away") })
+	if !res.OK || res.Detail != "the append of /r/away.git to the config's repos as away is dropped (config.yaml: yaml: bad); add it to the config by hand, or paste the source again" {
+		t.Fatalf("dismiss of a task whose host is gone: %+v", res)
 	}
-	rl.Unlock()
-	if res := <-dismissed; !res.OK || res.Detail != "" {
+	for _, line := range []string{
+		"relay ret: dismissed; the append of /r/two.git to the config's repos as two is dropped (config.yaml: yaml: bad)\n",
+		"relay away: dismissed; the append of /r/away.git to the config's repos as away is dropped (config.yaml: yaml: bad)\n",
+	} {
+		if n := strings.Count(logged.String(), line); n != 1 {
+			t.Fatalf("%q logged %d times:\n%s", line, n, logged.String())
+		}
+	}
+	waits("plain", func() { res = local.dismiss("plain") })
+	if !res.OK || res.Detail != "" {
 		t.Fatalf("dismiss of a task without an append: %+v", res)
 	}
-	n := len(a.calls())
+	if res := local.dismiss("failed"); !res.OK || res.Detail != "" {
+		t.Fatalf("dismiss of a failed add: %+v", res)
+	}
+	n = len(a.calls())
 	// An append that comes after the dismiss finds no record and is not
 	// made.
 	a.fail(nil)
@@ -407,6 +446,120 @@ func TestDismissDropsAppend(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if got := a.calls()[n:]; len(got) != 0 {
 		t.Fatalf("appended after the dismiss: %v", got)
+	}
+}
+
+// A task that handed over with its append still asked for keeps asking
+// until a dismiss: the sweep leaves it past the retention with its host
+// gone, and one dropped with its worktree, by a listing that found the
+// worktree removed or by rm, has the dropped append in the log once,
+// with what dropped it and why the append failed.
+func TestRetiredDropLogsAppend(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	dir := t.TempDir()
+	barrier := &protocol.Listing{Generation: 1, Revision: 5}
+	for _, id := range []string{"gone", "rmd", "old"} {
+		p := protocol.Pending{ID: id, Host: "vm", EnvironmentID: "henv", Source: "/r/" + id + ".git", Repo: id, Branch: "b", Agent: "argv", Root: "/w/" + id + "/b",
+			Sent: true, Taken: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()}
+		retiredAt := time.Now()
+		if id == "old" {
+			retiredAt = retiredAt.Add(-2 * handoffRetention)
+		}
+		b, _ := json.Marshal(pendingFile{Pending: p, Barrier: barrier, RepoEntry: &protocol.RepoEntry{Source: p.Source, Name: id}, Remember: true,
+			ReplacedBy: "henv/worktree/" + p.Root, RetiredAt: retiredAt})
+		if err := os.WriteFile(filepath.Join(dir, FileName(id)), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &appends{err: errors.New("config.yaml: yaml: bad")}
+	logged := &lockedLog{}
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
+		AppendRepo: a.add, Logger: log.New(logged, "", 0),
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.setLocal(local)
+	for _, id := range []string{"gone", "rmd", "old"} {
+		f.awaitRecord(t, id, 10*time.Second, func(p pendingFile) bool { return p.RememberError != "" })
+	}
+	at := protocol.Listing{Generation: 1, Revision: 6}
+	local.dropRetiredAt("henv/worktree//w/gone/b", at)
+	if res := local.dismissAt("r1", "henv", "/w/rmd/b", &at); !res.OK {
+		t.Fatalf("dismiss at the root: %+v", res)
+	}
+	f.hosts.set()
+	local.sweepRelay(time.Now())
+	for id, want := range map[string]bool{"gone": false, "rmd": false, "old": true} {
+		if _, ok := local.relay.get(id); ok != want {
+			t.Errorf("%s kept %v", id, ok)
+		}
+	}
+	for _, line := range []string{
+		"relay gone: its worktree is removed; the append of /r/gone.git to the config's repos as gone is dropped (config.yaml: yaml: bad)\n",
+		"relay rmd: dismissed by rm of its worktree; the append of /r/rmd.git to the config's repos as rmd is dropped (config.yaml: yaml: bad)\n",
+	} {
+		if n := strings.Count(logged.String(), line); n != 1 {
+			t.Errorf("%q logged %d times:\n%s", line, n, logged.String())
+		}
+	}
+}
+
+// An append made while the pending file cannot be written, a full disk
+// say, is on the record at once, and the write's retries do not hold a
+// dismiss: the dismiss answers, here with the removal's own failure,
+// and says nothing dropped, since the append was made.
+func TestDismissNotHeldByAWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	f := newRelayFixture(t, nil)
+	dir := t.TempDir()
+	held := pendingFile{Pending: protocol.Pending{ID: "held", Host: "vm", EnvironmentID: "henv", Source: "/r/new.git", Repo: "new", Branch: "b", Agent: "argv",
+		Sent: true, Taken: true, Done: true, OK: true, Root: "/w/new/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
+		RepoEntry: &protocol.RepoEntry{Source: "/r/new.git", Name: "new"}, Remember: true}
+	b, _ := json.Marshal(held)
+	if err := os.WriteFile(filepath.Join(dir, FileName("held")), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &appends{err: errors.New("config.yaml: yaml: bad")}
+	var mu sync.Mutex
+	changed := false
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
+		AppendRepo: a.add, WorktreeInterval: 30 * time.Millisecond,
+		Reread: func() (ConfigRead, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			c := changed
+			changed = false
+			return ConfigRead{}, c, nil
+		},
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.setLocal(local)
+	f.awaitRecord(t, "held", 10*time.Second, func(p pendingFile) bool { return p.RememberError != "" })
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	a.fail(nil)
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	f.awaitRecord(t, "held", 10*time.Second, func(p pendingFile) bool { return !p.Remember })
+	dismissed := make(chan protocol.Message, 1)
+	go func() { dismissed <- local.dismiss("held") }()
+	select {
+	case res := <-dismissed:
+		if res.OK || res.Detail != "" || !strings.Contains(res.Error, "permission denied") {
+			t.Fatalf("dismiss: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dismiss waits on the pending file's write")
 	}
 }
 
@@ -440,12 +593,12 @@ func TestPollReadsRepos(t *testing.T) {
 		{nil, false, errors.New("yaml: bad")},
 	}
 	var logged strings.Builder
-	d := New(Config{EnvironmentID: "env", Store: store, Logger: log.New(&logged, "", 0), Repos: func() (worktree.Listed, bool, error) {
+	d := New(Config{EnvironmentID: "env", Store: store, Logger: log.New(&logged, "", 0), Reread: func() (ConfigRead, bool, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		r := reads[0]
 		reads = reads[1:]
-		return worktree.Listed{Repos: r.repos}, r.changed, r.err
+		return ConfigRead{Listed: worktree.Listed{Repos: r.repos}}, r.changed, r.err
 	}})
 	label := func() string {
 		for _, w := range d.worktreeRecords() {
@@ -467,25 +620,26 @@ func TestPollReadsRepos(t *testing.T) {
 			t.Fatalf("poll %d: %q %v", i, label(), store.Repos())
 		}
 	}
-	if n := strings.Count(logged.String(), "config: yaml: bad; the repositories stay as they were"); n != 1 {
+	if n := strings.Count(logged.String(), "config: yaml: bad; the daemon keeps the config it had"); n != 1 {
 		t.Fatalf("logged %d times:\n%s", n, logged.String())
 	}
 }
 
 // An add takes what the config lists from the daemon's last read of
-// the file: a copy rule for every worktree, and a listed repository's
-// copy and setup, edited after the daemon started, are used by the next
-// add without a restart.
+// the file: a copy rule for every worktree, a listed repository's copy
+// and setup, and the agents' commands, edited after the daemon started,
+// are used by the next add without a restart, an agent added since
+// included.
 func TestAddFollowsConfig(t *testing.T) {
-	d, _, store, remote := newAddDaemon(t)
+	d, ft, store, remote := newAddDaemon(t)
 	ctx := context.Background()
-	reads := make(chan worktree.Listed, 1)
-	d.cfg.Repos = func() (worktree.Listed, bool, error) {
+	reads := make(chan ConfigRead, 1)
+	d.cfg.Reread = func() (ConfigRead, bool, error) {
 		select {
-		case l := <-reads:
-			return l, true, nil
+		case r := <-reads:
+			return r, true, nil
 		default:
-			return worktree.Listed{}, false, nil
+			return ConfigRead{}, false, nil
 		}
 	}
 	d.readConfig(ctx)
@@ -501,9 +655,12 @@ func TestAddFollowsConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reads <- worktree.Listed{
-		Repos: worktree.Repos{{Source: remote, Name: "proj", Copy: []string{"repo.local"}, Setup: []string{"echo edited >> log"}}},
-		Copy:  []string{"host.local"},
+	reads <- ConfigRead{
+		Listed: worktree.Listed{
+			Repos: worktree.Repos{{Source: remote, Name: "proj", Copy: []string{"repo.local"}, Setup: []string{"echo edited >> log"}}},
+			Copy:  []string{"host.local"},
+		},
+		Agents: map[string][]string{"claude": {"claude", "--edited"}, "gemini": {"gemini"}},
 	}
 	d.readConfig(ctx)
 	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a2", Repo: "proj", Branch: "two", AgentName: "claude"})
@@ -515,5 +672,15 @@ func TestAddFollowsConfig(t *testing.T) {
 		if b, err := os.ReadFile(filepath.Join(second.Root, name)); err != nil || string(b) != want {
 			t.Errorf("%s after the edit: %q %v", name, b, err)
 		}
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a3", Repo: "proj", Branch: "three", AgentName: "gemini"})
+	if third, _ := result(t, pc, "a3"); !third.OK {
+		t.Fatalf("add with an agent added since: %+v", third)
+	}
+	ft.mu.Lock()
+	cmds := fmt.Sprint(ft.cmds)
+	ft.mu.Unlock()
+	if cmds != "[[claude] [claude --edited] [gemini]]" {
+		t.Errorf("the agents started: %s", cmds)
 	}
 }

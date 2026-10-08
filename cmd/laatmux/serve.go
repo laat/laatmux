@@ -81,16 +81,12 @@ func cmdServe(ctx context.Context, args []string) error {
 	// no add; the log says so once.
 	hostname, _ := os.Hostname()
 	var store *worktree.Store
-	agents := map[string][]string{}
 	if local, ok := cfg.Local(); ok {
 		hostname = local.Name
 		if dirs, err := local.Dirs(); err == nil {
 			store = worktree.New(dirs.Expand(), nil)
 			store.SetListed(worktree.ListedFrom(cfg))
 		}
-	}
-	for name, a := range cfg.Agents {
-		agents[name] = a.Cmd
 	}
 	rt := home.Runtime{Address: network + ":" + ln.Addr().String(), PID: os.Getpid(), Version: version, EnvironmentID: envID, StartedAt: time.Now()}
 	if self, ok := procs.Lookup(os.Getpid()); ok {
@@ -115,14 +111,14 @@ func cmdServe(ctx context.Context, args []string) error {
 	} else {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
 	}
-	readRepos, appendRepo := configHooks()
+	reread, appendRepo := configHooks()
 	// The shutdown message ends the daemon the way a signal does.
 	ctx, shutdown := context.WithCancel(ctx)
 	defer shutdown()
 	d := daemon.New(daemon.Config{
 		Targets: daemon.Targets(watched...), Interval: *interval, CaptureLines: *lines,
 		EnvironmentID: envID, Host: hostname, Version: version, Logger: logger,
-		Store: store, Repos: readRepos, Agents: agents, Shutdown: shutdown,
+		Store: store, Reread: reread, Agents: agentCommands(cfg), Shutdown: shutdown,
 		Commands: filepath.Join(home.Dir(), "commands"),
 		Pending:  filepath.Join(home.Dir(), "pending"),
 		// A relayed add of a repository new to the config appends it
@@ -186,24 +182,35 @@ func cmdServe(ctx context.Context, args []string) error {
 }
 
 // configHooks are the daemon's hooks on this machine's config file.
-// readRepos is the store's and the relay's: the file is looked at every
-// worktree interval and read again when it has changed, so a repository
-// the task form or add appended, or a hand edit, is listed without a
-// restart, a copy rule or a repository's setup edited is used by the
-// next add, and an append a broken file refused is tried again once the
-// file is fixed. appendRepo is the relay's, for an add of a repository
-// new to the config once the host's add has succeeded.
-func configHooks() (readRepos func() (worktree.Listed, bool, error), appendRepo func(src, name string) (bool, error)) {
+// reread is the store's, the adds' and the relay's: the file is looked
+// at every worktree interval and read again when it has changed, so a
+// repository the task form or add appended, or a hand edit, is listed
+// without a restart, a copy rule, a repository's setup or an agent
+// added or edited is used by the next add, and an append a broken file
+// refused is tried again once the file is fixed. appendRepo is the
+// relay's, for an add of a repository new to the config once the host's
+// add has succeeded.
+func configHooks() (reread func() (daemon.ConfigRead, bool, error), appendRepo func(src, name string) (bool, error)) {
 	var watch config.Watch
-	readRepos = func() (worktree.Listed, bool, error) {
+	reread = func() (daemon.ConfigRead, bool, error) {
 		cfg, changed, err := watch.Changed()
 		if !changed || err != nil {
-			return worktree.Listed{}, false, err
+			return daemon.ConfigRead{}, false, err
 		}
-		return worktree.ListedFrom(cfg), true, nil
+		return daemon.ConfigRead{Listed: worktree.ListedFrom(cfg), Agents: agentCommands(cfg)}, true, nil
 	}
 	appendRepo = func(src, name string) (bool, error) { return config.AddRepo(config.Path(), src, name) }
-	return readRepos, appendRepo
+	return reread, appendRepo
+}
+
+// agentCommands is the config's agents as the daemon starts them: the
+// command by label.
+func agentCommands(cfg config.Config) map[string][]string {
+	agents := make(map[string][]string, len(cfg.Agents))
+	for name, a := range cfg.Agents {
+		agents[name] = a.Cmd
+	}
+	return agents
 }
 
 // localSessions is the daemon's listing of this machine's workspace

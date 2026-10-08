@@ -1780,6 +1780,28 @@ func TestDismissSaysDroppedAppend(t *testing.T) {
 	}
 }
 
+// laatmux tasks dismiss says what the daemon dropped with the record,
+// and nothing for a dismiss that dropped nothing more, as before.
+func TestTasksDismissSays(t *testing.T) {
+	const dropped = "the append of git@x:o/p.git to the config's repos as p is dropped (yaml: bad); add it to the config by hand, or paste the source again"
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRelay}, func(pc *protocol.Conn, m protocol.Message) bool {
+		res := protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true}
+		if m.ID == "held" {
+			res.Detail = dropped
+		}
+		pc.Write(res)
+		return true
+	})
+	var out strings.Builder
+	if err := dismissTask(context.Background(), &out, "held"); err != nil || out.String() != "dismissed held; "+dropped+"\n" {
+		t.Fatalf("held: %q %v", out.String(), err)
+	}
+	out.Reset()
+	if err := dismissTask(context.Background(), &out, "plain"); err != nil || out.String() != "" {
+		t.Fatalf("plain: %q %v", out.String(), err)
+	}
+}
+
 // x's question on a worktree and on a task, and the message a dismiss
 // ends with, name a branch with a C1 control character, which git
 // takes, by its <repo>/<branch> as tmux.Printable shows it.

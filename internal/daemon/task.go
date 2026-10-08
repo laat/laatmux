@@ -222,8 +222,10 @@ func (r *addRun) run(ctx context.Context) error {
 	r.repo = repo
 	r.cmd = m.Cmd
 	if len(r.cmd) == 0 {
+		// The agent's command as the config last read says, an agent
+		// added or edited since the daemon started included.
 		var ok bool
-		if r.cmd, ok = rn.cfg.Agents[m.AgentName]; !ok {
+		if r.cmd, ok = rn.core.agentCmds()[m.AgentName]; !ok {
 			return stageErr(stage, fmt.Errorf("unknown agent %q: not in this host's config", m.AgentName))
 		}
 	}

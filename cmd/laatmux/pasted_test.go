@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -350,10 +351,34 @@ copy: ["*.local"]
 	}
 }
 
-// serve's hooks on the config file: the store's read answers the list
-// at first and after the relay's append, and not between, with the
-// copy rules for every worktree and a repository's copy and setup as
-// the file has them at each read.
+// A picker opening on a config file that does not load keeps what the
+// form offers and says why in the note, until a read succeeds.
+func TestFormReloadFails(t *testing.T) {
+	cfg := dashConfig(t)
+	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: func() (config.Config, error) { return config.Config{}, errors.New("yaml: bad") }}
+	form := buildForm(cfg, f, home.Last{}, "proj", "", "", nil)
+	open := func() {
+		for form.Focus() != 2 {
+			form.Handle(term.Key{Kind: term.KeyShiftTab})
+		}
+		form.Handle(term.Key{Kind: term.KeyEnter})
+		form.Handle(term.Key{Kind: term.KeyEsc})
+	}
+	open()
+	if n := form.Note(form); n != "config: yaml: bad; the form keeps what it offers" || len(form.Chips[1].Choices) != 2 || form.Chips[2].Label() != "claude" {
+		t.Fatalf("after a failed read: note %q hosts %+v agent %q", n, form.Chips[1].Choices, form.Chips[2].Label())
+	}
+	f.reload = func() (config.Config, error) { return cfg, nil }
+	open()
+	if n := form.Note(form); n != "" {
+		t.Fatalf("after a read that succeeded: note %q", n)
+	}
+}
+
+// serve's hooks on the config file: the read answers the list at first
+// and after the relay's append, and not between, with the copy rules
+// for every worktree, a repository's copy and setup and the agents'
+// commands as the file has them at each read.
 func TestConfigHooks(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("LAATMUX_CONFIG", p)
@@ -361,25 +386,26 @@ func TestConfigHooks(t *testing.T) {
 	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	readRepos, appendRepo := configHooks()
-	if l, changed, err := readRepos(); err != nil || !changed || len(l.Repos) != 1 || l.Repos[0].Name != "a" || l.Copy != nil {
-		t.Fatalf("first read: %v %v %v", l, changed, err)
+	reread, appendRepo := configHooks()
+	if r, changed, err := reread(); err != nil || !changed || len(r.Listed.Repos) != 1 || r.Listed.Repos[0].Name != "a" || r.Listed.Copy != nil || len(r.Agents) != 0 {
+		t.Fatalf("first read: %+v %v %v", r, changed, err)
 	}
-	if _, changed, _ := readRepos(); changed {
+	if _, changed, _ := reread(); changed {
 		t.Fatal("changed with no change")
 	}
 	if added, err := appendRepo("git@x:o/p.git", "p"); err != nil || !added {
 		t.Fatalf("append: %v %v", added, err)
 	}
-	if l, changed, err := readRepos(); err != nil || !changed || len(l.Repos) != 2 || l.Repos[1].Source != "git@x:o/p.git" || l.Repos[1].Name != "p" {
-		t.Fatalf("after the append: %v %v %v", l, changed, err)
+	if r, changed, err := reread(); err != nil || !changed || len(r.Listed.Repos) != 2 || r.Listed.Repos[1].Source != "git@x:o/p.git" || r.Listed.Repos[1].Name != "p" {
+		t.Fatalf("after the append: %+v %v %v", r, changed, err)
 	}
-	edited := "copy: [\"*.local\"]\nrepos:\n  - source: git@x:o/a.git\n    copy: [.envrc]\n    setup: [make]\n"
+	edited := "copy: [\"*.local\"]\nagents:\n  claude: {cmd: [claude, --edited]}\nrepos:\n  - source: git@x:o/a.git\n    copy: [.envrc]\n    setup: [make]\n"
 	if err := os.WriteFile(p, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	l, changed, err := readRepos()
-	if err != nil || !changed || len(l.Repos) != 1 || fmt.Sprint(l.Copy, l.Repos[0].Copy, l.Repos[0].Setup) != "[*.local] [.envrc] [make]" {
-		t.Fatalf("after the edit: %+v %v %v", l, changed, err)
+	r, changed, err := reread()
+	l := r.Listed
+	if err != nil || !changed || len(l.Repos) != 1 || fmt.Sprint(l.Copy, l.Repos[0].Copy, l.Repos[0].Setup, r.Agents) != "[*.local] [.envrc] [make] map[claude:[claude --edited]]" {
+		t.Fatalf("after the edit: %+v %v %v", r, changed, err)
 	}
 }

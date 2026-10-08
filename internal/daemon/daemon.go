@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
@@ -146,6 +147,15 @@ type osProcs struct{}
 func (osProcs) Find(tty string) (procs.Identity, bool, error)      { return procs.Find(tty) }
 func (osProcs) Exists(tty string, id procs.Identity) (bool, error) { return procs.Exists(tty, id) }
 
+// ConfigRead is what the daemon takes from a read of this machine's
+// config file again: what its store lists, and the commands of the
+// agents an add starts, by label. The hosts it reads through
+// Config.Hosts; tmux_servers and github_hosts it reads at start alone.
+type ConfigRead struct {
+	Listed worktree.Listed
+	Agents map[string][]string
+}
+
 type Config struct {
 	Targets       []Target  // defaults to the managed laatmux server alone
 	Procs         Processes // defaults to the OS process table
@@ -159,19 +169,21 @@ type Config struct {
 	// Store is the host's checkouts and worktrees; nil when the host has no
 	// repos and worktrees directories, and then there are no worktree
 	// records and no add or rm. Agents maps an agent label to its command
-	// for add. WorktreeInterval is how often git is asked.
+	// for add, as the config said at start. WorktreeInterval is how often
+	// git is asked.
 	Store            *worktree.Store
 	Agents           map[string][]string
 	WorktreeInterval time.Duration
-	// Repos reads what the config lists for Store again, every
-	// WorktreeInterval: the repositories, their copy and setup steps,
-	// and the copy rules for every worktree; changed when the file
-	// changed since the last read, so Store follows repositories an add
-	// or the task form appended, and hand edits, without a restart, and
-	// the relay retries the appends a config it could not take held. A
-	// file that does not read keeps what Store has. nil keeps what Store
-	// was made with, and retries the appends at start alone.
-	Repos func() (listed worktree.Listed, changed bool, err error)
+	// Reread reads the config file again, every WorktreeInterval:
+	// changed when the file changed since the last read, so Store
+	// follows the repositories an add or the task form appended, and
+	// hand edits, without a restart, their steps and the copy rules for
+	// every worktree too, the adds the agents' commands, the merged
+	// subscribers the hosts, and the relay retries the appends a config
+	// it could not take held. A file that does not read keeps what the
+	// daemon has. nil keeps what it was made with, and retries the
+	// appends at start alone.
+	Reread func() (read ConfigRead, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
 	// capability; "" means none.
@@ -308,7 +320,11 @@ type Daemon struct {
 	lastListErr  string            // logged once per change; under pollMu
 	lastReposErr string            // the same for the config file; runConfig's
 	configRead   bool              // runConfig has read the file once
-	poke         chan struct{}
+	// commands is the commands of the agents an add starts, by label:
+	// Config.Agents, then each read of the file that changed, replaced
+	// whole.
+	commands atomic.Pointer[map[string][]string]
+	poke     chan struct{}
 	// Attribution: the listed roots, longest first; the pane records of
 	// panes without an agent inside a root, by pane key; the run
 	// records by id; and the resolved-path cache, with a lock of its
@@ -520,6 +536,8 @@ func New(cfg Config) *Daemon {
 			d.journal = j
 		}
 	}
+	agents := cfg.Agents
+	d.commands.Store(&agents)
 	d.tasks = newRunner(d)
 	if cfg.Attention != "" && cfg.Hosts != nil {
 		a, err := openAttention(cfg.Attention)
@@ -587,6 +605,11 @@ func (d *Daemon) capabilities() []string {
 	return caps
 }
 
+// agentCmds is the commands of the agents an add starts, by label, as
+// the config last read said; the map is the daemon's and is not to be
+// changed.
+func (d *Daemon) agentCmds() map[string][]string { return *d.commands.Load() }
+
 // runCtx is Run's context, or the background one before Run.
 func (d *Daemon) runCtx() context.Context {
 	d.mu.Lock()
@@ -609,7 +632,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.mu.Lock()
 	d.ctx = ctx
 	d.mu.Unlock()
-	if d.cfg.Repos != nil {
+	if d.cfg.Reread != nil {
 		// The config's first look, before the poll and the relay start.
 		d.readConfig(ctx)
 	}
@@ -627,7 +650,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.startRelays(ctx)
 		go d.runRelaySweep(ctx)
 	}
-	if d.cfg.Repos != nil {
+	if d.cfg.Reread != nil {
 		go d.runConfig(ctx)
 	}
 	if d.attn != nil {

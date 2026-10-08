@@ -28,9 +28,14 @@ func TestViewFollowsConfig(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("LAATMUX_CONFIG", p)
 	t.Setenv("LAATMUX_HOME", t.TempDir())
+	// Each write a rename over the file, so a look never reads one half
+	// written, which would be a change of its own.
 	write := func(s string) {
 		t.Helper()
-		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+		if err := os.WriteFile(p+".new", []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(p+".new", p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +74,7 @@ theme: {mode: dark}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmds := make(chan func(*view.Model) view.Action, 1)
-	watchConfig(ctx, &w, 10*time.Millisecond, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, configFailed)
+	watchConfig(ctx, &w, 10*time.Millisecond, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, taker.failed)
 	next := func() {
 		t.Helper()
 		select {
@@ -131,12 +136,16 @@ sidebar:
 	if len(form.Chips[1].Choices) != 2 || form.Chips[2].Label() != "codex" {
 		t.Fatalf("the form: hosts %+v agent %q", form.Chips[1].Choices, form.Chips[2].Label())
 	}
-	m.Overlay, d.add = nil, nil
 
+	// A bad file with the form up: the footer, and the form's note,
+	// which covers it.
 	write("hosts: [\n")
 	next()
 	if !strings.HasPrefix(m.Message, "config: ") || !strings.HasSuffix(m.Message, "; the view keeps the config it had") {
 		t.Fatalf("message %q", m.Message)
+	}
+	if n := form.Note(form); !strings.HasPrefix(n, "config: ") || !strings.HasSuffix(n, "; the form keeps what it offers") {
+		t.Fatalf("the form's note %q", n)
 	}
 	if _, ok := d.cfg.Find("vm"); !ok {
 		t.Fatal("a file that does not load replaced the config")
@@ -150,6 +159,9 @@ sidebar:
 	next()
 	if _, ok := d.cfg.Find("vm"); ok || !reflect.DeepEqual(theme, dark) {
 		t.Fatal("the file put right was not taken")
+	}
+	if m.Message != "" || strings.HasPrefix(form.Note(form), "config: ") {
+		t.Fatalf("after the file was put right: footer %q note %q", m.Message, form.Note(form))
 	}
 }
 

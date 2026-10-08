@@ -62,10 +62,22 @@ func watchConfig(ctx context.Context, w *config.Watch, every time.Duration, cmds
 	}()
 }
 
-// configFailed is a view's footer for a config file that changed and
-// does not load.
-func configFailed(m *view.Model, err error) {
-	m.Message = "config: " + err.Error() + "; the view keeps the config it had"
+// formConfig puts a config file that does not load in the note of the
+// task form that is up, which covers the view's footer, until a read
+// succeeds; nil, a read that did, clears it.
+func (d *dash) formConfig(err error) {
+	if d.add != nil {
+		d.add.configErr = formConfigErr(err)
+	}
+}
+
+// formConfigErr is the task form's note for a config that does not
+// load, "" for nil.
+func formConfigErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "config: " + err.Error() + "; the form keeps what it offers"
 }
 
 // background is the terminal's background as a view asks it: once, the
@@ -93,17 +105,35 @@ type configTaker struct {
 	bg      *background
 	theme   func(palette.Theme) // the terminal's, which the next draw uses
 	current string              // the session the rows mark, for the refill
+	// failure is the footer failed put up, which a take clears while
+	// the footer still says it.
+	failure string
+}
+
+// failed puts a config file that changed and does not load in the
+// footer, and in the note of a task form that is up, which covers the
+// footer; the view keeps what it has.
+func (c *configTaker) failed(m *view.Model, err error) {
+	c.failure = "config: " + err.Error() + "; the view keeps the config it had"
+	m.Message = c.failure
+	c.d.formConfig(err)
 }
 
 // take gives the view what it draws and acts with from cfg: the dash's
 // config, which the jumps, the removals and a task form made from now
-// on read; the merged state's repository names, order and stale
+// on read, with a failure's footer and note cleared; the merged state's repository names, order and stale
 // settings; the theme and icons; the templates; the agent icons; the
 // jump key labels; this machine's name; and in a sidebar pane the
 // strip's chip width. refill fills the rows again, for a config taken
 // while the view runs; the first fill is the view's.
 func (c *configTaker) take(m *view.Model, cfg config.Config, refill bool) {
 	c.d.cfg = cfg
+	c.d.formConfig(nil)
+	if c.failure != "" && m.Message == c.failure {
+		// The file that did not load is put right.
+		m.Message = ""
+	}
+	c.failure = ""
 	c.st.Configure(cfg)
 	th, icons := lookWith(cfg, c.bg.get)
 	c.theme(th)
