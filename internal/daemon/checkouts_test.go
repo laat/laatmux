@@ -277,7 +277,8 @@ func TestMainCheckoutRecords(t *testing.T) {
 // checkout was with the repos directory under the worktrees one, or the
 // other way round: the new record goes out, then the agent in the root
 // takes it, then the old id's remove, a worktree's with its listing
-// stamp; the git object is not carried across.
+// stamp; the git object is not carried across. A shell's pane record
+// naming the old id goes before it too.
 func TestRecordChangesKind(t *testing.T) {
 	d := New(Config{EnvironmentID: "env"})
 	s := &subscriber{ch: make(chan protocol.Message, 64), checkouts: true}
@@ -344,6 +345,22 @@ func TestRecordChangesKind(t *testing.T) {
 		if ms[rec].Worktree.Git != nil {
 			t.Fatalf("%s: the git object carried across: %+v", c.name, ms[rec].Worktree.Git)
 		}
+	}
+	// A shell alone in the root, its agent gone: its pane record,
+	// the worktree's, goes before the worktree's record does.
+	delete(d.agents, key)
+	delete(d.panes, key)
+	shell := "default/%2"
+	d.panes[shell] = &paneState{target: &target{Target: Target{Label: "default"}}, observed: true, bare: true, path: dir, pane: tmux.Pane{ID: "%2"}}
+	if ms := list([]worktree.Record{wt}, nil); !slices.ContainsFunc(ms, func(m protocol.Message) bool { return m.Pane != nil && m.Pane.WorktreeID == worktreeID }) {
+		t.Fatalf("the shell's pane record in the worktree: %+v", ms)
+	}
+	ms := list(nil, []worktree.Record{main})
+	pane := slices.IndexFunc(ms, func(m protocol.Message) bool {
+		return m.Type == protocol.TypeRemove && m.PaneRecordID == "env/pane/"+shell
+	})
+	if gone := removedAt(ms, worktreeID); pane < 0 || gone < pane {
+		t.Fatalf("to a main checkout with a shell: its pane record's remove, then the worktree's: %+v", ms)
 	}
 }
 
