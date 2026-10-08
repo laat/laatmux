@@ -754,6 +754,9 @@ func (s Server) EnsureConfigured(ctx context.Context) error {
 			}
 		}
 	}
+	if err := s.ensureShell(ctx); err != nil {
+		return err
+	}
 	return s.ensureLocale(ctx)
 }
 

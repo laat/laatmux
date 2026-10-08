@@ -1269,6 +1269,16 @@ func TestEnsureConfiguredRemovesHooksFirst(t *testing.T) {
 	if out, err := s.Run(ctx, "show-options", "-s", "terminal-features"); err != nil || strings.Count(string(out), "tmux*:extkeys") != 1 {
 		t.Errorf("terminal-features %q %v, want tmux*:extkeys once", out, err)
 	}
+	// The user's login shell, not the daemon's SHELL, is the server's
+	// default-shell and its global SHELL.
+	if sh := LoginShell(); sh != "" {
+		if out, err := s.Run(ctx, "show-options", "-gv", "default-shell"); err != nil || strings.TrimSpace(string(out)) != sh {
+			t.Errorf("default-shell is %q %v, want the login shell %s", out, err, sh)
+		}
+		if out, err := s.Run(ctx, "show-environment", "-g", "SHELL"); err != nil || strings.TrimSpace(string(out)) != "SHELL="+sh {
+			t.Errorf("global SHELL is %q %v, want %s", out, err, sh)
+		}
+	}
 	if out, err := s.Run(ctx, "show-options", "-t", id, "status"); err != nil || strings.TrimSpace(string(out)) != "" {
 		t.Errorf("session %s keeps %q %v", id, out, err)
 	}
@@ -1800,6 +1810,12 @@ func TestNewSessionArgvThroughExtendedGlob(t *testing.T) {
 	if err := os.WriteFile(shell, []byte("#!/bin/sh\n: > \"$0.ran\"\nexec "+shellJoin([]string{zsh})+" -f -o extended_glob \"$@\" 2>> \"$0.err\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The wrapper as the user's login shell: EnsureConfigured sets the
+	// login shell as default-shell on every NewSession, so a
+	// set-option alone would be undone.
+	prev := LoginShell
+	LoginShell = func() string { return shell }
+	t.Cleanup(func() { LoginShell = prev })
 	if _, err := s.Run(ctx, "set-option", "-g", "default-shell", shell); err != nil {
 		t.Fatal(err)
 	}
@@ -2781,5 +2797,19 @@ func TestServersDefaultAndParsed(t *testing.T) {
 	}
 	if _, err := ParseServers([]string{"default", ""}); err == nil {
 		t.Fatal("duplicate default accepted")
+	}
+}
+
+// The shell field of a passwd line, by name; a short or missing line
+// gives nothing.
+func TestShellFromPasswd(t *testing.T) {
+	data := []byte("root:x:0:0:root:/root:/bin/sh\nalice:x:1000:1000:Alice:/home/alice:/usr/bin/zsh\nbob:x:1001:1001\n")
+	for name, want := range map[string]string{"alice": "/usr/bin/zsh", "root": "/bin/sh", "bob": "", "carol": ""} {
+		if got := shellFromPasswd(data, name); got != want {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+	}
+	if sh := LoginShell(); sh != "" && !strings.HasPrefix(sh, "/") {
+		t.Errorf("the login shell %q is not a path", sh)
 	}
 }
