@@ -54,9 +54,12 @@ func failAttach(t *testing.T, session string) {
 	if _, err := Server.Run(ctx, "respawn-pane", "-k", "-t", pane, "sh -c 'exit 1'"); err != nil {
 		t.Fatal(err)
 	}
+	// Dead, and kept: pane_dead_status can read empty for a while on
+	// tmux 3.4, so the status is not waited for; a pane closed instead
+	// of kept would be gone from the session.
 	for i := 0; ; i++ {
-		out, _ := Server.Run(ctx, "display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}")
-		if strings.TrimSpace(string(out)) == "1 1" {
+		out, _ := Server.Run(ctx, "display-message", "-p", "-t", pane, "#{pane_dead}")
+		if strings.TrimSpace(string(out)) == "1" {
 			return
 		}
 		if i > 200 {
@@ -120,8 +123,8 @@ func TestEnsureAttachEnds(t *testing.T) {
 		t.Fatalf("ensure on a missing managed session: %v %v", created, err)
 	}
 	wait("the failed attach dead and kept", func() bool {
-		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/w2", "-F", "#{pane_dead} #{pane_dead_status}")
-		return strings.TrimSpace(string(out)) == "1 1"
+		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/w2", "-F", "#{pane_dead}")
+		return strings.TrimSpace(string(out)) == "1"
 	})
 	if out, err := Server.Run(ctx, "list-sessions", "-F", "#{session_name}"); err != nil || !strings.Contains(string(out), "mac/w2") {
 		t.Fatalf("the session of a failed attach: %q %v", out, err)
