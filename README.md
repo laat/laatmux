@@ -530,9 +530,11 @@ pane is tagged by the id `new-session` printed, since the user's hooks may
 split the window at once. The pane runs a placeholder until then, so it
 cannot exit before `remain-on-exit failed` is set on it; the attach command
 replaces the placeholder in the same sequence as the tags, and an attach
-that fails at once leaves a dead pane, with its message, for the next
-`jump` to respawn. An attach that ends well, the managed session having
-ended with its agent, closes the pane and so the workspace session.
+that fails, ssh refused or the managed session not there, leaves a dead
+pane, with its message, for the next `jump` to respawn. A connected
+attach ends with status 0 whether the managed session ended with its
+agent or was killed under it, and then the pane closes and so the
+workspace session; the next `jump` makes it again.
 
 - **`add <branch>`** resolves the repository from `--repo`, else from the
   current directory: its git origin is matched against the known sources,

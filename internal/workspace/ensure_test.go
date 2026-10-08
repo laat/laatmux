@@ -39,6 +39,95 @@ func startServers(t *testing.T) {
 	}
 }
 
+// failAttach makes the attach pane of the workspace session dead as a
+// failed attach leaves it, kept by remain-on-exit failed with a non-zero
+// status, and waits for it: the attach command is replaced by one that
+// exits 1, as ssh refused or a managed session that is not there does.
+func failAttach(t *testing.T, session string) {
+	t.Helper()
+	ctx := context.Background()
+	out, err := Server.Run(ctx, "list-panes", "-s", "-t", "="+session, "-F", "#{pane_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := strings.TrimSpace(string(out))
+	if _, err := Server.Run(ctx, "respawn-pane", "-k", "-t", pane, "sh -c 'exit 1'"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		out, _ := Server.Run(ctx, "display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}")
+		if strings.TrimSpace(string(out)) == "1 1" {
+			return
+		}
+		if i > 200 {
+			t.Fatalf("attach pane of %s not dead after a failing attach: %q", session, out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The attach pane is kept only when its attach failed. A managed
+// session killed under a connected attach, or ending by itself with
+// its agent, has the client exit 0: the pane closes and the workspace
+// session with it, and the next Ensure makes a new one; an attach to a
+// session that is not there exits 1 and stays, with its message, for
+// the next Ensure to respawn.
+func TestEnsureAttachEnds(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	startServers(t)
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "s", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Host: peer.Host{Name: "mac"}, Managed: "s", Name: "mac/w", Key: "env//w", Branch: "w"}
+	if _, created, err := Ensure(ctx, spec); err != nil || !created {
+		t.Fatalf("first ensure: %v %v", created, err)
+	}
+	// The attach connected: the managed server lists its client.
+	wait := func(what string, ok func() bool) {
+		t.Helper()
+		for i := 0; !ok(); i++ {
+			if i > 200 {
+				t.Fatalf("%s: not within ten seconds", what)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	wait("the attach client on s", func() bool {
+		out, _ := tmux.LaatmuxServer.Run(ctx, "list-clients", "-F", "#{client_session}")
+		return strings.Contains(string(out), "s")
+	})
+	if _, err := tmux.LaatmuxServer.Run(ctx, "kill-session", "-t", "=s"); err != nil {
+		t.Fatal(err)
+	}
+	wait("the workspace session gone with its attach", func() bool {
+		out, _ := Server.Run(ctx, "list-sessions", "-F", "#{session_name}")
+		return !strings.Contains(string(out), "mac/w")
+	})
+	// Made again on the next Ensure, the managed session being back.
+	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "s", "sleep", "600"); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := Ensure(ctx, spec); err != nil || !created {
+		t.Fatalf("ensure after the session ended: %v %v", created, err)
+	}
+	// A failing attach stays, dead with its status, in a session that
+	// is still there.
+	gone := Spec{Host: peer.Host{Name: "mac"}, Managed: "nosuch", Name: "mac/w2", Key: "env//w2", Branch: "w2"}
+	if _, created, err := Ensure(ctx, gone); err != nil || !created {
+		t.Fatalf("ensure on a missing managed session: %v %v", created, err)
+	}
+	wait("the failed attach dead and kept", func() bool {
+		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/w2", "-F", "#{pane_dead} #{pane_dead_status}")
+		return strings.TrimSpace(string(out)) == "1 1"
+	})
+	if out, err := Server.Run(ctx, "list-sessions", "-F", "#{session_name}"); err != nil || !strings.Contains(string(out), "mac/w2") {
+		t.Fatalf("the session of a failed attach: %q %v", out, err)
+	}
+}
+
 // A workspace session found again for a spec that names another
 // managed session has its attach pane moved there: the worktree's
 // agent is in another session now. The pane's tag says which.
@@ -76,20 +165,11 @@ func TestEnsureRetargetsAttach(t *testing.T) {
 	if tag, cmd := target(); tag != "s2" || !strings.Contains(cmd, "s2") {
 		t.Fatalf("attach after retarget %q %q", tag, cmd)
 	}
-	// A dead pane on another target comes back on the spec's.
-	if _, err := tmux.LaatmuxServer.Run(ctx, "kill-session", "-t", "=s2"); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; ; i++ {
-		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/w", "-F", "#{pane_dead}")
-		if strings.TrimSpace(string(out)) == "1" {
-			break
-		}
-		if i > 200 {
-			t.Fatal("attach pane still alive with its session gone")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// A dead pane on another target comes back on the spec's: the
+	// attach failed, as one does when ssh is refused, and the pane is
+	// kept with its message. (A managed session killed under a
+	// connected attach ends the pane instead: TestEnsureAttachEnds.)
+	failAttach(t, "mac/w")
 	spec.Managed = "s1"
 	if _, _, err := Ensure(ctx, spec); err != nil {
 		t.Fatal(err)
@@ -966,18 +1046,9 @@ func TestEnsureAdoptsAttachment(t *testing.T) {
 	if _, err := Server.Run(ctx, "set-option", "-p", "-u", "-t", "=mac/proj/w:", "@laatmux_attach_target"); err != nil {
 		t.Fatal(err)
 	}
+	failAttach(t, "mac/proj/w")
 	if _, err := tmux.LaatmuxServer.Run(ctx, "kill-session", "-t", "=proj/w"); err != nil {
 		t.Fatal(err)
-	}
-	for i := 0; ; i++ {
-		out, _ := Server.Run(ctx, "list-panes", "-s", "-t", "=mac/proj/w", "-F", "#{pane_dead}")
-		if strings.TrimSpace(string(out)) == "1" {
-			break
-		}
-		if i > 200 {
-			t.Fatal("attach pane still alive with its session gone")
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	if _, err := tmux.LaatmuxServer.Run(ctx, "new-session", "-d", "-s", "proj/w", "sleep", "600"); err != nil {
 		t.Fatal(err)
