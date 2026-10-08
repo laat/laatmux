@@ -608,6 +608,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.mu.Lock()
 	d.ctx = ctx
 	d.mu.Unlock()
+	if d.cfg.Repos != nil {
+		// The config's first look, before the poll and the relay start.
+		d.readConfig(ctx)
+	}
 	if d.cfg.Store != nil {
 		go d.runWorktrees(ctx)
 		go d.runGitStatus(ctx)

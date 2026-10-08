@@ -228,6 +228,21 @@ func TestAddRepoDanglingLink(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Fatal("written beside the directory link")
 	}
+	// A .. after a directory link in the target is taken after the
+	// link: other.yaml names alias/../gone.yaml, and alias is
+	// real/nested, so the target is real/gone.yaml.
+	if err := os.Symlink("alias/../gone.yaml", filepath.Join(dir, "other.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(filepath.Join(dir, "other.yaml"), "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("a .. after a link: added %v, %v", added, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real", "gone.yaml")); err != nil {
+		t.Fatalf("the target is not real/gone.yaml: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "gone.yaml")); err == nil {
+		t.Fatal("the .. taken before the link")
+	}
 }
 
 // A file of two YAML documents is refused, as it was: the config is the
@@ -269,6 +284,29 @@ func TestAddRepoSecondDocument(t *testing.T) {
 		if b, _ := os.ReadFile(p); string(b) != "repos:\n  - git@x:o/a.git\n  - git@x:o/p.git\n"+tail {
 			t.Fatalf("%q at the end: file %q", tail, b)
 		}
+	}
+	// A file without repos and an empty document after its first has
+	// the list made at the first's end.
+	if err := os.WriteFile(p, []byte("icons: ascii\n---\n# mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("no repos and an empty document: added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "icons: ascii\nrepos:\n  - git@x:o/p.git\n---\n# mine\n" {
+		t.Fatalf("no repos and an empty document: file %q", b)
+	}
+	// One that needs the rewrite, a flow list, is refused: the rewrite
+	// is of the first document, and would drop the marker after it.
+	flow := "repos: [git@x:o/a.git]\n---\n# only a comment\n"
+	if err := os.WriteFile(p, []byte(flow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); added || err == nil || !strings.Contains(err.Error(), "a document marker after its first document") {
+		t.Fatalf("a flow list and an empty document: added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != flow {
+		t.Fatalf("file changed to %q", b)
 	}
 	// One document with its start marker is one.
 	if err := os.WriteFile(p, []byte("---\nrepos:\n  - git@x:o/a.git\n"), 0o600); err != nil {

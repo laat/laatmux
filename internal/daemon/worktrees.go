@@ -94,15 +94,17 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 // runConfig looks at the config file every worktree interval until ctx
 // is done (readConfig), on a daemon with a store or without one: the
 // relay of a laptop whose own entry has no directories appends too.
+// The first look is Run's, before the relay resumes its records, so a
+// change after a resumed append's read is one the loop sees.
 func (d *Daemon) runConfig(ctx context.Context) {
 	t := time.NewTicker(d.cfg.WorktreeInterval)
 	defer t.Stop()
 	for {
-		d.readConfig(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			d.readConfig(ctx)
 		}
 	}
 }
@@ -110,8 +112,9 @@ func (d *Daemon) runConfig(ctx context.Context) {
 // readConfig acts on a config file that has changed: the store takes
 // its repositories, and a poll at once labels the checkouts by them,
 // and the relay retries the appends still asked for, which the change
-// may let through; not on the first read, which finds the file as the
-// relay's start did. A file that does not read is logged once per
+// may let through; not on the first read, Run's before the relay
+// resumes its records, which then read the file as it found it or
+// later. A file that does not read is logged once per
 // change of message, and the list stays as it was. lastReposErr and
 // configRead are runConfig's alone.
 func (d *Daemon) readConfig(ctx context.Context) {

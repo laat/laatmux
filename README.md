@@ -142,7 +142,8 @@ written again from its parsed YAML, which keeps the content and the
 comments but not the layout. A file of more than one YAML document with
 content is refused, since laatmux reads the first and a rewrite would
 drop the rest; an empty one after it, a `---` at the end or one of
-comments alone, is kept as it is, the line going before its marker. The
+comments alone, is kept as it is, the line going before its marker,
+though a file that needs the rewrite and has one is refused too. The
 result is parsed before it replaces the file, through a temporary
 renamed over it, the link's target when the config is a symlink, made
 with its directory when the link's target is not there, with the file's

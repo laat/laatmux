@@ -182,8 +182,10 @@ func AddRepo(path, src, name string) (bool, error) {
 // linkTarget is the file path names, the links on the way followed,
 // whether or not it is there: EvalSymlinks's answer for one that is,
 // else the last link's target, as a write through the link makes it. A
-// relative target is taken from the link's own directory with the
-// links in it resolved, as the system takes it.
+// target's directory is resolved as the system resolves it, a relative
+// one from the link's own directory, links before the .. after them,
+// which a lexical join would not do: alias/../x through alias, a link
+// to real/nested, is real/x.
 func linkTarget(path string) (string, error) {
 	real, err := filepath.EvalSymlinks(path)
 	if !errors.Is(err, fs.ErrNotExist) {
@@ -206,13 +208,21 @@ func linkTarget(path string) (string, error) {
 			return "", err
 		}
 		if !filepath.IsAbs(target) {
-			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
-			if err != nil {
-				return "", err
-			}
-			target = filepath.Join(dir, target)
+			target = filepath.Dir(p) + string(filepath.Separator) + target
 		}
-		p = target
+		// The directory unjoined, so EvalSymlinks takes a .. after the
+		// link before it; one not there yet is made by the write, and
+		// has no links to resolve past the part that is.
+		i := strings.LastIndexByte(target, filepath.Separator)
+		dir, err := filepath.EvalSymlinks(target[:max(i, 1)])
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			p = filepath.Clean(target)
+		case err != nil:
+			return "", err
+		default:
+			p = filepath.Join(dir, target[i+1:])
+		}
 	}
 	return "", &fs.PathError{Op: "readlink", Path: path, Err: syscall.ELOOP}
 }
@@ -287,6 +297,11 @@ func addRepo(real, src, name string) (bool, error) {
 	}
 	out, ok := insertRepo(b, r)
 	if !ok || checkAdded(b, out, r) != nil {
+		if laterDocument(b) {
+			// The rewrite is of the first document alone, and would drop
+			// the marker of an empty one after it and what it holds.
+			return false, fmt.Errorf("%s has a document marker after its first document, which a rewrite of the file would drop; add %s to its repos by hand", tmux.Printable(real), src)
+		}
 		if out, err = rewriteRepo(b, r); err != nil {
 			return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
 		}
@@ -382,8 +397,11 @@ func insertRepo(b []byte, r Repo) ([]byte, bool) {
 		out := slices.Concat(lines[:i], add, lines[i:])
 		return []byte(strings.Join(out, ""))
 	}
+	// A list made goes at the first document's end, before the marker
+	// of an empty one after it.
+	docEnd := firstDocEnd(lines)
 	if len(doc.Content) == 0 {
-		return at(len(lines), append([]string{"repos:\n"}, list("  ")...)), true
+		return at(docEnd, append([]string{"repos:\n"}, list("  ")...)), true
 	}
 	top := doc.Content[0]
 	if top.Kind != yaml.MappingNode || top.Style&yaml.FlowStyle != 0 {
@@ -404,15 +422,9 @@ func insertRepo(b []byte, r Repo) ([]byte, bool) {
 			// the next key's, or the document's end, a marker or the
 			// file's end, less the blank and comment lines before it,
 			// which belong to what follows.
-			end := len(lines)
+			end := docEnd
 			if i+2 < len(top.Content) {
-				end = top.Content[i+2].Line - 1
-			}
-			for j := v.Line; j < end; j++ {
-				if t := strings.TrimRight(lines[j], "\r\n"); t == "---" || t == "..." || strings.HasPrefix(t, "--- ") {
-					end = j
-					break
-				}
+				end = min(end, top.Content[i+2].Line-1)
 			}
 			for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#")) {
 				end--
@@ -421,7 +433,34 @@ func insertRepo(b []byte, r Repo) ([]byte, bool) {
 		}
 		return nil, false
 	}
-	return at(len(lines), append([]string{"repos:\n"}, list("  ")...)), true
+	return at(docEnd, append([]string{"repos:\n"}, list("  ")...)), true
+}
+
+// firstDocEnd is the index of the first document marker, --- or ...,
+// after the first document begins, len(lines) when there is none: one
+// --- before any content starts the first.
+func firstDocEnd(lines []string) int {
+	content := false
+	for i, l := range lines {
+		t := strings.TrimRight(l, "\r\n")
+		marker := t == "---" || t == "..." || strings.HasPrefix(t, "--- ")
+		switch {
+		case marker && content:
+			return i
+		case marker:
+			content = true
+		case strings.TrimSpace(t) != "" && !strings.HasPrefix(strings.TrimSpace(t), "#"):
+			content = true
+		}
+	}
+	return len(lines)
+}
+
+// laterDocument reports whether b has a document marker after its first
+// document begins (firstDocEnd).
+func laterDocument(b []byte) bool {
+	lines := strings.Split(string(b), "\n")
+	return firstDocEnd(lines) < len(lines)
 }
 
 // rewriteRepo appends the entry to the file's nodes and writes them

@@ -122,6 +122,44 @@ func TestRelayRememberOnConfigChange(t *testing.T) {
 	}
 }
 
+// The config's first look is made before the relay resumes a record
+// asking for its append: a repair of the file after the resumed append
+// read it is then a change the watch sees, never the first look it
+// passes over.
+func TestConfigReadBeforeResume(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	dir := t.TempDir()
+	p := pendingFile{Pending: protocol.Pending{ID: "old", Host: "vm", EnvironmentID: "henv", Source: "/r/new.git", Repo: "new", Branch: "b", Agent: "argv",
+		Sent: true, Taken: true, Done: true, OK: true, Root: "/w/new/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
+		RepoEntry: &protocol.RepoEntry{Source: "/r/new.git", Name: "new"}, Remember: true}
+	b, _ := json.Marshal(p)
+	if err := os.WriteFile(filepath.Join(dir, FileName("old")), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var events []string
+	note := func(e string) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
+		AppendRepo: func(string, string) (bool, error) { note("append"); return true, nil },
+		Repos:      func() ([]worktree.Repo, bool, error) { note("read"); return nil, false, nil },
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.setLocal(local)
+	f.awaitRecord(t, "old", 10*time.Second, func(p pendingFile) bool { return !p.Remember })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) < 2 || events[0] != "read" {
+		t.Fatalf("events %v", events)
+	}
+}
+
 // rememberDaemon is a laptop daemon of the fixture's on its own pending
 // directory, appending to the config through a.
 func rememberDaemon(f *relayFixture, dir string, a *appends) *Daemon {
