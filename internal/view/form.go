@@ -21,7 +21,7 @@ import (
 // skipped, so the form reads the same every time. Pasting is text
 // inserted where the cursor is, line breaks included, never a submit and
 // never a tab. A click on a field focuses it, by the layout the last
-// Render drew. The renderer is a pure function of the fields, the
+// Render drew, and on a chip opens its picker. The renderer is a pure function of the fields, the
 // cursor and the size, and records that layout for the click.
 type Form struct {
 	Title string
@@ -164,11 +164,15 @@ func (f *Form) Handle(k term.Key) {
 		f.focus = (f.focus + 4) % 5
 		return
 	case term.KeyMouse:
-		// A click focuses the field under it; the wheel, and a click
-		// between fields, do nothing.
+		// A click focuses the field under it, and on a chip opens its
+		// picker as Enter does; the wheel, and a click between fields,
+		// do nothing.
 		if k.Wheel == 0 {
 			if i := f.fieldAt(k.X, k.Y); i >= 0 {
 				f.focus = i
+				if i < fieldPrompt {
+					f.chipKey(term.Key{Kind: term.KeyEnter})
+				}
 			}
 		}
 		return
