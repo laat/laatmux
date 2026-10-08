@@ -54,7 +54,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.Follow(ctx, c)
-	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: config.Load}
+	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: config.LoadSettled}
 	// No repository configured is the form with a picker for a pasted
 	// source, as the dashboard's a has.
 	switch {

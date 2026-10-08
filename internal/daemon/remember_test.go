@@ -683,4 +683,11 @@ func TestAddFollowsConfig(t *testing.T) {
 	if cmds != "[[claude] [claude --edited] [gemini]]" {
 		t.Errorf("the agents started: %s", cmds)
 	}
+	// Every agent gone from the file: none is started.
+	reads <- ConfigRead{Listed: store.Listed(), Agents: map[string][]string{}}
+	d.readConfig(ctx)
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "a4", Repo: "proj", Branch: "four", AgentName: "claude"})
+	if res, _ := result(t, pc, "a4"); res.OK || !strings.Contains(res.Error, `unknown agent "claude"`) {
+		t.Fatalf("add with an agent removed: %+v", res)
+	}
 }

@@ -408,4 +408,18 @@ func TestConfigHooks(t *testing.T) {
 	if err != nil || !changed || len(l.Repos) != 1 || fmt.Sprint(l.Copy, l.Repos[0].Copy, l.Repos[0].Setup, r.Agents) != "[*.local] [.envrc] [make] map[claude:[claude --edited]]" {
 		t.Fatalf("after the edit: %+v %v %v", r, changed, err)
 	}
+	// The hosts' read: a file being written in place, empty for now,
+	// keeps the daemon's hosts rather than leave the local one alone.
+	if err := os.WriteFile(p, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if hosts, err := configHosts(); err != nil || len(hosts) != 2 {
+		t.Fatalf("hosts: %v %v", hosts, err)
+	}
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if hosts, err := configHosts(); err != config.ErrWriting {
+		t.Fatalf("hosts of a file being written: %v %v", hosts, err)
+	}
 }

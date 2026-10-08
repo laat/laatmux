@@ -126,7 +126,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 		return err
 	}
 	defer t.Close()
-	d := &dash{ctx: ctx, st: st, exitOnJump: exitOnJump, reload: config.Load}
+	d := &dash{ctx: ctx, st: st, exitOnJump: exitOnJump, reload: config.LoadSettled}
 	taker := &configTaker{d: d, st: st, o: o, current: current,
 		bg:    &background{ask: func() (bool, bool) { return t.Background(backgroundWait) }},
 		theme: func(th palette.Theme) { t.Theme = th }}

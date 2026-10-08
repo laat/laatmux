@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A source new to the list is named as the list would derive it; one
@@ -544,9 +545,28 @@ func TestWatch(t *testing.T) {
 			t.Fatalf("an empty file, look %d: %v %v", i, changed, err)
 		}
 	}
+	if _, err := LoadSettled(); err != ErrWriting {
+		t.Fatalf("LoadSettled of the file being written: %v", err)
+	}
 	os.WriteFile(p, []byte("repos: [git@x:o/s.git]\n"), 0o600)
 	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 1 || cfg.Repos[0].Name != "s" {
 		t.Fatalf("written after the truncation: %v %v %v", cfg.Repos, changed, err)
+	}
+	// Emptied, and left so past the settling time: the default config,
+	// for the watch and LoadSettled alike.
+	os.WriteFile(p, nil, 0o600)
+	if _, changed, _ := w.Changed(); changed {
+		t.Fatal("an empty file taken at once")
+	}
+	old := time.Now().Add(-2 * settling)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 0 || len(cfg.Hosts) != 1 {
+		t.Fatalf("an emptied file: %v %v %v", cfg.Repos, changed, err)
+	}
+	if cfg, err := LoadSettled(); err != nil || len(cfg.Hosts) != 1 {
+		t.Fatalf("LoadSettled of an emptied file: %v %v", cfg.Hosts, err)
 	}
 	// An empty file at the first look is the default config, as Load
 	// reads it.

@@ -63,11 +63,12 @@ func watchConfig(ctx context.Context, w *config.Watch, every time.Duration, cmds
 }
 
 // formConfig puts a config file that does not load in the note of the
-// task form that is up, which covers the view's footer, until a read
-// succeeds; nil, a read that did, clears it.
+// task form that is up, which covers the view's footer, and of one
+// opened later, until a read succeeds; nil, a read that did, clears it.
 func (d *dash) formConfig(err error) {
+	d.configErr = formConfigErr(err)
 	if d.add != nil {
-		d.add.configErr = formConfigErr(err)
+		d.add.configErr = d.configErr
 	}
 }
 

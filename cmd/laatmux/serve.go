@@ -133,19 +133,9 @@ func cmdServe(ctx context.Context, args []string) error {
 		Branches:    filepath.Join(home.Dir(), "branches.json"),
 		GitHubHosts: cfg.GitHubHosts,
 		// The merged stream: the hosts are re-read from the file on every
-		// merged subscription, and the local sessions listed from the
-		// default server.
-		Hosts: func() ([]peer.Host, error) {
-			cfg, err := config.Load()
-			if err != nil {
-				return nil, err
-			}
-			hosts := make([]peer.Host, 0, len(cfg.Hosts))
-			for _, h := range cfg.Hosts {
-				hosts = append(hosts, h.Host)
-			}
-			return hosts, nil
-		},
+		// merged subscription and when the file changes, and the local
+		// sessions listed from the default server.
+		Hosts:    configHosts,
 		Sessions: localSessions,
 	})
 	// A daemon New could not finish, its pending directory unopenable
@@ -201,6 +191,23 @@ func configHooks() (reread func() (daemon.ConfigRead, bool, error), appendRepo f
 	}
 	appendRepo = func(src, name string) (bool, error) { return config.AddRepo(config.Path(), src, name) }
 	return reread, appendRepo
+}
+
+// configHosts is the daemon's read of the hosts the config lists. A
+// file read empty while it is being written, an editor saving it in
+// place say, is config.ErrWriting, and the daemon keeps the hosts it
+// has, rather than taking the default config's lone local host and
+// dropping every other from the views.
+func configHosts() ([]peer.Host, error) {
+	cfg, err := config.LoadSettled()
+	if err != nil {
+		return nil, err
+	}
+	hosts := make([]peer.Host, 0, len(cfg.Hosts))
+	for _, h := range cfg.Hosts {
+		hosts = append(hosts, h.Host)
+	}
+	return hosts, nil
 }
 
 // agentCommands is the config's agents as the daemon starts them: the

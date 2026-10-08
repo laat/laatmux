@@ -155,13 +155,27 @@ sidebar:
 		t.Fatal("the bad file said twice")
 	case <-time.After(100 * time.Millisecond):
 	}
+	// A form opened while the file does not load says so too.
+	m.Overlay, d.add = nil, nil
+	d.startAdd(m)
+	later, ok := m.Overlay.(*view.Form)
+	if !ok || !strings.HasPrefix(later.Note(later), "config: ") {
+		t.Fatalf("a form opened after the failure: %v", m.Overlay)
+	}
 	write(before)
 	next()
 	if _, ok := d.cfg.Find("vm"); ok || !reflect.DeepEqual(theme, dark) {
 		t.Fatal("the file put right was not taken")
 	}
-	if m.Message != "" || strings.HasPrefix(form.Note(form), "config: ") {
-		t.Fatalf("after the file was put right: footer %q note %q", m.Message, form.Note(form))
+	if m.Message != "" || strings.HasPrefix(later.Note(later), "config: ") {
+		t.Fatalf("after the file was put right: footer %q note %q", m.Message, later.Note(later))
+	}
+	// A footer of another's, a dismiss's say, is left to its next key.
+	m.Message = "dismissed proj/b on vm"
+	write(strings.Replace(before, "mode: dark", "mode: light", 1))
+	next()
+	if m.Message != "dismissed proj/b on vm" {
+		t.Fatalf("a take cleared another's footer: %q", m.Message)
 	}
 }
 

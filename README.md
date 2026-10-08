@@ -116,9 +116,10 @@ daemon's last as the add starts, whatever the file says while its clone
 runs. `tmux_servers`, `github_hosts` and the local host's directories
 are read when the daemon starts; `laatmux stop` makes the next one take
 an edit. A file that does not parse keeps what the daemon had, with one
-line in its log; a file read empty after the first read is one an editor
-has truncated to write it again in place, and is read again at the next
-look rather than taken as the default config. A missing file is the
+line in its log. A file read empty within two seconds of its last change
+is one an editor has truncated to write it again in place: the daemon
+and the views keep what they have, the hosts included, and read it again
+at the next look; one left empty longer, like a missing file, is the
 default config, as at start.
 
 The dashboard, the sidebar panes and `compose` follow the file the same

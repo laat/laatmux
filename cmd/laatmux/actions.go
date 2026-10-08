@@ -46,8 +46,11 @@ type dash struct {
 	// run is the command whose log is on screen, nil when none.
 	run *running
 	// reload reads the config again, for the task form's repository
-	// picker; nil in tests keeps cfg.
-	reload func() (config.Config, error)
+	// picker; nil in tests keeps cfg. configErr is the view's last read
+	// of the file failing, for the note of a form opened before a read
+	// succeeds (formConfig).
+	reload    func() (config.Config, error)
+	configErr string
 	// jumper replaces a row's jump, for tests, and refocus is the return
 	// of focus after a click in the sidebar.
 	jumper func(r rows.Row) error
@@ -332,7 +335,7 @@ func pastedRepo(cfg config.Config, filter string) (c view.Choice, uncredentialed
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addForm{repos: d.cfg.Repos, hosts: addHosts(d.cfg), agents: d.cfg.AgentNames(), reload: d.reload}
+	f := &addForm{repos: d.cfg.Repos, hosts: addHosts(d.cfg), agents: d.cfg.AgentNames(), reload: d.reload, configErr: d.configErr}
 	// A field with nothing to choose from refuses before the form is
 	// up, but the repository, which a source pasted into its picker
 	// gives. So does last.json that cannot be read: the submit's own

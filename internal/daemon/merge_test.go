@@ -525,6 +525,21 @@ func TestMergedHostsFollowConfigChange(t *testing.T) {
 	f.local.readConfig(ctx)
 	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.HostName == "vm" })
 	until(t, c, pc, hostStatus("box", listed))
+	// A read of the hosts that fails, a file being written say, keeps
+	// the host set.
+	f.hosts.mu.Lock()
+	f.hosts.hosts, f.hosts.err = nil, errors.New("the config file is empty while it is being written")
+	f.hosts.mu.Unlock()
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	f.local.readConfig(ctx)
+	f.local.mu.Lock()
+	_, kept := f.local.mhosts["box"]
+	f.local.mu.Unlock()
+	if !kept {
+		t.Fatal("a failed read of the hosts dropped box")
+	}
 }
 
 // Remote subscriptions are dropped once no merged subscriber has been

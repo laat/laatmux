@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"time"
 
@@ -25,9 +26,9 @@ type Watch struct {
 // with changed true; else changed is false and the config zero. A file
 // that changed and does not load answers its error once, and again
 // only after it changes again. A file read empty after the first call
-// is one a writer has truncated and not yet filled, an editor saving in
-// place say, and is no change: the default config it would parse as is
-// not what the user means, and the next call reads the file again.
+// while it is being written (beingWritten) is no change: the default
+// config it would parse as is not what the user means, and the next
+// call reads the file again. One left empty is the default config.
 func (w *Watch) Changed() (Config, bool, error) {
 	fi, err := os.Stat(Path())
 	exists := err == nil
@@ -35,7 +36,7 @@ func (w *Watch) Changed() (Config, bool, error) {
 		return Config{}, false, nil
 	}
 	b, rerr := os.ReadFile(Path())
-	if rerr == nil && len(b) == 0 && w.read {
+	if rerr == nil && len(b) == 0 && w.read && beingWritten() {
 		return Config{}, false, nil
 	}
 	w.read, w.exists, w.file = true, exists, fi
@@ -52,4 +53,38 @@ func (w *Watch) Changed() (Config, bool, error) {
 		return Config{}, false, err
 	}
 	return cfg, true, nil
+}
+
+// ErrWriting is a config file read empty while it is being written,
+// for a reader that has a config to keep (LoadSettled).
+var ErrWriting = errors.New("the config file is empty while it is being written")
+
+// LoadSettled is Load for a reader that has a config to keep, a daemon
+// re-reading the hosts say: a file read empty while it is being
+// written is ErrWriting, not the default config.
+func LoadSettled() (Config, error) {
+	b, err := os.ReadFile(Path())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Parse(nil)
+		}
+		return Config{}, tmux.PrintablePath(err)
+	}
+	if len(b) == 0 && beingWritten() {
+		return Config{}, ErrWriting
+	}
+	return Parse(b)
+}
+
+// settling is how long after its last change a config file read empty
+// is taken for one a writer has truncated and not yet filled, an editor
+// saving it in place say, rather than for one emptied. A follower looks
+// again a poll later, after the time has passed.
+const settling = 2 * time.Second
+
+// beingWritten reports whether the config file, read empty, is being
+// written: it has content again, or it changed within settling.
+func beingWritten() bool {
+	fi, err := os.Stat(Path())
+	return err == nil && (fi.Size() > 0 || time.Since(fi.ModTime()) < settling)
 }
