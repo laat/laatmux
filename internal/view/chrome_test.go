@@ -335,3 +335,31 @@ func TestDimLineNotFaintWithColours(t *testing.T) {
 		t.Errorf("a dim line without colours: %q", got)
 	}
 }
+
+// A span with a link is drawn as an OSC 8 hyperlink around its text,
+// with or without attributes, and closed after it; Text leaves the
+// link out. The PR's number links to the PR.
+func TestSpanLink(t *testing.T) {
+	dark, _ := palette.New(true, nil)
+	const url = "https://github.com/o/r/pull/416"
+	l := Line{Spans: []Span{{Text: "#416", Link: url}, {Text: " ok"}}}
+	open, close := "\x1b]8;;"+url+"\x1b\\", "\x1b]8;;\x1b\\"
+	for _, th := range []palette.Theme{dark, palette.Mono()} {
+		got := ANSI(l, th)
+		if !strings.Contains(got, open+"#416"+close+" ok") {
+			t.Errorf("plain linked span: %q", got)
+		}
+	}
+	l.Spans[0].Fg = palette.Success
+	if got := ANSI(l, dark); !strings.Contains(got, dark.SGR(palette.Success, false)+open+"#416"+close+"\x1b[0m") {
+		t.Errorf("coloured linked span: %q", got)
+	}
+	if got := Text([]Line{l}); got != "#416 ok\n" {
+		t.Errorf("Text with a link: %q", got)
+	}
+	m := &Model{}
+	r := rows.Row{Worktree: &protocol.Worktree{Repo: "r", Branch: "fix"}, Branch: &protocol.BranchStatus{PR: &protocol.PullRequest{Number: 416, State: "open", URL: url}}}
+	if sp := m.prNumber(r); len(sp) == 0 || sp[0].Text != "#416" || sp[0].Link != url {
+		t.Errorf("the PR number's link: %+v", sp)
+	}
+}
