@@ -52,8 +52,16 @@ func cmdAdd(ctx context.Context, args []string) error {
 	branch, prompt := a.branch, a.prompt
 	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated, Remember: isNew}
 	fmt.Println(add.Describe())
-	if isNew {
+	// What happens to the config is said once the add is under way: a
+	// submit the daemon refuses promises nothing.
+	newRepo := func() {
+		if !isNew {
+			return
+		}
 		fmt.Printf("%s is new to the config: added to its repos as %s once the host has made the worktree\n", repo.Source, repo.Name)
+		if repo.Source != a.repo {
+			fmt.Println("the credential in --repo is left out of the config and the add")
+		}
 	}
 	if a.detach {
 		// The daemon has the task once an id comes back, whatever the
@@ -62,11 +70,13 @@ func cmdAdd(ctx context.Context, args []string) error {
 		switch {
 		case err == nil:
 			fmt.Printf("accepted %s; the daemon runs it, laatmux tasks shows it\n", id)
+			newRepo()
 		case id != "":
 			fmt.Printf("submitted %s; laatmux tasks says whether the daemon holds it\n", id)
 		}
 		return err
 	}
+	newRepo()
 	res, err := add.Run(ctx, printer{})
 	// A host result that succeeded means the worktree and its agent
 	// exist there, whatever happened to last.json or the local session

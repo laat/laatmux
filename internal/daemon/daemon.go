@@ -243,7 +243,9 @@ type Config struct {
 //     with the poll's, so neither is applied after a newer one; taken
 //     before relay.mu and mu. lastHostsErr is under it.
 //   - pollMu holds the worktree poll and its publication together, so an
-//     older observation never overwrites a newer one; taken before mu.
+//     older observation never overwrites a newer one; taken before
+//     relay.mu, which the poll takes to retry the config appends after
+//     the config changed, and before mu.
 //     lastListErr and lastReposErr are under it.
 //   - repos, and the keyed locks repoLock hands out, all held across mu
 //     and never taken under it. An add holds repos shared, then its

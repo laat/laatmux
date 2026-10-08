@@ -50,6 +50,23 @@ func TestRunRemembers(t *testing.T) {
 	if b, _ := os.ReadFile(cfgPath); strings.Contains(string(b), "q.git") {
 		t.Fatalf("an add without remember changed the config:\n%s", b)
 	}
+	// The name the host placed the checkout under is the name appended,
+	// or none: a repository of the same last element listed since the
+	// name was chosen takes it, and the append fails, never listing the
+	// source under another name than its directory's.
+	const named = "repos:\n  - git@x:laat/scripts.git\n"
+	if err := os.WriteFile(cfgPath, []byte(named), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes = nil
+	add.Remember, add.Repo = true, config.Repo{Source: "git@x:nrkno/scripts.git", Name: "scripts"}
+	add.Run(context.Background(), noter{fn: func(s string) { notes = append(notes, s) }})
+	if b, _ := os.ReadFile(cfgPath); string(b) != named {
+		t.Fatalf("appended under another name:\n%s", b)
+	}
+	if len(notes) == 0 || !strings.HasPrefix(notes[0], "git@x:nrkno/scripts.git not added to the config's repos: ") || !strings.Contains(notes[0], "both get the name scripts") {
+		t.Fatalf("notes %q", notes)
+	}
 }
 
 // Submit sends remember with the add to a daemon that has the

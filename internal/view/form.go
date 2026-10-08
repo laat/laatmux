@@ -40,7 +40,10 @@ type Form struct {
 	Note func(f *Form) string
 	// Changed, when set, is called after a chip's selection changes,
 	// with the chip's index, so the host can re-derive the others.
+	// Opening, when set, is called as a chip's picker opens, with the
+	// chip's index, so the host can bring its candidates up to date.
 	Changed func(f *Form, chip int)
+	Opening func(f *Form, chip int)
 	// Error is what refused the last submit.
 	Error string
 	// Cancelled is set when Esc ended the form.
@@ -215,6 +218,10 @@ func (f *Form) chipKey(k term.Key) {
 			f.setChip(f.focus, (c.Selected+1)%n)
 		}
 	case term.KeyEnter:
+		if f.Opening != nil {
+			f.Opening(f, f.focus)
+			n = len(c.Choices)
+		}
 		if n > 0 || c.Other != nil {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
 			f.picker.Other = c.Other

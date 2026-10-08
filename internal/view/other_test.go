@@ -47,7 +47,9 @@ func TestPickerOther(t *testing.T) {
 	if len(p.Matches()) != 1 {
 		t.Fatalf("the filter is not in laatmux's source: %v", p.Matches())
 	}
-	p.Render(80, 8)
+	if text := Text(p.Render(80, 8)); !strings.Contains(text, "  laat  git@github.com:laat/laat  new\n") || strings.Contains(text, "laatmux") {
+		t.Fatalf("render of a source inside a listed one:\n%s", text)
+	}
 	p.Handle(term.Key{Kind: term.KeyEnter})
 	if p.Chosen != len(choices()) || p.Taken.Label != "laat" {
 		t.Fatalf("a source inside a listed one: chosen %d taken %+v", p.Chosen, p.Taken)
@@ -145,6 +147,28 @@ func TestFormTakesOther(t *testing.T) {
 	g.Handle(term.Key{Kind: term.KeyNewline})
 	if !g.Done() || g.Chips[0].Label() != "pin-scripts" {
 		t.Fatalf("submit after the take: done %v error %q", g.Done(), g.Error)
+	}
+	// Opening is told as a chip's picker opens, before the picker takes
+	// the candidates, which it may change: an empty chip given one opens
+	// on it.
+	cs = chips()
+	cs[0].Choices = nil
+	o := NewForm("add a task", cs, "")
+	var opened []int
+	o.Opening = func(f *Form, chip int) {
+		opened = append(opened, chip)
+		f.Chips[chip].Choices = []Choice{{Label: "fresh", Detail: "git@github.com:laat/fresh.git"}}
+	}
+	for range 3 {
+		o.Handle(term.Key{Kind: term.KeyShiftTab})
+	}
+	o.Handle(term.Key{Kind: term.KeyEnter})
+	if len(opened) != 1 || opened[0] != 0 || o.picker == nil || len(o.picker.Choices) != 1 {
+		t.Fatalf("opening %v picker %+v", opened, o.picker)
+	}
+	o.Handle(term.Key{Kind: term.KeyEnter})
+	if o.Chips[0].Label() != "fresh" {
+		t.Fatalf("picked %q", o.Chips[0].Label())
 	}
 	// Without Other an empty chip opens nothing, as before.
 	cs = chips()

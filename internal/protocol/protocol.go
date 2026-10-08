@@ -291,11 +291,16 @@ type Pending struct {
 	AttemptOpen bool   `json:"attempt_open,omitempty"`
 	// AttemptError is the host's refusal of the last attempt, recovery
 	// expired say, kept apart from Error, the add's own outcome.
-	AttemptError string    `json:"attempt_error,omitempty"`
-	Listed       bool      `json:"listed,omitempty"`
-	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
-	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
-	UpdatedAt    time.Time `json:"updated_at"`
+	AttemptError string `json:"attempt_error,omitempty"`
+	Listed       bool   `json:"listed,omitempty"`
+	ListingError string `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
+	Gone         bool   `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
+	// RememberError is why the add's repository, new to this machine's
+	// config, could not be appended to it after the add succeeded, while
+	// it cannot: the relay holds the handoff and tries again at start
+	// and whenever the config file changes.
+	RememberError string    `json:"remember_error,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Complete reports whether nothing about the add needs the user: it

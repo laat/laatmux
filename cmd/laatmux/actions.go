@@ -45,6 +45,9 @@ type dash struct {
 	rm command.Rm
 	// run is the command whose log is on screen, nil when none.
 	run *running
+	// reload reads the config again, for the task form's repository
+	// picker; nil in tests keeps cfg.
+	reload func() (config.Config, error)
 	// jumper replaces a row's jump, for tests, and refocus is the return
 	// of focus after a click in the sidebar.
 	jumper func(r rows.Row) error
@@ -229,6 +232,47 @@ type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
+	// reload reads the config again as the repository picker opens, so
+	// a repository added since the form was made, by an earlier add of a
+	// pasted source say, is a listed candidate and not offered as new;
+	// nil keeps the candidates the form was made with. uncredentialed
+	// is the pasted sources whose credential NewRepo left out, for the
+	// note.
+	reload         func() (config.Config, error)
+	uncredentialed map[string]bool
+}
+
+// refresh brings the repository chip up to the config read again: its
+// listed candidates the config's now, a pasted one kept after them
+// while the config does not list it, and the selection on the
+// repository it was on, by source; the host is told when that is gone.
+func (f *addForm) refresh(form *view.Form, cfg config.Config) {
+	c := &form.Chips[0]
+	was, _ := f.repo(form, c.Selected)
+	var pasted []view.Choice
+	if len(c.Choices) > len(f.repos) {
+		for _, ch := range c.Choices[len(f.repos):] {
+			if _, listed := cfg.RepoBySource(ch.Detail); !listed {
+				pasted = append(pasted, ch)
+			}
+		}
+	}
+	f.repos = cfg.Repos
+	c.Choices, c.Selected = nil, 0
+	for _, r := range f.repos {
+		c.Choices = append(c.Choices, view.Choice{Label: r.Name, Detail: r.Source})
+	}
+	c.Choices = append(c.Choices, pasted...)
+	found := false
+	for i, ch := range c.Choices {
+		if was.Source != "" && source.Same(ch.Detail, was.Source) {
+			c.Selected, found = i, true
+			break
+		}
+	}
+	if !found && was.Source != "" && form.Changed != nil {
+		form.Changed(form, 0)
+	}
 }
 
 // repo is the repository of the repository chip's candidate i: the
@@ -248,21 +292,22 @@ func (f *addForm) repo(form *view.Form, i int) (r config.Repo, isNew bool) {
 // pastedRepo is the repository chip's entry for a picker filter no
 // candidate matches: the listed repository a source names in another
 // of its forms, else a source new to the config, named as it will be
-// listed; nothing for a filter that is no repository's source.
-func pastedRepo(cfg config.Config, filter string) (view.Choice, bool) {
+// listed, its credential left out, which uncredentialed reports;
+// nothing for a filter that is no repository's source.
+func pastedRepo(cfg config.Config, filter string) (c view.Choice, uncredentialed, ok bool) {
 	src := strings.TrimSpace(filter)
 	if r, ok := cfg.RepoBySource(src); ok {
-		return view.Choice{Label: r.Name, Detail: r.Source}, true
+		return view.Choice{Label: r.Name, Detail: r.Source}, false, true
 	}
 	r, err := cfg.NewRepo(src)
 	if err != nil {
-		return view.Choice{}, false
+		return view.Choice{}, false, false
 	}
-	return view.Choice{Label: r.Name, Detail: r.Source}, true
+	return view.Choice{Label: r.Name, Detail: r.Source}, r.Source != src, true
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addForm{repos: d.cfg.Repos, agents: d.cfg.AgentNames()}
+	f := &addForm{repos: d.cfg.Repos, agents: d.cfg.AgentNames(), reload: d.reload}
 	for _, h := range d.cfg.Hosts {
 		if h.CanAdd() {
 			f.hosts = append(f.hosts, h)
@@ -335,7 +380,19 @@ func (d *dash) startAdd(m *view.Model) {
 func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
 	var chips [3]view.Chip
 	chips[0].Title = "repository"
-	chips[0].Other = func(filter string) (view.Choice, bool) { return pastedRepo(cfg, filter) }
+	// The config as the repository picker last read it: a pasted source
+	// is named among the repositories listed now.
+	listed := cfg
+	chips[0].Other = func(filter string) (view.Choice, bool) {
+		c, uncredentialed, ok := pastedRepo(listed, filter)
+		if uncredentialed {
+			if f.uncredentialed == nil {
+				f.uncredentialed = map[string]bool{}
+			}
+			f.uncredentialed[c.Detail] = true
+		}
+		return c, ok
+	}
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
 		if r.Name == preRepo || source.Same(r.Source, preRepo) {
@@ -376,6 +433,15 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	}
 	form := view.NewForm("add a task", chips, branch)
 	form.Propose = worktree.ProposeBranch
+	form.Opening = func(form *view.Form, chip int) {
+		if chip != 0 || f.reload == nil {
+			return
+		}
+		if fresh, err := f.reload(); err == nil {
+			listed = fresh
+			f.refresh(form, fresh)
+		}
+	}
 	// A repository chosen later brings its own last-used host and
 	// agent, unless the user has set those chips themselves; a host
 	// pre-filled from a worktree's record is as good as set.
@@ -422,7 +488,10 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 		if len(form.Chips[0].Choices) == 0 {
 			return "no repositories configured; enter on the repository takes a pasted source"
 		}
-		if _, isNew := f.repo(form, form.Chips[0].Selected); isNew {
+		if repo, isNew := f.repo(form, form.Chips[0].Selected); isNew {
+			if f.uncredentialed[repo.Source] {
+				return "a new repository, added to the config's repos once its worktree is made, without the pasted URL's credential"
+			}
 			return "a new repository, added to the config's repos once its worktree is made"
 		}
 		return ""

@@ -114,21 +114,37 @@ from `add`: a source in one of the forge forms below
 into the repository chip's picker, or given to `--repo`, is the add's
 repository, named as the list would derive it (`pin-scripts`), or, when
 that name would rename a listed repository or is no label, under a name
-of its own written with it (`nrkno-scripts`, `next_js`). The add carries
-it as its `repo_entry`, and once the host has made the worktree the
-source is appended to `repos`: by `add` itself in the foreground, and by
-the local daemon's relay for the form and `add --detach`, which keeps
-the ask in the task's pending file until the append is made, across a
-restart. An add the host refuses, a clone that fails say, leaves the
-config as it was. A source the list has in another form is that
-repository and is not added again. The append keeps the file as it was
+of its own written with it (`nrkno-scripts`, `next_js`). A credential in
+the source, an https URL's user and token or an ssh URL's password, is
+left out, and the form's footer or add's output says so: it never
+reaches the config, a pending file or a host, and the host clones
+through its own credentials. The add carries it as its `repo_entry`,
+and once the host has made the worktree the source is appended to
+`repos`: by `add` itself in the foreground, and by the local daemon's
+relay for the form and `add --detach`. An add the host refuses, a clone
+that fails say, leaves the config as it was. The relay keeps the ask in
+the task's pending file until the append is made: an append that fails,
+a config that does not parse at that moment say, holds the task, whose
+row then says `done, not added to the config` with the reason and needs
+the user, who may fix the file or dismiss the task with `x`; the relay
+tries again whenever the config file changes and at every start,
+handed-over tasks included, and the task hands over to its worktree row
+once the append is made. A source the list has in another form is that
+repository and is not added again. The repository picker reads the
+config again as it opens, so a repository an earlier add appended is a
+listed candidate, not a new one. The append keeps the file as it was
 around the new line, comments and blank lines included: the line goes
 after the list's last item, in its indentation, or a `repos:` list is
 made; a file the line cannot go into, a list written `[a, b]` say, is
 written again from its parsed YAML, which keeps the content and the
-comments but not the layout. The result is parsed before it replaces
-the file, through a temporary renamed over it, the link's target when
-the config is a symlink, with the file's mode. A host's own daemon needs
+comments but not the layout. A file of more than one YAML document is
+refused, since laatmux reads the first and a rewrite would drop the
+rest. The result is parsed before it replaces the file, through a
+temporary renamed over it, the link's target when the config is a
+symlink, made with its directory when the link's target is not there,
+with the file's mode. The appends on one machine take turns under
+`config.lock` in the state directory, and a file another writer changed
+between the read and the rename is read again. A host's own daemon needs
 no `repos` entry for the add, since `repo_entry` carries the source; its
 listing labels the new checkout by its directory's name, the entry's
 name, with its origin as the source, until its own config names it.
@@ -396,7 +412,8 @@ truth; labels only place new things.
   `repos` once the host's add has succeeded; a client sends it only to a
   daemon with the capability, and an older daemon, which would read the
   add without the field and add nothing, is refused with a hint to stop
-  it so the current build starts.
+  it so the current build starts. A pending record's `remember_error`
+  is why that append fails, while it does.
   The key is `agent_name` because `agent` is the upsert's record in the
   same envelope. A branch that is not valid UTF-8, or has U+FFFD, is
   refused: the connection turns such a byte into U+FFFD, so the daemon
@@ -1165,6 +1182,7 @@ orphaned row's session exists locally and is switched to.
   repository without a last use gets, the footer says the repository
   is added to the config's `repos` once its worktree is made, and the
   submit carries it as the add's `repo_entry` (see the config above).
+  The picker reads the config again as it opens.
   With no repository configured the form still opens, saying so, and a
   submit without a repository is refused. A paste whose bytes stop for a second is shown as
   far as it came, with its framing kept, and one whose end marker

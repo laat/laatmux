@@ -231,7 +231,7 @@ func (r Row) NeedsUser() bool {
 	case !p.Done || p.AttemptOpen:
 		return false
 	}
-	return !p.Complete() || p.Gone
+	return !p.Complete() || p.Gone || p.RememberError != ""
 }
 
 // Rank is the row's sort group in priority order: pending tasks, then
@@ -350,6 +350,8 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 		return "prompt not delivered", firstOf(p.AttemptError, p.Error)
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
 		return "prompt delivery unknown", firstOf(p.AttemptError, p.Error)
+	case p.Done && p.RememberError != "":
+		return "done, not added to the config", p.RememberError
 	case p.Done && !p.Listed:
 		return "done, awaiting the listing", p.ListingError
 	case p.Done:

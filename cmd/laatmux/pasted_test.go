@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,5 +142,78 @@ func TestAddRepoFlag(t *testing.T) {
 	}
 	if _, isNew, err := addRepo(ctx, config.Config{}, "/srv/git/proj.git"); err == nil || isNew {
 		t.Errorf("a path is no forge source: %v %v", isNew, err)
+	}
+	r, isNew, err := addRepo(ctx, cfg, "https://laat:ghp_secret@github.com/nrkno/pin-scripts.git")
+	if err != nil || !isNew || r.Source != "https://github.com/nrkno/pin-scripts.git" {
+		t.Errorf("a credential: %+v %v %v", r, isNew, err)
+	}
+}
+
+// The repository picker reads the config again as it opens: a source
+// added since the form was made, by an earlier add, is a listed
+// candidate, taken as listed, not new; the selection stays on its
+// repository; a pasted candidate the config lists now is dropped for
+// the listed one. A pasted URL's credential is left out, and the note
+// says so.
+func TestFormReloadsRepos(t *testing.T) {
+	cfg := dashConfig(t)
+	fresh := cfg
+	fresh.Repos = append(append([]config.Repo(nil), cfg.Repos...), config.Repo{Source: "git@github.com:nrkno/pin-scripts.git", Name: "pin-scripts"})
+	reads := 0
+	f := &addForm{repos: cfg.Repos, hosts: cfg.Hosts[:2], agents: cfg.AgentNames(), reload: func() (config.Config, error) {
+		reads++
+		if reads == 1 {
+			return cfg, nil
+		}
+		return fresh, nil
+	}}
+	var last home.Last
+	form := buildForm(cfg, f, last, "proj", "", "", nil)
+	pick(form, "https://ghp_secret@github.com/nrkno/pin-scripts")
+	if form.Chips[0].Label() != "pin-scripts" || form.Chips[0].Choices[2].Detail != "https://github.com/nrkno/pin-scripts" {
+		t.Fatalf("pasted: %+v", form.Chips[0])
+	}
+	if n := form.Note(form); !strings.Contains(n, "without the pasted URL's credential") {
+		t.Fatalf("note %q", n)
+	}
+	if _, isNew := f.repo(form, form.Chips[0].Selected); !isNew {
+		t.Fatal("not new before the config lists it")
+	}
+	// The config lists it now: the picker opening reads it, the pasted
+	// candidate gives way to the listed one, which stays selected.
+	pick(form, "git@github.com:nrkno/pin-scripts.git")
+	c := form.Chips[0]
+	if reads != 2 || len(c.Choices) != 3 || c.Selected != 2 || c.Choices[2].Detail != "git@github.com:nrkno/pin-scripts.git" || len(f.repos) != 3 {
+		t.Fatalf("after the reload: reads %d %+v", reads, c)
+	}
+	if repo, isNew := f.repo(form, c.Selected); isNew || repo.Name != "pin-scripts" {
+		t.Fatalf("listed now: %+v new %v", repo, isNew)
+	}
+	if n := form.Note(form); n != "" {
+		t.Fatalf("note %q", n)
+	}
+}
+
+// serve's hooks on the config file: the store's read answers the list
+// at first and after the relay's append, and not between.
+func TestConfigHooks(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("LAATMUX_CONFIG", p)
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readRepos, appendRepo := configHooks()
+	if rs, changed, err := readRepos(); err != nil || !changed || len(rs) != 1 || rs[0].Name != "a" {
+		t.Fatalf("first read: %v %v %v", rs, changed, err)
+	}
+	if _, changed, _ := readRepos(); changed {
+		t.Fatal("changed with no change")
+	}
+	if added, err := appendRepo("git@x:o/p.git", "p"); err != nil || !added {
+		t.Fatalf("append: %v %v", added, err)
+	}
+	if rs, changed, err := readRepos(); err != nil || !changed || len(rs) != 2 || rs[1].Source != "git@x:o/p.git" || rs[1].Name != "p" {
+		t.Fatalf("after the append: %v %v %v", rs, changed, err)
 	}
 }

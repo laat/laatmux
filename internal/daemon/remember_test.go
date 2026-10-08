@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/worktree"
 )
 
@@ -35,6 +37,74 @@ func (a *appends) calls() [][2]string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([][2]string(nil), a.got...)
+}
+
+func (a *appends) fail(err error) {
+	a.mu.Lock()
+	a.err = err
+	a.mu.Unlock()
+}
+
+// An append that fails holds the task where its row says why, not
+// handed over, and the user sees it as a task that needs them; a change
+// of the config file has the relay try again, and the task then hands
+// over as any other.
+func TestRelayRememberOnConfigChange(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	other := filepath.Join(t.TempDir(), "other.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", f.source(), other).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v %s", err, out)
+	}
+	store, _ := newStore(t)
+	var mu sync.Mutex
+	changed := false
+	a := &appends{err: errors.New("config.yaml: yaml: bad")}
+	dir := t.TempDir()
+	local := New(Config{
+		EnvironmentID: "lenv", Version: "local", Hosts: f.hosts.get, Dial: f.remote.dial, Pending: dir,
+		MergedIdle: 200 * time.Millisecond, ReconnectMin: 20 * time.Millisecond, Timings: testTimings,
+		AppendRepo: a.add, Store: store, WorktreeInterval: 30 * time.Millisecond,
+		Repos: func() ([]worktree.Repo, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			c := changed
+			changed = false
+			return store.Repos(), c, nil
+		},
+	})
+	discovered(local)
+	go local.Run(f.ctx)
+	f.setLocal(local)
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "rem", Relay: "vm", Repo: other, Name: "sent", Branch: "task",
+		RepoEntry: &protocol.RepoEntry{Source: other, Name: "sent"}, Remember: true, AgentName: "argv", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatalf("accept: %+v", res)
+	}
+	p := f.awaitRecord(t, "rem", 30*time.Second, func(p pendingFile) bool { return p.RememberError != "" })
+	if !p.OK || !p.Remember || p.RememberError != "config.yaml: yaml: bad" {
+		t.Fatalf("record %+v", p)
+	}
+	if state, detail := rows.PendingState(p.Pending, false); state != "done, not added to the config" || detail != "config.yaml: yaml: bad" {
+		t.Fatalf("state %q %q", state, detail)
+	}
+	if r := (rows.Row{Pending: &p.Pending}); !r.NeedsUser() {
+		t.Fatal("a failed append does not need the user")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if p, _ := local.relay.get("rem"); p.retired() || p.Listed {
+		t.Fatalf("handed over with the append failed: %+v", p)
+	}
+	n := len(a.calls())
+	a.fail(nil)
+	mu.Lock()
+	changed = true
+	mu.Unlock()
+	p = f.awaitRecord(t, "rem", 30*time.Second, func(p pendingFile) bool { return p.retired() })
+	if p.Remember || p.RememberError != "" {
+		t.Fatalf("record %+v", p)
+	}
+	if got := a.calls(); len(got) != n+1 || got[n] != [2]string{other, "sent"} {
+		t.Fatalf("appends %v", got)
+	}
 }
 
 // rememberDaemon is a laptop daemon of the fixture's on its own pending
@@ -119,32 +189,48 @@ func TestRelayRemember(t *testing.T) {
 
 // A successful add whose append the last daemon did not get to, or
 // could not make, is appended at start: the ask is in the file until
-// an append succeeds.
+// an append succeeds, a record that has handed over to its worktree
+// since included.
 func TestRelayRememberAtStart(t *testing.T) {
 	f := newRelayFixture(t, nil)
 	dir := t.TempDir()
-	p := pendingFile{Pending: protocol.Pending{ID: "old", Host: "vm", EnvironmentID: "henv", Source: "/r/new.git", Repo: "new", Branch: "b", Agent: "argv",
-		Sent: true, Taken: true, Done: true, OK: true, Root: "/w/new/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
-		RepoEntry: &protocol.RepoEntry{Source: "/r/new.git", Name: "new"}, Remember: true}
-	b, _ := json.Marshal(p)
-	if err := os.WriteFile(filepath.Join(dir, FileName("old")), b, 0o600); err != nil {
-		t.Fatal(err)
+	write := func(p pendingFile) {
+		t.Helper()
+		b, _ := json.Marshal(p)
+		if err := os.WriteFile(filepath.Join(dir, FileName(p.ID)), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
+	write(pendingFile{Pending: protocol.Pending{ID: "old", Host: "vm", EnvironmentID: "henv", Source: "/r/new.git", Repo: "new", Branch: "b", Agent: "argv",
+		Sent: true, Taken: true, Done: true, OK: true, Root: "/w/new/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
+		RepoEntry: &protocol.RepoEntry{Source: "/r/new.git", Name: "new"}, Remember: true})
+	write(pendingFile{Pending: protocol.Pending{ID: "ret", Host: "vm", EnvironmentID: "henv", Source: "/r/two.git", Repo: "two", Branch: "b", Agent: "argv",
+		Sent: true, Taken: true, Done: true, OK: true, Listed: true, Root: "/w/two/b", Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()},
+		RepoEntry: &protocol.RepoEntry{Source: "/r/two.git", Name: "two"}, Remember: true, ReplacedBy: "henv/worktree//w/two/b", RetiredAt: time.Now()})
 	failing := &appends{err: errors.New("config.yaml: yaml: bad")}
 	rememberDaemon(f, dir, failing)
-	for deadline := time.Now().Add(10 * time.Second); len(failing.calls()) == 0; {
+	for deadline := time.Now().Add(10 * time.Second); len(failing.calls()) < 2; {
 		if time.Now().After(deadline) {
-			t.Fatal("no append at start")
+			t.Fatalf("appends at start: %v", failing.calls())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if got := readPending(t, dir, "old"); !got.Remember {
-		t.Fatalf("a failed append cleared the ask: %+v", got)
+	for _, id := range []string{"old", "ret"} {
+		if got := readPending(t, dir, id); !got.Remember {
+			t.Fatalf("a failed append cleared the ask: %+v", got)
+		}
 	}
 	a := &appends{}
 	rememberDaemon(f, dir, a)
 	f.awaitRecord(t, "old", 10*time.Second, func(p pendingFile) bool { return !p.Remember })
-	if got := a.calls(); len(got) != 1 || got[0] != [2]string{"/r/new.git", "new"} {
+	for deadline := time.Now().Add(10 * time.Second); readPending(t, dir, "ret").Remember; {
+		if time.Now().After(deadline) {
+			t.Fatal("the retired record's ask was not cleared")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got := a.calls()
+	if len(got) != 2 || !slices.Contains(got, [2]string{"/r/new.git", "new"}) || !slices.Contains(got, [2]string{"/r/two.git", "two"}) {
 		t.Fatalf("appends %v", got)
 	}
 }

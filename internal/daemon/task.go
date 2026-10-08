@@ -997,13 +997,17 @@ func (rn *taskRunner) addRepo(m protocol.Message) (worktree.Repo, error) {
 	if e.Source == "" || !source.Same(e.Source, m.Repo) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository entry is for %q, not %q", e.Source, m.Repo)
 	}
-	if repo, ok := rn.cfg.Store.BySource(e.Source); ok {
+	// One list for every lookup: the daemon replaces it when the config
+	// changes, and a repository listed between two lookups would be
+	// missed by the first and collide in the second.
+	repos := rn.cfg.Store.Repos()
+	if repo, ok := repos.BySource(e.Source); ok {
 		return repo, nil
 	}
 	if !config.ValidLabel(e.Name) {
 		return worktree.Repo{}, fmt.Errorf("the add's repository name %q is not a valid label (%s)", e.Name, config.LabelRule)
 	}
-	for _, other := range rn.cfg.Store.Repos() {
+	for _, other := range repos {
 		if other.Name == e.Name {
 			return worktree.Repo{}, fmt.Errorf("the add's repository name %s is this host's name for %s; name it differently in the config", e.Name, other.Source)
 		}

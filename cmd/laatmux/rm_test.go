@@ -534,6 +534,7 @@ func TestTaskState(t *testing.T) {
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "a\tb"}, "prompt delivery unknown: " + strconv.Quote("a\tb")},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "a\x1bb"}, "prompt " + protocol.DeliveryNotDelivered + "; last attempt refused: " + strconv.Quote("a\x1bb")},
 		{protocol.Pending{Done: true, OK: true, ListingError: "a\x1bb"}, "done, awaiting the listing: " + strconv.Quote("a\x1bb")},
+		{protocol.Pending{Done: true, OK: true, RememberError: "a\x1bb"}, "done; not added to the config's repos: " + strconv.Quote("a\x1bb")},
 		{protocol.Pending{Unreachable: "a\x1bb"}, "host unreachable, retrying: " + strconv.Quote("a\x1bb")},
 	} {
 		if got := TaskState(c.p, true); got != c.want {

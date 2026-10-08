@@ -48,7 +48,7 @@ func (d *Daemon) runWorktrees(ctx context.Context) {
 func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.pollMu.Lock()
 	defer d.pollMu.Unlock()
-	d.readRepos()
+	d.readRepos(ctx)
 	d.mu.Lock()
 	stamp := protocol.Listing{Generation: d.generation, Revision: d.revision}
 	d.mu.Unlock()
@@ -93,10 +93,11 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 }
 
 // readRepos gives the store the config's repositories when the file
-// has changed, before a listing labels the checkouts by them. A file
-// that does not read is logged once per change of message, and the list
-// stays as it was. Called with pollMu held.
-func (d *Daemon) readRepos() {
+// has changed, before a listing labels the checkouts by them, and has
+// the relay retry the appends still asked for, which the change may
+// let through. A file that does not read is logged once per change of
+// message, and the list stays as it was. Called with pollMu held.
+func (d *Daemon) readRepos(ctx context.Context) {
 	if d.cfg.Repos == nil {
 		return
 	}
@@ -107,6 +108,7 @@ func (d *Daemon) readRepos() {
 	case changed:
 		d.lastReposErr = ""
 		d.cfg.Store.SetRepos(repos)
+		d.rememberAgain(ctx)
 	}
 }
 

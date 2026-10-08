@@ -5,13 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
+	"syscall"
 
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"gopkg.in/yaml.v3"
@@ -23,16 +25,44 @@ import (
 // ssh:// or https://, as source.Forge reads them, and the name the
 // derivation gives it among the listed ones, or, when the source alone
 // would rename one of them or get no label, a name of its own (see
-// appended). A source that is no forge form, or one the list has in any
-// form source.Same takes as one, is an error.
+// appended). A credential in the source, the user and token of an
+// https URL or the password of an ssh one, is left out (Uncredentialed),
+// so it never reaches the config, a pending file or a host: the entry's
+// source differs from src then. A source that is no forge form, or one
+// the list has in any form source.Same takes as one, is an error.
 func (c Config) NewRepo(src string) (Repo, error) {
 	if _, _, ok := source.Forge(src); !ok {
 		return Repo{}, fmt.Errorf("%q is not a repository's source: git@host:owner/repo, ssh://git@host/owner/repo or https://host/owner/repo", src)
 	}
+	src = Uncredentialed(src)
 	if r, ok := c.RepoBySource(src); ok {
 		return Repo{}, fmt.Errorf("%s is listed as %s", src, r.Name)
 	}
 	return appended(c.Repos, src, "")
+}
+
+// Uncredentialed is a URL source without the credential it carries: an
+// http or https URL without its user and password, which source.Key
+// does not count either, and an ssh one without the password after its
+// user. Any other source is as it is.
+func Uncredentialed(src string) string {
+	if !strings.Contains(src, "://") {
+		return src
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.User == nil {
+		return src
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		u.User = nil
+	default:
+		if _, set := u.User.Password(); !set {
+			return src
+		}
+		u.User = url.User(u.User.Username())
+	}
+	return u.String()
 }
 
 // appended is the entry src gets appended to repos, whose names are
@@ -100,10 +130,6 @@ func asLabel(s string) string {
 // its rename: the edit is made again on what is there now.
 var errChanged = errors.New("the config file changed while it was written")
 
-// addMu serializes AddRepo in a process: the daemon's relay appends for
-// every task that succeeds, and two at once would read the same file.
-var addMu sync.Mutex
-
 // AddRepo appends src to repos in the config file at path, under the
 // name given, and reports whether it did: a source the list has, in any
 // form source.Same takes as one, is not added again. The entry is the
@@ -118,19 +144,24 @@ var addMu sync.Mutex
 // not the layout. Either way the result must parse as the file's own
 // content with the entry added before it is written. The write goes
 // through a temporary renamed over the file, the link's target when
-// path is a symlink so the link stays, with the file's mode; a file
-// changed by another writer meanwhile is read again and the edit made
-// on what it has. Errors name the file as tmux.Printable shows it.
+// path is a symlink so the link stays, with the file's mode; a link
+// whose target is not there has it made, its directory too. Appends on
+// this machine, the daemon's relay and add in the foreground, take
+// turns under a lock file in the state directory; a file changed by
+// another writer meanwhile, an editor say, is read again and the edit
+// made on what it has. A file of more than one YAML document is
+// refused: the parsed config is the first alone, and a rewrite would
+// drop the rest. Errors name the file as tmux.Printable shows it.
 func AddRepo(path, src, name string) (bool, error) {
-	addMu.Lock()
-	defer addMu.Unlock()
-	real, err := filepath.EvalSymlinks(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		real, err = path, nil
-	}
+	real, err := linkTarget(path)
 	if err != nil {
 		return false, tmux.PrintablePath(err)
 	}
+	unlock, err := lockAppends()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	for range 3 {
 		added, err := addRepo(real, src, name)
 		if !errors.Is(err, errChanged) {
@@ -138,6 +169,61 @@ func AddRepo(path, src, name string) (bool, error) {
 		}
 	}
 	return false, fmt.Errorf("%s: %w", tmux.Printable(real), errChanged)
+}
+
+// linkTarget is the file path names, the links on the way followed,
+// whether or not it is there: EvalSymlinks's answer for one that is,
+// else the last link's target, as a write through the link makes it.
+func linkTarget(path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return real, err
+	}
+	p := path
+	for range 40 {
+		fi, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return p, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			return p, nil
+		}
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(p), target)
+		}
+		p = target
+	}
+	return "", &fs.PathError{Op: "readlink", Path: path, Err: syscall.ELOOP}
+}
+
+// lockAppends takes the lock AddRepo's appends on this machine take
+// turns under: an exclusive flock on config.lock in the state
+// directory, a file of its own since the rename replaces the config's
+// inode, and kept out of the config's directory, which may be a
+// dotfiles checkout.
+func lockAppends() (func(), error) {
+	if err := os.MkdirAll(home.Dir(), 0o700); err != nil {
+		return nil, tmux.PrintablePath(err)
+	}
+	f, err := os.OpenFile(filepath.Join(home.Dir(), "config.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, tmux.PrintablePath(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
 }
 
 // addRepo is one try of AddRepo on the file at real.
@@ -156,6 +242,9 @@ func addRepo(real, src, name string) (bool, error) {
 	if _, ok := cfg.RepoBySource(src); ok {
 		return false, nil
 	}
+	if n := documents(b); n > 1 {
+		return false, fmt.Errorf("%s has %d YAML documents, of which laatmux reads the first; add %s to its repos by hand", tmux.Printable(real), n, src)
+	}
 	r, err := appended(cfg.Repos, src, name)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
@@ -169,7 +258,26 @@ func addRepo(real, src, name string) (bool, error) {
 			return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
 		}
 	}
-	return true, writeOver(real, out, before)
+	if err := writeOver(real, out, before); err != nil {
+		if errors.Is(err, errChanged) {
+			return false, err
+		}
+		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+	}
+	return true, nil
+}
+
+// documents is how many YAML documents b has, as a decoder reads them.
+func documents(b []byte) int {
+	d := yaml.NewDecoder(bytes.NewReader(b))
+	n := 0
+	for {
+		var node yaml.Node
+		if err := d.Decode(&node); err != nil {
+			return n
+		}
+		n++
+	}
 }
 
 // repoItem is the entry's lines as a list item, without the "- ": the

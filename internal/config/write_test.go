@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,6 +181,134 @@ func TestAddRepoThroughLink(t *testing.T) {
 	}
 }
 
+// A link whose target is not there, through a second link here, has
+// the target made, its directory too, and stays a link: a file in its
+// place would leave the target, in a dotfiles checkout say, without the
+// entry.
+func TestAddRepoDanglingLink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "config.yaml")
+	if err := os.Symlink("hop.yaml", link); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "dotfiles", "laatmux.yaml")
+	if err := os.Symlink(target, filepath.Join(dir, "hop.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(link, "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("added %v, %v", added, err)
+	}
+	for _, l := range []string{link, filepath.Join(dir, "hop.yaml")} {
+		if fi, err := os.Lstat(l); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("the link %s is gone: %v %v", l, fi, err)
+		}
+	}
+	if b, _ := os.ReadFile(target); string(b) != "repos:\n  - git@x:o/p.git\n" {
+		t.Fatalf("target:\n%s", b)
+	}
+}
+
+// A file of two YAML documents is refused, as it was: the config is the
+// first, and a rewrite of it would drop the second.
+func TestAddRepoSecondDocument(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	in := "repos: [git@x:o/a.git]\n---\n# mine\nfoo: bar\n"
+	if err := os.WriteFile(p, []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); added || err == nil || !strings.Contains(err.Error(), "has 2 YAML documents") {
+		t.Fatalf("added %v, %v", added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != in {
+		t.Fatalf("file changed to %q", b)
+	}
+	// One document with its start marker is one.
+	if err := os.WriteFile(p, []byte("---\nrepos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); !added || err != nil {
+		t.Fatalf("one document: added %v, %v", added, err)
+	}
+}
+
+// The credential of a pasted URL is left out of the entry, so it never
+// reaches the config: an https URL's user and token, an ssh URL's
+// password; the user git of an ssh URL stays.
+func TestNewRepoLeavesOutCredential(t *testing.T) {
+	var cfg Config
+	for _, c := range []struct{ src, want string }{
+		{"https://laat:ghp_secret@github.com/nrkno/pin-scripts.git", "https://github.com/nrkno/pin-scripts.git"},
+		{"https://ghp_secret@github.com/nrkno/pin-scripts", "https://github.com/nrkno/pin-scripts"},
+		{"ssh://git:secret@github.com/nrkno/pin-scripts.git", "ssh://git@github.com/nrkno/pin-scripts.git"},
+		{"ssh://git@github.com/nrkno/pin-scripts.git", "ssh://git@github.com/nrkno/pin-scripts.git"},
+		{"git@github.com:nrkno/pin-scripts.git", "git@github.com:nrkno/pin-scripts.git"},
+	} {
+		r, err := cfg.NewRepo(c.src)
+		if err != nil || r.Source != c.want || r.Name != "pin-scripts" {
+			t.Errorf("%s: %+v %v", c.src, r, err)
+		}
+	}
+}
+
+// Appends at once, the relay's for several tasks or the relay's and a
+// foreground add's, each keep the others': they take turns under the
+// lock, so none reads a file another is about to replace.
+func TestAddRepoConcurrent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	errs := make(chan error, n)
+	for i := range n {
+		go func() {
+			name := "r" + string(rune('0'+i))
+			_, err := AddRepo(p, "git@x:o/"+name+".git", name)
+			errs <- err
+		}()
+	}
+	for range n {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(p)
+	cfg, err := Parse(b)
+	if err != nil || len(cfg.Repos) != n+1 {
+		t.Fatalf("%d repos, %v:\n%s", len(cfg.Repos), err, b)
+	}
+}
+
+// A file another writer changed between the read and the rename, an
+// editor that does not take the lock say, is not written over: the
+// write says so, the file is as the other writer left it, and AddRepo
+// makes its edit again on that.
+func TestWriteOverChanged(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(p)
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n  - git@x:o/b.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOver(p, []byte("repos:\n  - git@x:o/a.git\n  - git@x:o/p.git\n"), before); !errors.Is(err, errChanged) {
+		t.Fatalf("write over a changed file: %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "repos:\n  - git@x:o/a.git\n  - git@x:o/b.git\n" {
+		t.Fatalf("file %q", b)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(p)); len(ents) != 1 {
+		t.Fatalf("a temporary left behind: %v", ents)
+	}
+	if added, err := AddRepo(p, "git@x:o/p.git", "p"); err != nil || !added {
+		t.Fatal(added, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "repos:\n  - git@x:o/a.git\n  - git@x:o/b.git\n  - git@x:o/p.git\n" {
+		t.Fatalf("file %q", b)
+	}
+}
+
 // Watch answers the config on its first call and after the file
 // changed, by an append's rename or an edit in place; not between.
 func TestWatch(t *testing.T) {
@@ -200,6 +329,23 @@ func TestWatch(t *testing.T) {
 	}
 	if _, changed, _ := w.Changed(); changed {
 		t.Fatal("an unchanged file changed")
+	}
+	// Another file renamed over it, of the same size and modification
+	// time: another file all the same.
+	fi, _ := os.Stat(p)
+	b, _ := os.ReadFile(p)
+	other := filepath.Join(filepath.Dir(p), "other.yaml")
+	if err := os.WriteFile(other, []byte(strings.Replace(string(b), "o/p.git", "o/r.git", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(other, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(other, p); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, changed, err := w.Changed(); err != nil || !changed || len(cfg.Repos) != 1 || cfg.Repos[0].Name != "r" {
+		t.Fatalf("after a rename of the same size and time: %v %v %v", cfg.Repos, changed, err)
 	}
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {

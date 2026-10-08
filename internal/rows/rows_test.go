@@ -437,6 +437,7 @@ func TestPendingState(t *testing.T) {
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "sent, not seen"}, false, "prompt delivery unknown", "sent, not seen"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "recovery expired", Error: "x"}, false, "prompt not delivered", "recovery expired"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, ListingError: "git failed"}, false, "done, awaiting the listing", "git failed"},
+		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad"}, false, "done, not added to the config", "yaml: bad"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}, false, "done", ""},
 		{protocol.Pending{Unreachable: "ssh: timeout"}, false, "host unreachable, retrying", "ssh: timeout"},
 		{protocol.Pending{}, false, "submitted", ""},
