@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,7 +87,7 @@ func TestParseFull(t *testing.T) {
 		t.Fatal(err)
 	}
 	mac, ok := c.Local()
-	if !ok || mac.Name != "mac" || mac.Repos != "~/code" || mac.Worktrees != "~/worktrees" {
+	if !ok || mac.Name != "mac" || !slices.Equal(mac.Repos, Paths{"~/code"}) || mac.Worktrees != "~/worktrees" {
 		t.Fatalf("local: %+v %v", mac, ok)
 	}
 	vm, ok := c.Find("vm")
@@ -149,10 +150,68 @@ func TestRepoLookupNameBeforeSource(t *testing.T) {
 	}
 }
 
+// A host's repos is one directory, as a string, or a list of them: a
+// checkout is looked for in each, and a clone is made in the first. An
+// empty string is no directory, as it was.
+func TestParseReposDirs(t *testing.T) {
+	cases := map[string][]string{
+		"repos: ~/code":                     {"~/code"},
+		"repos: [~/code]":                   {"~/code"},
+		"repos: [~/code, /src/group]":       {"~/code", "/src/group"},
+		"repos:\n      - /a\n      - ~/b\n": {"/a", "~/b"},
+	}
+	for in, want := range cases {
+		c, err := Parse([]byte("hosts:\n  - name: h\n    " + in + "\n    worktrees: ~/wt\n"))
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		h, _ := c.Find("h")
+		if !slices.Equal(h.Repos, Paths(want)) || !h.CanAdd() {
+			t.Errorf("%q: repos %q, want %q", in, h.Repos, want)
+			continue
+		}
+		d, err := h.Dirs()
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if !slices.Equal(d.Repos, want) || d.Clones() != want[0] || d.Checkout("x") != want[0]+"/x" {
+			t.Errorf("%q: dirs %+v, clones %q, checkout %q", in, d, d.Clones(), d.Checkout("x"))
+		}
+	}
+	c, err := Parse([]byte("hosts:\n  - name: h\n    repos: \"\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := c.Find("h"); h.Repos != nil || h.CanAdd() {
+		t.Errorf("an empty repos: %q, can add %v", h.Repos, h.CanAdd())
+	}
+	rejects := map[string]string{
+		"repos: []\n    worktrees: ~/wt":                     "h has worktrees but not repos",
+		"repos: [~/code, group]\n    worktrees: ~/wt":        "h: repos \"group\" must be absolute or start with ~",
+		"repos: [~/code, \"\"]\n    worktrees: ~/wt":         "h: repos entry 2 is empty",
+		"repos: [null, /src]\n    worktrees: ~/wt":           "h: repos entry 1 is empty",
+		"repos:\n      -\n      - /src\n    worktrees: ~/wt": "h: repos entry 1 is empty",
+		"repos: [/src, ~]\n    worktrees: ~/wt":              "h: repos entry 2 is empty; a bare ~ is YAML's null, the home directory is \"~\"",
+		"repos: {dir: ~/code}\n    worktrees: ~/wt":          "cannot unmarshal",
+		"repos: [~/code, [~/x]]\n    worktrees: ~/wt":        "cannot unmarshal",
+		"repos: [~/code, /src]\n    worktrees: wt":           "h: worktrees \"wt\" must be absolute or start with ~",
+		"repos: [~/code, /src]":                              "h has repos but not worktrees",
+		"repos: [~/code, ~user/src]\n    worktrees: ~/w":     "repos \"~user/src\" must be absolute",
+	}
+	for in, want := range rejects {
+		_, err := Parse([]byte("hosts:\n  - name: h\n    " + in + "\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %v, want %q", in, err, want)
+		}
+	}
+}
+
 func TestExpandDirs(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
-	d := Dirs{Repos: "~/code", Worktrees: "/abs/wt"}.Expand()
-	if d.Repos != "/home/u/code" || d.Worktrees != "/abs/wt" {
+	d := Dirs{Repos: []string{"~/code", "/abs/group", "~"}, Worktrees: "/abs/wt"}.Expand()
+	if !slices.Equal(d.Repos, []string{"/home/u/code", "/abs/group", "/home/u"}) || d.Worktrees != "/abs/wt" {
 		t.Fatalf("expand: %+v", d)
 	}
 	if ExpandHome("~") != "/home/u" || ExpandHome("~user/x") != "~user/x" {

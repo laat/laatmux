@@ -107,7 +107,11 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	logger.Printf("serve %s env=%s tmux=%s listen=%s", version, envID, strings.Join(labels, ","), tmux.Printable(rt.Address))
 	if store != nil {
-		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", tmux.Printable(store.Dirs.Repos), tmux.Printable(store.Dirs.Worktrees), len(store.Repos()))
+		repos := make([]string, len(store.Dirs.Repos))
+		for i, r := range store.Dirs.Repos {
+			repos[i] = tmux.Printable(r)
+		}
+		logger.Printf("worktrees: repos=%s worktrees=%s known=%d", strings.Join(repos, ","), tmux.Printable(store.Dirs.Worktrees), len(store.Repos()))
 	} else {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
 	}

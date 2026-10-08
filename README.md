@@ -77,7 +77,8 @@ hosts:
   - name: box
     ssh: box                  # ssh alias, ControlMaster assumed
     bin: laatmux              # remote binary, must be on PATH of a non-interactive shell
-    repos: ~/src
+    repos: [~/src, ~/src/work]  # or several: a checkout is found in any of them,
+                                # a clone for add is made in the first
     worktrees: ~/src/worktrees
 tmux_servers: [laatmux, default]   # what this machine's daemon watches
 agents:
@@ -101,7 +102,8 @@ local host's `repos` and `worktrees` are read by the daemon on the machine
 the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
 default server list is the managed `laatmux` server alone. The daemon
-follows the file's `repos`: every two seconds it looks at the file, and
+reads its host's directories when it starts, and follows the file's
+top-level `repos` list: every two seconds it looks at the file, and
 reads the list again when the file has changed (another file renamed
 over it, or a new modification time or size), so a repository added by
 hand or by the task form shows in the listing without a restart, and
@@ -210,7 +212,16 @@ is rejected, naming the host, when it starts with `-`, since the tools
 in `upgrade`'s install script would read the path as options, and so,
 unless the path needs quoting, would the host's shell running the
 bridge. `repos` and `worktrees` have no defaults, and must be absolute
-or start with `~`; a host without them cannot `add`. A repository's
+or start with `~`; a host without them cannot `add`. A host's `repos` is
+one directory or a list of them, `[~/code, ~/code/group]` say, for
+checkouts kept in a directory that groups related repositories: each
+is scanned as one is, its direct children with an `origin`, and no
+deeper, so a group is listed by name. A repository found in none of
+them is cloned into the first; worktrees go under the one `worktrees`
+directory whichever directory has the checkout. A checkout reached
+twice, by a directory listed twice or through a symlink, a link in one
+directory to a checkout in another say, is listed once: by its own path
+where a `repos` directory has it, else by the path scanned first. A repository's
 name is derived from its source: the last path
 component without `.git`; on a collision each is prefixed with its org
 (`laat-laatmux`, `acme-laatmux`); if they still collide, or there is no org
@@ -219,7 +230,10 @@ The derivation is deterministic, so every host derives the same name from
 the same list, and duplicate sources or duplicate final names are rejected.
 Identity is the source, not the name: the name only places new things.
 `laatmux repos` shows each name next to its checkout and worktree paths per
-host, as configured, so a `~` is the host's own.
+host, as configured, so a `~` is the host's own; for a host with several
+`repos` directories, a line before the list names them and the first,
+where the checkout path each repository's line shows is cloned when no
+directory has a checkout of it.
 
 Shared setup lives in `.laatmux.yaml` at the repository root, committed:
 
@@ -289,7 +303,8 @@ truth; labels only place new things.
 - **Worktree records** arrive in the subscription stream next to agents:
   `worktrees` in a snapshot, `worktree` in an upsert, `worktree_id` in a
   remove. Every two seconds the daemon scans the main checkouts under
-  `repos`, each found by having an `origin`, asks each that has a linked
+  each `repos` directory, in the order the list has them, each found by
+  having an `origin`, asks each that has a linked
   worktree under `worktrees/`, read from the `gitdir` files git keeps,
   for `git worktree list --porcelain`, and publishes the entries under
   `worktrees/`, a root once. Every checkout counts, listed in the config
@@ -301,10 +316,15 @@ truth; labels only place new things.
   that label, as `ls` shows it. Such a label does not take one another
   repository has, the config's name for it or the label of another
   checkout the config does not list, `next_js` or `next:js` say: the
-  config's name, or the checkout named so, keeps it, else the first by
-  name, and the made label gets a `-` and six hex digits of a hash of
-  its origin after it, which the daemon logs once. Clones of one
-  repository share their label. Listing either repository in the
+  config's name, or the checkout named so, keeps it, else the first in
+  scan order, by name within a directory, and the made label gets a `-`
+  and six hex digits of a hash of its origin after it, which the daemon
+  logs once. Two checkouts of different repositories named alike in two
+  `repos` directories, `~/code/api` and `~/code/group/api` say, are
+  told apart the same way: a checkout of the config's repository named
+  `api` whose directory is named `api` keeps the label, else the one in
+  the directory listed first, and the other gets the hash. Clones of
+  one repository share their label. Listing either repository in the
   host's config with a `name` settles it. The laptop's views show the
   laptop's own name for a source it knows. Prunable entries, whose
   directory is gone, are not published; a detached worktree has an
@@ -396,8 +416,10 @@ truth; labels only place new things.
   their own for now. A pane's path is resolved off
   the poll, so a shell on a hung mount never holds detection up.
 - **`add`** `{type: add, id, repo, branch, agent_name, cmd}` runs the
-  stages in the note, each step skipped by inspection: resolve, clone
-  (refused when `<repos>/<name>` exists with another origin), fetch,
+  stages in the note, each step skipped by inspection: resolve (a
+  checkout in any `repos` directory), clone (into the first `repos`
+  directory, refused when `<first>/<name>` exists with another origin),
+  fetch,
   worktree (`set-head --auto` and prune; a remote branch is tracked, an
   existing local branch used as is, a new one made with `--no-track` from
   `origin/HEAD`; the root registered on another branch or the branch

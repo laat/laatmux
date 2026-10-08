@@ -1,8 +1,8 @@
 // Package worktree is the git side of a host's workspaces: the checkouts
-// under the host's repos directory, the worktrees under its worktrees
+// under the host's repos directories, the worktrees under its worktrees
 // directory, and the stages of add that touch git and the filesystem.
 //
-// Git is the source of truth. A checkout is found under <repos> by its
+// Git is the source of truth. A checkout is found under a <repos> by its
 // origin, never by its directory name; a worktree is found by asking the
 // checkout's `git worktree list`, never by computing a path. Labels place
 // new things only, so a renamed repository keeps its existing paths.
@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -190,8 +191,8 @@ func (s *Store) Known(ctx context.Context, nameOrSource string) (Repo, bool, err
 	return Repo{}, false, nil
 }
 
-// Checkout finds the main checkout of repo under the repos directory: the
-// direct child whose remote.origin.url is the source, in any form
+// Checkout finds the main checkout of repo under the repos directories:
+// the direct child of one whose remote.origin.url is the source, in any form
 // source.Same takes as one, so each host fetches over the
 // transport its checkout was cloned with. Reads of origin are cached by
 // the mtime and size of .git/config, so an idle poll spawns no git
@@ -205,8 +206,8 @@ func (s *Store) Checkout(ctx context.Context, repo Repo) (string, bool, error) {
 	return dir, ok, nil
 }
 
-// Checkouts scans the repos directory once and maps each origin found,
-// by source.Key, to its checkout, the first in directory order
+// Checkouts scans the repos directories once and maps each origin found,
+// by source.Key, to its checkout, the first in scan order (scan)
 // when two share an origin. One scan serves every repository in a poll.
 func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 	cos, err := s.scan(ctx)
@@ -223,31 +224,73 @@ func (s *Store) Checkouts(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-// checkout is a main checkout under the repos directory and its origin.
+// checkout is a main checkout under a repos directory and its origin.
 type checkout struct{ dir, origin string }
 
-// scan is every main checkout with an origin directly under the repos
-// directory, in directory order.
+// scan is every main checkout with an origin directly under one of the
+// repos directories, in scan order: the directories in the config's
+// order, each in directory order. A directory that does not exist has
+// no checkouts. A checkout reached twice, by a directory listed twice,
+// as written or through a symlink, or by a symlink in a repos directory
+// to another's checkout, a link left from before the list say, is
+// listed once: by its own path where a repos directory has it as an
+// entry that is no symlink, else by the path scanned first. A symlink
+// leading to it would otherwise label it by the link's name, which the
+// config's name for it does not hold (labels). Only a symlink is
+// resolved per entry, so a poll over many checkouts costs no more than
+// it did.
 func (s *Store) scan(ctx context.Context) ([]checkout, error) {
-	entries, err := os.ReadDir(s.Dirs.Repos)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+	type entry struct {
+		dir, real string
+		link      bool
+	}
+	var entries []entry
+	own := map[string]bool{} // by real path, the entries that are no symlink
+	for _, repos := range s.Dirs.Repos {
+		repos = filepath.Clean(repos)
+		des, err := os.ReadDir(repos)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, tmux.PrintablePath(err)
 		}
-		return nil, tmux.PrintablePath(err)
+		real := realPath(repos)
+		for _, e := range des {
+			en := entry{dir: filepath.Join(repos, e.Name()), real: filepath.Join(real, e.Name())}
+			if e.Type()&fs.ModeSymlink != 0 {
+				en.real, en.link = realPath(en.dir), true
+			} else {
+				own[en.real] = true
+			}
+			entries = append(entries, en)
+		}
 	}
 	var out []checkout
-	for _, e := range entries {
-		dir := filepath.Join(s.Dirs.Repos, e.Name())
-		url, ok, err := s.origin(ctx, dir)
+	found := map[string]bool{} // by real path
+	for _, en := range entries {
+		if found[en.real] || en.link && own[en.real] {
+			continue
+		}
+		url, ok, err := s.origin(ctx, en.dir)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			out = append(out, checkout{dir, url})
+			found[en.real] = true
+			out = append(out, checkout{en.dir, url})
 		}
 	}
 	return out, nil
+}
+
+// realPath is p with its symlinks resolved, as resolveExisting resolves
+// them, or p as it is where they cannot be.
+func realPath(p string) string {
+	if real, ok := resolveExisting(p); ok {
+		return real
+	}
+	return p
 }
 
 // dirLabel is the label of a checkout the config does not list, from
@@ -285,7 +328,7 @@ func dirLabel(name string) string {
 // name. A label made of a name that is not one, next_js of next.js,
 // does not take one another repository has: the config's name for it,
 // or the label of a checkout the config does not list, whose directory
-// is named so or which comes first in directory order, next_js or
+// is named so or which comes first in scan order, next_js or
 // next:js say. The made label then has a - and a hash of its origin
 // after it, so every clone of one repository that loses the plain
 // label gets the same one; held names, by the directory of each such,
@@ -295,12 +338,29 @@ func dirLabel(name string) string {
 // listing, which the daemon would take for their removal. A directory
 // whose own name is the config's name for another repository keeps it,
 // as the user named it: Known refuses that label, naming both sources.
+// A name that is a label is the checkout's own but where a checkout of
+// another repository in another repos directory is named so too, as one
+// directory cannot have two: a checkout of the config's repository
+// named as the config names it keeps the plain label, else the first in
+// scan order, and the other's label has the hash after it.
 func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held map[string]checkout) {
 	out = make(map[string]Repo, len(cos))
 	held = map[string]checkout{}
 	holders := map[string]checkout{} // by label, what has it
 	for _, r := range repos {
 		holders[r.Name] = checkout{origin: r.Source}
+	}
+	// By name, the checkout named so that keeps it against one named so
+	// in another repos directory: a checkout of the config's repository
+	// whose directory is named as the config names it, wherever it is,
+	// else the first in scan order.
+	named := map[string]checkout{}
+	for _, co := range cos {
+		if r, listed := repos.BySource(co.origin); listed && filepath.Base(co.dir) == r.Name {
+			if _, ok := named[r.Name]; !ok {
+				named[r.Name] = co
+			}
+		}
 	}
 	var made []checkout // unlisted checkouts whose name is not a label
 	for _, co := range cos {
@@ -311,6 +371,15 @@ func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held m
 		name := filepath.Base(co.dir)
 		if !config.ValidLabel(name) {
 			made = append(made, co)
+			continue
+		}
+		if f, ok := named[name]; !ok {
+			named[name] = co
+		} else if !source.Same(f.origin, co.origin) {
+			// A checkout of another repository named so in another
+			// repos directory: one directory cannot have two.
+			held[co.dir] = f
+			out[co.dir] = Repo{Source: co.origin, Name: hashed(name, co.origin)}
 			continue
 		}
 		out[co.dir] = Repo{Source: co.origin, Name: name}
@@ -326,12 +395,19 @@ func (s *Store) labels(repos Repos, cos []checkout) (out map[string]Repo, held m
 			holders[label] = co
 		case !source.Same(h.origin, co.origin):
 			held[co.dir] = h
-			sum := sha256.Sum256([]byte(source.Key(co.origin)))
-			label += "-" + hex.EncodeToString(sum[:3])
+			label = hashed(label, co.origin)
 		}
 		out[co.dir] = Repo{Source: co.origin, Name: label}
 	}
 	return out, held
+}
+
+// hashed is a label that lost its plain form to another repository's:
+// a - and six hex digits of a hash of the origin after it, the same for
+// every clone of one repository.
+func hashed(label, origin string) string {
+	sum := sha256.Sum256([]byte(source.Key(origin)))
+	return label + "-" + hex.EncodeToString(sum[:3])
 }
 
 // collided logs, once per pair, that a checkout's label has a hash
@@ -503,14 +579,14 @@ func parseWorktrees(out string) []Entry {
 
 // Record is one worktree of a known repository under the worktrees
 // directory, as the daemon publishes it, or with Main a main checkout
-// under the repos directory, as ListAll lists them.
+// under a repos directory, as ListAll lists them.
 type Record struct {
 	Repo   string // label
 	Source string
 	Branch string // "" when detached
 	Root   string
 	// Main is a main checkout's record: Root is its directory under
-	// the repos directory and Branch what its HEAD has checked out.
+	// a repos directory and Branch what its HEAD has checked out.
 	// Configured is that this host's config lists its repository;
 	// Linked that a worktree of this checkout is in the listing;
 	// Unread that its HEAD could not be read, so it is not to be
@@ -523,14 +599,14 @@ type Record struct {
 }
 
 // List returns every worktree that lives under the worktrees directory
-// of every main checkout under the repos directory, whether or not the
+// of every main checkout under the repos directories, whether or not the
 // config lists its repository: a checkout the config lists is labelled
 // with the config's name and source, any other with its directory name,
 // made a label by dirLabel, and origin, a hash after it when another
 // repository has that label, logged once (see labels). Prunable entries,
 // whose directory is gone, are left out, as is the main checkout, which
 // is not a worktree even when the repos directory sits under the
-// worktrees one. The repos directory is scanned once; one checkout
+// worktrees one. The repos directories are scanned once; one checkout
 // failing to list does not hide the others: its error is returned
 // alongside what was listed.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
@@ -685,7 +761,7 @@ func (s *Store) Owns(root string) bool {
 	return true
 }
 
-// IsCheckout reports whether root is a main checkout under the repos
+// IsCheckout reports whether root is a main checkout under a repos
 // directory, as written or with symlinks resolved: rm refuses one even
 // where the repos directory sits under the worktrees one, so Owns takes
 // it, since its sessions are new's, not a worktree's.
@@ -783,7 +859,7 @@ func pointsBack(root, checkout string) (bool, error) {
 }
 
 // Find locates a registered worktree by root across every main checkout
-// under the repos directory, under the worktrees directory only. Used by
+// under the repos directories, under the worktrees directory only. Used by
 // rm on a root-only target; a worktree elsewhere is not the daemon's to
 // remove.
 func (s *Store) Find(ctx context.Context, root string) (Record, string, bool, error) {

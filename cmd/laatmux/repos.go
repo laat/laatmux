@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -24,21 +25,46 @@ func cmdRepos(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("usage: laatmux repos")
 	}
+	var last home.Last
+	if len(cfg.Repos) > 0 {
+		if last, err = home.ReadLast(); err != nil {
+			return err
+		}
+	}
+	writeRepos(os.Stdout, cfg, last)
+	return nil
+}
+
+// writeRepos is cmdRepos's output. A host with more than one repos
+// directory has a line first: a checkout is looked for in each, and a
+// repository found in none is cloned into the first, the checkout each
+// repository's line names.
+func writeRepos(out io.Writer, cfg config.Config, last home.Last) {
+	var head []string
 	if len(cfg.Copy) > 0 {
-		fmt.Printf("copy, every worktree on this machine: %s\n", strings.Join(cfg.Copy, "  "))
+		head = append(head, "copy, every worktree on this machine: "+strings.Join(cfg.Copy, "  "))
+	}
+	for _, h := range cfg.Hosts {
+		if len(h.Repos) < 2 {
+			continue
+		}
+		dirs := make([]string, len(h.Repos))
+		for i, d := range h.Repos {
+			dirs[i] = tmux.Printable(d)
+		}
+		head = append(head, fmt.Sprintf("checkouts on %s: found in %s, cloned into %s", h.Name, strings.Join(dirs, "  "), dirs[0]))
+	}
+	for _, l := range head {
+		fmt.Fprintln(out, l)
 	}
 	if len(cfg.Repos) == 0 {
-		fmt.Printf("no repos configured in %s\n", tmux.Printable(config.Path()))
-		return nil
+		fmt.Fprintf(out, "no repos configured in %s\n", tmux.Printable(config.Path()))
+		return
 	}
-	if len(cfg.Copy) > 0 {
-		fmt.Println()
+	if len(head) > 0 {
+		fmt.Fprintln(out)
 	}
-	last, err := home.ReadLast()
-	if err != nil {
-		return err
-	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 8, 2, ' ', 0)
 	defer w.Flush()
 	for i, r := range cfg.Repos {
 		if i > 0 {
@@ -69,5 +95,4 @@ func cmdRepos(ctx context.Context, args []string) error {
 			fmt.Fprintln(w)
 		}
 	}
-	return nil
 }

@@ -227,7 +227,7 @@ func newStore(t *testing.T) (*worktree.Store, string) {
 	sh(seed, "git", "add", ".")
 	sh(seed, "git", "commit", "-q", "-m", "init")
 	sh(seed, "git", "push", "-q", remote, "main")
-	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
+	dirs := config.Dirs{Repos: []string{filepath.Join(base, "repos")}, Worktrees: filepath.Join(base, "worktrees")}
 	return worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}}), remote
 }
 
@@ -562,7 +562,7 @@ func TestRmLeavesExternalWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkout, _, _ := store.Checkout(ctx, repo)
-	elsewhere := filepath.Join(filepath.Dir(store.Dirs.Repos), "elsewhere")
+	elsewhere := filepath.Join(filepath.Dir(store.Dirs.Repos[0]), "elsewhere")
 	cmd := exec.Command("git", "worktree", "add", "-q", "-b", "outside", elsewhere, "main")
 	cmd.Dir = checkout
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -667,7 +667,7 @@ func TestRootWithControlBytesQuoted(t *testing.T) {
 	store, remote := newStore(t)
 	dirs := store.Dirs
 	base := filepath.Dir(dirs.Worktrees)
-	dirs.Repos = filepath.Join(base, "re\tpos\x1b[32m")
+	dirs.Repos = []string{filepath.Join(base, "re\tpos\x1b[32m")}
 	dirs.Worktrees = filepath.Join(base, "work\ttrees\x1b[31m")
 	store = worktree.New(dirs, []config.Repo{{Source: remote, Name: "proj"}, {Source: "/nowhere/other.git", Name: "other"}})
 	d, ft := addDaemon(t, store)
@@ -1097,10 +1097,10 @@ func TestRmPrunableWorktree(t *testing.T) {
 // and so does a session new made in it.
 func TestRmRefusesMainCheckout(t *testing.T) {
 	store, remote := newStore(t)
-	store.Dirs.Repos = filepath.Join(store.Dirs.Worktrees, "checkouts")
-	main := filepath.Join(store.Dirs.Repos, "proj")
-	mkdirs(t, store.Dirs.Repos)
-	sh(t, store.Dirs.Repos, "git", "clone", "-q", remote, main)
+	store.Dirs.Repos = []string{filepath.Join(store.Dirs.Worktrees, "checkouts")}
+	main := filepath.Join(store.Dirs.Repos[0], "proj")
+	mkdirs(t, store.Dirs.Repos[0])
+	sh(t, store.Dirs.Repos[0], "git", "clone", "-q", remote, main)
 	d, ft := addDaemon(t, store)
 	ft.set(func() {
 		ft.panes = []tmux.Pane{{Session: "notes", SessionID: "$1", ID: "%1", Managed: true, Cwd: main, CurrentPath: main}}
@@ -1239,7 +1239,7 @@ func TestAddFromRepoEntry(t *testing.T) {
 			t.Fatalf("dash: the refusal should name the label and the rule: %q", res.Error)
 		}
 	}
-	if _, err := os.Stat(store.Dirs.Repos); err == nil {
+	if _, err := os.Stat(store.Dirs.Repos[0]); err == nil {
 		t.Fatal("a refused add touched the repos directory")
 	}
 
@@ -1253,7 +1253,7 @@ func TestAddFromRepoEntry(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(root, "log")); string(b) != "ran\nsent\n" {
 		t.Fatalf("setup: %q", b)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dirs.Repos, "sent", ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(store.Dirs.Repos[0], "sent", ".git")); err != nil {
 		t.Fatal("not cloned under the entry's name")
 	}
 	d.pollWorktrees(ctx)
@@ -1321,7 +1321,7 @@ func TestRmUnlistedRepository(t *testing.T) {
 	root := res.Root
 
 	// A second clone of the repository, with a worktree of its own.
-	second := filepath.Join(store.Dirs.Repos, "sent2")
+	second := filepath.Join(store.Dirs.Repos[0], "sent2")
 	if out, err := exec.Command("git", "clone", "-q", remote, second).CombinedOutput(); err != nil {
 		t.Fatalf("clone: %v %s", err, out)
 	}
@@ -1370,7 +1370,7 @@ func TestUnlistedCheckoutLabelInRefusals(t *testing.T) {
 	pc := conn(t, d)
 	root := addWorktree(t, pc, remote, "task")
 	const label = "hand_made__31m"
-	hand := filepath.Join(store.Dirs.Repos, "hand\tmade\x1b[31m")
+	hand := filepath.Join(store.Dirs.Repos[0], "hand\tmade\x1b[31m")
 	side := store.Dirs.Worktree("hand", "side")
 	for _, args := range [][]string{
 		{"clone", "-q", remote, hand},
@@ -1444,7 +1444,7 @@ func TestListingErrorOnce(t *testing.T) {
 	}
 	var logged strings.Builder
 	d := New(Config{EnvironmentID: "lenv", Version: "local", Logger: log.New(&logged, "", 0),
-		Store: worktree.New(config.Dirs{Repos: repos, Worktrees: filepath.Join(dir, "wt")}, nil)})
+		Store: worktree.New(config.Dirs{Repos: []string{repos}, Worktrees: filepath.Join(dir, "wt")}, nil)})
 	state := func() (uint64, string) { d.mu.Lock(); defer d.mu.Unlock(); return d.seq, d.listErr }
 	for range 3 {
 		d.pollWorktrees(context.Background())

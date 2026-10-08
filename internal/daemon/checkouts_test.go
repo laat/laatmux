@@ -104,9 +104,9 @@ func sh(t *testing.T, dir string, args ...string) {
 // subscriber that did not ask for the records gets none.
 func TestMainCheckoutRecords(t *testing.T) {
 	store, remote := newStore(t)
-	base := filepath.Dir(store.Dirs.Repos)
-	proj := filepath.Join(store.Dirs.Repos, "proj")
-	other := filepath.Join(store.Dirs.Repos, "other")
+	base := filepath.Dir(store.Dirs.Repos[0])
+	proj := filepath.Join(store.Dirs.Repos[0], "proj")
+	other := filepath.Join(store.Dirs.Repos[0], "other")
 	sh(t, base, "git", "clone", "-q", remote, proj)
 	sh(t, base, "git", "clone", "-q", remote, other)
 	// Another repository, which the config does not list.
@@ -115,7 +115,7 @@ func TestMainCheckoutRecords(t *testing.T) {
 	mkdirs(t, filepath.Join(other, "sub"))
 	// A third, not listed either, with a worktree under the worktrees
 	// directory.
-	linked := filepath.Join(store.Dirs.Repos, "linked")
+	linked := filepath.Join(store.Dirs.Repos[0], "linked")
 	sh(t, base, "git", "clone", "-q", remote, linked)
 	sh(t, linked, "git", "remote", "set-url", "origin", filepath.Join(base, "linked.git"))
 	sh(t, linked, "git", "worktree", "add", "-q", "-b", "x", filepath.Join(store.Dirs.Worktrees, "linked", "x"))
@@ -368,8 +368,8 @@ func TestRecordChangesKind(t *testing.T) {
 // and fails no listing: the worktrees' changes still go out.
 func TestMainCheckoutUnread(t *testing.T) {
 	store, remote := newStore(t)
-	base := filepath.Dir(store.Dirs.Repos)
-	proj := filepath.Join(store.Dirs.Repos, "proj")
+	base := filepath.Dir(store.Dirs.Repos[0])
+	proj := filepath.Join(store.Dirs.Repos[0], "proj")
 	sh(t, base, "git", "clone", "-q", remote, proj)
 	// A listing first, which reads the origin as a running daemon has
 	// it: git finds no repository whose HEAD it cannot open.
@@ -403,8 +403,8 @@ func TestMainCheckoutUnread(t *testing.T) {
 // use.
 func TestMainCheckoutOrdering(t *testing.T) {
 	store, remote := newStore(t)
-	base := filepath.Dir(store.Dirs.Repos)
-	other := filepath.Join(store.Dirs.Repos, "other")
+	base := filepath.Dir(store.Dirs.Repos[0])
+	other := filepath.Join(store.Dirs.Repos[0], "other")
 	sh(t, base, "git", "clone", "-q", remote, other)
 	sh(t, other, "git", "remote", "set-url", "origin", filepath.Join(base, "other.git"))
 	laatmux, def := &fakeServer{}, &fakeServer{}

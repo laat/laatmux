@@ -157,7 +157,7 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 // default server is refused as jump refuses it; with no agent the jump
 // says so, not how add would start one, and so do S's lookup.
 func TestJumpRowMainCheckout(t *testing.T) {
-	mac := config.Host{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}
+	mac := config.Host{Host: peer.Host{Name: "mac"}, Repos: config.Paths{"/r"}, Worktrees: "/w"}
 	vm := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
 	cfg := config.Config{Hosts: []config.Host{mac, vm}}
 	w := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
@@ -579,8 +579,8 @@ func TestEnsureUnlistedDottedCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
-	checkout := filepath.Join(dirs.Repos, "my.repo")
+	dirs := config.Dirs{Repos: []string{filepath.Join(base, "repos")}, Worktrees: filepath.Join(base, "worktrees")}
+	checkout := filepath.Join(dirs.Repos[0], "my.repo")
 	root := dirs.Worktree("my_repo", "b")
 	for _, args := range [][]string{
 		{"init", "-q", checkout},

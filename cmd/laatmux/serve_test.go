@@ -56,7 +56,8 @@ func (s *served) wait(t *testing.T) error {
 // base and the tmux socket directory at a short path of its own under
 // /tmp, so the daemon polls a laatmux server that is not there and
 // never starts one, then starts cmdServe on a loopback port and waits
-// for its hello.
+// for its hello. The config lists a repos directory with no checkout
+// before the store's, so the daemon finds the checkout in the second.
 func serveFixture(t *testing.T) *served {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -69,8 +70,8 @@ func serveFixture(t *testing.T) *served {
 		}
 	}
 	remote := seedRemote(t, base)
-	dirs := config.Dirs{Repos: filepath.Join(base, "repos"), Worktrees: filepath.Join(base, "worktrees")}
-	cfg := fmt.Sprintf("hosts:\n  - name: box\n    repos: %s\n    worktrees: %s\nrepos:\n  - source: %s\n    name: proj\n", dirs.Repos, dirs.Worktrees, remote)
+	dirs := config.Dirs{Repos: []string{filepath.Join(base, "repos")}, Worktrees: filepath.Join(base, "worktrees")}
+	cfg := fmt.Sprintf("hosts:\n  - name: box\n    repos: [%s, %s]\n    worktrees: %s\nrepos:\n  - source: %s\n    name: proj\n", filepath.Join(base, "code"), dirs.Repos[0], dirs.Worktrees, remote)
 	os.WriteFile(filepath.Join(base, "config.yaml"), []byte(cfg), 0o644)
 	// State and config under base; the tmux socket directory below is
 	// one of this fixture's own too, so the daemon polls a laatmux
