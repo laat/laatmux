@@ -1039,9 +1039,14 @@ func ANSI(l Line, th palette.Theme) string {
 			b.WriteString("\x1b[7m")
 		}
 		if l.Dim && !band && !l.Reverse {
-			b.WriteString("\x1b[2m")
+			// A dim line is the dimmed colour, or faint where there is
+			// none: never both, since a terminal that renders faint by
+			// blending towards the background would darken the dimmed
+			// colour a second time, below reading on a dark background.
 			if colour {
 				b.WriteString(th.SGR(palette.Dimmed, false))
+			} else {
+				b.WriteString("\x1b[2m")
 			}
 		}
 		if l.Bold {
@@ -1081,8 +1086,9 @@ func ANSI(l Line, th palette.Theme) string {
 		faint := s.Dim && !l.Dim && fg == "" && !(s.band && pre == "\x1b[7m")
 		if faint && s.faded && colour {
 			// A dim row's span on a line that is not dim, its chip in
-			// the strip: faint in the dimmed colour, as its line is.
-			fg = th.SGR(palette.Dimmed, false)
+			// the strip: the dimmed colour, as its line is, and not
+			// faint on top of it.
+			fg, faint = th.SGR(palette.Dimmed, false), false
 		}
 		if faint && bg != "" {
 			// Faint in the terminal's colour can all but vanish on a
@@ -1094,8 +1100,10 @@ func ANSI(l Line, th palette.Theme) string {
 			}
 		}
 		if faint || s.Bold || fg != "" || bg != "" || pre != "" {
-			if s.label && l.Dim && !band {
-				// The viewer's label is not faint on a dim line.
+			if s.label && l.Dim && !band && !colour {
+				// The viewer's label is not faint on a dim line; with
+				// colours the line was never faint and the label's own
+				// colour replaces the dimmed one.
 				b.WriteString("\x1b[22m")
 			}
 			b.WriteString(pre)

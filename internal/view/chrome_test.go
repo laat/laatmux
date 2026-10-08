@@ -236,7 +236,7 @@ func TestChromeEdges(t *testing.T) {
 	if got := ANSI(Line{Spans: []Span{{Text: "─", Fg: palette.Border, Dim: true}}}, palette.Mono()); !strings.Contains(got, "\x1b[2m") {
 		t.Errorf("divider without colours not faint: %q", got)
 	}
-	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg, label: true}}}, th); !strings.Contains(got, "\x1b[22m\x1b[1m"+th.SGR(palette.CurrentWorktreeFg, false)+"me") {
+	if got := ANSI(Line{Dim: true, Spans: []Span{{Text: "me", Bold: true, Fg: palette.CurrentWorktreeFg, label: true}}}, th); !strings.Contains(got, "\x1b[1m"+th.SGR(palette.CurrentWorktreeFg, false)+"me") || strings.Contains(got, "\x1b[2") {
 		t.Errorf("the viewer's label on a dim line: %q", got)
 	}
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
@@ -322,5 +322,20 @@ func TestGuessedSelection(t *testing.T) {
 	l.Reverse = false
 	if got := ANSI(l, th); !strings.Contains(got, "38;") {
 		t.Errorf("unselected has no colour: %q", got)
+	}
+}
+
+// TestDimLineNotFaintWithColours pins #333: a dim line in a colour
+// theme is the dimmed colour alone, never the faint attribute on top of
+// it, which a terminal that blends faint towards the background darkens
+// a second time; without colours it is faint.
+func TestDimLineNotFaintWithColours(t *testing.T) {
+	dark, _ := palette.New(true, nil)
+	l := Line{Dim: true, Spans: []Span{{Text: "enter jump  q quit"}}}
+	if got := ANSI(l, dark); strings.Contains(got, "\x1b[2m") || !strings.HasPrefix(got, dark.SGR(palette.Dimmed, false)) {
+		t.Errorf("a dim line with colours: %q", got)
+	}
+	if got := ANSI(l, palette.Mono()); !strings.HasPrefix(got, "\x1b[2m") {
+		t.Errorf("a dim line without colours: %q", got)
 	}
 }
