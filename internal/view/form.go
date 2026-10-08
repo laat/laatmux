@@ -2,6 +2,7 @@ package view
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/term"
@@ -10,18 +11,23 @@ import (
 // Form is the task form: three chips for the repository, the host and
 // the agent, a prompt box, and a branch line after it, filled from the
 // prompt as it is typed until the user edits it. Tab and Shift-Tab move
-// between the fields; on a chip Left and Right cycle its candidates and
-// Enter opens the picker with its filter; in the prompt typing edits,
-// Ctrl-J inserts a newline, and Enter submits when the prompt is not
-// empty; on the branch line typing edits it, and Enter submits. Esc
-// cancels the whole form. A field with one candidate is shown, not
+// between the fields; on a chip Left and Right cycle its candidates,
+// Enter opens the picker with its filter and Ctrl-J submits; in the
+// prompt typing edits, Ctrl-J inserts a newline, and Enter submits when
+// the prompt is not empty; on the branch line typing edits it, and
+// Enter or Ctrl-J submits. So Ctrl-J, and Shift-Enter where the
+// terminal tells it apart, submits from every field but the prompt,
+// where it breaks a line. Esc cancels the whole form. A field with one candidate is shown, not
 // skipped, so the form reads the same every time. Pasting is text
 // inserted where the cursor is, line breaks included, never a submit and
-// never a tab. The renderer is a pure function of the fields, the cursor
-// and the size.
+// never a tab. A click on a field focuses it, by the layout the last
+// Render drew. The renderer is a pure function of the fields, the
+// cursor and the size, and records that layout for the click.
 type Form struct {
 	Title string
 	Hint  string
+	// layout is the last Render's, for a click.
+	layout layout
 	// Chips are the repository, the host and the agent, in that order.
 	Chips [3]Chip
 	// Propose derives the branch line from the prompt; nil proposes
@@ -77,7 +83,7 @@ const (
 // and the branch line empty; a branch given is the user's from the
 // start, as a on a worktree row without a session wants.
 func NewForm(title string, chips [3]Chip, branch string) *Form {
-	f := &Form{Title: title, Chips: chips, focus: fieldPrompt, Hint: "tab next field  enter submit  ctrl-j newline  esc cancel"}
+	f := &Form{Title: title, Chips: chips, focus: fieldPrompt, Hint: "tab next field  enter submit  ctrl-j newline, submits from a chip  esc cancel"}
 	if branch != "" {
 		f.branch, f.edited = branch, true
 	}
@@ -158,6 +164,13 @@ func (f *Form) Handle(k term.Key) {
 		f.focus = (f.focus + 4) % 5
 		return
 	case term.KeyMouse:
+		// A click focuses the field under it; the wheel, and a click
+		// between fields, do nothing.
+		if k.Wheel == 0 {
+			if i := f.fieldAt(k.X, k.Y); i >= 0 {
+				f.focus = i
+			}
+		}
 		return
 	case term.KeyPaste:
 		// A paste is text for the prompt wherever the focus is, but on
@@ -190,11 +203,27 @@ func (f *Form) chipKey(k term.Key) {
 		if n > 0 {
 			f.setChip(f.focus, (c.Selected+1)%n)
 		}
-	case term.KeyEnter, term.KeyNewline:
+	case term.KeyEnter:
 		if n > 0 {
 			f.picker = NewPicker(f.Title+": "+c.Title, c.Choices, c.Selected)
 		}
+	case term.KeyNewline:
+		// Ctrl-J or Shift-Enter on a chip submits, as from the prompt
+		// Enter does: the chips are set, the prompt is written, and the
+		// hand need not travel back to it.
+		f.submitPrompt()
 	}
+}
+
+// submitPrompt submits from a field other than the branch line: the
+// prompt must not be empty, since an agent started with no prompt is
+// the add as it was, which the branch line alone offers.
+func (f *Form) submitPrompt() {
+	if strings.TrimSpace(string(f.prompt)) == "" {
+		f.Error = "the prompt is empty"
+		return
+	}
+	f.submit()
 }
 
 // setChip selects a chip's candidate and tells the host.
@@ -211,6 +240,8 @@ func (f *Form) setChip(i, sel int) {
 // promptKey edits the prompt.
 func (f *Form) promptKey(k term.Key) {
 	switch k.Kind {
+	case term.KeyCtrl:
+		f.promptCtrl(k.Rune)
 	case term.KeyRune:
 		f.insert([]rune{k.Rune})
 	case term.KeyNewline:
@@ -272,12 +303,52 @@ func (f *Form) promptKey(k term.Key) {
 		// From the prompt, Enter submits when there is one; the branch
 		// line submits without, an agent started on a branch with no
 		// prompt being the add as it was.
-		if strings.TrimSpace(string(f.prompt)) == "" {
-			f.Error = "the prompt is empty"
-			return
-		}
-		f.submit()
+		f.submitPrompt()
 	}
+}
+
+// promptCtrl is the readline chords in the prompt, within the line as
+// Home and End are: Ctrl-A and Ctrl-E to its start and end, Ctrl-B and
+// Ctrl-F a rune back and forward, Ctrl-D the rune under the cursor,
+// Ctrl-U and Ctrl-K the line's text before and after the cursor, Ctrl-W
+// the word before it. Any other chord does nothing.
+func (f *Form) promptCtrl(r rune) {
+	switch r {
+	case 'a':
+		f.promptKey(term.Key{Kind: term.KeyHome})
+	case 'e':
+		f.promptKey(term.Key{Kind: term.KeyEnd})
+	case 'b':
+		f.promptKey(term.Key{Kind: term.KeyLeft})
+	case 'f':
+		f.promptKey(term.Key{Kind: term.KeyRight})
+	case 'd':
+		f.promptKey(term.Key{Kind: term.KeyDelete})
+	case 'u':
+		f.cut(f.lineStart(f.cursor), f.cursor)
+	case 'k':
+		f.cut(f.cursor, f.lineEnd(f.cursor))
+	case 'w':
+		i, start := f.cursor, f.lineStart(f.cursor)
+		for i > start && unicode.IsSpace(f.prompt[i-1]) {
+			i--
+		}
+		for i > start && !unicode.IsSpace(f.prompt[i-1]) {
+			i--
+		}
+		f.cut(i, f.cursor)
+	}
+}
+
+// cut removes the prompt's runes from i to j and leaves the cursor at
+// i.
+func (f *Form) cut(i, j int) {
+	if i >= j {
+		return
+	}
+	f.prompt = append(f.prompt[:i], f.prompt[j:]...)
+	f.cursor = i
+	f.propose()
 }
 
 // joins reports whether r is drawn with the rune before it, taking no
@@ -321,10 +392,10 @@ func (f *Form) branchKey(k term.Key) {
 		// A branch name has no spaces: a paste loses them.
 		f.branch += strings.ReplaceAll(pasteLine(k.Text), " ", "")
 		f.edited = true
-	case term.KeyRune, term.KeyBackspace:
+	case term.KeyRune, term.KeyBackspace, term.KeyCtrl:
 		f.branch = edited(f.branch, k)
 		f.edited = true
-	case term.KeyEnter:
+	case term.KeyEnter, term.KeyNewline:
 		f.submit()
 	}
 }
@@ -357,7 +428,9 @@ func (f *Form) Render(w, h int) []Line {
 		return f.picker.Render(w, h)
 	}
 	out := []Line{bold(f.Title, w)}
+	f.layout = layout{chips: len(out)}
 	out = append(out, f.chipLines(w)...)
+	f.layout.chipLines = len(out) - f.layout.chips
 	// Footer: the hint, or the error; the note under it when there is
 	// room and one to give.
 	var foot []Line
@@ -383,7 +456,9 @@ func (f *Form) Render(w, h int) []Line {
 	if boxLines < 3 {
 		boxLines = 3
 	}
+	f.layout.box, f.layout.boxLines = len(out), boxLines
 	out = append(out, f.promptBox(w, boxLines)...)
+	f.layout.branch = len(out)
 	out = append(out, branch)
 	out = append(out, foot...)
 	for len(out) < h {
@@ -391,7 +466,45 @@ func (f *Form) Render(w, h int) []Line {
 	}
 	// Too short for it all, the top goes: the footer says why a submit
 	// was refused, which is worth more than the title.
+	f.layout.cut = len(out) - h
 	return out[len(out)-h:]
+}
+
+// layout is where the last Render put the fields, for a click: the
+// first line of the chips, the prompt box and the branch line, counted
+// from the top of the full form before the top was cut to the height,
+// the number of chip lines (three framed on one row, or one each when
+// narrow), the prompt box's height, the chips' column ranges on the
+// framed row, and how many lines were cut from the top.
+type layout struct {
+	chips, box, branch  int
+	chipLines, boxLines int
+	narrow              bool // one chip a line, no frames
+	chipCols            [3][2]int
+	cut                 int
+}
+
+// fieldAt is the field under a click at column x and line y, both
+// 1-based as the terminal reports them, or -1 between fields.
+func (f *Form) fieldAt(x, y int) int {
+	l := f.layout
+	row, col := y-1+l.cut, x-1
+	switch {
+	case row >= l.chips && row < l.chips+l.chipLines:
+		if l.narrow {
+			return row - l.chips
+		}
+		for i, c := range l.chipCols {
+			if col >= c[0] && col < c[1] {
+				return i
+			}
+		}
+	case row >= l.box && row < l.box+l.boxLines:
+		return fieldPrompt
+	case row == l.branch:
+		return fieldBranch
+	}
+	return -1
 }
 
 // focusFg is the colour of the focused field's frame; tabStop is how
@@ -408,6 +521,7 @@ func (f *Form) chipLines(w int) []Line {
 	avail := w - 2
 	if avail < 12 {
 		// Too narrow for frames: one line each.
+		f.layout.narrow = true
 		var out []Line
 		for i, c := range f.Chips {
 			l := plain(fit(c.Title+" "+c.Label(), w))
@@ -421,8 +535,14 @@ func (f *Form) chipLines(w int) []Line {
 	widths := [3]int{avail * 4 / 11, avail * 3 / 11, 0}
 	widths[2] = avail - widths[0] - widths[1]
 	var top, mid, bot Line
+	x := 0
 	for i, c := range f.Chips {
 		cw := widths[i]
+		if i > 0 {
+			x++ // the gap
+		}
+		f.layout.chipCols[i] = [2]int{x, x + cw}
+		x += cw
 		title := " " + c.Title + " "
 		if width(title) > cw-2 {
 			title = fit(title, cw-2)
