@@ -355,6 +355,14 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 			if !rn.cfg.Store.Owns(root) {
 				return fmt.Errorf("%s is not under the worktrees directory %s", tmux.Printable(root), tmux.Printable(rn.cfg.Store.Dirs.Worktrees))
 			}
+			// Nor is a main checkout, where the repos directory is under
+			// the worktrees one: git keeps it, and a session new made in
+			// it is not rm's to kill.
+			if main, err := rn.cfg.Store.IsCheckout(ctx, root); err != nil {
+				return err
+			} else if main {
+				return fmt.Errorf("%s is a main checkout; rm removes worktrees", tmux.Printable(root))
+			}
 		}
 		switch {
 		case root != "":

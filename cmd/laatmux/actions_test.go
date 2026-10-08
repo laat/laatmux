@@ -1248,6 +1248,51 @@ func TestRmFor(t *testing.T) {
 	}
 }
 
+// x and X refuse a main checkout, from its line in the tree and from
+// its agent's tile, with no question asked; z says it has no workspace
+// session to settle.
+func TestMainCheckoutRefused(t *testing.T) {
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	w := protocol.Worktree{ID: "menv/worktree//r/proj", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "main", Root: "/r/proj", Main: true}
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", Agent: "claude",
+			Activity: protocol.Working, Liveness: protocol.Alive, WorktreeID: w.ID}},
+		Worktrees: []protocol.Worktree{w},
+	}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	m.Render()
+	press := func(r rune) {
+		t.Helper()
+		m.Message, m.Confirm = "", ""
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: r}})
+	}
+	for _, c := range []struct {
+		show func() bool
+		kind rows.Kind
+	}{
+		{func() bool { return m.Selection() != nil }, rows.KindTile},
+		{func() bool { treeView(m); return m.Select(w.ID) }, rows.KindWorktree},
+	} {
+		if !c.show() || m.Selection().Kind != c.kind {
+			t.Fatalf("selection %+v, want a %v", m.Selection(), c.kind)
+		}
+		for _, r := range []rune{'x', 'X'} {
+			press(r)
+			if m.Confirm != "" || m.Message != "mac/proj/main is the main checkout; x removes worktrees" {
+				t.Errorf("%c on %v: confirm=%q message=%q", r, m.Selection().Kind, m.Confirm, m.Message)
+			}
+		}
+		press('z')
+		if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
+			t.Errorf("z on %v: %q", m.Selection().Kind, m.Message)
+		}
+	}
+}
+
 // In the tree, x on a repository line, the stale fold, a pane or a run
 // says what x removes; from a worktree line or an agent under it the
 // question counts the agents the tree joins to the worktree, the jump

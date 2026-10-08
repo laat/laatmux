@@ -168,7 +168,7 @@ func TestBranchesGitHubError(t *testing.T) {
 		t.Errorf("error: %+v", msgs)
 	}
 	d.mu.Lock()
-	snap := d.mergedSnapshotLocked()
+	snap := d.mergedSnapshotLocked(false)
 	d.mu.Unlock()
 	if snap.GitHubError == "" || len(snap.BranchStatuses) != 1 {
 		t.Errorf("snapshot: %q %+v", snap.GitHubError, snap.BranchStatuses)
@@ -206,7 +206,7 @@ func TestBranchesAgeAndKeep(t *testing.T) {
 
 	d2, s2 := branchDaemon(t, dir, gh)
 	d2.mu.Lock()
-	snap := d2.mergedSnapshotLocked()
+	snap := d2.mergedSnapshotLocked(false)
 	d2.ageBranchesLocked(map[string]branchQuery{}, time.Now().Add(6*time.Minute))
 	e := d2.branches.entries[branchKeyString(bkey("a"))]
 	stale := e != nil && e.Status.Stale
@@ -365,7 +365,7 @@ func TestBranchesStaleAfterRestart(t *testing.T) {
 	d.mu.Unlock()
 	d2, _ := branchDaemon(t, dir, gh)
 	d2.mu.Lock()
-	snap := d2.mergedSnapshotLocked()
+	snap := d2.mergedSnapshotLocked(false)
 	d2.mu.Unlock()
 	if len(snap.BranchStatuses) != 1 || !snap.BranchStatuses[0].Stale {
 		t.Errorf("%+v", snap.BranchStatuses)

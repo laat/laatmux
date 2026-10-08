@@ -211,7 +211,7 @@ func TestBroadcastNumbers(t *testing.T) {
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &protocol.Agent{ID: "before"}})
 	d.mu.Unlock()
-	s, snap := d.subscribe(nil)
+	s, snap := d.subscribe(nil, false)
 	if snap.Seq != 2 {
 		t.Fatalf("snapshot numbered %d after two broadcasts", snap.Seq)
 	}

@@ -186,9 +186,11 @@ func (j *join) worktreeAgents(w *protocol.Worktree) []*protocol.Agent {
 	return out
 }
 
-// Tree is the tree view: repositories by name, their worktrees by branch
-// with their agents, panes and runs under them, tasks and orphaned
-// sessions where they belong, and other sessions last. Depth is the
+// Tree is the tree view: repositories by name, their main checkouts in
+// use first, with the agents in plain sessions on the default server in
+// each, then their worktrees by branch with their agents, panes and runs
+// under them, tasks and orphaned sessions where they belong, and other
+// sessions last. Depth is the
 // node's level, Children how many nodes are under a foldable one.
 func Tree(in Input) []Row {
 	b := newBuilder(sorted(in))
@@ -558,8 +560,9 @@ func (b *builder) nameRepos() {
 }
 
 // repoLines is the repositories by name, each line followed by its
-// groups: worktrees by branch, tasks and orphaned lines among them by
-// their name, tasks of one name the newest first.
+// groups: the main checkouts first, then worktrees by branch, tasks and
+// orphaned lines among them by their name, tasks of one name the newest
+// first.
 func (b *builder) repoLines() []Row {
 	var out []Row
 	keys := make([]string, 0, len(b.repos))
@@ -575,6 +578,9 @@ func (b *builder) repoLines() []Row {
 	for _, k := range keys {
 		rp := b.repos[k]
 		sort.SliceStable(rp.nodes, func(x, y int) bool {
+			if ma, mb := rp.nodes[x][0].mainCheckout(), rp.nodes[y][0].mainCheckout(); ma != mb {
+				return ma
+			}
 			la, _ := rp.nodes[x][0].Labels()
 			lb, _ := rp.nodes[y][0].Labels()
 			if la != lb {
@@ -598,6 +604,11 @@ func (b *builder) repoLines() []Row {
 		}
 	}
 	return out
+}
+
+// mainCheckout reports whether a line is a main checkout's.
+func (r Row) mainCheckout() bool {
+	return r.Kind == KindWorktree && r.Worktree != nil && r.Worktree.Main
 }
 
 // attachedHome marks the lines whose home the viewer's plain attachment
@@ -968,10 +979,11 @@ func (r Row) namedAfter(session string) bool {
 // named is the name add gives the managed session of the line's
 // worktree, tmux.SessionName of the host's label, which this machine's
 // configuration may name otherwise, and the branch. "" for a detached
-// worktree, which add does not make, and for a line of none.
+// worktree, which add does not make, for a main checkout, which add
+// makes no session for, and for a line of none.
 func (r Row) named() string {
 	w := r.Worktree
-	if w == nil || w.Branch == "" {
+	if w == nil || w.Branch == "" || w.Main {
 		return ""
 	}
 	return tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)

@@ -15,6 +15,7 @@ import (
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -30,6 +31,10 @@ import (
 // A managed session that is no worktree's, one that new made, is reached
 // the same way through a local session named <host>/<session>, tagged as
 // a plain attachment rather than a workspace.
+//
+// A repository's main checkout, <host>/<repo>/<branch> for the branch it
+// has checked out, has no workspace session: the jump switches to the
+// session of its agent on this machine's default server (jumpMain).
 //
 // With --server default the session is one the daemon merely observes on
 // this machine's own tmux. It is already in the user's server, so jump is
@@ -65,27 +70,25 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	if how == jumpSwitch {
-		// A client belongs to one server, so switching only works when the
-		// server jump runs in is the default one.
-		// The target is printed as tmux.Printable shows it, here and in
-		// jump's other refusals: it can name a branch, and git takes a
-		// C1 control character and a byte that is not UTF-8 in one.
-		if !workspace.Server.HasSession(ctx, rest) {
-			return fmt.Errorf("%s: no such session on the default tmux server", tmux.Printable(h.Name+"/"+rest))
-		}
-		if !workspace.Inside(ctx) {
-			return fmt.Errorf("%s: is on the default tmux server; run jump from a client of it", tmux.Printable(h.Name+"/"+rest))
-		}
-		return workspace.Switch(ctx, rest)
+		return switchDefault(ctx, h, rest)
 	}
 	_, snap, err := snapshot(ctx, h.Host, "")
 	if err != nil {
 		return err
 	}
 	var spec workspace.Spec
-	w, ok, err := matchWorktree(snap.Worktrees, cfg, rest)
+	// A worktree before a main checkout, which another clone of the
+	// repository can have on the branch.
+	worktrees, mains := splitMains(snap.Worktrees)
+	w, ok, err := matchWorktree(worktrees, cfg, rest)
+	if err == nil && !ok {
+		w, ok, err = matchWorktree(mains, cfg, rest)
+	}
 	if err != nil {
 		return err
+	}
+	if ok && w.Main {
+		return jumpMain(ctx, h, w, snap.Agents)
 	}
 	if ok {
 		if w.Session == "" {
@@ -103,6 +106,69 @@ func cmdJump(ctx context.Context, args []string) error {
 		return err
 	}
 	return focus(ctx, name, created)
+}
+
+// switchDefault switches to a session on this machine's default server,
+// the one jump runs in: a client belongs to one server, so switching
+// only works when the server jump runs in is the default one. The
+// target is printed as tmux.Printable shows it, here and in jump's
+// other refusals: it can name a branch, and git takes a C1 control
+// character and a byte that is not UTF-8 in one.
+func switchDefault(ctx context.Context, h config.Host, session string) error {
+	if !workspace.Server.HasSession(ctx, session) {
+		return fmt.Errorf("%s: no such session on the default tmux server", tmux.Printable(h.Name+"/"+session))
+	}
+	if !workspace.Inside(ctx) {
+		return fmt.Errorf("%s: is on the default tmux server; run jump from a client of it", tmux.Printable(h.Name+"/"+session))
+	}
+	return workspace.Switch(ctx, session)
+}
+
+// jumpMain goes to a main checkout's agent, in a plain session on its
+// host's default server: the most recently active of several, as the
+// checkout's line goes (rows.MainAgent). No workspace session is made
+// for a main checkout, so one with no agent is refused, and an agent
+// on a remote host's default server is refused as any session there
+// is.
+func jumpMain(ctx context.Context, h config.Host, w protocol.Worktree, agents []protocol.Agent) error {
+	a := rows.MainAgent(agents, w)
+	if a == nil {
+		return errors.New(mainNoAgent(h, w))
+	}
+	if _, err := jumpMode(h.Host, tmux.Parse(a.Server), a.Session); err != nil {
+		return err
+	}
+	return switchDefault(ctx, h, a.Session)
+}
+
+// mainNoAgent says a main checkout has no agent to jump to: jump makes
+// no workspace session for one, and add starts agents in worktrees.
+func mainNoAgent(h config.Host, w protocol.Worktree) string {
+	return mainName(h.Name, w) + " is the main checkout, and no agent runs in it"
+}
+
+// mainName is a main checkout as the refusals about it name it:
+// <host>/<repo>/<branch>, or its root on a detached HEAD, as
+// tmux.Printable shows it, since git takes a C1 control character and
+// a byte that is not UTF-8 in a branch.
+func mainName(host string, w protocol.Worktree) string {
+	if w.Branch == "" {
+		return tmux.Printable(w.Root) + " on " + host
+	}
+	return tmux.Printable(host + "/" + w.Repo + "/" + w.Branch)
+}
+
+// splitMains is the records that are worktrees and those that are main
+// checkouts, apart.
+func splitMains(ws []protocol.Worktree) (worktrees, mains []protocol.Worktree) {
+	for _, w := range ws {
+		if w.Main {
+			mains = append(mains, w)
+		} else {
+			worktrees = append(worktrees, w)
+		}
+	}
+	return worktrees, mains
 }
 
 // attachSpec is the plain attachment to a managed session that is no

@@ -18,7 +18,13 @@ import (
 // is not inside /w/foo, against each root as git registered it and with
 // its symlinks resolved; a pane's path is resolved too, off the poll, so
 // a pane on a hung mount never holds the poll up. A pane under no listed
-// root, the main checkout's included, belongs to no worktree.
+// root belongs to no worktree. An agent in a main checkout, under no
+// worktree root inside it, belongs to the checkout's record when its
+// pane is on the default server and not laatmux's own, the user's plain
+// session there; the record is published while an agent is so (see
+// syncMainsLocked), and first, so no agent names a record a subscriber
+// has not had. Any other pane in a main checkout belongs to none, and a
+// pane with no agent there has no pane record.
 //
 // Panes are polled far more often than git lists worktrees. An agent
 // record takes its worktree at every observation, and when a listing
@@ -26,10 +32,13 @@ import (
 // worktree listed after its pane was seen gains the pane without
 // waiting for the pane to change.
 
-// root is a listed worktree root and its path with symlinks resolved.
+// root is a listed worktree root and its path with symlinks resolved,
+// or with main a main checkout's directory, of which only an agent in a
+// plain session on the default server is (attributeLocked).
 type root struct {
 	root string // as git registered it, the worktree record's
 	real string
+	main bool
 }
 
 // panePath is the path a pane is attributed by: the recorded one of a
@@ -56,12 +65,16 @@ func inside(path, dir string) bool {
 	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }
 
-// resolveRoots is the roots of a listing with their resolved paths,
-// longest first, so the first root that contains a path is the deepest.
-func resolveRoots(roots []string) []root {
-	out := make([]root, 0, len(roots))
+// resolveRoots is the roots of a listing with their resolved paths, the
+// worktrees' and the main checkouts', longest first, so the first root
+// that contains a path is the deepest.
+func resolveRoots(roots, mains []string) []root {
+	out := make([]root, 0, len(roots)+len(mains))
 	for _, r := range roots {
 		out = append(out, root{root: r, real: resolveNow(r)})
+	}
+	for _, r := range mains {
+		out = append(out, root{root: r, real: resolveNow(r), main: true})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i].real) > len(out[j].real) })
 	return out
@@ -92,17 +105,32 @@ func (d *Daemon) setRootsLocked(roots []root, now time.Time) {
 }
 
 // worktreeOfLocked is the id of the worktree whose root contains the
-// resolved path, "" when none does. Called with d.mu held.
-func (d *Daemon) worktreeOfLocked(path string) string {
+// resolved path, "" when none does; with main, of the main checkout
+// whose directory does, unless a worktree root inside it does too.
+// Called with d.mu held.
+func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 	if path == "" {
 		return ""
 	}
 	for _, r := range d.roots {
+		if r.main && !main {
+			continue
+		}
 		if inside(path, r.real) || inside(path, r.root) {
 			return d.worktreeID(r.root)
 		}
 	}
 	return ""
+}
+
+// attributeLocked is the worktree an observed pane's agent belongs to:
+// the deepest listed root its path is in, a main checkout's directory
+// only for a pane on the default server that is not laatmux's own, the
+// user's plain session there. A session new made in a main checkout, on
+// the managed server, keeps a row of its own; a pane record is never a
+// main checkout's (publishPaneLocked). Called with d.mu held.
+func (d *Daemon) attributeLocked(st *paneState) string {
+	return d.worktreeOfLocked(st.path, st.target.Label == protocol.ServerDefault && !st.pane.Own)
 }
 
 // within reports whether path is inside root, as written or resolved;
@@ -161,7 +189,7 @@ func (d *Daemon) runRecordID(id string) string { return d.cfg.EnvironmentID + "/
 // what the record says has changed, removed when it has left every
 // worktree. Called with d.mu held.
 func (d *Daemon) publishPaneLocked(key string, st *paneState, now time.Time) {
-	wid := d.worktreeOfLocked(st.path)
+	wid := d.worktreeOfLocked(st.path, false)
 	if wid == "" || st.pane.Own {
 		// Outside every worktree, or laatmux's own: a sidebar pane, or
 		// the attach pane of a workspace session.
@@ -214,11 +242,12 @@ func (d *Daemon) reattributeLocked(now time.Time) {
 			continue
 		}
 		if a, ok := d.agents[key]; ok {
-			wid := d.worktreeOfLocked(st.path)
+			wid := d.attributeLocked(st)
 			if a.WorktreeID == wid {
 				continue
 			}
 			a.WorktreeID, a.UpdatedAt = wid, now
+			d.syncMainsLocked(now, wid)
 			d.agents[key] = a
 			d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
 			continue
@@ -227,6 +256,7 @@ func (d *Daemon) reattributeLocked(now time.Time) {
 			d.publishPaneLocked(key, st, now)
 		}
 	}
+	d.syncMainsLocked(now, "")
 }
 
 // runStarted publishes a run whose process has started.

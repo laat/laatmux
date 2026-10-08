@@ -1224,3 +1224,98 @@ func TestNewer(t *testing.T) {
 		t.Fatal("newer: wrong order")
 	}
 }
+
+// mainInput is a repository on the local host with a worktree and its
+// main checkout, two agents in plain sessions on the default server in
+// the checkout, attributed to its record by the host, and one in a
+// clone outside the repos directory, in none.
+func mainInput(now time.Time) Input {
+	src := "https://github.com/laat/laatmux"
+	main := "menv/worktree//code/laatmux"
+	plain := func(id, session string, act protocol.Activity, at time.Duration, wt string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: act,
+			ActivityAt: now.Add(-at), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 1, StartUnix: 1}, WorktreeID: wt}
+	}
+	return Input{
+		Hosts: []Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			plain("menv/default/%1", "laatmux", protocol.Idle, 10*time.Minute, main),
+			plain("menv/default/%2", "notes", protocol.Working, 30*time.Minute, main),
+			plain("menv/default/%4", "dots", protocol.Idle, time.Minute, ""),
+			{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/fix", Agent: "claude", Activity: protocol.Idle,
+				ActivityAt: now, Liveness: protocol.Alive, Managed: true, WorktreeID: "menv/worktree//w/fix"},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: "menv/worktree//w/fix", EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "fix", Root: "/w/fix", Session: "laatmux/fix"},
+			{ID: main, EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "main", Root: "/code/laatmux", Main: true,
+				Git: &protocol.GitStatus{Base: "origin/main", Uncommitted: [2]int{3, 1}, Dirty: true}},
+		},
+		Locals:  []protocol.Session{{Name: "mac/laatmux/fix", Key: "menv//w/fix", Host: "mac"}},
+		Current: "laatmux",
+		Now:     now,
+	}
+}
+
+// A main checkout is a line under its repository, first, with the agents
+// the host attributed to it, from plain sessions on the default server;
+// the line jumps through the most recently active, one working before
+// one idle, and is the viewer's by its own session only through that
+// agent's. Its agents are tiles titled by the repository with the branch
+// under it. It has no session add named, and with no agent it says so.
+// An agent in a clone the host does not publish stays in other sessions.
+func TestMainCheckoutLine(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	in := mainInput(now)
+	nodes := Tree(in)
+	want := `laatmux
+  laatmux *
+    laatmux
+    notes
+  fix
+    laatmux/fix
+other sessions
+  dots
+`
+	if got := outline(nodes); got != want {
+		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
+	}
+	line := nodes[1]
+	if line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.Local == nil || line.Local.Name != "notes" || line.Own {
+		t.Fatalf("the line jumps through the working agent, in notes: %+v", line)
+	}
+	if line.Children != 2 || line.Worktree.Git == nil {
+		t.Fatalf("line %+v", line)
+	}
+	if HomeLine(nodes, "mac", "laatmux/main") != -1 {
+		t.Error("a managed session named as add would name the main checkout's is its")
+	}
+	// The working one goes idle before the other did: the other is the
+	// most recently active, and the viewer, in its session, is on the
+	// line by its own session.
+	in.Agents[1].Activity = protocol.Idle
+	nodes = Tree(in)
+	if line := nodes[1]; line.Agent == nil || line.Agent.ID != "menv/default/%1" || line.Local.Name != "laatmux" || !line.Own {
+		t.Fatalf("the line jumps through the latest active, the viewer's: %+v", line)
+	}
+	tiles := Agents(in, nodes)
+	var mains []Row
+	for _, r := range append(tiles.Main, tiles.Stale...) {
+		if r.Worktree != nil && r.Worktree.Main {
+			mains = append(mains, r)
+		}
+	}
+	if len(mains) != 2 {
+		t.Fatalf("tiles %+v", tiles)
+	}
+	for _, r := range mains {
+		if title, sub := r.Titles(); title != "laatmux" || sub != "main" || r.Suffix == "" {
+			t.Errorf("tile %s: %q %q %q", r.Agent.ID, title, sub, r.Suffix)
+		}
+	}
+	// No agent: the line says so, as a worktree line with a session does.
+	in.Agents = in.Agents[2:]
+	nodes = Tree(in)
+	if line := nodes[1]; !line.Worktree.Main || line.Agent != nil || line.State() != "no agent" || line.Children != 0 {
+		t.Fatalf("the line with no agent: %+v", line)
+	}
+}

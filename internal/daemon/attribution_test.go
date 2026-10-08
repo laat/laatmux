@@ -50,7 +50,7 @@ func TestAttributionTable(t *testing.T) {
 	}
 	d := New(Config{EnvironmentID: "env"})
 	d.mu.Lock()
-	d.roots = resolveRoots([]string{foo, foo2, nested})
+	d.roots = resolveRoots([]string{foo, foo2, nested}, nil)
 	d.mu.Unlock()
 	id := func(root string) string { return "env/worktree/" + root }
 	for _, c := range []struct {
@@ -73,7 +73,7 @@ func TestAttributionTable(t *testing.T) {
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)))
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), false)
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -191,7 +191,7 @@ func newAttrFixture(t *testing.T) *attrFixture {
 func (f *attrFixture) list(roots ...string) {
 	f.d.mu.Lock()
 	defer f.d.mu.Unlock()
-	f.d.setRootsLocked(resolveRoots(roots), time.Now())
+	f.d.setRootsLocked(resolveRoots(roots, nil), time.Now())
 }
 
 // drain returns what the subscriber got until the stream is quiet.

@@ -170,7 +170,7 @@ func TestTwoServers(t *testing.T) {
 		t.Fatalf("records mixed up: %+v %+v", ma, ua)
 	}
 
-	sub, _ := d.subscribe(nil)
+	sub, _ := d.subscribe(nil, false)
 	u.listErr = &tmux.Error{Msg: "no server running"}
 	if err := d.poll(context.Background()); err != nil {
 		t.Fatal(err)

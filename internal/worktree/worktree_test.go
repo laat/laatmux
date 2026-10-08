@@ -1216,6 +1216,56 @@ func TestSetupFileErrorsNameTheirStage(t *testing.T) {
 
 // With the repos directory under the worktrees one, the main checkout
 // satisfies Owns but is not a worktree: it is not listed.
+// ListAll has a record of every main checkout it scans, labelled as its
+// worktrees are, its branch read from HEAD, "" when detached, on the
+// reftable backend too; whether the config lists its repository, and
+// whether a worktree of it is listed, which the daemon publishes it by.
+func TestListAllMainCheckouts(t *testing.T) {
+	f := newFixture(t)
+	a, _, err := f.add("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Dir(f.store.Dirs.Repos)
+	clone := func(name, branch string) string {
+		dir := filepath.Join(f.store.Dirs.Repos, name)
+		run(t, base, "git", "clone", "-q", f.remote, dir)
+		run(t, dir, "git", "remote", "set-url", "origin", filepath.Join(base, name+".git"))
+		if branch == "" {
+			run(t, dir, "git", "checkout", "-q", "--detach")
+		} else {
+			run(t, dir, "git", "checkout", "-q", "-b", branch)
+		}
+		return dir
+	}
+	other, detached := clone("other", "feature"), clone("detached", "")
+	want := []Record{
+		{Repo: "detached", Source: filepath.Join(base, "detached.git"), Root: detached, Main: true},
+		{Repo: "other", Source: filepath.Join(base, "other.git"), Branch: "feature", Root: other, Main: true},
+		{Repo: "proj", Source: f.remote, Branch: "main", Root: f.checkout(), Main: true, Configured: true, Linked: true},
+	}
+	if err := exec.Command("git", "init", "-q", "--ref-format=reftable", filepath.Join(base, "probe")).Run(); err == nil {
+		dir := filepath.Join(f.store.Dirs.Repos, "table")
+		run(t, base, "git", "clone", "-q", "--ref-format=reftable", f.remote, dir)
+		run(t, dir, "git", "checkout", "-q", "-b", "tabled")
+		want = append(want, Record{Repo: "proj", Source: f.remote, Branch: "tabled", Root: dir, Main: true, Configured: true})
+	}
+	recs, checkouts, err := f.store.ListAll(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Root != a.Root || recs[0].Main {
+		t.Fatalf("worktrees %+v", recs)
+	}
+	if !slices.Equal(checkouts, want) {
+		t.Fatalf("checkouts\n%+v\nwant\n%+v", checkouts, want)
+	}
+	// List is the worktrees alone.
+	if recs, err := f.store.List(f.ctx); err != nil || len(recs) != 1 || recs[0].Root != a.Root {
+		t.Fatalf("list %+v %v", recs, err)
+	}
+}
+
 func TestMainCheckoutNotListed(t *testing.T) {
 	f := newFixture(t)
 	f.store.Dirs.Repos = filepath.Join(f.store.Dirs.Worktrees, "checkouts")

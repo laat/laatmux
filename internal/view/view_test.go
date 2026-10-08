@@ -1196,6 +1196,50 @@ func TestRenderTree(t *testing.T) {
 	golden(t, "tree-agents", Debug(m.Render()))
 }
 
+// A repository's main checkout: a line under its repository, first,
+// with its git stats and the agents in plain sessions on this machine's
+// default server in it; their tiles titled by the repository, with the
+// branch under it and the stats beside, as a worktree's, numbered as
+// two agents of one worktree are. Failing checks on main show, as on a
+// worktree on main.
+func TestRenderMainCheckout(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	src := "https://github.com/laat/laatmux"
+	main := "menv/worktree//code/laatmux"
+	plain := func(id, session string, act protocol.Activity, at time.Duration, title string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: session, Agent: "claude", Activity: act,
+			ActivityAt: now.Add(-at), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 1, StartUnix: 1}, WorktreeID: main, Title: title}
+	}
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{
+			plain("menv/default/%1", "laatmux", protocol.Working, 2*time.Minute, "Reading the README"),
+			plain("menv/default/%2", "notes", protocol.Idle, 9*time.Minute, "notes"),
+			{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/fix", Agent: "codex", Activity: protocol.Idle,
+				ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Managed: true, WorktreeID: "menv/worktree//w/fix", Title: "fixing"},
+		},
+		Worktrees: []protocol.Worktree{
+			{ID: main, EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "main", Root: "/code/laatmux", Main: true,
+				Git: &protocol.GitStatus{Base: "origin/main", Uncommitted: [2]int{12, 3}, Dirty: true}},
+			{ID: "menv/worktree//w/fix", EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "fix", Root: "/w/fix", Session: "laatmux/fix",
+				Git: &protocol.GitStatus{Base: "origin/main", Committed: [2]int{40, 2}, Ahead: 1}},
+		},
+		Locals: []protocol.Session{{Name: "mac/laatmux/fix", Key: "menv//w/fix", Host: "mac"}},
+		Branches: map[protocol.BranchKey]protocol.BranchStatus{
+			{Source: source.Key(src), Branch: "main"}: {Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 4, Total: 5}},
+		},
+		Current: "laatmux",
+		Now:     now,
+	}
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Tabs: true, Width: 60, Height: 12, Follow: true}
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	m.SetTree(rows.Tree(in))
+	golden(t, "main-tree", Debug(m.Render()))
+	m.Handle(term.Key{Kind: term.KeyTab})
+	m.Layout, m.Width, m.Height = Tiles, 45, 14
+	golden(t, "main-tiles", Debug(m.Render()))
+}
+
 // A line in other sessions shows the host as the {host} token draws it
 // on the agent's tile: the server after it for an agent observed off
 // the managed server, none for a managed agent in no worktree, ? for a

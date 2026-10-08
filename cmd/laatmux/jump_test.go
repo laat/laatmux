@@ -152,6 +152,32 @@ func TestJumpRowWorktreeThroughAgent(t *testing.T) {
 	}
 }
 
+// A main checkout's line jumps to its agent's session on this machine's
+// default server, with no workspace session; one on a remote host's
+// default server is refused as jump refuses it; with no agent the jump
+// says so, not how add would start one, and so do S's lookup.
+func TestJumpRowMainCheckout(t *testing.T) {
+	mac := config.Host{Host: peer.Host{Name: "mac"}, Repos: "/r", Worktrees: "/w"}
+	vm := config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
+	cfg := config.Config{Hosts: []config.Host{mac, vm}}
+	w := protocol.Worktree{ID: "menv/worktree//r/proj", EnvironmentID: "menv", Repo: "proj", Branch: "main", Root: "/r/proj", Main: true}
+	a := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", WorktreeID: w.ID}
+	spec, session, err := rowSpec(cfg, mac, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w, Agent: &a})
+	if err != nil || session != "work" || spec.Key != "" {
+		t.Fatalf("local: spec %+v session %q err %v", spec, session, err)
+	}
+	if _, _, err := rowSpec(cfg, vm, rows.Row{Kind: rows.KindWorktree, Host: "vm", Worktree: &w, Agent: &a}); err == nil || !strings.Contains(err.Error(), "only observes") {
+		t.Fatalf("remote: %v", err)
+	}
+	err = jumpRow(context.Background(), cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Name: "proj/main", Worktree: &w})
+	if err == nil || err.Error() != "mac/proj/main is the main checkout, and no agent runs in it" {
+		t.Fatalf("no agent: %v", err)
+	}
+	if _, err := localSpec(cfg, rows.Row{Kind: rows.KindWorktree, Host: "mac", Worktree: &w, Agent: &a}); err == nil || err.Error() != "mac/proj/main is the main checkout, which has no workspace session" {
+		t.Fatalf("shell: %v", err)
+	}
+}
+
 // A user's after-list-sessions hook that fails after list-sessions
 // printed: the dashboard's jump, its pane jump and its shell's lookup
 // take the session Ensure made from the listing, and the view says

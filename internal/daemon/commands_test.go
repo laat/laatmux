@@ -1089,6 +1089,29 @@ func TestRmPrunableWorktree(t *testing.T) {
 	}
 }
 
+// rm refuses a main checkout's root, also where the repos directory is
+// under the worktrees one, so the root passes Owns: the checkout stays
+// and so does a session new made in it.
+func TestRmRefusesMainCheckout(t *testing.T) {
+	store, remote := newStore(t)
+	store.Dirs.Repos = filepath.Join(store.Dirs.Worktrees, "checkouts")
+	main := filepath.Join(store.Dirs.Repos, "proj")
+	mkdirs(t, store.Dirs.Repos)
+	sh(t, store.Dirs.Repos, "git", "clone", "-q", remote, main)
+	d, ft := addDaemon(t, store)
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{Session: "notes", SessionID: "$1", ID: "%1", Managed: true, Cwd: main, CurrentPath: main}}
+	})
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "main", Root: main})
+	if res, _ := result(t, pc, "r1"); res.OK || !strings.Contains(res.Error, "is a main checkout; rm removes worktrees") {
+		t.Fatalf("rm of the main checkout: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(main, ".git")); err != nil || len(ft.kills) != 0 {
+		t.Fatalf("the checkout or its session went: %v, kills %v", err, ft.kills)
+	}
+}
+
 // rm kills each managed session at the root by its id, on the server
 // it was listed on, and once when it has two panes there: a session
 // made by hand can be called c:d, which tmux 3.7 keeps and no target

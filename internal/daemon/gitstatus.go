@@ -17,9 +17,10 @@ import (
 // rather than in it, since the listing is serialized and stamps the
 // listings that retire tasks, and a slow repository must not hold it. A
 // pool of gitWorkers takes the worktrees due for a refresh: one with a
-// home session every gitSessionEvery, one without every gitIdleEvery,
-// and any at once when add or a run ending makes it due or an mtime the
-// loop stats every gitTick changes: HEAD and index in its git dir, and in
+// home session, or a main checkout with an agent in it, every
+// gitSessionEvery, any other every gitIdleEvery, and any at once when
+// add or a run ending makes it due or an mtime the loop stats every
+// gitTick changes: HEAD and index in its git dir, and in
 // the common dir packed-refs, shallow and the loose refs of the branch
 // and its base. No worktree is refreshed more than once per gitMinGap.
 const (
@@ -157,7 +158,7 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 			continue
 		}
 		every := gitIdleEvery
-		if d.worktrees[root].Session != "" {
+		if d.worktrees[root].Session != "" || d.mainAgents[d.worktreeID(root)] {
 			every = gitSessionEvery
 		}
 		if e.due || now.Sub(e.last) >= every {

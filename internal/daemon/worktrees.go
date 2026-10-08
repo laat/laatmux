@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -48,7 +50,7 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	d.mu.Lock()
 	stamp := protocol.Listing{Generation: d.generation, Revision: d.revision}
 	d.mu.Unlock()
-	recs, err := d.cfg.Store.List(ctx)
+	recs, mains, err := d.cfg.Store.ListAll(ctx)
 	if ctx.Err() != nil {
 		return
 	}
@@ -58,7 +60,11 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		for _, r := range recs {
 			paths = append(paths, r.Root)
 		}
-		roots = resolveRoots(paths)
+		checkouts := make([]string, 0, len(mains))
+		for _, r := range mains {
+			checkouts = append(checkouts, r.Root)
+		}
+		roots = resolveRoots(paths, checkouts)
 	}
 	if err != nil {
 		if d.logOnce(&d.lastListErr, "worktrees: %v", err) {
@@ -70,17 +76,18 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 	} else {
 		d.lastListErr = ""
 		d.mu.Lock()
-		d.lastList = recs
+		d.lastList, d.lastMains = recs, mains
+		d.mainIDs = make(map[string]bool, len(mains))
+		for _, r := range mains {
+			d.mainIDs[d.worktreeID(r.Root)] = true
+		}
 		d.listed = true
 		d.listing, d.listErr = stamp, ""
 		now := time.Now()
 		d.publishWorktreesLocked(now)
 		d.setRootsLocked(roots, now)
 		d.publishListingLocked()
-		listed := map[string]bool{}
-		for root := range d.worktrees {
-			listed[d.worktreeID(root)] = true
-		}
+		listed := listedIDs(d.worktrees)
 		d.hostListedLocked(d.cfg.EnvironmentID, listed, false)
 		d.mu.Unlock()
 	}
@@ -144,51 +151,108 @@ func sameSessions(a, b map[string]string) bool {
 }
 
 // publishWorktreesLocked joins the last git listing with the managed
-// sessions and broadcasts what changed. Called with d.mu held.
+// sessions and broadcasts what changed: the worktrees, and the main
+// checkouts in use (inUseLocked). Called with d.mu held.
 func (d *Daemon) publishWorktreesLocked(now time.Time) {
 	seen := map[string]bool{}
 	for _, r := range d.lastList {
-		seen[r.Root] = true
-		w := protocol.Worktree{
-			ID:            d.worktreeID(r.Root),
-			EnvironmentID: d.cfg.EnvironmentID,
-			Repo:          r.Repo,
-			Source:        r.Source,
-			Branch:        r.Branch,
-			Root:          r.Root,
-			Session:       d.managedRoots[r.Root],
-			UpdatedAt:     now,
-		}
-		// A branch checked out by hand that the connection cannot carry
-		// is sent as it is shown, and marked: no command names the
-		// worktree by it, and it is taken back with this root alone
-		// (worktree.BranchIs).
-		if worktree.CheckWire(r.Branch) != nil {
-			w.Branch, w.BranchDisplayOnly = tmux.Printable(r.Branch), true
-		}
-		prev, had := d.worktrees[r.Root]
-		if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.BranchDisplayOnly == w.BranchDisplayOnly && prev.Session == w.Session {
-			continue
-		}
-		if had && prev.Branch == w.Branch {
-			// The git object is the refresh's, carried across the
-			// rebuild; a new branch at the root waits for its own.
-			w.Git = prev.Git
-		} else {
-			delete(d.gits, r.Root)
-		}
-		d.worktrees[r.Root] = w
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
+		d.publishRecordLocked(r, now, seen)
 	}
-	for root := range d.worktrees {
+	for _, r := range d.lastMains {
+		if d.inUseLocked(r) {
+			d.publishRecordLocked(r, now, seen)
+		}
+	}
+	for root, w := range d.worktrees {
 		if seen[root] {
 			continue
 		}
 		delete(d.worktrees, root)
 		delete(d.gits, root)
+		if w.Main {
+			// Out of use, or gone: no task's worktree, and nothing the
+			// listing removed.
+			d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root)})
+			continue
+		}
 		l := d.listing
 		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root), RemovedIn: &l})
 		d.worktreeRemovedLocked(d.worktreeID(root), &l)
+	}
+}
+
+// publishRecordLocked publishes one record of the listing when it
+// changed, and marks its root seen. A main checkout's has no home
+// session: a session new made in it is no workspace's. Called with d.mu
+// held.
+func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[string]bool) {
+	seen[r.Root] = true
+	w := protocol.Worktree{
+		ID:            d.worktreeID(r.Root),
+		EnvironmentID: d.cfg.EnvironmentID,
+		Repo:          r.Repo,
+		Source:        r.Source,
+		Branch:        r.Branch,
+		Root:          r.Root,
+		Main:          r.Main,
+		UpdatedAt:     now,
+	}
+	if !r.Main {
+		w.Session = d.managedRoots[r.Root]
+	}
+	// A branch checked out by hand that the connection cannot carry
+	// is sent as it is shown, and marked: no command names the
+	// worktree by it, and it is taken back with this root alone
+	// (worktree.BranchIs).
+	if worktree.CheckWire(r.Branch) != nil {
+		w.Branch, w.BranchDisplayOnly = tmux.Printable(r.Branch), true
+	}
+	prev, had := d.worktrees[r.Root]
+	if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.BranchDisplayOnly == w.BranchDisplayOnly && prev.Session == w.Session && prev.Main == w.Main {
+		return
+	}
+	if had && prev.Branch == w.Branch {
+		// The git object is the refresh's, carried across the
+		// rebuild; a new branch at the root waits for its own.
+		w.Git = prev.Git
+	} else {
+		delete(d.gits, r.Root)
+	}
+	d.worktrees[r.Root] = w
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
+}
+
+// inUseLocked reports whether a main checkout's record is published: its
+// repository is in this host's config, a worktree of it is listed, or
+// an agent is attributed to it. The rest of the checkouts under the
+// repos directory, many on a machine that clones there by hand, have no
+// record, no line and no git status refresh. Called with d.mu held.
+func (d *Daemon) inUseLocked(r worktree.Record) bool {
+	return r.Configured || r.Linked || d.mainAgents[d.worktreeID(r.Root)]
+}
+
+// syncMainsLocked publishes the main checkouts again when the set with
+// an agent attributed to them changed: also is a main checkout's id an
+// agent is about to be published with, whose record goes first, so no
+// record names one a subscriber has not had; called again once the
+// agents are published, it takes back the records no agent names any
+// more. Called with d.mu held.
+func (d *Daemon) syncMainsLocked(now time.Time, also string) {
+	in := map[string]bool{}
+	if d.mainIDs[also] {
+		in[also] = true
+	}
+	for _, a := range d.agents {
+		if d.mainIDs[a.WorktreeID] {
+			in[a.WorktreeID] = true
+		}
+	}
+	if maps.Equal(in, d.mainAgents) {
+		return
+	}
+	d.mainAgents = in
+	if d.listed {
+		d.publishWorktreesLocked(now)
 	}
 }
 
@@ -199,7 +263,7 @@ func (d *Daemon) branchNameLocked(w protocol.Worktree) string {
 	if !w.BranchDisplayOnly {
 		return w.Branch
 	}
-	for _, r := range d.lastList {
+	for _, r := range append(slices.Clip(d.lastList), d.lastMains...) {
 		if r.Root == w.Root {
 			return r.Branch
 		}
@@ -212,10 +276,15 @@ func (d *Daemon) branchNameLocked(w protocol.Worktree) string {
 // from the left.
 func (d *Daemon) worktreeID(root string) string { return d.cfg.EnvironmentID + "/worktree/" + root }
 
-func (d *Daemon) worktreesLocked() []protocol.Worktree {
+// worktreesLocked is the published records for a snapshot, the main
+// checkouts' only for a subscriber that asked for them. Called with d.mu
+// held.
+func (d *Daemon) worktreesLocked(checkouts bool) []protocol.Worktree {
 	out := make([]protocol.Worktree, 0, len(d.worktrees))
 	for _, w := range d.worktrees {
-		out = append(out, w)
+		if !w.Main || checkouts {
+			out = append(out, w)
+		}
 	}
 	return out
 }

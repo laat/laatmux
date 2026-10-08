@@ -1,6 +1,6 @@
 // Package rows builds the rows the listing, the sidebar and the dashboard
-// show, from one join of the hosts' records: each host's worktrees with
-// its agents, by the worktree the host attributed each agent to or, from
+// show, from one join of the hosts' records: each host's worktrees, and
+// the main checkouts it publishes, with its agents, by the worktree the host attributed each agent to or, from
 // a host without attribution, by the managed session the worktree record
 // names; the relay's pending tasks where their worktrees will be; agents
 // with no worktree and observed agents on other servers under other
@@ -285,7 +285,8 @@ func (r Row) State() string {
 		return s
 	case r.Agent != nil:
 		return ""
-	case r.Worktree != nil && r.Worktree.Session != "":
+	case r.Worktree != nil && (r.Worktree.Session != "" || r.Worktree.Main):
+		// A main checkout has no session of its own to lack.
 		return "no agent"
 	default:
 		return "no session"
@@ -457,8 +458,11 @@ func (r Row) HostName() string {
 // swap the row's agent and the others' rows as they work: a live agent
 // before a gone one, then the one that started first, then the id. The
 // rest keep rows of their own until the views show several agents per
-// worktree.
+// worktree. A main checkout's line has its own choice (mainAgent).
 func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
+	if w.Main {
+		return mainAgent(agents)
+	}
 	var best *protocol.Agent
 	for _, a := range agents {
 		managed := a.Server == protocol.ServerLaatmux
@@ -476,6 +480,56 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 		}
 	}
 	return best
+}
+
+// mainAgent is the agent a main checkout's line jumps through: of its
+// agents in plain sessions on the default server, the only ones the
+// host gives it, the most recently active. One working or blocked is
+// active now and goes first, then the latest change of activity; a live
+// one before one gone. Unlike a worktree's, the choice turns on
+// activity: the checkout has no session of its own for enter to go to,
+// and goes where the work is.
+func mainAgent(agents []*protocol.Agent) *protocol.Agent {
+	var best *protocol.Agent
+	for _, a := range agents {
+		if a.Server != protocol.ServerDefault || a.Managed {
+			continue
+		}
+		if best == nil || livelier(a, best) {
+			best = a
+		}
+	}
+	return best
+}
+
+// MainAgent is the agent a jump to a main checkout goes to, of the
+// records given: one its host attributed to it, chosen as its line's
+// (mainAgent); nil for none.
+func MainAgent(agents []protocol.Agent, w protocol.Worktree) *protocol.Agent {
+	var of []*protocol.Agent
+	for i := range agents {
+		if a := &agents[i]; a.EnvironmentID == w.EnvironmentID && a.WorktreeID == w.ID {
+			of = append(of, a)
+		}
+	}
+	return mainAgent(of)
+}
+
+// livelier is a ahead of b in mainAgent's choice.
+func livelier(a, b *protocol.Agent) bool {
+	if (a.Liveness == protocol.Gone) != (b.Liveness == protocol.Gone) {
+		return b.Liveness == protocol.Gone
+	}
+	active := func(a *protocol.Agent) bool {
+		return a.Activity == protocol.Working || a.Activity == protocol.Blocked
+	}
+	if active(a) != active(b) {
+		return active(a)
+	}
+	if !a.ActivityAt.Equal(b.ActivityAt) {
+		return a.ActivityAt.After(b.ActivityAt)
+	}
+	return a.ID < b.ID
 }
 
 // newer orders tasks newest first: by submission, then by id for two

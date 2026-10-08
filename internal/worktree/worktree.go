@@ -450,12 +450,20 @@ func parseWorktrees(out string) []Entry {
 }
 
 // Record is one worktree of a known repository under the worktrees
-// directory, as the daemon publishes it.
+// directory, as the daemon publishes it, or with Main a main checkout
+// under the repos directory, as ListAll lists them.
 type Record struct {
 	Repo   string // label
 	Source string
 	Branch string // "" when detached
 	Root   string
+	// Main is a main checkout's record: Root is its directory under
+	// the repos directory and Branch what its HEAD has checked out.
+	// Configured is that this host's config lists its repository;
+	// Linked that a worktree of this checkout is in the listing.
+	Main       bool
+	Configured bool
+	Linked     bool
 }
 
 // List returns every worktree that lives under the worktrees directory
@@ -470,49 +478,112 @@ type Record struct {
 // failing to list does not hide the others: its error is returned
 // alongside what was listed.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
+	records, _, err := s.ListAll(ctx)
+	return records, err
+}
+
+// ListAll is List's worktrees and a record of every main checkout the
+// scan finds, by root, labelled as its worktrees are, its branch read
+// from its HEAD (headBranch): the daemon publishes those in use. A
+// checkout whose HEAD cannot be read is an error, as one git cannot
+// list is, and has no record.
+func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err error) {
 	cos, err := s.scan(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	labels, held := s.labels(cos)
-	var records []Record
 	var errs []error
 	seen := map[string]bool{}
 	for _, co := range cos {
-		if !s.linked(co.dir) {
-			continue
-		}
 		r := labels[co.dir]
-		if h, ok := held[co.dir]; ok {
-			s.collided(co, h, r.Name)
+		_, configured := s.BySource(co.origin)
+		main := Record{Repo: r.Name, Source: r.Source, Root: co.dir, Main: true, Configured: configured}
+		if s.linked(co.dir) {
+			if h, ok := held[co.dir]; ok {
+				s.collided(co, h, r.Name)
+			}
+			recs, err := s.worktreesOf(ctx, co, r, seen)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			records = append(records, recs...)
+			main.Linked = len(recs) > 0
 		}
-		entries, err := ListWorktrees(ctx, co.dir)
+		branch, err := headBranch(ctx, co.dir)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", tmux.Printable(co.dir), err))
+			errs = append(errs, err)
 			continue
 		}
-		for _, e := range entries {
-			// A root two checkouts register, one after the other's
-			// directory was deleted by hand, is listed once, for the
-			// checkout the worktree points back to, as Find finds it.
-			if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
-				continue
-			}
-			// A root whose owner cannot be told, its .git unreadable or
-			// not a worktree's, is listed for the first checkout that
-			// registers it: the listing fails as a whole on an error,
-			// which would hold every other worktree's change, and a
-			// wrong clone here is only a label. Find and ByBranch, which
-			// rm removes through, refuse it instead.
-			if mine, err := pointsBack(e.Root, co.dir); err == nil && !mine {
-				continue
-			}
-			seen[e.Root] = true
-			records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
-		}
+		main.Branch = branch
+		checkouts = append(checkouts, main)
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Root < records[j].Root })
-	return records, errors.Join(errs...)
+	return records, checkouts, errors.Join(errs...)
+}
+
+// worktreesOf is a checkout's worktrees under the worktrees directory,
+// labelled as the checkout is, but for a root seen holds, which another
+// checkout listed; it adds the roots it lists to seen.
+func (s *Store) worktreesOf(ctx context.Context, co checkout, r Repo, seen map[string]bool) ([]Record, error) {
+	entries, err := ListWorktrees(ctx, co.dir)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", tmux.Printable(co.dir), err)
+	}
+	var records []Record
+	for _, e := range entries {
+		// A root two checkouts register, one after the other's
+		// directory was deleted by hand, is listed once, for the
+		// checkout the worktree points back to, as Find finds it.
+		if e.Prunable || e.Bare || e.Root == co.dir || seen[e.Root] || !s.Owns(e.Root) {
+			continue
+		}
+		// A root whose owner cannot be told, its .git unreadable or
+		// not a worktree's, is listed for the first checkout that
+		// registers it: the listing fails as a whole on an error,
+		// which would hold every other worktree's change, and a
+		// wrong clone here is only a label. Find and ByBranch, which
+		// rm removes through, refuse it instead.
+		if mine, err := pointsBack(e.Root, co.dir); err == nil && !mine {
+			continue
+		}
+		seen[e.Root] = true
+		records = append(records, Record{Repo: r.Name, Source: r.Source, Branch: e.Branch, Root: e.Root})
+	}
+	return records, nil
+}
+
+// headBranch is the branch a main checkout has checked out, read from
+// its .git/HEAD, which costs no process on a poll over many checkouts:
+// "" for a detached HEAD. A checkout on the reftable backend keeps a
+// stub there, refs/heads/.invalid, and git is asked.
+func headBranch(ctx context.Context, dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", tmux.Printable(dir), tmux.PrintablePath(err))
+	}
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "ref:")
+	if !ok {
+		return "", nil
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "refs/heads/.invalid" {
+		out, err := git(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
+		var ee *exec.ExitError
+		switch {
+		case errors.As(err, &ee) && ee.ExitCode() == 1:
+			// Detached.
+			return "", nil
+		case err != nil:
+			return "", fmt.Errorf("%s: %w", tmux.Printable(dir), err)
+		}
+		ref = strings.TrimSpace(out)
+	}
+	branch, ok := strings.CutPrefix(ref, "refs/heads/")
+	if !ok {
+		return "", nil
+	}
+	return branch, nil
 }
 
 // Owns reports whether root is inside the worktrees directory: the only
@@ -539,6 +610,28 @@ func (s *Store) Owns(root string) bool {
 		return false
 	}
 	return true
+}
+
+// IsCheckout reports whether root is a main checkout under the repos
+// directory, as written or with symlinks resolved: rm refuses one even
+// where the repos directory sits under the worktrees one, so Owns takes
+// it, since its sessions are new's, not a worktree's.
+func (s *Store) IsCheckout(ctx context.Context, root string) (bool, error) {
+	cos, err := s.scan(ctx)
+	if err != nil {
+		return false, err
+	}
+	root = filepath.Clean(root)
+	real, resolved := resolveExisting(root)
+	for _, co := range cos {
+		if co.dir == root {
+			return true, nil
+		}
+		if dir, ok := resolveExisting(co.dir); ok && resolved && dir == real {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // resolveExisting resolves symlinks in the longest existing prefix of p

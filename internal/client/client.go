@@ -336,11 +336,11 @@ func (c *Conn) Request(ctx context.Context, m protocol.Message) (protocol.Messag
 	return Refused(c.Exchange(ctx, m, nil))
 }
 
-// Snapshot subscribes and returns the first snapshot. Cancelling ctx closes
-// the connection and returns.
+// Snapshot subscribes, to the main checkouts' records too, and returns
+// the first snapshot. Cancelling ctx closes the connection and returns.
 func (c *Conn) Snapshot(ctx context.Context) (protocol.Message, error) {
 	defer c.CloseOnDone(ctx)()
-	if err := c.pc.Write(protocol.Message{Type: protocol.TypeSubscribe}); err != nil {
+	if err := c.pc.Write(protocol.Message{Type: protocol.TypeSubscribe, Checkouts: true}); err != nil {
 		return protocol.Message{}, tmux.PrintablePath(err)
 	}
 	for {

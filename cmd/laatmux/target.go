@@ -349,6 +349,25 @@ func findWorktree(ws []protocol.Worktree, repo config.Repo, branch string) (prot
 	return protocol.Worktree{}, false, fmt.Errorf("%s has worktrees at %s, in two clones of the repository", tmux.Printable(repo.Name+"/"+branch), strings.Join(roots, " and "))
 }
 
+// findRecord is findWorktree over the worktrees, then over the main
+// checkouts, which another clone of the repository can have on the
+// branch a worktree is for: path prints a main checkout's root, and rm
+// and run refuse it (onMain).
+func findRecord(ws []protocol.Worktree, repo config.Repo, branch string) (protocol.Worktree, bool, error) {
+	worktrees, mains := splitMains(ws)
+	if w, ok, err := findWorktree(worktrees, repo, branch); ok || err != nil {
+		return w, ok, err
+	}
+	return findWorktree(mains, repo, branch)
+}
+
+// onMain is rm's and run's refusal of a main checkout, which git keeps
+// and run's root is not: what names it, its host and its root, and what
+// the command takes instead.
+func onMain(repo config.Repo, w protocol.Worktree, host, takes string) error {
+	return fmt.Errorf("%s on %s is the main checkout, at %s; %s", tmux.Printable(repo.Name+"/"+w.Branch), host, tmux.Printable(w.Root), takes)
+}
+
 // noWorktree is run's and path's error for a branch with no worktree on
 // the host, <repo>/<branch> as tmux.Printable shows it: git takes a C1
 // control character and a byte that is not UTF-8 in a branch.

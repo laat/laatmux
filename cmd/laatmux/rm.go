@@ -71,13 +71,15 @@ func cmdRm(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		w, ok, err := findWorktree(snap.Worktrees, repo, branch)
-		if err != nil {
+		w, ok, err := findRecord(snap.Worktrees, repo, branch)
+		switch {
+		case err != nil:
 			return err
-		}
-		if ok {
+		case ok && w.Main:
+			return onMain(repo, w, rm.Host.Name, "rm removes worktrees")
+		case ok:
 			rm.Root = w.Root
-		} else {
+		default:
 			locals, err := workspace.List(ctx)
 			if err = warnHook(err); err != nil {
 				return err

@@ -279,8 +279,14 @@ type Daemon struct {
 
 	// Worktrees: the last git listing, the managed sessions by root, and
 	// the published join of the two.
-	worktrees    map[string]protocol.Worktree // by root
-	lastList     []worktree.Record
+	worktrees map[string]protocol.Worktree // by root, the main checkouts in use among them
+	lastList  []worktree.Record
+	// lastMains is every main checkout of the last listing, mainIDs
+	// their ids, and mainAgents the ids of those an agent is
+	// attributed to, which are in use (inUseLocked).
+	lastMains    []worktree.Record
+	mainIDs      map[string]bool
+	mainAgents   map[string]bool
 	listed       bool
 	managedRoots map[string]string // root -> session
 	lastListErr  string            // logged once per change; under pollMu
@@ -423,6 +429,8 @@ type subscriber struct {
 	ch     chan protocol.Message
 	drop   func() // closes the transport so the peer sees EOF and resnapshots
 	merged bool   // on the merged stream rather than this host's own
+	// checkouts is that it asked for the main checkouts' records.
+	checkouts bool
 }
 
 func New(cfg Config) *Daemon {
@@ -525,7 +533,7 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapNew, protocol.CapSelect)
 	}
 	if d.cfg.Store != nil {
-		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus)
+		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
 		}
@@ -536,9 +544,10 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Hosts != nil {
 		caps = append(caps, protocol.CapMerged)
 		if d.cfg.Store == nil {
-			// It forwards what the hosts attribute and the git objects
-			// they read, though it has no worktrees of its own.
-			caps = append(caps, protocol.CapAttribution, protocol.CapGitStatus)
+			// It forwards what the hosts attribute, the git objects
+			// they read and their main checkouts, though it has no
+			// worktrees of its own.
+			caps = append(caps, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
 		}
 	}
 	if d.relay != nil {
@@ -723,6 +732,8 @@ func (d *Daemon) removeUnseen(t *target, seen map[string]bool) {
 		delete(d.agents, key)
 		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, AgentID: d.agentID(key)})
 	}
+	// A main checkout whose last agent went is out of use.
+	d.syncMainsLocked(time.Now(), "")
 }
 
 func (d *Daemon) agentID(key string) string { return d.cfg.EnvironmentID + "/" + key }
@@ -844,13 +855,17 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
 	}
 	st.pane, st.path, st.observed, st.bare = p, path, true, false
-	a.WorktreeID = d.worktreeOfLocked(path)
+	a.WorktreeID = d.attributeLocked(st)
 	d.dropPaneLocked(key)
 	if had && sameRecord(prev, a) {
 		return
 	}
+	// A main checkout the agent is in is published before the agent
+	// names it, and one it has left is taken back after.
+	d.syncMainsLocked(now, a.WorktreeID)
 	d.agents[key] = a
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Agent: &a})
+	d.syncMainsLocked(now, "")
 }
 
 // nextActivity applies the state machine: startup grace, skip, and the
@@ -941,12 +956,29 @@ func (d *Daemon) broadcastLocked(m protocol.Message) {
 // authoritative snapshot rather than a stream with a hole in it.
 func fanout(subs map[*subscriber]struct{}, m protocol.Message, gone func(*subscriber)) {
 	for s := range subs {
+		m, ok := s.sees(m)
+		if !ok {
+			continue
+		}
 		select {
 		case s.ch <- m:
 		default:
 			gone(s)
 		}
 	}
+}
+
+// sees is what of m the subscriber is sent: all of it, but a main
+// checkout's record to one that did not ask for them, which is taken
+// out, and the message not sent when nothing is left. The remove of
+// such a record goes to every subscriber; one that never had it passes
+// over it.
+func (s *subscriber) sees(m protocol.Message) (protocol.Message, bool) {
+	if s.checkouts || m.Worktree == nil || !m.Worktree.Main {
+		return m, true
+	}
+	m.Worktree = nil
+	return m, m.Agent != nil || m.Pane != nil || m.Run != nil
 }
 
 // goneLocked drops a plain subscriber that fell behind: out of the set,
@@ -959,16 +991,18 @@ func (d *Daemon) goneLocked(s *subscriber) {
 	}
 }
 
-func (d *Daemon) subscribe(drop func()) (*subscriber, protocol.Message) {
+// subscribe registers a subscriber of this host's own records and returns
+// its snapshot; checkouts is that it asked for the main checkouts'.
+func (d *Daemon) subscribe(drop func(), checkouts bool) (*subscriber, protocol.Message) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop}
+	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop, checkouts: checkouts}
 	d.subs[s] = struct{}{}
 	agents := make([]protocol.Agent, 0, len(d.agents))
 	for _, a := range d.agents {
 		agents = append(agents, a)
 	}
-	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(),
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agents, Worktrees: d.worktreesLocked(checkouts),
 		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr}
 	if d.listed {
 		l := d.listing
@@ -1124,14 +1158,14 @@ func (c *clientConn) subscribe(m protocol.Message) error {
 		// are complete, as a remote host's does, so a tmux the daemon
 		// cannot poll holds up neither the remote hosts nor the host
 		// rows.
-		s, snap = d.mergedSubscribe(c.ctx, c.drop)
+		s, snap = d.mergedSubscribe(c.ctx, c.drop, m.Checkouts)
 	} else {
 		select {
 		case <-d.discovered:
 		case <-c.ctx.Done():
 			return c.ctx.Err()
 		}
-		s, snap = d.subscribe(c.drop)
+		s, snap = d.subscribe(c.drop, m.Checkouts)
 	}
 	c.sub = s
 	if err := c.pc.Write(snap); err != nil {

@@ -141,6 +141,70 @@ func TestRmWithoutTmux(t *testing.T) {
 	}
 }
 
+// A repository's main checkout, from the host's record: the merged
+// stream is asked for it; rm and run refuse it as the main checkout
+// without sending anything; jump goes to the session of its agent on
+// the default server, not a workspace session, here a session the
+// default server, with no tmux on the PATH, does not have; and a
+// worktree on the branch in another clone is found before it.
+func TestMainCheckoutCommands(t *testing.T) {
+	const src = "git@x:o/proj.git"
+	var sent []protocol.Message
+	var mu sync.Mutex
+	main := protocol.Worktree{ID: "lenv/worktree//r/proj", EnvironmentID: "lenv", Repo: "proj", Branch: "main", Root: "/r/proj", Source: src, Main: true}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapFollow, protocol.CapRm, protocol.CapRun, protocol.CapCheckouts}, func(pc *protocol.Conn, m protocol.Message) bool {
+		mu.Lock()
+		sent = append(sent, m)
+		mu.Unlock()
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRm, protocol.CapRun, protocol.CapFollow, protocol.CapCheckouts}},
+			}, Worktrees: []protocol.Worktree{main, {ID: "lenv/worktree//w/proj/b", EnvironmentID: "lenv", Repo: "proj", Branch: "b", Root: "/w/proj/b", Source: src}},
+				Agents: []protocol.Agent{
+					{ID: "lenv/default/%1", EnvironmentID: "lenv", Server: "default", Session: "old", Activity: protocol.Idle, Liveness: protocol.Alive, WorktreeID: main.ID},
+					{ID: "lenv/default/%2", EnvironmentID: "lenv", Server: "default", Session: "work", Activity: protocol.Working, Liveness: protocol.Alive, WorktreeID: main.ID},
+				}})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(os.Getenv("LAATMUX_HOME"), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	ctx := context.Background()
+	if err := cmdRm(ctx, []string{"proj/main", "--host", "mac"}); err == nil || err.Error() != "proj/main on mac is the main checkout, at /r/proj; rm removes worktrees" {
+		t.Errorf("rm: %v", err)
+	}
+	if err := cmdRun(ctx, []string{"proj/main", "--host", "mac", "--", "true"}); err == nil || !strings.Contains(err.Error(), "is the main checkout, at /r/proj; run runs in worktrees") {
+		t.Errorf("run: %v", err)
+	}
+	if err := cmdJump(ctx, []string{"mac/proj/main"}); err == nil || err.Error() != "mac/work: no such session on the default tmux server" {
+		t.Errorf("jump: %v", err)
+	}
+	mu.Lock()
+	for _, m := range sent {
+		switch {
+		case m.Type == protocol.TypeRm || m.Type == protocol.TypeRun:
+			t.Errorf("sent %+v", m)
+		case m.Type == protocol.TypeSubscribe && !m.Checkouts:
+			t.Errorf("subscribed without the main checkouts: %+v", m)
+		}
+	}
+	mu.Unlock()
+	// Another clone's worktree on the branch is the worktree meant.
+	other := protocol.Worktree{ID: "lenv/worktree//w/proj/main", EnvironmentID: "lenv", Repo: "proj", Branch: "main", Root: "/w/proj/main", Source: src}
+	repo := config.Repo{Source: src, Name: "proj"}
+	if w, ok, err := findRecord([]protocol.Worktree{main, other}, repo, "main"); err != nil || !ok || w.Root != other.Root {
+		t.Errorf("findRecord: %+v %v %v", w, ok, err)
+	}
+	if w, ok, err := findRecord([]protocol.Worktree{main}, repo, "main"); err != nil || !ok || !w.Main {
+		t.Errorf("findRecord, the main checkout alone: %+v %v %v", w, ok, err)
+	}
+}
+
 // A user's after-list-sessions, after-display-message and
 // after-list-panes hooks that fail after their listings printed: the
 // commands run from a shell go on with what the listings printed and

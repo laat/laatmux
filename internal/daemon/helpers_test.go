@@ -16,11 +16,12 @@ func (d *Daemon) agentRecords() (uint64, []protocol.Agent) {
 	return d.seq, out
 }
 
-// worktreeRecords is the current worktree records.
+// worktreeRecords is the current worktree records, the main checkouts'
+// left out.
 func (d *Daemon) worktreeRecords() []protocol.Worktree {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.worktreesLocked()
+	return d.worktreesLocked(false)
 }
 
 // create writes a new pending record, as acceptRelay does under its
