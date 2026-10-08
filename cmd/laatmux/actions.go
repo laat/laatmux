@@ -366,14 +366,45 @@ func (d *dash) startAdd(m *view.Model) {
 			}
 		}
 	default:
-		if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-			preRepo = repo.Name
+		preRepo, preHost = workspacePreset(d.ctx, f.hosts)
+		if preRepo == "" {
+			if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
+				preRepo = repo.Name
+			}
 		}
 	}
 	form := buildForm(d.cfg, f, last, preRepo, preHost, branch, d.st.HostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(d.ctx, strings.TrimSpace(b)) }
 	d.add = f
 	m.Overlay = form
+}
+
+// workspacePreset is the repository and host the form preselects when
+// it is opened from a workspace session: the session's, from its tags,
+// since the user who presses the key in a workspace means that
+// repository on that host, and the directory the popup opens in says
+// nothing of it when the worktree is on another machine. The host only
+// when it is one the form offers; "" and "" outside a workspace, or
+// where the session's tags do not say.
+func workspacePreset(ctx context.Context, hosts []config.Host) (repo, host string) {
+	s, err := workspace.Current(ctx)
+	if err != nil {
+		return "", ""
+	}
+	return presetFor(s, hosts)
+}
+
+// presetFor is workspacePreset's answer for a session already read.
+func presetFor(s protocol.Session, hosts []config.Host) (repo, host string) {
+	if !s.Workspace() {
+		return "", ""
+	}
+	for _, h := range hosts {
+		if h.Name == s.Host {
+			host = s.Host
+		}
+	}
+	return s.Source, host
 }
 
 // buildForm makes the task form over the candidates, preselecting the

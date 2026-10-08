@@ -69,11 +69,16 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	preRepo := ""
-	if repo, err := resolveRepo(ctx, cfg, ""); err == nil {
-		preRepo = repo.Name
+	// Opened from a workspace session, the form is for its repository
+	// on its host; elsewhere for the repository of the directory it was
+	// opened in.
+	preRepo, preHost := workspacePreset(ctx, f.hosts)
+	if preRepo == "" {
+		if repo, err := resolveRepo(ctx, cfg, ""); err == nil {
+			preRepo = repo.Name
+		}
 	}
-	form := buildForm(cfg, f, last, preRepo, "", "", st.HostCaps)
+	form := buildForm(cfg, f, last, preRepo, preHost, "", st.HostCaps)
 	form.Validate = func(b string) error { return worktree.CheckBranch(ctx, strings.TrimSpace(b)) }
 	t, err := term.Open(os.Stdin, os.Stdout)
 	if err != nil {
