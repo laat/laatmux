@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -385,7 +386,12 @@ func twoMains(target string, found []protocol.Worktree) error {
 		roots[i] = tmux.Printable(w.Root)
 	}
 	sort.Strings(roots)
-	return fmt.Errorf("%s is checked out in the main checkouts at %s, two clones of the repository", target, strings.Join(roots, " and "))
+	n := len(roots)
+	clones, at := "two clones", strings.Join(roots, " and ")
+	if n > 2 {
+		clones, at = strconv.Itoa(n)+" clones", strings.Join(roots[:n-1], ", ")+" and "+roots[n-1]
+	}
+	return fmt.Errorf("%s is checked out in the main checkouts at %s, %s of the repository", target, at, clones)
 }
 
 // onMain is rm's and run's refusal of a main checkout, which git keeps

@@ -44,15 +44,15 @@ func TestAttributionTable(t *testing.T) {
 	nested := filepath.Join(foo, "vendor", "lib")
 	main := filepath.Join(base, "repos", "proj")
 	// A main checkout inside a worktree, its repos directory there.
-	inner := filepath.Join(foo, "repos", "p")
-	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main, filepath.Join(inner, "src"))
+	inner, unread := filepath.Join(foo, "repos", "p"), filepath.Join(foo, "repos", "q")
+	mkdirs(t, filepath.Join(foo, "src"), foo2, nested, main, filepath.Join(inner, "src"), unread)
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(foo, link); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Config{EnvironmentID: "env"})
 	d.mu.Lock()
-	d.roots = resolveRoots([]string{foo, foo2, nested}, []string{inner})
+	d.roots = resolveRoots([]string{foo, foo2, nested}, []root{{root: inner}, {root: unread, unread: true}})
 	d.mu.Unlock()
 	id := func(root string) string { return "env/worktree/" + root }
 	for _, c := range []struct {
@@ -72,6 +72,7 @@ func TestAttributionTable(t *testing.T) {
 		// The checkout's, which only an agent in a plain session takes,
 		// not the worktree's around it.
 		{"a main checkout inside a worktree", tmux.Pane{CurrentPath: filepath.Join(inner, "src")}, ""},
+		{"a main checkout unread inside a worktree", tmux.Pane{CurrentPath: unread}, ""},
 	} {
 		// A pane's path is resolved off the poll: the answer is there
 		// by a later one.
@@ -91,9 +92,15 @@ func TestAttributionTable(t *testing.T) {
 	}
 	d.mu.Lock()
 	got := d.worktreeOfLocked(filepath.Join(inner, "src"), true)
+	// One whose HEAD could not be read has no record: neither it nor
+	// the worktree around it takes the agent.
+	gotUnread := d.worktreeOfLocked(unread, true)
 	d.mu.Unlock()
 	if got != "env/checkout/"+inner {
 		t.Errorf("an agent in a plain session in the checkout: %q", got)
+	}
+	if gotUnread != "" {
+		t.Errorf("an agent in a plain session in a checkout unread: %q", gotUnread)
 	}
 }
 

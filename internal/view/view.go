@@ -345,8 +345,12 @@ func (m *Model) followed(vis []Item) int {
 func (m *Model) followRow(n int, row func(int) *rows.Row) int {
 	id, w, visited := "", "", false
 	if t := m.treeFollowed(); t != nil {
-		// The line's worktree as the scope's viewerWorktree has it.
-		id, w, visited = t.ID(), worktreeOf(t), !t.Own
+		// The line's worktree as the scope's viewerWorktree has it. A
+		// main checkout's line is the viewer's through one of its
+		// agents, in plain sessions of their own: the one in the
+		// viewer's session is followed, as a visitor's is, not the
+		// first of the others.
+		id, w, visited = t.ID(), worktreeOf(t), !t.Own || t.Worktree != nil && t.Worktree.Main
 	}
 	best, of := -1, -1
 	for i := 0; i < n; i++ {

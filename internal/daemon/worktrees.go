@@ -61,9 +61,9 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		for _, r := range recs {
 			paths = append(paths, r.Root)
 		}
-		checkouts := make([]string, 0, len(mains))
+		checkouts := make([]root, 0, len(mains))
 		for _, r := range mains {
-			checkouts = append(checkouts, r.Root)
+			checkouts = append(checkouts, root{root: r.Root, unread: r.Unread})
 		}
 		roots = resolveRoots(paths, checkouts)
 	}
@@ -170,15 +170,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 		}
 		delete(d.worktrees, root)
 		delete(d.gits, root)
-		if w.Main {
-			// Out of use, or gone: no task's worktree, and nothing the
-			// listing removed.
-			d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
-			continue
-		}
-		l := d.listing
-		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: d.worktreeID(root), RemovedIn: &l})
-		d.worktreeRemovedLocked(d.worktreeID(root), &l)
+		d.removeRecordLocked(w)
 	}
 }
 
@@ -212,7 +204,7 @@ func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[
 	if had && prev.Repo == w.Repo && prev.Source == w.Source && prev.Branch == w.Branch && prev.BranchDisplayOnly == w.BranchDisplayOnly && prev.Session == w.Session && prev.Main == w.Main {
 		return
 	}
-	if had && prev.Branch == w.Branch {
+	if had && prev.Branch == w.Branch && prev.ID == w.ID {
 		// The git object is the refresh's, carried across the
 		// rebuild; a new branch at the root waits for its own.
 		w.Git = prev.Git
@@ -221,15 +213,37 @@ func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[
 	}
 	d.worktrees[r.Root] = w
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
+	if had && prev.ID != w.ID {
+		// A worktree where a main checkout was, or the other way
+		// round, with the repos directory under the worktrees one: the
+		// record the root had goes, after the one taking its place.
+		d.removeRecordLocked(prev)
+	}
+}
+
+// removeRecordLocked tells subscribers a record is gone: a main
+// checkout's, out of use or gone, with no more, as it is no task's
+// worktree and nothing the listing removed; a worktree's
+// with the stamp of the listing that found it gone, and its tasks
+// checked. Called with d.mu held.
+func (d *Daemon) removeRecordLocked(w protocol.Worktree) {
+	if w.Main {
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
+		return
+	}
+	l := d.listing
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID, RemovedIn: &l})
+	d.worktreeRemovedLocked(w.ID, &l)
 }
 
 // inUseLocked reports whether a main checkout's record is published: its
 // repository is in this host's config, a worktree of it is listed, or
 // an agent is attributed to it. The rest of the checkouts under the
 // repos directory, many on a machine that clones there by hand, have no
-// record, no line and no git status refresh. Called with d.mu held.
+// record, no line and no git status refresh, and so does one whose HEAD
+// could not be read. Called with d.mu held.
 func (d *Daemon) inUseLocked(r worktree.Record) bool {
-	return r.Configured || r.Linked || d.mainAgents[d.checkoutID(r.Root)]
+	return !r.Unread && (r.Configured || r.Linked || d.mainAgents[d.checkoutID(r.Root)])
 }
 
 // syncMainsLocked publishes the main checkouts again when the set with

@@ -404,6 +404,8 @@ type Agent struct {
 	// worktree whose root contains the pane's path: the recorded one of
 	// a pane laatmux made, the current one otherwise. "" when the pane
 	// is in no listed worktree, or the worktree has not been listed yet.
+	// From a daemon with checkouts, to a subscriber that asked for them,
+	// it may be a main checkout's record's instead (Worktree.Main).
 	WorktreeID string    `json:"worktree_id,omitempty"`
 	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -512,7 +514,7 @@ const (
 // disappears, and one whose directory is gone (prunable) is not published.
 // With Main it is a main checkout under the repos directory instead.
 type Worktree struct {
-	ID            string `json:"id"` // "<environment_id>/worktree/<root>"; opaque to clients
+	ID            string `json:"id"` // "<environment_id>/worktree/<root>", "<environment_id>/checkout/<root>" with Main; opaque to clients
 	EnvironmentID string `json:"environment_id"`
 	Repo          string `json:"repo"`             // repository label from the host's config
 	Source        string `json:"source,omitempty"` // repository source, the identity; "" from older daemons

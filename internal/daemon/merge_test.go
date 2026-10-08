@@ -807,6 +807,16 @@ func TestMergedMainCheckouts(t *testing.T) {
 	if i := slices.IndexFunc(snap3.Agents, func(x protocol.Agent) bool { return x.ID == a.ID }); i < 0 || snap3.Agents[i].WorktreeID != "" {
 		t.Fatalf("the attribution in a snapshot that did not ask: %+v", snap3.Agents)
 	}
+	// This machine dropped from the hosts: its main checkout's record
+	// goes by its own id.
+	lmain := protocol.Worktree{ID: "lenv/checkout//code/x", EnvironmentID: "lenv", Repo: "x", Branch: "main", Root: "/code/x", Main: true}
+	f.local.mu.Lock()
+	f.local.worktrees["/code/x"] = lmain
+	f.local.mu.Unlock()
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
+	c6, _, _ := f.subscribeAsking(t, ctx, true)
+	c6.Close()
+	until(t, c, pc, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.WorktreeID == lmain.ID })
 }
 
 // A reconnect's snapshot is forwarded in the host's own order: the

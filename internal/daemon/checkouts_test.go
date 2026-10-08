@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // stream is a subscriber's connection, its messages collected.
@@ -269,6 +270,72 @@ func TestMainCheckoutRecords(t *testing.T) {
 	gone, agent = removedAt(ms, otherID), agentAt(ms, "%9")
 	if agent < 0 || ms[agent].Agent.WorktreeID != "" || gone < agent {
 		t.Fatalf("the checkout moved: the agent, then the record: %+v", ms)
+	}
+}
+
+// A root whose record changes kind, a worktree made where a main
+// checkout was with the repos directory under the worktrees one, or the
+// other way round: the new record goes out, then the old id's remove, a
+// worktree's with its listing stamp.
+func TestRecordChangesKind(t *testing.T) {
+	d := New(Config{EnvironmentID: "env"})
+	s := &subscriber{ch: make(chan protocol.Message, 64), checkouts: true}
+	drain := func() []protocol.Message {
+		var out []protocol.Message
+		for {
+			select {
+			case m := <-s.ch:
+				out = append(out, m)
+			default:
+				return out
+			}
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.subs[s] = struct{}{}
+	d.listed = true
+	const root = "/w/repos/proj"
+	main := worktree.Record{Repo: "proj", Branch: "main", Root: root, Main: true, Configured: true}
+	wt := worktree.Record{Repo: "proj", Branch: "x", Root: root}
+	d.lastMains = []worktree.Record{main}
+	d.publishWorktreesLocked(time.Now())
+	drain()
+	d.lastList, d.lastMains = []worktree.Record{wt}, nil
+	d.publishWorktreesLocked(time.Now())
+	ms := drain()
+	if len(ms) != 2 || ms[0].Worktree == nil || ms[0].Worktree.ID != "env/worktree/"+root || ms[1].WorktreeID != "env/checkout/"+root || ms[1].RemovedIn != nil {
+		t.Fatalf("to a worktree: %+v", ms)
+	}
+	d.lastList, d.lastMains = nil, []worktree.Record{main}
+	d.publishWorktreesLocked(time.Now())
+	ms = drain()
+	if len(ms) != 2 || ms[0].Worktree == nil || ms[0].Worktree.ID != "env/checkout/"+root || ms[1].WorktreeID != "env/worktree/"+root || ms[1].RemovedIn == nil {
+		t.Fatalf("to a main checkout: %+v", ms)
+	}
+}
+
+// A checkout whose HEAD cannot be read, configured or not, has no record
+// and fails no listing: the worktrees' changes still go out.
+func TestMainCheckoutUnread(t *testing.T) {
+	store, remote := newStore(t)
+	base := filepath.Dir(store.Dirs.Repos)
+	proj := filepath.Join(store.Dirs.Repos, "proj")
+	sh(t, base, "git", "clone", "-q", remote, proj)
+	head := filepath.Join(proj, ".git", "HEAD")
+	if err := os.Chmod(head, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(head, 0o644) })
+	if _, err := os.ReadFile(head); err == nil {
+		t.Skip("HEAD readable without permission (root)")
+	}
+	d := New(Config{EnvironmentID: "env", Store: store})
+	d.pollWorktrees(context.Background())
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.worktrees[proj]; ok || d.listErr != "" || !d.listed {
+		t.Fatalf("records %+v, listing error %q, listed %v", d.worktrees, d.listErr, d.listed)
 	}
 }
 

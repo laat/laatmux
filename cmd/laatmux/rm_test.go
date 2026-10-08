@@ -213,11 +213,49 @@ func TestMainCheckoutCommands(t *testing.T) {
 		t.Errorf("findRecord, two clones: %v", err)
 	}
 	cfg := config.Config{Repos: []config.Repo{repo}}
-	if _, _, err := matchMain(two, cfg, "mac", "proj/main"); err == nil || !strings.HasSuffix(err.Error(), "two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either") || !strings.Contains(err.Error(), "/r/proj and /r/proj-2") {
+	mac, vm := config.Host{Host: peer.Host{Name: "mac"}}, config.Host{Host: peer.Host{Name: "vm", SSH: "vm"}}
+	if _, _, err := matchMain(two, cfg, mac, "proj/main"); err == nil || !strings.HasSuffix(err.Error(), "two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either") || !strings.Contains(err.Error(), "/r/proj and /r/proj-2") {
 		t.Errorf("matchMain, two clones: %v", err)
 	}
-	if w, ok, err := matchMain(two[:1], cfg, "mac", "proj/main"); err != nil || !ok || w.Root != "/r/proj" {
+	// On a remote host, whose default server jump does not reach, the
+	// roots alone.
+	if _, _, err := matchMain(two, cfg, vm, "proj/main"); err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj and /r/proj-2, two clones of the repository" {
+		t.Errorf("matchMain, two clones on a remote host: %v", err)
+	}
+	if w, ok, err := matchMain(two[:1], cfg, mac, "proj/main"); err != nil || !ok || w.Root != "/r/proj" {
 		t.Errorf("matchMain, one: %+v %v %v", w, ok, err)
+	}
+	third := clone
+	third.ID, third.Root = "lenv/checkout//r/proj-3", "/r/proj-3"
+	if _, _, err := findRecord(append(two, third), repo, "main"); err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj, /r/proj-2 and /r/proj-3, 3 clones of the repository" {
+		t.Errorf("findRecord, three clones: %v", err)
+	}
+}
+
+// jump to a branch two clones' main checkouts have checked out names
+// both, and how to reach an agent's session in either.
+func TestJumpTwoMainCheckouts(t *testing.T) {
+	const src = "git@x:o/proj.git"
+	main := protocol.Worktree{ID: "lenv/checkout//r/proj", EnvironmentID: "lenv", Repo: "proj", Branch: "main", Root: "/r/proj", Source: src, Main: true}
+	clone := main
+	clone.ID, clone.Root = "lenv/checkout//r/proj-2", "/r/proj-2"
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe {
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapCheckouts}},
+			}, Worktrees: []protocol.Worktree{main, clone}})
+		}
+		return true
+	})
+	cfgPath := filepath.Join(os.Getenv("LAATMUX_HOME"), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	t.Setenv("PATH", t.TempDir())
+	err := cmdJump(context.Background(), []string{"mac/proj/main"})
+	if err == nil || err.Error() != "proj/main is checked out in the main checkouts at /r/proj and /r/proj-2, two clones of the repository; jump --server default mac/<session> goes to the session of an agent in either" {
+		t.Errorf("jump: %v", err)
 	}
 }
 

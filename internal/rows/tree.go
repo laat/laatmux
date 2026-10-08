@@ -382,7 +382,9 @@ func (b *builder) worktrees() {
 		// agent is kept apart, for the folded line's icon.
 		line.Local = j.byKey[key]
 		if w.Session == "" && line.Agent != nil && line.Agent.Server == protocol.ServerDefault {
-			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() {
+			// A main checkout's plain session only, as below: an
+			// attachment's tag makes its session another line's.
+			if l := j.agentLocal(host, line.Agent); l != nil && !l.Workspace() && !(w.Main && l.Laatmux()) {
 				if line.Local == nil {
 					line.Local = l
 				}

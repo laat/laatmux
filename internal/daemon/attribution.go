@@ -34,11 +34,14 @@ import (
 
 // root is a listed worktree root and its path with symlinks resolved,
 // or with main a main checkout's directory, of which only an agent in a
-// plain session on the default server is (attributeLocked).
+// plain session on the default server is (attributeLocked); with unread
+// too, one whose HEAD could not be read, which has no record: no pane is
+// its, nor a worktree's around it.
 type root struct {
-	root string // as git registered it, the worktree record's
-	real string
-	main bool
+	root   string // as git registered it, the worktree record's
+	real   string
+	main   bool
+	unread bool
 }
 
 // panePath is the path a pane is attributed by: the recorded one of a
@@ -66,15 +69,16 @@ func inside(path, dir string) bool {
 }
 
 // resolveRoots is the roots of a listing with their resolved paths, the
-// worktrees' and the main checkouts', longest first, so the first root
-// that contains a path is the deepest.
-func resolveRoots(roots, mains []string) []root {
+// worktrees' and the main checkouts', given by root and unread, longest
+// first, so the first root that contains a path is the deepest.
+func resolveRoots(roots []string, mains []root) []root {
 	out := make([]root, 0, len(roots)+len(mains))
 	for _, r := range roots {
 		out = append(out, root{root: r, real: resolveNow(r)})
 	}
 	for _, r := range mains {
-		out = append(out, root{root: r, real: resolveNow(r), main: true})
+		r.real, r.main = resolveNow(r.root), true
+		out = append(out, r)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i].real) > len(out[j].real) })
 	return out
@@ -107,8 +111,8 @@ func (d *Daemon) setRootsLocked(roots []root, now time.Time) {
 // worktreeOfLocked is the id of the worktree whose root is the deepest
 // to contain the resolved path, "" when none does. A main checkout's
 // directory is such a root too: with main its id, else "", not the id of
-// a worktree around the checkout, since the pane is in the checkout.
-// Called with d.mu held.
+// a worktree around the checkout, since the pane is in the checkout; ""
+// too for one unread, which has no record. Called with d.mu held.
 func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 	if path == "" {
 		return ""
@@ -117,7 +121,7 @@ func (d *Daemon) worktreeOfLocked(path string, main bool) string {
 		if !inside(path, r.real) && !inside(path, r.root) {
 			continue
 		}
-		if r.main && !main {
+		if r.main && (!main || r.unread) {
 			return ""
 		}
 		return d.recordID(r)

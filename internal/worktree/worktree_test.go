@@ -1266,7 +1266,7 @@ func TestListAllMainCheckouts(t *testing.T) {
 
 // A branch ending in U+0085 or U+00A0, which git takes, is read from
 // HEAD as it is, on either backend; a checkout whose HEAD cannot be read
-// has no record and fails nothing, its worktree still listed.
+// is marked unread and fails nothing, its worktree still listed.
 func TestListAllHeadEdges(t *testing.T) {
 	f := newFixture(t)
 	a, _, err := f.add("task")
@@ -1310,7 +1310,7 @@ func TestListAllHeadEdges(t *testing.T) {
 	if err != nil || len(recs) != 1 || recs[0].Root != a.Root {
 		t.Fatalf("with a HEAD unreadable: %+v %v", recs, err)
 	}
-	if slices.ContainsFunc(checkouts, func(c Record) bool { return c.Root == f.checkout() }) || !strings.Contains(logged.String(), "HEAD") {
+	if !slices.ContainsFunc(checkouts, func(c Record) bool { return c.Root == f.checkout() && c.Unread && c.Branch == "" }) || !strings.Contains(logged.String(), "HEAD") {
 		t.Fatalf("the checkout whose HEAD is unreadable: %+v, log %q", checkouts, logged.String())
 	}
 	// Logged once while it fails, and once more after it has read again.

@@ -472,10 +472,14 @@ type Record struct {
 	// Main is a main checkout's record: Root is its directory under
 	// the repos directory and Branch what its HEAD has checked out.
 	// Configured is that this host's config lists its repository;
-	// Linked that a worktree of this checkout is in the listing.
+	// Linked that a worktree of this checkout is in the listing;
+	// Unread that its HEAD could not be read, so it is not to be
+	// published, though its directory still bounds what a worktree
+	// around it is said to hold.
 	Main       bool
 	Configured bool
 	Linked     bool
+	Unread     bool
 }
 
 // List returns every worktree that lives under the worktrees directory
@@ -497,7 +501,7 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 // ListAll is List's worktrees and a record of every main checkout the
 // scan finds, by root, labelled as its worktrees are, its branch read
 // from its HEAD (headBranch): the daemon publishes those in use. A
-// checkout whose HEAD cannot be read has no record, and the error is
+// checkout whose HEAD cannot be read is marked Unread, and the error is
 // logged once rather than returned.
 func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err error) {
 	cos, err := s.scan(ctx)
@@ -525,14 +529,16 @@ func (s *Store) ListAll(ctx context.Context) (records, checkouts []Record, err e
 		branch, err := headBranch(ctx, co.dir)
 		if err != nil {
 			// Not the listing's failure: one checkout of many, in no use
-			// as a rule, would hold every worktree's change. It has no
-			// record until its HEAD reads again; the error is logged
-			// once until then, as a git status error is.
+			// as a rule, would hold every worktree's change. It is
+			// marked unread, published by no one, until its HEAD reads
+			// again; the error is logged once until then, as a git
+			// status error is.
 			s.logOnce("head\x00"+co.dir, "worktrees: %v", err)
-			continue
+			main.Unread = true
+		} else {
+			s.forget("head\x00" + co.dir)
+			main.Branch = branch
 		}
-		s.forget("head\x00" + co.dir)
-		main.Branch = branch
 		checkouts = append(checkouts, main)
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Root < records[j].Root })

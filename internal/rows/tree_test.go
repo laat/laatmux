@@ -1256,6 +1256,44 @@ func mainInput(now time.Time) Input {
 	}
 }
 
+// An agent of a main checkout in a window of a workspace session, or of
+// a plain attachment's session, does not make the checkout's line the
+// viewer's there, whichever of its agents the line jumps through: those
+// sessions are other lines'.
+func TestMainCheckoutLineInLaatmuxSessions(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	in := mainInput(now)
+	in.Agents[0].Session = "mac/laatmux/fix" // a window of fix's workspace session
+	in.Agents[1].Session = "att"             // a plain attachment's session
+	in.Locals = append(in.Locals, protocol.Session{Name: "att", Attach: "mac/other", Host: "mac"})
+	line := func(nodes []Row, id string) Row {
+		for _, n := range nodes {
+			if n.Depth == 1 && n.ID() == id {
+				return n
+			}
+		}
+		t.Fatalf("no line %s", id)
+		return Row{}
+	}
+	for _, c := range []struct {
+		viewer  string
+		working int // the agent working, the line's jump agent
+	}{{"mac/laatmux/fix", 0}, {"mac/laatmux/fix", 1}, {"att", 0}, {"att", 1}} {
+		in.Current = c.viewer
+		for i := range in.Agents[:2] {
+			in.Agents[i].Activity = protocol.Idle
+		}
+		in.Agents[c.working].Activity = protocol.Working
+		nodes := Tree(in)
+		if m := line(nodes, "menv/checkout//code/laatmux"); m.Own {
+			t.Errorf("viewer in %s, %s working: the main line is the viewer's", c.viewer, in.Agents[c.working].ID)
+		}
+		if f := line(nodes, "menv/worktree//w/fix"); f.Own != (c.viewer == "mac/laatmux/fix") {
+			t.Errorf("viewer in %s: fix's line Own %v", c.viewer, f.Own)
+		}
+	}
+}
+
 // A main checkout is a line under its repository, first, with the agents
 // the host attributed to it, from plain sessions on the default server;
 // the line jumps through the most recently active, one working before

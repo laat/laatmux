@@ -82,7 +82,7 @@ func cmdJump(ctx context.Context, args []string) error {
 	worktrees, mains := splitMains(snap.Worktrees)
 	w, ok, err := matchWorktree(worktrees, cfg, rest)
 	if err == nil && !ok {
-		w, ok, err = matchMain(mains, cfg, h.Name, rest)
+		w, ok, err = matchMain(mains, cfg, h, rest)
 	}
 	if err != nil {
 		return err
@@ -162,7 +162,7 @@ func mainName(host string, w protocol.Worktree) string {
 // two clones' checkouts on the branch: no label tells them apart, both
 // clones of a repository the config lists carrying its name, but their
 // agents' sessions do, which the error says how to reach.
-func matchMain(mains []protocol.Worktree, cfg config.Config, host, rest string) (protocol.Worktree, bool, error) {
+func matchMain(mains []protocol.Worktree, cfg config.Config, h config.Host, rest string) (protocol.Worktree, bool, error) {
 	w, ok, err := matchWorktree(mains, cfg, rest)
 	if err == nil {
 		return w, ok, nil
@@ -175,7 +175,12 @@ func matchMain(mains []protocol.Worktree, cfg config.Config, host, rest string) 
 			found = append(found, m)
 		}
 	}
-	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in either", twoMains(tmux.Printable(rest), found), host)
+	err = twoMains(tmux.Printable(rest), found)
+	if !h.Host.Local() {
+		// A remote host's default server is not jumped to at all.
+		return protocol.Worktree{}, false, err
+	}
+	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in either", err, h.Name)
 }
 
 // splitMains is the records that are worktrees and those that are main
