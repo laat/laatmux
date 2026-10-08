@@ -522,9 +522,12 @@ func TestWorktreeRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The pane, with no agent in it, is the worktree's pane record.
+	// The worktree's own messages: not a pane record's, and not the
+	// main checkout's, in use while the worktree is listed and out of
+	// use with it, whose remove the map order can put first.
 	worktreeMsg := func() protocol.Message {
 		for m := range got {
-			if m.Pane == nil && m.PaneRecordID == "" {
+			if m.Pane == nil && m.PaneRecordID == "" && !(m.Worktree != nil && m.Worktree.Main) && !strings.Contains(m.WorktreeID, "/checkout/") {
 				return m
 			}
 		}

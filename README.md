@@ -281,8 +281,9 @@ truth; labels only place new things.
   poll reads each main checkout's branch from its `.git/HEAD`, empty
   when detached, asking git only on the reftable backend, whose HEAD is
   a stub, and publishes a worktree record with `main` for each checkout
-  in use: one whose repository the host's config lists, one with a
-  worktree listed, or one an agent is attributed to (below). Its id is
+  in use: one with a worktree listed, or one an agent is attributed to
+  (below); being in the host's config is not use, since a config that
+  lists every repository would publish a line for each. Its id is
   `<environment_id>/checkout/<root>`, its root the checkout's
   directory, its branch the one checked out, and it has no `session`;
   its `git` object is read as a worktree's, every 5 s while an agent is
