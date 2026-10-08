@@ -457,6 +457,18 @@ func (m *Model) treeShown() []bool {
 // first agent, a repository line on its first worktree's. A target a
 // fold hides opens the fold. Nothing to resolve to leaves the selection
 // on no row; a following selection follows on.
+// FollowView puts the model in the view another pane chose, read from
+// the settings file: a switch as Tab does, with the selection carried
+// across, but not the model's own choice, so it is not written back as
+// one; nothing when the model is in that view already.
+func (m *Model) FollowView(v View) {
+	if m.View == v {
+		return
+	}
+	m.Switch()
+	m.viewSet = false
+}
+
 func (m *Model) Switch() {
 	m.settings, m.viewSet = true, true
 	r := m.Selection()

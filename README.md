@@ -1121,8 +1121,12 @@ orphaned row's session exists locally and is switched to.
   thing. The view and layout last chosen by a key or the CLI and the
   scope last set by the CLI are *start defaults*: a pane reads them
   when it starts, over the config's (`sidebar.scope` among them), and
-  `F` is never written; a change in one pane never moves another, and
-  `--all` is how to change every pane. The folds the user toggled, the
+  `F` is never written; the layout and the scope of one pane never
+  move another's, and `--all` is how to change every pane's. The view
+  is followed between the sidebar panes: `Tab` in one switches every
+  other to the tree or the agents, read with the folds, so the sidebar
+  is one view whatever window shows it; the dashboard keeps its own.
+  The folds the user toggled, the
   stale fold among them, are *shared*: every pane and the dashboard
   read them again when the file's mtime changes, checked every second,
   keeping the selection on its row, and a fold carried across a task's

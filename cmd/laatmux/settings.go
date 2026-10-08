@@ -15,7 +15,11 @@ import (
 // At start a pane takes the file's values and the config's for what the
 // file lacks; on a change it writes the view, the layout and its folds
 // back; every second it looks at the file's mtime and takes the folds
-// another pane wrote.
+// another pane wrote, and the view: a sidebar pane switched to the tree
+// switches every other sidebar pane, so the sidebar reads as one
+// whatever window it is seen in. The layout and the scope stay each
+// pane's own, --all changing every pane's; the dashboard keeps its own
+// view.
 
 // settingsPoll is how often a pane looks for another's write.
 const settingsPoll = time.Second
@@ -100,10 +104,10 @@ func touchSettings(m *view.Model, now time.Time) error {
 // touchEvery is how often a pane refreshes its folds' sightings.
 const touchEvery = time.Hour
 
-// watchSettings sends the file's folds to the view whenever its mtime
-// moves past the one last seen, and once an hour a refresh of the
-// sightings, until ctx ends.
-func watchSettings(ctx context.Context, seen time.Time, cmds chan<- func(*view.Model) view.Action) {
+// watchSettings sends the file's folds, and for a sidebar pane the
+// file's view, to the view whenever its mtime moves past the one last
+// seen, and once an hour a refresh of the sightings, until ctx ends.
+func watchSettings(ctx context.Context, seen time.Time, cmds chan<- func(*view.Model) view.Action, h settingsHost) {
 	go func() {
 		t := time.NewTicker(settingsPoll)
 		defer t.Stop()
@@ -134,6 +138,9 @@ func watchSettings(ctx context.Context, seen time.Time, cmds chan<- func(*view.M
 			case cmds <- func(m *view.Model) view.Action {
 				if s, _, err := home.ReadSidebar(); err == nil {
 					m.ApplyFolds(s.FoldMap())
+					if v, err := view.ParseView(s.View); err == nil && s.View != "" && !h.dashboard && !h.fixedView && m.Layout != view.Strip {
+						m.FollowView(v)
+					}
 				}
 				return view.Action{}
 			}:
