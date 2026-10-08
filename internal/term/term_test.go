@@ -535,6 +535,8 @@ func TestParse(t *testing.T) {
 		"\x1b[97:65;2u":  {{Rune: 'A'}},
 		"\x1b[27;2;97~":  {{Rune: 'A'}},
 		"\x1b[97;2u":     {{Rune: 'A'}},
+		"\x1b[32;2u":     {{Rune: ' '}},
+		"\x1b[27;2;32~":  {{Rune: ' '}},
 		"\x1b[106;5u":    {{Kind: KeyNewline}},
 		"\x1b[27;3;13~":  {{Kind: KeyNewline}},
 		"\x1b[27;3;120~": {{Kind: -1}},
