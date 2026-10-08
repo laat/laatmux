@@ -1469,6 +1469,35 @@ func TestNewSessionCountsItsOwnPanes(t *testing.T) {
 	}
 }
 
+// A session made with no command, the user's shell, has its pane tagged
+// so, and the listing says it; one made with a command has not.
+func TestNewSessionTagsNoCommand(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	shell, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/shell", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/agent", Cwd: t.TempDir(), Cmd: []string{"sleep", "600"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	panes, err := s.ListPanes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range panes {
+		got[p.ID] = p.NoCmd
+	}
+	if nocmd, ok := got[shell.PaneID]; !ok || !nocmd {
+		t.Errorf("the shell's pane %s: NoCmd %v, listed %v", shell.PaneID, nocmd, ok)
+	}
+	if nocmd, ok := got[agent.PaneID]; !ok || nocmd {
+		t.Errorf("the command's pane %s: NoCmd %v, listed %v", agent.PaneID, nocmd, ok)
+	}
+}
+
 // A hand-started server whose user config has an after-list-sessions
 // hook that fails is not taken for one that is not running: list-sessions
 // fails on it, and a cold start's set-option would run the failing

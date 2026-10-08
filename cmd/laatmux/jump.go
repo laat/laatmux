@@ -19,6 +19,7 @@ import (
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
+	"github.com/laat/laatmux/internal/worktree"
 )
 
 // jump switches to the local workspace session for <host>/<repo>/<branch>,
@@ -27,6 +28,10 @@ import (
 // attached to the managed session on the host. Local and remote are the
 // same operation, since managed agents live on the dedicated laatmux
 // server, which the user's tmux cannot switch-client into.
+//
+// A worktree with no managed session and no agent gets one first, with
+// the user's shell at its root, from the host's daemon (newHome); where
+// the jump makes none, the refusal says how add makes one (addHint).
 //
 // A managed session that is no worktree's, one that new made, is reached
 // the same way through a local session named <host>/<session>, tagged as
@@ -72,7 +77,7 @@ func cmdJump(ctx context.Context, args []string) error {
 	if how == jumpSwitch {
 		return switchDefault(ctx, h, rest)
 	}
-	_, snap, err := snapshot(ctx, h.Host, "")
+	hello, snap, err := snapshot(ctx, h.Host, "")
 	if err != nil {
 		return err
 	}
@@ -92,7 +97,22 @@ func cmdJump(ctx context.Context, args []string) error {
 	}
 	if ok {
 		if w.Session == "" {
-			return errors.New(addHint(cfg, h, w))
+			// The records are the host's, its label in them.
+			name := shellSession(rows.Row{Worktree: &w})
+			if name == "" || rows.JumpAgent(snap.Agents, w) != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
+				return errors.New(addHint(cfg, h, w))
+			}
+			made, err := newHome(ctx, h, w, name, func() protocol.Message { return snap })
+			if noNew(err) {
+				return errors.New(addHint(cfg, h, w))
+			}
+			if err != nil {
+				return err
+			}
+			if made != "" {
+				fmt.Println(made)
+			}
+			w.Session = name
 		}
 		spec = worktreeSpec(h, w)
 	} else {
@@ -126,12 +146,12 @@ func switchDefault(ctx context.Context, h config.Host, session string) error {
 
 // jumpMain goes to a main checkout's agent, in a plain session on its
 // host's default server: the most recently active of several, as the
-// checkout's line goes (rows.MainAgent). No workspace session is made
+// checkout's line goes (rows.JumpAgent). No workspace session is made
 // for a main checkout, so one with no agent is refused, and an agent
 // on a remote host's default server is refused as any session there
 // is.
 func jumpMain(ctx context.Context, h config.Host, w protocol.Worktree, agents []protocol.Agent) error {
-	a := rows.MainAgent(agents, w)
+	a := rows.JumpAgent(agents, w)
 	if a == nil {
 		return errors.New(mainNoAgent(h, w))
 	}
@@ -235,7 +255,107 @@ func addHint(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	if w.Branch == "" {
 		name = tmux.Printable(w.Root) + " on " + h.Name
 	}
-	return name + " has no managed session; " + addsSession(cfg, h, w)
+	return name + " has no managed session; " + addsSession(cfg, h, w, false)
+}
+
+// shellSession is the managed session a jump makes for a worktree with
+// no home and no agent: the one add makes, by the name add gives it
+// (rows.Row.AddSession). "" where the jump makes none, as add makes
+// none: for a main checkout and a detached worktree; for a branch only
+// shown, which no command names, flagged so or, from an older daemon
+// that sends no flag, with U+FFFD in it (worktree.CheckWire); and for a
+// name new refuses, one tmux would not store as given, as an older
+// host's label for a checkout its config does not list can make it.
+func shellSession(r rows.Row) string {
+	name := r.AddSession()
+	if name == "" || r.Worktree.BranchDisplayOnly || worktree.CheckWire(r.Worktree.Branch) != nil || tmux.CheckSessionName(name) != nil {
+		return ""
+	}
+	return name
+}
+
+// newHome asks the host's daemon for the managed session a jump makes
+// for a worktree with no home and no agent: name, at the root, with no
+// command, so the host's default-shell runs in it, as new makes one.
+// What was made is returned, for the message. The daemon refuses a name
+// in use. A session of the name that the host's records, as records
+// reads them then, place elsewhere (elsewhere) is refused as add refuses
+// it; any other, one made at the root since the records were read, an
+// add's say, is the worktree's to attach, and nothing is said made. A
+// daemon without new is a *noNewError; one that answers as another
+// environment than the worktree's is refused before anything is asked,
+// the host entry having moved to another machine since the records. The
+// round trip is bounded.
+func newHome(ctx context.Context, h config.Host, w protocol.Worktree, name string, records func() protocol.Message) (made string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, newTimeout)
+	defer cancel()
+	_, err = newSession(ctx, h, w.EnvironmentID, protocol.Message{Name: name, Cwd: w.Root})
+	switch {
+	case err == nil:
+		return fmt.Sprintf("made session %s on %s, a shell at %s", tmux.Printable(name), h.Name, tmux.Printable(w.Root)), nil
+	case noNew(err):
+		return "", err
+	case ctx.Err() != nil:
+		return "", fmt.Errorf("%s: no answer to new %s after %s", h.Name, tmux.Printable(name), newTimeout)
+	case !strings.HasSuffix(err.Error(), ": duplicate session: "+name):
+		// tmux's own words, the name as it stored it: a name new takes
+		// is stored as given.
+		return "", fmt.Errorf("%s: new %s: %w", h.Name, tmux.Printable(name), err)
+	}
+	if cwd, ok := elsewhere(records(), w, name); ok {
+		return "", fmt.Errorf("%s: session %s runs in %s, not %s; name in use", h.Name, tmux.Printable(name), tmux.Printable(cwd), tmux.Printable(w.Root))
+	}
+	return "", nil
+}
+
+// newTimeout bounds the new round trip, a cold managed server's start
+// included.
+const newTimeout = 10 * time.Second
+
+// elsewhere is where the host's records place the managed session name
+// other than in the worktree: the root of another worktree whose home it
+// is, two clones' worktrees on one branch being named alike; else the
+// directory of an agent or a pane in it that the host attributes to
+// another worktree, or, attributed to none, has outside the root, unless
+// a record has the pane laatmux made at the root, a managed one whose
+// record has the directory it was made at: a split of the worktree's own
+// session gone elsewhere leaves the session the worktree's, where a
+// split of another's that has gone to the root does not make it this
+// worktree's. Not ok when none does, as for a session made at the root
+// since the records were read, which they do not have yet.
+func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string, bool) {
+	for _, o := range snap.Worktrees {
+		if o.Session == name && o.ID != w.ID {
+			return o.Root, true
+		}
+	}
+	type rec struct {
+		cwd, worktreeID string
+		managed         bool
+	}
+	var in []rec
+	for _, a := range snap.Agents {
+		if a.Server == protocol.ServerLaatmux && a.Session == name {
+			in = append(in, rec{a.Cwd, a.WorktreeID, a.Managed})
+		}
+	}
+	for _, p := range snap.Panes {
+		if p.Server == protocol.ServerLaatmux && p.Session == name {
+			in = append(in, rec{p.Cwd, p.WorktreeID, p.Managed})
+		}
+	}
+	for _, r := range in {
+		if r.managed && r.cwd == w.Root {
+			return "", false
+		}
+	}
+	for _, r := range in {
+		inside := r.cwd == w.Root || strings.HasPrefix(r.cwd, strings.TrimSuffix(w.Root, "/")+"/")
+		if r.worktreeID != w.ID && (r.worktreeID != "" || r.cwd != "" && !inside) {
+			return r.cwd, true
+		}
+	}
+	return "", false
 }
 
 // addCommand is the add line for the worktree's branch on the host. Its

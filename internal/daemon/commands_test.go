@@ -20,6 +20,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/gittest"
+	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
@@ -416,6 +417,104 @@ func TestAddThenRm(t *testing.T) {
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r2", Repo: remote, Branch: "fix/v1.2", Root: root})
 	if res, _ := result(t, pc, "r2"); !res.OK {
 		t.Fatalf("repeat rm: %s", res.Error)
+	}
+}
+
+// A session in the root made with the user's shell, as a jump makes one
+// for a worktree with none, is not taken up while no agent runs in it:
+// add refuses at the agent stage, saying how to start the agent there,
+// and the worktree is left. No agent runs in a pane with no state or one
+// not observed yet, one observed bare, one whose agent has gone, and one
+// whose observation is of another server instance, a pane id reused
+// since. One whose shell runs an agent the daemon has identified is
+// taken up as any session in the root is.
+func TestAddShellSession(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	root := store.Dirs.Worktree("proj", "task")
+	ft.panes = []tmux.Pane{{Session: "proj/task", ID: "%9", Cwd: root, Managed: true, NoCmd: true, ServerPID: 7}}
+	pc := conn(t, d)
+	want := "session proj/task in " + root + " has a shell and no agent running; start claude in it, or exit that shell and add again"
+	for i, st := range []*paneState{
+		nil,
+		{hasIdentity: true, obs: observation{serverPID: 7}},
+		{observed: true, bare: true, obs: observation{serverPID: 7}},
+		{observed: true, hasIdentity: true, gone: true, obs: observation{serverPID: 7, live: false}},
+		{observed: true, hasIdentity: true, obs: observation{serverPID: 6, live: true}},
+	} {
+		d.mu.Lock()
+		if st == nil {
+			delete(d.panes, paneKey("laatmux", "%9"))
+		} else {
+			d.panes[paneKey("laatmux", "%9")] = st
+		}
+		d.mu.Unlock()
+		id := fmt.Sprintf("c%d", i)
+		pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: id, Repo: remote, Branch: "task", AgentName: "claude"})
+		if res, _ := result(t, pc, id); res.OK || res.Stage != protocol.StageAgent || !strings.Contains(res.Error, want) || res.Root != root {
+			t.Fatalf("state %+v: result %+v, want %q", st, res, want)
+		}
+		if len(ft.panes) != 1 {
+			t.Fatalf("panes %+v", ft.panes)
+		}
+	}
+	d.mu.Lock()
+	d.panes[paneKey("laatmux", "%9")] = &paneState{observed: true, hasIdentity: true, obs: observation{serverPID: 7, live: true}}
+	d.mu.Unlock()
+	pc.Write(protocol.Message{Type: protocol.TypeAdd, ID: "c9", Repo: remote, Branch: "task", AgentName: "claude"})
+	res, progress := result(t, pc, "c9")
+	if !res.OK || res.Session != "proj/task" || res.PaneID != "%9" || !hasProgress(progress, protocol.StageAgent, protocol.StateSkip, "session proj/task runs in "+root) {
+		t.Fatalf("with an agent: result %+v progress %+v", res, progress)
+	}
+}
+
+// add's look at whether an agent runs in a pane follows the polls: one
+// that finds the agent says it runs, on the server instance the pane is
+// listed on; the next, which finds it gone, says it does not.
+func TestAgentRunsFollowsPolls(t *testing.T) {
+	d := New(Config{EnvironmentID: "env", Targets: managed(onePane(pane, idleScr)), Procs: &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, wrapper, claude}}, {procs: []procs.Proc{shell}}}}})
+	ctx := context.Background()
+	if d.tasks.agentRuns(pane) {
+		t.Fatal("an agent runs before any poll")
+	}
+	d.poll(ctx)
+	if !d.tasks.agentRuns(pane) {
+		t.Fatal("the agent found does not run")
+	}
+	moved := pane
+	moved.ServerPID++
+	if d.tasks.agentRuns(moved) {
+		t.Fatal("the agent runs on another server instance")
+	}
+	d.poll(ctx)
+	if d.tasks.agentRuns(pane) {
+		t.Fatal("the agent gone still runs")
+	}
+}
+
+// add's look at whether an agent runs in a pane reads what the poll
+// wrote under the lock, beside polls that find the agent and lose it
+// again: the race detector would see a read of the poll's own state.
+func TestAgentRunsBesidePolls(t *testing.T) {
+	var tables []procTable
+	for i := 0; i < 10; i++ {
+		tables = append(tables, procTable{procs: []procs.Proc{shell, wrapper, claude}}, procTable{procs: []procs.Proc{shell}})
+	}
+	d := New(Config{EnvironmentID: "env", Targets: managed(onePane(pane, idleScr)), Procs: &fakeProcs{tables: tables}})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < len(tables); i++ {
+			d.poll(context.Background())
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			d.tasks.agentRuns(pane)
+			runtime.Gosched()
+		}
 	}
 }
 

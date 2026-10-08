@@ -686,7 +686,7 @@ func (b *builder) attachedHome(out []Row) {
 		n := &out[i]
 		home, named := n.Home(), false
 		if home == "" && n.Depth == 1 {
-			home, named = n.named(), true
+			home, named = n.AddSession(), true
 		}
 		if home == "" || !b.attachedTo(n, home) {
 			continue
@@ -998,17 +998,17 @@ func HomeLine(tree []Row, host, session string) int {
 }
 
 // namedAfter reports whether a managed session has the name add gives
-// the line's worktree's (named).
+// the line's worktree's (AddSession).
 func (r Row) namedAfter(session string) bool {
-	return session != "" && session == r.named()
+	return session != "" && session == r.AddSession()
 }
 
-// named is the name add gives the managed session of the line's
+// AddSession is the name add gives the managed session of the line's
 // worktree, tmux.SessionName of the host's label, which this machine's
 // configuration may name otherwise, and the branch. "" for a detached
 // worktree, which add does not make, for a main checkout, which add
 // makes no session for, and for a line of none.
-func (r Row) named() string {
+func (r Row) AddSession() string {
 	w := r.Worktree
 	if w == nil || w.Branch == "" || w.Main {
 		return ""

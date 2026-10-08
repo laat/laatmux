@@ -455,8 +455,12 @@ type observation struct {
 	session   string
 	serverPID int
 	verified  bool // an agent identified, not tentative, and seen alive by this poll's process check
-	identity  procs.Identity
-	idle      bool // the detector saw the prompt box: VisibleIdle, not the fallback
+	// live is an agent identified that has not gone, by this poll, a
+	// tentative one or one a failed process check did not vouch for
+	// among them: what add takes as an agent running in a shell's pane.
+	live     bool
+	identity procs.Identity
+	idle     bool // the detector saw the prompt box: VisibleIdle, not the fallback
 }
 
 type subscriber struct {
@@ -903,7 +907,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	defer d.mu.Unlock()
 	st.obs = observation{
 		at: now, session: p.Session, serverPID: p.ServerPID,
-		verified: checked && !st.gone && !st.identity.Tentative, identity: st.identity,
+		verified: checked && !st.gone && !st.identity.Tentative, live: !st.gone, identity: st.identity,
 		idle: !res.Skip && res.State == detect.Idle && res.VisibleIdle,
 	}
 	st.pane, st.path, st.observed, st.bare = p, path, true, false

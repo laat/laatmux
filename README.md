@@ -435,7 +435,9 @@ truth; labels only place new things.
   above. An agent record carries
   `worktree_id`, so a worktree has any number of agents. A pane with no
   agent inside a root is a pane record, `{id, environment_id, server,
-  session, window, pane_id, command, pid, cwd, worktree_id}`, upserted
+  session, window, pane_id, command, pid, cwd, worktree_id, managed}`,
+  `managed` for a pane laatmux made, whose `cwd` is the directory it was
+  made at, upserted
   when its command, path or place changes and removed when it leaves
   every root, goes, or has an agent identified in it: `panes` in a
   snapshot, `pane` in an upsert, `pane_record_id` in a remove. A `run`
@@ -465,7 +467,13 @@ truth; labels only place new things.
   renamed into place), setup (markers under the worktree's git directory,
   keyed by index and hash of the command), agent (one tmux invocation,
   skipped when a managed session already runs in the root, refused as a
-  name in use when the intended name runs elsewhere). Progress streams as
+  name in use when the intended name runs elsewhere; one in the root made
+  with the user's shell, its pane tagged `@laatmux_nocmd` as `new` with
+  no command tags it, in which no agent runs by the daemon's last look
+  at the pane on the server instance it is on, none started or one
+  exited, is refused too, saying to start the agent in it or exit that
+  shell and add again; a shell session made by an older host, untagged,
+  is taken up as before). Progress streams as
   `{type: progress, id, stage, state, detail}` with state `start`, `done`,
   `skip` or `output`; the result carries `stage` on failure, and
   `session`, `pane_id` and `root` on success. `repo` is the source, and
@@ -755,7 +763,30 @@ workspace session; the next `jump` makes it again.
   attach pane on another managed session than the jump's, the worktree's
   agent having moved to another since, is restarted on the jump's; a
   pane from before the target was tagged is left as it is, and closing
-  it has the next jump make a tagged one. A
+  it has the next jump make a tagged one. A worktree with no managed
+  session and no agent gets one first, asked of the host's daemon
+  through `new` (capability `new`): named as `add` names the
+  worktree's, the host's label and the encoded branch, at the root, with
+  no command, so the host's `default-shell` runs in it; the jump prints
+  what it made. A session of that name, which `new` refuses as a name in
+  use, is attached instead, as one made since the listing by an `add`
+  say, unless the host's records place it elsewhere: another worktree's
+  home, which two clones' worktrees on one branch can be, or, with no
+  record of the managed pane laatmux made at the root, a session an
+  agent or a pane of another worktree runs in, or one outside the root;
+  that is refused as `add` refuses it, `session <name> runs in <dir>,
+  not <root>; name in use`. The view reads the records once `new` has
+  answered, those it had at enter when the stream has no listing of the
+  worktree's machine by then: the host down, listing again after its
+  entry changed, or the entry reaching another machine. A daemon that
+  answers as another machine than the worktree's is asked nothing. A
+  host whose daemon lacks `new`, a branch only shown, a name
+  tmux would not store as given, and a worktree whose agent is
+  elsewhere keep the refusal that says how `add` makes one. The shell
+  session is the worktree's home from then
+  on: an agent started in it by hand is the worktree's, and `add` for
+  the worktree refuses the session while no agent runs in it, saying so,
+  rather than take it up and start none, on a host of this build. A
   managed session that is no worktree's, one `new` made, is reached the
   same way through a session named `<host>/<session>` tagged
   `@laatmux_attach`. A session name the host's tmux lists escaped, one
@@ -1059,10 +1090,23 @@ records: a workspace row switches to its local session, creating it from
 the record when missing; a `new` session's row does the same through a
 plain attachment; an observed agent on this machine's default server is
 a `switch-client`; one on a remote host's default server is refused with
-`jump`'s message; a worktree with no session says in the footer how `add`
-would start one: its command line, or what add needs first; a main
-checkout goes as `jump` takes it, and with no agent says so. An
-orphaned row's session exists locally and is switched to.
+`jump`'s message; a worktree with no session and no agent gets a managed
+session with a shell at its root as `jump` makes one, on a host whose
+daemon has `new` by the capabilities the merged stream has cached for
+it. The view does not wait on the host: the footer says `making a
+session on <host>…`, a jump meanwhile is refused with it, and when the
+host answers the jump ends as any does, the footer saying what was made
+and the dashboard closing. A user who has moved on meanwhile, to a form
+or a question in the view, or with the client to another session, is
+left there: the footer says the session is there and enter on the line
+goes there. A click and a digit are jumps, so they make the session
+too. On another host, one that is down among them, and for
+a detached worktree or a branch only shown, the footer says how `add`
+would start one: its command line, or what add needs first. `z` on such
+a line says which: that enter creates one with a shell and the `add`
+line makes one with an agent, or the refusal. A main checkout goes as
+`jump` takes it, and with no agent says so. An orphaned row's session
+exists locally and is switched to.
 
 - **`sidebar [toggle|on|off]`**, meant for a key binding. `on` sets
   eight server hooks at indexes laatmux owns, `after-new-window[9101]`

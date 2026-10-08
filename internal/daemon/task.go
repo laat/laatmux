@@ -427,6 +427,14 @@ func (r *addRun) agent(ctx context.Context) (delivery, reason string, err error)
 	for _, s := range names {
 		ps := bySession[s]
 		if len(ps) == 1 && ps[0].Managed && ps[0].Cwd == r.root {
+			if ps[0].NoCmd && !rn.agentRuns(ps[0]) {
+				// A session made with the user's shell, a jump's to a
+				// worktree with none say, in which no agent runs, none
+				// started there or one that has exited: taking it up
+				// would start no agent, and the prompt would reach the
+				// shell.
+				return r.failed(prompt, "launch refused", fmt.Errorf("session %s in %s has a shell and no agent running; start %s in it, or exit that shell and add again", tmux.Printable(s), tmux.Printable(r.root), tmux.Printable(tmux.ShellJoin(r.cmd))))
+			}
 			// s is any session of the managed server, one renamed by
 			// hand say, not SessionName's encoding; it is quoted with
 			// the root.
@@ -735,6 +743,19 @@ func (rn *taskRunner) worktreeReplaced(ctx context.Context, e entry) string {
 		return "worktree replaced: " + tmux.Printable(e.Root) + " is now on branch " + tmux.Printable(rec.Branch) + ", not " + tmux.Printable(e.Branch)
 	}
 	return ""
+}
+
+// agentRuns reports whether the daemon's last observation of the managed
+// pane, on the server instance it is listed on now, identified an agent
+// in it that had not gone. A pane not observed yet, as on a server
+// restarted since or a daemon just started, has none known to run, nor
+// has one observed bare. The observation is read as the poll wrote it
+// under the lock; the rest of the pane's state is the poll's own.
+func (rn *taskRunner) agentRuns(p tmux.Pane) bool {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
+	return ok && st.obs.live && st.obs.serverPID == p.ServerPID
 }
 
 // adopt finds the target for an entry without one: the managed session

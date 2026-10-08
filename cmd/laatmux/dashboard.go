@@ -140,6 +140,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 	cmds := make(chan func(*view.Model) view.Action)
 	watchSettings(ctx, seen, cmds, host)
 	watchConfig(ctx, w, configPoll, cmds, func(m *view.Model, cfg config.Config) { taker.take(m, cfg, true) }, taker.failed)
+	d.cmds = cmds
 	if o.listen {
 		// The pane's socket: a command names the client its jump
 		// switches, kept on the dash until the jump takes it.
@@ -349,11 +350,12 @@ func fill(v *view.Model, s merged.Status) {
 // does the same through a plain attachment; an observed agent on this
 // machine's default server is a switch-client; one on a remote host's
 // default server is refused as jump refuses it. A worktree with no
-// session cannot be jumped to: the message says how add would start
-// one. A orphaned row's session exists locally and is switched to.
-// The view is meant to run inside the default tmux server, where
-// switch-client is allowed; run elsewhere, a dashboard in a plain
-// terminal say, the message says how to attach instead.
+// session and no agent is refused here, the refusal saying how add would
+// start one (*noHome); the view makes its managed session instead where
+// the host can (dash.makeHome). A orphaned row's session exists locally
+// and is switched to. The view is meant to run inside the default tmux
+// server, where switch-client is allowed; run elsewhere, a dashboard in a
+// plain terminal say, the message says how to attach instead.
 func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if r.Orphaned {
 		return switchTo(ctx, r.Local.Name)
@@ -365,13 +367,37 @@ func jumpRow(ctx context.Context, cfg config.Config, r rows.Row) error {
 	if session != "" {
 		return switchTo(ctx, session)
 	}
-	// A session Ensure read from a listing a user's hook failed after is
-	// there; the view has no line for the hook's error (warnHook).
+	return ensureSwitch(ctx, spec)
+}
+
+// ensureSwitch makes or finds the workspace session and switches to it,
+// the end of a jump to one. A session Ensure read from a listing a
+// user's hook failed after is there; the view has no line for the hook's
+// error (warnHook).
+func ensureSwitch(ctx context.Context, spec workspace.Spec) error {
 	name, _, err := workspace.Ensure(ctx, spec)
 	if err != nil && !tmux.HookOnly(err) {
 		return err
 	}
 	return switchTo(ctx, name)
+}
+
+// shellable is a jump's refusal of a worktree with no home and no agent
+// that the view makes a managed session for instead: one shellSession
+// names a session for, on a host whose daemon has new by the
+// capabilities st has cached for it, with the host's records as st has
+// them then. A host st has as down, or that never answered, is not
+// dialled, and the refusal stands.
+func shellable(st *merged.State, err error) (*noHome, protocol.Message, bool) {
+	var nh *noHome
+	if st == nil || !errors.As(err, &nh) || nh.name == "" {
+		return nil, protocol.Message{}, false
+	}
+	hello, snap, ok, err := st.HostSnapshot(nh.h.Name)
+	if !ok || err != nil || !protocol.Has(hello.Capabilities, protocol.CapNew) {
+		return nil, protocol.Message{}, false
+	}
+	return nh, snap, true
 }
 
 // jumpTarget is where jumpRow takes a row that is not orphaned: what
@@ -413,7 +439,7 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		return spec, "", errors.New(mainNoAgent(h, *r.Worktree))
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
 		if r.Worktree.Session == "" {
-			return spec, "", errors.New(addHint(cfg, h, *r.Worktree))
+			return spec, "", &noHome{h: h, w: *r.Worktree, name: shellSession(r), hint: addHint(cfg, h, *r.Worktree)}
 		}
 		return worktreeSpec(h, *r.Worktree), "", nil
 	case r.Worktree != nil && r.Agent.Server == protocol.ServerLaatmux:
@@ -444,6 +470,19 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 	}
 	return spec, "", errors.New(r.Name + ": nothing to jump to")
 }
+
+// noHome is rowSpec's refusal of a worktree with no home and no agent,
+// which says how add makes one (addHint). The view makes one instead,
+// with a shell, where the host's daemon can (shellable); name is the
+// session it makes, shellSession's, "" for none.
+type noHome struct {
+	h    config.Host
+	w    protocol.Worktree
+	name string
+	hint string
+}
+
+func (e *noHome) Error() string { return e.hint }
 
 // pendingTarget is a pending task's row made ready for the jump: a
 // task whose host is gone or answers as another machine is refused,
@@ -499,6 +538,22 @@ func switchTo(ctx context.Context, name string) error {
 		return workspace.SwitchClient(ctx, c, name)
 	}
 	return workspace.Switch(ctx, name)
+}
+
+// clientSession is the session of the client a jump switches, the one
+// the context names or the calling one, as switch-client picks it: a
+// jump that waited on a host compares it, so it does not pull a client
+// the user has moved since. "" when tmux does not say, outside tmux say.
+func clientSession(ctx context.Context) string {
+	var a []string
+	if c, ok := ctx.Value(clientKey{}).(string); ok && c != "" {
+		a = []string{"-c", c}
+	}
+	s, err := workspace.Server.Display(ctx, "#{client_session}", a...)
+	if err != nil && !tmux.HookOnly(err) {
+		return ""
+	}
+	return s
 }
 
 // clientKey carries the tmux client a jump switches through a context.

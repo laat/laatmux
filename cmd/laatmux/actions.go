@@ -58,6 +58,13 @@ type dash struct {
 	// command with -c; "" is the view's own.
 	client  string
 	refocus func()
+	// cmds is the view's commands, through which a jump that waited on a
+	// host ends on the view's goroutine (makeHome); making is the host
+	// such a jump waits on, "" for none. clientAt is the session of the
+	// client a jump switches, clientSession unless a test replaces it.
+	cmds     chan<- func(*view.Model) view.Action
+	making   string
+	clientAt func(context.Context) string
 }
 
 // running is a command under way: what to do when it ends; its log is
@@ -108,11 +115,17 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 }
 
 // jumpRow runs the jump and says whether it happened: jumped is false
-// for a task still running and for a jump refused, whose message is in
-// the footer; exit is that the view ends.
+// for a task still running, for a jump refused, whose message is in the
+// footer, and while another waits on a host; exit is that the view ends.
+// A jump that waits on a host for a managed session (makeHome) is under
+// way, and ends the view, when it does, once the host has answered.
 func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 	if r.Pending != nil && !r.Pending.Done {
 		// A task still running has nothing to jump to yet.
+		return false, false
+	}
+	if d.making != "" {
+		m.Message = making(d.making)
 		return false, false
 	}
 	jump := d.jumper
@@ -149,11 +162,89 @@ func (d *dash) jumpRow(m *view.Model, r rows.Row) (exit, jumped bool) {
 			r.Kind, r.Run = rows.KindWorktree, nil
 		}
 	}
-	if err := jump(r); err != nil {
+	err := jump(r)
+	if nh, before, ok := shellable(d.st, err); ok && d.jumper == nil && d.cmds != nil {
+		d.makeHome(m, nh, before)
+		return false, true
+	}
+	if err != nil {
 		m.Message = err.Error()
 		return false, false
 	}
 	return d.exitOnJump, true
+}
+
+// making is the message line while a jump waits on the host.
+func making(host string) string { return "making a session on " + host + "…" }
+
+// makeHome has the host's daemon make the managed session of a worktree
+// with no home and no agent (newHome), with the user's shell at its
+// root, and then ends the jump on the view's goroutine as a jump to the
+// workspace session ends, through the view's commands: the view does not
+// wait on the host, and says meanwhile that a session is being made,
+// which a jump meanwhile is refused with. The jump switches the client
+// it would have, and says what was made, before an error after it, since
+// the session is there. A user who has moved on meanwhile, to a form or
+// a question in the view or with the client to another session, is left
+// where they are, the message saying the session is there for enter. A
+// view that ends first leaves the jump undone. before is the host's
+// records shellable read at enter, which a name in use is judged by
+// unless the stream has a listing of the worktree's machine by the
+// answer: it may have the host down, or listing again after its entry
+// changed, or the entry may reach another machine now.
+func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message) {
+	ctx, st, host := d.ctx, d.st, nh.h.Name
+	at := d.clientAt
+	if at == nil {
+		at = clientSession
+	}
+	was := at(ctx)
+	d.making = host
+	m.Message = making(host)
+	go func() {
+		made, err := newHome(ctx, nh.h, nh.w, nh.name, func() protocol.Message {
+			if hello, snap, ok, err := st.HostSnapshot(host); ok && err == nil && hello.EnvironmentID == nh.w.EnvironmentID {
+				return snap
+			}
+			return before
+		})
+		end := func(m *view.Model) view.Action {
+			d.making = ""
+			if noNew(err) {
+				// An older build answers for the host since its hello
+				// was cached: the refusal stands.
+				err = nh
+			}
+			if err == nil && (m.Overlay != nil || m.Confirm != "" || at(ctx) != was) {
+				there := made
+				if there == "" {
+					there = "session " + tmux.Printable(nh.name) + " on " + host + " is there"
+				}
+				m.Message = there + "; enter on the line goes there"
+				return view.Action{}
+			}
+			if err == nil {
+				w := nh.w
+				w.Session = nh.name
+				if err = ensureSwitch(ctx, worktreeSpec(nh.h, w)); err != nil && made != "" {
+					err = fmt.Errorf("%s; %w", made, err)
+				}
+			}
+			if err != nil {
+				m.Message = err.Error()
+				return view.Action{}
+			}
+			m.Message = made
+			if d.exitOnJump {
+				return view.Action{Kind: view.ActionQuit}
+			}
+			return view.Action{}
+		}
+		select {
+		case d.cmds <- end:
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // overlayDone reads what the finished overlay decided and moves on:
@@ -989,7 +1080,7 @@ func (d *dash) settle(m *view.Model) {
 		// session, and the agent's pane jump makes it (paneSpec).
 		hint := "enter creates one"
 		if !resolved || r.Worktree != nil || line.Home() != "" {
-			hint = noWorkspaceHint(d.cfg, *line, resolved)
+			hint = noWorkspaceHint(d.cfg, d.st, *line, resolved)
 		}
 		m.Message = line.Name + ": no local workspace session; " + hint
 		return
@@ -1016,7 +1107,10 @@ func (d *dash) settle(m *view.Model) {
 
 // noWorkspaceHint says what enter on a line with no local workspace
 // session does about one, by where the line's jump goes: it makes the
-// session; or it jumps to the session of the line's agent on this
+// session; or, for a worktree with no home and no agent, it makes the
+// managed session with a shell and the workspace session, where st
+// has the host's daemon able to (shellable), and add makes them with an
+// agent; or it jumps to the session of the line's agent on this
 // machine's default server; or it is refused, and the refusal is the
 // hint. A worktree with no home whose jump goes by such an agent, or by
 // one on another host's default server, gets its workspace session from
@@ -1025,7 +1119,7 @@ func (d *dash) settle(m *view.Model) {
 // nothing to jump to until it is done. A line of no worktree, which
 // settle does not pass, gets no add line: what add needs is the
 // worktree's.
-func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
+func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolved bool) string {
 	enter := "enter"
 	if resolved {
 		enter = "enter on the line"
@@ -1040,12 +1134,15 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 	case err == nil:
 		hint = fmt.Sprintf("%s jumps to %s, its agent's session", enter, session)
 	default:
+		if nh, _, ok := shellable(st, err); ok {
+			return enter + " creates one with a shell; " + addsSession(cfg, nh.h, nh.w, true)
+		}
 		hint = err.Error()
 	}
 	if h, ok := cfg.Find(line.Host); ok && line.Host != "" && line.Agent != nil && line.Worktree != nil {
 		// Enter went by the agent, which only the jump of a worktree
 		// with no home does: add gives it a home and the session.
-		hint += "; " + addsSession(cfg, h, *line.Worktree)
+		hint += "; " + addsSession(cfg, h, *line.Worktree, false)
 	}
 	return hint
 }
@@ -1058,8 +1155,13 @@ func noWorkspaceHint(cfg config.Config, line rows.Row, resolved bool) string {
 // lists, which --repo takes, with an agent in that config for add to
 // start, and last.json readable JSON, which add reads before it picks
 // the host. It names every one of these the worktree lacks, not only
-// the first.
-func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
+// the first. withAgent says add's is the one with an agent, where enter
+// makes one with a shell.
+func addsSession(cfg config.Config, h config.Host, w protocol.Worktree, withAgent bool) string {
+	one := "one"
+	if withAgent {
+		one = "one with an agent"
+	}
 	var needs []string
 	switch {
 	case w.Branch == "":
@@ -1082,13 +1184,13 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree) string {
 	}
 	switch n := len(needs); {
 	case n == 0:
-		return addCommand(cfg, h, w, last) + " makes one"
+		return addCommand(cfg, h, w, last) + " makes " + one
 	case n > 2:
 		// A list: the directories' own "and" would run into the joins.
 		needs[n-1] = "and " + needs[n-1]
-		return "laatmux add makes one once " + strings.Join(needs, ", ")
+		return "laatmux add makes " + one + " once " + strings.Join(needs, ", ")
 	}
-	return "laatmux add makes one once " + strings.Join(needs, " and ")
+	return "laatmux add makes " + one + " once " + strings.Join(needs, " and ")
 }
 
 // shell opens the shell window in the selected workspace, creating the

@@ -289,6 +289,8 @@ func TestAttributionListedAfterPoll(t *testing.T) {
 		f.laatmux.panes = []tmux.Pane{
 			{Session: "proj/foo", ID: "%1", TTY: "/dev/a1", Managed: true, Cwd: f.foo, CurrentPath: f.foo},
 			{Session: "proj/foo", ID: "%2", TTY: "/dev/s1", CurrentCommand: "zsh", PID: 40, CurrentPath: f.foo},
+			// A shell new made at the root, gone into a directory under it.
+			{Session: "proj/sh", ID: "%3", TTY: "/dev/s3", CurrentCommand: "zsh", PID: 41, Managed: true, NoCmd: true, Cwd: f.foo, CurrentPath: filepath.Join(f.foo, "sub")},
 		}
 	})
 	ms := f.poll(t)
@@ -305,14 +307,19 @@ func TestAttributionListedAfterPoll(t *testing.T) {
 	if got := agentUpserts(ms); got["%1"].WorktreeID != "env/worktree/"+f.foo {
 		t.Fatalf("after listing %+v", got)
 	}
-	var pane *protocol.Pane
+	panes := map[string]*protocol.Pane{}
 	for _, m := range ms {
 		if m.Pane != nil {
-			pane = m.Pane
+			panes[m.Pane.PaneID] = m.Pane
 		}
 	}
-	if pane == nil || pane.ID != "env/pane/laatmux/%2" || pane.WorktreeID != "env/worktree/"+f.foo || pane.Command != "zsh" || pane.PID != 40 {
+	if pane := panes["%2"]; pane == nil || pane.ID != "env/pane/laatmux/%2" || pane.WorktreeID != "env/worktree/"+f.foo || pane.Command != "zsh" || pane.PID != 40 || pane.Cwd != f.foo || pane.Managed {
 		t.Fatalf("pane record %+v", pane)
+	}
+	// A pane laatmux made is said to be one, its cwd the one it was made
+	// at.
+	if pane := panes["%3"]; pane == nil || pane.WorktreeID != "env/worktree/"+f.foo || pane.Cwd != f.foo || !pane.Managed {
+		t.Fatalf("managed pane record %+v", pane)
 	}
 	// The worktree leaves the listing: the pane record goes and the
 	// agent loses the id, without a pane poll.

@@ -25,20 +25,49 @@ func cmdNew(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", a.host)
 	}
-	c, err := client.Dial(ctx, h.Host)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	if !protocol.Has(c.Hello.Capabilities, protocol.CapNew) {
-		return fmt.Errorf("%s: daemon %s does not support new", h.Name, c.Hello.Version)
-	}
-	res, err := c.Request(ctx, protocol.Message{Type: protocol.TypeNew, Name: a.name, Cwd: a.cwd, Cmd: a.cmd, Host: h.Name})
+	res, err := newSession(ctx, h, "", protocol.Message{Name: a.name, Cwd: a.cwd, Cmd: a.cmd})
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%s/%s %s\n", h.Name, res.Session, res.PaneID)
 	return nil
+}
+
+// newSession asks the host's daemon to make a managed session, as new
+// does and as a jump does for a worktree with none (newHome): m's name,
+// cwd and command, the session tagged with the host's name here. A
+// daemon without the capability is a *noNewError, and nothing is asked;
+// so is one that answers as another environment than env, when env is
+// set: the host entry has moved to another machine since the records the
+// request was resolved from.
+func newSession(ctx context.Context, h config.Host, env string, m protocol.Message) (protocol.Message, error) {
+	c, err := client.Dial(ctx, h.Host)
+	if err != nil {
+		return protocol.Message{}, err
+	}
+	defer c.Close()
+	if !protocol.Has(c.Hello.Capabilities, protocol.CapNew) {
+		return protocol.Message{}, &noNewError{host: h.Name, version: c.Hello.Version}
+	}
+	if env != "" && c.Hello.EnvironmentID != env {
+		return protocol.Message{}, fmt.Errorf("answers as environment %s, not %s the request was resolved for", c.Hello.EnvironmentID, env)
+	}
+	m.Type, m.Host = protocol.TypeNew, h.Name
+	return c.Request(ctx, m)
+}
+
+// noNewError is a host whose daemon does not support new: an older
+// build, or one with no managed server.
+type noNewError struct{ host, version string }
+
+func (e *noNewError) Error() string {
+	return fmt.Sprintf("%s: daemon %s does not support new", e.host, e.version)
+}
+
+// noNew reports whether err is a daemon without new.
+func noNew(err error) bool {
+	var e *noNewError
+	return errors.As(err, &e)
 }
 
 type newArgs struct {
