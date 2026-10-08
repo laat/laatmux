@@ -528,9 +528,11 @@ label that may mean another repository on this machine. The session is
 created detached and tagged in one tmux command sequence, then the attach
 pane is tagged by the id `new-session` printed, since the user's hooks may
 split the window at once. The pane runs a placeholder until then, so it
-cannot exit before `remain-on-exit` is set on it; the attach command
+cannot exit before `remain-on-exit failed` is set on it; the attach command
 replaces the placeholder in the same sequence as the tags, and an attach
-that fails at once leaves a dead pane for the next `jump` to respawn.
+that fails at once leaves a dead pane, with its message, for the next
+`jump` to respawn. An attach that ends well, the managed session having
+ended with its agent, closes the pane and so the workspace session.
 
 - **`add <branch>`** resolves the repository from `--repo`, else from the
   current directory: its git origin is matched against the known sources,
@@ -1025,10 +1027,17 @@ row's session exists locally and is switched to.
   the host and the agent, preselecting what `add` would take, a prompt
   box, and a branch line filled from the prompt as it is typed until
   it is edited. `Tab` and `Shift-Tab` move between the fields; on a
-  chip `Left` and `Right` cycle and `Enter` opens the picker; in the
-  prompt `Enter` submits and `Ctrl-J` inserts a newline. `Shift-Enter`
-  and `Ctrl-Enter` insert one too where the terminal reports them as
-  distinct keys, and are `Enter` and submit elsewhere: the view asks
+  chip `Left` and `Right` cycle, `Enter` opens the picker and `Ctrl-J`
+  submits; in the prompt `Enter` submits and `Ctrl-J` inserts a
+  newline; on the branch line either submits. The prompt takes the
+  readline chords within a line: `Ctrl-A` and `Ctrl-E` to its start and
+  end, `Ctrl-B` and `Ctrl-F` a rune back and forward, `Ctrl-D` the rune
+  under the cursor, `Ctrl-U` and `Ctrl-K` the text before and after it,
+  `Ctrl-W` the word before it; on the branch line, and in the list's
+  `/` filter, `Ctrl-U` clears and `Ctrl-W` takes the last word or
+  segment. A click on a field focuses it. `Shift-Enter` and
+  `Ctrl-Enter` are `Ctrl-J` where the terminal reports them as
+  distinct keys, and `Enter` elsewhere: the view asks
   for xterm's modifyOtherKeys at level 1 and reads both the
   `CSI 27 ; m ; 13 ~` and the `CSI 13 ; m u` forms, which under tmux
   takes `extended-keys on` (the default is off) and the outer

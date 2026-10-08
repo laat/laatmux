@@ -506,3 +506,159 @@ func TestPromptEditVS16(t *testing.T) {
 		t.Errorf("backspace over a C1: %q at %d", string(f.prompt), f.cursor)
 	}
 }
+
+// Ctrl-J, which Shift-Enter and Ctrl-Enter decode to, submits from a
+// chip and from the branch line, as Enter does from the prompt; on a
+// chip Enter still opens the picker, and an empty prompt is refused
+// from a chip as from the prompt.
+func TestFormChipNewlineSubmits(t *testing.T) {
+	f := NewForm("add a task", chips(), "")
+	f.Propose = propose
+	f.Handle(term.Key{Kind: term.KeyShiftTab}) // from the prompt to the agent chip
+	if f.Focus() != fieldAgent {
+		t.Fatalf("focus %d, want the agent chip", f.Focus())
+	}
+	f.Handle(term.Key{Kind: term.KeyNewline})
+	if f.Done() || f.Error != "the prompt is empty" {
+		t.Fatalf("ctrl-j on a chip with no prompt: done %v, error %q", f.Done(), f.Error)
+	}
+	f.Handle(term.Key{Kind: term.KeyEnter})
+	if f.picker == nil {
+		t.Fatalf("enter on a chip did not open the picker")
+	}
+	f.Handle(term.Key{Kind: term.KeyEsc})
+	f.Handle(term.Key{Kind: term.KeyTab}) // the prompt
+	for _, r := range "Fix it" {
+		f.Handle(term.Key{Rune: r})
+	}
+	f.Handle(term.Key{Kind: term.KeyShiftTab}) // back to the agent chip
+	f.Handle(term.Key{Kind: term.KeyNewline})
+	if !f.Done() || f.Cancelled || f.Prompt() != "Fix it" || f.Branch() != "fix-it" {
+		t.Fatalf("ctrl-j on a chip: done %v cancelled %v prompt %q branch %q", f.Done(), f.Cancelled, f.Prompt(), f.Branch())
+	}
+	g := NewForm("add a task", chips(), "")
+	g.Handle(term.Key{Kind: term.KeyTab}) // from the prompt to the branch line
+	for _, r := range "by-hand" {
+		g.Handle(term.Key{Rune: r})
+	}
+	g.Handle(term.Key{Kind: term.KeyNewline})
+	if !g.Done() || g.Branch() != "by-hand" {
+		t.Fatalf("ctrl-j on the branch line: done %v branch %q", g.Done(), g.Branch())
+	}
+}
+
+// A click focuses the field under it, by the layout the last Render
+// drew: a chip by its columns on the framed row, the prompt box, the
+// branch line; a click on the title or the footer changes nothing, and
+// the wheel never does. One chip a line when the form is narrow, and
+// the top cut to a short height is accounted for.
+func TestFormClickFocuses(t *testing.T) {
+	f := NewForm("add a task", chips(), "")
+	f.Render(80, 12)
+	// 80 by 12: the title is line 1; the chips are 28, 21 and 29
+	// columns wide with a gap between, on lines 2 to 4; the prompt box
+	// is lines 5 to 10, the branch line 11, the hint 12.
+	for _, c := range []struct {
+		x, y, want int
+	}{
+		{1, 2, fieldRepo}, {28, 3, fieldRepo}, {30, 3, fieldHost}, {52, 4, fieldAgent}, {80, 3, fieldAgent},
+		{10, 5, fieldPrompt}, {10, 10, fieldPrompt}, {3, 11, fieldBranch},
+	} {
+		f.focus = fieldPrompt
+		if c.want == fieldPrompt {
+			f.focus = fieldRepo
+		}
+		f.Handle(term.Key{Kind: term.KeyMouse, X: c.x, Y: c.y})
+		if f.Focus() != c.want {
+			t.Errorf("click at %d,%d: focus %d, want %d", c.x, c.y, f.Focus(), c.want)
+		}
+	}
+	f.focus = fieldHost
+	for _, k := range []term.Key{{Kind: term.KeyMouse, X: 5, Y: 1}, {Kind: term.KeyMouse, X: 5, Y: 12}, {Kind: term.KeyMouse, X: 29, Y: 3}, {Kind: term.KeyMouse, X: 10, Y: 6, Wheel: 1}} {
+		f.Handle(k)
+		if f.Focus() != fieldHost {
+			t.Errorf("%+v moved the focus to %d", k, f.Focus())
+		}
+	}
+	// Narrow: one chip a line, lines 2 to 4.
+	n := NewForm("t", chips(), "")
+	n.Render(12, 12)
+	n.Handle(term.Key{Kind: term.KeyMouse, X: 1, Y: 4})
+	if n.Focus() != fieldAgent {
+		t.Errorf("narrow click on the third chip line: focus %d", n.Focus())
+	}
+	// Short: nine lines are needed and eight given, so the title is
+	// cut and the first line is the chips' top frame.
+	s := NewForm("t", chips(), "")
+	s.Render(80, 8)
+	s.Handle(term.Key{Kind: term.KeyMouse, X: 30, Y: 1})
+	if s.Focus() != fieldHost {
+		t.Errorf("short form, click on the first line: focus %d, want the host chip", s.Focus())
+	}
+}
+
+// The readline chords in the prompt, within the line: Ctrl-A and Ctrl-E,
+// Ctrl-B and Ctrl-F, Ctrl-D, Ctrl-U, Ctrl-K and Ctrl-W; on the branch
+// line Ctrl-U clears and Ctrl-W takes the last segment. An unknown
+// chord changes nothing.
+func TestFormReadlineChords(t *testing.T) {
+	f := NewForm("t", chips(), "")
+	f.Propose = propose
+	ctrl := func(r rune) { f.Handle(term.Key{Kind: term.KeyCtrl, Rune: r}) }
+	for _, r := range "one two\nthree four" {
+		if r == '\n' {
+			f.Handle(term.Key{Kind: term.KeyNewline})
+		} else {
+			f.Handle(term.Key{Rune: r})
+		}
+	}
+	ctrl('a')
+	if f.cursor != 8 {
+		t.Errorf("ctrl-a: cursor %d, want the second line's start 8", f.cursor)
+	}
+	ctrl('e')
+	if f.cursor != len(f.prompt) {
+		t.Errorf("ctrl-e: cursor %d, want the end %d", f.cursor, len(f.prompt))
+	}
+	ctrl('w')
+	if f.Prompt() != "one two\nthree " {
+		t.Errorf("ctrl-w: %q", f.Prompt())
+	}
+	ctrl('b')
+	ctrl('b')
+	ctrl('k')
+	if f.Prompt() != "one two\nthre" {
+		t.Errorf("ctrl-b twice then ctrl-k: %q", f.Prompt())
+	}
+	ctrl('u')
+	if f.Prompt() != "one two\n" || f.cursor != 8 {
+		t.Errorf("ctrl-u: %q cursor %d", f.Prompt(), f.cursor)
+	}
+	ctrl('a')
+	ctrl('a') // already at the line's start: stays
+	ctrl('f')
+	ctrl('d')
+	ctrl('x')
+	if f.Prompt() != "one two\n" || f.cursor != 8 {
+		t.Errorf("ctrl-f, ctrl-d at the end of the text, an unknown chord: %q cursor %d", f.Prompt(), f.cursor)
+	}
+	f.Handle(term.Key{Kind: term.KeyUp})
+	ctrl('d')
+	if f.Prompt() != "ne two\n" {
+		t.Errorf("ctrl-d: %q", f.Prompt())
+	}
+	// The branch line: cleared of the proposed name first.
+	f.Handle(term.Key{Kind: term.KeyTab})
+	ctrl('u')
+	for _, r := range "fix/one-two" {
+		f.Handle(term.Key{Rune: r})
+	}
+	ctrl('w')
+	if f.Branch() != "fix/one-" {
+		t.Errorf("ctrl-w on the branch line: %q", f.Branch())
+	}
+	ctrl('u')
+	if f.Branch() != "" || !f.edited {
+		t.Errorf("ctrl-u on the branch line: %q edited %v", f.Branch(), f.edited)
+	}
+}

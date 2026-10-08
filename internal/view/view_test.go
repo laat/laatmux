@@ -709,11 +709,14 @@ func TestNewlineIsEnter(t *testing.T) {
 		t.Fatalf("picker: done %v chosen %d", p.Done(), p.Chosen)
 	}
 	f := NewForm("t", chips(), "")
-	f.Handle(term.Key{Kind: term.KeyShiftTab})
 	f.Handle(term.Key{Kind: term.KeyShiftTab}) // the agent chip
 	f.Handle(term.Key{Kind: term.KeyNewline})
+	if f.picker != nil || f.Error != "the prompt is empty" {
+		t.Fatalf("a newline on a chip is a submit, refused with no prompt: picker %v, error %q", f.picker != nil, f.Error)
+	}
+	f.Handle(term.Key{Kind: term.KeyEnter})
 	if f.picker == nil {
-		t.Fatal("a newline on a chip did not open the picker")
+		t.Fatal("enter on a chip did not open the picker")
 	}
 }
 

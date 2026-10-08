@@ -445,13 +445,17 @@ func adopt(ctx context.Context, name string, s Spec) error {
 // command that does not exit, so the pane cannot die before remain-on-exit
 // is set on it. The attach command, which may exit at once when ssh fails
 // or the managed session is gone, replaces it in the same sequence as the
-// tags; a pane that then dies stays for jump to respawn.
+// tags. remain-on-exit is `failed` (tmux 3.2): an attach that fails, ssh
+// refused say, stays dead with its message for jump to respawn; one that
+// ends well, the managed session having ended with its agent, closes the
+// pane and with it the workspace session, so the user is not left on a
+// dead pane after quitting the agent.
 const placeholder = "sleep 2147483647"
 
 // startAttach tags the pane and replaces its placeholder with the attach
 // command, in one tmux command sequence.
 func startAttach(ctx context.Context, paneID string, s Spec) error {
-	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "remain-on-exit", "on",
+	_, err := Server.Run(ctx, "set-option", "-p", "-t", paneID, "remain-on-exit", "failed",
 		tmux.Next, "set-option", "-p", "-t", paneID, "@laatmux_attach_pane", "1",
 		tmux.Next, "set-option", "-p", "-t", paneID, "@laatmux_attach_target", s.Managed,
 		tmux.Next, "respawn-pane", "-k", "-t", paneID, AttachCommand(s.Host, s.Managed))

@@ -52,6 +52,12 @@ const (
 	// them: the text is inserted where the cursor is, never read as
 	// keys, so a pasted line break is a newline and not a submit.
 	KeyPaste
+	// KeyCtrl is a control chord, Ctrl-A to Ctrl-Z, with Rune the
+	// lower-case letter: the readline keys of an input, Ctrl-A, Ctrl-E,
+	// Ctrl-U, Ctrl-K, Ctrl-W among them. The chords with a kind of
+	// their own, Ctrl-C, Ctrl-H, Ctrl-I, Ctrl-J and Ctrl-M, are never
+	// this.
+	KeyCtrl
 )
 
 // Paste markers of bracketed paste mode.
@@ -734,6 +740,11 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 		case c == 0x03:
 			keys = append(keys, Key{Kind: KeyCtrlC})
 			b = b[1:]
+		case c >= 0x01 && c <= 0x1a:
+			// A control chord by its letter; the ones above are kinds
+			// of their own.
+			keys = append(keys, Key{Kind: KeyCtrl, Rune: rune('a' + c - 1)})
+			b = b[1:]
 		case c < 0x20:
 			b = b[1:]
 		default:
@@ -760,8 +771,8 @@ func parse(b []byte, flush bool, stamp func(off int) time.Time) (keys []Key, res
 // it, and mod one more than the modifier bits (shift 1, alt 2, ctrl
 // 4). Enter with any modifier is a newline, so Shift-Enter and
 // Ctrl-Enter break a line as Ctrl-J does; Shift-Tab is itself; the
-// plain keys are themselves; a modified letter or other chord is
-// dropped, as an unknown sequence is.
+// plain keys are themselves; a control chord on a letter is KeyCtrl;
+// any other modified key is dropped, as an unknown sequence is.
 func extended(code, alt, mod int) Key {
 	if mod < 1 {
 		mod = 1
@@ -809,6 +820,9 @@ func extended(code, alt, mod int) Key {
 			return Key{Kind: KeyBackspace}
 		case '[':
 			return Key{Kind: KeyEsc}
+		}
+		if code >= 'a' && code <= 'z' {
+			return Key{Kind: KeyCtrl, Rune: rune(code)}
 		}
 	}
 	switch {
