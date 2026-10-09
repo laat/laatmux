@@ -529,12 +529,15 @@ truth; labels only place new things.
   removal generation is bumped, so a run that resolved before is
   refused with `worktree removed; retry`, also when the removal then
   does not happen; no run registers in a closed root (`worktree being
-  removed; retry`); and `new` refuses a session in it, and kills one
-  it made while the root was closed or once its directory went, which
-  tmux would otherwise start in the home directory. An add's session
-  is there by the look, as `rm` waits for every add in flight. A
-  session elsewhere, and one in another worktree, is made as ever,
-  without waiting. With `delete_branch` too, once this `rm` has had git remove
+  removed; retry`); and `new`, which makes a session in a worktree at
+  its directory with the links resolved, refuses one in a closed root,
+  and kills one it made while a root of it was closed or removed, by
+  the removal generation, also one reopened since, or once its
+  directory went, which tmux would otherwise start in the home
+  directory; a session whose pane went into another session meanwhile
+  is left, and said. An add's session is there by the look, as `rm`
+  waits for every add in flight. A session elsewhere, and one in
+  another worktree, is made as ever, without waiting. With `delete_branch` too, once this `rm` has had git remove
   the worktree, the branch is deleted when it is still at `head`, with
   its reflog and its config, as `git branch -D` deletes them; the
   deletion is `git update-ref --no-deref -d` with `head` as the old

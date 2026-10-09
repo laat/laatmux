@@ -1288,15 +1288,22 @@ func (c *clientConn) newSession(m protocol.Message) error {
 		res.Error = err.Error()
 		return c.pc.Write(res)
 	}
+	cwd := m.Cwd
 	create := func() (tmux.Session, error) {
-		return d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+		return d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: cwd, Cmd: m.Cmd, Host: m.Host})
 	}
 	var made tmux.Session
 	var err error
 	if dir := filepath.Clean(m.Cwd); d.cfg.Store != nil && m.Cwd != "" && d.cfg.Store.Owns(dir) {
-		// prune's rm, which has the worktree closed while it looks
-		// and removes, finds no session it would kill made meanwhile.
-		made, err = d.tasks.newInWorktree(c.ctx, dir, create)
+		// In a worktree the session is made at the directory with its
+		// links resolved, as git registers roots, so prune's rm, which
+		// has the worktree closed while it looks and removes, finds no
+		// session made meanwhile by another path to it, and kills the
+		// one made at its root by that root.
+		if real, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+			dir, cwd = real, real
+		}
+		made, err = d.tasks.newInWorktree(c.ctx, dir, m.Name, create)
 	} else {
 		made, err = create()
 	}

@@ -222,14 +222,30 @@ func (rn *taskRunner) closedRootLocked(dir string) string {
 	return ""
 }
 
-// newInWorktree makes a managed session for new when its directory is
-// in a worktree: refused while rm's unused has the worktree closed,
-// and, made, killed again and refused when the worktree was closed
-// meanwhile or is gone, which tmux would have started it outside of,
-// in the home directory. create makes the session.
-func (rn *taskRunner) newInWorktree(ctx context.Context, dir string, create func() (tmux.Session, error)) (tmux.Session, error) {
+// genUnderLocked is the removal generations of the roots dir is in or
+// at, summed: they only grow, so a change between two reads is a root
+// of dir closed by prune's rm or removed by any rm meanwhile, even one
+// reopened since. Called with rn.mu held.
+func (rn *taskRunner) genUnderLocked(dir string) uint64 {
+	var n uint64
+	for root, gen := range rn.rootGen {
+		if under(dir, root) {
+			n += gen
+		}
+	}
+	return n
+}
+
+// newInWorktree makes a managed session named name for new when its
+// directory, resolved, is in a worktree: refused while prune's rm has
+// the worktree closed, and, made, killed again and refused when a root
+// of it was closed or removed meanwhile, also one reopened and made
+// again since, or the directory is gone, which tmux would have started
+// the session outside of, in the home directory. create makes the
+// session.
+func (rn *taskRunner) newInWorktree(ctx context.Context, dir, name string, create func() (tmux.Session, error)) (tmux.Session, error) {
 	rn.mu.Lock()
-	closed := rn.closedRootLocked(dir)
+	closed, gen := rn.closedRootLocked(dir), rn.genUnderLocked(dir)
 	rn.mu.Unlock()
 	if closed != "" {
 		return tmux.Session{}, fmt.Errorf("the worktree at %s is being removed; not made", tmux.Printable(closed))
@@ -242,29 +258,39 @@ func (rn *taskRunner) newInWorktree(ctx context.Context, dir string, create func
 		return made, err
 	}
 	rn.mu.Lock()
-	closed = rn.closedRootLocked(dir)
+	moved := rn.genUnderLocked(dir) != gen
 	rn.mu.Unlock()
 	_, statErr := os.Stat(dir)
-	if closed == "" && statErr == nil {
+	if !moved && statErr == nil {
 		return made, nil
 	}
-	if err := rn.killPane(ctx, made); err != nil {
-		return tmux.Session{}, fmt.Errorf("the worktree at %s was removed while its session was made, and the session made is left: %w", tmux.Printable(dir), err)
+	why := "was closed for removal while its session was made; not made, retry"
+	if statErr != nil {
+		why = "was removed while its session was made; not made"
 	}
-	return tmux.Session{}, fmt.Errorf("the worktree at %s was removed while its session was made; not made", tmux.Printable(dir))
+	if err := rn.killMade(ctx, made, name); err != nil {
+		return tmux.Session{}, fmt.Errorf("the worktree at %s %s, and the session made is left: %w", tmux.Printable(dir), why, err)
+	}
+	return tmux.Session{}, fmt.Errorf("the worktree at %s %s", tmux.Printable(dir), why)
 }
 
-// killPane kills the managed session the pane made is in, found by
-// its id on the server it was made on; one gone already is no error.
-func (rn *taskRunner) killPane(ctx context.Context, made tmux.Session) error {
+// killMade kills the session new just made, found by its pane on the
+// server it was made on and only while that pane is still in the
+// session of the name made: a pane moved into another session since
+// is left, with that session. One gone already is no error.
+func (rn *taskRunner) killMade(ctx context.Context, made tmux.Session, name string) error {
 	panes, err := rn.listManaged(ctx)
 	if err != nil {
 		return err
 	}
 	for _, p := range panes {
-		if p.ID == made.PaneID && p.ServerPID == made.ServerPID {
-			return rn.managed.Tmux.KillSessionID(ctx, p.SessionID, p.ServerPID)
+		if p.ID != made.PaneID || p.ServerPID != made.ServerPID {
+			continue
 		}
+		if p.Session != name {
+			return fmt.Errorf("its pane %s is in session %s now", p.ID, tmux.Printable(p.Session))
+		}
+		return rn.managed.Tmux.KillSessionID(ctx, p.SessionID, p.ServerPID)
 	}
 	return nil
 }

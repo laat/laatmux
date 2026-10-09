@@ -272,6 +272,20 @@ func TestRmUnused(t *testing.T) {
 	if err := d.tasks.registerRun(&runJob{root: root}, gen); err == nil || err.Error() != "worktree removed; retry" {
 		t.Errorf("a run resolved before rm looked registered after: %v", err)
 	}
+	// The refusal reopened the root: a run registers, and a session is
+	// made there.
+	job := &runJob{root: root}
+	if err := d.tasks.registerRun(job, d.tasks.runGen(root)); err != nil {
+		t.Errorf("a run after a refused rm: %v", err)
+	} else {
+		d.mu.Lock()
+		delete(d.tasks.runs, root)
+		d.mu.Unlock()
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n-after", Name: "after", Cwd: root})
+	if res, _ := result(t, pc, "n-after"); !res.OK {
+		t.Errorf("new after a refused rm: %+v", res)
+	}
 	// While rm has the root closed, a run that resolves then does not
 	// register either.
 	reopen := d.tasks.closeRoot(root)
@@ -374,19 +388,64 @@ func TestNewInClosedWorktree(t *testing.T) {
 		t.Fatalf("new in a worktree directory that is not there: %+v", res)
 	}
 
-	// Closed while the session was being made: it goes again.
-	made := 0
-	_, err := d.tasks.newInWorktree(context.Background(), root, func() (tmux.Session, error) {
-		s, err := ft.NewSession(context.Background(), tmux.NewSessionOpts{Name: "raced", Cwd: root})
-		made++
+	// By a symlink to the worktree: closed all the same, and made at
+	// the root itself, which rm kills by.
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	reopen = d.tasks.closeRoot(root)
+	if res := newAt("n4", "by-alias", alias); res.OK || !strings.Contains(res.Error, "is being removed; not made") {
+		t.Fatalf("new by a symlink to a closed worktree: %+v", res)
+	}
+	reopen()
+	if res := newAt("n5", "by-alias", alias); !res.OK {
+		t.Fatalf("new by a symlink: %+v", res)
+	}
+	ft.mu.Lock()
+	cwd := ft.panes[len(ft.panes)-1].Cwd
+	ft.mu.Unlock()
+	if cwd != root {
+		t.Errorf("made by a symlink at %s, not the root %s", cwd, root)
+	}
+
+	// Closed while the session was being made, also when reopened
+	// before it was: it goes again.
+	for _, k := range []struct {
+		name   string
+		reopen bool
+	}{{"raced", false}, {"reopened", true}} {
+		made := 0
+		_, err := d.tasks.newInWorktree(context.Background(), root, k.name, func() (tmux.Session, error) {
+			s, err := ft.NewSession(context.Background(), tmux.NewSessionOpts{Name: k.name, Cwd: root})
+			made++
+			reopen = d.tasks.closeRoot(root)
+			if k.reopen {
+				reopen()
+			}
+			return s, err
+		})
+		reopen()
+		if err == nil || !strings.Contains(err.Error(), "was closed for removal while its session was made; not made, retry") || made != 1 {
+			t.Fatalf("%s: %v, made %d", k.name, err, made)
+		}
+		if !slices.Contains(ft.killed, k.name) {
+			t.Errorf("%s: the session made is left: killed %v", k.name, ft.killed)
+		}
+	}
+	// One whose pane went into another session meanwhile is left, with
+	// that session.
+	_, err := d.tasks.newInWorktree(context.Background(), root, "moved", func() (tmux.Session, error) {
+		s, err := ft.NewSession(context.Background(), tmux.NewSessionOpts{Name: "moved", Cwd: root})
+		ft.set(func() { ft.panes[len(ft.panes)-1].Session = "work" })
 		d.tasks.closeRoot(root)
 		return s, err
 	})
-	if err == nil || !strings.Contains(err.Error(), "was removed while its session was made; not made") || made != 1 {
-		t.Fatalf("made while closed: %v, made %d", err, made)
+	if err == nil || !strings.Contains(err.Error(), "the session made is left: its pane") || !strings.Contains(err.Error(), "is in session work now") {
+		t.Fatalf("moved: %v", err)
 	}
-	if !slices.Contains(ft.killed, "raced") {
-		t.Errorf("the session made while closed is left: killed %v", ft.killed)
+	if slices.Contains(ft.killed, "work") {
+		t.Errorf("killed the session the pane went into: %v", ft.killed)
 	}
 }
 
