@@ -328,15 +328,14 @@ func hostState(h config.Host, s merged.Status) string {
 
 // hostEntry is a host on the hosts line: paused as the config says, else
 // as the merged stream has it, connected and listed; down with an error;
-// or connecting, which a host with no record there, or still paused
-// there, is too, the daemon having yet to read the config for it.
+// or connecting, which a host with no record there, or one still paused
+// there, a record with nothing else set, is too, the daemon having yet
+// to read the config for it.
 func hostEntry(h config.Host, s merged.Status) view.HostEntry {
 	e := view.HostEntry{Name: h.Name, Paused: h.Paused}
-	st, ok := s.Host(h.Name)
+	st, _ := s.Host(h.Name)
 	switch {
 	case h.Paused:
-	case !ok || st.Paused:
-		e.Connecting = true
 	case st.Connected && st.Listed:
 	case !st.Connected && st.Error != "":
 		e.Down = true

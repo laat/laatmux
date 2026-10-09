@@ -100,8 +100,6 @@ func (m *Model) renderStrip() []Line {
 	m.hitIDs, m.hitTop, m.hitAt = nil, 0, m.Now
 	m.hitColsPrev, m.hitCols = m.hitCols, nil
 	m.hitLinesPrev, m.hitLines = m.hitLines, height
-	// No hosts line, as no header lines: nothing of one to click.
-	m.hitHostsPrev, m.hitHosts = m.hitHosts, nil
 	tmpl := m.templates().Top
 	lines := make([]Line, height)
 	if len(vis) == 0 && height > 0 {
