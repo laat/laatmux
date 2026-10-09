@@ -117,22 +117,31 @@ func pasteSwitch(ctx context.Context, sub, exe string) error {
 // Every table is listed, not the root table alone: tmux 3.7 to 3.7c
 // show a listing of one binding on a client's status line rather than
 // print it, which the root table's can be, and a table not there is an
-// error. An error, a user's after-list-keys hook that failed say, may
-// hide a binding, and is returned. -N, so a server not running is not
-// started.
+// error. A listing with no binding at all is that, or a server with
+// every table emptied, and C-v's binding cannot be told from it: an
+// error, as is a failed listing, a user's after-list-keys hook that
+// failed say, which may hide a binding. -N, so a server not running is
+// not started.
 func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
 	out, err := workspace.Server.Run(ctx, "-N", "list-keys")
 	if err != nil {
 		return "", false, err
 	}
+	listed := false
 	for _, l := range strings.Split(string(out), "\n") {
 		// bind-key [-r] -T root C-v if-shell -F "#{@laatmux_attach_pane}" "run-shell -b '... paste-image run ...'" "send-keys C-v"
 		f := commandWords(l)
+		if len(f) > 0 && f[0] == "bind-key" {
+			listed = true
+		}
 		i := slices.Index(f, "-T")
 		if len(f) == 0 || f[0] != "bind-key" || i < 0 || i+2 >= len(f) || f[i+1] != "root" || f[i+2] != pasteKey {
 			continue
 		}
 		return l, pasteOurs(f[i+3:]), nil
+	}
+	if !listed {
+		return "", false, errors.New("tmux list-keys printed no binding, so what " + pasteKey + " is bound to cannot be told: tmux 3.7 to 3.7c show a lone binding on a status line instead")
 	}
 	return "", false, nil
 }

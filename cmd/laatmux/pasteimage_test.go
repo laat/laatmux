@@ -188,6 +188,7 @@ func TestPasteBinding(t *testing.T) {
 		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -C 'laatmux paste-image run x'", "send-keys C-v"},
 		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b /usr/bin/true ; display-message 'laatmux paste-image run x'", "send-keys C-v"},
 		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b /usr/bin/true # laatmux paste-image run x", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b 'laatmux paste-image run x' ; display-message hi", "send-keys C-v"},
 	} {
 		must(workspace.Server.Run(ctx, append([]string{"bind-key", "-n", "C-v"}, user...)...))
 		was := bound()
@@ -218,6 +219,18 @@ func TestPasteBinding(t *testing.T) {
 	must(workspace.Server.Run(ctx, "set-hook", "-gu", "after-list-keys"))
 	if !strings.Contains(bound(), "display-message \"use laatmux") {
 		t.Errorf("a failing after-list-keys hook let on bind: %q", bound())
+	}
+	// No binding listed at all, as tmux 3.7 to 3.7c print for a server
+	// whose one binding is C-v: what C-v is bound to cannot be told,
+	// and nothing is bound or unbound.
+	for _, table := range []string{"root", "prefix", "copy-mode", "copy-mode-vi"} {
+		_, _ = workspace.Server.Run(ctx, "unbind-key", "-a", "-T", table)
+	}
+	for _, sub := range []string{"on", "toggle", "off"} {
+		err := pasteSwitch(ctx, sub, exe)
+		if keys := string(must(workspace.Server.Run(ctx, "list-keys"))); err == nil || !strings.Contains(err.Error(), "list-keys printed no binding") || keys != "" {
+			t.Errorf("%s with no binding listed: %v, then %q", sub, err, keys)
+		}
 	}
 	must(workspace.Server.Run(ctx, "kill-server"))
 	// kill-server returns before the server has gone, and a client
