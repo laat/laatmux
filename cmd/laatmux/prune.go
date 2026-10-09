@@ -27,7 +27,7 @@ import (
 // cmdPrune removes the worktrees nothing uses whose work is in the
 // repository's default branch: the ones ls shows with no session, no
 // agent and nothing else in them, that are clean, and whose commits
-// are all in the default branch or whose PR is merged into it. Their
+// are all in the default branch or whose PR is merged. Their
 // ignored files go with them, as with rm, and the plan says how many.
 // The listing is the merged stream's, as ls reads it; what the
 // worktree holds is read on its host, by the facts message; the PR
@@ -169,13 +169,13 @@ func keepBefore(in pruneInput) string {
 
 // decide is whether the worktree goes, and why or why not. It goes
 // when it is clean and either has no commit its repository's default
-// branch lacks, or its branch's PR is merged into the default branch
-// with HEAD at the PR's last commit: a squash or a rebase merge leaves
-// the branch's commits ahead of the default branch, a commit made
-// after the merge is in no PR, and a PR merged into another branch,
-// one under it in a stack say, has not put its work in the default
-// branch. Everything else stays, said with why: a worktree git keeps
-// from removal, locked or with submodules, too, as rm would fail on it.
+// branch lacks, or its branch's PR is merged with HEAD at the PR's
+// last commit: a squash or a rebase merge leaves the branch's commits
+// ahead of the default branch, and a commit made after the merge is in
+// no PR. A PR merged into another branch, one under it in a stack say,
+// counts: its work is in that branch on origin, and the plan names
+// it. Everything else stays, said with why: a worktree git keeps from
+// removal, locked or with submodules, too, as rm would fail on it.
 func decide(in pruneInput) (remove bool, reason string) {
 	w, f := in.Worktree, in.Facts
 	if r := keepBefore(in); r != "" {
@@ -215,14 +215,14 @@ func decide(in pruneInput) (remove bool, reason string) {
 	}
 	if pr != nil && pr.State == "merged" {
 		switch {
-		case pr.Base == "":
-			return false, fmt.Sprintf("%s; PR #%d is merged, into a branch not known yet", ahead, pr.Number)
-		case pr.Base != def:
-			return false, fmt.Sprintf("%s; PR #%d is merged into %s, not %s", ahead, pr.Number, tmux.Printable(pr.Base), tmux.Printable(def))
 		case in.Branch.HeadOID == "":
 			return false, fmt.Sprintf("%s; PR #%d is merged, its last commit not known", ahead, pr.Number)
 		case in.Branch.HeadOID == f.Head:
-			return true, fmt.Sprintf("%s, PR #%d merged", clean(f), pr.Number)
+			into := ""
+			if pr.Base != "" && pr.Base != def {
+				into = " into " + tmux.Printable(pr.Base)
+			}
+			return true, fmt.Sprintf("%s, PR #%d merged%s", clean(f), pr.Number, into)
 		}
 		return false, fmt.Sprintf("%s; PR #%d is merged, but HEAD is not its last commit", ahead, pr.Number)
 	}
