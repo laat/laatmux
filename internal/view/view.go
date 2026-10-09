@@ -554,9 +554,9 @@ func (m *Model) Render() []Line {
 		out = append(out, Line{Spans: []Span{{Text: fit(h.Text, m.Width), Fg: fg}}, Bold: true})
 	}
 	foot := m.footerLines()
-	// The hosts line takes what it needs of a third of the height, and
-	// gives way to the body's first line.
-	hosts, hostHits := m.hostsLines(min(max(1, m.Height/3), m.Height-len(out)-len(foot)-1))
+	// The hosts line takes what it needs of a third of the height, two
+	// rows at the least, and gives way to the body's first line.
+	hosts, hostHits := m.hostsLines(min(max(2, m.Height/3), m.Height-len(out)-len(foot)-1))
 	body := m.Height - len(out) - len(hosts) - len(foot)
 	if body < 1 {
 		body = 1

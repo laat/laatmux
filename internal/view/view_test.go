@@ -2629,16 +2629,49 @@ func TestHostsLine(t *testing.T) {
 	if got := Text(out[17:]); got != "[x] vm  [x] box\n[x] new  [ ] coder\nq quit\n" || len(m.hitIDs) != 16 {
 		t.Fatalf("wrapped:\n%s", Debug(out))
 	}
-	// Six lines and no header: the line takes two rows, a third of the
-	// height, and the second ends in … after box, new and coder left over.
-	m.Header, m.Width, m.Height = nil, 10, 6
-	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] box …\nq quit\n" {
+	// Fifteen columns: vm and box fill the first row exactly.
+	m.Width = 15
+	if got := Text(m.Render()[16:]); got != "[x] vm  [x] box\n[x] new\n[ ] coder\nq quit\n" {
+		t.Fatalf("an exact fit:\n%s", got)
+	}
+	// Nine lines and no header: the line takes three rows, a third of
+	// the height, and the third ends in … after new, coder left over.
+	m.Header, m.Width, m.Height = nil, 10, 9
+	if got := Text(m.Render()[5:]); got != "[x] vm\n[x] box\n[x] new …\nq quit\n" {
 		t.Fatalf("past a third of the height:\n%s", got)
 	}
-	// Seven columns: no room beside box, whose end the … takes.
+	// Six lines: two rows at the least, the second ending in ….
+	m.Height = 6
+	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] box …\nq quit\n" {
+		t.Fatalf("two rows past a third of the height:\n%s", got)
+	}
+	// Five lines with the tab line: the second row still, beside a line
+	// of body, and its entry clicked.
+	m.Tabs, m.Height = true, 5
+	m.Hosts = hostsFixture[:2]
+	if got := Text(m.Render()[2:]); got != "[x] vm\n[x] box\nq quit\n" {
+		t.Fatalf("five lines with the tabs:\n%s", got)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 5, Y: 4}); a.Kind != ActionPause || a.HostName != "box" {
+		t.Fatalf("a click on the second row: %+v", a)
+	}
+	m.Tabs, m.Hosts, m.Height = false, hostsFixture, 6
+	// Nine columns: box and the … fill the second row exactly.
+	m.Width = 9
+	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] box …\nq quit\n" {
+		t.Fatalf("an exact fit of the ellipsis:\n%s", got)
+	}
+	// Seven columns: no room beside box, whose end the … takes, and a
+	// click on the … is not on box.
 	m.Width = 7
 	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] bo…\nq quit\n" {
 		t.Fatalf("no room for the ellipsis:\n%s", got)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 6, Y: 5}); a.Kind != ActionPause || a.HostName != "box" {
+		t.Fatalf("a click on box's last letter: %+v", a)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 7, Y: 5}); a.Kind != ActionNone {
+		t.Fatalf("a click on the ellipsis: %+v", a)
 	}
 	// A pane with no room for it beside a body line: no line.
 	m.Width, m.Height = 20, 2
@@ -2714,6 +2747,10 @@ func TestHostsLineClick(t *testing.T) {
 	}
 	if a := click(1, 18, time.Time{}); a.Kind == ActionPause {
 		t.Errorf("a click where the line was: %+v", a)
+	}
+	// One read before both draws is dropped.
+	if a := click(1, 18, t0.Add(-time.Second)); a.Kind != ActionNone {
+		t.Errorf("a click read before two redraws: %+v", a)
 	}
 	// The strip.
 	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 60, 3, 18

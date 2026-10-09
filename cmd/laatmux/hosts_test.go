@@ -252,6 +252,14 @@ func TestHostPicker(t *testing.T) {
 	}
 	m.Overlay.Handle(term.Key{Kind: term.KeyEsc})
 	d.act(m, m.Poll())
+	// vm connected again, its snapshot not yet in.
+	st.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", Connected: true}})
+	d.act(m, key)
+	if got := m.Overlay.(*hostPicker).Choices[0]; got != (view.Choice{Label: "vm", Detail: "connected, snapshot pending"}) {
+		t.Fatalf("a snapshot pending: %+v", got)
+	}
+	m.Overlay.Handle(term.Key{Kind: term.KeyEsc})
+	d.act(m, m.Poll())
 	// Esc leaves the file alone.
 	d.act(m, key)
 	m.Overlay.Handle(term.Key{Kind: term.KeyEsc})
@@ -295,10 +303,11 @@ func TestHostEntries(t *testing.T) {
 	}
 }
 
-// A click on the hosts line pauses the host clicked through the write H
-// makes, in the dashboard and the sidebar alike, the line showing the
-// flip on the next draw, with a local daemon older than pause noted in
-// the footer; a click on the paused one resumes it. A write refused, a
+// The hosts line is filled by the view's refresh, and a click on it in
+// a sidebar pane, whose host takes it as the dashboard's does, pauses
+// the host clicked through the write H makes, the line showing the flip
+// on the next draw, with a local daemon older than pause noted in the
+// footer; a click on the paused one resumes it. A write refused, a
 // config file that does not parse, is in the footer, the line and the
 // file as they were.
 func TestHostsLineClick(t *testing.T) {
@@ -314,16 +323,19 @@ func TestHostsLineClick(t *testing.T) {
 		{Name: "vm", SSH: "vm", Connected: true, Listed: true},
 		{Name: "box", SSH: "box", Error: "ssh: no route"},
 	}})
+	// A sidebar pane's: the dashboard's keys are off.
 	d := &dash{ctx: context.Background(), st: st, reload: config.LoadSettled}
-	taker := &configTaker{d: d, st: st, bg: &background{}, theme: func(palette.Theme) {}}
+	taker := &configTaker{d: d, st: st, o: viewOptions{listen: true}, bg: &background{}, theme: func(palette.Theme) {}}
+	vh := viewHost(taker, nil, settingsHost{})
 	m := dashModel(cfg)
 	m.Hint = "q quit"
-	taker.take(m, cfg, true)
+	taker.take(m, cfg, false)
+	vh.Refresh(m)
 	if want := []view.HostEntry{{Name: "vm"}, {Name: "box", Down: true}}; !slices.Equal(m.Hosts, want) {
 		t.Fatalf("the hosts line %+v", m.Hosts)
 	}
 	// click clicks the first column of the hosts line, the line above
-	// the footer, and hands the action on as the sidebar does.
+	// the footer, and hands the action to the pane's host.
 	click := func() view.Action {
 		t.Helper()
 		out := m.Render()
@@ -332,10 +344,9 @@ func TestHostsLineClick(t *testing.T) {
 			y--
 		}
 		a := m.Handle(term.Key{Kind: term.KeyMouse, X: 1, Y: y})
-		if !sidebarAction(m, a) {
-			t.Fatalf("the sidebar does not take %+v", a)
+		if vh.Act(m, a) {
+			t.Fatalf("%+v ended the view", a)
 		}
-		d.act(m, a)
 		return a
 	}
 	const note = "the local daemon fake is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build"

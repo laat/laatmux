@@ -72,7 +72,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 			"p            deliver a task's prompt",
 			"S            open a shell in the workspace session",
 			"o O          open the PR, its checks",
-			"H click      pause or resume a host: the picker, or its box on the hosts line",
+			"H click      pause or resume a host",
 			"q Ctrl-C     quit",
 		}}
 	// The dashboard starts at all: a scope the CLI set for the sidebar
@@ -110,7 +110,6 @@ type viewOptions struct {
 // The config is w's first read, cfg; the view follows the file from
 // there (watchConfig).
 func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.Conn, m *view.Model, o viewOptions) error {
-	exitOnJump, actions := o.exitOnJump, o.actions
 	current := ""
 	// A lookup a user's hook failed after has the session all the same;
 	// the view has no line for the hook's error (warnHook).
@@ -127,7 +126,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 		return err
 	}
 	defer t.Close()
-	d := &dash{ctx: ctx, st: st, exitOnJump: exitOnJump, reload: config.LoadSettled}
+	d := &dash{ctx: ctx, st: st, exitOnJump: o.exitOnJump, reload: config.LoadSettled}
 	taker := &configTaker{d: d, st: st, o: o, current: current,
 		bg:    &background{ask: func() (bool, bool) { return t.Background(backgroundWait) }},
 		theme: func(th palette.Theme) { t.Theme = th }}
@@ -154,8 +153,18 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 			defer stop()
 		}
 	}
-	return view.Run(ctx, t, m, view.Host{
-		Changed:  st.Changed(),
+	return view.Run(ctx, t, m, viewHost(taker, cmds, host))
+}
+
+// viewHost is what the view runs with: the merged stream's changes, the
+// commands, the refresh, which fills the rows and the hosts line
+// (configTaker.fill), and the actions: a change of the settings saved,
+// a jump, and the dashboard's keys, of which a sidebar pane takes
+// sidebarAction's.
+func viewHost(taker *configTaker, cmds <-chan func(*view.Model) view.Action, host settingsHost) view.Host {
+	d := taker.d
+	return view.Host{
+		Changed:  taker.st.Changed(),
 		Commands: cmds,
 		Refresh:  taker.fill,
 		Act: func(m *view.Model, a view.Action) bool {
@@ -167,14 +176,14 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 				return false
 			case a.Kind == view.ActionJump:
 				return d.jumpAction(m, a)
-			case actions:
+			case taker.o.actions:
 				return d.act(m, a)
 			case sidebarAction(m, a):
 				return d.act(m, a)
 			}
 			return false
 		},
-	})
+	}
 }
 
 // jumpAction runs a jump: to the row the action names. In a view that
