@@ -58,7 +58,9 @@ func files(t *testing.T, dir string) []string {
 // the file's path into the agent's pane at the root with no Enter,
 // through a buffer the start's sweep takes; a newer image stays, and
 // so does a file that is no image. A second paste gets a file of its
-// own. A daemon without the managed server has no paste.
+// own. The pane's observation is spent, as after a prompt, and no
+// paste is left counted in flight. A daemon without the managed server
+// has no paste.
 func TestPaste(t *testing.T) {
 	root := "/w/proj/a"
 	dir := filepath.Join(t.TempDir(), "paste")
@@ -84,6 +86,7 @@ func TestPaste(t *testing.T) {
 	}
 	pc := conn(t, d)
 	var paths []string
+	sent := time.Now()
 	for _, id := range []string{"p1", "p2"} {
 		pc.Write(protocol.Message{Type: protocol.TypePaste, ID: id, EnvironmentID: "env", Root: root, Image: pngData})
 		if res, _ := result(t, pc, id); !res.OK || res.Error != "" {
@@ -112,35 +115,49 @@ func TestPaste(t *testing.T) {
 	if got := files(t, dir); slices.Contains(got, "old.png") || !slices.Contains(got, "recent.png") || !slices.Contains(got, "notes.txt") || len(got) != 4 {
 		t.Errorf("the directory after two pastes: %q, want old.png gone, recent.png and notes.txt kept and the two images", got)
 	}
+	d.mu.Lock()
+	spent, pasting := d.tasks.pasted[paneKey("laatmux", "%1")], d.tasks.pasting
+	d.mu.Unlock()
+	if spent.Before(sent) || pasting != 0 {
+		t.Errorf("after the pastes: the pane's observation spent at %v, before %v; %d pastes in flight", spent, sent, pasting)
+	}
 }
 
 // A refusal writes and pastes nothing: another environment, no root,
 // data that is not a PNG, a root with no agent of laatmux's in it, a
-// daemon shutting down. A paste that fails says how far it got: a
-// buffer that would not load reached nothing, a paste-buffer that
-// failed may have reached the pane.
+// pane whose verified observation is from the server instance before
+// a restart, a daemon shutting down. A paste that fails says how far
+// it got: a buffer that would not load reached nothing, a paste-buffer
+// that failed may have reached the pane.
 func TestPasteRefused(t *testing.T) {
 	root := "/w/proj/a"
 	dir := filepath.Join(t.TempDir(), "paste")
 	d, ft := pasteDaemon(t, root, dir)
 	pc := conn(t, d)
+	restarted := func(pid int) func() { return func() { ft.panes[0].ServerPID = pid } }
 	for _, c := range []struct {
-		name string
-		m    protocol.Message
-		want string
+		name   string
+		m      protocol.Message
+		before func()
+		want   string
 	}{
-		{"another environment", protocol.Message{EnvironmentID: "other", Root: root, Image: pngData}, "this host is environment env, not other"},
-		{"no root", protocol.Message{EnvironmentID: "env", Image: pngData}, "root required"},
-		{"not a PNG", protocol.Message{EnvironmentID: "env", Root: root, Image: []byte("GIF89a")}, "not a PNG image"},
-		{"no image", protocol.Message{EnvironmentID: "env", Root: root}, "not a PNG image"},
-		{"no agent at the root", protocol.Message{EnvironmentID: "env", Root: "/w/proj/b", Image: pngData}, "no agent to deliver to: no managed session in /w/proj/b"},
+		{"another environment", protocol.Message{EnvironmentID: "other", Root: root, Image: pngData}, nil, "this host is environment env, not other"},
+		{"no root", protocol.Message{EnvironmentID: "env", Image: pngData}, nil, "root required"},
+		{"not a PNG", protocol.Message{EnvironmentID: "env", Root: root, Image: []byte("GIF89a")}, nil, "not a PNG image"},
+		{"no image", protocol.Message{EnvironmentID: "env", Root: root}, nil, "not a PNG image"},
+		{"no agent at the root", protocol.Message{EnvironmentID: "env", Root: "/w/proj/b", Image: pngData}, nil, "no agent to deliver to: no managed session in /w/proj/b"},
+		{"server restarted", protocol.Message{EnvironmentID: "env", Root: root, Image: pngData}, restarted(6), "no agent to deliver to: pane %1 in session proj/a on server 6 is not observed yet"},
 	} {
+		if c.before != nil {
+			ft.set(c.before)
+		}
 		c.m.Type, c.m.ID = protocol.TypePaste, c.name
 		pc.Write(c.m)
 		if res, _ := result(t, pc, c.name); res.OK || res.Error != c.want {
 			t.Errorf("%s: %+v, want the error %q", c.name, res, c.want)
 		}
 	}
+	ft.set(restarted(5))
 	if ps := ft.pasted(); len(ps) != 0 {
 		t.Errorf("pasted after refusals: %+v", ps)
 	}
@@ -173,10 +190,63 @@ func TestPasteRefused(t *testing.T) {
 	}
 }
 
+// A paste waits for the root's delivery lock, which a prompt's paste
+// and rm hold, before it looks for the agent or writes; and a daemon
+// that stops waits for a paste in flight, and no longer once it is
+// done. The waits are seen not to end within a fifth of a second.
+func TestPasteWaits(t *testing.T) {
+	root := "/w/proj/a"
+	dir := filepath.Join(t.TempDir(), "paste")
+	d, ft := pasteDaemon(t, root, dir)
+	pc := conn(t, d)
+	unlock := d.tasks.lockDeliveries(root)
+	pc.Write(protocol.Message{Type: protocol.TypePaste, ID: "locked", EnvironmentID: "env", Root: root, Image: pngData})
+	time.Sleep(200 * time.Millisecond)
+	if got := files(t, dir); len(got) != 0 || len(ft.pasted()) != 0 {
+		t.Errorf("under the root's delivery lock: wrote %q, pasted %+v", got, ft.pasted())
+	}
+	unlock()
+	if res, _ := result(t, pc, "locked"); !res.OK {
+		t.Fatalf("after the lock: %+v", res)
+	}
+	hold := make(chan struct{})
+	ft.set(func() { ft.pasteHold = hold })
+	pc.Write(protocol.Message{Type: protocol.TypePaste, ID: "held", EnvironmentID: "env", Root: root, Image: pngData})
+	// The file is written before the paste starts.
+	for i := 0; len(files(t, dir)) < 2; i++ {
+		if i == 250 {
+			t.Fatal("the second image was never written")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		d.StopRuns(ctx)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("the daemon stopped with a paste in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(hold)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon still waits once the paste is done")
+	}
+	if res, _ := result(t, pc, "held"); !res.OK {
+		t.Fatalf("the paste in flight: %+v", res)
+	}
+}
+
 // Without a paste directory the images go to /tmp as
 // laatmux-paste-<timestamp>.png, and the pruning there takes only
 // laatmux's: another program's old image stays. Two images written in
-// the same millisecond get two files.
+// the same millisecond get two files. A paste directory not there is
+// made, mode 0700, and a relative one is written as an absolute path.
 func TestPasteTmp(t *testing.T) {
 	was := pasteTmp
 	pasteTmp = t.TempDir()
@@ -205,5 +275,14 @@ func TestPasteTmp(t *testing.T) {
 	}
 	if got := files(t, pasteTmp); slices.Contains(got, "laatmux-paste-old.png") || !slices.Contains(got, "other.png") {
 		t.Errorf("/tmp after the pastes: %q", got)
+	}
+	t.Chdir(t.TempDir())
+	p, err := writePaste(filepath.Join("state", "paste"), pngData, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Dir(p))
+	if !filepath.IsAbs(p) || err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("a relative paste directory: wrote %s, the directory %v %v", p, fi.Mode(), err)
 	}
 }

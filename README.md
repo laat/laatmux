@@ -667,7 +667,9 @@ truth; labels only place new things.
   as is an `environment_id` not the daemon's own. The agent's pane is
   found as a prompt delivery without a target finds it: the managed
   session laatmux made at `root`, alone there, with a verified agent in
-  its single pane; none is a refusal, and nothing is written. The image
+  its single pane, observed on the server instance and in the session
+  the pane is listed in now, since a paste does not wait for a fresh
+  look as a delivery does; none is a refusal, and nothing is written. The image
   goes to `<state>/paste/<timestamp>.png`, or
   `/tmp/laatmux-paste-<timestamp>.png` for a daemon with no state
   directory, mode 0600, a file there never overwritten, after the
@@ -1543,22 +1545,27 @@ orphaned row's session exists locally and is switched to.
   user's on `C-v` is left alone, `on` saying so and `off` leaving it.
   `run` finds the pane's host by the session's `@laatmux_host`: on this
   machine it presses `C-v` in the pane, since the agent reads this
-  clipboard itself. Otherwise it reads a PNG from the clipboard: on
-  macOS when `osascript`'s `clipboard info` has PNG data and no file
-  reference, with `pngpaste` when it is on `PATH`, else `osascript`;
-  elsewhere with `wl-paste` under Wayland, else `xclip`, when the
-  clipboard offers `image/png`. No image there presses `C-v` in the
-  pane, so a text paste and every other use of the key are as they
-  were. The image goes to the host's daemon in a `paste` message (see
-  below) over a connection of its own, as every command dials, with the
-  workspace session's key; the daemon writes it to a file and types the
-  file's path into the agent's pane with no Enter, so text can be added
-  before sending, and Claude Code takes the path as the image. A paused
-  host, a daemon without `paste`, a plain attachment, which is no
-  worktree's, and a failed read, send or paste are shown with
-  `display-message` to the client for five seconds, and nothing is
-  typed. It needs `osascript` (macOS) or `wl-paste` or `xclip` here,
-  and a daemon of this build on the host. Not covered: pasting from a
+  clipboard itself. Otherwise it reads a PNG from the clipboard, within
+  ten seconds: on macOS when `osascript`'s `clipboard info` has no file
+  reference, with `pngpaste` when it is on `PATH`, which takes PNG data
+  and converts TIFF, JPEG and GIF, else with `osascript`, which takes
+  PNG data alone; elsewhere with `wl-paste` under Wayland, else `xclip`,
+  when the clipboard offers `image/png`, an empty clipboard being no
+  image and a tool that cannot reach its display an error. No image
+  there presses `C-v` in the pane, so a text paste and every other use
+  of the key are as they were; a config that does not load, or a host
+  it has not, matters only then. The image goes to the host's daemon in
+  a `paste` message (see below) over a connection of its own, as every
+  command dials, with the workspace session's key, within a minute, the
+  client told `sending a 2.1 MB image to vm` as it starts: keys typed
+  meanwhile reach the pane before the path. The daemon writes it to a
+  file and types the file's absolute path into the agent's pane with no
+  Enter, so text can be added before sending, and Claude Code takes the
+  path as the image. A paused host, a daemon without `paste`, a plain
+  attachment, which is no worktree's, and a failed read, send or paste
+  are shown with `display-message` to the client for five seconds, and
+  nothing is typed. It needs `osascript` (macOS) or `wl-paste` or
+  `xclip` here, and a daemon of this build on the host. Not covered: pasting from a
   machine that does not run laatmux, which needs a terminal protocol
   for clipboard images; agents that take no path as an image; and a
   file copied in Finder, a file reference with its icon as image data,

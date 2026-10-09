@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,8 +43,9 @@ import (
 const pasteKey = "C-v"
 
 // pasteTimeout bounds run's round trip to the host: a dial over ssh
-// and a few megabytes of image.
-const pasteTimeout = 30 * time.Second
+// and an image of a few megabytes, a third more as base64, over a slow
+// uplink.
+const pasteTimeout = 60 * time.Second
 
 func cmdPasteImage(ctx context.Context, args []string) error {
 	usage := errors.New("usage: laatmux paste-image [toggle|on|off]\n       laatmux paste-image run <pane> [<client>]")
@@ -111,25 +113,33 @@ func pasteSwitch(ctx context.Context, sub, exe string) error {
 }
 
 // pasteBinding is C-v's binding in the root table as list-keys prints
-// it, "" when it has none, and whether it is laatmux's: one that runs
-// paste-image run. -N, so a server not running is not started.
+// it, "" when it has none, and whether it is laatmux's: an if-shell on
+// the attach pane's tag whose command runs paste-image run, as
+// pasteBindArgs binds it, and not any binding that has the words. -N,
+// so a server not running is not started.
 func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
 	out, err := workspace.Server.Run(ctx, "-N", "list-keys", "-T", "root")
 	var te *tmux.Error
-	if errors.As(err, &te) && strings.Contains(te.Msg, "doesn't exist") {
-		// A root table with no key in it is no table at all.
+	if errors.As(err, &te) && te.Msg == "table root doesn't exist" {
+		// A root table with no key in it is no table at all. Any
+		// other error, a user's after-list-keys hook that failed say,
+		// may hide a binding, and is returned.
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
 	for _, l := range strings.Split(string(out), "\n") {
-		// bind-key [-r] -T root C-v if-shell -F ...
+		// bind-key [-r] -T root C-v if-shell -F "#{@laatmux_attach_pane}" "run-shell -b '... paste-image run ...'" "send-keys C-v"
 		f := strings.Fields(l)
 		i := slices.Index(f, "-T")
-		if len(f) > 0 && f[0] == "bind-key" && i > 0 && i+2 < len(f) && f[i+1] == "root" && f[i+2] == pasteKey {
-			return l, strings.Contains(l, " paste-image run "), nil
+		if len(f) == 0 || f[0] != "bind-key" || i < 0 || i+2 >= len(f) || f[i+1] != "root" || f[i+2] != pasteKey {
+			continue
 		}
+		cmd := f[i+3:]
+		ours := len(cmd) > 4 && cmd[0] == "if-shell" && cmd[1] == "-F" && strings.Trim(cmd[2], `"'`) == "#{@laatmux_attach_pane}" &&
+			strings.HasPrefix(strings.TrimLeft(cmd[3], `"'`), "run-shell") && strings.Contains(l, " paste-image run ")
+		return l, ours, nil
 	}
 	return "", false, nil
 }
@@ -148,8 +158,8 @@ func pasteBindArgs(exe string) []string {
 // client. It never fails itself: a background run-shell that exits
 // with an error, or prints, puts that over the pane.
 func pasteRun(ctx context.Context, pane, client string) {
-	if err := pasteImage(ctx, pane); err != nil {
-		pasteNotice(ctx, pane, client, err)
+	if err := pasteImage(ctx, pane, client); err != nil {
+		pasteNotice(ctx, pane, client, 5*time.Second, err.Error())
 	}
 }
 
@@ -157,7 +167,12 @@ func pasteRun(ctx context.Context, pane, client string) {
 // the pane is in, or presses C-v in the pane when there is no image to
 // send. The pane is looked up, and the key pressed, on the server TMUX
 // names, where the binding ran, as split does: a pane id is per server.
-func pasteImage(ctx context.Context, pane string) error {
+// A config that does not load, or that has not the session's host,
+// matters to an image alone: with none the key goes to the pane as it
+// does unbound. The client is told when the image is on its way, which
+// takes a dial and an upload: keys typed meanwhile reach the pane
+// before the path.
+func pasteImage(ctx context.Context, pane, client string) error {
 	l, _, err := workspace.PaneSession(ctx, pane)
 	if err != nil && !tmux.HookOnly(err) {
 		return err
@@ -166,32 +181,75 @@ func pasteImage(ctx context.Context, pane string) error {
 		// Not a session of laatmux's: the key is the pane's.
 		return pressPasteKey(ctx, pane)
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	h, ok := cfg.Find(l.Host)
-	if !ok {
-		return fmt.Errorf("unknown host %q", l.Host)
-	}
-	if h.Local() {
+	h, hostErr := pasteHost(l.Host)
+	if hostErr == nil && h.Local() {
 		// The agent reads this clipboard itself.
 		return pressPasteKey(ctx, pane)
 	}
-	png, err := clipboardPNG(ctx)
+	png, err := readClipboard(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the clipboard: %w", err)
+		return err
 	}
 	if png == nil {
 		return pressPasteKey(ctx, pane)
 	}
+	if hostErr != nil {
+		return hostErr
+	}
 	if !l.Workspace() {
 		return fmt.Errorf("%s is not a workspace session: the image has no agent to go to", l.Name)
 	}
+	size := sizeText(len(png))
+	pasteNotice(ctx, pane, client, 0, fmt.Sprintf("sending a %s image to %s", size, h.Name))
 	env, root := protocol.SplitSessionKey(l.Key)
 	sctx, cancel := context.WithTimeout(ctx, pasteTimeout)
 	defer cancel()
-	return sendPaste(sctx, h.Host, env, root, png)
+	err = sendPaste(sctx, h.Host, env, root, png)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: no answer within %ds sending a %s image", h.Name, int(pasteTimeout.Seconds()), size)
+	}
+	return err
+}
+
+// pasteHost is the configured host of the name.
+func pasteHost(name string) (config.Host, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return config.Host{}, err
+	}
+	h, ok := cfg.Find(name)
+	if !ok {
+		return config.Host{}, fmt.Errorf("unknown host %q", name)
+	}
+	return h, nil
+}
+
+// clipboardTimeout bounds the clipboard's read; a variable so a test
+// can shorten it.
+var clipboardTimeout = 10 * time.Second
+
+// readClipboard is clipboardPNG within clipboardTimeout: a clipboard
+// whose owner never answers, a hung application or X selection owner
+// say, would hold the key's job, and each one after it, for ever.
+func readClipboard(ctx context.Context) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, clipboardTimeout)
+	defer cancel()
+	png, err := clipboardPNG(cctx)
+	switch {
+	case err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded):
+		return nil, fmt.Errorf("reading the clipboard: no answer within %s", clipboardTimeout)
+	case err != nil:
+		return nil, fmt.Errorf("reading the clipboard: %w", err)
+	}
+	return png, nil
+}
+
+// sizeText is n bytes as the notices say it.
+func sizeText(n int) string {
+	if n < 1<<20 {
+		return fmt.Sprintf("%d KB", (n+1023)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
 }
 
 // pressPasteKey presses C-v in the pane, as the key does unbound.
@@ -223,20 +281,32 @@ var sendPaste = func(ctx context.Context, h peer.Host, env, root string, png []b
 	return nil
 }
 
-// pasteNotice shows err to the client with display-message, for five
-// seconds or until a key: from a key's background job it is the only
-// way the user sees it. A client gone since the key, or a message the
-// client refuses, is shown as display-message picks the client.
-// Nothing is returned: there is nowhere else to say it.
-func pasteNotice(ctx context.Context, pane, client string, err error) {
-	msg := displayLiteral("laatmux paste-image: " + err.Error())
-	srv := tmux.Server{}
+// pasteNotice shows msg to the client with display-message, for delay
+// or until a key, or for the display-time with no delay: from a key's
+// background job it is the only way the user sees it. A client gone
+// since the key is passed over, display-message then picking one, and
+// a tmux that refuses -d shows it for its display-time. Nothing is
+// returned: there is nowhere else to say it.
+func pasteNotice(ctx context.Context, pane, client string, delay time.Duration, msg string) {
+	msg = displayLiteral("laatmux paste-image: " + msg)
+	var d []string
+	if delay > 0 {
+		d = []string{"-d", strconv.FormatInt(delay.Milliseconds(), 10)}
+	}
+	var tries [][]string
 	if client != "" {
-		if _, err := srv.Run(ctx, "display-message", "-c", client, "-d", "5000", "-t", pane, msg); err == nil {
+		tries = append(tries, append([]string{"-c", client}, d...))
+	}
+	tries = append(tries, d)
+	if d != nil {
+		tries = append(tries, nil)
+	}
+	for _, flags := range tries {
+		args := append(append([]string{"display-message"}, flags...), "-t", pane, msg)
+		if _, err := (tmux.Server{}).Run(ctx, args...); err == nil {
 			return
 		}
 	}
-	_, _ = srv.Run(ctx, "display-message", "-d", "5000", "-t", pane, msg)
 }
 
 // displayLiteral is a message display-message shows as s: the message
@@ -295,11 +365,14 @@ func (c clipboard) png(ctx context.Context) ([]byte, error) {
 }
 
 // read reads the image. On macOS osascript says what the clipboard
-// holds: PNG data and no file reference, since a file copied in Finder
-// is one, with its icon as image data; pngpaste reads it when it is on
-// PATH, osascript otherwise. Elsewhere, under Wayland with wl-paste,
-// else with xclip, when the clipboard offers image/png; the listing
-// fails for a clipboard with nothing in it, which is no image.
+// holds. A file reference is no image, since a file copied in Finder
+// is one, with its icon as image data. pngpaste, when it is on PATH,
+// reads PNG data and converts TIFF, JPEG and GIF; osascript otherwise
+// reads PNG data alone. Elsewhere, under Wayland with wl-paste, else
+// with xclip, when the clipboard offers image/png; the listing fails
+// with its own words for a clipboard with nothing in it, which is no
+// image, and any other failure, a display it cannot reach say, is the
+// error.
 func (c clipboard) read(ctx context.Context) ([]byte, error) {
 	switch {
 	case c.goos == "darwin":
@@ -309,11 +382,18 @@ func (c clipboard) read(ctx context.Context) ([]byte, error) {
 		}
 		// The class names are in guillemets, printed in the locale's
 		// encoding, so they are matched without them.
-		if !bytes.Contains(info, []byte("class PNGf")) || bytes.Contains(info, []byte("class furl")) {
+		has := func(class string) bool { return bytes.Contains(info, []byte(class)) }
+		if has("class furl") {
 			return nil, nil
 		}
 		if c.has("pngpaste") {
+			if !has("class PNGf") && !has("TIFF picture") && !has("JPEG picture") && !has("GIF picture") {
+				return nil, nil
+			}
 			return c.run(ctx, "pngpaste", "-")
+		}
+		if !has("class PNGf") {
+			return nil, nil
 		}
 		out, err := c.run(ctx, "osascript", "-e", "the clipboard as «class PNGf»")
 		if err != nil {
@@ -322,18 +402,35 @@ func (c clipboard) read(ctx context.Context) ([]byte, error) {
 		return osaData(out)
 	case c.getenv("WAYLAND_DISPLAY") != "" && c.has("wl-paste"):
 		types, err := c.run(ctx, "wl-paste", "--list-types")
-		if err != nil || !hasLine(types, "image/png") {
+		if err != nil {
+			return nil, emptyClipboard(err, "Nothing is copied", "No selection")
+		}
+		if !hasLine(types, "image/png") {
 			return nil, nil
 		}
 		return c.run(ctx, "wl-paste", "--no-newline", "--type", "image/png")
 	case c.has("xclip"):
 		targets, err := c.run(ctx, "xclip", "-selection", "clipboard", "-t", "TARGETS", "-o")
-		if err != nil || !hasLine(targets, "image/png") {
+		if err != nil {
+			return nil, emptyClipboard(err, "target TARGETS not available")
+		}
+		if !hasLine(targets, "image/png") {
 			return nil, nil
 		}
 		return c.run(ctx, "xclip", "-selection", "clipboard", "-t", "image/png", "-o")
 	}
 	return nil, errors.New("no clipboard tool: install wl-clipboard or xclip")
+}
+
+// emptyClipboard is nil for a tool's error that says the clipboard has
+// nothing in it, in one of the tool's phrasings, and err otherwise.
+func emptyClipboard(err error, phrasings ...string) error {
+	for _, p := range phrasings {
+		if strings.Contains(err.Error(), p) {
+			return nil
+		}
+	}
+	return err
 }
 
 // osaData is the bytes osascript prints a clipboard read as PNG as:

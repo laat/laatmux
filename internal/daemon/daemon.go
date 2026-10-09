@@ -267,8 +267,9 @@ type Config struct {
 //     lockRepo) until its agent is launched; a typed prompt's wait runs
 //     without them. rm holds repos alone (lockRepos). "deliver/<root>"
 //     is held by a delivery's readiness check and paste, by rm from
-//     git's removal on, by an add's result and by a trust step, each
-//     on its own; when nested it is the inner one, under repos (rm) or
+//     git's removal on, by an add's result, by a trust step and by a
+//     pasted image's lookup, write and paste (paste.go), each on its
+//     own; when nested it is the inner one, under repos (rm) or
 //     under this host's "attempt/<id>" (a prompt's attempts), never
 //     the other way.
 //   - the relay's keyed locks per pending record, "attempt/<id>" for a

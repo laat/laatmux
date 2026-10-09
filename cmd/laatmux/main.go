@@ -156,7 +156,8 @@ func usage() {
   watch     live list, redraws on change, for a plain terminal
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
             laatmux sidebar pane | attach <window> | fit <window> | reap | seen   what the pane and the hooks run
-  paste-image laatmux paste-image [toggle|on|off]   C-v in a workspace's attach pane sends the
+  paste-image
+            laatmux paste-image [toggle|on|off]   C-v in a workspace's attach pane sends the
             clipboard's image to the host and types its path into the agent's pane
             laatmux paste-image run <pane> [<client>]   what the key runs
   dashboard the list in a popup for display-popup -E: Enter jumps and closes it;

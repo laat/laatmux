@@ -164,9 +164,10 @@ func TestAddArgvPrompt(t *testing.T) {
 	}
 }
 
-// The typed path: the prompt is pasted once the detector sees the
-// prompt box with a verified agent in the recorded pane, the identity
-// is bound, and the buffer is named for the add.
+// The typed path: the prompt is pasted and submitted with Enter once
+// the detector sees the prompt box with a verified agent in the
+// recorded pane, the identity is bound, and the buffer is named for
+// the add.
 func TestAddTypedPrompt(t *testing.T) {
 	d, ft, _, remote := taskDaemon(t, idleScreen, nil)
 	pc := conn(t, d)
@@ -175,7 +176,7 @@ func TestAddTypedPrompt(t *testing.T) {
 	if !res.OK || res.Prompt != protocol.DeliveryDelivered || res.Error != "" {
 		t.Fatalf("result %+v", res)
 	}
-	if len(ft.pastes) != 1 || ft.pastes[0].pane != "%1" || ft.pastes[0].text != "do the thing" || !strings.HasPrefix(ft.pastes[0].buffer, attemptBufferPrefix) {
+	if len(ft.pastes) != 1 || ft.pastes[0].pane != "%1" || ft.pastes[0].text != "do the thing" || !ft.pastes[0].enter || !strings.HasPrefix(ft.pastes[0].buffer, attemptBufferPrefix) {
 		t.Fatalf("pastes %+v", ft.pastes)
 	}
 	if !hasProgress(progress, protocol.StageAgent, protocol.StateDone, "prompt delivered") {

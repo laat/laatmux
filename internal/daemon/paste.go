@@ -79,13 +79,17 @@ func (c *clientConn) paste(m protocol.Message) error {
 // never lands between a prompt and its Enter, nor in a root rm has
 // taken; and it counts as a paste in flight, so a daemon shutting down
 // starts none and waits for one started, whose buffer is then deleted.
-// No agent found writes nothing. Only a failure to load the buffer
+// No agent found, or none observed in the pane as it is listed now,
+// writes nothing. Only a failure to load the buffer
 // proves the path did not reach the pane, as for a prompt. The file
 // stays until a later paste prunes it, whatever became of the paste.
 func (rn *taskRunner) pasteImage(ctx context.Context, root string, png []byte) error {
 	unlock := rn.lockDeliveries(root)
 	defer unlock()
 	target, why := rn.adopt(ctx, root)
+	if why == "" {
+		why = rn.observedAs(target)
+	}
 	if why != "" {
 		return errors.New(why)
 	}
@@ -117,10 +121,29 @@ func (rn *taskRunner) pasteImage(ctx context.Context, root string, png []byte) e
 	}
 }
 
+// observedAs says why the last observation of the pane does not vouch
+// for the agent in it as the pane is listed now, "" when it does.
+// adopt takes the verified observation whatever server instance it was
+// made on, and a delivery then waits for one of the pane as recorded; a
+// paste does not wait, so the observation must be of the server
+// instance and the session the pane is listed in: a server restarted
+// since can have given the pane's id to a shell at the same root.
+func (rn *taskRunner) observedAs(p tmux.Pane) string {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
+	if !ok || st.obs.serverPID != p.ServerPID || st.obs.session != p.Session {
+		return fmt.Sprintf("no agent to deliver to: pane %s in session %s on server %d is not observed yet", p.ID, tmux.Printable(p.Session), p.ServerPID)
+	}
+	return ""
+}
+
 // writePaste writes png to a new file in dir named <timestamp>.png, or
 // without a dir in pasteTmp as laatmux-paste-<timestamp>.png, after
-// removing the images there older than pasteKeep. A file there is
-// never overwritten: a second paste in the same millisecond gets -2.
+// removing the images there older than pasteKeep, and returns its
+// absolute path: the agent resolves a relative one, from a relative
+// LAATMUX_HOME say, against its own directory. A file there is never
+// overwritten: a second paste in the same millisecond gets -2.
 func writePaste(dir string, png []byte, now time.Time) (string, error) {
 	prefix := ""
 	if dir == "" {
@@ -128,6 +151,10 @@ func writePaste(dir string, png []byte, now time.Time) (string, error) {
 	}
 	// os's errors name the state directory as it is; the result
 	// carries them to a client, which shows them.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", tmux.PrintablePath(err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", tmux.PrintablePath(err)
 	}
