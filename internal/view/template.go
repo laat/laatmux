@@ -246,8 +246,8 @@ func Compile(name, src, def string) Compiled {
 // the number and the checks; a popup has the width, a sidebar seldom.
 const (
 	DefaultTile1        = "{stripe} {status_icon} {title} {pane_suffix}{fill}{elapsed}"
-	DefaultTile2        = "{stripe}    {kind_icon} {subtitle} @{host}{fill}{git_stats}"
-	DefaultTile3        = "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
+	DefaultTile2        = "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}"
+	DefaultTile3        = "{stripe} {pane_title}{fill}{pr_number} {pr_checks}"
 	DefaultCompact      = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
 	DefaultTop1         = "{status_icon} {title} {pane_suffix}"
 	DefaultTop2         = "{kind_icon} {subtitle} @{host}"
@@ -257,8 +257,8 @@ const (
 	DefaultAgent        = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
 	DefaultPane         = "{indent}$ {command}"
 	DefaultRun          = "{indent}▶ {command}{fill}{elapsed}"
-	DefaultDashTile2    = "{stripe}    {kind_icon} {subtitle} @{host}{fill}{git_stats}  {git_sync}"
-	DefaultDashTile3    = "{stripe}    {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
+	DefaultDashTile2    = "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}  {git_sync}"
+	DefaultDashTile3    = "{stripe} {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
 	DefaultDashCompact  = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {elapsed}"
 	DefaultDashWorktree = "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
 )

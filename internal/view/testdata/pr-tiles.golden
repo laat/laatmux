@@ -1,35 +1,35 @@
 ..B|⟨danger:box  DOWN  ssh: connect to host box port 22: No ⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ laatmux                                2:00
-S..|⟨accent:▌⟩    ⎇ fix-ls @‹vm›                               
-S..|⟨accent:▌⟩    Permission to run pnpm test in packa… «⟨success:#52⟩» ⟨success:✓⟩
+S..|⟨accent:▌⟩ ⎇ fix-ls @‹vm›                                  
+S..|⟨accent:▌⟩ Permission to run pnpm test in packages… «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes                           0:01
-...|⟨info:▌⟩    @‹vm/default›
-...|⟨info:▌⟩    remote
+...|⟨info:▌⟩ @‹vm/default›
+...|⟨info:▌⟩ remote
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:proj⟩»                                   0:08
-...|⟨info:▌⟩    ⎇ task @mac
-...|⟨info:▌⟩    Editing src/api.ts                ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
+...|⟨info:▌⟩ ⎇ task @mac
+...|⟨info:▌⟩ Editing src/api.ts                   ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ proj                                  10:00
-.D.|⟨info:▌⟩    ⎇ main @‹box›
-.D.|⟨info:▌⟩    last seen                             ⟨danger:×⟩⟨danger: 2/3⟩
+.D.|⟨info:▌⟩ ⎇ main @‹box›
+.D.|⟨info:▌⟩ last seen                                ⟨danger:×⟩⟨danger: 2/3⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch                                0:40
-...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ notes                                  5:00
-...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ proj                                     1h
-...|⟨border:▌⟩    ⎇ other @‹vm›
-...|⟨border:▌⟩    Done. 日本語のタイトル that is l… ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
+...|⟨border:▌⟩ ⎇ other @‹vm›
+...|⟨border:▌⟩ Done. 日本語のタイトル that is long… ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ proj                                     3h
-.D.|⟨border:▌⟩    ⎇ dead @‹vm›
-.D.|⟨border:▌⟩    claude gone                           ‹#7› ‹✓›‹?›
+.D.|⟨border:▌⟩ ⎇ dead @‹vm›
+.D.|⟨border:▌⟩ claude gone                              ‹#7› ‹✓›‹?›
 ...|‹⟨border:────────────────────────────────────────────────⟩›
 ...|‹⟨header:▸ 1 stale⟩›
 ...|

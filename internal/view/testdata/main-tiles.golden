@@ -1,14 +1,14 @@
 ...| «⟨header:Agents⟩»‹⟨border: │ ⟩›‹Tree›
 S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(1)⟩»                         2:00
-S..|⟨info:▌⟩    ⌂ main @mac                     ✎ «⟨success:+12⟩» «⟨danger:-3⟩»
-S..|⟨info:▌⟩    Reading the README                 ⟨danger:×⟩⟨danger: 4/5⟩
+S..|⟨info:▌⟩ ⌂ main @mac                        ✎ «⟨success:+12⟩» «⟨danger:-3⟩»
+S..|⟨info:▌⟩ Reading the README                    ⟨danger:×⟩⟨danger: 4/5⟩
 S..|‹⟨border:─────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(2)⟩»                         9:00
-...|⟨border:▌⟩    ⌂ main @mac                     ✎ «⟨success:+12⟩» «⟨danger:-3⟩»
-...|⟨border:▌⟩    notes                              ⟨danger:×⟩⟨danger: 4/5⟩
+...|⟨border:▌⟩ ⌂ main @mac                        ✎ «⟨success:+12⟩» «⟨danger:-3⟩»
+...|⟨border:▌⟩ notes                                 ⟨danger:×⟩⟨danger: 4/5⟩
 ...|‹⟨border:─────────────────────────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ laatmux                               1h
-...|⟨border:▌⟩    ⎇ fix @mac                        ‹⟨success:+40⟩› ‹⟨danger:-2⟩›
-...|⟨border:▌⟩    fixing
+...|⟨border:▌⟩ ⎇ fix @mac                           ‹⟨success:+40⟩› ‹⟨danger:-2⟩›
+...|⟨border:▌⟩ fixing
 ...|‹⟨border:─────────────────────────────────────────────⟩›
 .D.|

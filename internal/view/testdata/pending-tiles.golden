@@ -1,12 +1,12 @@
 S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ proj                           0:00
-S..|⟨info:▌⟩    sidebar-follow @‹vm›                 
-S..|⟨info:▌⟩    adding: clone: cloning git@github.…
+S..|⟨info:▌⟩ sidebar-follow @‹vm›                    
+S..|⟨info:▌⟩ adding: clone: cloning git@github.com…
 S..|‹⟨border:────────────────────────────────────────⟩›
 ...|⟨accent:▌⟩ ⟨accent:💬⟩ proj                           1:00
-...|⟨accent:▌⟩    fix-ls @‹vm›
-...|⟨accent:▌⟩    prompt not delivered: the pane was…
+...|⟨accent:▌⟩ fix-ls @‹vm›
+...|⟨accent:▌⟩ prompt not delivered: the pane was no…
 ...|‹⟨border:────────────────────────────────────────⟩›
 ...|⟨accent:▌⟩ ⟨accent:💬⟩ proj                           5:00
-...|⟨accent:▌⟩    ⎇ a @‹vm›
-...|⟨accent:▌⟩    Allow?
+...|⟨accent:▌⟩ ⎇ a @‹vm›
+...|⟨accent:▌⟩ Allow?
 .D.|
