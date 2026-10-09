@@ -126,7 +126,8 @@ func TestPaste(t *testing.T) {
 // A refusal writes and pastes nothing: another environment, no root,
 // data that is not a PNG, a root with no agent of laatmux's in it, a
 // pane whose verified observation is from the server instance before
-// a restart, a daemon shutting down. A paste that fails says how far
+// a restart or from another session, a daemon shutting down. A paste
+// that fails says how far
 // it got: a buffer that would not load reached nothing, a paste-buffer
 // that failed may have reached the pane.
 func TestPasteRefused(t *testing.T) {
@@ -135,6 +136,7 @@ func TestPasteRefused(t *testing.T) {
 	d, ft := pasteDaemon(t, root, dir)
 	pc := conn(t, d)
 	restarted := func(pid int) func() { return func() { ft.panes[0].ServerPID = pid } }
+	renamed := func(session string) func() { return func() { ft.panes[0].ServerPID, ft.panes[0].Session = 5, session } }
 	for _, c := range []struct {
 		name   string
 		m      protocol.Message
@@ -146,7 +148,8 @@ func TestPasteRefused(t *testing.T) {
 		{"not a PNG", protocol.Message{EnvironmentID: "env", Root: root, Image: []byte("GIF89a")}, nil, "not a PNG image"},
 		{"no image", protocol.Message{EnvironmentID: "env", Root: root}, nil, "not a PNG image"},
 		{"no agent at the root", protocol.Message{EnvironmentID: "env", Root: "/w/proj/b", Image: pngData}, nil, "no agent to deliver to: no managed session in /w/proj/b"},
-		{"server restarted", protocol.Message{EnvironmentID: "env", Root: root, Image: pngData}, restarted(6), "no agent to deliver to: pane %1 in session proj/a on server 6 is not observed yet"},
+		{"server restarted", protocol.Message{EnvironmentID: "env", Root: root, Image: pngData}, restarted(6), "no agent to deliver to: pane %1 has no observation yet as it is listed, in session proj/a on server 6"},
+		{"another session", protocol.Message{EnvironmentID: "env", Root: root, Image: pngData}, renamed("proj/b"), "no agent to deliver to: pane %1 has no observation yet as it is listed, in session proj/b on server 5"},
 	} {
 		if c.before != nil {
 			ft.set(c.before)
@@ -157,7 +160,7 @@ func TestPasteRefused(t *testing.T) {
 			t.Errorf("%s: %+v, want the error %q", c.name, res, c.want)
 		}
 	}
-	ft.set(restarted(5))
+	ft.set(renamed("proj/a"))
 	if ps := ft.pasted(); len(ps) != 0 {
 		t.Errorf("pasted after refusals: %+v", ps)
 	}

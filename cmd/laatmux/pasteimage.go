@@ -44,8 +44,8 @@ const pasteKey = "C-v"
 
 // pasteTimeout bounds run's round trip to the host: a dial over ssh
 // and an image of a few megabytes, a third more as base64, over a slow
-// uplink.
-const pasteTimeout = 60 * time.Second
+// uplink. A variable so a test can shorten it.
+var pasteTimeout = 60 * time.Second
 
 func cmdPasteImage(ctx context.Context, args []string) error {
 	usage := errors.New("usage: laatmux paste-image [toggle|on|off]\n       laatmux paste-image run <pane> [<client>]")
@@ -113,17 +113,16 @@ func pasteSwitch(ctx context.Context, sub, exe string) error {
 }
 
 // pasteBinding is C-v's binding in the root table as list-keys prints
-// it, "" when it has none, and whether it is laatmux's: an if-shell on
-// the attach pane's tag whose command runs paste-image run, as
-// pasteBindArgs binds it, and not any binding that has the words. -N,
+// it, "" when it has none, and whether it is laatmux's (pasteOurs). -N,
 // so a server not running is not started.
 func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
 	out, err := workspace.Server.Run(ctx, "-N", "list-keys", "-T", "root")
 	var te *tmux.Error
 	if errors.As(err, &te) && te.Msg == "table root doesn't exist" {
-		// A root table with no key in it is no table at all. Any
-		// other error, a user's after-list-keys hook that failed say,
-		// may hide a binding, and is returned.
+		// No root table, for a tmux that drops a table with no key
+		// left in it, is no binding; 3.6 lists such a table empty.
+		// Any other error, a user's after-list-keys hook that failed
+		// say, may hide a binding, and is returned.
 		return "", false, nil
 	}
 	if err != nil {
@@ -131,17 +130,81 @@ func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
 	}
 	for _, l := range strings.Split(string(out), "\n") {
 		// bind-key [-r] -T root C-v if-shell -F "#{@laatmux_attach_pane}" "run-shell -b '... paste-image run ...'" "send-keys C-v"
-		f := strings.Fields(l)
+		f := commandWords(l)
 		i := slices.Index(f, "-T")
 		if len(f) == 0 || f[0] != "bind-key" || i < 0 || i+2 >= len(f) || f[i+1] != "root" || f[i+2] != pasteKey {
 			continue
 		}
-		cmd := f[i+3:]
-		ours := len(cmd) > 4 && cmd[0] == "if-shell" && cmd[1] == "-F" && strings.Trim(cmd[2], `"'`) == "#{@laatmux_attach_pane}" &&
-			strings.HasPrefix(strings.TrimLeft(cmd[3], `"'`), "run-shell") && strings.Contains(l, " paste-image run ")
-		return l, ours, nil
+		return l, pasteOurs(f[i+3:]), nil
 	}
 	return "", false, nil
+}
+
+// pasteOurs reports whether a binding's command, its words, is
+// laatmux's as pasteBindArgs binds it: an if-shell -F on the attach
+// pane's tag whose command for an attach pane is a run-shell of a
+// binary's paste-image run. The words elsewhere, in the other branch
+// or in a string a command prints, make no binding laatmux's.
+func pasteOurs(cmd []string) bool {
+	if len(cmd) < 4 || cmd[0] != "if-shell" || cmd[1] != "-F" || cmd[2] != "#{@laatmux_attach_pane}" {
+		return false
+	}
+	run := commandWords(cmd[3])
+	if len(run) < 2 || run[0] != "run-shell" {
+		return false
+	}
+	sh := commandWords(run[len(run)-1])
+	return len(sh) >= 3 && sh[1] == "paste-image" && sh[2] == "run"
+}
+
+// commandWords splits s into words as tmux's command parser, and the
+// shell for the words laatmux writes, read them: single quotes keep
+// what they hold, a backslash outside them takes the next byte as it
+// is, inside double quotes too, and blanks part the words. list-keys
+// prints a binding's arguments quoted that way, a command inside a
+// branch quoted again, and the shell command inside run-shell once
+// more.
+func commandWords(s string) []string {
+	var words []string
+	var w strings.Builder
+	in := false // a word has begun
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\'':
+			in = true
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				end = len(s) - i - 1
+			}
+			w.WriteString(s[i+1 : i+1+end])
+			i += end + 1
+		case c == '"':
+			in = true
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' && i+1 < len(s) {
+					i++
+				}
+				w.WriteByte(s[i])
+			}
+		case c == '\\' && i+1 < len(s):
+			in = true
+			i++
+			w.WriteByte(s[i])
+		case c == ' ' || c == '\t':
+			if in {
+				words = append(words, w.String())
+				w.Reset()
+				in = false
+			}
+		default:
+			in = true
+			w.WriteByte(c)
+		}
+	}
+	if in {
+		words = append(words, w.String())
+	}
+	return words
 }
 
 // pasteBindArgs is the bind-key command for C-v: in an attach pane,
@@ -169,9 +232,9 @@ func pasteRun(ctx context.Context, pane, client string) {
 // names, where the binding ran, as split does: a pane id is per server.
 // A config that does not load, or that has not the session's host,
 // matters to an image alone: with none the key goes to the pane as it
-// does unbound. The client is told when the image is on its way, which
-// takes a dial and an upload: keys typed meanwhile reach the pane
-// before the path.
+// does unbound. The client is told while the image is on its way,
+// which takes a dial and an upload, keys typed meanwhile reaching the
+// pane before the path, and told when it has arrived.
 func pasteImage(ctx context.Context, pane, client string) error {
 	l, _, err := workspace.PaneSession(ctx, pane)
 	if err != nil && !tmux.HookOnly(err) {
@@ -199,16 +262,28 @@ func pasteImage(ctx context.Context, pane, client string) error {
 	if !l.Workspace() {
 		return fmt.Errorf("%s is not a workspace session: the image has no agent to go to", l.Name)
 	}
+	if h.Paused {
+		// Refused before the client is told anything is sent.
+		return &peer.PausedError{Name: h.Name}
+	}
 	size := sizeText(len(png))
-	pasteNotice(ctx, pane, client, 0, fmt.Sprintf("sending a %s image to %s", size, h.Name))
+	// The notice stays until the paste ends, which replaces it, or a
+	// key: a C-v pressed again meanwhile would send a second image.
+	pasteNotice(ctx, pane, client, pasteTimeout, fmt.Sprintf("sending a %s image to %s", size, h.Name))
 	env, root := protocol.SplitSessionKey(l.Key)
 	sctx, cancel := context.WithTimeout(ctx, pasteTimeout)
 	defer cancel()
 	err = sendPaste(sctx, h.Host, env, root, png)
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%s: no answer within %ds sending a %s image", h.Name, int(pasteTimeout.Seconds()), size)
+	switch {
+	case err != nil && errors.Is(sctx.Err(), context.DeadlineExceeded):
+		// The connection closed under a write in flight fails it with
+		// its own error, not the context's.
+		return fmt.Errorf("%s: no answer within %s sending a %s image", h.Name, durationText(pasteTimeout), size)
+	case err != nil:
+		return err
 	}
-	return err
+	pasteNotice(ctx, pane, client, 0, fmt.Sprintf("sent a %s image to %s", size, h.Name))
+	return nil
 }
 
 // pasteHost is the configured host of the name.
@@ -224,9 +299,10 @@ func pasteHost(name string) (config.Host, error) {
 	return h, nil
 }
 
-// clipboardTimeout bounds the clipboard's read; a variable so a test
-// can shorten it.
-var clipboardTimeout = 10 * time.Second
+// clipboardTimeout bounds the clipboard's read: osascript without
+// pngpaste prints a large screenshot as hex, twice its size. A variable
+// so a test can shorten it.
+var clipboardTimeout = 30 * time.Second
 
 // readClipboard is clipboardPNG within clipboardTimeout: a clipboard
 // whose owner never answers, a hung application or X selection owner
@@ -237,11 +313,20 @@ func readClipboard(ctx context.Context) ([]byte, error) {
 	png, err := clipboardPNG(cctx)
 	switch {
 	case err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded):
-		return nil, fmt.Errorf("reading the clipboard: no answer within %s", clipboardTimeout)
+		return nil, fmt.Errorf("reading the clipboard: no answer within %s", durationText(clipboardTimeout))
 	case err != nil:
 		return nil, fmt.Errorf("reading the clipboard: %w", err)
 	}
 	return png, nil
+}
+
+// durationText is d as the notices say it: whole seconds as 60s, where
+// Duration's own form is 1m0s.
+func durationText(d time.Duration) string {
+	if d >= time.Second && d%time.Second == 0 {
+		return fmt.Sprintf("%ds", d/time.Second)
+	}
+	return d.String()
 }
 
 // sizeText is n bytes as the notices say it.

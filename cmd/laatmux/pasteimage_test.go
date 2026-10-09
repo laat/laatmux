@@ -59,6 +59,8 @@ func TestClipboardRead(t *testing.T) {
 		{"osascript", "darwin", "", nil, map[string]string{"osascript -e clipboard info": info["image"], "osascript -e the clipboard as «class PNGf»": hexPNG}, testPNG, "", []string{"osascript -e clipboard info", "osascript -e the clipboard as «class PNGf»"}},
 		{"tiff", "darwin", "", []string{"pngpaste"}, map[string]string{"osascript -e clipboard info": info["tiff"], "pngpaste -": string(testPNG)}, testPNG, "", []string{"osascript -e clipboard info", "pngpaste -"}},
 		{"tiff without pngpaste", "darwin", "", nil, map[string]string{"osascript -e clipboard info": info["tiff"]}, nil, "", []string{"osascript -e clipboard info"}},
+		{"jpeg", "darwin", "", []string{"pngpaste"}, map[string]string{"osascript -e clipboard info": "JPEG picture, 299024\n", "pngpaste -": string(testPNG)}, testPNG, "", []string{"osascript -e clipboard info", "pngpaste -"}},
+		{"gif", "darwin", "", []string{"pngpaste"}, map[string]string{"osascript -e clipboard info": "GIF picture, 230329\n", "pngpaste -": string(testPNG)}, testPNG, "", []string{"osascript -e clipboard info", "pngpaste -"}},
 		{"text", "darwin", "", []string{"pngpaste"}, map[string]string{"osascript -e clipboard info": info["text"]}, nil, "", []string{"osascript -e clipboard info"}},
 		{"finder", "darwin", "", []string{"pngpaste"}, map[string]string{"osascript -e clipboard info": info["finder"]}, nil, "", []string{"osascript -e clipboard info"}},
 		{"empty", "darwin", "", nil, map[string]string{"osascript -e clipboard info": info["empty"]}, nil, "", []string{"osascript -e clipboard info"}},
@@ -126,7 +128,9 @@ func TestDisplayLiteral(t *testing.T) {
 func TestPasteBinding(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
-	const exe = "/usr/local/bin/laatmux"
+	// A path with a blank and a quote, which the run-shell command
+	// quotes, and list-keys quotes again.
+	const exe = "/usr/local/my bin/it's/laatmux"
 	bound := func() string {
 		t.Helper()
 		line, _, err := pasteBinding(ctx)
@@ -146,12 +150,13 @@ func TestPasteBinding(t *testing.T) {
 	if err := pasteSwitch(ctx, "on", exe); err != nil {
 		t.Fatal(err)
 	}
-	// As list-keys prints it: the run-shell command quoted again.
-	line := strings.Join(strings.Fields(bound()), " ")
-	for _, want := range []string{"-T root C-v if-shell -F ", "#{@laatmux_attach_pane}", `"run-shell -b '` + exe + " paste-image run ", "#{pane_id}", "#{client_name}", `"send-keys C-v"`} {
-		if !strings.Contains(line, want) {
-			t.Errorf("bound %q, want %q in it", line, want)
-		}
+	// As list-keys prints it, read back into the words bound, with
+	// run-shell in the background.
+	if line, ours, err := pasteBinding(ctx); err != nil || !ours || !slices.Equal(commandWords(line)[4:], pasteBindArgs(exe)[3:]) {
+		t.Errorf("bound %q, ours %v, %v; want the words %q", line, ours, err, pasteBindArgs(exe)[3:])
+	}
+	if run := commandWords(pasteBindArgs(exe)[6]); len(run) < 3 || run[0] != "run-shell" || run[1] != "-b" {
+		t.Errorf("the attach pane's command %q, want run-shell -b", run)
 	}
 	if keys := string(must(workspace.Server.Run(ctx, "list-keys", "-T", "root"))); strings.Count(keys, "paste-image run") != 1 {
 		t.Errorf("bound more than once:\n%s", keys)
@@ -171,13 +176,28 @@ func TestPasteBinding(t *testing.T) {
 	if err := pasteSwitch(ctx, "off", exe); err != nil || !strings.Contains(bound(), "display-message mine") {
 		t.Errorf("off over the user's binding: %v, bound %q", err, bound())
 	}
-	must(workspace.Server.Run(ctx, "bind-key", "-n", "C-v", "display-message", "use laatmux paste-image run for images"))
-	for _, sub := range []string{"on", "toggle", "off"} {
-		err := pasteSwitch(ctx, sub, exe)
-		if !strings.Contains(bound(), "display-message \"use laatmux") || sub != "off" && err == nil {
-			t.Errorf("%s over a user's binding with the words: %v, bound %q", sub, err, bound())
+	for _, user := range [][]string{
+		{"display-message", "use laatmux paste-image run for images"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "display-message 'use paste-image run now'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@other}", "run-shell -b 'laatmux paste-image run x'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b custom-paste", `display-message "use laatmux paste-image run for images"`},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", `run-shell -b 'printf "use paste-image run now"'`, "send-keys C-v"},
+	} {
+		must(workspace.Server.Run(ctx, append([]string{"bind-key", "-n", "C-v"}, user...)...))
+		was := bound()
+		for _, sub := range []string{"on", "toggle", "off"} {
+			err := pasteSwitch(ctx, sub, exe)
+			if bound() != was || sub != "off" && err == nil {
+				t.Errorf("%s over the user's %q: %v, bound %q", sub, user, err, bound())
+			}
 		}
 	}
+	// A root table with no key left in it: tmux 3.6 lists it empty.
+	must(workspace.Server.Run(ctx, "unbind-key", "-a", "-T", "root"))
+	if err := pasteSwitch(ctx, "on", exe); err != nil || !strings.Contains(bound(), "paste-image run") {
+		t.Errorf("on with an empty root table: %v, bound %q", err, bound())
+	}
+	must(workspace.Server.Run(ctx, "bind-key", "-n", "C-v", "display-message", "use laatmux paste-image run for images"))
 	must(workspace.Server.Run(ctx, "set-hook", "-g", "after-list-keys", "list-keys -T nosuch"))
 	if err := pasteSwitch(ctx, "on", exe); err == nil || !strings.Contains(err.Error(), "table nosuch doesn't exist") {
 		t.Errorf("on with a failing after-list-keys hook: %v", err)
@@ -206,6 +226,30 @@ func TestPasteBinding(t *testing.T) {
 	}
 	if _, err := workspace.Server.Run(ctx, "-N", "list-sessions"); !tmux.NoServer(err) {
 		t.Errorf("a server after on with none: %v", err)
+	}
+}
+
+// The words of laatmux's binding as list-keys prints it, its arguments
+// in double quotes with a backslash before a " or a \ as tmux 3.6 does,
+// for a binary path with a blank, a quote and a # in it, and with -r:
+// each level down to the shell command's words, which pasteOurs reads,
+// is the command pasteBindArgs bound.
+func TestCommandWords(t *testing.T) {
+	for _, exe := range []string{"/usr/local/bin/laatmux", "/a b/it's #1/laatmux"} {
+		args := pasteBindArgs(exe)
+		quoted := func(s string) string { return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"` }
+		line := "bind-key -r -T root C-v " + strings.Join(args[3:5], " ") + " " + quoted(args[5]) + " " + quoted(args[6]) + " " + quoted(args[7])
+		f := commandWords(line)
+		if !slices.Equal(f[:5], []string{"bind-key", "-r", "-T", "root", "C-v"}) || !slices.Equal(f[5:], args[3:]) {
+			t.Fatalf("%s: words %q, want the bound command %q", line, f, args[3:])
+		}
+		if !pasteOurs(f[5:]) {
+			t.Errorf("%s: not ours", line)
+		}
+		run := commandWords(f[8])
+		if sh := commandWords(run[len(run)-1]); !slices.Equal(sh, []string{tmux.FormatLiteral(exe), "paste-image", "run", "#{pane_id}", "#{client_name}"}) {
+			t.Errorf("%s: the shell command's words %q", line, sh)
+		}
 	}
 }
 
@@ -287,24 +331,25 @@ type writerFunc func([]byte) (int, error)
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // run, by the pane's session and the clipboard: in a workspace of a
-// remote host, with an image, the client is told the image is on its
-// way, the image goes to the host for the workspace's root, and
-// nothing is typed; with no image the pane gets C-v. A workspace on
-// this machine and a session not laatmux's get C-v without the
-// clipboard being read; so does a session whose host the config has
-// not, or a config that does not load, when the clipboard has no
-// image. A failure is a message to the client, and then nothing is
-// typed: the host not configured or the config broken, with an image;
-// the clipboard failing or not answering in time; a plain attachment
-// with an image, which has no agent; the host's refusal; no answer
-// from the host in time, said with the image's size. run itself never
-// fails.
+// remote host, with an image, the client is told while the image is on
+// its way and once it has arrived, the image goes to the host for the
+// workspace's root, and nothing is typed; with no image the pane gets
+// C-v. A workspace on this machine and a session not laatmux's get C-v
+// without the clipboard being read; so does a session whose host the
+// config has not, or a config that does not load, when the clipboard
+// has no image. A failure is a message to the client, and then nothing
+// is typed: the host not configured or the config broken, with an
+// image; the clipboard failing or not answering in time; a plain
+// attachment with an image, which has no agent; a paused host, before
+// anything is said to be sent; the host's refusal; no answer from the
+// host in time, said with the image's size, though the send fails
+// with the transport's error. run itself never fails.
 func TestPasteRun(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	good, broken := filepath.Join(dir, "config.yaml"), filepath.Join(dir, "broken.yaml")
-	if err := os.WriteFile(good, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n"), 0o644); err != nil {
+	if err := os.WriteFile(good, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n  - name: pz\n    ssh: pz\n    paused: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(broken, []byte("hosts: [\n"), 0o644); err != nil {
@@ -315,23 +360,42 @@ func TestPasteRun(t *testing.T) {
 	if brokenErr == nil {
 		t.Fatal("the broken config loads")
 	}
+	// A clipboard that never answers, and a host that does not, wait
+	// for the bound; a bound gone fails the case in five seconds rather
+	// than hanging the test.
+	unbounded := func(ctx context.Context, err error) error {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(5 * time.Second):
+			return errors.New("not bounded")
+		}
+	}
+	errHang := errors.New("hang")
 	var clipPNG []byte
 	var clipErr, sendErr error
-	hang, reads := false, 0
+	reads := 0
 	var sent []string
-	wasClip, wasSend, wasTimeout := clipboardPNG, sendPaste, clipboardTimeout
-	t.Cleanup(func() { clipboardPNG, sendPaste, clipboardTimeout = wasClip, wasSend, wasTimeout })
-	clipboardTimeout = 200 * time.Millisecond
+	wasClip, wasSend, wasClipTimeout, wasPasteTimeout := clipboardPNG, sendPaste, clipboardTimeout, pasteTimeout
+	t.Cleanup(func() {
+		clipboardPNG, sendPaste, clipboardTimeout, pasteTimeout = wasClip, wasSend, wasClipTimeout, wasPasteTimeout
+	})
+	clipboardTimeout, pasteTimeout = 200*time.Millisecond, 300*time.Millisecond
 	clipboardPNG = func(ctx context.Context) ([]byte, error) {
 		reads++
-		if hang {
-			<-ctx.Done()
-			return nil, ctx.Err()
+		if clipErr == errHang {
+			// The tool the context kills fails as killed.
+			return nil, unbounded(ctx, errors.New("osascript: signal: killed"))
 		}
 		return clipPNG, clipErr
 	}
-	sendPaste = func(_ context.Context, h peer.Host, env, root string, png []byte) error {
+	sendPaste = func(ctx context.Context, h peer.Host, env, root string, png []byte) error {
 		sent = append(sent, fmt.Sprintf("%s %s %s %s", h.Name, env, root, png))
+		if sendErr == errHang {
+			// A write the closed connection cuts short fails with
+			// the transport's error, not the context's.
+			return unbounded(ctx, errors.New("write |1: file already closed"))
+		}
 		return sendErr
 	}
 	client, output := controlClient(t, "boot")
@@ -345,7 +409,7 @@ func TestPasteRun(t *testing.T) {
 			}
 		}
 	}
-	const sending = "sending a 1 KB image to vm"
+	const sending, arrived = "sending a 1 KB image to vm", "sent a 1 KB image to vm"
 	toVM := "vm venv /w/a " + string(testPNG)
 	for _, c := range []struct {
 		name              string
@@ -353,13 +417,12 @@ func TestPasteRun(t *testing.T) {
 		host, key, attach string
 		png               []byte
 		clipErr, sendErr  error
-		hang              bool
 		typed             string // the first byte the pane read
 		reads             int
 		sent              string
-		notices           []string
+		notices, hidden   []string
 	}{
-		{name: "remote image", host: "vm", key: "venv//w/a", png: testPNG, typed: "x", reads: 1, sent: toVM, notices: []string{sending}},
+		{name: "remote image", host: "vm", key: "venv//w/a", png: testPNG, typed: "x", reads: 1, sent: toVM, notices: []string{sending, arrived}},
 		{name: "remote no image", host: "vm", key: "venv//w/a", typed: "\x16", reads: 1},
 		{name: "local", host: "mac", key: "menv//w/a", png: testPNG, typed: "\x16"},
 		{name: "not laatmux's", png: testPNG, typed: "\x16"},
@@ -368,17 +431,18 @@ func TestPasteRun(t *testing.T) {
 		{name: "broken config", cfg: broken, host: "vm", key: "venv//w/a", png: testPNG, typed: "x", reads: 1, notices: []string{brokenErr.Error()}},
 		{name: "broken config no image", cfg: broken, host: "vm", key: "venv//w/a", typed: "\x16", reads: 1},
 		{name: "clipboard fails", host: "vm", key: "venv//w/a", clipErr: errors.New("osascript: 100% #broken"), typed: "x", reads: 1, notices: []string{"reading the clipboard: osascript: 100% #broken"}},
-		{name: "clipboard hangs", host: "vm", key: "venv//w/a", hang: true, typed: "x", reads: 1, notices: []string{"reading the clipboard: no answer within 200ms"}},
+		{name: "clipboard hangs", host: "vm", key: "venv//w/a", clipErr: errHang, typed: "x", reads: 1, notices: []string{"reading the clipboard: no answer within 200ms"}},
 		{name: "plain attachment", host: "vm", attach: "vm/s", png: testPNG, typed: "x", reads: 1, notices: []string{"boot is not a workspace session: the image has no agent to go to"}},
-		{name: "host refuses", host: "vm", key: "venv//w/a", png: testPNG, sendErr: errors.New("vm: no agent to deliver to"), typed: "x", reads: 1, sent: toVM, notices: []string{sending, "vm: no agent to deliver to"}},
-		{name: "host does not answer", host: "vm", key: "venv//w/a", png: testPNG, sendErr: context.DeadlineExceeded, typed: "x", reads: 1, sent: toVM, notices: []string{sending, "vm: no answer within 60s sending a 1 KB image"}},
+		{name: "paused host", host: "pz", key: "penv//w/a", png: testPNG, typed: "x", reads: 1, notices: []string{"host pz is paused; laatmux hosts resume pz connects it"}, hidden: []string{"sending"}},
+		{name: "host refuses", host: "vm", key: "venv//w/a", png: testPNG, sendErr: errors.New("vm: no agent to deliver to"), typed: "x", reads: 1, sent: toVM, notices: []string{sending, "vm: no agent to deliver to"}, hidden: []string{arrived}},
+		{name: "host does not answer", host: "vm", key: "venv//w/a", png: testPNG, sendErr: errHang, typed: "x", reads: 1, sent: toVM, notices: []string{sending, "vm: no answer within 300ms sending a 1 KB image"}, hidden: []string{arrived}},
 	} {
 		if c.cfg == "" {
 			c.cfg = good
 		}
 		t.Setenv("LAATMUX_CONFIG", c.cfg)
 		tag(c.host, c.key, c.attach)
-		clipPNG, clipErr, sendErr, hang, reads, sent = c.png, c.clipErr, c.sendErr, c.hang, 0, nil
+		clipPNG, clipErr, sendErr, reads, sent = c.png, c.clipErr, c.sendErr, 0, nil
 		pane, out := rawPane(t, "boot")
 		before := output()
 		if err := cmdPasteImage(ctx, []string{"run", pane, client}); err != nil {
@@ -398,6 +462,11 @@ func TestPasteRun(t *testing.T) {
 			}
 			if !strings.Contains(shown(), n) {
 				t.Errorf("%s: the client was shown %q, want %q in it", c.name, shown(), n)
+			}
+		}
+		for _, n := range c.hidden {
+			if strings.Contains(shown(), "laatmux paste-image: "+n) {
+				t.Errorf("%s: the client was shown %q, with %q", c.name, shown(), n)
 			}
 		}
 		if len(c.notices) == 0 && strings.Contains(shown(), "laatmux paste-image") {

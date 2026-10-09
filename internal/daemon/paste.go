@@ -133,7 +133,7 @@ func (rn *taskRunner) observedAs(p tmux.Pane) string {
 	defer rn.mu.Unlock()
 	st, ok := rn.panes[paneKey(rn.managed.Label, p.ID)]
 	if !ok || st.obs.serverPID != p.ServerPID || st.obs.session != p.Session {
-		return fmt.Sprintf("no agent to deliver to: pane %s in session %s on server %d is not observed yet", p.ID, tmux.Printable(p.Session), p.ServerPID)
+		return fmt.Sprintf("no agent to deliver to: pane %s has no observation yet as it is listed, in session %s on server %d", p.ID, tmux.Printable(p.Session), p.ServerPID)
 	}
 	return ""
 }
