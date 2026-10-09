@@ -104,7 +104,15 @@ type Row struct {
 	// hostRepo is the host's label of a line's worktree where this
 	// machine names it otherwise (Input.HostRepos), "" where not.
 	hostRepo string
-	Agent    *protocol.Agent
+	// madeHome is, on a main checkout's line with no home, the session
+	// of the agent laatmux made at its root, which a split gone elsewhere
+	// took the home from, whatever agent the line shows; "" for none.
+	// elsewhere is that the session named as its shell session
+	// (ShellSession) is not the line's: a managed agent in it runs in a
+	// pane laatmux made at another directory (nameClaim).
+	madeHome  string
+	elsewhere bool
+	Agent     *protocol.Agent
 	// Local is the local session for the row, when there is one: the
 	// workspace session by key, the plain attachment by tag (of several
 	// with one tag, the viewer's when it is in one), or the observed
@@ -512,6 +520,19 @@ func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 			continue
 		}
 		if best == nil || livelier(a, best) {
+			best = a
+		}
+	}
+	return best
+}
+
+// madeAgent is, of a main checkout's agents, the one laatmux made at its
+// root, in the session a split gone elsewhere took the home from; of
+// several, the first in rowAgent's order; nil for none.
+func madeAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
+	var best *protocol.Agent
+	for _, a := range agents {
+		if a.Server == protocol.ServerLaatmux && a.Managed && a.Cwd == w.Root && (best == nil || before(a, best)) {
 			best = a
 		}
 	}

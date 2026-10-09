@@ -252,30 +252,32 @@ func TestMainCheckoutRecords(t *testing.T) {
 		t.Fatalf("the agent laatmux made at the root, quit, the home lost: %+v", snap.Agents)
 	}
 
-	// The managed sessions exit: other's record stays for the agent in
-	// the plain session, and proj's goes.
-	laatmux.set(func() { laatmux.panes = nil })
-	if err := d.poll(ctx); err != nil {
-		t.Fatal(err)
-	}
-	ms = with.drain()
-	if removedAt(ms, otherID) >= 0 {
-		t.Fatalf("the checkout's managed session gone, its agent in a plain session left: %+v", ms)
-	}
-	if removedAt(ms, projID) < 0 {
-		t.Fatalf("the checkout whose home went, with nothing else in use: %+v", ms)
-	}
-
-	// The agent leaves: its upsert, then the record goes; the
-	// checkout with a worktree stays.
+	// The agent in the plain session leaves: the gone agent laatmux made
+	// at the root holds the record alone.
 	def.set(func() { def.panes[0].CurrentPath = "/" })
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
 	ms = with.drain()
-	gone, agent := removedAt(ms, otherID), agentAt(ms, "%7")
-	if agent < 0 || ms[agent].Agent.WorktreeID != "" || gone < agent || ms[gone].RemovedIn != nil {
-		t.Fatalf("the agent left, then the record went: %+v", ms)
+	if agent := agentAt(ms, "%7"); agent < 0 || ms[agent].Agent.WorktreeID != "" || removedAt(ms, otherID) >= 0 {
+		t.Fatalf("the plain session's agent left, the gone agent at the root still there: %+v", ms)
+	}
+
+	// The managed sessions exit: the gone agent's remove, then other's
+	// record's, which is no worktree's removal; proj's goes too, and the
+	// checkout with a worktree stays.
+	laatmux.set(func() { laatmux.panes = nil })
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ms = with.drain()
+	agentGone := slices.IndexFunc(ms, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.AgentID == "env/laatmux/%1" })
+	gone := removedAt(ms, otherID)
+	if agentGone < 0 || gone < agentGone || ms[gone].RemovedIn != nil {
+		t.Fatalf("the gone agent at the root removed, then the record: %+v", ms)
+	}
+	if removedAt(ms, projID) < 0 {
+		t.Fatalf("the checkout whose home went, with nothing else in use: %+v", ms)
 	}
 	d.mu.Lock()
 	_, kept := d.worktrees[linked]

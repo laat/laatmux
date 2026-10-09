@@ -144,6 +144,7 @@ func TestAttributeMainCheckout(t *testing.T) {
 		{"another observed server", other, pane("work"), main, claude, ""},
 		{"the home session", managed, pane("proj/main"), filepath.Join(main, "src"), claude, checkout},
 		{"one gone in the home", managed, made("proj/main", main), main, gone, checkout},
+		{"one gone in a split of the home", managed, pane("proj/main"), filepath.Join(main, "src"), gone, checkout},
 		{"the pane laatmux made at the root, the home lost", managed, made("old", main), main, claude, checkout},
 		{"one gone there", managed, made("old", main), main, gone, checkout},
 		{"a pane laatmux made below the root", managed, made("scratch", sub), sub, claude, ""},

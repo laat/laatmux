@@ -1584,14 +1584,15 @@ func TestShellMakesSession(t *testing.T) {
 	// S where the line has a workspace session at the root, its managed
 	// session gone, on a worktree and on a main checkout: the session is
 	// made first, as enter makes it, the workspace session for the root
-	// attached to it (the fake tmux lists none, so Ensure makes it), and
-	// the shell window opened there, not in the one the line had.
+	// attached to it, and the shell window opened there. In production
+	// Ensure finds the session the line had by the root's key and takes
+	// it up; the fake tmux lists none, so Ensure makes one.
 	for _, k := range []struct{ id, ws, req, managed, root string }{
 		{c.ID, "mac/proj/c", `proj/c /w/c mac []`, "proj/c", "/w/c"},
 		{clone.ID, "mac/proj/dev", `proj/dev /r/proj2 mac []`, "proj/dev", "/r/proj2"},
 	} {
 		p := press('S', k.id)
-		if p.req != k.req || p.end.Kind != view.ActionQuit || strings.Contains(p.cmds, "=mac/proj/old:") {
+		if p.req != k.req || p.end.Kind != view.ActionQuit {
 			t.Errorf("S on %s with a workspace session left: %+v", k.id, p)
 		}
 		for _, want := range []string{"@laatmux_attach_target " + k.managed + " ", "new-window -t =" + k.ws + ": -n shell -c " + k.root, "switch-client -t =" + k.ws + ":"} {
@@ -1752,6 +1753,18 @@ func TestMainCheckoutLostHome(t *testing.T) {
 	}
 	if msg, cmds := press('\r', stray.ID); !strings.Contains(cmds, "@laatmux_workspace menv//r/proj ") || !strings.Contains(cmds, "@laatmux_attach_target proj/main ") || !strings.Contains(cmds, "switch-client -t =mac/proj/main:") {
 		t.Errorf("enter on the other agent, the plain session's agent working: message %q, ran %q", msg, cmds)
+	}
+	// The home named otherwise, by hand or on another branch: the root
+	// agent's session is the line's all the same, and either agent's row
+	// lands in the workspace session keyed by the root.
+	in.Agents[0].Session, in.Agents[1].Session = "scratch", "scratch"
+	for _, id := range []string{made.ID, stray.ID} {
+		msg, cmds := press('\r', id)
+		for _, want := range []string{"@laatmux_workspace menv//r/proj ", "@laatmux_attach_target scratch ", "switch-client -t =mac/proj/main:"} {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("enter on %s, the home named scratch: message %q, ran %q, want %q in it", id, msg, cmds, want)
+			}
+		}
 	}
 }
 

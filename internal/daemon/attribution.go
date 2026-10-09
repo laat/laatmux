@@ -138,11 +138,12 @@ func (d *Daemon) worktreeOfLocked(path string, main func(root string) bool) stri
 // only for a named agent, claude or codex, in a pane that is not
 // laatmux's own. On the managed server, one in the checkout's home
 // session (homeSessions), the shell session a jump made at the root, say,
-// where the user started it, or in the pane laatmux made at the root
-// once a pane gone elsewhere took the home, is the checkout's as a
-// worktree's root agent is, also after it quit, while its pane lasts. On
-// the default server, the user's plain session there, a live one is. Any
-// other session new made in a main checkout keeps a row of its own; a
+// where the user started it, or in a pane laatmux made at the root in
+// any session, the home's once a pane gone elsewhere took the home among
+// them, is the checkout's as a worktree's root agent is, also after it
+// quit, while its pane lasts. On the default server, the user's plain
+// session there, a live one is. Any other session new made in a main
+// checkout, below its root, keeps a row of its own; a
 // shell in a plain session, one left after its agent quit among them,
 // puts no checkout in use, nor keeps one, so a record never follows a
 // shell's cd; a pane record is never a main checkout's

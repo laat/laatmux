@@ -647,8 +647,9 @@ func TestJumpMakesShellSession(t *testing.T) {
 // makes the workspace session keyed by the root attached to it,
 // switches there and says what it made; a name in use that no record
 // places elsewhere is attached, one in which an agent of another
-// worktree runs refused. One with a home goes to its workspace session
-// and asks nothing, with an agent in the home and another in a plain
+// worktree runs refused, and so is one whose agent runs in a pane
+// laatmux made below the root. One with a home goes to its workspace
+// session and asks nothing, with an agent in the home and another in a plain
 // session; one with an agent in a plain session and no home
 // switches to that session, as before; one whose home a split took
 // attaches the workspace session named after it to the session of the
@@ -663,11 +664,11 @@ func TestJumpMainCheckoutShell(t *testing.T) {
 	}
 	proj, taken, busy, homed, plain, det := main("proj", "main", "/r/proj"), main("lib", "dev", "/r/lib"), main("app", "main", "/r/app"), main("tool", "main", "/r/tool"), main("note", "main", "/r/note"), main("dots", "", "/r/dots")
 	homed.Session = "tool/main"
-	lost := main("kit", "main", "/r/kit")
+	lost, below := main("kit", "main", "/r/kit"), main("sub", "main", "/r/sub")
 	x := protocol.Worktree{ID: "menv/worktree//w/x", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "x", Root: "/w/x", Session: "proj/x"}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps}},
-		Worktrees: []protocol.Worktree{proj, taken, busy, homed, plain, det, lost, x},
+		Worktrees: []protocol.Worktree{proj, taken, busy, homed, plain, det, lost, below, x},
 		Agents: []protocol.Agent{
 			// x's agent, moved by hand into the session app/main would be.
 			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "app/main", Agent: "claude", WorktreeID: x.ID, Cwd: "/w/x"},
@@ -679,13 +680,16 @@ func TestJumpMainCheckoutShell(t *testing.T) {
 			// The agent laatmux made at kit's root, a split gone elsewhere
 			// having taken the home.
 			{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "kit/old", Agent: "claude", Managed: true, WorktreeID: lost.ID, Cwd: lost.Root},
+			// A session new made below sub's root under the name sub's
+			// shell session would have, its agent the checkout's not.
+			{ID: "menv/laatmux/%7", EnvironmentID: "menv", Server: "laatmux", Session: "sub/main", Agent: "claude", Managed: true, Cwd: "/r/sub/x"},
 		}}
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
-	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts, protocol.CapNew}, &snap, inUse("lib/dev", "app/main"))
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts, protocol.CapNew}, &snap, inUse("lib/dev", "app/main", "sub/main"))
 	jump := func(target string) (out, cmds, req string, err error) {
 		t.Helper()
 		os.Remove(log)
@@ -719,10 +723,15 @@ func TestJumpMainCheckoutShell(t *testing.T) {
 			}
 		}
 	}
-	want := "mac: session app/main runs in /w/x, not /r/app; name in use"
-	if out, cmds, req, err := jump("mac/app/main"); err == nil || err.Error() != want || req != `app/main /r/app mac []` || out != "" || cmds != "" {
-		t.Errorf("jump to a name in use elsewhere: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, want)
+	for _, k := range []struct{ target, req, want string }{
+		{"mac/app/main", `app/main /r/app mac []`, "mac: session app/main runs in /w/x, not /r/app; name in use"},
+		{"mac/sub/main", `sub/main /r/sub mac []`, "mac: session sub/main runs in /r/sub/x, not /r/sub; name in use"},
+	} {
+		if out, cmds, req, err := jump(k.target); err == nil || err.Error() != k.want || req != k.req || out != "" || cmds != "" {
+			t.Errorf("jump to a name in use elsewhere: %v, asked %q, printed %q, tmux %q; want %q", err, req, out, cmds, k.want)
+		}
 	}
+	var want string
 	if out, cmds, req, err := jump("mac/note/main"); err != nil || req != "" || out != "" || !strings.Contains(cmds, "switch-client -t =notes:") || strings.Contains(cmds, "new-session") {
 		t.Errorf("jump with an agent in a plain session: %v, asked %q, printed %q, tmux %q", err, req, out, cmds)
 	}

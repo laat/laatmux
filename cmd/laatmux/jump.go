@@ -326,8 +326,11 @@ const newTimeout = 10 * time.Second
 // record has the directory it was made at: a split of the worktree's own
 // session gone elsewhere leaves the session the worktree's, where a
 // split of another's that has gone to the root does not make it this
-// worktree's. Not ok when none does, as for a session made at the root
-// since the records were read, which they do not have yet.
+// worktree's. For a main checkout, whose root the host gives no agent of
+// another managed session, a pane laatmux made at another directory,
+// below the root too, places the session there. Not ok when none does,
+// as for a session made at the root since the records were read, which
+// they do not have yet.
 func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string, bool) {
 	for _, o := range snap.Worktrees {
 		if o.Session == name && o.ID != w.ID {
@@ -356,7 +359,8 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 	}
 	for _, r := range in {
 		inside := r.cwd == w.Root || strings.HasPrefix(r.cwd, strings.TrimSuffix(w.Root, "/")+"/")
-		if r.worktreeID != w.ID && (r.worktreeID != "" || r.cwd != "" && !inside) {
+		made := w.Main && r.managed && r.cwd != "" && r.cwd != w.Root
+		if made || r.worktreeID != w.ID && (r.worktreeID != "" || r.cwd != "" && !inside) {
 			return r.cwd, true
 		}
 	}

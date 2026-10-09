@@ -423,20 +423,22 @@ truth; labels only place new things.
   laatmux's own, with its path in a main checkout and under no worktree
   root inside it, is attributed to the checkout's record: a live one on
   the host's default server; on the managed server, live or after it
-  quit, one in the checkout's home session, or in the pane laatmux made
-  at its root once a pane gone elsewhere took the home, as a worktree's
-  root agent stays its worktree's. The record is published before the
-  agent names it and taken back, when no other reason holds it, after
-  the last such agent has left or quit (gone from its pane on the
-  managed server), also when the checkout leaves the listing; a shell
-  in a plain session, one left after its agent quit among them, puts no
-  checkout in use, so a record never follows a shell's `cd`. An agent
-  in any other managed session in a checkout, a `new` session's made
-  below its root, keeps a row of its own, even where the checkout is
-  inside a worktree, and a pane with no agent in a checkout has no pane
-  record, its home's shell among them. `rm` refuses a main checkout's root, also where
-  the repos directory is under the worktrees one, and `run` takes
-  registered worktrees only, as before.
+  quit, one in the checkout's home session, or in a pane laatmux made at
+  its root in any session, the home's once a pane gone elsewhere took
+  the home among them, as a worktree's root agent stays its worktree's.
+  The record is published before the agent names it and taken back,
+  when no other reason holds it, after the last such agent has left or
+  quit (gone from its pane on the managed server), also when the
+  checkout leaves the listing; a shell in a plain session, one left
+  after its agent quit among them, puts no checkout in use, so a record
+  never follows a shell's `cd`. An agent in a managed session made
+  below the root, a `new` session's, keeps a row of its own, even where
+  the checkout is inside a worktree, and the views take a session of
+  the checkout's shell session's name in which such an agent runs for
+  no session of the checkout's; a pane with no agent in a checkout has
+  no pane record, its home's shell among them. `rm` refuses a main
+  checkout's root, also where the repos directory is under the
+  worktrees one, and `run` takes registered worktrees only, as before.
 - **Attribution**, capability `attribution` (issue #55): every polled
   pane, on every server in `tmux_servers`, belongs to the worktree whose
   root contains its path, the recorded `@laatmux_cwd` of a pane laatmux
@@ -940,6 +942,9 @@ workspace session; the next `jump` makes it again.
   through `new`, named as `add` would name a worktree's on the branch
   (`pin-chat/main`), with the host's `default-shell` at the checkout's
   root, and the workspace session keyed by the root, as any root's; a
+  session of that name in use is attached or refused as for a worktree,
+  and also refused when an agent in it runs in a pane laatmux made at
+  another directory, below the root too. A
   host whose daemon lacks `new` says no agent runs there. The home is
   the checkout's from then on, and an agent started in it by hand is
   the checkout's (issue #376). A host on a build from before this has
@@ -1081,10 +1086,12 @@ list that `Tab` or a click switches:
   goes through the most recently active agent, the line is the
   viewer's when the viewer sits in the session of any agent in a plain
   session, and with no agent either `Enter` makes it a home with a
-  shell (below). The session named as that shell session is, its home
-  lost to a split gone elsewhere, stays the line's, as a session named
-  after a worktree stays the worktree's. Its agents' tiles are titled
-  by the repository, with the branch under it.
+  shell (below). With the home lost to a split gone elsewhere, the
+  session of the agent laatmux made at its root stays the line's,
+  whatever its name, and so does one named as that shell session is,
+  as a session named after a worktree stays the worktree's, unless an
+  agent in it runs in a pane laatmux made below the root. Its agents'
+  tiles are titled by the repository, with the branch under it.
   A pending task sits where its worktree will be, holding the worktree's
   children while it stands for it, the newest of several owning them.
   An orphaned session sits under its repository by its source tag,
