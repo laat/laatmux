@@ -909,6 +909,19 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	for _, kv := range opts {
 		args = append(args, Next, "set-option", "-p", "-t", target, kv[0], kv[1])
 	}
+	if sh := LoginShell(); len(o.Cmd) > 0 && s.Managed() && sh != "" && !strings.ContainsAny(sh, "'\"\\") {
+		// A pane whose command ends drops to the login shell rather
+		// than closing: an agent exited to switch its model, say,
+		// leaves the user in a shell at the root, and the shell's exit
+		// ends the session as the command's did before. remain-on-exit
+		// keeps the dead pane for the pane hook, which respawns it as
+		// the shell and turns remain-on-exit off again; in the same
+		// sequence as new-session, so the command cannot end before
+		// them. The hook runs with the pane as its target. Only global
+		// hooks are removed by EnsureConfigured.
+		args = append(args, Next, "set-option", "-p", "-t", target, "remain-on-exit", "on",
+			Next, "set-hook", "-p", "-t", target, "pane-died", "respawn-pane 'exec "+sh+" -l' ; set-option -p remain-on-exit off")
+	}
 	// From here on the session may exist whatever the error: the
 	// sequence runs to completion once submitted, and the steps after
 	// it act on a session that is there.

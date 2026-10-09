@@ -1508,6 +1508,44 @@ func TestNewSessionTagsNoCommand(t *testing.T) {
 	}
 }
 
+// A managed session's pane whose command ends drops to the login shell
+// rather than closing, and the shell's exit then ends the session as
+// the command's did before.
+func TestNewSessionCommandEndsInShell(t *testing.T) {
+	sh := LoginShell()
+	if sh == "" {
+		t.Skip("no login shell known")
+	}
+	s := startManaged(t)
+	ctx := context.Background()
+	made, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/agent", Cwd: t.TempDir(), Cmd: []string{"sleep", "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := func() string {
+		out, _ := s.Run(ctx, "display-message", "-p", "-t", made.PaneID, "#{pane_dead} #{pane_current_command} #{remain-on-exit}")
+		return strings.TrimSpace(string(out))
+	}
+	want := "0 " + filepath.Base(sh) + " off"
+	var got string
+	for i := 0; i < 300 && got != want; i++ {
+		time.Sleep(50 * time.Millisecond)
+		got = state()
+	}
+	if got != want {
+		t.Fatalf("after the command ended the pane is %q, want %q", got, want)
+	}
+	if _, err := s.Run(ctx, "send-keys", "-t", made.PaneID, "exit", "Enter"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100 && s.HasSession(ctx, "proj/agent"); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if s.HasSession(ctx, "proj/agent") {
+		t.Error("the session is still there after the shell's exit")
+	}
+}
+
 // A hand-started server whose user config has an after-list-sessions
 // hook that fails is not taken for one that is not running: list-sessions
 // fails on it, and a cold start's set-option would run the failing
