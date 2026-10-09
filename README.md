@@ -1660,7 +1660,8 @@ alike; only the lines it leaves differ.
   worktree's is titled by its session's name with no subtitle), `{branch}`, `{repo}`,
   `{host}` (dim for every host but this machine, `?` when no host
   claims the record, with `/server` on a tile or an agent line for an
-  agent observed off the managed server), `{session}`, `{window}`
+  agent observed off the managed server, except on this machine's own
+  default server, which `jump` reaches as any other), `{session}`, `{window}`
   (tmux's `session:index`), `{window_index}`, `{pane_title}` (the
   cleaned title, or on a tile what the row is instead: a task's state,
   `no session`, `claude gone`), `{pane_suffix}` (`(2)` on the second

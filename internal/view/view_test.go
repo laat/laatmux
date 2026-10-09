@@ -1302,7 +1302,9 @@ func TestOtherSessionsHost(t *testing.T) {
 		{"venv/default/%5", "...|    scratch‹ (vm/default)›  ⟨accent:💬⟩ claude\n", "...|‹vm/default›\n"},
 		{"venv/laatmux/%9", "...|    loose‹ (vm)›  ⟨border:  ⟩ codex\n", "...|‹vm›\n"},
 		{"xenv/work/%4", ".D.|    stray‹ (?/work)›  ⟨border:  ⟩ claude\n", "...|‹?/work›\n"},
-		{"menv/default/%6", "...|    here (mac/default)  ⟨border:  ⟩ codex\n", "...|mac/default\n"},
+		// This machine's own default server: no suffix, since a jump there is
+		// as ordinary as one to the managed server.
+		{"menv/default/%6", "...|    here (mac)  ⟨border:  ⟩ codex\n", "...|mac\n"},
 	} {
 		i := m.indexOf(c.id)
 		if i < 0 || m.Tree[i].Depth != 1 {
@@ -1362,10 +1364,10 @@ func TestOtherSessionsSettled(t *testing.T) {
 		line, tile string
 		stale      bool
 	}{
-		{true, ".D.|    vm/laatmux/agents-config (mac/default)  ⟨dimmed:💤⟩ codex\n",
-			".D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ vm/laatmux/agents-config @mac/default                                  0:00\n", true},
-		{false, "...|    vm/laatmux/agents-config (mac/default)  ⟨border:  ⟩ codex\n",
-			"...|⟨border:▌⟩ ⟨border:  ⟩ vm/laatmux/agents-config @mac/default                                  0:00\n", false},
+		{true, ".D.|    vm/laatmux/agents-config (mac)  ⟨dimmed:💤⟩ codex\n",
+			".D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ vm/laatmux/agents-config @mac                                          0:00\n", true},
+		{false, "...|    vm/laatmux/agents-config (mac)  ⟨border:  ⟩ codex\n",
+			"...|⟨border:▌⟩ ⟨border:  ⟩ vm/laatmux/agents-config @mac                                          0:00\n", false},
 	} {
 		in := treeInput(now)
 		in.Agents = append(in.Agents, protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: "vm/laatmux/agents-config", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/Users/u"})

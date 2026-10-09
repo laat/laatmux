@@ -929,13 +929,17 @@ func (m *Model) row(r rows.Row, idx int) []Line {
 }
 
 // where is an agent's host: the host, with the server after it for an
-// agent observed off the managed server, as ls prints it; dim for every
-// host but this machine. The {host} token draws it on a tile or an
-// agent node, and the other-sessions line in its brackets.
+// agent observed off the managed server, as ls prints it, except this
+// machine's own default server, the user's tmux, where a jump is a
+// switch-client and the suffix would mark the ordinary case; a remote
+// host's default server, or any other server, which jump refuses,
+// keeps it. Dim for every host but this machine. The {host} token
+// draws it on a tile or an agent node, and the other-sessions line in
+// its brackets.
 func (m *Model) where(r rows.Row) Span {
 	s := r.HostName()
 	if r.Agent != nil {
-		if srv := r.Agent.Server; srv != protocol.ServerLaatmux {
+		if srv := r.Agent.Server; srv != protocol.ServerLaatmux && !(srv == protocol.ServerDefault && r.Host == m.LocalHost) {
 			s += "/" + srv
 		}
 	}
