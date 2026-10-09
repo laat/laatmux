@@ -95,6 +95,12 @@ const (
 	// config lists only the host itself, as a rule, and then its merged
 	// stream is its own records.
 	CapMerged = "merged"
+	// CapPause is a merging daemon that takes a host's paused from its
+	// config: it does not dial a paused host, and its merged stream has
+	// a host record with paused for it and none of its records; the
+	// relay waits for the host to be resumed. A daemon without it, an
+	// older build, dials the host whatever the config says.
+	CapPause = "pause"
 	// CapRepoEntry is the repository coming from the machine the user
 	// sits at: an add with repo_entry for a repository this host's
 	// config does not list is resolved against that entry, and the

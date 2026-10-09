@@ -96,6 +96,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	watchConfig(ctx, &w, configPoll, cmds, func(_ *view.Model, cfg config.Config) {
 		t.Theme, _ = lookWith(cfg, bg.get)
 		d.formConfig(nil)
+		f.takePaused(cfg)
 	}, func(_ *view.Model, err error) { d.formConfig(err) })
 	err = view.Run(ctx, t, m, view.Host{
 		Changed:  st.Changed(),

@@ -626,6 +626,11 @@ func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendin
 	if h.Paused {
 		return nil, p, &peer.PausedError{Name: h.Name}
 	}
+	if !p.Reachable && p.Unreachable == (&peer.PausedError{Name: h.Name}).Error() {
+		// Resumed: the dial, which may start the machine and take a
+		// while, is not said to wait on a resume.
+		d.setPending(id, false, func(p *pendingFile) { p.Unreachable = "" })
+	}
 	c, err := d.cfg.Dial(ctx, h)
 	if err != nil {
 		return nil, p, err
@@ -1413,6 +1418,45 @@ func (d *Daemon) restartRunners(id string) {
 		d.relay.mu.Lock()
 		d.startRunnerLocked(ctx, id, d.settle)
 		d.relay.mu.Unlock()
+	}
+}
+
+// pauseRelays ends the goroutines of the records whose host the config
+// has paused, and a connection of theirs to the host with them, then
+// starts them again, as a dismiss that keeps a record does: the new ones
+// wait in relayConn for the host to be resumed, and an add or a listing
+// followed when the pause came is followed again from the host's
+// journal then. A connection already up is not kept on a host the user
+// paused, which it would keep running. A retired record has nothing to
+// ask the host. Called when the config file has changed.
+func (d *Daemon) pauseRelays() {
+	if d.relay == nil || d.cfg.Hosts == nil {
+		return
+	}
+	hosts, err := d.cfg.Hosts()
+	if err != nil {
+		return
+	}
+	paused := map[string]bool{}
+	for _, h := range hosts {
+		if h.Paused {
+			paused[h.Name] = true
+		}
+	}
+	if len(paused) == 0 {
+		return
+	}
+	var ids []string
+	d.relay.mu.Lock()
+	for id := range d.relay.runners {
+		if p, ok := d.relay.recs[id]; ok && paused[p.Host] && !p.retired() {
+			ids = append(ids, id)
+		}
+	}
+	d.relay.mu.Unlock()
+	for _, id := range ids {
+		d.stopRunners(id)
+		d.restartRunners(id)
 	}
 }
 

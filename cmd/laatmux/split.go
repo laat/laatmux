@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -26,7 +27,8 @@ import (
 // of a split, or of the shell window, resolves the same way. The new
 // pane lands at the root, not the split pane's directory: the attach
 // pane's directory is wherever attach was started, and a remote pane's
-// is the laptop directory ssh ran from, so neither means anything.
+// is the laptop directory ssh ran from, so neither means anything. A
+// workspace of a paused host is refused: the pane would dial it.
 func cmdSplit(ctx context.Context, args []string) error {
 	dir := ""
 	paneID := os.Getenv("TMUX_PANE")
@@ -61,6 +63,10 @@ func cmdSplit(ctx context.Context, args []string) error {
 		}
 		if h, err = workspaceHost(ctx, cfg, l); err != nil {
 			return err
+		}
+		if h.Paused && !h.Local() {
+			// The new pane would ssh to it.
+			return &peer.PausedError{Name: h.Name}
 		}
 	}
 	// The split runs on the server the lookup used, the one TMUX names:

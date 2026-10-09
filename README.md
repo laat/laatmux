@@ -158,16 +158,24 @@ the task form's append does. This machine does not dial a paused host:
 the daemon drops its merged subscription and removes its records, as
 for a host removed from the config, within its two-second look at the
 file, and takes it up again when it is resumed; the relay does not
-follow its tasks, `hosts` does not probe it, and no PR or checks are
-asked for its worktrees, which are out of the stream. A command aimed at
-it, `add --host`, `jump`, `rm`, `run`, `path`, `new`, a shell, or a task
-form's submit, is refused with `host vm is paused; laatmux hosts resume
-vm connects it`; `upgrade`, which the user runs by hand, connects it and
-says so. A task queued for it before the pause stays in its file, its
-row saying `host vm is paused`, and is followed again once the host is
-resumed; nothing is dismissed. The host's own daemon is not told:
-pausing is this machine's refusal to dial, nothing more. This machine's
-own entry, which nothing dials, cannot be paused.
+follow its tasks, and closes a connection it has open to the host, an
+add it follows going on on the host; `hosts` does not probe it, and no
+PR or checks are asked for its worktrees, which are out of the stream.
+A command aimed at it, `add --host`, `jump`, `rm`, `run`, `path`,
+`new`, `split` and a shell in its workspace, or a task form's submit,
+is refused with `host vm is paused; laatmux hosts resume vm connects
+it`; `upgrade`, which the user runs by hand, connects it and says so. A
+task queued for it before the pause stays in its file, its row saying
+`host vm is paused` where it waits on the host and not first on the
+user, and is followed again once the host is resumed, from the host's
+journal where the add went on; nothing is dismissed, though a task not
+sent in seven days is `outcome unknown`, paused or not. The host's own
+daemon is not told: pausing is this machine's refusal to dial, nothing
+more. This machine's own entry, which nothing dials, cannot be paused.
+A local daemon of a build older than pause, capability `pause`, reads
+the file without the key and goes on dialling the host: `laatmux hosts
+pause` says so, and `laatmux stop` ends it, the next command starting
+the current build.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below

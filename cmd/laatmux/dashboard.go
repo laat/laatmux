@@ -169,10 +169,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
-			case taskAction(m, a), hostAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z':
-				// The sidebar takes a task's p and x, and what follows
-				// from them, H and its picker, and z, which settles;
-				// none of the dashboard's other keys.
+			case sidebarAction(m, a):
 				return d.act(m, a)
 			}
 			return false
@@ -270,6 +267,13 @@ func taskAction(m *view.Model, a view.Action) bool {
 		return ok
 	}
 	return false
+}
+
+// sidebarAction is what the sidebar takes of the dashboard's actions: a
+// task's p and x, and what follows from them, H and its picker, and z,
+// which settles; none of the dashboard's other keys.
+func sidebarAction(m *view.Model, a view.Action) bool {
+	return taskAction(m, a) || hostAction(m, a) || a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z'
 }
 
 // hostAction is H, or its picker ending, which the sidebar takes as the

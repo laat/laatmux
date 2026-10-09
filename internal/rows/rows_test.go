@@ -452,9 +452,11 @@ func TestPendingState(t *testing.T) {
 }
 
 // A task of a paused host waits for it: while the relay would be asking
-// the host, for the add, the listing after it or a prompt's delivery,
-// its row says the host is paused, and it does not need the user for
-// that; a task with an outcome the host is not asked about says that.
+// the host, for the add, the listing after a complete add or a prompt's
+// delivery, its row says the host is paused, and it does not need the
+// user for that; a task with an outcome the host is not asked about, or
+// one that needs the user first, its prompt not delivered or its
+// repository not appended, says that.
 // The host's local workspace sessions are no orphaned lines, its
 // worktrees being out of the stream. Resumed, the task says where it is.
 func TestPausedHostTasks(t *testing.T) {
@@ -467,6 +469,9 @@ func TestPausedHostTasks(t *testing.T) {
 			{ID: "a3", Host: "vm", Repo: "proj", Branch: "three", Source: src, EnvironmentID: "venv", Root: "/r/three", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 1},
 			{ID: "a4", Host: "vm", Repo: "proj", Branch: "four", Source: src, Taken: true, Sent: true, Done: true, Error: "boom"},
 			{ID: "a5", Host: "vm", Repo: "proj", Branch: "five", Source: src, EnvironmentID: "venv", Root: "/r/five", Taken: true, Sent: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready"},
+			{ID: "a6", Host: "vm", Repo: "proj", Branch: "six", Source: src, EnvironmentID: "venv", Root: "/r/six", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready"},
+			{ID: "a7", Host: "vm", Repo: "proj", Branch: "seven", Source: src, EnvironmentID: "venv", Root: "/r/seven", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad"},
+			{ID: "a8", Host: "vm", Repo: "proj", Branch: "eight", Source: src, EnvironmentID: "venv", Root: "/r/eight", Taken: true, Sent: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 2},
 		},
 		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm", Source: src, Branch: "gone"}},
 	}
@@ -480,6 +485,9 @@ func TestPausedHostTasks(t *testing.T) {
 		{"a3", "host vm is paused", "", false},
 		{"a4", "failed", "boom", true},
 		{"a5", "prompt not delivered", "the pane was not ready", true},
+		{"a6", "prompt not delivered", "the pane was not ready", true},
+		{"a7", "done, not added to the config", "yaml: bad", true},
+		{"a8", "host vm is paused", "", false},
 	} {
 		r := byID[c.id]
 		if !r.Paused || r.State() != c.state || r.Detail() != c.detail || r.NeedsUser() != c.needs {

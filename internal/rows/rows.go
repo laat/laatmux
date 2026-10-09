@@ -390,13 +390,16 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 }
 
 // WaitsOnHost reports whether the relay is asking the task's host for
-// something, or would be: the add, the listing after it, or a prompt's
-// delivery; not for a task with an outcome that leaves the host out,
-// its add failed or its worktree gone, nor for one whose host answers
-// as another machine. A task of a paused host that waits on it says
-// the host is paused.
+// something, or would be, and nothing else stands in the way: the add,
+// a prompt's delivery, or the listing after a complete add with its
+// repository in the config. Not a task with an outcome that leaves the
+// host out, its add failed or its worktree gone, nor one whose host
+// answers as another machine, nor one that needs the user first, its
+// prompt not delivered or its repository not appended. A task of a
+// paused host that waits on it says the host is paused.
 func WaitsOnHost(p protocol.Pending) bool {
-	return p.Mismatch == "" && !p.Gone && !(p.Done && !p.OK) && (!p.Done || p.AttemptOpen || !p.Listed)
+	return p.Mismatch == "" && !p.Gone && !(p.Done && !p.OK) &&
+		(!p.Done || p.AttemptOpen || !p.Listed && p.Complete() && p.RememberError == "")
 }
 
 // stands is a task that may still become the worktree row at its root,

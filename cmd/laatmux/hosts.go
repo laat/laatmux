@@ -30,6 +30,9 @@ func cmdHosts(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Println(pausedLine(args[1], args[0] == "pause", changed))
+		if note := pauseUnknown(localHello(ctx)); note != "" {
+			fmt.Println(note)
+		}
 		return nil
 	case len(args) > 0:
 		return errors.New("usage: laatmux hosts [pause|resume <host>]")
@@ -73,6 +76,34 @@ func probeHosts(ctx context.Context, hosts []config.Host, dial func(context.Cont
 	return rows
 }
 
+// localHello is the hello of this machine's daemon, the zero message
+// when none is running; none is started.
+func localHello(ctx context.Context) protocol.Message {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	nc, err := client.DialLocal(ctx, false)
+	if err != nil {
+		return protocol.Message{}
+	}
+	c, err := client.Connect(ctx, peer.Host{Name: "local"}, nc, nc, func() { nc.Close() })
+	if err != nil {
+		return protocol.Message{}
+	}
+	defer c.Close()
+	return c.Hello
+}
+
+// pauseUnknown is the note for a local daemon whose hello lacks the
+// pause capability, an older build still running, which dials a paused
+// host all the same; "" for one with it, and for none running, whose
+// successor reads the file as it starts.
+func pauseUnknown(hello protocol.Message) string {
+	if hello.Type == "" || protocol.Has(hello.Capabilities, protocol.CapPause) {
+		return ""
+	}
+	return "the local daemon " + hello.Version + " is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build"
+}
+
 // pausedLine says what pausing or resuming the host did, changed being
 // that the config had it the other way.
 func pausedLine(name string, paused, changed bool) string {
@@ -82,7 +113,7 @@ func pausedLine(name string, paused, changed bool) string {
 	case !changed:
 		return name + " is not paused"
 	case paused:
-		return name + " paused; nothing on this machine dials it until it is resumed"
+		return name + " paused; this machine dials it for upgrade alone until it is resumed"
 	}
 	return name + " resumed; it is dialled again"
 }

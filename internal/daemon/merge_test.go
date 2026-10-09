@@ -27,8 +27,9 @@ type fakeRemote struct {
 	d     *Daemon
 	ln    net.Listener
 	mu    sync.Mutex
-	down  error      // Dial fails with it when set
-	conns []net.Conn // the remote's end of every connection accepted
+	down  error         // Dial fails with it when set
+	hold  chan struct{} // Dial waits for it to close when set, as ssh starting a machine
+	conns []net.Conn    // the remote's end of every connection accepted
 	dials int
 }
 
@@ -61,8 +62,15 @@ func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
 func (r *fakeRemote) dial(ctx context.Context, h peer.Host) (*client.Conn, error) {
 	r.mu.Lock()
 	r.dials++
-	down := r.down
+	down, hold := r.down, r.hold
 	r.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if down != nil {
 		return nil, down
 	}
@@ -564,6 +572,11 @@ func TestMergedHostPaused(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := newMergedFixture(t, ctx, nil)
+	// The merging daemon says it takes paused; one that merges nothing
+	// has no hosts to pause.
+	if !protocol.Has(f.local.capabilities(), protocol.CapPause) || protocol.Has(f.remote.d.capabilities(), protocol.CapPause) {
+		t.Fatalf("capabilities %v, the remote's %v", f.local.capabilities(), f.remote.d.capabilities())
+	}
 	vm, paused := peer.Host{Name: "vm", SSH: "vm"}, peer.Host{Name: "vm", SSH: "vm", Paused: true}
 	f.hosts.set(peer.Host{Name: "here"}, paused)
 	var mu sync.Mutex

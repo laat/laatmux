@@ -14,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/palette"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/term"
@@ -26,11 +27,11 @@ const pauseConfig = `hosts:
     repos: /r
     worktrees: /w
   - name: vm
-    ssh: vm   # the coder box
+    ssh: vm.invalid   # the coder box
     repos: /r
     worktrees: /w
   - name: box
-    ssh: box
+    ssh: box.invalid
 agents:
   claude: {cmd: [claude]}
 `
@@ -53,7 +54,7 @@ func pauseFixture(t *testing.T) string {
 // hosts lists a paused host without dialling it; the others are dialled
 // as before.
 func TestProbeHostsSkipsPaused(t *testing.T) {
-	cfg, err := config.Parse([]byte(strings.Replace(pauseConfig, "    ssh: vm   # the coder box\n", "    ssh: vm\n    paused: true\n", 1)))
+	cfg, err := config.Parse([]byte(strings.Replace(pauseConfig, "    ssh: vm.invalid   # the coder box\n", "    ssh: vm.invalid\n    paused: true\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,11 +122,28 @@ func TestHostsPauseResume(t *testing.T) {
 	if read() != pauseConfig {
 		t.Fatalf("a refusal changed the file:\n%s", read())
 	}
-	if l := pausedLine("vm", true, true); l != "vm paused; nothing on this machine dials it until it is resumed" {
+	if l := pausedLine("vm", true, true); l != "vm paused; this machine dials it for upgrade alone until it is resumed" {
 		t.Errorf("paused line %q", l)
 	}
 	if l := pausedLine("vm", false, false); l != "vm is not paused" {
 		t.Errorf("not paused line %q", l)
+	}
+}
+
+// hosts pause notes a local daemon that is older than pause, which
+// dials the host all the same; one with the capability, and none
+// running, get no note.
+func TestPauseNoteForOlderDaemon(t *testing.T) {
+	if n := pauseUnknown(protocol.Message{}); n != "" {
+		t.Errorf("no daemon: %q", n)
+	}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, nil)
+	if n := pauseUnknown(localHello(context.Background())); n != "the local daemon fake is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build" {
+		t.Errorf("older daemon: %q", n)
+	}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapPause}, nil)
+	if n := pauseUnknown(localHello(context.Background())); n != "" {
+		t.Errorf("daemon with pause: %q", n)
 	}
 }
 
@@ -147,7 +165,7 @@ func TestHostPicker(t *testing.T) {
 	d := &dash{ctx: context.Background(), cfg: cfg, st: st, reload: config.LoadSettled}
 	m := dashModel(cfg)
 	key := view.Action{Kind: view.ActionOther, Key: term.Key{Kind: term.KeyRune, Rune: 'H'}}
-	if !hostAction(m, key) {
+	if !sidebarAction(m, key) {
 		t.Fatal("the sidebar does not take H")
 	}
 	d.act(m, key)
@@ -160,11 +178,11 @@ func TestHostPicker(t *testing.T) {
 	}
 	hp.Handle(term.Key{Kind: term.KeyEnter})
 	a := m.Poll()
-	if !hostAction(m, a) {
+	if !sidebarAction(m, a) {
 		t.Fatal("the sidebar does not take the picker's end")
 	}
 	d.act(m, a)
-	if m.Overlay != nil || m.Message != "vm paused; nothing on this machine dials it until it is resumed" {
+	if m.Overlay != nil || m.Message != "vm paused; this machine dials it for upgrade alone until it is resumed" {
 		t.Fatalf("overlay %v message %q", m.Overlay, m.Message)
 	}
 	b, _ := os.ReadFile(p)
@@ -182,6 +200,16 @@ func TestHostPicker(t *testing.T) {
 	if b, _ := os.ReadFile(p); string(b) != pauseConfig || m.Message != "vm resumed; it is dialled again" {
 		t.Fatalf("message %q, file:\n%s", m.Message, b)
 	}
+	// The stream still has vm paused, and box no record: the daemon has
+	// yet to read the file.
+	st.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "vm", SSH: "vm", Paused: true}})
+	st.Apply(protocol.Message{Type: protocol.TypeRemove, HostName: "box"})
+	d.act(m, key)
+	if got := []view.Choice{{Label: "vm", Detail: "resuming"}, {Label: "box", Detail: "connecting"}}; !slices.Equal(m.Overlay.(*hostPicker).Choices, got) {
+		t.Fatalf("choices while the daemon catches up %+v", m.Overlay.(*hostPicker).Choices)
+	}
+	m.Overlay.Handle(term.Key{Kind: term.KeyEsc})
+	d.act(m, m.Poll())
 	// Esc leaves the file alone.
 	d.act(m, key)
 	m.Overlay.Handle(term.Key{Kind: term.KeyEsc})
@@ -196,7 +224,7 @@ func TestHostPicker(t *testing.T) {
 // attach, and the dial itself, whoever makes it.
 func TestPausedHostRefused(t *testing.T) {
 	p := pauseFixture(t)
-	if err := os.WriteFile(p, []byte(strings.Replace(pauseConfig, "    ssh: vm   # the coder box\n", "    ssh: vm\n    paused: true\n", 1)), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(strings.Replace(pauseConfig, "    ssh: vm.invalid   # the coder box\n", "    ssh: vm.invalid\n    paused: true\n", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -230,7 +258,7 @@ func TestPausedHostRefused(t *testing.T) {
 // up, so no task is queued for a host nothing dials.
 func TestFormRefusesPausedHost(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
-	cfg, err := config.Parse([]byte(strings.Replace(pauseConfig, "    ssh: vm   # the coder box\n", "    ssh: vm\n    paused: true\n", 1) + "repos:\n  - git@github.com:laat/proj.git\n"))
+	cfg, err := config.Parse([]byte(strings.Replace(pauseConfig, "    ssh: vm.invalid   # the coder box\n", "    ssh: vm.invalid\n    paused: true\n", 1) + "repos:\n  - git@github.com:laat/proj.git\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,5 +293,21 @@ func TestFormRefusesPausedHost(t *testing.T) {
 	f.Chips[1].Selected = 0
 	if n := f.Note(f); n == refusal {
 		t.Fatalf("note for mac %q", n)
+	}
+	// Resumed while the form is up: the view's next look at the file
+	// lets the submit through, the choice and the prompt as they were.
+	f.Chips[1].Selected = 1
+	resumed, err := config.Parse([]byte(pauseConfig + "repos:\n  - git@github.com:laat/proj.git\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	taker := &configTaker{d: d, st: d.st, bg: &background{}, theme: func(palette.Theme) {}}
+	taker.take(m, resumed, false)
+	if c := f.Chips[1].Choices; strings.Contains(c[1].Detail, "paused") || f.Chips[1].Label() != "vm" || f.Note(f) == refusal {
+		t.Fatalf("after the resume: choices %+v note %q", c, f.Note(f))
+	}
+	f.Handle(term.Key{Kind: term.KeyEnter})
+	if !d.act(m, m.Poll()) || !submitted {
+		t.Fatalf("not submitted after the resume: overlay %+v message %q", m.Overlay, m.Message)
 	}
 }

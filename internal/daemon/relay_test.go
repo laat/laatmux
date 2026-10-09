@@ -598,7 +598,7 @@ func TestRelayPausedHost(t *testing.T) {
 	}
 	f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "connect refused") })
 	f.hosts.set(paused)
-	f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable == refusal })
+	waiting := f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable == refusal })
 	dials := f.remote.count()
 	down(nil)
 	// Ten of the fixture's shortest backoff.
@@ -606,10 +606,28 @@ func TestRelayPausedHost(t *testing.T) {
 	if n := f.remote.count(); n != dials {
 		t.Fatalf("a paused host dialled %d times", n-dials)
 	}
-	if p, _ := f.local.relay.get("p1"); p.Sent || p.Taken || p.Reachable {
-		t.Fatalf("record while paused %+v", p)
+	// Asked about at every retry, the record is not changed, and so not
+	// published, again.
+	if p, _ := f.local.relay.get("p1"); p.Sent || p.Taken || p.Reachable || !p.UpdatedAt.Equal(waiting.UpdatedAt) {
+		t.Fatalf("record while paused %+v, was %+v", p, waiting)
 	}
+	// A task the relay holds is accepted again, a lost answer asked for
+	// again, though its host is paused.
+	if res := add("p1"); !res.OK {
+		t.Fatalf("a held task asked for again: %+v", res)
+	}
+	// Resumed, the record no longer says the host is paused while the
+	// dial, a machine starting say, takes its time.
+	hold := make(chan struct{})
+	f.remote.mu.Lock()
+	f.remote.hold = hold
+	f.remote.mu.Unlock()
 	f.hosts.set(vm)
+	f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable == "" && !p.Reachable })
+	f.remote.mu.Lock()
+	f.remote.hold = nil
+	f.remote.mu.Unlock()
+	close(hold)
 	p := f.awaitRecord(t, "p1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
 	if !p.OK || p.Prompt != protocol.DeliveryNotDelivered || !p.Reachable {
 		t.Fatalf("record after the resume %+v", p)
@@ -620,6 +638,40 @@ func TestRelayPausedHost(t *testing.T) {
 	}
 	if p := readPending(t, f.dir, "p1"); p.Attempt != 0 || p.AttemptOpen {
 		t.Fatalf("file after a refused prompt %+v", p)
+	}
+}
+
+// A pause seen while the relay follows an add on an open connection
+// closes it, the add going on on the host: the record waits, saying the
+// host is paused, with no dial made; resumed, the add is followed to its
+// outcome from the host's journal.
+func TestRelayPauseClosesFollow(t *testing.T) {
+	shortWait(t, 3*time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	const refusal = "host vm is paused; laatmux hosts resume vm connects it"
+	if res := f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: "c1", Relay: "vm", Repo: f.source(), Name: "proj", Branch: "c1", AgentName: "claude", Prompt: "later", SubmittedAt: time.Now()}); !res.OK {
+		t.Fatal(res.Error)
+	}
+	// The host waits for the agent to be ready, which it never is.
+	f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.Taken && p.Stage == protocol.StageAgent })
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm", Paused: true})
+	f.local.pauseRelays()
+	p := f.awaitRecord(t, "c1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable == refusal })
+	if p.Done || p.Reachable {
+		t.Fatalf("the follow went on after the pause: %+v", p)
+	}
+	dials := f.remote.count()
+	f.awaitHostResult(t, "c1")
+	if n := f.remote.count(); n != dials {
+		t.Fatalf("a paused host dialled %d times", n-dials)
+	}
+	if p, _ := f.local.relay.get("c1"); p.Done {
+		t.Fatalf("an outcome while paused: %+v", p)
+	}
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm"})
+	p = f.awaitRecord(t, "c1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	if !p.OK || p.Prompt != protocol.DeliveryNotDelivered {
+		t.Fatalf("record after the resume %+v", p)
 	}
 }
 

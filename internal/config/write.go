@@ -747,8 +747,9 @@ func hostsEntry(doc *yaml.Node, i int) (seq, entry *yaml.Node, next int) {
 // content, which is the line before the next item's, or before the key
 // after hosts, or the document's end, less the blank and comment lines
 // before it, in the indentation of the entry's keys. To resume: the
-// paused line of the entry's own taken out. ok is false for any other
-// shape, which rewritePaused takes.
+// paused line of the entry's own taken out. A comment on the line is
+// kept. ok is false for any other shape, which rewritePaused takes; so
+// is resuming an entry whose paused comes from a mapping merged into it.
 func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
@@ -767,6 +768,10 @@ func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 		lines[n-1] += "\n"
 	}
 	indent := strings.Repeat(" ", entry.Column-1)
+	eol := "\n"
+	if strings.Contains(string(b), "\r\n") {
+		eol = "\r\n"
+	}
 	var key, value *yaml.Node
 	for k := 0; k+1 < len(entry.Content); k += 2 {
 		if entry.Content[k].Value == "paused" {
@@ -780,9 +785,20 @@ func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 		if key == entry.Content[0] || value.Line != key.Line || key.Column != entry.Column {
 			return nil, false
 		}
+		// The line's comment stays: after the value made true, or on a
+		// line of its own where the key is taken out.
+		comment := value.LineComment
+		if comment == "" {
+			comment = key.LineComment
+		}
 		var line []string
-		if paused {
-			line = []string{indent + "paused: true\n"}
+		switch {
+		case paused && comment != "":
+			line = []string{indent + "paused: true " + comment + eol}
+		case paused:
+			line = []string{indent + "paused: true" + eol}
+		case comment != "":
+			line = []string{indent + comment + eol}
 		}
 		at := key.Line - 1
 		return []byte(strings.Join(slices.Concat(lines[:at], line, lines[at+1:]), "")), true
@@ -799,11 +815,13 @@ func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#")) {
 		end--
 	}
-	return []byte(strings.Join(slices.Concat(lines[:end], []string{indent + "paused: true\n"}, lines[end:]), "")), true
+	return []byte(strings.Join(slices.Concat(lines[:end], []string{indent + "paused: true" + eol}, lines[end:]), "")), true
 }
 
 // rewritePaused sets paused: true on the host's entry in the file's
-// nodes, or takes paused out, and writes them again.
+// nodes, or takes paused out, and writes them again. An entry resumed
+// whose paused is not its own, but a mapping's merged into it with <<,
+// gets paused: false, which the other entries that merge it do not.
 func rewritePaused(b []byte, i int, paused bool) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
@@ -827,15 +845,20 @@ func rewritePaused(b []byte, i int, paused bool) ([]byte, error) {
 		}
 		break
 	}
-	if !found && paused {
-		entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, yes)
+	if !found {
+		v := yes
+		if !paused {
+			v = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+		}
+		entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, v)
 	}
 	return encodeLike(b, &doc)
 }
 
 // checkPaused checks an edit: the result parses as a config with the
 // host's entry paused or not as asked, and decodes as the file did with
-// paused set on that entry, or gone from it, and nothing else changed.
+// paused set on that entry, or gone from it, or false on it where the
+// entry resumed has it so, and nothing else changed.
 func checkPaused(old, out []byte, i int, paused bool) error {
 	cfg, err := Parse(out)
 	if err != nil {
@@ -860,9 +883,18 @@ func checkPaused(old, out []byte, i int, paused bool) error {
 	if !ok {
 		return errors.New("hosts: the entry is not a mapping")
 	}
-	if paused {
+	gm, _ := got.(map[string]any)
+	gh, _ := gm["hosts"].([]any)
+	var ge map[string]any
+	if i < len(gh) {
+		ge, _ = gh[i].(map[string]any)
+	}
+	switch {
+	case paused:
 		e["paused"] = true
-	} else {
+	case ge["paused"] == false:
+		e["paused"] = false
+	default:
 		delete(e, "paused")
 	}
 	if !reflect.DeepEqual(want, got) {

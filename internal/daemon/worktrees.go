@@ -113,10 +113,11 @@ func (d *Daemon) runConfig(ctx context.Context) {
 // its repositories with their steps and the copy rules for every
 // worktree, and the adds the agents' commands, so the next add uses
 // them, and a poll at once labels the checkouts by the repositories;
-// the merged subscribers get the hosts it lists (rereadHosts); and the
-// relay retries the appends still asked for, which the change may let
-// through. The last two not on the first read, Run's before any
-// subscription and before the relay resumes its records, which then
+// the merged subscribers get the hosts it lists (rereadHosts); the
+// relay lets go of a host paused (pauseRelays) and retries the appends
+// still asked for, which the change may let through. Those last not on
+// the first read, Run's before any subscription and before the relay
+// resumes its records, which then
 // read the file as it found it or later. A file that does not read is
 // logged once per change of message, and the daemon keeps what it had.
 // A read of the hosts that failed last, a file being written as a
@@ -140,6 +141,7 @@ func (d *Daemon) readConfig(ctx context.Context) {
 		}
 		if !first {
 			d.rereadHosts()
+			d.pauseRelays()
 			d.rememberAgain(ctx)
 		}
 	case !first && d.hostsFailed():

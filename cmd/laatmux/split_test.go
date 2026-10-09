@@ -199,6 +199,50 @@ func TestSplitAndShellRootWithHash(t *testing.T) {
 	}
 }
 
+// In a workspace session of a paused host, split and shell are refused
+// and make no pane: either would run ssh to the host.
+func TestSplitAndShellPausedHost(t *testing.T) {
+	bin := t.TempDir()
+	sshLog := filepath.Join(bin, "ssh.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + sshLog + "'\nexec sleep 1000\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	isolatedDefault(t)
+	ctx := context.Background()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: vm\n    ssh: laatmux-test.invalid\n    paused: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := workspace.Server.Run(ctx, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	t.Setenv("TMUX", run("display-message", "-p", "#{socket_path}")+",0,0")
+	pane := run("new-session", "-d", "-s", "vm0", "-P", "-F", "#{pane_id}", "sleep 1000")
+	run("set-option", "-t", "=vm0:", "@laatmux_workspace", protocol.SessionKey("venv", "/w/proj/x"), tmux.Next, "set-option", "-t", "=vm0:", "@laatmux_host", "vm")
+	const refusal = "host vm is paused; laatmux hosts resume vm connects it"
+	if err := cmdSplit(ctx, []string{"-h", pane}); err == nil || err.Error() != refusal {
+		t.Fatalf("split: %v", err)
+	}
+	t.Setenv("TMUX_PANE", pane)
+	if err := cmdShell(ctx, nil); err == nil || err.Error() != refusal {
+		t.Fatalf("shell: %v", err)
+	}
+	if n := len(strings.Fields(run("list-panes", "-s", "-t", "=vm0:", "-F", "#{pane_id}"))); n != 1 {
+		t.Fatalf("%d panes after the refusals", n)
+	}
+	if _, err := os.Stat(sshLog); !os.IsNotExist(err) {
+		t.Fatalf("ssh ran: %v", err)
+	}
+}
+
 // The command after "--" is taken verbatim, flags and target before it.
 func TestSplitDashes(t *testing.T) {
 	before, cmd, ok := splitDashes([]string{"proj/x", "--host", "vm", "--", "sh", "-c", "echo -- hi"})

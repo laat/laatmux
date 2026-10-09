@@ -122,7 +122,8 @@ func (c *configTaker) failed(m *view.Model, err error) {
 
 // take gives the view what it draws and acts with from cfg: the dash's
 // config, which the jumps, the removals and a task form made from now
-// on read, with a failure's footer and note cleared; the merged state's repository names, order and stale
+// on read, with a failure's footer and note cleared, and the paused
+// flags of an open task form's hosts; the merged state's repository names, order and stale
 // settings; the theme and icons; the templates; the agent icons; the
 // jump key labels; this machine's name; and in a sidebar pane the
 // strip's chip width. refill fills the rows again, for a config taken
@@ -130,6 +131,9 @@ func (c *configTaker) failed(m *view.Model, err error) {
 func (c *configTaker) take(m *view.Model, cfg config.Config, refill bool) {
 	c.d.cfg = cfg
 	c.d.formConfig(nil)
+	if c.d.add != nil {
+		c.d.add.takePaused(cfg)
+	}
 	if c.failure != "" && m.Message == c.failure {
 		// The file that did not load is put right.
 		m.Message = ""

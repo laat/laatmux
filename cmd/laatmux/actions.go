@@ -304,16 +304,17 @@ func (d *dash) pickHost(m *view.Model) {
 }
 
 // hostState is a host's state in H's picker: paused as the config says,
-// else as the merged stream has the host. A host the stream has no
-// record of, or one still paused there, the daemon has yet to read the
-// config for.
+// else as the merged stream has the host. A host still paused there, or
+// with no record there, the daemon has yet to read the config for.
 func hostState(h config.Host, s merged.Status) string {
 	if h.Paused {
 		return "paused"
 	}
 	st, ok := s.Host(h.Name)
 	switch {
-	case !ok || st.Paused:
+	case !ok:
+		return "connecting"
+	case st.Paused:
 		return "resuming"
 	case st.Connected && st.Listed:
 		return "connected"
@@ -326,7 +327,8 @@ func hostState(h config.Host, s merged.Status) string {
 }
 
 // setPaused writes the host's paused to the config and says what that
-// did; the daemon and the views act on the file at their next look.
+// did; the daemon and the views act on the file at their next look, and
+// this view's config takes it at once, for a task form opened next.
 func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 	changed, err := config.SetPaused(config.Path(), name, paused)
 	if err != nil {
@@ -334,6 +336,11 @@ func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 		return
 	}
 	m.Message = pausedLine(name, paused, changed)
+	if d.reload != nil {
+		if fresh, err := d.reload(); err == nil {
+			d.cfg = fresh
+		}
+	}
 }
 
 // overlayDone reads what the finished overlay decided and moves on:
@@ -435,6 +442,27 @@ type addForm struct {
 	reload         func() (config.Config, error)
 	uncredentialed map[string]bool
 	configErr      string
+	// form is the form the candidates are on, for takePaused.
+	form *view.Form
+}
+
+// takePaused brings the paused flag of the hosts the form offers up to
+// cfg, by name, with the host chip's details: a host paused or resumed
+// while the form is up is refused, or taken, as the file says now, the
+// candidates and the choice otherwise as they were.
+func (f *addForm) takePaused(cfg config.Config) {
+	paused := map[string]bool{}
+	for _, h := range cfg.Hosts {
+		paused[h.Name] = h.Paused
+	}
+	for i := range f.hosts {
+		if p, ok := paused[f.hosts[i].Name]; ok {
+			f.hosts[i].Paused = p
+		}
+	}
+	if f.form != nil && len(f.form.Chips[1].Choices) == len(f.hosts) {
+		f.form.Chips[1].Choices = hostChoices(f.hosts)
+	}
 }
 
 // addHosts is the hosts the task form offers: those with the
@@ -670,6 +698,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	chips[2].Choices = agentChoices(f.cfg, f.agents)
 	chips[2].Selected = choiceIndex(chips[2].Choices, defaultAgent(repo))
 	form := view.NewForm("add a task", chips, branch)
+	f.form = form
 	form.Propose = worktree.ProposeBranch
 	form.Opening = func(form *view.Form, chip int) {
 		if f.reload == nil {
