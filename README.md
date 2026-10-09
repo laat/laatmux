@@ -1115,7 +1115,7 @@ list that `Tab` or a click switches:
 - **Tree**: one node per repository, by this machine's label for the
   source, else the host's; its worktrees under it by branch, the host in
   parentheses, with the git stats and the PR on the line, and before the
-  name `⎇`, a worktree, or `🏠`, the main checkout (`{kind_icon}`,
+  name `⎇`, a worktree, or `⌂`, the main checkout (`{kind_icon}`,
   below); under each
   its agents by start time, its other panes (`$ zsh`) and its runs (`▶
   make test 0:42`), from the pane and run records the client now keeps.
@@ -1235,7 +1235,7 @@ the third line under it. The icon is the status's: a two-cell braille
 spinner at 250 ms for working, 💬 for blocked or a task that needs the
 user, ✅ for done, 💤 for stale or a settled workspace's agent; `icons: nerdfont` and `icons: ascii` choose other sets, and
 `status_icons` sets single ones. The set also has the glyphs a tree
-line says what it is by, `⎇` a worktree and `🏠` the main checkout,
+line says what it is by, `⎇` a worktree and `⌂` the main checkout,
 nf-oct-git_branch (U+F418) and nf-fa-home (U+F015) in nerdfont, `+` and
 `=` in ascii; `kind_icons` sets single ones. Plain text keeps the
 terminal's own foreground. `theme.mode: auto` asks the terminal for its
@@ -1696,12 +1696,14 @@ alike; only the lines it leaves differ.
   `{worst_status}` (the most pressing agent's icon, on a folded line)
   on a worktree line, `{command}` on a pane or run line, `{kind_icon}`
   (the set's glyph for what the row's checkout is: `⎇` a worktree, a
-  detached one too, `🏠` a main checkout, on its line and on the
-  agents, panes, runs and tiles in it; nothing on a task's line, while
-  it stands for a worktree too, an orphaned session's or another
-  session's; plain, so in the line's colour, dim on a dim line and not
-  the viewer's colour, which stays on the label). A token that
-  has nothing on a row is empty.
+  detached one too, `⌂` a main checkout, on its line and on the
+  agents, panes, runs and tiles in it; nothing on a task's line or
+  tile, while it stands for a worktree too, though the agents, panes
+  and runs under it keep the worktree's, and nothing on an orphaned
+  session's line or another session's; plain, so in the line's colour,
+  dim on a dim line and not the viewer's colour, which stays on the
+  label; an override in `kind_icons` is drawn whole or dropped, never
+  cut). A token that has nothing on a row is empty.
 - **`{fill}`** splits the line into a left and a right part, the right
   against the right edge. An empty token takes the adjacent run of
   spaces with it, the one after it, else the one before, so separators

@@ -71,7 +71,7 @@ func (ic Icons) icon(s Status) string {
 // kindIcons are the sets' glyphs for what a row's checkout is: a
 // worktree, and a repository's main checkout.
 var kindIcons = map[string]struct{ worktree, main string }{
-	IconsEmoji:    {"⎇", "🏠"},
+	IconsEmoji:    {"⎇", "⌂"},
 	IconsNerdFont: {"\uf418", "\uf015"},
 	IconsASCII:    {"+", "="},
 }

@@ -20,9 +20,10 @@ import (
 // read again on its next look: the hosts, agents and default agent a
 // task form made from then on offers, the copy rules a submit sends,
 // this machine's name for a repository in the rows, the line templates,
-// the theme, the agent icons, the jump key labels, the strip's chip
-// width and the hosts line. A file that changes and does not load is said once in the
-// footer, the view keeping what it had, and the file put right is taken.
+// the theme, the agent and kind icons, the jump key labels, the
+// strip's chip width and the hosts line. A file that changes and does
+// not load is said once in the footer, the view keeping what it had,
+// and the file put right is taken.
 func TestViewFollowsConfig(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	p := filepath.Join(t.TempDir(), "config.yaml")
@@ -102,11 +103,12 @@ repos:
 copy: ["*.local"]
 theme: {mode: light}
 agent_icons: {claude: {icon: CC}}
+kind_icons: {worktree: W}
 sidebar:
   jump_keys: true
   horizontal: {item_width: 30}
   templates:
-    tree: {worktree: "WT {branch}"}
+    tree: {worktree: "WT {kind_icon} {branch}"}
 `)
 	next()
 	if _, ok := d.cfg.Find("vm"); !ok || strings.Join(d.cfg.Copy, ",") != "*.local" {
@@ -130,7 +132,7 @@ sidebar:
 		}
 		b.WriteString("\n")
 	}
-	if out := b.String(); !strings.Contains(out, "renamed") || !strings.Contains(out, "WT task") {
+	if out := b.String(); !strings.Contains(out, "renamed") || !strings.Contains(out, "WT W task") {
 		t.Errorf("the rows after the change:\n%s", out)
 	}
 	d.startAdd(m)
