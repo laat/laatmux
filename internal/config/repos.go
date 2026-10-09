@@ -239,10 +239,10 @@ func sourceHash(src string) string {
 // repositories has is taken as, which is what the task form and add
 // take a pasted source as: the source in one of the forge forms,
 // git@host:owner/repo, ssh:// or https://, as source.Forge reads them,
-// under the first name no known repository has of its last path
-// element, its org and that, and that with a hash of the source, a
-// name that is no label made one as a checkout's is, next_js of
-// next.js. A host with no checkout of it clones it under that name. A
+// under the first name none of known has of its last path element, its
+// org and that, and that with a hash of the source, a name that is no
+// label made one as a checkout's is, next_js of next.js; known has each
+// repository under every name it goes by. A host with no checkout of it clones it under that name. A
 // credential in the source, the user and token of an https URL or the
 // password of an ssh one, is left out (Uncredentialed), so it never
 // reaches a pending file or a host: the repository's source differs

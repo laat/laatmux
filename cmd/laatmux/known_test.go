@@ -12,6 +12,7 @@ import (
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -222,13 +223,111 @@ func TestAwaitLocal(t *testing.T) {
 	}
 	here.Listed = true
 	st.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &here})
-	if waits() {
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
 		t.Fatal("waited on vm")
 	}
 	start := time.Now()
 	awaitLocal(context.Background(), merged.New(), 50*time.Millisecond)
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("waited past the bound")
+	}
+}
+
+// The form opened on a worktree preselects its repository by source: a
+// configured repository's name that a host also gives a checkout of
+// another source, a fork say, does not take the form to the fork.
+func TestFormPreselectsBySource(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	cfg := dashConfig(t) // laat/laatmux and laat/proj
+	const fork = "git@github.com:other/proj.git"
+	st := merged.New()
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
+		Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "proj", Source: fork, Root: "/r2/proj"}}}}}})
+	d := &dash{ctx: context.Background(), cfg: cfg, st: st}
+	for _, src := range []string{"git@github.com:laat/proj.git", fork} {
+		w := protocol.Worktree{ID: "venv/worktree//w/" + src, EnvironmentID: "venv", Repo: "proj", Source: src, Branch: "x", Root: "/w/" + src}
+		in := rows.Input{
+			Hosts:     []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true}},
+			Worktrees: []protocol.Worktree{w},
+		}
+		m := &view.Model{Width: 100, Height: 40, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(w.ID) {
+			t.Fatal("no worktree line")
+		}
+		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'a'}})
+		form, ok := m.Overlay.(*view.Form)
+		if !ok {
+			t.Fatalf("no form: %q", m.Message)
+		}
+		if r, _ := d.add.repo(form, form.Chips[0].Selected); r.Source != src {
+			t.Errorf("a worktree of %s preselected %s", src, r.Source)
+		}
+		form.Handle(term.Key{Kind: term.KeyEsc})
+		d.act(m, m.Poll())
+	}
+	// A name alone: the config's entry before a host's label for another
+	// source.
+	f := &addForm{hosts: cfg.Hosts[:2], agents: cfg.AgentNames(), known: st.Known}
+	if form := buildForm(cfg, f, home.Last{}, "proj", "", "", nil); form.Chips[0].Choices[form.Chips[0].Selected].Detail != "git@github.com:laat/proj.git" {
+		t.Errorf("proj by name preselected %+v", form.Chips[0])
+	}
+}
+
+// jump takes a name of the known set's for a repository the host labels
+// otherwise, last: box, first in the config, labels notes so, and vm,
+// where the worktree is, labels it notes-vm. A target another reading
+// takes, vm's own label, is taken without the known set, and a name
+// the known set has for no repository is refused as no session.
+func TestJumpKnownName(t *testing.T) {
+	t.Setenv("LAATMUX_HOME", t.TempDir())
+	fakeSSH(t, `printf "can't find session: x\n" >&2; exit 1`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: box\n    ssh: box\n  - name: vm\n    ssh: vm\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAATMUX_CONFIG", cfgPath)
+	w := protocol.Worktree{ID: "venv/worktree//w/notes-vm/fix", EnvironmentID: "venv", Repo: "notes-vm", Source: notesSource, Branch: "fix", Root: "/w/notes-vm/fix"}
+	var mu sync.Mutex
+	subs := 0
+	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapRepos}
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeSubscribe && m.Merged {
+			mu.Lock()
+			subs++
+			mu.Unlock()
+			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
+				{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: caps, Repos: &protocol.RepoSet{}},
+				{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true, Capabilities: caps,
+					Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes", Source: notesSource, Root: "/r/notes"}}}},
+				{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: caps,
+					Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes-vm", Source: notesSource, Root: "/r/notes-vm"}}}},
+			}, Worktrees: []protocol.Worktree{w}})
+		}
+		return true
+	})
+	// The worktree has no session and vm's daemon no new: the refusal
+	// is the add line, which says the worktree was found.
+	refusal := "vm/notes-vm/fix has no managed session; laatmux add fix --repo " + notesSource + " --host vm makes one"
+	for _, c := range []struct {
+		target, want string
+		subs         int
+	}{
+		{"vm/notes-vm/fix", refusal, 1},
+		{"vm/notes/fix", refusal, 3},
+		{"vm/nope/fix", "vm/nope/fix: no such session on the laatmux tmux server", 5},
+	} {
+		err := cmdJump(context.Background(), []string{c.target})
+		mu.Lock()
+		n := subs
+		mu.Unlock()
+		if err == nil || !strings.HasPrefix(err.Error(), c.want) || n != c.subs {
+			t.Errorf("jump %s: %v, %d subscriptions; want %q, %d", c.target, err, n, c.want, c.subs)
+		}
 	}
 }
 
@@ -270,21 +369,21 @@ func TestResolveRepoDiscovered(t *testing.T) {
 	git("remote", "add", "origin", "https://github.com/laat/proj")
 	t.Chdir(dir)
 	ctx := context.Background()
-	if r, err := resolveRepo(ctx, cfg, known, ""); err != nil || r.Name != "proj" || reads != 0 {
+	if r, err := resolveRepo(ctx, cfg, known, "", ""); err != nil || r.Name != "proj" || reads != 0 {
 		t.Fatalf("a listed origin: %+v %v, %d reads", r, err, reads)
 	}
 	git("remote", "set-url", "origin", "https://github.com/laat/notes")
-	if r, err := resolveRepo(ctx, cfg, known, ""); err != nil || r.Name != "notes" || r.Source != notesSource {
+	if r, err := resolveRepo(ctx, cfg, known, "", ""); err != nil || r.Name != "notes" || r.Source != notesSource {
 		t.Fatalf("a discovered origin: %+v %v", r, err)
 	}
 	git("remote", "set-url", "origin", "git@github.com:laat/other.git")
-	_, err := resolveRepo(ctx, cfg, known, "")
+	_, err := resolveRepo(ctx, cfg, known, "", "")
 	if err == nil || !strings.HasSuffix(err.Error(), "has origin git@github.com:laat/other.git, which is not checked out on any host and not configured; use --repo (known: proj, notes)") {
 		t.Fatalf("an unknown origin: %v", err)
 	}
 	// --repo by a host's label and by a discovered source.
 	for _, flag := range []string{"notes", "https://github.com/laat/notes.git"} {
-		if r, err := resolveRepo(ctx, cfg, known, flag); err != nil || r.Source != notesSource {
+		if r, err := resolveRepo(ctx, cfg, known, flag, ""); err != nil || r.Source != notesSource {
 			t.Errorf("--repo %s: %+v %v", flag, r, err)
 		}
 	}

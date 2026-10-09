@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/laat/laatmux/internal/command"
@@ -551,7 +552,7 @@ func (f *addForm) refresh(form *view.Form, cfg config.Config) {
 	var pasted []view.Choice
 	if len(c.Choices) > n {
 		for _, ch := range c.Choices[n:] {
-			if r, err := config.NewRepo(ch.Detail, f.repos); err == nil {
+			if r, err := config.NewRepo(ch.Detail, f.set.Taken()); err == nil {
 				pasted = append(pasted, view.Choice{Label: r.Name, Detail: r.Source})
 			}
 		}
@@ -599,7 +600,7 @@ func pastedRepo(known merged.Known, filter string) (c view.Choice, uncredentiale
 	if r, ok := known.BySource(src); ok {
 		return view.Choice{Label: r.Name, Detail: r.Source}, false, true
 	}
-	r, err := config.NewRepo(src, known.Configs())
+	r, err := config.NewRepo(src, known.Taken())
 	if err != nil {
 		return view.Choice{}, false, false
 	}
@@ -636,7 +637,9 @@ func (d *dash) startAdd(m *view.Model) {
 	preRepo, preHost, branch := "", "", ""
 	switch r := m.Selection(); {
 	case r != nil && r.Worktree != nil && !r.Orphaned:
-		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
+		// By its source, which a name the config gives it could share
+		// with a host's label for another.
+		preRepo, preHost = r.Worktree.Source, r.Host
 		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly && !r.Worktree.Main {
 			branch = r.Worktree.Branch
 		}
@@ -658,7 +661,7 @@ func (d *dash) startAdd(m *view.Model) {
 	default:
 		preRepo, preHost = workspacePreset(d.ctx, f.hosts)
 		if preRepo == "" {
-			if repo, err := resolveRepo(d.ctx, d.cfg, func() merged.Known { return f.set }, ""); err == nil {
+			if repo, err := resolveRepo(d.ctx, d.cfg, func() merged.Known { return f.set }, "", ""); err == nil {
 				preRepo = repo.Source
 			}
 		}
@@ -725,11 +728,19 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 		}
 		return c, ok
 	}
+	// The repository named: by its source, else the first of its name,
+	// the config's entry before a host's label for another source.
+	byName := -1
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
-		if r.Name == preRepo || source.Same(r.Source, preRepo) {
-			chips[0].Selected = i
+		if byName < 0 && r.Name == preRepo {
+			byName = i
 		}
+	}
+	if i := slices.IndexFunc(f.repos, func(r config.Repo) bool { return source.Same(r.Source, preRepo) }); i >= 0 {
+		chips[0].Selected = i
+	} else if byName >= 0 {
+		chips[0].Selected = byName
 	}
 	var repo config.Repo
 	if len(f.repos) > 0 {

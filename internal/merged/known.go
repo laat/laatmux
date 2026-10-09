@@ -9,6 +9,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
+	"github.com/laat/laatmux/internal/tmux"
 )
 
 // Known is the repositories this machine knows: the checkouts every
@@ -50,7 +51,8 @@ type Found struct {
 }
 
 // hostCheckouts is what a host has said of its checkouts: its set, when
-// one has come (read), and the checkouts its records name.
+// one has come, or that it has answered without worktrees and has none
+// (read), and the checkouts its records name.
 type hostCheckouts struct {
 	read bool
 	set  []protocol.Checkout
@@ -69,7 +71,9 @@ func (m *State) Known(cfg config.Config) Known {
 	m.mu.Lock()
 	hosts := make(map[string]*hostCheckouts, len(m.hosts))
 	for n, h := range m.hosts {
-		hosts[n] = &hostCheckouts{}
+		// A host that has answered without worktrees has no checkouts
+		// to read.
+		hosts[n] = &hostCheckouts{read: h.EnvID != "" && !h.Worktrees}
 		if h.Repos != nil {
 			hosts[n].read, hosts[n].set = true, h.Repos.Checkouts
 		}
@@ -83,9 +87,15 @@ func (m *State) Known(cfg config.Config) Known {
 		recs = append(recs, rec{m.byHost[id], w})
 	}
 	m.mu.Unlock()
-	// The records in a fixed order, so a host with two clones labelled
-	// apart names the same one first every time.
-	sort.Slice(recs, func(i, j int) bool { return recs[i].w.Root < recs[j].w.Root })
+	// The records in a fixed order, the main checkouts first, which
+	// have the checkout's directory, so a host's first label and root
+	// for a source are the same every time.
+	sort.Slice(recs, func(i, j int) bool {
+		if recs[i].w.Main != recs[j].w.Main {
+			return recs[i].w.Main
+		}
+		return recs[i].w.Root < recs[j].w.Root
+	})
 	for _, r := range recs {
 		h, ok := hosts[r.host]
 		if !ok || r.w.Source == "" || r.w.Repo == "" {
@@ -133,13 +143,22 @@ func known(cfg config.Config, hosts map[string]*hostCheckouts) Known {
 		if !h.read {
 			k.Unread = append(k.Unread, host)
 		}
-		had := map[string]bool{} // the sources the host has a checkout of, by key
+		// The sources the host's set has, by key, which its records add
+		// nothing to; and the labels its records have added, by key and
+		// label, one each, a second clone's under its own.
+		inSet, labelled := map[string]bool{}, map[string]bool{}
 		add := func(c protocol.Checkout, record bool) {
 			key := source.Key(c.Source)
-			if c.Source == "" || record && had[key] {
+			switch {
+			case c.Source == "":
 				return
+			case !record:
+				inSet[key] = true
+			case inSet[key] || labelled[key+"\x00"+c.Repo]:
+				return
+			default:
+				labelled[key+"\x00"+c.Repo] = true
 			}
-			had[key] = true
 			f := Found{Host: host, Label: c.Repo, Root: c.Root}
 			i, ok := at[key]
 			if !ok {
@@ -169,7 +188,7 @@ func known(cfg config.Config, hosts map[string]*hostCheckouts) Known {
 }
 
 // Configs is the known repositories as the config would have them, for
-// the task form's picker and for NewRepo's names.
+// the task form's picker.
 func (k Known) Configs() []config.Repo {
 	out := make([]config.Repo, len(k.Repos))
 	for i, r := range k.Repos {
@@ -178,38 +197,60 @@ func (k Known) Configs() []config.Repo {
 	return out
 }
 
+// Taken is the known repositories under every name they go by, each
+// one's and every label a host gives it, for NewRepo: a pasted source
+// named as a host labels another would clone into that host's
+// checkout's directory.
+func (k Known) Taken() []config.Repo {
+	var out []config.Repo
+	for _, r := range k.Repos {
+		out = append(out, r.Repo)
+		for _, f := range r.Found {
+			if f.Label != r.Name {
+				out = append(out, config.Repo{Source: r.Source, Name: f.Label})
+			}
+		}
+	}
+	return out
+}
+
 // ByName finds a repository by a name: the config's entry of that
 // name, as config.Config.RepoByName finds it, else the one source a
-// host labels so, by the name the known set has for it. Two sources a
-// name is a host's label for, on two hosts or as the name of one and a
-// host's label for another, are an error naming both, which their
-// sources tell apart.
-func (k Known) ByName(name string) (config.Repo, bool, error) {
+// host labels so, by the name the known set has for it. A name that is
+// the label of two sources, on two hosts, is the one host labels so
+// when host is given and labels one so; else it is an error naming
+// both.
+func (k Known) ByName(name, host string) (config.Repo, bool, error) {
 	for _, r := range k.Repos {
 		if r.Configured && r.Name == name {
 			return r.Repo, true, nil
 		}
 	}
-	var named []KnownRepo
+	labels := func(r KnownRepo, host string) bool {
+		return slices.ContainsFunc(r.Found, func(f Found) bool { return f.Label == name && (host == "" || f.Host == host) })
+	}
+	var named, on []KnownRepo
 	for _, r := range k.Repos {
-		for _, f := range r.Found {
-			if f.Label == name {
-				named = append(named, r)
-				break
-			}
+		if labels(r, "") {
+			named = append(named, r)
+		}
+		if host != "" && labels(r, host) {
+			on = append(on, r)
 		}
 	}
-	switch len(named) {
-	case 0:
+	switch {
+	case len(named) == 0:
 		return config.Repo{}, false, nil
-	case 1:
+	case len(named) == 1:
 		return named[0].Repo, true, nil
+	case len(on) == 1:
+		return on[0].Repo, true, nil
 	}
 	srcs := make([]string, len(named))
 	for i, r := range named {
-		srcs[i] = r.Source
+		srcs[i] = tmux.Printable(r.Source)
 	}
-	return config.Repo{}, false, fmt.Errorf("%q names %s, on different hosts; name the repository by its source", name, strings.Join(srcs, " and "))
+	return config.Repo{}, false, fmt.Errorf("%q is the label of %s on different hosts; --host takes the host's, and a name for one of them under repos in the config tells them apart", name, strings.Join(srcs, " and "))
 }
 
 // BySource finds a repository by its source, in any of the forms
@@ -230,9 +271,9 @@ func (k Known) BySource(src string) (config.Repo, bool) {
 }
 
 // Find finds a repository by name, else by source, the order
-// config.Config.Repo takes them in.
-func (k Known) Find(nameOrSource string) (config.Repo, bool, error) {
-	if r, ok, err := k.ByName(nameOrSource); ok || err != nil {
+// config.Config.Repo takes them in; host is ByName's.
+func (k Known) Find(nameOrSource, host string) (config.Repo, bool, error) {
+	if r, ok, err := k.ByName(nameOrSource, host); ok || err != nil {
 		return r, ok, err
 	}
 	r, ok := k.BySource(nameOrSource)
@@ -240,11 +281,15 @@ func (k Known) Find(nameOrSource string) (config.Repo, bool, error) {
 }
 
 // Missing says what a repository the known set does not have is: one
-// no host has a checkout of and the config does not list, or, without
-// the hosts' checkouts, one the config does not list.
+// no host has a checkout of and the config does not list, with the
+// hosts whose checkouts were not read, or, without the hosts'
+// checkouts, one the config does not list.
 func (k Known) Missing() string {
-	if !k.Discovered {
+	switch {
+	case !k.Discovered:
 		return "not configured, and no local daemon answered for the hosts' checkouts"
+	case len(k.Unread) > 0:
+		return "not checked out on any host and not configured (checkouts not read from " + strings.Join(k.Unread, ", ") + ")"
 	}
 	return "not checked out on any host and not configured"
 }

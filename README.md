@@ -211,16 +211,25 @@ config's entries first, as before, and only for what they do not have
 the local daemon's merged stream, each host waited on until it is
 listed, has failed or is paused, at most 20 s; with no local daemon
 answering, the config's entries alone. A name nobody knows is refused,
-saying it is not checked out on any host and not configured and
-listing what is known; a name two sources answer to, as the labels of
-checkouts on two hosts, is refused naming both, and the source tells
-them apart. The task form's repository picker lists the known set, the
+saying it is not checked out on any host and not configured, naming
+the hosts whose checkouts were not read, and listing what is known; a
+name two sources answer to, as the labels of checkouts on two hosts,
+is the one `--host`'s host labels so, else refused naming both, and a
+name for one of them in the list tells them apart. `jump` reads a
+target's `<repo>` as before, by this machine's name, the host's label
+or the managed session's name, and last, when none of those names a
+worktree and the target is no managed session either, as a name of the
+known set's, finding the host's worktree of that source whatever the
+host labels it. The task form's repository picker lists the known set, the
 config's entries in their order and then the rest by name, taken again
 from the merged stream as the picker opens. An add of a known
 repository on a host with no checkout of it clones it there under its
-name, as `repo_entry` carries the source. The list is for overrides, a
-name, `copy` or `setup`, and for a source to keep known while the hosts
-that have it are paused or down, or before any has it.
+name, as `repo_entry` carries the source: the source as the first host
+in the config's order that has a checkout of it has it as its origin,
+so a host that cannot clone through that transport needs an entry
+that names one it can. The list is for overrides, a name, a source,
+`copy` or `setup`, and for a source to keep known while the hosts that
+have it are paused or down, or before any has it.
 
 A repository no host has and the config does not list is added from
 the task form or from `add`: a source in one of the forge forms below
@@ -228,8 +237,9 @@ the task form or from `add`: a source in one of the forge forms below
 into the repository chip's picker, or given to `--repo`, is the add's
 repository, named for its last path element (`pin-scripts`), else its
 org and that, else that with a hash of the source, the first that no
-known repository has, a name that is no label made one
-(`nrkno-scripts`, `next_js`). A credential in the source, an https
+known repository goes by, as its name or as a host's label for a
+checkout of it, a name that is no label made one (`nrkno-scripts`,
+`next_js`). A credential in the source, an https
 URL's user and token or an ssh URL's password, is left out, and the
 form's footer or add's output says so: it never reaches a pending file
 or a host, and the host clones through its own credentials. The add

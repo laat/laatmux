@@ -61,14 +61,15 @@ func splitRepoBranch(target string) (repo, branch string, err error) {
 // an error, not a fall back to the label: the label may belong to another
 // source by now. The config's entries are looked at first, as they were
 // before the known set; known, the known set, is asked only for what
-// they do not have.
-func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag string) (config.Repo, error) {
+// they do not have. host, the command's --host, picks between two
+// sources a flag is the label of (merged.Known.ByName).
+func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag, host string) (config.Repo, error) {
 	if flag != "" {
 		if r, ok := cfg.Repo(flag); ok {
 			return r, nil
 		}
 		k := known()
-		r, ok, err := k.Find(flag)
+		r, ok, err := k.Find(flag, host)
 		if err != nil {
 			return config.Repo{}, err
 		}
@@ -99,7 +100,7 @@ func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Kno
 		if r, ok := cfg.RepoByName(label); ok {
 			return r, nil
 		}
-		if r, ok, err := known().ByName(label); ok || err != nil {
+		if r, ok, err := known().ByName(label, ""); ok || err != nil {
 			return r, err
 		}
 	}
@@ -108,13 +109,14 @@ func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Kno
 
 // lookupRepo is the repository the <repo> of a <repo>/<branch> names:
 // the config's entry of that name, as before the known set, else the
-// known set's, which known reads only then.
-func lookupRepo(cfg config.Config, known func() merged.Known, name string) (config.Repo, error) {
+// known set's, which known reads only then; host, the command's
+// --host, picks between two sources the name is the label of.
+func lookupRepo(cfg config.Config, known func() merged.Known, name, host string) (config.Repo, error) {
 	if r, ok := cfg.RepoByName(name); ok {
 		return r, nil
 	}
 	k := known()
-	r, ok, err := k.ByName(name)
+	r, ok, err := k.ByName(name, host)
 	switch {
 	case err != nil:
 		return config.Repo{}, err

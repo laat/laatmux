@@ -87,7 +87,8 @@ func writeRepos(out io.Writer, cfg config.Config, known merged.Known, last home.
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Name, r.Source, reposMark(r))
+		// A host's origin, which the user's config did not give.
+		fmt.Fprintf(w, "%s\t%s\t%s\n", r.Name, tmux.Printable(r.Source), reposMark(r))
 		if len(r.Copy) > 0 {
 			fmt.Fprintf(w, "  copy\t%s\n", strings.Join(r.Copy, "  "))
 		}

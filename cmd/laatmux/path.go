@@ -34,7 +34,7 @@ func cmdPath(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, err := lookupRepo(cfg, lazyKnown(ctx, cfg), repoLabel)
+	repo, err := lookupRepo(cfg, lazyKnown(ctx, cfg), repoLabel, *hostFlag)
 	if err != nil {
 		return err
 	}

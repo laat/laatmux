@@ -129,8 +129,13 @@ func TestAddRepoFlag(t *testing.T) {
 	cfg := dashConfig(t)
 	ctx := context.Background()
 	st := merged.New()
-	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
-		Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes", Source: "git@github.com:laat/notes.git", Root: "/r/notes"}}}}}})
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
+		{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
+			Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes", Source: "git@github.com:laat/notes.git", Root: "/r/notes"}}}},
+		// box labels notes otherwise.
+		{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true,
+			Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes2", Source: "git@github.com:laat/notes.git", Root: "/r/notes2"}}}},
+	}})
 	known := func() merged.Known { return st.Known(cfg) }
 	for _, c := range []struct {
 		flag, name string
@@ -139,25 +144,28 @@ func TestAddRepoFlag(t *testing.T) {
 		{"proj", "proj", false},
 		{"https://github.com/laat/proj", "proj", false},
 		{"notes", "notes", false},
+		{"notes2", "notes", false},
 		{"https://github.com/laat/notes", "notes", false},
 		{"git@github.com:nrkno/pin-scripts.git", "pin-scripts", true},
 		{"https://github.com/nrkno/proj.git", "nrkno-proj", true},
-		// notes is a host's label for another source.
+		// notes and notes2 are hosts' labels for another source: box's
+		// checkout of it is in notes2.
 		{"https://github.com/nrkno/notes.git", "nrkno-notes", true},
+		{"https://github.com/nrkno/notes2.git", "nrkno-notes2", true},
 	} {
-		r, isNew, err := addRepo(ctx, cfg, known, c.flag)
+		r, isNew, err := addRepo(ctx, cfg, known, c.flag, "")
 		if err != nil || r.Name != c.name || isNew != c.isNew {
 			t.Errorf("%s: %+v %v %v", c.flag, r, isNew, err)
 		}
 	}
-	if _, _, err := addRepo(ctx, cfg, known, "nope"); err == nil || err.Error() != `unknown repository "nope": not checked out on any host and not configured; known: laatmux, proj, notes` {
+	if _, _, err := addRepo(ctx, cfg, known, "nope", ""); err == nil || err.Error() != `unknown repository "nope": not checked out on any host and not configured; known: laatmux, proj, notes` {
 		t.Errorf("nope: %v", err)
 	}
 	none := func() merged.Known { return merged.ConfigOnly(config.Config{}) }
-	if _, isNew, err := addRepo(ctx, config.Config{}, none, "/srv/git/proj.git"); err == nil || isNew {
+	if _, isNew, err := addRepo(ctx, config.Config{}, none, "/srv/git/proj.git", ""); err == nil || isNew {
 		t.Errorf("a path is no forge source: %v %v", isNew, err)
 	}
-	r, isNew, err := addRepo(ctx, cfg, known, "https://laat:ghp_secret@github.com/nrkno/pin-scripts.git")
+	r, isNew, err := addRepo(ctx, cfg, known, "https://laat:ghp_secret@github.com/nrkno/pin-scripts.git", "")
 	if err != nil || !isNew || r.Source != "https://github.com/nrkno/pin-scripts.git" {
 		t.Errorf("a credential: %+v %v %v", r, isNew, err)
 	}

@@ -56,14 +56,7 @@ func cmdCompose(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.Follow(ctx, c)
-	// The candidates are the known set, which the merged stream carries:
-	// its snapshot is waited for, and this machine's host listed in it,
-	// whose checkouts the directory's repository is preselected from,
-	// for a moment at most; what the hosts send later is a candidate
-	// once the picker opens.
-	awaitLocal(ctx, st, localWait)
 	f := &addForm{hosts: addHosts(cfg), agents: cfg.AgentNames(), known: st.Known, reload: config.LoadSettled}
-	f.take(cfg)
 	// No repository known is the form with a picker for a pasted
 	// source, as the dashboard's a has.
 	switch {
@@ -76,12 +69,19 @@ func cmdCompose(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The candidates are the known set, which the merged stream carries:
+	// its snapshot is waited for, and this machine's host listed in it,
+	// whose checkouts the directory's repository is preselected from,
+	// for a moment at most; what the hosts send later is a candidate
+	// once the picker opens.
+	awaitLocal(ctx, st, localWait)
+	f.take(cfg)
 	// Opened from a workspace session, the form is for its repository
 	// on its host; elsewhere for the repository of the directory it was
 	// opened in.
 	preRepo, preHost := workspacePreset(ctx, f.hosts)
 	if preRepo == "" {
-		if repo, err := resolveRepo(ctx, cfg, func() merged.Known { return f.set }, ""); err == nil {
+		if repo, err := resolveRepo(ctx, cfg, func() merged.Known { return f.set }, "", ""); err == nil {
 			preRepo = repo.Source
 		}
 	}

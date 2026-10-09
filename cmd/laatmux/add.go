@@ -36,7 +36,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, isNew, err := addRepo(ctx, cfg, lazyKnown(ctx, cfg), a.repo)
+	repo, isNew, err := addRepo(ctx, cfg, lazyKnown(ctx, cfg), a.repo, a.host)
 	if err != nil {
 		return err
 	}
@@ -108,16 +108,17 @@ func cmdAdd(ctx context.Context, args []string) error {
 // --repo gives that no known repository has in any form, new, as
 // NewRepo names it among the known ones, which the add carries as its
 // repository entry: the host clones it under that name. A --repo that
-// is neither a known repository nor a source is resolveRepo's refusal.
-func addRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag string) (config.Repo, bool, error) {
-	repo, err := resolveRepo(ctx, cfg, known, flag)
+// is neither a known repository nor a source is resolveRepo's refusal;
+// host is its.
+func addRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag, host string) (config.Repo, bool, error) {
+	repo, err := resolveRepo(ctx, cfg, known, flag, host)
 	if err == nil || flag == "" {
 		return repo, false, err
 	}
 	if _, _, ok := source.Forge(flag); !ok {
 		return config.Repo{}, false, err
 	}
-	repo, err = config.NewRepo(flag, known().Configs())
+	repo, err = config.NewRepo(flag, known().Taken())
 	if err != nil {
 		return config.Repo{}, false, err
 	}

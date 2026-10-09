@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -28,6 +30,12 @@ import (
 // attached to the managed session on the host. Local and remote are the
 // same operation, since managed agents live on the dedicated laatmux
 // server, which the user's tmux cannot switch-client into.
+//
+// The <repo> is read as this machine's name for the repository, the
+// host's label, or as part of the managed session's name
+// (matchWorktree); last, when no reading names a worktree and the
+// target is no managed session, as a name of the known set's for a
+// repository the host labels otherwise (matchKnown), as path reads it.
 //
 // A worktree with no managed session and no agent gets one first, with
 // the user's shell at its root, from the host's daemon (newHome); where
@@ -98,6 +106,20 @@ func cmdJump(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if !ok {
+		// No reading of the target names a worktree: it is a managed
+		// session's name, as before, or, last, a name the known set has
+		// for a repository the host labels otherwise (matchKnown).
+		serr := checkSession(ctx, h.Host, rest)
+		if serr != nil {
+			if w, ok, err = matchKnown(worktrees, mains, cfg, h, lazyKnown(ctx, cfg), rest); err != nil {
+				return err
+			}
+			if !ok {
+				return serr
+			}
+		}
+	}
 	switch a := rows.JumpAgent(snap.Agents, w); {
 	case ok && w.Main && a != nil:
 		// A main checkout with an agent goes as its line goes (rowSpec):
@@ -138,9 +160,6 @@ func cmdJump(ctx context.Context, args []string) error {
 		}
 		spec = worktreeSpec(h, w)
 	default:
-		if err := checkSession(ctx, h.Host, rest); err != nil {
-			return err
-		}
 		spec = attachSpec(h, rest)
 	}
 	name, created, err := workspace.Ensure(ctx, spec)
@@ -207,6 +226,39 @@ func matchMain(mains []protocol.Worktree, cfg config.Config, h config.Host, rest
 		return protocol.Worktree{}, false, err
 	}
 	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in any of them", err, h.Name)
+}
+
+// matchKnown is the last reading of a jump target's <repo>/<branch>:
+// the repository the known set (merged.Known) has by that name, for a
+// name the config does not have, its worktree on the host for the
+// branch, else its main checkout there, whatever the host labels it,
+// as path finds it by source. It is taken only once every other
+// reading has matched nothing and the target is no managed session, so
+// a target that reached a worktree or a session reaches it still, and
+// the merged stream is read only then. A name the known set has for
+// no repository, or for two, is no match.
+func matchKnown(worktrees, mains []protocol.Worktree, cfg config.Config, h config.Host, known func() merged.Known, rest string) (protocol.Worktree, bool, error) {
+	label, branch, _ := strings.Cut(rest, "/")
+	if branch == "" {
+		return protocol.Worktree{}, false, nil
+	}
+	if _, ok := cfg.RepoByName(label); ok {
+		// The config's name, read first by matchWorktree.
+		return protocol.Worktree{}, false, nil
+	}
+	r, ok, err := known().ByName(label, h.Name)
+	if !ok || err != nil {
+		return protocol.Worktree{}, false, nil
+	}
+	// The config read with the known repository under the target's
+	// name, so the readings match it by source.
+	with := cfg
+	with.Repos = append(slices.Clip(cfg.Repos), config.Repo{Source: r.Source, Name: label})
+	w, ok, err := matchWorktree(worktrees, with, rest)
+	if err == nil && !ok {
+		w, ok, err = matchMain(mains, with, h, rest)
+	}
+	return w, ok, err
 }
 
 // splitMains is the records that are worktrees and those that are main
