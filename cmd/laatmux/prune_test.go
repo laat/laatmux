@@ -26,7 +26,7 @@ import (
 // record: dirty stays, and so do a locked worktree and one with
 // submodules, which git keeps; clean with nothing beyond the default
 // branch goes, its ignored files said; clean and ahead goes only with
-// its PR merged into the default branch at HEAD; anything else ahead
+// its PR merged at HEAD, into whatever branch; anything else ahead
 // stays, said with whether it is pushed and its PR.
 func TestPruneDecide(t *testing.T) {
 	w := protocol.Worktree{Repo: "proj", Branch: "fix", Root: "/w/proj/fix", Source: "git@x:o/proj.git"}
@@ -81,8 +81,8 @@ func TestPruneDecide(t *testing.T) {
 		{"nothing ahead, ignored ones of each", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ignored, f.IgnoredDirs = 1, 2 })}, true, "clean, 1 ignored file and 2 ignored directories, no commits beyond origin/main"},
 		{"merged at HEAD", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: pr("merged", false, "abc")}, true, "clean, PR #7 merged"},
 		{"merged at HEAD, an ignored directory", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ahead, f.IgnoredDirs = 2, 1 }), Branch: pr("merged", false, "abc")}, true, "clean, 1 ignored directory, PR #7 merged"},
-		{"merged into another branch", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "feature")}, false, "2 commits ahead of origin/main; PR #7 is merged into feature, not main"},
-		{"merged, base not known", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "")}, false, "2 commits ahead of origin/main; PR #7 is merged, into a branch not known yet"},
+		{"merged into another branch", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "feature")}, true, "clean, PR #7 merged into feature"},
+		{"merged, base not known", pruneInput{Worktree: w, Facts: facts(ahead(2)), Branch: prOn("merged", false, "abc", "")}, true, "clean, PR #7 merged"},
 		{"merged into a local default", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Ahead, f.Base = 2, "master" }), Branch: prOn("merged", false, "abc", "master")}, true, "clean, PR #7 merged"},
 		{"merged, HEAD moved on", pruneInput{Worktree: w, Facts: facts(ahead(3)), Branch: pr("merged", false, "old")}, false, "3 commits ahead of origin/main; PR #7 is merged, but HEAD is not its last commit"},
 		{"merged, last commit unknown", pruneInput{Worktree: w, Facts: facts(ahead(1)), Branch: pr("merged", false, "")}, false, "1 commit ahead of origin/main; PR #7 is merged, its last commit not known"},

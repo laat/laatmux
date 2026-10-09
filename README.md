@@ -954,11 +954,12 @@ closes and so the workspace session; the next `jump` makes it again.
   each host with `prune` and decides on the answer and this machine's
   branch records, the ones `{pr_state}` draws from: a clean worktree
   goes when it has no commit the default branch lacks, or when its
-  branch's PR is merged into the default branch and HEAD is the PR's
-  last commit, since a squash or rebase merge leaves the branch's
-  commits ahead of the default branch, a commit made after the merge is
-  in no PR, and a PR merged into another branch, the one under it in a
-  stack say, has not put its work in the default branch. One the host
+  branch's PR is merged and HEAD is the PR's last commit, since a
+  squash or rebase merge leaves the branch's commits ahead of the
+  default branch and a commit made after the merge is in no PR; a PR
+  merged into another branch, the one under it in a stack say, counts,
+  its work being in that branch on origin, and the plan names the
+  branch. One the host
   finds in use stays with what uses it; a dirty one
   with the count of changed files; a locked one with its reason
   and one with submodules, which git removes only by force; one ahead
