@@ -501,3 +501,62 @@ func TestGitTriggerDuringRead(t *testing.T) {
 		t.Error("a change during the read did not make the worktree due")
 	}
 }
+
+// A root an rm is removing gets no git status: a refresh is not
+// started for it, and one in flight is dropped, so the files going
+// under the read are never published as deletions. A removal that
+// failed unmarks it; one that worked is unmarked when the record leaves
+// the listing.
+func TestGitRefreshDuringRemoval(t *testing.T) {
+	f := installFakeGit(t)
+	d, s := gitDaemon(t)
+	f.status["/w/a"] = protocol.GitStatus{Base: "origin/main", Uncommitted: [2]int{0, 15251}}
+	f.head["/w/a"], f.after["/w/a"] = "h1", "h1"
+	d.markRemoving("/w/a", true)
+	makeDue(d)
+	refresh(t, d)
+	if ups := upserts(s); len(ups) != 0 {
+		t.Fatalf("a refresh started for a root being removed: %+v", ups)
+	}
+	d.mu.Lock()
+	e := d.gits["/w/a"]
+	due := e != nil && e.due
+	d.mu.Unlock()
+	if !due {
+		t.Error("the root is not due once the removal is over")
+	}
+	// In flight when the removal starts: dropped.
+	d.markRemoving("/w/a", false)
+	f.mu.Lock()
+	f.block = make(chan struct{})
+	block := f.block
+	f.mu.Unlock()
+	d.gitRound(context.Background(), make(chan struct{}, gitWorkers))
+	d.markRemoving("/w/a", true)
+	close(block)
+	idle(t, d)
+	if ups := upserts(s); len(ups) != 0 {
+		t.Fatalf("a read in flight across the removal's start was published: %+v", ups)
+	}
+	// The record gone with the files: unmarked, so a worktree made at
+	// the root later is read.
+	d.mu.Lock()
+	d.lastList = nil
+	d.publishWorktreesLocked(time.Now())
+	removing := d.removing["/w/a"]
+	d.mu.Unlock()
+	if removing {
+		t.Error("still marked after the record left the listing")
+	}
+	// A failed removal: unmarked, and the next refresh publishes.
+	d.markRemoving("/w/a", true)
+	d.markRemoving("/w/a", false)
+	d.mu.Lock()
+	d.worktrees["/w/a"] = protocol.Worktree{ID: "w/a", Root: "/w/a", Branch: "a"}
+	d.mu.Unlock()
+	makeDue(d)
+	refresh(t, d)
+	if ups := upserts(s); len(ups) != 1 {
+		t.Errorf("after a failed removal: %+v", ups)
+	}
+}

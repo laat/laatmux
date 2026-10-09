@@ -154,7 +154,7 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 		if changed[root] {
 			e.due = true
 		}
-		if e.running || now.Sub(e.last) < gitMinGap {
+		if e.running || now.Sub(e.last) < gitMinGap || d.removing[root] {
 			continue
 		}
 		every := gitIdleEvery
@@ -185,6 +185,19 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 	}
 }
 
+// markRemoving marks root as one an rm is removing, or unmarks it when
+// the removal failed; a removal that worked is unmarked when the record
+// leaves the listing (publishWorktreesLocked).
+func (d *Daemon) markRemoving(root string, on bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if on {
+		d.removing[root] = true
+	} else {
+		delete(d.removing, root)
+	}
+}
+
 // refreshGit reads one worktree's git state and publishes it when a value
 // changed. The result is dropped when the worktree left the listing, or
 // its HEAD moved, while the refresh ran; the next one reads it again. A
@@ -211,8 +224,9 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 		return
 	}
 	w, ok := d.worktrees[root]
-	if !ok || w.Branch != e.branch {
-		// Another branch at the root since: its own entry reads it.
+	if !ok || w.Branch != e.branch || d.removing[root] {
+		// Another branch at the root since: its own entry reads it. A
+		// root an rm is removing: the read saw the files going.
 		return
 	}
 	if paths.GitDir != "" {

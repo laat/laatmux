@@ -67,6 +67,7 @@ type taskCore interface {
 	pokeWorktrees()
 	setManagedRoots(panes []tmux.Pane, now time.Time)
 	gitDue(root string)
+	markRemoving(root string, on bool)
 	runStarted(r *runJob, at time.Time)
 	runEndedLocked(r *runJob)
 	runCtx() context.Context
