@@ -717,6 +717,12 @@ truth; labels only place new things.
   result carries `branch`.
   The agent stage is journaled as `launching` before `new-session` and
   `launched` after, with the pane and the tmux server instance. The
+  pane's command ending, the agent exited to switch its model say,
+  drops the pane to the host's login shell at the root rather than
+  closing it: `remain-on-exit` and a `pane-died` hook that respawns the
+  pane as the shell are set in the sequence that makes the session, on
+  every managed session made with a command, `new`'s too; the shell's
+  exit then ends the session as the command's did before. The
   prompt reaches the agent on the argv when the `cmd` has `{prompt}`,
   and `launched` is then `delivered`; otherwise it is typed in once the
   pane is ready: a fresh observation by the detector, after the startup
@@ -815,9 +821,9 @@ cannot exit before `remain-on-exit failed` is set on it; the attach command
 replaces the placeholder in the same sequence as the tags, and an attach
 that fails, ssh refused or the managed session not there, leaves a dead
 pane, with its message, for the next `jump` to respawn. A connected
-attach ends with status 0 whether the managed session ended with its
-agent or was killed under it, and then the pane closes and so the
-workspace session; the next `jump` makes it again.
+attach ends with status 0 whether the managed session ended with the
+shell its agent left behind or was killed under it, and then the pane
+closes and so the workspace session; the next `jump` makes it again.
 
 - **`add <branch>`** resolves the repository from `--repo`, a listed
   name or source, or a source in a forge form the config does not list,
