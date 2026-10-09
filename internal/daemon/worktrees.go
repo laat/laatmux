@@ -255,6 +255,7 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 			continue
 		}
 		delete(d.worktrees, root)
+		delete(d.removing, root)
 		delete(d.gits, root)
 		d.removeRecordLocked(w)
 	}

@@ -363,6 +363,11 @@ type Daemon struct {
 	sessionsHookErr string
 	// The worktrees' git status refreshes, by root; see gitstatus.go.
 	gits map[string]*gitEntry
+	// removing is the roots an rm is removing: no git status is
+	// started or published for one, since the files going under a read
+	// would show as thousands of deletions on its tile, until the
+	// record is gone with them or the removal failed (markRemoving).
+	removing map[string]bool
 	// factSlots bounds the roots the facts messages of every connection
 	// read at once; see prune.go.
 	factSlots chan struct{}
@@ -527,6 +532,7 @@ func New(cfg Config) *Daemon {
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
+		removing:     map[string]bool{},
 		factSlots:    make(chan struct{}, factWorkers),
 		paths:        newResolver(),
 

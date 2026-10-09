@@ -448,7 +448,15 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		}
 		removedFrom := ""
 		if checkout != "" {
+			// The files go one by one under the git status refreshes:
+			// a read meanwhile would publish them as thousands of
+			// deletions on the tile. None is published for the root
+			// until its record is gone with them.
+			rn.core.markRemoving(root, true)
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
+			if err != nil || !removed {
+				rn.core.markRemoving(root, false)
+			}
 			if err != nil {
 				return err
 			}
