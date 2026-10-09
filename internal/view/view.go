@@ -356,7 +356,9 @@ func (m *Model) followed(vis []Item) int {
 // sessions; of a line the viewer's only through a visitor, the first of
 // those in the viewer's session; when none of those is shown, the first
 // of the viewer's tiles in the viewer's session, else the first of the
-// viewer's tiles (viewerRank). So a visitor's tile is followed before
+// viewer's tiles (viewerRank); before all of those, the tile of the
+// agent in the viewer's window (Here), of the viewer's session's
+// several. So a visitor's tile is followed before
 // its worktree's other agents in their own sessions, which its line
 // being the viewer's makes the viewer's too. So the two views agree
 // whenever the tree's choice and a tile of it are shown. A tile in
@@ -373,6 +375,14 @@ func (m *Model) followRow(n int, row func(int) *rows.Row) int {
 		// viewer's session is followed, as a visitor's is, not the
 		// first of the others.
 		id, w, visited = t.ID(), worktreeOf(t), !t.Own || t.Worktree != nil && t.Worktree.Main
+	}
+	// The agent in the viewer's window, of several of the viewer's in
+	// its session, before what the tree follows: two agents in windows
+	// of one session are two tiles of one line.
+	for i := 0; i < n; i++ {
+		if r := row(i); r.Current && r.Kind == rows.KindTile && r.Here {
+			return i
+		}
 	}
 	best, of := -1, -1
 	for i := 0; i < n; i++ {

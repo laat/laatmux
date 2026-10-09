@@ -1226,6 +1226,11 @@ worktree's agents and tasks or the tile of the agent the tree follows
 in other sessions, and of a line followed through a visitor the
 visitor's; when none of those is shown, the first of the viewer's
 tiles in the viewer's session, else the first of the viewer's tiles.
+Before any of those, the tile of the agent in the viewer's own window,
+of the viewer's session's several, two agents in windows of one session
+say: the agent record's `window_id` (tmux's `@N`, which a renumbering
+keeps) against the window the sidebar pane or the popup sits in; the
+tree follows that agent's node in other sessions the same way.
 A tile in other sessions that sorts first is not
 followed for that reason. Such a tile can be the viewer's beside the
 worktree's own, an agent started outside any worktree from a split of

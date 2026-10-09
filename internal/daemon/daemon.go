@@ -897,6 +897,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		Server:        t.Label,
 		Session:       p.Session,
 		Window:        p.WindowIndex,
+		WindowID:      p.WindowID,
 		PaneID:        p.ID,
 		TTY:           p.TTY,
 		Cwd:           firstNonEmpty(p.Cwd, p.CurrentPath),

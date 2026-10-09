@@ -1506,6 +1506,11 @@ func TestNewSessionTagsNoCommand(t *testing.T) {
 	if nocmd, ok := got[agent.PaneID]; !ok || nocmd {
 		t.Errorf("the command's pane %s: NoCmd %v, listed %v", agent.PaneID, nocmd, ok)
 	}
+	for _, p := range panes {
+		if !strings.HasPrefix(p.WindowID, "@") {
+			t.Errorf("pane %s: window id %q", p.ID, p.WindowID)
+		}
+	}
 }
 
 // A managed session's pane whose command ends drops to the login shell

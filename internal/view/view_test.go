@@ -2786,3 +2786,51 @@ func TestEscCloses(t *testing.T) {
 		t.Errorf("esc in a sidebar pane: %+v, confirm %q", a, s.Confirm)
 	}
 }
+
+// Two of the viewer's agents in windows of one session, the viewer's
+// own: the selection follows the one in the viewer's window, and with
+// no window known the first, as before.
+func TestFollowWindow(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	first := protocol.Agent{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "notes", Window: 0, WindowID: "@1", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-time.Minute), Liveness: protocol.Alive, Cwd: "/Users/u/notes"}
+	second := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", Window: 1, WindowID: "@2", Agent: "claude", Activity: protocol.Idle, ActivityAt: now.Add(-time.Minute), Liveness: protocol.Alive, Cwd: "/Users/u/notes"}
+	for _, c := range []struct{ window, want string }{{"", first.ID}, {"@1", first.ID}, {"@2", second.ID}, {"@9", first.ID}} {
+		in := rows.Input{
+			Hosts:   []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true}},
+			Agents:  []protocol.Agent{first, second},
+			Current: "notes",
+			Window:  c.window,
+			Now:     now,
+		}
+		m := &Model{Now: now, LocalHost: "mac", View: ViewAgents, Width: 80, Height: 30, Follow: true}
+		m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+		if vis := m.Visible(); len(vis) != 2 || !vis[0].Row.Own || !vis[1].Row.Own {
+			t.Fatalf("window %q: both tiles the viewer's own: %s", c.window, ids(m))
+		}
+		if r := m.Selection(); r == nil || r.ID() != c.want {
+			t.Errorf("window %q: follows %v, want %s", c.window, r, c.want)
+		}
+		here := 0
+		for _, it := range m.Visible() {
+			if it.Row.Here {
+				here++
+				if it.Row.ID() != c.want || c.window == "" {
+					t.Errorf("window %q: Here on %s", c.window, it.Row.ID())
+				}
+			}
+		}
+		if c.window == "@1" || c.window == "@2" {
+			if here != 1 {
+				t.Errorf("window %q: %d tiles Here, want 1", c.window, here)
+			}
+		} else if here != 0 {
+			t.Errorf("window %q: %d tiles Here, want 0", c.window, here)
+		}
+		// The tree follows the same agent's node in other sessions.
+		m.View = ViewTree
+		m.commit()
+		if r := m.Selection(); r == nil || r.ID() != c.want {
+			t.Errorf("window %q: the tree follows %v, want %s", c.window, r, c.want)
+		}
+	}
+}

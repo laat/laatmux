@@ -61,6 +61,12 @@ type Input struct {
 	// Current is the local session the viewer is in, "" when none: the
 	// session the sidebar pane sits in or the popup was opened from.
 	Current string
+	// Window is the id of the window the viewer sits in, @N on this
+	// machine's default server, "" when unknown: of the viewer's tiles
+	// in the viewer's session, the one whose agent is in that window
+	// is the viewer's own (Row.Here), two agents in windows of one
+	// session say.
+	Window string
 	// Panes and Runs are the pane and run records of hosts with
 	// attribution, the tree's children beside the agents.
 	Panes []protocol.Pane
@@ -178,6 +184,10 @@ type Row struct {
 	// Own. Following prefers it, and a line to any other node (the
 	// view's viewerRank).
 	Own bool
+	// Here is a tile that is Own and whose agent is in the viewer's
+	// window (Input.Window): of the viewer's tiles in the viewer's
+	// session, following takes it first.
+	Here bool
 	// attached is an agent under a line, a visitor in another line's
 	// home session, that the viewer sits with through a plain attachment
 	// to that session, which is not the visitor's local session: that

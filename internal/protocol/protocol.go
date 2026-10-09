@@ -434,6 +434,7 @@ type Agent struct {
 	Server        string    `json:"server,omitempty"` // tmux server label: ServerLaatmux, ServerDefault, or another server's -L name or -S path
 	Session       string    `json:"session"`
 	Window        int       `json:"window"`
+	WindowID      string    `json:"window_id,omitempty"` // tmux's @N, which a renumbering keeps; "" from older daemons
 	PaneID        string    `json:"pane_id"`
 	TTY           string    `json:"tty"`
 	Cwd           string    `json:"cwd"`

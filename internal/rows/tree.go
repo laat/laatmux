@@ -209,7 +209,7 @@ func Tree(in Input) []Row {
 	b.attachedHome(out)
 	b.visitors(out)
 	out = b.otherSessions(out)
-	markViewer(out, in.Current)
+	markViewer(out, in.Current, in.Window)
 	return out
 }
 
@@ -888,7 +888,7 @@ func (b *builder) otherSessions(out []Row) []Row {
 // viewer sits with one of its agents, through the workspace session or
 // an attachment, as following wants it. A line is Own by its own
 // session alone, not through an agent of it.
-func markViewer(out []Row, current string) {
+func markViewer(out []Row, current, window string) {
 	line := -1
 	for i := range out {
 		r := &out[i]
@@ -903,6 +903,9 @@ func markViewer(out []Row, current string) {
 			// to its home session beside its workspace session.
 			r.Current = mine || r.Current
 			r.Own = mine || r.Own
+			// An agent in other sessions in the viewer's own window, of
+			// the viewer's session's several.
+			r.Here = mine && r.Agent != nil && r.Agent.Server == protocol.ServerDefault && window != "" && r.Agent.WindowID == window
 		case mine && line >= 0:
 			out[line].Current = true
 		}
@@ -1151,6 +1154,7 @@ func Agents(in Input, tree []Row) Rows {
 			// session, which the viewer is not in.
 			t.Own = n.Depth == 1 && n.Current || n.attached || t.Local != nil && in.Current != "" && t.Local.Name == in.Current
 			t.Current = t.Current || t.Own
+			t.Here = t.Own && in.Window != "" && n.Agent.Server == protocol.ServerDefault && n.Agent.WindowID == in.Window
 			rows = append(rows, t)
 		}
 	}
