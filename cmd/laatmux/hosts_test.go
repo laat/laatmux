@@ -137,9 +137,47 @@ func TestPauseNoteForOlderDaemon(t *testing.T) {
 	if n := pauseUnknown(protocol.Message{}); n != "" {
 		t.Errorf("no daemon: %q", n)
 	}
+	pauseFixture(t)
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, nil)
-	if n := pauseUnknown(localHello(context.Background())); n != "the local daemon fake is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build" {
+	const note = "the local daemon fake is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build"
+	if n := pauseUnknown(localHello(context.Background())); n != note {
 		t.Errorf("older daemon: %q", n)
+	}
+	// The CLI and H say it on a pause, not on a resume.
+	out := func(args ...string) string {
+		t.Helper()
+		f, err := os.CreateTemp(t.TempDir(), "out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout := os.Stdout
+		os.Stdout = f
+		err = cmdHosts(context.Background(), args)
+		os.Stdout = stdout
+		f.Close()
+		b, _ := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return string(b)
+	}
+	if got := out("pause", "vm"); !strings.HasSuffix(got, "\n"+note+"\n") {
+		t.Errorf("hosts pause: %q", got)
+	}
+	if got := out("resume", "vm"); strings.Contains(got, "older than pause") {
+		t.Errorf("hosts resume: %q", got)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	m := &view.Model{}
+	if d.setPaused(m, "vm", true); !strings.HasSuffix(m.Message, "; "+note) {
+		t.Errorf("H pausing: %q", m.Message)
+	}
+	if d.setPaused(m, "vm", false); strings.Contains(m.Message, "older than pause") {
+		t.Errorf("H resuming: %q", m.Message)
 	}
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged, protocol.CapPause}, nil)
 	if n := pauseUnknown(localHello(context.Background())); n != "" {

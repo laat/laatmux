@@ -1427,12 +1427,13 @@ func (d *Daemon) restartRunners(id string) {
 // wait in relayConn for the host to be resumed, and an add or a listing
 // followed when the pause came is followed again from the host's
 // journal then; a retired record's gone check is not started again, and
-// the host's next listing after the resume makes one. A connection
-// already up is not kept on a host the user paused, which it would keep
-// running. A retired record still appending its repository to the
-// config keeps its goroutine, which does not reach the host. Each
-// record is stopped and started on a goroutine of its own, one at a
-// time per record, so the config's look never waits on a goroutine that
+// the host's next listing after the resume makes one, and a retired
+// record still asking for its repository's append gets the append's
+// goroutine again, which does not reach the host. A connection already
+// up is not kept on a host the user paused, which it would keep
+// running. The goroutines are cancelled at once; each record's are
+// waited for and started again on a goroutine of its own, one at a time
+// per record, so the config's look never waits on a goroutine that
 // waits on a lock: runAttempt's on an attempt that a p delivers, which
 // ends first, its connection with it. Called when the config file has
 // changed, and when a read of the hosts that failed is made again.
@@ -1453,20 +1454,34 @@ func (d *Daemon) pauseRelays() {
 	if len(paused) == 0 {
 		return
 	}
-	var ids []string
+	// Every runner is cancelled here, at once, whatever an earlier
+	// pause's worker still waits on; the waits and the restarts are the
+	// workers'.
+	stopped := map[string][]*runner{}
 	d.relay.mu.Lock()
-	for id := range d.relay.runners {
-		if p, ok := d.relay.recs[id]; ok && paused[p.Host] && !(p.retired() && p.Remember) {
-			ids = append(ids, id)
+	for id, rs := range d.relay.runners {
+		if p, ok := d.relay.recs[id]; ok && paused[p.Host] {
+			stopped[id] = append([]*runner(nil), rs...)
+			for _, r := range rs {
+				r.cancel()
+			}
 		}
 	}
 	d.relay.mu.Unlock()
-	for _, id := range ids {
+	for id, rs := range stopped {
 		go func() {
 			l := d.relay.lock("pause/" + id)
 			l.Lock()
 			defer l.Unlock()
-			d.stopRunners(id)
+			for _, r := range rs {
+				<-r.done
+			}
+			if p, ok := d.relay.get(id); ok && p.retired() && p.Remember {
+				d.relay.mu.Lock()
+				d.startRunnerLocked(d.runCtx(), id, d.settle)
+				d.relay.mu.Unlock()
+				return
+			}
 			d.restartRunners(id)
 		}()
 	}

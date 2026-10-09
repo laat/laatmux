@@ -653,6 +653,72 @@ func TestRelayPausedHost(t *testing.T) {
 	}
 }
 
+// pauseRelays cancels every goroutine of a paused host's records at
+// once, a retired record's gone check among them, though an earlier
+// pause's worker still waits on one that has not ended; the waits and
+// the restarts are the workers', one record at a time. A retired record
+// still asking for its append has the append's goroutine started again,
+// and another host's records keep theirs.
+func TestPauseRelaysCancels(t *testing.T) {
+	f := newRelayFixture(t, nil)
+	f.hosts.set(peer.Host{Name: "vm", SSH: "vm", Paused: true}, peer.Host{Name: "box", SSH: "box"})
+	mk := func(id, host string, retired bool) {
+		p := pendingFile{Pending: protocol.Pending{ID: id, Host: host, Source: f.source(), Repo: "proj", Branch: id, Taken: true, Sent: true, Done: true, OK: true,
+			Listed: true, Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()}}
+		if retired {
+			p.ReplacedBy, p.RetiredAt, p.Remember = "henv/worktree//w/proj/"+id, time.Now(), true
+		}
+		if _, err := f.local.relay.create(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("x1", "vm", false)
+	mk("r1", "vm", true)
+	mk("b1", "box", false)
+	// start runs fn as a goroutine of the record's; cancelled is closed
+	// when its context is.
+	start := func(id string, fn func(ctx context.Context)) (cancelled chan struct{}) {
+		cancelled = make(chan struct{})
+		f.local.relay.mu.Lock()
+		f.local.startRunnerLocked(f.ctx, id, func(ctx context.Context, _ string) {
+			go func() { <-ctx.Done(); close(cancelled) }()
+			fn(ctx)
+		})
+		f.local.relay.mu.Unlock()
+		return cancelled
+	}
+	gone := func(c chan struct{}) bool {
+		select {
+		case <-c:
+			return true
+		case <-time.After(time.Second):
+			return false
+		}
+	}
+	release := make(chan struct{})
+	stuck := start("x1", func(ctx context.Context) { <-ctx.Done(); <-release }) // queued on a lock, say
+	check := start("r1", func(ctx context.Context) { <-ctx.Done() })
+	other := start("b1", func(ctx context.Context) { <-ctx.Done() })
+	f.local.pauseRelays()
+	if !gone(stuck) || !gone(check) {
+		t.Fatal("the paused host's goroutines not cancelled")
+	}
+	f.awaitRecord(t, "r1", 5*time.Second, func(p pendingFile) bool { return !p.Remember })
+	// The first pause's worker still waits on stuck: a goroutine started
+	// since is cancelled by the next pause all the same.
+	later := start("x1", func(ctx context.Context) { <-ctx.Done() })
+	f.local.pauseRelays()
+	if !gone(later) {
+		t.Fatal("a goroutine started since the first pause not cancelled while its worker waits")
+	}
+	select {
+	case <-other:
+		t.Fatal("another host's goroutine cancelled")
+	default:
+	}
+	close(release)
+}
+
 // A pause the daemon sees in the config file while the relay follows an
 // add on an open connection closes it, the add going on on the host:
 // the record waits, saying the host is paused, with no dial made;
