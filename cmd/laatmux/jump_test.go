@@ -547,6 +547,9 @@ func TestJumpMakesShellSession(t *testing.T) {
 			{ID: "menv/laatmux/%3", EnvironmentID: "menv", Server: "laatmux", Session: "proj/lost", Agent: "claude", Managed: true, WorktreeID: otherLost.ID, Cwd: otherLost.Root},
 			{ID: "menv/laatmux/%10", EnvironmentID: "menv", Server: "laatmux", Session: "proj/loose", Agent: "claude", Cwd: "/w/loose/x"},
 			{ID: "menv/laatmux/%11", EnvironmentID: "menv", Server: "laatmux", Session: "proj/loose", Agent: "codex"},
+			// An agent of sub's in a pane new made below its root: the
+			// worktree's, unlike a main checkout's.
+			{ID: "menv/laatmux/%13", EnvironmentID: "menv", Server: "laatmux", Session: "proj/sub", Agent: "claude", Managed: true, WorktreeID: sub.ID, Cwd: "/w/sub/src"},
 		},
 		Panes: []protocol.Pane{
 			pane(4, "proj/pn", "/w2/pn/src", otherPn.ID, false),

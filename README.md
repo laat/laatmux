@@ -434,11 +434,15 @@ truth; labels only place new things.
   never follows a shell's `cd`. An agent in a managed session made
   below the root, a `new` session's, keeps a row of its own, even where
   the checkout is inside a worktree, and the views take a session of
-  the checkout's shell session's name in which such an agent runs for
-  no session of the checkout's; a pane with no agent in a checkout has
-  no pane record, its home's shell among them. `rm` refuses a main
-  checkout's root, also where the repos directory is under the
-  worktrees one, and `run` takes registered worktrees only, as before.
+  the checkout's shell session's name for no session of the checkout's
+  where a managed agent in it runs in a pane laatmux made at another
+  directory, below the root too (with no pane record of the home's
+  shell, a pane moved there by hand from a session `new` made below the
+  root reads the same once the home is lost); a pane with no agent in
+  a checkout has no pane record, its home's shell among them. `rm`
+  refuses a main checkout's root, also where the repos directory is
+  under the worktrees one, and `run` takes registered worktrees only,
+  as before.
 - **Attribution**, capability `attribution` (issue #55): every polled
   pane, on every server in `tmux_servers`, belongs to the worktree whose
   root contains its path, the recorded `@laatmux_cwd` of a pane laatmux
@@ -1090,7 +1094,8 @@ list that `Tab` or a click switches:
   session of the agent laatmux made at its root stays the line's,
   whatever its name, and so does one named as that shell session is,
   as a session named after a worktree stays the worktree's, unless an
-  agent in it runs in a pane laatmux made below the root. Its agents'
+  agent in it runs in a pane laatmux made at another directory, below
+  the root too. Its agents'
   tiles are titled by the repository, with the branch under it.
   A pending task sits where its worktree will be, holding the worktree's
   children while it stands for it, the newest of several owning them.

@@ -968,14 +968,14 @@ func (r Row) home() (session string, own bool) {
 		return "", false
 	case r.Worktree != nil && r.Worktree.Session != "":
 		return r.Worktree.Session, true
-	case r.madeHome != "":
-		// A main checkout's agent laatmux made at the root, whichever
-		// agent the line shows.
-		return r.madeHome, false
 	case r.Worktree != nil && r.Agent != nil && r.Agent.Server == protocol.ServerLaatmux:
 		// A standing task's root agent in the task's session leaves
 		// the session the task's own.
 		return r.Agent.Session, r.stands() && r.Pending.Session == r.Agent.Session
+	case r.madeHome != "":
+		// A main checkout's agent laatmux made at the root, where the
+		// line shows an agent in a plain session.
+		return r.madeHome, false
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
 		// A task's session, before the host lists the worktree or
 		// while it lists one without a home.

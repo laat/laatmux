@@ -106,7 +106,8 @@ type Row struct {
 	hostRepo string
 	// madeHome is, on a main checkout's line with no home, the session
 	// of the agent laatmux made at its root, which a split gone elsewhere
-	// took the home from, whatever agent the line shows; "" for none.
+	// took the home from: its Home where the line shows an agent in a
+	// plain session; "" for none.
 	// elsewhere is that the session named as its shell session
 	// (ShellSession) is not the line's: a managed agent in it runs in a
 	// pane laatmux made at another directory (nameClaim).

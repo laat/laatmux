@@ -1422,12 +1422,16 @@ func TestMainCheckoutHome(t *testing.T) {
 	}
 	in.Agents[4].Session, in.Agents[5].Session = "laatmux/main", "laatmux/main"
 	// The agent laatmux made at the root the most recently active: the
-	// line goes through it, its session the line's.
+	// line goes through it, its session the line's, also beside an older
+	// one made at the root in another session whose home was lost too.
 	in.Agents[1].Activity, in.Agents[4].Activity = protocol.Idle, protocol.Working
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%8", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/older", Agent: "claude", Managed: true, Cwd: "/code/laatmux",
+		Activity: protocol.Idle, ActivityAt: now.Add(-2 * time.Hour), Liveness: protocol.Alive, WorktreeID: "menv/checkout//code/laatmux", Identity: &protocol.Identity{PID: 8, StartUnix: 1}})
 	nodes = Tree(in)
-	if _, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/laatmux/%5" || line.Home() != "laatmux/main" {
+	if i, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/laatmux/%5" || line.Home() != "laatmux/main" || HomeLine(nodes, "mac", "laatmux/main") != i {
 		t.Errorf("the agent laatmux made at the root working, the home lost: %+v", line)
 	}
+	in.Agents = in.Agents[:len(in.Agents)-1]
 	// The home back with a shell alone in it: the line shows the working
 	// agent in a plain session; with none of its own, no agent.
 	in.Worktrees[1].Session = "laatmux/main"
@@ -1449,7 +1453,9 @@ func TestMainCheckoutHome(t *testing.T) {
 // laatmux/main --cwd /code/laatmux/sub` say, is no session of the
 // checkout's, which the host does not give the agent: HomeLine finds no
 // line for it and the viewer in a plain attachment to it is not on the
-// main line. With the agent made at the root, the name is the line's.
+// main line. With the agent made at the root, with one in a split laatmux
+// did not make, with one made elsewhere on another machine, or with no
+// agent in the session, the name is the line's.
 func TestMainCheckoutNameElsewhere(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	in := mainInput(now)
@@ -1466,10 +1472,45 @@ func TestMainCheckoutNameElsewhere(t *testing.T) {
 			t.Errorf("the viewer in an attachment to a session made below the root is on the main line: %+v", n)
 		}
 	}
-	in.Agents[len(in.Agents)-1].Cwd = "/code/laatmux"
-	nodes = Tree(in)
-	if l := HomeLine(nodes, "mac", "laatmux/main"); l < 0 || !nodes[l].mainCheckout() || !nodes[l].Own {
-		t.Errorf("HomeLine %d for the session made at the root", l)
+	// Made at the root; or an agent in a split gone elsewhere, which
+	// laatmux did not make; or one made elsewhere in a session of that
+	// name on another machine: the name is the line's.
+	for what, a := range map[string]func(a *protocol.Agent){
+		"made at the root":            func(a *protocol.Agent) { a.Cwd = "/code/laatmux" },
+		"a split gone elsewhere":      func(a *protocol.Agent) { a.Managed, a.Cwd = false, "/tmp" },
+		"made on another machine":     func(a *protocol.Agent) { a.EnvironmentID, a.ID = "venv", "venv/laatmux/%7" },
+		"no agent of its name at all": func(a *protocol.Agent) { a.Session = "other" },
+	} {
+		agent := in.Agents[len(in.Agents)-1]
+		a(&in.Agents[len(in.Agents)-1])
+		nodes = Tree(in)
+		if l := HomeLine(nodes, "mac", "laatmux/main"); l < 0 || !nodes[l].mainCheckout() || !nodes[l].Own {
+			t.Errorf("%s: HomeLine %d", what, l)
+		}
+		in.Agents[len(in.Agents)-1] = agent
+	}
+}
+
+// The main checkout's agent laatmux made at its root, moved by hand into
+// a worktree's add session, leaves that session the worktree's for the
+// tree, as a worktree's root agent moved there does, while the main line
+// shows an agent in a plain session.
+func TestMainCheckoutRootAgentInWorktreeSession(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	in := mainInput(now)
+	src := "https://github.com/laat/laatmux"
+	in.Worktrees = append(in.Worktrees, protocol.Worktree{ID: "menv/worktree//w/y", EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "y", Root: "/w/y"})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%9", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/y", Agent: "codex", Managed: true, Cwd: "/code/laatmux",
+		Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, WorktreeID: "menv/checkout//code/laatmux", Identity: &protocol.Identity{PID: 9, StartUnix: 9}})
+	nodes := Tree(in)
+	l := HomeLine(nodes, "mac", "laatmux/y")
+	if l < 0 || nodes[l].Worktree == nil || nodes[l].Worktree.ID != "menv/worktree//w/y" {
+		t.Fatalf("HomeLine %d, want y's line", l)
+	}
+	for _, n := range nodes {
+		if n.mainCheckout() && (n.Agent == nil || n.Agent.ID != "menv/default/%2" || n.Home() != "laatmux/y") {
+			t.Errorf("the main line: %+v", n)
+		}
 	}
 }
 
