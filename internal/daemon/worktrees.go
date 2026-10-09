@@ -236,9 +236,9 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 }
 
 // publishRecordLocked publishes one record of the listing when it
-// changed, and marks its root seen. A main checkout's has no home
-// session: a session new made in it is no workspace's. Called with d.mu
-// held.
+// changed, and marks its root seen. A main checkout's home session is
+// one as a worktree's is, the one a jump makes with a shell at its root
+// say: add makes none. Called with d.mu held.
 func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[string]bool) {
 	seen[r.Root] = true
 	w := protocol.Worktree{
@@ -249,10 +249,8 @@ func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[
 		Branch:        r.Branch,
 		Root:          r.Root,
 		Main:          r.Main,
+		Session:       d.managedRoots[r.Root],
 		UpdatedAt:     now,
-	}
-	if !r.Main {
-		w.Session = d.managedRoots[r.Root]
 	}
 	// A branch checked out by hand that the connection cannot carry
 	// is sent as it is shown, and marked: no command names the
@@ -329,15 +327,16 @@ func (d *Daemon) removeRecordLocked(w protocol.Worktree) {
 }
 
 // inUseLocked reports whether a main checkout's record is published: a
-// worktree of it is listed, or an agent is attributed to it. Being in
-// the host's config is not use: a config that lists every repository,
-// as one made from a directory of clones does, would publish a line for
-// each. The rest of the checkouts under the repos directory, many on a
-// machine that clones there by hand, have no record, no line and no git
-// status refresh, and so does one whose HEAD could not be read. Called
-// with d.mu held.
+// worktree of it is listed, an agent is attributed to it, or it has a
+// home session, which its line shows and goes to. Being in the host's
+// config is not use: a config that lists every repository, as one made
+// from a directory of clones does, would publish a line for each. The
+// rest of the checkouts under the repos directory, many on a machine
+// that clones there by hand, have no record, no line and no git status
+// refresh, and so does one whose HEAD could not be read. Called with
+// d.mu held.
 func (d *Daemon) inUseLocked(r worktree.Record) bool {
-	return !r.Unread && (r.Linked || d.mainAgents[d.checkoutID(r.Root)])
+	return !r.Unread && (r.Linked || d.mainAgents[d.checkoutID(r.Root)] || d.managedRoots[r.Root] != "")
 }
 
 // syncMainsLocked publishes the main checkouts again when the set with

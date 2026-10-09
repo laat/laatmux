@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -104,7 +106,19 @@ type Row struct {
 	// hostRepo is the host's label of a line's worktree where this
 	// machine names it otherwise (Input.HostRepos), "" where not.
 	hostRepo string
-	Agent    *protocol.Agent
+	// madeHome is, on a main checkout's line with no home, the session
+	// of the agent laatmux made at its root, which a split gone elsewhere
+	// took the home from: its Home where the line shows an agent in a
+	// plain session; "" for none. made is the sessions of every such
+	// agent, of which HomeLine takes any for the line's, as it takes a
+	// worktree's home.
+	// elsewhere is that the session named as its shell session
+	// (ShellSession) is not the line's: a managed agent in it runs in a
+	// pane laatmux made at another directory (nameClaim).
+	madeHome  string
+	made      []string
+	elsewhere bool
+	Agent     *protocol.Agent
 	// Local is the local session for the row, when there is one: the
 	// workspace session by key, the plain attachment by tag (of several
 	// with one tag, the viewer's when it is in one), or the observed
@@ -296,7 +310,8 @@ func (r Row) State() string {
 	case r.Agent != nil:
 		return ""
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Worktree.Main):
-		// A main checkout has no session of its own to lack.
+		// A main checkout lacks none: add makes it none, and enter one
+		// with a shell when asked.
 		return "no agent"
 	default:
 		return "no session"
@@ -494,17 +509,20 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	return best
 }
 
-// mainAgent is the agent a main checkout's line jumps through: of its
-// agents in plain sessions on the default server, the only ones the
-// host gives it, the most recently active. One working or blocked is
-// active now and goes first, then the latest change of activity; a live
-// one before one gone. Unlike a worktree's, the choice turns on
-// activity: the checkout has no session of its own for enter to go to,
-// and goes where the work is.
+// mainAgent is the agent a main checkout's line shows, and with no home
+// jumps through: of its agents, the ones the host gives it, in plain
+// sessions on the default server and on the managed server in its home
+// or in the pane laatmux made at its root, the most recently active. One
+// working or blocked is active now and goes first, then the latest
+// change of activity; a live one before one gone. Unlike a worktree's,
+// the choice turns on activity: the line's state follows its agents
+// wherever they run, and with no home enter goes where the work is.
+// With a home enter goes there (rowSpec), whichever agent the line
+// shows.
 func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {
-		if a.Server != protocol.ServerDefault || a.Managed {
+		if a.Server != protocol.ServerLaatmux && (a.Server != protocol.ServerDefault || a.Managed) {
 			continue
 		}
 		if best == nil || livelier(a, best) {
@@ -512,6 +530,26 @@ func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 		}
 	}
 	return best
+}
+
+// madeSessions is, of a main checkout's agents, the sessions of those
+// laatmux made at its root, a split gone elsewhere having taken their
+// home, the first's in rowAgent's order first; nil for none.
+func madeSessions(agents []*protocol.Agent, w *protocol.Worktree) []string {
+	var made []*protocol.Agent
+	for _, a := range agents {
+		if a.Server == protocol.ServerLaatmux && a.Managed && a.Cwd == w.Root {
+			made = append(made, a)
+		}
+	}
+	sort.SliceStable(made, func(i, j int) bool { return before(made[i], made[j]) })
+	var sessions []string
+	for _, a := range made {
+		if !slices.Contains(sessions, a.Session) {
+			sessions = append(sessions, a.Session)
+		}
+	}
+	return sessions
 }
 
 // JumpAgent is the agent a jump to a worktree or a main checkout goes

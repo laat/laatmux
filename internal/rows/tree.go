@@ -2,6 +2,7 @@ package rows
 
 import (
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -336,26 +337,42 @@ func (b *builder) worktrees() {
 		} else {
 			line.Name = w.Repo + "/" + w.Branch
 		}
-		// The workspace session by the worktree's key. A main checkout
-		// has none: one left at its root, from a worktree there before,
-		// is no session of its and stays an orphaned line.
+		// The workspace session by the worktree's key, a main checkout's
+		// as any root's: the one a jump made for the shell session it
+		// made there, or one left at its root from a worktree there
+		// before, which a jump there takes up.
 		key := protocol.SessionKey(w.EnvironmentID, w.Root)
 		ws := j.byKey[key]
-		if w.Main {
-			ws = nil
-		} else {
-			b.seenKey[key] = true
-		}
+		b.seenKey[key] = true
 		agents := j.worktreeAgents(w)
 		// The line's agent is the one its jump goes through: in the home
 		// session; with the home lost, the one laatmux made at the root,
 		// whose session the workspace session attaches to then (Home);
 		// or one on a default server. The home, as Home has it, is what
-		// the children take the workspace session by.
+		// the children take the workspace session by. A main checkout's
+		// line shows the most recently active agent wherever it runs; with
+		// the home lost, the session of the agent laatmux made at its root
+		// is its Home all the same, whichever agent the line shows, also
+		// when the session has another name than the line's shell session
+		// would, made on another branch or by hand. The line claims no
+		// session by that name where a managed agent in it was made at
+		// another directory, below the root too (nameClaim).
 		line.Agent = rowAgent(agents, w)
+		if w.Main {
+			if w.Session == "" {
+				line.made = madeSessions(agents, w)
+			}
+			if len(line.made) > 0 {
+				line.madeHome = line.made[0]
+			}
+			line.elsewhere = b.madeElsewhere(w, line.ShellSession())
+		}
 		home := w.Session
 		if home == "" && line.Agent != nil && line.Agent.Server == protocol.ServerLaatmux {
 			home = line.Agent.Session
+		}
+		if home == "" {
+			home = line.madeHome
 		}
 		var children []Row
 		for _, a := range agents {
@@ -406,12 +423,13 @@ func (b *builder) worktrees() {
 				}
 			}
 		}
-		if w.Main && in.Current != "" {
-			// A main checkout has no session of its own: the viewer in
-			// the plain session of any of its agents is on its line by
-			// its own session, not only in its jump agent's, which turns
-			// with activity, so the following band does not move with
-			// another agent's work.
+		if w.Main && w.Session == "" && in.Current != "" {
+			// A main checkout with no home, enter going to the plain
+			// session of an agent: the viewer in the plain session of any
+			// of its agents is on its line by its own session, not only
+			// in its jump agent's, which turns with activity, so the
+			// following band does not move with another agent's work.
+			// With a home, enter goes there, as a worktree's does.
 			for _, c := range children {
 				if c.Local != nil && !c.Local.Laatmux() && c.Local.Name == in.Current {
 					line.Current, line.Own = true, true
@@ -456,6 +474,20 @@ func (b *builder) worktrees() {
 		}
 		rp.nodes = append(rp.nodes, append([]Row{line}, children...))
 	}
+}
+
+// madeElsewhere reports whether a managed agent on a main checkout's
+// machine in the session of that name runs in a pane laatmux made at
+// another directory than the checkout's root: one new made below the
+// root, say, which the host gives no checkout.
+func (b *builder) madeElsewhere(w *protocol.Worktree, session string) bool {
+	for i := range b.in.Agents {
+		a := &b.in.Agents[i]
+		if session != "" && a.EnvironmentID == w.EnvironmentID && a.Server == protocol.ServerLaatmux && a.Session == session && a.Managed && a.Cwd != "" && a.Cwd != w.Root {
+			return true
+		}
+	}
+	return false
 }
 
 // panes is the worktree's pane rows, by session, window and pane.
@@ -654,11 +686,13 @@ func (r Row) mainCheckout() bool {
 // is named after while that session is no other line's: the session
 // add made for the worktree, which the host stops calling its home once
 // a pane of another worktree is in it, is still the worktree's for the
-// viewer. The tasks standing for one worktree are one line here, as for
-// the workspace session they share: all are the viewer's when one is,
-// by its own Home or name, which for a task with no agent of its own may
-// not be the line's, and the newest, which holds the children and which
-// following goes to, is Own when HomeLine picks any of them. The line
+// viewer, and so is the one a jump made with a shell for a worktree or
+// a main checkout (nameClaim). The tasks standing for one worktree
+// are one line here, as for the workspace session they share: all are
+// the viewer's when one is, by its own Home or name, which for a task
+// with no agent of its own may not be the line's, and the newest, which
+// holds the children and which following goes to, is Own when HomeLine
+// picks any of them. The line
 // HomeLine picks takes the mark whichever of a machine's two names the
 // attachment is tagged with and the line carries (homeLine). Not for no
 // host, as HomeLine has it, which wants the lines in the tree's order,
@@ -686,7 +720,7 @@ func (b *builder) attachedHome(out []Row) {
 		n := &out[i]
 		home, named := n.Home(), false
 		if home == "" && n.Depth == 1 {
-			home, named = n.AddSession(), true
+			home, named = n.nameClaim(), true
 		}
 		if home == "" || !b.attachedTo(n, home) {
 			continue
@@ -942,6 +976,10 @@ func (r Row) home() (session string, own bool) {
 		// A standing task's root agent in the task's session leaves
 		// the session the task's own.
 		return r.Agent.Session, r.stands() && r.Pending.Session == r.Agent.Session
+	case r.madeHome != "":
+		// A main checkout's agent laatmux made at the root, where the
+		// line shows an agent in a plain session.
+		return r.madeHome, false
 	case r.stands() && r.Pending.EnvironmentID != "" && r.Pending.Root != "":
 		// A task's session, before the host lists the worktree or
 		// while it lists one without a home.
@@ -953,7 +991,11 @@ func (r Row) home() (session string, own bool) {
 // HomeLine is the index in the tree of the depth-1 line on a host whose
 // workspace session attaches to a managed session, the line whose Home
 // it is, or, with no home at all, the line of the worktree the session
-// is named after. Of several, the first in the tree's order whose own
+// is named after, or of the main checkout, whose shell session a jump
+// named so and a split gone elsewhere took the home from, say; a main
+// checkout's line with no home takes the session of any of its root
+// agents as one whose Home it is. Of several, the first in the tree's
+// order whose own
 // session it is; then the first of a worktree the session is named after
 // (namedAfter), whose root agent is in it with the home lost or which
 // has no home at all; then the first. A worktree's root agent moved by
@@ -981,6 +1023,11 @@ func HomeLine(tree []Row, host, session string) int {
 			continue
 		}
 		home, own := n.home()
+		if home != session && slices.Contains(n.made, session) {
+			// Another session a main checkout's root agent is in, its
+			// home lost too.
+			home, own = session, false
+		}
 		switch {
 		case home != session && home != "":
 		case home == session && own:
@@ -997,20 +1044,36 @@ func HomeLine(tree []Row, host, session string) int {
 	return first
 }
 
-// namedAfter reports whether a managed session has the name add gives
-// the line's worktree's (AddSession).
+// namedAfter reports whether a managed session has the name the line
+// claims (nameClaim).
 func (r Row) namedAfter(session string) bool {
-	return session != "" && session == r.AddSession()
+	return session != "" && session == r.nameClaim()
 }
 
-// AddSession is the name add gives the managed session of the line's
-// worktree, tmux.SessionName of the host's label, which this machine's
-// configuration may name otherwise, and the branch. "" for a detached
-// worktree, which add does not make, for a main checkout, which add
-// makes no session for, and for a line of none.
-func (r Row) AddSession() string {
+// nameClaim is the name of the session that is the line's by its name
+// alone: the one add gives the line's worktree's, or a jump the one it
+// makes with a shell for the worktree or the main checkout
+// (ShellSession). A main checkout claims none where a managed agent in
+// the session of that name runs in a pane laatmux made at another
+// directory (madeElsewhere), as the host gives such a session no
+// checkout.
+func (r Row) nameClaim() string {
+	if r.elsewhere {
+		return ""
+	}
+	return r.ShellSession()
+}
+
+// ShellSession is the name of the managed session add makes for the
+// line's worktree, and a jump with the user's shell for the worktree or
+// the main checkout when it has none: tmux.SessionName of the host's
+// label, which this machine's configuration may name otherwise, and the
+// branch; a main checkout's in the same form, though add makes it none.
+// "" for a detached checkout, which neither makes, and for a line of
+// none.
+func (r Row) ShellSession() string {
 	w := r.Worktree
-	if w == nil || w.Branch == "" || w.Main {
+	if w == nil || w.Branch == "" {
 		return ""
 	}
 	return tmux.SessionName(firstOf(r.hostRepo, w.Repo), w.Branch)

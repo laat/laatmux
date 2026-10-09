@@ -79,7 +79,7 @@ func TestAttributionTable(t *testing.T) {
 		var got string
 		for i := 0; i < 100; i++ {
 			d.mu.Lock()
-			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), false)
+			got = d.worktreeOfLocked(d.paths.resolve(panePath(c.pane)), nil)
 			d.mu.Unlock()
 			if got == c.want {
 				break
@@ -90,17 +90,74 @@ func TestAttributionTable(t *testing.T) {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
+	every := func(string) bool { return true }
 	d.mu.Lock()
-	got := d.worktreeOfLocked(filepath.Join(inner, "src"), true)
+	got := d.worktreeOfLocked(filepath.Join(inner, "src"), every)
 	// One whose HEAD could not be read has no record: neither it nor
 	// the worktree around it takes the agent.
-	gotUnread := d.worktreeOfLocked(unread, true)
+	gotUnread := d.worktreeOfLocked(unread, every)
 	d.mu.Unlock()
 	if got != "env/checkout/"+inner {
 		t.Errorf("an agent in a plain session in the checkout: %q", got)
 	}
 	if gotUnread != "" {
 		t.Errorf("an agent in a plain session in a checkout unread: %q", gotUnread)
+	}
+}
+
+// An agent in a main checkout is the checkout's when it is a named agent
+// in a pane that is not laatmux's own: a live one on the default server;
+// on the managed server, live or gone, one in the session that is the
+// checkout's home or in the pane laatmux made at its root, the home
+// lost. Not one gone in a plain session, not one in another managed
+// session there or in a pane laatmux made below the root, not on another
+// observed server, not a shell, and not one in a sidebar or attach pane.
+// In a worktree any agent is the worktree's.
+func TestAttributeMainCheckout(t *testing.T) {
+	base := realTemp(t)
+	main, foo := filepath.Join(base, "repos", "proj"), filepath.Join(base, "worktrees", "proj", "foo")
+	sub := filepath.Join(main, "sub")
+	mkdirs(t, sub, foo)
+	d := New(Config{EnvironmentID: "env"})
+	managed := &target{Target: Target{Label: "laatmux", Managed: true}}
+	def := &target{Target: Target{Label: "default"}}
+	other := &target{Target: Target{Label: "other"}}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.roots = resolveRoots([]string{foo}, []root{{root: main}})
+	d.managedRoots = map[string]string{main: "proj/main", foo: "proj/foo"}
+	claude := protocol.Agent{Agent: "claude", Liveness: protocol.Alive}
+	gone := protocol.Agent{Agent: "claude", Liveness: protocol.Gone}
+	checkout, worktree := "env/checkout/"+main, "env/worktree/"+foo
+	pane := func(session string) tmux.Pane { return tmux.Pane{Session: session} }
+	made := func(session, cwd string) tmux.Pane { return tmux.Pane{Session: session, Managed: true, Cwd: cwd} }
+	for _, c := range []struct {
+		name string
+		t    *target
+		pane tmux.Pane
+		path string
+		a    protocol.Agent
+		want string
+	}{
+		{"plain session", def, pane("work"), main, claude, checkout},
+		{"one gone in a plain session", def, pane("work"), main, gone, ""},
+		{"another observed server", other, pane("work"), main, claude, ""},
+		{"the home session", managed, pane("proj/main"), filepath.Join(main, "src"), claude, checkout},
+		{"one gone in the home", managed, made("proj/main", main), main, gone, checkout},
+		{"one gone in a split of the home", managed, pane("proj/main"), filepath.Join(main, "src"), gone, checkout},
+		{"the pane laatmux made at the root, the home lost", managed, made("old", main), main, claude, checkout},
+		{"one gone there", managed, made("old", main), main, gone, checkout},
+		{"a pane laatmux made below the root", managed, made("scratch", sub), sub, claude, ""},
+		{"another managed session", managed, pane("scratch"), main, claude, ""},
+		{"the home of another root", managed, pane("proj/foo"), main, claude, ""},
+		{"a shell in the home", managed, pane("proj/main"), main, protocol.Agent{Liveness: protocol.Alive}, ""},
+		{"laatmux's own pane in the home", managed, tmux.Pane{Session: "proj/main", Own: true}, main, claude, ""},
+		{"a worktree's, in any session", managed, pane("scratch"), foo, gone, worktree},
+	} {
+		st := &paneState{target: c.t, pane: c.pane, path: c.path}
+		if got := d.attributeLocked(st, c.a); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

@@ -99,8 +99,12 @@ func sh(t *testing.T, dir string, args ...string) {
 // the config, from the first listing, with its branch and, as a
 // worktree's, its git status; another checkout once an agent in a plain
 // session on the default server is in it, its record before the agent
-// naming it, and taken back after the agent has left. A managed agent
-// in a checkout is not its, a shell there has no pane record, and a
+// naming it, and taken back after the agent has left. The managed
+// session with a pane laatmux made at a checkout's root is its home, the
+// record's session, which puts it in use with a shell alone in it, and an
+// agent in it is the checkout's; another managed agent in a checkout is
+// not its, and the home gone, the record has no session and goes when
+// nothing else holds it. A shell there has no pane record, and a
 // subscriber that did not ask for the records gets none.
 func TestMainCheckoutRecords(t *testing.T) {
 	store, remote := newStore(t)
@@ -125,6 +129,7 @@ func TestMainCheckoutRecords(t *testing.T) {
 		"/dev/a1": {Agent: "claude", PID: 11, Start: start, Comm: "claude"},
 		"/dev/a2": {Agent: "codex", PID: 12, Start: start, Comm: "codex"},
 		"/dev/a3": {Agent: "claude", PID: 13, Start: start, Comm: "claude"},
+		"/dev/a4": {Agent: "claude", PID: 14, Start: start, Comm: "claude"},
 	}}
 	d := New(Config{
 		EnvironmentID: "env", Store: store,
@@ -167,7 +172,16 @@ func TestMainCheckoutRecords(t *testing.T) {
 	without.drain()
 
 	laatmux.set(func() {
-		laatmux.panes = []tmux.Pane{{Session: "notes", ID: "%1", TTY: "/dev/a2", Managed: true, Cwd: other, CurrentPath: other}}
+		laatmux.panes = []tmux.Pane{
+			// The managed pane at other's root makes notes its home, and
+			// the agent in it the checkout's; one in another managed
+			// session there, under the root, is not.
+			{Session: "notes", ID: "%1", TTY: "/dev/a2", Managed: true, Cwd: other, CurrentPath: other},
+			{Session: "elsewhere", ID: "%2", TTY: "/dev/a4", Managed: true, Cwd: filepath.Join(other, "sub"), CurrentPath: filepath.Join(other, "sub")},
+			// A shell a jump made at proj's root: its home, which puts it
+			// in use with no agent.
+			{Session: "proj/main", ID: "%3", TTY: "/dev/s9", Managed: true, NoCmd: true, Cwd: proj, CurrentPath: proj},
+		}
 	})
 	def.set(func() {
 		def.panes = []tmux.Pane{
@@ -179,20 +193,24 @@ func TestMainCheckoutRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	ms = with.drain()
-	rec, agent := recordAt(ms, otherID), agentAt(ms, "%7")
-	if rec < 0 || agent < 0 || rec > agent {
-		t.Fatalf("the record of the checkout the agent is in, then the agent: %+v", ms)
+	rec, agent, home := recordAt(ms, otherID), agentAt(ms, "%7"), agentAt(ms, "%1")
+	if rec < 0 || agent < 0 || home < 0 || rec > agent || rec > home {
+		t.Fatalf("the record of the checkout the agents are in, then the agents: %+v", ms)
 	}
-	// The managed pane at the root would make notes its home session;
-	// a main checkout has none.
-	if w := ms[rec].Worktree; !w.Main || w.Branch != "feature" || w.Repo != "other" || w.Session != "" {
+	if w := ms[rec].Worktree; !w.Main || w.Branch != "feature" || w.Repo != "other" || w.Session != "notes" {
 		t.Fatalf("the checkout's record: %+v", w)
 	}
 	if a := ms[agent].Agent; a.WorktreeID != otherID {
 		t.Fatalf("the agent in the checkout: %+v", a)
 	}
-	if i := agentAt(ms, "%1"); i < 0 || ms[i].Agent.WorktreeID != "" {
-		t.Fatalf("a managed agent in the checkout: %+v", ms)
+	if a := ms[home].Agent; a.WorktreeID != otherID {
+		t.Fatalf("the agent in the checkout's home: %+v", a)
+	}
+	if i := agentAt(ms, "%2"); i < 0 || ms[i].Agent.WorktreeID != "" {
+		t.Fatalf("a managed agent in the checkout, not in its home: %+v", ms)
+	}
+	if i := recordAt(ms, projID); i < 0 || !ms[i].Worktree.Main || ms[i].Worktree.Session != "proj/main" {
+		t.Fatalf("a checkout with a home and no agent: %+v", ms)
 	}
 	if slices.ContainsFunc(ms, func(m protocol.Message) bool { return m.Pane != nil }) {
 		t.Fatalf("a shell in a checkout has a pane record: %+v", ms)
@@ -212,16 +230,54 @@ func TestMainCheckoutRecords(t *testing.T) {
 		t.Fatalf("a snapshot that did not ask has the attribution: %+v", snap.Agents)
 	}
 
-	// The agent leaves: its upsert, then the record goes; the
-	// checkout with a worktree stays.
+	// A split of notes gone elsewhere takes the home: the record has no
+	// session, and the agent in the pane laatmux made at the root stays
+	// the checkout's, as a worktree's root agent does, also once it quit.
+	laatmux.set(func() {
+		laatmux.panes = append(laatmux.panes, tmux.Pane{Session: "notes", ID: "%4", TTY: "/dev/s4", CurrentPath: "/"})
+	})
+	ids.mu.Lock()
+	delete(ids.ids, "/dev/a2")
+	ids.mu.Unlock()
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ms = with.drain()
+	if i := recordAt(ms, otherID); i < 0 || ms[i].Worktree.Session != "" || removedAt(ms, otherID) >= 0 {
+		t.Fatalf("the home lost: %+v", ms)
+	}
+	s, snap = d.subscribe(nil, true)
+	d.unsubscribe(s)
+	if i := slices.IndexFunc(snap.Agents, func(a protocol.Agent) bool { return a.PaneID == "%1" }); i < 0 || snap.Agents[i].WorktreeID != otherID || snap.Agents[i].Liveness != protocol.Gone {
+		t.Fatalf("the agent laatmux made at the root, quit, the home lost: %+v", snap.Agents)
+	}
+
+	// The agent in the plain session leaves: the gone agent laatmux made
+	// at the root holds the record alone.
 	def.set(func() { def.panes[0].CurrentPath = "/" })
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
 	ms = with.drain()
-	gone, agent := removedAt(ms, otherID), agentAt(ms, "%7")
-	if agent < 0 || ms[agent].Agent.WorktreeID != "" || gone < agent || ms[gone].RemovedIn != nil {
-		t.Fatalf("the agent left, then the record went: %+v", ms)
+	if agent := agentAt(ms, "%7"); agent < 0 || ms[agent].Agent.WorktreeID != "" || removedAt(ms, otherID) >= 0 {
+		t.Fatalf("the plain session's agent left, the gone agent at the root still there: %+v", ms)
+	}
+
+	// The managed sessions exit: the gone agent's remove, then other's
+	// record's, which is no worktree's removal; proj's goes too, and the
+	// checkout with a worktree stays.
+	laatmux.set(func() { laatmux.panes = nil })
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ms = with.drain()
+	agentGone := slices.IndexFunc(ms, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.AgentID == "env/laatmux/%1" })
+	gone := removedAt(ms, otherID)
+	if agentGone < 0 || gone < agentGone || ms[gone].RemovedIn != nil {
+		t.Fatalf("the gone agent at the root removed, then the record: %+v", ms)
+	}
+	if removedAt(ms, projID) < 0 {
+		t.Fatalf("the checkout whose home went, with nothing else in use: %+v", ms)
 	}
 	d.mu.Lock()
 	_, kept := d.worktrees[linked]

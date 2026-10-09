@@ -1466,6 +1466,308 @@ func TestEnterMakesShellSession(t *testing.T) {
 	}
 }
 
+// Enter on a main checkout's line with no home and no agent makes it a
+// session with a shell at its root as enter makes one for a worktree,
+// named as add would name a worktree's on the branch, and the workspace
+// session keyed by its root; z says enter does, with no add line. S on
+// it, and on a worktree with no home and no agent, makes the session
+// the same way, then opens the shell window at the root in the
+// workspace session and switches there; a user who has moved on is
+// left there, the message saying S goes there. A jump or an S while one
+// waits on the host is refused with its message. On a host whose cached
+// capabilities, or whose hello, lack new, enter keeps its refusal, that
+// no agent runs in the checkout, and S its own, that the row is no
+// workspace.
+func TestShellMakesSession(t *testing.T) {
+	log := fakeDefaultTmux(t)
+	src := "git@github.com:laat/proj.git"
+	b := protocol.Worktree{ID: "menv/worktree//w/b", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "b", Root: "/w/b"}
+	main := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "main", Root: "/r/proj", Main: true}
+	onVM, mainVM := b, main
+	onVM.ID, onVM.EnvironmentID, mainVM.ID, mainVM.EnvironmentID = "venv/worktree//w/b", "venv", "venv/checkout//r/proj", "venv"
+	// A worktree and another clone's main checkout whose managed sessions
+	// are gone, their workspace sessions left.
+	c, clone := b, main
+	c.ID, c.Branch, c.Root, clone.ID, clone.Branch, clone.Root = "menv/worktree//w/c", "c", "/w/c", "menv/checkout//r/proj2", "dev", "/r/proj2"
+	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
+		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
+		{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: caps[:4]},
+	}, Worktrees: []protocol.Worktree{b, main, onVM, mainVM, c, clone}}
+	release := make(chan struct{})
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapNew}, nil, map[string]func() bool{"proj/b": func() bool { <-release; return false }})
+	ends := make(chan func(*view.Model) view.Action, 1)
+	where := "work"
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: ends, clientAt: func(context.Context) string { return where }}
+	d.st.Apply(snap)
+	in := rows.Input{Hosts: []rows.Host{
+		{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+		{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+	}, Worktrees: snap.Worktrees, Locals: []protocol.Session{
+		{Name: "mac/proj/c", Key: "menv//w/c", Host: "mac", Source: src, Branch: "c"},
+		{Name: "mac/proj/old", Key: "menv//r/proj2", Host: "mac", Source: src, Branch: "old"},
+	}}
+	model := func(id string) *view.Model {
+		t.Helper()
+		m := &view.Model{Width: 100, Height: 40, ShowHidden: true, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(id) {
+			t.Fatalf("no line %s", id)
+		}
+		return m
+	}
+	type pressed struct {
+		waiting, msg, cmds, req string
+		end                     view.Action
+	}
+	// pressThen is the key on the line, what the user does meanwhile,
+	// and the end of what waits on the host, as the view runs it.
+	pressThen := func(key rune, id string, meanwhile func()) pressed {
+		t.Helper()
+		m := model(id)
+		os.Remove(log)
+		d.exitOnJump = true
+		if key == '\r' {
+			d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		} else {
+			d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: key}})
+		}
+		var p pressed
+		p.waiting = m.Message
+		if d.making != "" {
+			meanwhile()
+			select {
+			case end := <-ends:
+				p.end = end(m)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%c on %s: it did not end", key, id)
+			}
+		}
+		got, _ := os.ReadFile(log)
+		p.msg, p.cmds, p.req = m.Message, string(got), asked(requests)
+		return p
+	}
+	press := func(key rune, id string) pressed {
+		t.Helper()
+		return pressThen(key, id, func() {})
+	}
+	// Enter and S on the main line, S on the worktree's.
+	for _, k := range []struct {
+		key        rune
+		id         string
+		req, made  string
+		managed    string
+		root       string
+		shellOpens bool
+	}{
+		{'\r', main.ID, `proj/main /r/proj mac []`, "made session proj/main on mac, a shell at /r/proj", "proj/main", "/r/proj", false},
+		{'S', main.ID, `proj/main /r/proj mac []`, "made session proj/main on mac, a shell at /r/proj", "proj/main", "/r/proj", true},
+	} {
+		p := press(k.key, k.id)
+		if p.waiting != "making a session on mac…" || p.req != k.req || p.msg != k.made || p.end.Kind != view.ActionQuit {
+			t.Errorf("%c on %s: %+v", k.key, k.id, p)
+		}
+		wants := []string{"new-session -d -s mac/" + k.managed + " ", "@laatmux_attach_target " + k.managed + " ", "@laatmux_workspace menv/" + k.root + " ", "switch-client -t =mac/" + k.managed + ":"}
+		if k.shellOpens {
+			wants = append(wants, "new-window -t =mac/"+k.managed+": -n shell -c "+k.root)
+		} else if strings.Contains(p.cmds, "new-window") {
+			t.Errorf("%c on %s opened a shell window: %q", k.key, k.id, p.cmds)
+		}
+		for _, want := range wants {
+			if !strings.Contains(p.cmds, want) {
+				t.Errorf("%c on %s ran %q, want %q in it", k.key, k.id, p.cmds, want)
+			}
+		}
+	}
+	// S where the line has a workspace session at the root, its managed
+	// session gone, on a worktree and on a main checkout: the session is
+	// made first, as enter makes it, the workspace session for the root
+	// attached to it, and the shell window opened there. In production
+	// Ensure finds the session the line had by the root's key and takes
+	// it up; the fake tmux lists none, so Ensure makes one.
+	for _, k := range []struct{ id, ws, req, managed, root string }{
+		{c.ID, "mac/proj/c", `proj/c /w/c mac []`, "proj/c", "/w/c"},
+		{clone.ID, "mac/proj/dev", `proj/dev /r/proj2 mac []`, "proj/dev", "/r/proj2"},
+	} {
+		p := press('S', k.id)
+		if p.req != k.req || p.end.Kind != view.ActionQuit {
+			t.Errorf("S on %s with a workspace session left: %+v", k.id, p)
+		}
+		for _, want := range []string{"@laatmux_attach_target " + k.managed + " ", "new-window -t =" + k.ws + ": -n shell -c " + k.root, "switch-client -t =" + k.ws + ":"} {
+			if !strings.Contains(p.cmds, want) {
+				t.Errorf("S on %s ran %q, want %q in it", k.id, p.cmds, want)
+			}
+		}
+	}
+	// S on the worktree's line, the host holding its answer back: a jump
+	// and an S meanwhile are refused with the message.
+	m := model(b.ID)
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'S'}})
+	for _, other := range []func(*view.Model){
+		func(o *view.Model) { d.jumpAction(o, view.Action{Kind: view.ActionJump}) },
+		func(o *view.Model) { d.act(o, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'S'}}) },
+	} {
+		o := model(main.ID)
+		if other(o); o.Message != "making a session on mac…" {
+			t.Errorf("meanwhile: %q", o.Message)
+		}
+	}
+	os.Remove(log)
+	close(release)
+	select {
+	case end := <-ends:
+		if a := end(m); a.Kind != view.ActionQuit || m.Message != "made session proj/b on mac, a shell at /w/b" {
+			t.Errorf("S on the worktree: %+v, message %q", a, m.Message)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("S on the worktree did not end")
+	}
+	got, _ := os.ReadFile(log)
+	for _, want := range []string{"new-session -d -s mac/proj/b ", "@laatmux_attach_target proj/b ", "new-window -t =mac/proj/b: -n shell -c /w/b", "switch-client -t =mac/proj/b:"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("S on the worktree ran %q, want %q in it", got, want)
+		}
+	}
+	if req := asked(requests); req != `proj/b /w/b mac []` || asked(requests) != "" {
+		t.Errorf("S on the worktree asked %q", req)
+	}
+	// Moved on meanwhile: left there.
+	if p := pressThen('S', main.ID, func() { where = "elsewhere" }); p.msg != "made session proj/main on mac, a shell at /r/proj; S on the line opens the shell there" || p.cmds != "" || p.end.Kind != view.ActionNone {
+		t.Errorf("S, moved on: %+v", p)
+	}
+	where = "work"
+	m = model(main.ID)
+	d.settle(m)
+	if m.Message != "proj/main: no local workspace session; enter creates one with a shell" {
+		t.Errorf("z on the main line: %q", m.Message)
+	}
+	// A host whose cached capabilities lack new.
+	for _, k := range []struct {
+		key  rune
+		id   string
+		want string
+	}{
+		{'\r', mainVM.ID, "vm/proj/main is the main checkout, and no agent runs in it"},
+		{'S', mainVM.ID, "vm/proj/main is the main checkout, which has no workspace session"},
+		{'S', onVM.ID, "proj/b: not a workspace"},
+	} {
+		if p := press(k.key, k.id); p.waiting != k.want || p.msg != k.want || p.cmds != "" || p.req != "" {
+			t.Errorf("%c on %s: %+v, want %q", k.key, k.id, p, k.want)
+		}
+	}
+	m = model(mainVM.ID)
+	d.settle(m)
+	if m.Message != "proj/main: no local workspace session; vm/proj/main is the main checkout, and no agent runs in it" {
+		t.Errorf("z on the main line on vm: %q", m.Message)
+	}
+	// A hello that lacks new, the cached capabilities notwithstanding.
+	requests = fakeNew(t, "menv", []string{protocol.CapStatus}, nil, nil)
+	for _, k := range []struct {
+		key  rune
+		id   string
+		want string
+	}{
+		{'\r', main.ID, "mac/proj/main is the main checkout, and no agent runs in it"},
+		{'S', main.ID, "mac/proj/main is the main checkout, which has no workspace session"},
+		{'S', b.ID, "proj/b: not a workspace"},
+	} {
+		if p := press(k.key, k.id); p.msg != k.want || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
+			t.Errorf("%c on %s with no new in the hello: %+v, want %q", k.key, k.id, p, k.want)
+		}
+	}
+}
+
+// A main checkout whose home a split gone elsewhere took, with the agent
+// laatmux made at its root still its own and an agent of no checkout in
+// a split of that session: enter on the line, while the root agent is
+// the most recently active, attaches the workspace session named and
+// keyed after the checkout to the root agent's session, and asks the
+// host for nothing; enter on the other agent's row lands in that
+// workspace session, as does S on it, which opens the shell window at
+// the root there. With an agent in a plain session the most recently
+// active, enter on the line goes to its session, and the other agent's
+// row still lands in the checkout's workspace session.
+func TestMainCheckoutLostHome(t *testing.T) {
+	log := fakeDefaultTmux(t)
+	src := "git@github.com:laat/proj.git"
+	main := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "main", Root: "/r/proj", Main: true}
+	now := time.Now()
+	made := protocol.Agent{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "proj/main", PaneID: "%5", Agent: "codex", Managed: true, Cwd: main.Root,
+		WorktreeID: main.ID, Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 5, StartUnix: 5}}
+	stray := protocol.Agent{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "proj/main", PaneID: "%6", Agent: "claude", Cwd: "/tmp",
+		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 6, StartUnix: 6}}
+	plain := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", PaneID: "%2", Agent: "claude",
+		WorktreeID: main.ID, Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 2, StartUnix: 2}}
+	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps}},
+		Worktrees: []protocol.Worktree{main}, Agents: []protocol.Agent{made, stray, plain}}
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapNew}, nil, nil)
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: make(chan func(*view.Model) view.Action, 1), clientAt: func(context.Context) string { return "work" }}
+	d.st.Apply(snap)
+	in := rows.Input{Hosts: []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Worktrees: snap.Worktrees, Agents: snap.Agents}
+	press := func(key rune, id string) (msg, cmds string) {
+		t.Helper()
+		m := &view.Model{Width: 100, Height: 40, ShowHidden: true, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(id) {
+			t.Fatalf("no row %s", id)
+		}
+		os.Remove(log)
+		if key == '\r' {
+			d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		} else {
+			d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: key}})
+		}
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got)
+	}
+	attached := []string{"new-session -d -s mac/proj/main ", "@laatmux_workspace menv//r/proj ", "@laatmux_attach_target proj/main ", "switch-client -t =mac/proj/main:"}
+	for _, k := range []struct {
+		key  rune
+		id   string
+		want []string
+	}{
+		{'\r', main.ID, attached},
+		{'\r', stray.ID, attached},
+		{'S', stray.ID, append(slices.Clone(attached), "new-window -t =mac/proj/main: -n shell -c /r/proj")},
+	} {
+		msg, cmds := press(k.key, k.id)
+		for _, want := range k.want {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("%c on %s: message %q, ran %q, want %q in it", k.key, k.id, msg, cmds, want)
+			}
+		}
+		if d.making != "" || asked(requests) != "" {
+			t.Errorf("%c on %s asked the host for a session", k.key, k.id)
+		}
+	}
+	// The agent in the plain session the most recently active.
+	in.Agents[0].Activity, in.Agents[2].Activity = protocol.Idle, protocol.Working
+	if msg, cmds := press('\r', main.ID); !strings.Contains(cmds, "switch-client -t =notes:") || strings.Contains(cmds, "new-session") {
+		t.Errorf("enter on the line, the plain session's agent working: message %q, ran %q", msg, cmds)
+	}
+	if msg, cmds := press('\r', stray.ID); !strings.Contains(cmds, "@laatmux_workspace menv//r/proj ") || !strings.Contains(cmds, "@laatmux_attach_target proj/main ") || !strings.Contains(cmds, "switch-client -t =mac/proj/main:") {
+		t.Errorf("enter on the other agent, the plain session's agent working: message %q, ran %q", msg, cmds)
+	}
+	// The home named otherwise, by hand or on another branch: the root
+	// agent's session is the line's all the same, and either agent's row
+	// lands in the workspace session keyed by the root.
+	in.Agents[0].Session, in.Agents[1].Session = "scratch", "scratch"
+	for _, id := range []string{made.ID, stray.ID} {
+		msg, cmds := press('\r', id)
+		for _, want := range []string{"@laatmux_workspace menv//r/proj ", "@laatmux_attach_target scratch ", "switch-client -t =mac/proj/main:"} {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("enter on %s, the home named scratch: message %q, ran %q, want %q in it", id, msg, cmds, want)
+			}
+		}
+	}
+}
+
 // An rm whose host side succeeded and whose local cleanup then failed
 // returns the root with the error, so the CLI prints the removal before
 // the error and the dashboard says what was removed.
@@ -1623,10 +1925,14 @@ func TestRmFor(t *testing.T) {
 }
 
 // x and X refuse a main checkout, from its line in the tree and from
-// its agent's tile, with no question asked; z and S say it has no
-// workspace session, also with one left at its root; a preselects its
-// repository and host, not its branch.
+// its agent's tile, with no question asked; a preselects its repository
+// and host, not its branch. With its agent in a plain session and no
+// workspace session, z says enter goes to the agent's session, with no
+// add line, and S that it has no workspace session; with one at its
+// root, left from a worktree there before or made by a jump, z settles
+// it and S opens the shell window in it, as on a worktree's line.
 func TestMainCheckoutRefused(t *testing.T) {
+	log := fakeDefaultTmux(t)
 	cfg := dashConfig(t)
 	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
 	w := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "main", Root: "/r/proj", Main: true}
@@ -1635,48 +1941,69 @@ func TestMainCheckoutRefused(t *testing.T) {
 		Agents: []protocol.Agent{{ID: "menv/default/%1", EnvironmentID: "menv", Server: "default", Session: "work", Agent: "claude",
 			Activity: protocol.Working, Liveness: protocol.Alive, WorktreeID: w.ID}},
 		Worktrees: []protocol.Worktree{w},
-		// A workspace session left at its root, from a worktree there before.
-		Locals: []protocol.Session{{Name: "mac/proj/old", Key: "menv//r/proj", Host: "mac"}},
 	}
 	m := &view.Model{Width: 80, Height: 20}
-	m.SetTree(rows.Tree(in))
-	m.SetRows(rows.Agents(in, rows.Tree(in)))
-	m.Render()
-	press := func(r rune) {
+	show := func() {
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+	}
+	press := func(r rune) string {
 		t.Helper()
 		m.Message, m.Confirm = "", ""
+		os.Remove(log)
 		d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: r}})
+		got, _ := os.ReadFile(log)
+		return string(got)
 	}
-	for _, c := range []struct {
-		show func() bool
-		kind rows.Kind
-	}{
-		{func() bool { return m.Selection() != nil }, rows.KindTile},
-		{func() bool { treeView(m); return m.Select(w.ID) }, rows.KindWorktree},
-	} {
-		if !c.show() || m.Selection().Kind != c.kind {
-			t.Fatalf("selection %+v, want a %v", m.Selection(), c.kind)
+	for _, ws := range []bool{false, true} {
+		if ws {
+			in.Locals = []protocol.Session{{Name: "mac/proj/old", Key: "menv//r/proj", Host: "mac"}}
 		}
-		for _, r := range []rune{'x', 'X'} {
-			press(r)
-			if m.Confirm != "" || m.Message != "mac/proj/main is the main checkout; x removes worktrees" {
-				t.Errorf("%c on %v: confirm=%q message=%q", r, m.Selection().Kind, m.Confirm, m.Message)
+		show()
+		for _, c := range []struct {
+			show  func() bool
+			kind  rows.Kind
+			enter string
+		}{
+			{func() bool { m.View = view.ViewAgents; return m.Select("menv/default/%1") }, rows.KindTile, "enter on the line"},
+			{func() bool { treeView(m); return m.Select(w.ID) }, rows.KindWorktree, "enter"},
+		} {
+			if !c.show() || m.Selection().Kind != c.kind {
+				t.Fatalf("selection %+v, want a %v", m.Selection(), c.kind)
 			}
-		}
-		for _, r := range []rune{'z', 'S'} {
-			press(r)
-			if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
-				t.Errorf("%c on %v: %q", r, m.Selection().Kind, m.Message)
+			for _, r := range []rune{'x', 'X'} {
+				press(r)
+				if m.Confirm != "" || m.Message != "mac/proj/main is the main checkout; x removes worktrees" {
+					t.Errorf("%c on %v: confirm=%q message=%q", r, m.Selection().Kind, m.Confirm, m.Message)
+				}
 			}
+			z, s := press('z'), press('S')
+			switch {
+			case !ws && (z != "" || s != ""):
+				t.Errorf("on %v with no workspace session: tmux ran %q, %q", c.kind, z, s)
+			case ws && (!strings.Contains(z, "set-option -t =mac/proj/old: @laatmux_settled 1") || !strings.Contains(s, "new-window -t =mac/proj/old: -n shell -c /r/proj") || !strings.Contains(s, "switch-client -t =mac/proj/old:")):
+				t.Errorf("on %v with a workspace session at its root: z ran %q, S ran %q", c.kind, z, s)
+			}
+			if !ws {
+				press('z')
+				if want := "proj/main: no local workspace session; " + c.enter + " jumps to work, its agent's session"; m.Message != want {
+					t.Errorf("z on %v: %q, want %q", c.kind, m.Message, want)
+				}
+				press('S')
+				if m.Message != "mac/proj/main is the main checkout, which has no workspace session" {
+					t.Errorf("S on %v: %q", c.kind, m.Message)
+				}
+			}
+			// a preselects the repository and host, not the branch, which
+			// git keeps checked out in the checkout.
+			press('a')
+			f, ok := m.Overlay.(*view.Form)
+			if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "mac" || f.Branch() != "" {
+				t.Errorf("a on %v: form %+v, message %q", m.Selection().Kind, m.Overlay, m.Message)
+			}
+			m.Overlay, d.add = nil, nil
 		}
-		// a preselects the repository and host, not the branch, which
-		// git keeps checked out in the checkout.
-		press('a')
-		f, ok := m.Overlay.(*view.Form)
-		if !ok || f.Chips[0].Label() != "proj" || f.Chips[1].Label() != "mac" || f.Branch() != "" {
-			t.Errorf("a on %v: form %+v, message %q", m.Selection().Kind, m.Overlay, m.Message)
-		}
-		m.Overlay, d.add = nil, nil
 	}
 }
 

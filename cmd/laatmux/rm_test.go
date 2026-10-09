@@ -67,6 +67,15 @@ func TestRmCurrent(t *testing.T) {
 		{"not a workspace", protocol.Session{Name: "notes"}, mac, "env", nil, command.Rm{}, "not a workspace session"},
 		{"attachment", protocol.Session{Name: "vm/work", Attach: "vm/work", Host: "vm"}, vm, "env", nil, command.Rm{}, "not a workspace session"},
 		{"no root", protocol.Session{Name: "vm/proj/x", Key: "env", Host: "vm"}, vm, "env", nil, command.Rm{}, "no root"},
+		// The workspace session of a main checkout's shell session.
+		{"main checkout", protocol.Session{Name: "vm/proj/main", Key: "env//r/proj", Host: "vm", Source: proj.Source, Branch: "main"}, vm, "env",
+			[]protocol.Worktree{{ID: "env/checkout//r/proj", EnvironmentID: "env", Repo: "proj", Source: proj.Source, Branch: "main", Root: "/r/proj", Main: true, Session: "proj/main"}},
+			command.Rm{}, "proj/main on vm is the main checkout, at /r/proj; rm removes worktrees"},
+		// By the host's label, for a source this machine's config does
+		// not know.
+		{"main checkout of a source not configured here", protocol.Session{Name: "vm/other/main", Key: "env//r/other", Host: "vm"}, vm, "env",
+			[]protocol.Worktree{{ID: "env/checkout//r/other", EnvironmentID: "env", Repo: "other", Source: "git@x:o/other.git", Branch: "main", Root: "/r/other", Main: true}},
+			command.Rm{}, "other/main on vm is the main checkout, at /r/other; rm removes worktrees"},
 	}
 	for _, c := range cases {
 		got, err := rmCurrent(cfg, c.cur, c.h, c.env, c.ws)

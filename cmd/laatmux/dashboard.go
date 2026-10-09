@@ -349,9 +349,10 @@ func fill(v *view.Model, s merged.Status) {
 // from the record when missing; a managed session that is no worktree's
 // does the same through a plain attachment; an observed agent on this
 // machine's default server is a switch-client; one on a remote host's
-// default server is refused as jump refuses it. A worktree with no
-// session and no agent is refused here, the refusal saying how add would
-// start one (*noHome); the view makes its managed session instead where
+// default server is refused as jump refuses it. A worktree or a main
+// checkout with no session and no agent is refused here, the refusal
+// saying how add would start one, or for a main checkout that no agent
+// runs in it (*noHome); the view makes its managed session instead where
 // the host can (dash.makeHome). A orphaned row's session exists locally
 // and is switched to. The view is meant to run inside the default tmux
 // server, where switch-client is allowed; run elsewhere, a dashboard in a
@@ -382,8 +383,9 @@ func ensureSwitch(ctx context.Context, spec workspace.Spec) error {
 	return switchTo(ctx, name)
 }
 
-// shellable is a jump's refusal of a worktree with no home and no agent
-// that the view makes a managed session for instead: one shellSession
+// shellable is a jump's refusal of a worktree or a main checkout with no
+// home and no agent that the view makes a managed session for instead,
+// for enter or for S: one shellSession
 // names a session for, on a host whose daemon has new by the
 // capabilities st has cached for it, with the host's records as st has
 // them then. A host st has as down, or that never answered, is not
@@ -433,10 +435,11 @@ func worktreeSessionName(h config.Host, w protocol.Worktree) string {
 // find, or the session on this machine's default server to switch to.
 func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec, session string, err error) {
 	switch {
-	case r.Worktree != nil && r.Worktree.Main && r.Agent == nil:
-		// A main checkout's line goes to its agent's session, the
-		// default server's: no workspace session is made for it.
-		return spec, "", errors.New(mainNoAgent(h, *r.Worktree))
+	case r.Worktree != nil && r.Worktree.Main && r.Worktree.Session == "" && r.Agent == nil:
+		// A main checkout with no home goes to its agent's session, the
+		// default server's; with none, the view makes it a home with a
+		// shell where the host can, as for a worktree.
+		return spec, "", &noHome{h: h, w: *r.Worktree, name: shellSession(r), hint: mainNoAgent(h, *r.Worktree)}
 	case r.Worktree != nil && (r.Worktree.Session != "" || r.Agent == nil):
 		if r.Worktree.Session == "" {
 			return spec, "", &noHome{h: h, w: *r.Worktree, name: shellSession(r), hint: addHint(cfg, h, *r.Worktree)}
@@ -444,10 +447,11 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 		return worktreeSpec(h, *r.Worktree), "", nil
 	case r.Worktree != nil && r.Agent.Server == protocol.ServerLaatmux:
 		// A worktree whose own session lost the home, a split in it gone
-		// elsewhere say: the row's agent is the one laatmux made at the
-		// root, and the worktree's workspace session attaches to that
-		// session as it did while it was the home, so the worktree keeps
-		// one local session whether or not it has a home. The local
+		// elsewhere say, or a main checkout's: the row's agent is the one
+		// laatmux made at the root, and the worktree's workspace session
+		// attaches to that session as it did while it was the home, so
+		// the worktree keeps one local session whether or not it has a
+		// home. The local
 		// session is named after the worktree, as add names the one it
 		// makes, not after the agent's session, which panes moved in by
 		// hand could make another worktree's too.
@@ -472,9 +476,10 @@ func rowSpec(cfg config.Config, h config.Host, r rows.Row) (spec workspace.Spec,
 }
 
 // noHome is rowSpec's refusal of a worktree with no home and no agent,
-// which says how add makes one (addHint). The view makes one instead,
-// with a shell, where the host's daemon can (shellable); name is the
-// session it makes, shellSession's, "" for none.
+// which says how add makes one (addHint), or of a main checkout with
+// neither, which says no agent runs in it (mainNoAgent). The view makes
+// one instead, with a shell, where the host's daemon can (shellable);
+// name is the session it makes, shellSession's, "" for none.
 type noHome struct {
 	h    config.Host
 	w    protocol.Worktree

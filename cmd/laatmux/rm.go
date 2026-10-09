@@ -257,7 +257,17 @@ func rmCurrent(cfg config.Config, cur protocol.Session, h config.Host, environme
 		if w.Root != root || w.EnvironmentID != env {
 			continue
 		}
-		if repo, ok := cfg.RepoBySource(w.Source); ok {
+		repo, ok := cfg.RepoBySource(w.Source)
+		if w.Main {
+			// The workspace session of the shell session a jump made in
+			// a main checkout: git keeps the checkout, and so does
+			// laatmux, as the host's rm would refuse it.
+			if !ok {
+				repo.Name = w.Repo
+			}
+			return command.Rm{}, onMain(repo, w, h.Name, "rm removes worktrees")
+		}
+		if ok {
 			rm.Repo, rm.Branch = repo, w.Branch
 		}
 		return rm, nil
