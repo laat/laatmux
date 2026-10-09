@@ -126,8 +126,8 @@ func (c *configTaker) failed(m *view.Model, err error) {
 // flags of an open task form's hosts; the merged state's repository names, order and stale
 // settings; the theme and icons; the templates; the agent icons; the
 // jump key labels; this machine's name; and in a sidebar pane the
-// strip's chip width. refill fills the rows again, for a config taken
-// while the view runs; the first fill is the view's.
+// strip's chip width. refill fills the rows and the hosts line again,
+// for a config taken while the view runs; the first fill is the view's.
 func (c *configTaker) take(m *view.Model, cfg config.Config, refill bool) {
 	c.d.cfg = cfg
 	c.d.formConfig(nil)
@@ -153,6 +153,14 @@ func (c *configTaker) take(m *view.Model, cfg config.Config, refill bool) {
 		m.ItemWidth = cfg.Sidebar.ItemWidth()
 	}
 	if refill {
-		fill(m, c.st.Status(c.current))
+		c.fill(m)
 	}
+}
+
+// fill fills the model from the merged state (fill), and the hosts line
+// from the config the view follows, each host in its state there.
+func (c *configTaker) fill(m *view.Model) {
+	s := c.st.Status(c.current)
+	fill(m, s)
+	m.Hosts = hostEntries(c.d.cfg, s)
 }

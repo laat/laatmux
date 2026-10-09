@@ -80,6 +80,10 @@ type Model struct {
 	// Header lines are drawn above the list: hosts that are not
 	// connected and listed, the local daemon being down.
 	Header []HeaderLine
+	// Hosts is the hosts line's entries, drawn above the footer: each
+	// host the config reaches over ssh, with a box a click flips
+	// (ActionPause). None draws no line, and the strip draws none.
+	Hosts []HostEntry
 	// Hint is the footer when nothing else claims it.
 	Hint          string
 	Now           time.Time
@@ -132,6 +136,11 @@ type Model struct {
 	hitPrevIDs []string
 	hitPrevTop int
 	hitPrevAt  time.Time
+	// hitHosts is the hosts line's entries as the last Render drew
+	// them, hitHostsPrev as the render before it did, for a click as
+	// the ids are.
+	hitHosts     []hitHost
+	hitHostsPrev []hitHost
 	// Handoffs are the pending tasks that have handed over to their
 	// worktree rows, command id to worktree id, as the merged stream
 	// carried them: an anchor on a task the view never saw hand over
@@ -234,13 +243,23 @@ func (m *Model) reselect() {
 }
 
 // HeaderLine is a line above the list; Down is that it says something is
-// down, drawn in danger, where connecting and the like are a warning;
-// Paused that it says a host is paused, which the user chose, drawn
-// dimmed.
+// down, drawn in danger, where connecting and the like are a warning.
 type HeaderLine struct {
-	Text   string
-	Down   bool
-	Paused bool
+	Text string
+	Down bool
+}
+
+// HostEntry is a host on the hosts line. Paused is that the config has
+// it paused: its box is empty and the entry dimmed. Otherwise its box is
+// checked and its name coloured as a header line about the host is:
+// Down in danger; Connecting, which takes in a snapshot pending and a
+// resume the daemon has yet to take, a warning; neither, connected and
+// listed, the terminal's own.
+type HostEntry struct {
+	Name       string
+	Paused     bool
+	Down       bool
+	Connecting bool
 }
 
 // Item is one entry of the list as drawn: a row, or a header in the
@@ -528,10 +547,6 @@ func (m *Model) Render() []Line {
 		out = append(out, m.tabs())
 	}
 	for _, h := range m.Header {
-		if h.Paused {
-			out = append(out, dim(h.Text, m.Width))
-			continue
-		}
 		fg := palette.Warning
 		if h.Down {
 			fg = palette.Danger
@@ -539,7 +554,10 @@ func (m *Model) Render() []Line {
 		out = append(out, Line{Spans: []Span{{Text: fit(h.Text, m.Width), Fg: fg}}, Bold: true})
 	}
 	foot := m.footerLines()
-	body := m.Height - len(out) - len(foot)
+	// The hosts line takes what it needs of a third of the height, and
+	// gives way to the body's first line.
+	hosts, hostHits := m.hostsLines(min(max(1, m.Height/3), m.Height-len(out)-len(foot)-1))
+	body := m.Height - len(out) - len(hosts) - len(foot)
 	if body < 1 {
 		body = 1
 	}
@@ -685,9 +703,21 @@ func (m *Model) Render() []Line {
 			out = append(out, plain(""))
 		}
 	}
-	for len(out) < m.Height-len(foot) {
+	for len(out) < m.Height-len(hosts)-len(foot) {
 		out = append(out, plain(""))
 	}
+	// The hosts line's entries on the lines they are drawn on, a row the
+	// height cuts off not among them.
+	m.hitHostsPrev, m.hitHosts = m.hitHosts, nil
+	for i, hs := range hostHits {
+		if y := len(out) + i + 1; y <= m.Height {
+			for _, h := range hs {
+				h.y = y
+				m.hitHosts = append(m.hitHosts, h)
+			}
+		}
+	}
+	out = append(out, hosts...)
 	out = append(out, foot...)
 	out = out[:m.Height]
 	// What spins is what is drawn: a body line the height cuts off
@@ -703,6 +733,79 @@ func (m *Model) Render() []Line {
 		}
 	}
 	return out
+}
+
+// hostsLines is the hosts line in at most n rows: an entry per host,
+// `[x] vm`, or `[ ] vm` paused, two spaces apart, wrapped at an entry
+// onto the next row rather than cut, but for an entry wider than the
+// pane, which is; the last row ends in … when entries are left over.
+// With each row, its entries' columns, for a click.
+func (m *Model) hostsLines(n int) ([]Line, [][]hitHost) {
+	if len(m.Hosts) == 0 || n <= 0 || m.Width <= 0 {
+		return nil, nil
+	}
+	var lines []Line
+	var hits [][]hitHost
+	var line Line
+	var at []hitHost
+	col, more := 0, false
+	for _, h := range m.Hosts {
+		spans := hostSpans(h)
+		if col > 0 && col+2+spansWidth(spans) > m.Width {
+			lines, hits = append(lines, line), append(hits, at)
+			line, at, col = Line{}, nil, 0
+			if len(lines) == n {
+				more = true
+				break
+			}
+		}
+		if col > 0 {
+			line.Spans = append(line.Spans, Span{Text: "  "})
+			col += 2
+		}
+		spans = clip(spans, m.Width-col)
+		at = append(at, hitHost{from: col, to: col + spansWidth(spans), name: h.Name, paused: h.Paused})
+		line.Spans = append(line.Spans, spans...)
+		col += spansWidth(spans)
+	}
+	if !more {
+		return append(lines, line), append(hits, at)
+	}
+	// The ellipsis after the last row's entries, or over the end of its
+	// last entry when there is no room beside it.
+	last := &lines[n-1]
+	if spansWidth(last.Spans)+2 <= m.Width {
+		last.Spans = append(last.Spans, Span{Text: " "})
+	} else {
+		last.Spans = clip(last.Spans, m.Width-1)
+		w := spansWidth(last.Spans)
+		var kept []hitHost
+		for _, h := range hits[n-1] {
+			if h.from < w {
+				h.to = min(h.to, w)
+				kept = append(kept, h)
+			}
+		}
+		hits[n-1] = kept
+	}
+	last.Spans = append(last.Spans, Span{Text: "…", Dim: true})
+	return lines, hits
+}
+
+// hostSpans is a host's entry on the hosts line: its box, then its name
+// in its state's colour; the whole dimmed when it is paused.
+func hostSpans(h HostEntry) []Span {
+	if h.Paused {
+		return []Span{Span{Text: "[ ] "}.dimmed(), Span{Text: h.Name}.dimmed()}
+	}
+	name := Span{Text: h.Name}
+	switch {
+	case h.Down:
+		name.Fg = palette.Danger
+	case h.Connecting:
+		name.Fg = palette.Warning
+	}
+	return []Span{{Text: "[x] "}, name}
 }
 
 // footerLines is the footer: a message or a question wrapped over as

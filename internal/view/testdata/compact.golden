@@ -26,5 +26,5 @@ S..|‹⟨border:─────────────────────
 ...|‹⟨header:▾ 1 stale⟩›
 .D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ done proj @mac                                                                     1d
 .D.|⟨dimmed:▌⟩    finished
-...|‹⟨border:──────────────────────────────────────────────────────────────────────────────────────────⟩›
+...|[x] vm  [x] ⟨danger:box⟩
 .D.|enter jump  v layout  / filter  f settled  q quit

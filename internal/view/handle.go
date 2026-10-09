@@ -19,6 +19,11 @@ type Action struct {
 	// made the view's pane active for.
 	Row   *rows.Row
 	Mouse bool
+	// HostName, on ActionPause, is the host whose entry on the hosts
+	// line was clicked, and Pause what the click asks: paused, for an
+	// entry drawn with its box checked, else resumed.
+	HostName string
+	Pause    bool
 }
 
 type ActionKind int
@@ -33,6 +38,7 @@ const (
 	// ActionSettings is a change of the view's settings, the view,
 	// layout, scope or a fold: the host may persist what it keeps.
 	ActionSettings
+	ActionPause // a click on the hosts line: HostName paused or resumed, as Pause says
 )
 
 // mode is what the model is doing, which decides whose key the next one
@@ -145,6 +151,9 @@ func (m *Model) Handle(k term.Key) Action {
 				m.Switch()
 			}
 			return Action{}
+		}
+		if a, ok := m.hostAt(k.X, k.Y, k.At); ok {
+			return a
 		}
 		if i := m.hitRow(k.Y, k.At); i >= 0 {
 			if r := m.Visible()[i].Row; r.Foldable() && (r.Kind == rows.KindRepo || r.Kind == rows.KindFold || k.X <= 2*r.Depth+2) {
@@ -369,6 +378,36 @@ func (m *Model) hitRow(y int, at time.Time) int {
 		}
 	}
 	return -1
+}
+
+// hitHost is a host's entry on the hosts line as drawn: its line
+// (1-based), its columns from and to (0-based, to excluded), its name,
+// and whether its box was drawn empty, the host paused.
+type hitHost struct {
+	y, from, to int
+	name        string
+	paused      bool
+}
+
+// hostAt is the action a click at column x on line y, both 1-based,
+// asks when it is on an entry of the hosts line: the host paused when
+// its box was drawn checked, else resumed, so a click does what the
+// screen showed whatever a refresh has done since. ok is false off the
+// entries. The screen clicked is the one hitRow takes.
+func (m *Model) hostAt(x, y int, at time.Time) (a Action, ok bool) {
+	hits := m.hitHosts
+	if !at.IsZero() && at.Before(m.hitAt) {
+		if m.hitPrevAt.IsZero() || at.Before(m.hitPrevAt) {
+			return Action{}, false
+		}
+		hits = m.hitHostsPrev
+	}
+	for _, h := range hits {
+		if y == h.y && x-1 >= h.from && x-1 < h.to {
+			return Action{Kind: ActionPause, HostName: h.name, Pause: !h.paused}, true
+		}
+	}
+	return Action{}, false
 }
 
 // edited is one line of text after a key: a rune or a paste's text, as

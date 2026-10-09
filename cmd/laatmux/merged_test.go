@@ -69,9 +69,9 @@ func TestRenderHosts(t *testing.T) {
 	}
 }
 
-// A paused host is a line of its own in ls, and in the views a line
-// above the list drawn dimmed, not as a host that is down; a task for
-// it says the host is paused.
+// A paused host is a line of its own in ls, and in the views no line
+// above the list, its box on the hosts line saying it, not a line of a
+// host that is down; a task for it says the host is paused.
 func TestRenderPausedHost(t *testing.T) {
 	m := merged.New()
 	m.Apply(protocol.Message{Type: protocol.TypeSnapshot,
@@ -90,11 +90,8 @@ func TestRenderPausedHost(t *testing.T) {
 	}
 	v := &view.Model{Width: 60, Height: 8}
 	fill(v, m.Status(""))
-	if len(v.Header) != 1 || v.Header[0] != (view.HeaderLine{Text: "vm paused · H connects", Paused: true}) {
+	if len(v.Header) != 0 {
 		t.Fatalf("header %+v", v.Header)
-	}
-	if lines := v.Render(); !lines[0].Dim || lines[0].Bold || lines[0].Spans[0].Text != "vm paused · H connects" || lines[0].Spans[0].Fg != "" {
-		t.Errorf("paused line drawn %+v", lines[0])
 	}
 }
 

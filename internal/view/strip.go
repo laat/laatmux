@@ -16,7 +16,8 @@ import (
 // sideways to keep the selection in view; chips past the right edge
 // are counted there. It shows the agent view only, and Tab does
 // nothing. The footer takes the last line only while it has something
-// to say: a question, a message, the filter.
+// to say: a question, a message, the filter. The header lines and the
+// hosts line are not drawn.
 
 // Strip is the layout of a sidebar at the top.
 const Strip Layout = "strip"
@@ -99,6 +100,8 @@ func (m *Model) renderStrip() []Line {
 	m.hitIDs, m.hitTop, m.hitAt = nil, 0, m.Now
 	m.hitColsPrev, m.hitCols = m.hitCols, nil
 	m.hitLinesPrev, m.hitLines = m.hitLines, height
+	// No hosts line, as no header lines: nothing of one to click.
+	m.hitHostsPrev, m.hitHosts = m.hitHosts, nil
 	tmpl := m.templates().Top
 	lines := make([]Line, height)
 	if len(vis) == 0 && height > 0 {

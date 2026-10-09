@@ -72,7 +72,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 			"p            deliver a task's prompt",
 			"S            open a shell in the workspace session",
 			"o O          open the PR, its checks",
-			"H            pause a host, or resume it",
+			"H click      pause or resume a host: the picker, or its box on the hosts line",
 			"q Ctrl-C     quit",
 		}}
 	// The dashboard starts at all: a scope the CLI set for the sidebar
@@ -157,7 +157,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 	return view.Run(ctx, t, m, view.Host{
 		Changed:  st.Changed(),
 		Commands: cmds,
-		Refresh:  func(m *view.Model) { fill(m, st.Status(current)) },
+		Refresh:  taker.fill,
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionSettings:
@@ -270,14 +270,15 @@ func taskAction(m *view.Model, a view.Action) bool {
 }
 
 // sidebarAction is what the sidebar takes of the dashboard's actions: a
-// task's p and x, and what follows from them, H and its picker, and z,
-// which settles; none of the dashboard's other keys.
+// task's p and x, and what follows from them, H and its picker, a click
+// on the hosts line, and z, which settles; none of the dashboard's other
+// keys.
 func sidebarAction(m *view.Model, a view.Action) bool {
 	return taskAction(m, a) || hostAction(m, a) || a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z'
 }
 
-// hostAction is H, or its picker ending, which the sidebar takes as the
-// dashboard does.
+// hostAction is H, or its picker ending, or a click on the hosts line,
+// which the sidebar takes as the dashboard does.
 func hostAction(m *view.Model, a view.Action) bool {
 	switch a.Kind {
 	case view.ActionOther:
@@ -285,6 +286,8 @@ func hostAction(m *view.Model, a view.Action) bool {
 	case view.ActionOverlay:
 		_, ok := m.Overlay.(*hostPicker)
 		return ok
+	case view.ActionPause:
+		return true
 	}
 	return false
 }
@@ -336,8 +339,8 @@ func localHostName(cfg config.Config) string {
 // fill sets the model's rows and header from the merged state: the rows
 // from every record and the local sessions, the day's handoffs, and a
 // header line for the local daemon being down, each host that is not
-// connected and listed, a paused one dimmed, and a failed session
-// listing.
+// connected and listed but a paused one, whose box on the hosts line
+// says it, and a failed session listing.
 func fill(v *view.Model, s merged.Status) {
 	tree := rows.Tree(s.Input)
 	v.Set(tree, rows.Agents(s.Input, tree), s.Handoffs)
@@ -349,9 +352,7 @@ func fill(v *view.Model, s merged.Status) {
 	for _, st := range s.Hosts {
 		n := st.Name
 		switch {
-		case st.Paused:
-			v.Header = append(v.Header, view.HeaderLine{Text: n + " paused · H connects", Paused: true})
-		case st.Connected && st.Listed:
+		case st.Paused, st.Connected && st.Listed:
 		case st.Connected:
 			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connected  (snapshot pending)"})
 		case st.Error != "":

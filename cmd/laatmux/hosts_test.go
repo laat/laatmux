@@ -261,6 +261,117 @@ func TestHostPicker(t *testing.T) {
 	}
 }
 
+// The hosts line has an entry per host the config reaches over ssh, in
+// its order, this machine's left out: paused as the config says,
+// whatever the stream has; else connected and listed, down, or
+// connecting, which a host with no record yet, one the daemon still has
+// paused and one with its snapshot pending are.
+func TestHostEntries(t *testing.T) {
+	cfg, err := config.Parse([]byte(`hosts:
+  - name: mac
+  - {name: vm, ssh: vm}
+  - {name: box, ssh: box}
+  - {name: coder, ssh: coder, paused: true}
+  - {name: new, ssh: new}
+  - {name: late, ssh: late}
+  - {name: pend, ssh: pend}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := merged.New()
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
+		{Name: "mac", Connected: true, Listed: true},
+		{Name: "vm", SSH: "vm", Connected: true, Listed: true},
+		{Name: "box", SSH: "box", Error: "ssh: no route"},
+		{Name: "coder", SSH: "coder", Connected: true, Listed: true},
+		{Name: "late", SSH: "late", Paused: true},
+		{Name: "pend", SSH: "pend", Connected: true},
+	}})
+	want := []view.HostEntry{{Name: "vm"}, {Name: "box", Down: true}, {Name: "coder", Paused: true},
+		{Name: "new", Connecting: true}, {Name: "late", Connecting: true}, {Name: "pend", Connecting: true}}
+	if got := hostEntries(cfg, st.Status("")); !slices.Equal(got, want) {
+		t.Fatalf("entries %+v", got)
+	}
+}
+
+// A click on the hosts line pauses the host clicked through the write H
+// makes, in the dashboard and the sidebar alike, the line showing the
+// flip on the next draw, with a local daemon older than pause noted in
+// the footer; a click on the paused one resumes it. A write refused, a
+// config file that does not parse, is in the footer, the line and the
+// file as they were.
+func TestHostsLineClick(t *testing.T) {
+	p := pauseFixture(t)
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, nil)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := merged.New()
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
+		{Name: "mac", Connected: true, Listed: true},
+		{Name: "vm", SSH: "vm", Connected: true, Listed: true},
+		{Name: "box", SSH: "box", Error: "ssh: no route"},
+	}})
+	d := &dash{ctx: context.Background(), st: st, reload: config.LoadSettled}
+	taker := &configTaker{d: d, st: st, bg: &background{}, theme: func(palette.Theme) {}}
+	m := dashModel(cfg)
+	m.Hint = "q quit"
+	taker.take(m, cfg, true)
+	if want := []view.HostEntry{{Name: "vm"}, {Name: "box", Down: true}}; !slices.Equal(m.Hosts, want) {
+		t.Fatalf("the hosts line %+v", m.Hosts)
+	}
+	// click clicks the first column of the hosts line, the line above
+	// the footer, and hands the action on as the sidebar does.
+	click := func() view.Action {
+		t.Helper()
+		out := m.Render()
+		y := len(out) - 1
+		for y > 0 && !strings.HasPrefix(view.Text(out[y-1:y]), "[") {
+			y--
+		}
+		a := m.Handle(term.Key{Kind: term.KeyMouse, X: 1, Y: y})
+		if !sidebarAction(m, a) {
+			t.Fatalf("the sidebar does not take %+v", a)
+		}
+		d.act(m, a)
+		return a
+	}
+	const note = "the local daemon fake is older than pause and dials a paused host all the same; laatmux stop ends it, and the next command starts this build"
+	if a := click(); a.Kind != view.ActionPause || a.HostName != "vm" || !a.Pause {
+		t.Fatalf("the click: %+v", a)
+	}
+	if m.Message != "vm paused; this machine dials it for upgrade alone until it is resumed; "+note {
+		t.Fatalf("message %q", m.Message)
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "    worktrees: /w\n    paused: true\n  - name: box") {
+		t.Fatalf("file:\n%s", b)
+	}
+	if !m.Hosts[0].Paused || !strings.Contains(view.Text(m.Render()), "[ ] vm  [x] box") {
+		t.Fatalf("the line after the click %+v:\n%s", m.Hosts, view.Text(m.Render()))
+	}
+	if a := click(); a.Pause || m.Message != "vm resumed; it is dialled again" || m.Hosts[0].Paused {
+		t.Fatalf("the second click: %+v, message %q, line %+v", a, m.Message, m.Hosts)
+	}
+	if b, _ := os.ReadFile(p); string(b) != pauseConfig {
+		t.Fatalf("file after the resume:\n%s", b)
+	}
+	if err := os.WriteFile(p, []byte("hosts: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	click()
+	if !strings.Contains(m.Message, "config.yaml: ") || m.Hosts[0].Paused {
+		t.Fatalf("a bad file: message %q, line %+v", m.Message, m.Hosts)
+	}
+	if out := view.Text(m.Render()); !strings.Contains(out, "config.yaml: ") || !strings.Contains(out, "[x] vm  [x] box") {
+		t.Fatalf("the footer of a bad file:\n%s", out)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "hosts: [\n" {
+		t.Fatalf("the bad file written over:\n%s", b)
+	}
+}
+
 // A command aimed at a paused host is refused before anything dials
 // it: jump, an add run or submitted, a shell, a workspace session's
 // attach, and the dial itself, whoever makes it.
