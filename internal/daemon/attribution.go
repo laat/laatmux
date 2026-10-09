@@ -22,10 +22,11 @@ import (
 // worktree root inside it, belongs to the checkout's record when its
 // pane is on the default server and not laatmux's own, the user's plain
 // session there, or in the checkout's home session on the managed
-// server; the record is published while an agent is so (see
-// syncMainsLocked), and first, so no agent names a record a subscriber
-// has not had. Any other pane in a main checkout belongs to none, and a
-// pane with no agent there has no pane record.
+// server or the pane laatmux made at its root; the record is published
+// while an agent is so (see syncMainsLocked), and first, so no agent
+// names a record a subscriber has not had. Any other pane in a main
+// checkout belongs to none, and a pane with no agent there has no pane
+// record.
 //
 // Panes are polled far more often than git lists worktrees. An agent
 // record takes its worktree at every observation, and when a listing
@@ -35,8 +36,8 @@ import (
 
 // root is a listed worktree root and its path with symlinks resolved,
 // or with main a main checkout's directory, of which only an agent in a
-// plain session on the default server or in the checkout's home session
-// is (attributeLocked); with unread
+// plain session on the default server, in the checkout's home session or
+// in the pane laatmux made at its root is (attributeLocked); with unread
 // too, one whose HEAD could not be read, which has no record: no pane is
 // its, nor a worktree's around it.
 type root struct {
@@ -134,24 +135,28 @@ func (d *Daemon) worktreeOfLocked(path string, main func(root string) bool) stri
 
 // attributeLocked is the worktree an observed pane's agent belongs to:
 // the deepest listed root its path is in, a main checkout's directory
-// only for a live, named agent, claude or codex, in a pane that is not
-// laatmux's own: on the default server, the user's plain session there,
-// or on the managed server in the checkout's home session (homeSessions),
-// the shell session a jump made at the root, say, where the user started
-// it. Any other session new made in a main checkout keeps a row of its
-// own; a shell, an identified pane with no named agent or one left after
-// its agent quit, puts no checkout in use, nor keeps one, so a record
-// never follows a shell's cd; a pane record is never a main checkout's
+// only for a named agent, claude or codex, in a pane that is not
+// laatmux's own. On the managed server, one in the checkout's home
+// session (homeSessions), the shell session a jump made at the root, say,
+// where the user started it, or in the pane laatmux made at the root
+// once a pane gone elsewhere took the home, is the checkout's as a
+// worktree's root agent is, also after it quit, while its pane lasts. On
+// the default server, the user's plain session there, a live one is. Any
+// other session new made in a main checkout keeps a row of its own; a
+// shell in a plain session, one left after its agent quit among them,
+// puts no checkout in use, nor keeps one, so a record never follows a
+// shell's cd; a pane record is never a main checkout's
 // (publishPaneLocked). Called with d.mu held.
 func (d *Daemon) attributeLocked(st *paneState, a protocol.Agent) string {
-	if a.Agent == "" || a.Liveness == protocol.Gone || st.pane.Own {
+	if a.Agent == "" || st.pane.Own {
 		return d.worktreeOfLocked(st.path, nil)
 	}
 	return d.worktreeOfLocked(st.path, func(root string) bool {
 		if st.target.Managed {
-			return st.pane.Session != "" && d.managedRoots[root] == st.pane.Session
+			home := st.pane.Session != "" && d.managedRoots[root] == st.pane.Session
+			return home || st.pane.Managed && st.pane.Cwd == root
 		}
-		return st.target.Label == protocol.ServerDefault
+		return a.Liveness != protocol.Gone && st.target.Label == protocol.ServerDefault
 	})
 }
 

@@ -1330,16 +1330,24 @@ func TestMainCheckoutLeftWorkspace(t *testing.T) {
 // A main checkout with a home session, the shell session a jump made at
 // its root, is a line as a worktree's with one: its workspace session
 // is its own, the viewer in it on the line by its own session, and so
-// in a plain attachment to the home; the line jumps through the agent
-// in the home, which takes the workspace session, not through the
-// working one in a plain session, and the viewer in that plain session
-// is on the line through the agent, not by its own session. HomeLine
-// finds the line by the home.
+// in a plain attachment to the home; the agent in the home takes the
+// workspace session; the viewer in the plain session of another agent
+// is on the line through it, not by its own session. HomeLine finds the
+// line by the home. The line shows the most recently active agent
+// wherever it runs, the working one in a plain session here, also with
+// a shell alone in the home, and "no agent" only with none. With the
+// home lost to a split gone elsewhere, the agent laatmux made at the
+// root stays the line's and takes the workspace session, and the line
+// goes through it when it is the most recently active; the session the
+// jump named is still the line's: HomeLine finds it, the viewer in a
+// plain attachment to it is on the line by its own session, and an
+// agent of no checkout in it, in other sessions, is the viewer's in the
+// line's workspace session.
 func TestMainCheckoutHome(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	in := mainInput(now)
 	in.Worktrees[1].Session = "laatmux/main"
-	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/main", Agent: "codex",
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/main", Agent: "codex", Managed: true, Cwd: "/code/laatmux",
 		Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, WorktreeID: "menv/checkout//code/laatmux", Identity: &protocol.Identity{PID: 5, StartUnix: 5}})
 	ws := protocol.Session{Name: "mac/laatmux/main", Key: "menv//code/laatmux", Host: "mac"}
 	in.Locals = append(in.Locals, ws, protocol.Session{Name: "att", Attach: "mac/laatmux/main", Host: "mac"})
@@ -1362,7 +1370,7 @@ func TestMainCheckoutHome(t *testing.T) {
 		if line.Current != c.current || line.Own != c.own {
 			t.Errorf("viewer in %s: the main line Current %v Own %v", c.viewer, line.Current, line.Own)
 		}
-		if line.Local == nil || line.Local.Name != ws.Name || line.Agent == nil || line.Agent.ID != "menv/laatmux/%5" || line.Home() != "laatmux/main" {
+		if line.Local == nil || line.Local.Name != ws.Name || line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.Home() != "laatmux/main" {
 			t.Fatalf("viewer in %s: the main line %+v", c.viewer, line)
 		}
 		if _, a := find(nodes, "menv/laatmux/%5"); a.Local == nil || a.Local.Name != ws.Name {
@@ -1382,11 +1390,44 @@ func TestMainCheckoutHome(t *testing.T) {
 			}
 		}
 	}
-	// The line says what runs in its home: none but a shell.
-	in.Agents = in.Agents[:len(in.Agents)-1]
+	// The home lost; an agent of no checkout in a split of the session.
+	in.Worktrees[1].Session = ""
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "laatmux/main", Agent: "claude",
+		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/tmp", Identity: &protocol.Identity{PID: 6, StartUnix: 6}})
+	for _, viewer := range []string{"att", ws.Name} {
+		in.Current = viewer
+		nodes := Tree(in)
+		i, line := find(nodes, "menv/checkout//code/laatmux")
+		if HomeLine(nodes, "mac", "laatmux/main") != i || !line.Own || line.Local == nil || line.Local.Name != ws.Name || line.Agent == nil || line.Agent.ID != "menv/default/%2" {
+			t.Errorf("viewer in %s, the home lost: the main line %+v", viewer, line)
+		}
+		if _, a := find(nodes, "menv/laatmux/%5"); a.Depth != 2 || a.Local == nil || a.Local.Name != ws.Name {
+			t.Errorf("viewer in %s, the home lost: the agent laatmux made at the root %+v", viewer, a)
+		}
+		if _, a := find(nodes, "menv/laatmux/%6"); a.Depth != 1 || !a.Current {
+			t.Errorf("viewer in %s, the home lost: the agent of no checkout %+v", viewer, a)
+		}
+	}
+	// The agent laatmux made at the root the most recently active: the
+	// line goes through it, its session the line's.
+	in.Agents[1].Activity, in.Agents[4].Activity = protocol.Idle, protocol.Working
 	nodes := Tree(in)
+	if _, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/laatmux/%5" || line.Home() != "laatmux/main" {
+		t.Errorf("the agent laatmux made at the root working, the home lost: %+v", line)
+	}
+	// The home back with a shell alone in it: the line shows the working
+	// agent in a plain session; with none of its own, no agent.
+	in.Worktrees[1].Session = "laatmux/main"
+	in.Agents = in.Agents[:4]
+	in.Agents[1].Activity = protocol.Working
+	nodes = Tree(in)
+	if _, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.State() != "" || line.Home() != "laatmux/main" {
+		t.Fatalf("the main line with a shell in its home and an agent working in a plain session: %+v", line)
+	}
+	in.Agents = in.Agents[2:]
+	nodes = Tree(in)
 	if _, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent != nil || line.State() != "no agent" {
-		t.Fatalf("the main line with a shell in its home: %+v", line)
+		t.Fatalf("the main line with a shell in its home and no agent: %+v", line)
 	}
 }
 
@@ -1395,8 +1436,9 @@ func TestMainCheckoutHome(t *testing.T) {
 // the line jumps through the most recently active, one working before
 // one idle, and is the viewer's by its own session when the viewer sits
 // with any of them, whichever the jump goes through. Its agents are
-// tiles titled by the repository with the branch under it. It has no
-// session add named, and with no agent it says so.
+// tiles titled by the repository with the branch under it. The session
+// named as a jump names its shell session is its line's, and with no
+// agent it says so.
 // An agent in a clone the host does not publish stays in other sessions.
 func TestMainCheckoutLine(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
@@ -1421,8 +1463,10 @@ other sessions
 	if line.Children != 2 || line.Worktree.Git == nil {
 		t.Fatalf("line %+v", line)
 	}
-	if HomeLine(nodes, "mac", "laatmux/main") != -1 {
-		t.Error("a managed session named as add would name the main checkout's is its")
+	// The session a jump names the checkout's shell session is its
+	// line's, as one add named is a worktree's.
+	if HomeLine(nodes, "mac", "laatmux/main") != 1 {
+		t.Error("a managed session named as a jump names the main checkout's is not its")
 	}
 	// The working one goes idle before the other did: the other is the
 	// most recently active, the viewer's.

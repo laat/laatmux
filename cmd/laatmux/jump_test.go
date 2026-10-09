@@ -648,8 +648,11 @@ func TestJumpMakesShellSession(t *testing.T) {
 // switches there and says what it made; a name in use that no record
 // places elsewhere is attached, one in which an agent of another
 // worktree runs refused. One with a home goes to its workspace session
-// and asks nothing; one with an agent in a plain session and no home
-// switches to that session, as before. A host whose daemon lacks new
+// and asks nothing, with an agent in the home and another in a plain
+// session; one with an agent in a plain session and no home
+// switches to that session, as before; one whose home a split took
+// attaches the workspace session named after it to the session of the
+// agent laatmux made at its root. A host whose daemon lacks new
 // keeps the refusal that no agent runs in it (a detached checkout, which
 // no target names by a branch, is TestJumpRowMainCheckout's).
 func TestJumpMainCheckoutShell(t *testing.T) {
@@ -660,14 +663,22 @@ func TestJumpMainCheckoutShell(t *testing.T) {
 	}
 	proj, taken, busy, homed, plain, det := main("proj", "main", "/r/proj"), main("lib", "dev", "/r/lib"), main("app", "main", "/r/app"), main("tool", "main", "/r/tool"), main("note", "main", "/r/note"), main("dots", "", "/r/dots")
 	homed.Session = "tool/main"
+	lost := main("kit", "main", "/r/kit")
 	x := protocol.Worktree{ID: "menv/worktree//w/x", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "x", Root: "/w/x", Session: "proj/x"}
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps}},
-		Worktrees: []protocol.Worktree{proj, taken, busy, homed, plain, det, x},
+		Worktrees: []protocol.Worktree{proj, taken, busy, homed, plain, det, lost, x},
 		Agents: []protocol.Agent{
 			// x's agent, moved by hand into the session app/main would be.
 			{ID: "menv/laatmux/%2", EnvironmentID: "menv", Server: "laatmux", Session: "app/main", Agent: "claude", WorktreeID: x.ID, Cwd: "/w/x"},
 			{ID: "menv/default/%3", EnvironmentID: "menv", Server: "default", Session: "notes", Agent: "claude", WorktreeID: plain.ID, Cwd: plain.Root},
+			// An agent in tool's home and one in a plain session: the
+			// home is gone to all the same.
+			{ID: "menv/laatmux/%4", EnvironmentID: "menv", Server: "laatmux", Session: "tool/main", Agent: "codex", Managed: true, WorktreeID: homed.ID, Cwd: homed.Root},
+			{ID: "menv/default/%5", EnvironmentID: "menv", Server: "default", Session: "work", Agent: "claude", Activity: protocol.Working, WorktreeID: homed.ID, Cwd: homed.Root},
+			// The agent laatmux made at kit's root, a split gone elsewhere
+			// having taken the home.
+			{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "kit/old", Agent: "claude", Managed: true, WorktreeID: lost.ID, Cwd: lost.Root},
 		}}
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
@@ -714,6 +725,15 @@ func TestJumpMainCheckoutShell(t *testing.T) {
 	}
 	if out, cmds, req, err := jump("mac/note/main"); err != nil || req != "" || out != "" || !strings.Contains(cmds, "switch-client -t =notes:") || strings.Contains(cmds, "new-session") {
 		t.Errorf("jump with an agent in a plain session: %v, asked %q, printed %q, tmux %q", err, req, out, cmds)
+	}
+	out, cmds, req, err := jump("mac/kit/main")
+	if err != nil || req != "" || out != "" {
+		t.Errorf("jump with the home lost: %v, asked %q, printed %q", err, req, out)
+	}
+	for _, want := range []string{"new-session -d -s mac/kit/main ", "@laatmux_workspace menv//r/kit ", "@laatmux_attach_target kit/old ", "switch-client -t =mac/kit/main:"} {
+		if !strings.Contains(cmds, want) {
+			t.Errorf("jump with the home lost ran %q, want %q in it", cmds, want)
+		}
 	}
 	requests = fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapMerged, protocol.CapCheckouts}, &snap, nil)
 	want = "mac/proj/main is the main checkout, and no agent runs in it"

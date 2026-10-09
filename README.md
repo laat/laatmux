@@ -419,19 +419,22 @@ truth; labels only place new things.
   clients and merging daemon do: an older client or merging daemon
   never sees one, and gets an agent attributed to one as an agent of
   no worktree, as before, so none takes a main checkout for a worktree
-  it may remove. A live, named agent (claude, codex) whose pane is not
-  laatmux's own, on the host's default server or in the checkout's home
-  session on the managed server, with its path in a main checkout and
-  under no worktree root inside it, is attributed to the checkout's
-  record, which is published before the agent names it and taken back,
-  when no other reason holds it, after the last such agent has left or
-  quit, also when the checkout leaves the listing; a shell, one left
-  after its agent quit among them, puts no checkout in use, so a record
-  never follows a shell's `cd`. An agent in any other managed session
-  in a checkout, a `new` session's made below its root, keeps a row of
-  its own, even where the checkout is inside a worktree, and a pane
-  with no agent in a checkout has no pane record, its home's shell
-  among them. `rm` refuses a main checkout's root, also where
+  it may remove. A named agent (claude, codex) whose pane is not
+  laatmux's own, with its path in a main checkout and under no worktree
+  root inside it, is attributed to the checkout's record: a live one on
+  the host's default server; on the managed server, live or after it
+  quit, one in the checkout's home session, or in the pane laatmux made
+  at its root once a pane gone elsewhere took the home, as a worktree's
+  root agent stays its worktree's. The record is published before the
+  agent names it and taken back, when no other reason holds it, after
+  the last such agent has left or quit (gone from its pane on the
+  managed server), also when the checkout leaves the listing; a shell
+  in a plain session, one left after its agent quit among them, puts no
+  checkout in use, so a record never follows a shell's `cd`. An agent
+  in any other managed session in a checkout, a `new` session's made
+  below its root, keeps a row of its own, even where the checkout is
+  inside a worktree, and a pane with no agent in a checkout has no pane
+  record, its home's shell among them. `rm` refuses a main checkout's root, also where
   the repos directory is under the worktrees one, and `run` takes
   registered worktrees only, as before.
 - **Attribution**, capability `attribution` (issue #55): every polled
@@ -927,17 +930,27 @@ workspace session; the next `jump` makes it again.
   repository's main checkout, `<host>/<repo>/<branch>` for the branch
   it has checked out, gets no session from `add`. With a home session
   the jump goes to its workspace session as a worktree's does. With
-  none it switches to the session of its agent on this machine's
-  default server, the most recently active of several, one working or
-  blocked first; one on a remote host's default server is refused as
-  any session there is. With no agent either it makes the checkout a
-  home as it makes a worktree with none one, through `new`, named as
-  `add` would name a worktree's on the branch (`pin-chat/main`), with
-  the host's `default-shell` at the checkout's root, and the workspace
-  session keyed by the root, as any root's; a host whose daemon lacks
-  `new` says no agent runs there. The home is the checkout's from then
-  on, and an agent started in it by hand is the checkout's (issue
-  #376). Two clones' main checkouts on
+  none it goes through its most recently active agent, one working or
+  blocked first: to its session on this machine's default server, one
+  on a remote host's default server refused as any session there is;
+  or, for the agent laatmux made at the root of a home a split gone
+  elsewhere took, through the workspace session attached to that
+  agent's session, as a worktree's jump does then. With no agent either
+  it makes the checkout a home as it makes a worktree with none one,
+  through `new`, named as `add` would name a worktree's on the branch
+  (`pin-chat/main`), with the host's `default-shell` at the checkout's
+  root, and the workspace session keyed by the root, as any root's; a
+  host whose daemon lacks `new` says no agent runs there. The home is
+  the checkout's from then on, and an agent started in it by hand is
+  the checkout's (issue #376). A host on a build from before this has
+  `new` but never ties the home to the checkout: each jump attaches to
+  the session again, as one of that name in use, and an agent started
+  there stays in other sessions. The home keeps the name it was made
+  with when the checkout switches branch, as a worktree's does; an
+  `add` of that branch then finds the name in use. Two clones of one
+  repository on one branch name their checkouts' shell sessions alike,
+  so the second's jump is refused as a name in use while the first's
+  home is listed. Two clones' main checkouts on
   the branch, which no label tells apart, are named with their roots,
   and, on this machine, `--server default <host>/<session>` reaches an
   agent in any of them.
@@ -1060,15 +1073,18 @@ list that `Tab` or a click switches:
   its agents by start time, its other panes (`$ zsh`) and its runs (`▶
   make test 0:42`), from the pane and run records the client now keeps.
   A main checkout in use is a line under its repository like a
-  worktree's, before them, with its git stats and the agents in plain
-  sessions on its host's default server and in its home session in it,
-  and the workspace session keyed by its root as its own; with a home
-  it is a worktree's line with one, `Enter` going there; with none,
-  `Enter` goes to the session of the most recently active agent, the
-  line is the viewer's when the viewer sits in the session of any of
-  them, and with no agent either `Enter` makes it a home with a shell
-  (below). Its agents' tiles are titled by the repository, with the
-  branch under it.
+  worktree's, before them, with its git stats and its agents in it, in
+  plain sessions on its host's default server and in its home, and the
+  workspace session keyed by its root as its own. The line shows its
+  most recently active agent wherever that runs. With a home it is a
+  worktree's line with one, `Enter` going there; with none, `Enter`
+  goes through the most recently active agent, the line is the
+  viewer's when the viewer sits in the session of any agent in a plain
+  session, and with no agent either `Enter` makes it a home with a
+  shell (below). The session named as that shell session is, its home
+  lost to a split gone elsewhere, stays the line's, as a session named
+  after a worktree stays the worktree's. Its agents' tiles are titled
+  by the repository, with the branch under it.
   A pending task sits where its worktree will be, holding the worktree's
   children while it stands for it, the newest of several owning them.
   An orphaned session sits under its repository by its source tag,
@@ -1238,7 +1254,7 @@ would start one: its command line, or what add needs first, and `S`
 says the row is no workspace. `z` on such a line says which: that
 enter creates one with a shell and the `add` line makes one with an
 agent, or the refusal. A main checkout goes as `jump` takes it: with
-no home and an agent, to the agent's session; with neither, where the
+no home, through its most recently active agent; with neither, where the
 host cannot make the home, the footer says no agent runs there, and
 `z` adds no `add` line, since add makes a main checkout none. An
 orphaned row's session exists locally and is switched to.

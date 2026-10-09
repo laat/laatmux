@@ -1485,11 +1485,15 @@ func TestShellMakesSession(t *testing.T) {
 	main := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "main", Root: "/r/proj", Main: true}
 	onVM, mainVM := b, main
 	onVM.ID, onVM.EnvironmentID, mainVM.ID, mainVM.EnvironmentID = "venv/worktree//w/b", "venv", "venv/checkout//r/proj", "venv"
+	// A worktree and another clone's main checkout whose managed sessions
+	// are gone, their workspace sessions left.
+	c, clone := b, main
+	c.ID, c.Branch, c.Root, clone.ID, clone.Branch, clone.Root = "menv/worktree//w/c", "c", "/w/c", "menv/checkout//r/proj2", "dev", "/r/proj2"
 	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
 		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps},
 		{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Capabilities: caps[:4]},
-	}, Worktrees: []protocol.Worktree{b, main, onVM, mainVM}}
+	}, Worktrees: []protocol.Worktree{b, main, onVM, mainVM, c, clone}}
 	release := make(chan struct{})
 	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapNew}, nil, map[string]func() bool{"proj/b": func() bool { <-release; return false }})
 	ends := make(chan func(*view.Model) view.Action, 1)
@@ -1499,7 +1503,10 @@ func TestShellMakesSession(t *testing.T) {
 	in := rows.Input{Hosts: []rows.Host{
 		{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
 		{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
-	}, Worktrees: snap.Worktrees}
+	}, Worktrees: snap.Worktrees, Locals: []protocol.Session{
+		{Name: "mac/proj/c", Key: "menv//w/c", Host: "mac", Source: src, Branch: "c"},
+		{Name: "mac/proj/old", Key: "menv//r/proj2", Host: "mac", Source: src, Branch: "old"},
+	}}
 	model := func(id string) *view.Model {
 		t.Helper()
 		m := &view.Model{Width: 100, Height: 40, ShowHidden: true, View: view.ViewTree}
@@ -1571,6 +1578,25 @@ func TestShellMakesSession(t *testing.T) {
 		for _, want := range wants {
 			if !strings.Contains(p.cmds, want) {
 				t.Errorf("%c on %s ran %q, want %q in it", k.key, k.id, p.cmds, want)
+			}
+		}
+	}
+	// S where the line has a workspace session at the root, its managed
+	// session gone, on a worktree and on a main checkout: the session is
+	// made first, as enter makes it, the workspace session for the root
+	// attached to it (the fake tmux lists none, so Ensure makes it), and
+	// the shell window opened there, not in the one the line had.
+	for _, k := range []struct{ id, ws, req, managed, root string }{
+		{c.ID, "mac/proj/c", `proj/c /w/c mac []`, "proj/c", "/w/c"},
+		{clone.ID, "mac/proj/dev", `proj/dev /r/proj2 mac []`, "proj/dev", "/r/proj2"},
+	} {
+		p := press('S', k.id)
+		if p.req != k.req || p.end.Kind != view.ActionQuit || strings.Contains(p.cmds, "=mac/proj/old:") {
+			t.Errorf("S on %s with a workspace session left: %+v", k.id, p)
+		}
+		for _, want := range []string{"@laatmux_attach_target " + k.managed + " ", "new-window -t =" + k.ws + ": -n shell -c " + k.root, "switch-client -t =" + k.ws + ":"} {
+			if !strings.Contains(p.cmds, want) {
+				t.Errorf("S on %s ran %q, want %q in it", k.id, p.cmds, want)
 			}
 		}
 	}
@@ -1649,6 +1675,83 @@ func TestShellMakesSession(t *testing.T) {
 		if p := press(k.key, k.id); p.msg != k.want || p.cmds != "" || p.req != "" || p.end.Kind != view.ActionNone {
 			t.Errorf("%c on %s with no new in the hello: %+v, want %q", k.key, k.id, p, k.want)
 		}
+	}
+}
+
+// A main checkout whose home a split gone elsewhere took, with the agent
+// laatmux made at its root still its own and an agent of no checkout in
+// a split of that session: enter on the line, while the root agent is
+// the most recently active, attaches the workspace session named and
+// keyed after the checkout to the root agent's session, and asks the
+// host for nothing; enter on the other agent's row lands in that
+// workspace session, as does S on it, which opens the shell window at
+// the root there. With an agent in a plain session the most recently
+// active, enter on the line goes to its session, and the other agent's
+// row still lands in the checkout's workspace session.
+func TestMainCheckoutLostHome(t *testing.T) {
+	log := fakeDefaultTmux(t)
+	src := "git@github.com:laat/proj.git"
+	main := protocol.Worktree{ID: "menv/checkout//r/proj", EnvironmentID: "menv", Repo: "proj", Source: src, Branch: "main", Root: "/r/proj", Main: true}
+	now := time.Now()
+	made := protocol.Agent{ID: "menv/laatmux/%5", EnvironmentID: "menv", Server: "laatmux", Session: "proj/main", PaneID: "%5", Agent: "codex", Managed: true, Cwd: main.Root,
+		WorktreeID: main.ID, Activity: protocol.Working, ActivityAt: now, Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 5, StartUnix: 5}}
+	stray := protocol.Agent{ID: "menv/laatmux/%6", EnvironmentID: "menv", Server: "laatmux", Session: "proj/main", PaneID: "%6", Agent: "claude", Cwd: "/tmp",
+		Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 6, StartUnix: 6}}
+	plain := protocol.Agent{ID: "menv/default/%2", EnvironmentID: "menv", Server: "default", Session: "notes", PaneID: "%2", Agent: "claude",
+		WorktreeID: main.ID, Activity: protocol.Idle, ActivityAt: now.Add(-time.Hour), Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 2, StartUnix: 2}}
+	caps := []string{protocol.CapStatus, protocol.CapWorktrees, protocol.CapAttribution, protocol.CapCheckouts, protocol.CapNew}
+	snap := protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: caps}},
+		Worktrees: []protocol.Worktree{main}, Agents: []protocol.Agent{made, stray, plain}}
+	requests := fakeNew(t, "menv", []string{protocol.CapStatus, protocol.CapNew}, nil, nil)
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: make(chan func(*view.Model) view.Action, 1), clientAt: func(context.Context) string { return "work" }}
+	d.st.Apply(snap)
+	in := rows.Input{Hosts: []rows.Host{{Name: "mac", Local: true, EnvironmentID: "menv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Worktrees: snap.Worktrees, Agents: snap.Agents}
+	press := func(key rune, id string) (msg, cmds string) {
+		t.Helper()
+		m := &view.Model{Width: 100, Height: 40, ShowHidden: true, View: view.ViewTree}
+		m.SetTree(rows.Tree(in))
+		m.SetRows(rows.Agents(in, rows.Tree(in)))
+		m.Render()
+		if !m.Select(id) {
+			t.Fatalf("no row %s", id)
+		}
+		os.Remove(log)
+		if key == '\r' {
+			d.jumpAction(m, view.Action{Kind: view.ActionJump})
+		} else {
+			d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: key}})
+		}
+		got, _ := os.ReadFile(log)
+		return m.Message, string(got)
+	}
+	attached := []string{"new-session -d -s mac/proj/main ", "@laatmux_workspace menv//r/proj ", "@laatmux_attach_target proj/main ", "switch-client -t =mac/proj/main:"}
+	for _, k := range []struct {
+		key  rune
+		id   string
+		want []string
+	}{
+		{'\r', main.ID, attached},
+		{'\r', stray.ID, attached},
+		{'S', stray.ID, append(slices.Clone(attached), "new-window -t =mac/proj/main: -n shell -c /r/proj")},
+	} {
+		msg, cmds := press(k.key, k.id)
+		for _, want := range k.want {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("%c on %s: message %q, ran %q, want %q in it", k.key, k.id, msg, cmds, want)
+			}
+		}
+		if d.making != "" || asked(requests) != "" {
+			t.Errorf("%c on %s asked the host for a session", k.key, k.id)
+		}
+	}
+	// The agent in the plain session the most recently active.
+	in.Agents[0].Activity, in.Agents[2].Activity = protocol.Idle, protocol.Working
+	if msg, cmds := press('\r', main.ID); !strings.Contains(cmds, "switch-client -t =notes:") || strings.Contains(cmds, "new-session") {
+		t.Errorf("enter on the line, the plain session's agent working: message %q, ran %q", msg, cmds)
+	}
+	if msg, cmds := press('\r', stray.ID); !strings.Contains(cmds, "@laatmux_workspace menv//r/proj ") || !strings.Contains(cmds, "@laatmux_attach_target proj/main ") || !strings.Contains(cmds, "switch-client -t =mac/proj/main:") {
+		t.Errorf("enter on the other agent, the plain session's agent working: message %q, ran %q", msg, cmds)
 	}
 }
 

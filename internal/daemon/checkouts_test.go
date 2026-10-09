@@ -230,15 +230,37 @@ func TestMainCheckoutRecords(t *testing.T) {
 		t.Fatalf("a snapshot that did not ask has the attribution: %+v", snap.Agents)
 	}
 
-	// The managed sessions exit: other's record stays, with no session,
-	// for the agent in the plain session, and proj's goes.
-	laatmux.set(func() { laatmux.panes = nil })
+	// A split of notes gone elsewhere takes the home: the record has no
+	// session, and the agent in the pane laatmux made at the root stays
+	// the checkout's, as a worktree's root agent does, also once it quit.
+	laatmux.set(func() {
+		laatmux.panes = append(laatmux.panes, tmux.Pane{Session: "notes", ID: "%4", TTY: "/dev/s4", CurrentPath: "/"})
+	})
+	ids.mu.Lock()
+	delete(ids.ids, "/dev/a2")
+	ids.mu.Unlock()
 	if err := d.poll(ctx); err != nil {
 		t.Fatal(err)
 	}
 	ms = with.drain()
 	if i := recordAt(ms, otherID); i < 0 || ms[i].Worktree.Session != "" || removedAt(ms, otherID) >= 0 {
-		t.Fatalf("the checkout's home gone, its agent in a plain session left: %+v", ms)
+		t.Fatalf("the home lost: %+v", ms)
+	}
+	s, snap = d.subscribe(nil, true)
+	d.unsubscribe(s)
+	if i := slices.IndexFunc(snap.Agents, func(a protocol.Agent) bool { return a.PaneID == "%1" }); i < 0 || snap.Agents[i].WorktreeID != otherID || snap.Agents[i].Liveness != protocol.Gone {
+		t.Fatalf("the agent laatmux made at the root, quit, the home lost: %+v", snap.Agents)
+	}
+
+	// The managed sessions exit: other's record stays for the agent in
+	// the plain session, and proj's goes.
+	laatmux.set(func() { laatmux.panes = nil })
+	if err := d.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ms = with.drain()
+	if removedAt(ms, otherID) >= 0 {
+		t.Fatalf("the checkout's managed session gone, its agent in a plain session left: %+v", ms)
 	}
 	if removedAt(ms, projID) < 0 {
 		t.Fatalf("the checkout whose home went, with nothing else in use: %+v", ms)

@@ -1318,12 +1318,20 @@ func ownerLine(m *view.Model, row rows.Row) *rows.Row {
 // host tag it was made with, which a renamed host leaves behind, and
 // not by the row's host: an observed agent on this machine's default
 // server sits in a local window of a workspace whose worktree may be
-// on another host, and the shell belongs where the worktree is.
+// on another host, and the shell belongs where the worktree is. A
+// worktree or a main checkout with no home and no agent is the jump's
+// refusal (*noHome) where the host can make the home (shellable),
+// whether or not a workspace session is there: S makes the home first,
+// as enter does, and the workspace session is attached to it.
 func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 	if r.Orphaned {
 		return protocol.Session{}, errors.New(r.Name + ": its worktree is gone")
 	}
+	spec, err := localSpec(d.cfg, r)
 	if r.Local != nil && r.Local.Workspace() {
+		if _, _, ok := shellable(d.st, err); ok {
+			return protocol.Session{}, err
+		}
 		l := *r.Local
 		env, _ := protocol.SplitSessionKey(l.Key)
 		if name := d.st.HostOf(env); name != "" {
@@ -1331,7 +1339,6 @@ func (d *dash) localFor(r rows.Row) (protocol.Session, error) {
 		}
 		return l, nil
 	}
-	spec, err := localSpec(d.cfg, r)
 	if err != nil {
 		return protocol.Session{}, err
 	}

@@ -471,11 +471,9 @@ func (r Row) HostName() string {
 // swap the row's agent and the others' rows as they work: a live agent
 // before a gone one, then the one that started first, then the id. The
 // rest keep rows of their own until the views show several agents per
-// worktree. A main checkout's line has its own choice (mainAgent) while
-// it has no home; with one, the shell session a jump made, it is a
-// worktree's, an agent in the home or none.
+// worktree. A main checkout's line has its own choice (mainAgent).
 func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
-	if w.Main && w.Session == "" {
+	if w.Main {
 		return mainAgent(agents)
 	}
 	var best *protocol.Agent
@@ -497,17 +495,20 @@ func rowAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
 	return best
 }
 
-// mainAgent is the agent a main checkout's line jumps through: of its
-// agents in plain sessions on the default server, the only ones the
-// host gives it, the most recently active. One working or blocked is
-// active now and goes first, then the latest change of activity; a live
-// one before one gone. Unlike a worktree's, the choice turns on
-// activity: the checkout has no home session for enter to go to, and
-// goes where the work is.
+// mainAgent is the agent a main checkout's line shows, and with no home
+// jumps through: of its agents, the ones the host gives it, in plain
+// sessions on the default server and on the managed server in its home
+// or in the pane laatmux made at its root, the most recently active. One
+// working or blocked is active now and goes first, then the latest
+// change of activity; a live one before one gone. Unlike a worktree's,
+// the choice turns on activity: the line's state follows its agents
+// wherever they run, and with no home enter goes where the work is.
+// With a home enter goes there (rowSpec), whichever agent the line
+// shows.
 func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 	var best *protocol.Agent
 	for _, a := range agents {
-		if a.Server != protocol.ServerDefault || a.Managed {
+		if a.Server != protocol.ServerLaatmux && (a.Server != protocol.ServerDefault || a.Managed) {
 			continue
 		}
 		if best == nil || livelier(a, best) {

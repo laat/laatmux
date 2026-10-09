@@ -38,10 +38,11 @@ import (
 // a plain attachment rather than a workspace.
 //
 // A repository's main checkout, <host>/<repo>/<branch> for the branch it
-// has checked out, gets no session from add: with no home the jump
-// switches to the session of its agent on this machine's default server
-// (jumpMain), and with no agent either makes it a home with a shell as a
-// worktree gets one, which the jump goes to from then on.
+// has checked out, gets no session from add: with no home the jump goes
+// as its line's does, to the session of its agent on this machine's
+// default server or through the agent laatmux made at its root (rowSpec),
+// and with no agent either makes it a home with a shell as a worktree
+// gets one, which the jump goes to from then on.
 //
 // With --server default the session is one the daemon merely observes on
 // this machine's own tmux. It is already in the user's server, so jump is
@@ -94,12 +95,22 @@ func cmdJump(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if ok && w.Main && w.Session == "" {
-		if a := rows.JumpAgent(snap.Agents, w); a != nil {
-			return jumpMain(ctx, h, *a)
+	switch a := rows.JumpAgent(snap.Agents, w); {
+	case ok && w.Main && a != nil:
+		// A main checkout with an agent goes as its line goes (rowSpec):
+		// to its home; with none, to its agent's plain session on this
+		// machine's default server, the most recently active of several,
+		// or through the workspace session attached to the session of the
+		// agent laatmux made at its root, a split gone elsewhere having
+		// taken the home.
+		var session string
+		if spec, session, err = rowSpec(cfg, h, rows.Row{Kind: rows.KindWorktree, Host: h.Name, Worktree: &w, Agent: a}); err != nil {
+			return err
 		}
-	}
-	if ok {
+		if session != "" {
+			return switchDefault(ctx, h, session)
+		}
+	case ok:
 		if w.Session == "" {
 			// The records are the host's, its label in them.
 			name := shellSession(rows.Row{Worktree: &w})
@@ -123,7 +134,7 @@ func cmdJump(ctx context.Context, args []string) error {
 			w.Session = name
 		}
 		spec = worktreeSpec(h, w)
-	} else {
+	default:
 		if err := checkSession(ctx, h.Host, rest); err != nil {
 			return err
 		}
@@ -150,17 +161,6 @@ func switchDefault(ctx context.Context, h config.Host, session string) error {
 		return fmt.Errorf("%s: is on the default tmux server; run jump from a client of it", tmux.Printable(h.Name+"/"+session))
 	}
 	return workspace.Switch(ctx, session)
-}
-
-// jumpMain goes to the agent a main checkout with no home jumps through,
-// in a plain session on its host's default server: the most recently
-// active of several, as the checkout's line goes (rows.JumpAgent). One
-// on a remote host's default server is refused as any session there is.
-func jumpMain(ctx context.Context, h config.Host, a protocol.Agent) error {
-	if _, err := jumpMode(h.Host, tmux.Parse(a.Server), a.Session); err != nil {
-		return err
-	}
-	return switchDefault(ctx, h, a.Session)
 }
 
 // mainNoAgent says a main checkout with no home has no agent to jump to,
