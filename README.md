@@ -578,8 +578,17 @@ truth; labels only place new things.
   on macOS git could not make its ref or root in any case.
 - **`rm`** `{type: rm, id, repo, branch, root, force}` removes the worktree
   through git, which refuses a dirty or locked one without `force` and
-  says why, then kills every managed session whose pane records the
-  root. Both steps skip when already done, so a repeat is `ok`. `repo`
+  says why, and kills every managed session whose pane records the
+  root. When git is going to agree, the worktree clean by `git status`
+  or the removal forced, the sessions and the runs at the root go
+  first and the worktree record leaves the stream and the snapshots at
+  once, since git's removal takes seconds on a large worktree; git
+  still judges, and a worktree it refuses all the same, locked say,
+  has its record put back. A dirty one is left to git's refusal,
+  nothing killed. The record goes for good, with what a removal means
+  for the tasks at the root, when the listing drops it; no git status
+  is published for the root meanwhile. Both steps skip when already
+  done, so a repeat is `ok`. `repo`
   names a repository the config lists or any checkout under `repos`, by
   source or by label; a label two repositories answer to is refused. With
   `root`, the checkout that registers the root is the one git removes

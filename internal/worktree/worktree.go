@@ -1031,6 +1031,23 @@ func Remove(ctx context.Context, checkout, root string, force bool) (removed boo
 	return true, nil
 }
 
+// Clean reports whether the worktree at root has nothing modified,
+// staged or untracked, which is what git's worktree remove refuses
+// without force; rm reads it to know whether what runs in the root can
+// go before the removal, which takes seconds on a large worktree. A
+// root that is not there, a registration whose directory went by hand,
+// has nothing to lose and is clean.
+func Clean(ctx context.Context, root string) (bool, error) {
+	if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+		return true, nil
+	}
+	out, err := git(ctx, root, "status", "--porcelain", "--untracked-files=all", "-z")
+	if err != nil {
+		return false, err
+	}
+	return out == "", nil
+}
+
 // git runs a git command in dir and returns its stdout. On failure the
 // error carries git's stderr.
 func git(ctx context.Context, dir string, args ...string) (string, error) {

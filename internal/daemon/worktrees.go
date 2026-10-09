@@ -267,6 +267,11 @@ func (d *Daemon) publishWorktreesLocked(now time.Time) {
 // say: add makes none. Called with d.mu held.
 func (d *Daemon) publishRecordLocked(r worktree.Record, now time.Time, seen map[string]bool) {
 	seen[r.Root] = true
+	if d.removing[r.Root] {
+		// Out of the stream while an rm removes it; the record it had
+		// is kept for the removal the listing's drop means.
+		return
+	}
 	w := protocol.Worktree{
 		ID:            d.recordID(root{root: r.Root, main: r.Main}),
 		EnvironmentID: d.cfg.EnvironmentID,
@@ -440,8 +445,8 @@ func (d *Daemon) recordID(r root) string {
 // held.
 func (d *Daemon) worktreesLocked(checkouts bool) []protocol.Worktree {
 	out := make([]protocol.Worktree, 0, len(d.worktrees))
-	for _, w := range d.worktrees {
-		if !w.Main || checkouts {
+	for root, w := range d.worktrees {
+		if (!w.Main || checkouts) && !d.removing[root] {
 			out = append(out, w)
 		}
 	}

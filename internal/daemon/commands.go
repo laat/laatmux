@@ -448,10 +448,30 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		}
 		removedFrom := ""
 		if checkout != "" {
-			// The files go one by one under the git status refreshes:
-			// a read meanwhile would publish them as thousands of
-			// deletions on the tile. None is published for the root
-			// until its record is gone with them.
+			// Git's removal takes seconds on a large worktree, and the
+			// user would watch them: the session and the runs at the
+			// root, laatmux's own, and the record go first when git is
+			// going to agree, the worktree clean or the removal forced;
+			// git still judges, and one it refuses all the same, locked
+			// say, has its record put back. A dirty one is left to git's
+			// refusal, with its message, nothing killed. The files going
+			// one by one under a git status refresh would show as
+			// thousands of deletions on the tile: none is published for
+			// the root from here on.
+			early := m.Force
+			if !early {
+				clean, err := worktree.Clean(ctx, root)
+				if err != nil {
+					return err
+				}
+				early = clean
+			}
+			if early {
+				rn.cancelRunsIn(root)
+				if err := rn.killSessionsAt(ctx, root); err != nil {
+					return err
+				}
+			}
 			rn.core.markRemoving(root, true)
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
 			if err != nil || !removed {
@@ -490,34 +510,39 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return err
 			}
 		}
-		panes, err := rn.listManaged(ctx)
-		if err != nil {
-			if tmux.NoServer(err) {
-				return nil
-			}
-			return err
-		}
-		// Each session is killed by its id, which reaches it whatever its
-		// name: a session made by hand can have a name no target reaches
-		// (tmux.CheckTarget), and a name no session has is looked up as a
-		// client's. It is killed on the server instance it was listed on:
-		// one started since, by hand or by a new that found none, numbers
-		// its sessions from $0 again. A session that ended since the
-		// listing, its agent having exited, is no error, and the rest are
-		// still killed.
-		killed := map[string]bool{}
-		for _, p := range panes {
-			if !p.Managed || p.Cwd != root || killed[p.SessionID] {
-				continue
-			}
-			if err := rn.managed.Tmux.KillSessionID(ctx, p.SessionID, p.ServerPID); err != nil {
-				return err
-			}
-			killed[p.SessionID] = true
-		}
-		return nil
+		return rn.killSessionsAt(ctx, root)
 	}()
 	rn.finish(c, res, err)
+}
+
+// killSessionsAt kills every managed session whose pane records the
+// root. Each session is killed by its id, which reaches it whatever its
+// name: a session made by hand can have a name no target reaches
+// (tmux.CheckTarget), and a name no session has is looked up as a
+// client's. It is killed on the server instance it was listed on: one
+// started since, by hand or by a new that found none, numbers its
+// sessions from $0 again. A session that ended since the listing, its
+// agent having exited, is no error, and the rest are still killed. No
+// server is nothing to kill.
+func (rn *taskRunner) killSessionsAt(ctx context.Context, root string) error {
+	panes, err := rn.listManaged(ctx)
+	if err != nil {
+		if tmux.NoServer(err) {
+			return nil
+		}
+		return err
+	}
+	killed := map[string]bool{}
+	for _, p := range panes {
+		if !p.Managed || p.Cwd != root || killed[p.SessionID] {
+			continue
+		}
+		if err := rn.managed.Tmux.KillSessionID(ctx, p.SessionID, p.ServerPID); err != nil {
+			return err
+		}
+		killed[p.SessionID] = true
+	}
+	return nil
 }
 
 // branchOrDetached names a worktree's branch for rm's and run's
