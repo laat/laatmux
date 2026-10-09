@@ -20,8 +20,8 @@ import (
 // read again on its next look: the hosts, agents and default agent a
 // task form made from then on offers, the copy rules a submit sends,
 // this machine's name for a repository in the rows, the line templates,
-// the theme, the agent icons, the jump key labels and the strip's chip
-// width. A file that changes and does not load is said once in the
+// the theme, the agent icons, the jump key labels, the strip's chip
+// width and the hosts line. A file that changes and does not load is said once in the
 // footer, the view keeping what it had, and the file put right is taken.
 func TestViewFollowsConfig(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
@@ -118,6 +118,11 @@ sidebar:
 	if !m.JumpKeys || m.ItemWidth != 30 || m.AgentIcons["claude"].Icon != "CC" {
 		t.Errorf("jump keys %v item width %d agent icons %v", m.JumpKeys, m.ItemWidth, m.AgentIcons)
 	}
+	// The hosts line has the host added, which the stream has yet to
+	// carry.
+	if want := []view.HostEntry{{Name: "vm", Connecting: true}}; !reflect.DeepEqual(m.Hosts, want) {
+		t.Errorf("the hosts line %+v", m.Hosts)
+	}
 	var b strings.Builder
 	for _, l := range m.Render() {
 		for _, s := range l.Spans {
@@ -164,8 +169,8 @@ sidebar:
 	}
 	write(before)
 	next()
-	if _, ok := d.cfg.Find("vm"); ok || !reflect.DeepEqual(theme, dark) {
-		t.Fatal("the file put right was not taken")
+	if _, ok := d.cfg.Find("vm"); ok || !reflect.DeepEqual(theme, dark) || len(m.Hosts) != 0 {
+		t.Fatalf("the file put right was not taken: hosts line %+v", m.Hosts)
 	}
 	if m.Message != "" || strings.HasPrefix(later.Note(later), "config: ") {
 		t.Fatalf("after the file was put right: footer %q note %q", m.Message, later.Note(later))

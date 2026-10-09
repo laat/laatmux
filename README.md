@@ -129,10 +129,11 @@ default config, as at start.
 The dashboard, the sidebar panes and `compose` follow the file the same
 way, every two seconds. The dashboard and a sidebar pane take the
 hosts, agents, `default_agent`, repositories and `copy` their keys and a
-task form opened from then on use, this machine's names for the
-repositories in the rows, the sidebar's `sort` and stale settings, the
-line templates, `icons`, `status_icons`, `agent_icons`, the theme,
-`jump_keys`' labels and the strip's `item_width`. A task form, the
+task form opened from then on use, the hosts and their `paused` on the
+hosts line, this machine's names for the repositories in the rows, the
+sidebar's `sort` and stale settings, the line templates, `icons`,
+`status_icons`, `agent_icons`, the theme, `jump_keys`' labels and the
+strip's `item_width`. A task form, the
 dashboard's or `compose`'s, reads the file again as a chip's picker
 opens: a form left up offers the repositories, hosts and agents listed
 then, each chip kept on its choice when that is still there, else on
@@ -153,7 +154,8 @@ while it runs, a cloud workspace that ssh starts say: `paused: true` on
 its entry, which `laatmux hosts pause <host>` writes and `laatmux hosts
 resume <host>` takes out, as does `H` in the dashboard and the sidebar,
 a picker of the hosts with their state (connected, paused, down) where
-`Enter` flips the one picked. The write keeps the rest of the file as
+`Enter` flips the one picked, and a click on the host's entry on the
+hosts line below their list. The write keeps the rest of the file as
 the task form's append does. This machine does not dial a paused host:
 the daemon drops its merged subscription and removes its records, as
 for a host removed from the config, within its two-second look at the
@@ -1252,10 +1254,18 @@ any is closed, else closes every one (the stale fold in the agent view),
 jumps to the row under it, on a fold mark or a repository line folds;
 the wheel moves the selection. Hosts that
 are not connected and listed, and a local daemon that is down, are
-lines above the list; a paused host is a dimmed one, `vm paused · H
-connects`, and its rows are gone until it is resumed. `H` opens the
-picker of the hosts reached over ssh, where `Enter` pauses the one
-picked, or resumes it (see the config above).
+lines above the list, but for a paused host. Below the list, above the
+footer, the hosts line has an entry for each host the config reaches
+over ssh: `[x] vm` when the host is connected, connecting or down, the
+name in danger when down, a warning while connecting and plain once it
+is connected and listed, and `[ ] vm` dimmed when it is paused, whose
+rows are gone until it is resumed. The entries wrap onto a second row
+where the width is short. The line is drawn from the config the view
+follows, so a pause made elsewhere shows within two seconds. A click on
+an entry pauses the host, or resumes it; `H` opens the picker of the
+same hosts, where `Enter` does (see the config above). The write, or
+its refusal, a config file that does not parse say, is said in the
+footer.
 
 A jump from a tile, or from an agent or a pane in the tree, goes to the
 pane, routed by the pane's server and session: a pane in a managed
@@ -1355,10 +1365,10 @@ orphaned row's session exists locally and is switched to.
   height allows; the strip scrolls sideways to keep the selection in
   view and counts the chips past the edge, `→8`; `h`, `l` and the
   arrows move through them, a click lands on one, and it shows the
-  agent view alone. `sidebar.width` takes columns or `N%` of the
-  window; unset it is 10% of the window clamped to 25..50 columns, an
-  explicit width is not clamped, and either is halved in a window
-  narrower than twice it.
+  agent view alone, with no host lines above it and no hosts line.
+  `sidebar.width` takes columns or `N%` of the window; unset it is 10%
+  of the window clamped to 25..50 columns, an explicit width is not
+  clamped, and either is halved in a window narrower than twice it.
 - **Scope** is what a pane shows, by the viewer's row, the one
   following picks: `all`, every row; `session`, the viewer's worktree,
   every agent of it whatever session each runs in and every task at

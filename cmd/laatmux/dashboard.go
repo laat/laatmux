@@ -72,7 +72,7 @@ func cmdDashboard(ctx context.Context, args []string) error {
 			"p            deliver a task's prompt",
 			"S            open a shell in the workspace session",
 			"o O          open the PR, its checks",
-			"H            pause a host, or resume it",
+			"H click      pause or resume a host",
 			"q Ctrl-C     quit",
 		}}
 	// The dashboard starts at all: a scope the CLI set for the sidebar
@@ -110,7 +110,6 @@ type viewOptions struct {
 // The config is w's first read, cfg; the view follows the file from
 // there (watchConfig).
 func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.Conn, m *view.Model, o viewOptions) error {
-	exitOnJump, actions := o.exitOnJump, o.actions
 	current := ""
 	// A lookup a user's hook failed after has the session all the same;
 	// the view has no line for the hook's error (warnHook).
@@ -127,7 +126,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 		return err
 	}
 	defer t.Close()
-	d := &dash{ctx: ctx, st: st, exitOnJump: exitOnJump, reload: config.LoadSettled}
+	d := &dash{ctx: ctx, st: st, exitOnJump: o.exitOnJump, reload: config.LoadSettled}
 	taker := &configTaker{d: d, st: st, o: o, current: current,
 		bg:    &background{ask: func() (bool, bool) { return t.Background(backgroundWait) }},
 		theme: func(th palette.Theme) { t.Theme = th }}
@@ -154,10 +153,20 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 			defer stop()
 		}
 	}
-	return view.Run(ctx, t, m, view.Host{
-		Changed:  st.Changed(),
+	return view.Run(ctx, t, m, viewHost(taker, cmds, host))
+}
+
+// viewHost is what the view runs with: the merged stream's changes, the
+// commands, the refresh, which fills the rows and the hosts line
+// (configTaker.fill), and the actions: a change of the settings saved,
+// a jump, and the dashboard's keys, of which a sidebar pane takes
+// sidebarAction's.
+func viewHost(taker *configTaker, cmds <-chan func(*view.Model) view.Action, host settingsHost) view.Host {
+	d := taker.d
+	return view.Host{
+		Changed:  taker.st.Changed(),
 		Commands: cmds,
-		Refresh:  func(m *view.Model) { fill(m, st.Status(current)) },
+		Refresh:  taker.fill,
 		Act: func(m *view.Model, a view.Action) bool {
 			switch {
 			case a.Kind == view.ActionSettings:
@@ -167,14 +176,14 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 				return false
 			case a.Kind == view.ActionJump:
 				return d.jumpAction(m, a)
-			case actions:
+			case taker.o.actions:
 				return d.act(m, a)
 			case sidebarAction(m, a):
 				return d.act(m, a)
 			}
 			return false
 		},
-	})
+	}
 }
 
 // jumpAction runs a jump: to the row the action names. In a view that
@@ -270,14 +279,15 @@ func taskAction(m *view.Model, a view.Action) bool {
 }
 
 // sidebarAction is what the sidebar takes of the dashboard's actions: a
-// task's p and x, and what follows from them, H and its picker, and z,
-// which settles; none of the dashboard's other keys.
+// task's p and x, and what follows from them, H and its picker, a click
+// on the hosts line, and z, which settles; none of the dashboard's other
+// keys.
 func sidebarAction(m *view.Model, a view.Action) bool {
 	return taskAction(m, a) || hostAction(m, a) || a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z'
 }
 
-// hostAction is H, or its picker ending, which the sidebar takes as the
-// dashboard does.
+// hostAction is H, or its picker ending, or a click on the hosts line,
+// which the sidebar takes as the dashboard does.
 func hostAction(m *view.Model, a view.Action) bool {
 	switch a.Kind {
 	case view.ActionOther:
@@ -285,6 +295,8 @@ func hostAction(m *view.Model, a view.Action) bool {
 	case view.ActionOverlay:
 		_, ok := m.Overlay.(*hostPicker)
 		return ok
+	case view.ActionPause:
+		return true
 	}
 	return false
 }
@@ -336,8 +348,8 @@ func localHostName(cfg config.Config) string {
 // fill sets the model's rows and header from the merged state: the rows
 // from every record and the local sessions, the day's handoffs, and a
 // header line for the local daemon being down, each host that is not
-// connected and listed, a paused one dimmed, and a failed session
-// listing.
+// connected and listed but a paused one, whose box on the hosts line
+// says it, and a failed session listing.
 func fill(v *view.Model, s merged.Status) {
 	tree := rows.Tree(s.Input)
 	v.Set(tree, rows.Agents(s.Input, tree), s.Handoffs)
@@ -349,9 +361,7 @@ func fill(v *view.Model, s merged.Status) {
 	for _, st := range s.Hosts {
 		n := st.Name
 		switch {
-		case st.Paused:
-			v.Header = append(v.Header, view.HeaderLine{Text: n + " paused · H connects", Paused: true})
-		case st.Connected && st.Listed:
+		case st.Paused, st.Connected && st.Listed:
 		case st.Connected:
 			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connected  (snapshot pending)"})
 		case st.Error != "":

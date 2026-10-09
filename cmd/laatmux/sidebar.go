@@ -629,7 +629,7 @@ func sidebarPane(ctx context.Context, cfg config.Config, w *config.Watch) error 
 		HelpTitle: "laatmux sidebar", Help: []string{
 			"p            deliver a task's prompt",
 			"x X          dismiss a task, remove its worktree",
-			"H            pause a host, or resume it",
+			"H click      pause or resume a host",
 			"q Ctrl-C     quit the sidebar, after a question",
 		}}
 	if cfg.Sidebar.Top() {

@@ -89,8 +89,11 @@ func golden(t *testing.T, name, got string) {
 	}
 }
 
+// model is the fixture's model, with its header line for the host that
+// is down and the hosts line of the two remote hosts.
 func model(now time.Time) *Model {
-	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []HeaderLine{{Text: "box  DOWN  ssh: connect to host box port 22: No route to host", Down: true}}}
+	return &Model{Rows: fixture(now), LocalHost: "mac", Now: now, Header: []HeaderLine{{Text: "box  DOWN  ssh: connect to host box port 22: No route to host", Down: true}},
+		Hosts: []HostEntry{{Name: "vm"}, {Name: "box", Down: true}}}
 }
 
 // The tile layout at the sidebar's default width: each tile is the
@@ -650,15 +653,16 @@ func TestSpinnerOnScreenAndNarrow(t *testing.T) {
 	// Tiles, the blocked tile selected at the top: the first working
 	// tile's head line is the fifth body line. Rows below take the
 	// window's last line for their count, so six body lines show its
-	// icon and five cut the tile off above it.
+	// icon and five cut the tile off above it; the hosts line and the
+	// footer are below them.
 	m.Layout = Tiles
 	m.Handle(term.Key{Rune: 'g'})
-	m.Height = len(m.Header) + 6 + 1
+	m.Height = len(m.Header) + 6 + 2
 	m.Render()
 	if !m.Spinning() {
 		t.Fatalf("tile head on screen and not spinning:\n%s", Debug(m.Render()))
 	}
-	m.Height = len(m.Header) + 5 + 1
+	m.Height = len(m.Header) + 5 + 2
 	m.Render()
 	if m.Spinning() {
 		t.Fatalf("tile head clipped and still spinning:\n%s", Debug(m.Render()))
@@ -2582,5 +2586,182 @@ func TestFooterWraps(t *testing.T) {
 	}
 	if n < 3 {
 		t.Errorf("the confirm question on %d bold lines", n)
+	}
+}
+
+// hostsFixture is a host in each state: connected, down, connecting
+// and paused.
+var hostsFixture = []HostEntry{{Name: "vm"}, {Name: "box", Down: true}, {Name: "new", Connecting: true}, {Name: "coder", Paused: true}}
+
+// The hosts line is above the footer in both views and both layouts,
+// the body giving it its line: an entry per host, its box checked and
+// its name in its state's colour, plain when connected, danger when
+// down, a warning when connecting, and a paused one's box empty and the
+// entry dimmed. Too narrow for the entries, they wrap at an entry onto
+// a second row, none cut; past a third of the height the last row ends
+// in …, over the end of its last entry when there is no room beside it.
+// No hosts, no line.
+func TestHostsLine(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	in := fixtureInput(now)
+	m := model(now)
+	m.Set(rows.Tree(in), rows.Agents(in, rows.Tree(in)), nil)
+	m.Hosts, m.Hint = hostsFixture, "q quit"
+	const line = "...|[x] vm  [x] ⟨danger:box⟩  [x] ⟨warning:new⟩  ‹[ ] ›‹coder›\n"
+	for _, v := range []View{ViewAgents, ViewTree} {
+		for _, layout := range []Layout{Tiles, Compact} {
+			m.View, m.Layout, m.Width, m.Height = v, layout, 60, 20
+			out := m.Render()
+			if len(out) != 20 || Debug(out[18:19]) != line || Text(out[19:]) != "q quit\n" {
+				t.Fatalf("%v %v:\n%s", v, layout, Debug(out))
+			}
+			// The header line, seventeen lines of body, the hosts line
+			// and the footer.
+			if len(m.hitIDs) != 17 || m.hitIDs[0] == "" {
+				t.Errorf("%v %v: body of %d lines, first %q", v, layout, len(m.hitIDs), m.hitIDs[0])
+			}
+		}
+	}
+	// Twenty columns: vm and box on the first row, new and coder on
+	// the second, whole.
+	m.View, m.Width = ViewAgents, 20
+	out := m.Render()
+	if got := Text(out[17:]); got != "[x] vm  [x] box\n[x] new  [ ] coder\nq quit\n" || len(m.hitIDs) != 16 {
+		t.Fatalf("wrapped:\n%s", Debug(out))
+	}
+	// Fifteen columns: vm and box fill the first row exactly.
+	m.Width = 15
+	if got := Text(m.Render()[16:]); got != "[x] vm  [x] box\n[x] new\n[ ] coder\nq quit\n" {
+		t.Fatalf("an exact fit:\n%s", got)
+	}
+	// Nine lines and no header: the line takes three rows, a third of
+	// the height, and the third ends in … after new, coder left over.
+	m.Header, m.Width, m.Height = nil, 10, 9
+	if got := Text(m.Render()[5:]); got != "[x] vm\n[x] box\n[x] new …\nq quit\n" {
+		t.Fatalf("past a third of the height:\n%s", got)
+	}
+	// Six lines: two rows at the least, the second ending in ….
+	m.Height = 6
+	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] box …\nq quit\n" {
+		t.Fatalf("two rows past a third of the height:\n%s", got)
+	}
+	// Five lines with the tab line: the second row still, beside a line
+	// of body, and its entry clicked.
+	m.Tabs, m.Height = true, 5
+	m.Hosts = hostsFixture[:2]
+	if got := Text(m.Render()[2:]); got != "[x] vm\n[x] box\nq quit\n" {
+		t.Fatalf("five lines with the tabs:\n%s", got)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 5, Y: 4}); a.Kind != ActionPause || a.HostName != "box" {
+		t.Fatalf("a click on the second row: %+v", a)
+	}
+	m.Tabs, m.Hosts, m.Height = false, hostsFixture, 6
+	// Nine columns: box and the … fill the second row exactly.
+	m.Width = 9
+	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] box …\nq quit\n" {
+		t.Fatalf("an exact fit of the ellipsis:\n%s", got)
+	}
+	// Seven columns: no room beside box, whose end the … takes, and a
+	// click on the … is not on box.
+	m.Width = 7
+	if got := Text(m.Render()[3:]); got != "[x] vm\n[x] bo…\nq quit\n" {
+		t.Fatalf("no room for the ellipsis:\n%s", got)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 6, Y: 5}); a.Kind != ActionPause || a.HostName != "box" {
+		t.Fatalf("a click on box's last letter: %+v", a)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyMouse, X: 7, Y: 5}); a.Kind != ActionNone {
+		t.Fatalf("a click on the ellipsis: %+v", a)
+	}
+	// A pane with no room for it beside a body line: no line.
+	m.Width, m.Height = 20, 2
+	if out := m.Render(); len(out) != 2 || strings.Contains(Text(out), "[x]") || Text(out[1:]) != "q quit\n" {
+		t.Fatalf("a two-line pane:\n%s", Debug(out))
+	}
+	m.Hosts, m.Width, m.Height = nil, 60, 20
+	if out := m.Render(); strings.Contains(Text(out), "[x]") || len(m.hitIDs) != 19 {
+		t.Fatalf("no hosts: body of %d lines:\n%s", len(m.hitIDs), Debug(out))
+	}
+}
+
+// A click on an entry of the hosts line asks for the host paused, or
+// resumed when its box was drawn empty, whichever row the entry wrapped
+// onto; a click between entries is nothing, and one on the body jumps
+// to the row there as before. A click read before the last draw is on
+// the line as drawn then, where a message wrapped since has moved it.
+// The strip draws no hosts line, and no click there is one.
+func TestHostsLineClick(t *testing.T) {
+	t0 := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(t0)
+	m.Hosts, m.Hint = hostsFixture, "q quit"
+	m.Layout, m.Width, m.Height = Compact, 20, 20
+	m.Render()
+	// Lines 18 and 19: "[x] vm  [x] box" and "[x] new  [ ] coder".
+	click := func(x, y int, at time.Time) Action {
+		t.Helper()
+		return m.Handle(term.Key{Kind: term.KeyMouse, X: x, Y: y, At: at})
+	}
+	for _, c := range []struct {
+		x, y  int
+		host  string
+		pause bool
+	}{
+		{1, 18, "vm", true},
+		{6, 18, "vm", true},
+		{7, 18, "", false},
+		{9, 18, "box", true},
+		{15, 18, "box", true},
+		{16, 18, "", false},
+		{1, 19, "new", true},
+		{10, 19, "coder", false},
+		{18, 19, "coder", false},
+		{19, 19, "", false},
+		{1, 20, "", false},
+	} {
+		a := click(c.x, c.y, time.Time{})
+		switch {
+		case c.host == "" && a.Kind != ActionNone:
+			t.Errorf("a click at %d,%d: %+v", c.x, c.y, a)
+		case c.host != "" && (a.Kind != ActionPause || a.HostName != c.host || a.Pause != c.pause):
+			t.Errorf("a click at %d,%d: %+v, want %s paused %v", c.x, c.y, a, c.host, c.pause)
+		}
+	}
+	// The body's first line, under the header line, is its first row.
+	first := m.Visible()[m.hitRow(2, time.Time{})].Row.ID()
+	if a := click(1, 2, time.Time{}); a.Kind != ActionJump || a.Row == nil || a.Row.ID() != first {
+		t.Fatalf("a click on the body: %+v", a)
+	}
+	// A message wraps over three lines and moves the line up.
+	m.Render()
+	m.Message = "a message long enough to take three lines"
+	m.Now = t0.Add(2 * time.Second)
+	out := m.Render()
+	if Text(out[14:15]) != "[x] vm  [x] box\n" {
+		t.Fatalf("the line under a message:\n%s", Text(out))
+	}
+	if a := click(1, 18, t0.Add(time.Second)); a.Kind != ActionPause || a.HostName != "vm" {
+		t.Errorf("a click read before the redraw: %+v", a)
+	}
+	if a := click(1, 15, time.Time{}); a.Kind != ActionPause || a.HostName != "vm" {
+		t.Errorf("a click on the line where it is now: %+v", a)
+	}
+	if a := click(1, 18, time.Time{}); a.Kind == ActionPause {
+		t.Errorf("a click where the line was: %+v", a)
+	}
+	// One read before both draws is dropped.
+	if a := click(1, 18, t0.Add(-time.Second)); a.Kind != ActionNone {
+		t.Errorf("a click read before two redraws: %+v", a)
+	}
+	// The strip.
+	m.Layout, m.View, m.Width, m.Height, m.ItemWidth = Strip, ViewAgents, 60, 3, 18
+	if out := m.Render(); strings.Contains(Text(out), "[x]") {
+		t.Fatalf("the strip drew the hosts line:\n%s", Text(out))
+	}
+	for y := 1; y <= 3; y++ {
+		for x := 1; x <= 60; x++ {
+			if a := click(x, y, time.Time{}); a.Kind == ActionPause {
+				t.Fatalf("a click on the strip at %d,%d: %+v", x, y, a)
+			}
+		}
 	}
 }

@@ -74,8 +74,8 @@ type running struct {
 	done func(m *view.Model) (exit bool)
 }
 
-// act handles a dashboard key, a confirm answer or an overlay ending.
-// True ends the view.
+// act handles a dashboard key, a click on the hosts line, a confirm
+// answer or an overlay ending. True ends the view.
 func (d *dash) act(m *view.Model, a view.Action) bool {
 	switch a.Kind {
 	case view.ActionOther:
@@ -102,6 +102,8 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 		case 'H':
 			d.pickHost(m)
 		}
+	case view.ActionPause:
+		d.setPaused(m, a.HostName, a.Pause)
 	case view.ActionConfirm:
 		switch m.ConfirmTag {
 		case "rm":
@@ -304,32 +306,64 @@ func (d *dash) pickHost(m *view.Model) {
 }
 
 // hostState is a host's state in H's picker: paused as the config says,
-// else as the merged stream has the host. A host still paused there, or
-// with no record there, the daemon has yet to read the config for.
+// else as the merged stream has the host (hostEntry), a host still
+// paused there resuming.
 func hostState(h config.Host, s merged.Status) string {
-	if h.Paused {
-		return "paused"
-	}
-	st, ok := s.Host(h.Name)
+	e := hostEntry(h, s)
+	st, _ := s.Host(h.Name)
 	switch {
-	case !ok:
-		return "connecting"
+	case e.Paused:
+		return "paused"
+	case e.Down:
+		return "down: " + st.Down()
+	case !e.Connecting:
+		return "connected"
 	case st.Paused:
 		return "resuming"
-	case st.Connected && st.Listed:
-		return "connected"
 	case st.Connected:
 		return "connected, snapshot pending"
-	case st.Error != "":
-		return "down: " + st.Down()
 	}
 	return "connecting"
+}
+
+// hostEntry is a host on the hosts line: paused as the config says, else
+// as the merged stream has it, connected and listed; down with an error;
+// or connecting, which a host with no record there, or one still paused
+// there, a record with nothing else set, is too, the daemon having yet
+// to read the config for it.
+func hostEntry(h config.Host, s merged.Status) view.HostEntry {
+	e := view.HostEntry{Name: h.Name, Paused: h.Paused}
+	st, _ := s.Host(h.Name)
+	switch {
+	case h.Paused:
+	case st.Connected && st.Listed:
+	case !st.Connected && st.Error != "":
+		e.Down = true
+	default:
+		e.Connecting = true
+	}
+	return e
+}
+
+// hostEntries is the hosts line: an entry for each host the config
+// reaches over ssh, in its order; this machine, which nothing dials, has
+// none.
+func hostEntries(cfg config.Config, s merged.Status) []view.HostEntry {
+	var out []view.HostEntry
+	for _, h := range cfg.Hosts {
+		if !h.Local() {
+			out = append(out, hostEntry(h, s))
+		}
+	}
+	return out
 }
 
 // setPaused writes the host's paused to the config and says what that
 // did, with a pause's note of a local daemon older than pause; the
 // daemon and the views act on the file at their next look, and this
-// view's config takes it at once, for a task form opened next.
+// view's config takes it at once, for a task form opened next and for
+// the hosts line, which shows the flip on the next draw. H's picker and
+// a click on the hosts line write through it.
 func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 	changed, err := config.SetPaused(config.Path(), name, paused)
 	if err != nil {
@@ -345,6 +379,7 @@ func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 	if d.reload != nil {
 		if fresh, err := d.reload(); err == nil {
 			d.cfg = fresh
+			m.Hosts = hostEntries(fresh, d.st.Status(""))
 		}
 	}
 }

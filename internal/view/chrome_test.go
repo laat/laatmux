@@ -151,7 +151,7 @@ func TestLoadingAndEmpty(t *testing.T) {
 func TestMoreBelow(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	m := model(now)
-	m.Header = nil
+	m.Header, m.Hosts = nil, nil
 	m.Layout, m.Width, m.Height = Tiles, 35, 10 // nine body lines
 	lines := m.Render()
 	body := lines[:len(lines)-1]
