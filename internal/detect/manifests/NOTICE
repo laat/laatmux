@@ -1,8 +1,19 @@
-The files claude.toml and codex.toml in this directory are copied verbatim from
-herdr (https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
-commit 3d9d2b18dab139ba226ebc5a1c9a9f2c9c3ee4df. A daily workflow,
+The files in upstream/ are copied verbatim from herdr
+(https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
+commit 2563803dca97c040beaf3dc3acdcb5a3221b4238. A daily workflow,
 .github/workflows/herdr-manifests.yaml, opens a pull request when they change
 upstream.
+
+The manifests the engine embeds, claude.toml and codex.toml in this directory,
+are those copies with laatmux's own changes applied: patches/<name>.patch,
+when there is one, is a unified diff from upstream/<name> to <name>. apply.sh
+rebuilds the manifests from upstream/ and patches/; the workflow runs it after
+copying, so a change upstream is taken as it is and the local one goes on
+top. To change a manifest here, edit it and run apply.sh refresh, which
+remakes its patch. When upstream changes the lines a patch touches, the patch
+no longer applies: the workflow says so in its pull request, and
+TestManifestsPatched fails until the manifest is brought to what upstream and
+the local change together mean and apply.sh refresh is run on that branch.
 
 The rule engine in ../engine.go and ../regions.go is a Go port of herdr's
 src/detect/manifest.rs.

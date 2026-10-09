@@ -2,6 +2,8 @@ package detect
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -228,6 +230,62 @@ func TestManifestsFitThePort(t *testing.T) {
 				t.Errorf("%s: rule %s uses region %q, which the port lacks", lm.ID, r.ID, spec)
 			}
 		}
+	}
+}
+
+// Each manifest the engine embeds is herdr's copy in manifests/upstream
+// with manifests/patches/<name>.patch applied when there is one, and
+// every upstream file has a manifest. The workflow that syncs upstream
+// reapplies the patches; a patch that no longer applies, or a manifest
+// edited without manifests/apply.sh refresh, fails here.
+func TestManifestsPatched(t *testing.T) {
+	if _, err := exec.LookPath("patch"); err != nil {
+		t.Skip("no patch command")
+	}
+	ups, err := filepath.Glob("manifests/upstream/*.toml")
+	if err != nil || len(ups) == 0 {
+		t.Fatalf("upstream manifests: %v %v", ups, err)
+	}
+	dir := t.TempDir()
+	for _, up := range ups {
+		name := filepath.Base(up)
+		raw, err := os.ReadFile(up)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built := filepath.Join(dir, name)
+		if err := os.WriteFile(built, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		patch := filepath.Join("manifests", "patches", name+".patch")
+		if pf, err := os.Open(patch); err == nil {
+			cmd := exec.Command("patch", "-p1", "-F0", "-s", "--no-backup-if-mismatch", built)
+			cmd.Stdin = pf
+			out, err := cmd.CombinedOutput()
+			pf.Close()
+			if err != nil {
+				t.Errorf("%s does not apply to upstream/%s; rebase it (manifests/apply.sh in NOTICE): %v\n%s", patch, name, err, out)
+				continue
+			}
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		want, err := os.ReadFile(built)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join("manifests", name))
+		if err != nil {
+			t.Errorf("upstream/%s has no manifest: %v", name, err)
+			continue
+		}
+		if string(got) != string(want) {
+			t.Errorf("manifests/%s is not upstream/%s with its patch applied; run manifests/apply.sh, or manifests/apply.sh refresh after editing it", name, name)
+		}
+	}
+	tops, _ := filepath.Glob("manifests/*.toml")
+	if len(tops) != len(ups) {
+		t.Errorf("%d manifests, %d upstream files; every manifest is built from an upstream copy", len(tops), len(ups))
 	}
 }
 
