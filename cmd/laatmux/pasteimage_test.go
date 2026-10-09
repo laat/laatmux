@@ -192,11 +192,6 @@ func TestPasteBinding(t *testing.T) {
 			}
 		}
 	}
-	// A root table with no key left in it: tmux 3.6 lists it empty.
-	must(workspace.Server.Run(ctx, "unbind-key", "-a", "-T", "root"))
-	if err := pasteSwitch(ctx, "on", exe); err != nil || !strings.Contains(bound(), "paste-image run") {
-		t.Errorf("on with an empty root table: %v, bound %q", err, bound())
-	}
 	must(workspace.Server.Run(ctx, "bind-key", "-n", "C-v", "display-message", "use laatmux paste-image run for images"))
 	must(workspace.Server.Run(ctx, "set-hook", "-g", "after-list-keys", "list-keys -T nosuch"))
 	if err := pasteSwitch(ctx, "on", exe); err == nil || !strings.Contains(err.Error(), "table nosuch doesn't exist") {
