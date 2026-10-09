@@ -105,9 +105,11 @@ type Panes interface {
 	// rm's. A session gone, with its server or not, is no error.
 	KillSessionID(ctx context.Context, id string, serverPID int) error
 	// Paste types text into a pane as one bracketed paste and Enter
-	// through the named buffer; DeleteBuffers deletes the buffers with
-	// the prefix. Both act on the managed server only.
+	// through the named buffer, and PasteNoEnter without the Enter;
+	// DeleteBuffers deletes the buffers with the prefix. All act on the
+	// managed server only.
 	Paste(ctx context.Context, buffer, paneID, text string) error
+	PasteNoEnter(ctx context.Context, buffer, paneID, text string) error
 	DeleteBuffers(ctx context.Context, prefix string) error
 	// SendKeys presses tmux key names in a pane, on the managed server:
 	// the answer to an agent's question at launch.
@@ -206,6 +208,11 @@ type Config struct {
 	// message; nil means no shutdown capability.
 	Shutdown func()
 
+	// Paste is the directory the paste message writes its images to,
+	// under the state directory; "" writes them to /tmp, named
+	// laatmux-paste-<timestamp>.png. See paste.go.
+	Paste string
+
 	// Timings are the daemon's waits and intervals: delivery and trust,
 	// the journal's retention, the relay's handoff, the command table
 	// and run cancellation; a zero field takes its default. Tests
@@ -260,8 +267,9 @@ type Config struct {
 //     lockRepo) until its agent is launched; a typed prompt's wait runs
 //     without them. rm holds repos alone (lockRepos). "deliver/<root>"
 //     is held by a delivery's readiness check and paste, by rm from
-//     git's removal on, by an add's result and by a trust step, each
-//     on its own; when nested it is the inner one, under repos (rm) or
+//     git's removal on, by an add's result, by a trust step and by a
+//     pasted image's lookup, write and paste (paste.go), each on its
+//     own; when nested it is the inner one, under repos (rm) or
 //     under this host's "attempt/<id>" (a prompt's attempts), never
 //     the other way.
 //   - the relay's keyed locks per pending record, "attempt/<id>" for a
@@ -575,7 +583,7 @@ func New(cfg Config) *Daemon {
 func (d *Daemon) capabilities() []string {
 	caps := []string{protocol.CapStatus, protocol.CapFollow}
 	if d.managed != nil {
-		caps = append(caps, protocol.CapNew, protocol.CapSelect)
+		caps = append(caps, protocol.CapNew, protocol.CapSelect, protocol.CapPaste)
 	}
 	if d.cfg.Store != nil {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts, protocol.CapRepos)
@@ -1206,6 +1214,7 @@ var handlers = map[string]func(*clientConn, protocol.Message) error{
 	protocol.TypeCancel:    (*clientConn).cancel,
 	protocol.TypeSelect:    (*clientConn).selectPane,
 	protocol.TypeFacts:     (*clientConn).facts,
+	protocol.TypePaste:     (*clientConn).paste,
 	protocol.TypePoke:      (*clientConn).poke,
 	protocol.TypeShutdown:  (*clientConn).shutdown,
 }

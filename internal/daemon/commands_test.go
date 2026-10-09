@@ -64,7 +64,11 @@ type fakeServer struct {
 	configured int
 }
 
-type fakePaste struct{ buffer, pane, text string }
+// fakePaste is one Paste, enter set, or PasteNoEnter.
+type fakePaste struct {
+	buffer, pane, text string
+	enter              bool
+}
 
 // set changes the fake under its lock, as the tests must while the
 // daemon polls it.
@@ -175,6 +179,12 @@ func (f *fakeServer) endSession(name string) {
 	})
 }
 func (f *fakeServer) Paste(_ context.Context, buffer, pane, text string) error {
+	return f.paste(fakePaste{buffer, pane, text, true})
+}
+func (f *fakeServer) PasteNoEnter(_ context.Context, buffer, pane, text string) error {
+	return f.paste(fakePaste{buffer, pane, text, false})
+}
+func (f *fakeServer) paste(p fakePaste) error {
 	f.mu.Lock()
 	hold := f.pasteHold
 	f.mu.Unlock()
@@ -186,7 +196,7 @@ func (f *fakeServer) Paste(_ context.Context, buffer, pane, text string) error {
 	if f.pasteErr != nil {
 		return f.pasteErr
 	}
-	f.pastes = append(f.pastes, fakePaste{buffer, pane, text})
+	f.pastes = append(f.pastes, p)
 	return nil
 }
 func (f *fakeServer) DeleteBuffers(_ context.Context, prefix string) error {

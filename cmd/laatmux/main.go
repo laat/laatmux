@@ -65,6 +65,8 @@ func main() {
 		err = cmdRun(ctx, os.Args[2:])
 	case "sidebar":
 		err = cmdSidebar(ctx, os.Args[2:])
+	case "paste-image":
+		err = cmdPasteImage(ctx, os.Args[2:])
 	case "dashboard":
 		err = cmdDashboard(ctx, os.Args[2:])
 	case "compose":
@@ -154,6 +156,10 @@ func usage() {
   watch     live list, redraws on change, for a plain terminal
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
             laatmux sidebar pane | attach <window> | fit <window> | reap | seen   what the pane and the hooks run
+  paste-image
+            laatmux paste-image [toggle|on|off]   C-v in a workspace's attach pane sends the
+            clipboard's image to the host and types its path into the agent's pane
+            laatmux paste-image run <pane> [<client>]   what the key runs
   dashboard the list in a popup for display-popup -E: Enter jumps and closes it;
             a opens the task form, x/X removes, z settles, S opens a shell, H pauses a host
   compose   the task form alone, for display-popup -E -d '#{pane_current_path}'

@@ -1006,6 +1006,19 @@ func (s Server) SendKeys(ctx context.Context, paneID string, keys ...string) err
 // reached the pane, "enter" means the text did and the submit may not
 // have.
 func (s Server) Paste(ctx context.Context, buffer, paneID, text string) error {
+	return s.paste(ctx, buffer, paneID, text, true)
+}
+
+// PasteNoEnter is Paste without the Enter: the text is left in the
+// pane's input unsent, for the user to go on typing after it, as a
+// pasted image's path is. Its error's Step is "load" or "paste", and
+// the buffer is deleted as Paste deletes it.
+func (s Server) PasteNoEnter(ctx context.Context, buffer, paneID, text string) error {
+	return s.paste(ctx, buffer, paneID, text, false)
+}
+
+// paste is Paste, with the Enter when enter is set.
+func (s Server) paste(ctx context.Context, buffer, paneID, text string, enter bool) error {
 	defer func() {
 		// The deletion has its own bounded context: a ctx cancelled
 		// after the load, by the daemon shutting down, must not leave
@@ -1019,6 +1032,9 @@ func (s Server) Paste(ctx context.Context, buffer, paneID, text string) error {
 	}
 	if _, err := s.Run(ctx, "paste-buffer", "-p", "-b", buffer, "-t", paneID); err != nil {
 		return &PasteError{Step: "paste", Err: err}
+	}
+	if !enter {
+		return nil
 	}
 	if _, err := s.Run(ctx, "send-keys", "-t", paneID, "Enter"); err != nil {
 		return &PasteError{Step: "enter", Err: err}
