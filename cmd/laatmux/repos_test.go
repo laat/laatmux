@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -67,6 +68,15 @@ notes   git@github.com:laat/notes.git  discovered on mac, box
 `
 	if b.String() != want {
 		t.Errorf("repos:\n%s\nwant:\n%s", b.String(), want)
+	}
+	// A host's origin is shown as tmux.Printable shows it.
+	b.Reset()
+	odd := "git@x:o/a\x1b[31m.git"
+	st.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &protocol.HostStatus{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true,
+		Repos: set(protocol.Checkout{Repo: "odd", Source: odd, Root: "/home/u/src/odd"})}})
+	writeRepos(&b, cfg, st.Known(cfg), last)
+	if got := b.String(); !strings.Contains(got, " "+strconv.Quote(odd)+"  discovered on box\n") || strings.Contains(got, "\x1b") {
+		t.Errorf("an origin with an ESC:\n%s", got)
 	}
 	// No local daemon answering: the config's entries alone, said so.
 	b.Reset()

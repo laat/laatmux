@@ -54,7 +54,8 @@ const notesSource = "git@github.com:laat/notes.git"
 // startKnownDaemon starts a stand-in for the local daemon whose merged
 // stream has vm's set of repositories, notes in it, and a worktree of
 // notes and one of proj on vm; vm is listed a moment after the
-// snapshot. It counts the merged subscriptions.
+// snapshot. mac and vm each label a repository of their own tools, and
+// vm has a worktree of its. It counts the merged subscriptions.
 func startKnownDaemon(t *testing.T) (subs func() int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -68,7 +69,8 @@ func startKnownDaemon(t *testing.T) (subs func() int) {
 		n++
 		mu.Unlock()
 		pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1, Hosts: []protocol.HostStatus{
-			{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: caps, Repos: &protocol.RepoSet{}},
+			{Name: "mac", EnvironmentID: "lenv", Connected: true, Listed: true, Capabilities: caps,
+				Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "tools", Source: "git@github.com:b/tools.git", Root: "/r/tools"}}}},
 			{Name: "vm", SSH: "vm"},
 		}})
 		time.Sleep(20 * time.Millisecond)
@@ -76,12 +78,14 @@ func startKnownDaemon(t *testing.T) (subs func() int) {
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 2, HostStatus: &vm})
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 3, Worktree: &protocol.Worktree{ID: "venv/worktree//w/notes/fix", EnvironmentID: "venv", Repo: "notes", Source: notesSource, Branch: "fix", Root: "/w/notes/fix"}})
 		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 4, Worktree: &protocol.Worktree{ID: "venv/worktree//w/proj/fix", EnvironmentID: "venv", Repo: "proj", Source: "git@github.com:laat/proj.git", Branch: "fix", Root: "/w/proj/fix"}})
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, Worktree: &protocol.Worktree{ID: "venv/worktree//w/tools/fix", EnvironmentID: "venv", Repo: "tools", Source: "git@github.com:a/tools.git", Branch: "fix", Root: "/w/tools/fix"}})
 		vm.Listed = true
 		vm.Repos = &protocol.RepoSet{Checkouts: []protocol.Checkout{
 			{Repo: "proj", Source: "git@github.com:laat/proj.git", Root: "/r/proj"},
 			{Repo: "notes", Source: notesSource, Root: "/r/notes"},
+			{Repo: "tools", Source: "git@github.com:a/tools.git", Root: "/r/tools"},
 		}}
-		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 5, HostStatus: &vm})
+		pc.Write(protocol.Message{Type: protocol.TypeUpsert, Seq: 6, HostStatus: &vm})
 		return true
 	})
 	return func() int {
@@ -95,8 +99,9 @@ func startKnownDaemon(t *testing.T) (subs func() int) {
 // gives it, which the config does not list, and finds its worktree on
 // the host; the local daemon's merged stream is read for it, waiting
 // for vm to be listed. A repository the config lists is resolved
-// without that read, as before. A name nobody knows is refused, saying
-// so and listing what is known.
+// without that read, as before. A name two hosts label two sources by
+// is the one --host's host labels so, and refused without it. A name
+// nobody knows is refused, saying so and listing what is known.
 func TestPathDiscovered(t *testing.T) {
 	knownConfig(t)
 	subs := startKnownDaemon(t)
@@ -120,7 +125,16 @@ func TestPathDiscovered(t *testing.T) {
 	if out, err := path("notes/fix", "--host", "vm"); err != nil || out != "/w/notes/fix\n" || subs() != 3 {
 		t.Fatalf("notes/fix: %q %v, %d subscriptions", out, err, subs())
 	}
-	if _, err := path("nope/fix", "--host", "vm"); err == nil || err.Error() != `unknown repository "nope": not checked out on any host and not configured; known: proj, notes` {
+	if out, err := path("tools/fix", "--host", "vm"); err != nil || out != "/w/tools/fix\n" {
+		t.Fatalf("tools/fix on vm: %q %v", out, err)
+	}
+	if _, err := path("tools/fix", "--host", "mac"); err == nil || err.Error() != "no worktree for tools/fix on mac" {
+		t.Fatalf("tools/fix on mac: %v", err)
+	}
+	if _, err := path("tools/fix"); err == nil || !strings.HasPrefix(err.Error(), `"tools" is the label of git@github.com:a/tools.git and git@github.com:b/tools.git on different hosts`) {
+		t.Fatalf("tools/fix: %v", err)
+	}
+	if _, err := path("nope/fix", "--host", "vm"); err == nil || err.Error() != `unknown repository "nope": not checked out on any host and not configured; known: proj, notes, tools, tools` {
 		t.Fatalf("nope/fix: %v", err)
 	}
 }
@@ -138,8 +152,11 @@ func TestFormKnownRepos(t *testing.T) {
 	set := func(cos ...protocol.Checkout) *protocol.RepoSet { return &protocol.RepoSet{Checkouts: cos} }
 	notes := protocol.Checkout{Repo: "notes", Source: notesSource, Root: "/r/notes"}
 	vm := protocol.HostStatus{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Repos: set(notes)}
+	// box, after vm in the config, labels notes otherwise.
+	box := protocol.HostStatus{Name: "box", SSH: "box", EnvironmentID: "benv", Connected: true, Listed: true,
+		Repos: set(protocol.Checkout{Repo: "notes-b", Source: notesSource, Root: "/r/notes-b"})}
 	st := merged.New()
-	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{vm}})
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{vm, box}})
 	d := &dash{ctx: context.Background(), cfg: cfg, st: st, reload: func() (config.Config, error) { return cfg, nil }}
 	var got command.Add
 	d.submit = func(a command.Add) (string, error) { got = a; return "add-1", nil }
@@ -177,12 +194,18 @@ func TestFormKnownRepos(t *testing.T) {
 	if r, isNew := d.add.repo(form, form.Chips[0].Selected); !isNew || r.Name != "other-notes" || form.Note(form) != "a new repository, which the host clones" {
 		t.Fatalf("another notes pasted: %+v new %v, note %q", r, isNew, form.Note(form))
 	}
+	// notes-b is box's label for notes, whose checkout has that
+	// directory there.
+	pick(form, "git@github.com:other/notes-b.git")
+	if r, isNew := d.add.repo(form, form.Chips[0].Selected); !isNew || r.Name != "other-notes-b" {
+		t.Fatalf("a paste named as box labels notes: %+v new %v", r, isNew)
+	}
 	// pin-scripts cloned on vm since: known as the picker opens.
 	const pin = "git@github.com:nrkno/pin-scripts.git"
 	vm.Repos = set(notes, protocol.Checkout{Repo: "pins", Source: pin, Root: "/r/pins"})
 	st.Apply(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &vm})
 	pick(form, pin)
-	if r, isNew := d.add.repo(form, form.Chips[0].Selected); isNew || r.Name != "pins" || labels() != "laatmux,proj,notes,pins,other-notes" {
+	if r, isNew := d.add.repo(form, form.Chips[0].Selected); isNew || r.Name != "pins" || labels() != "laatmux,proj,notes,pins,other-notes,other-notes-b" {
 		t.Fatalf("a clone discovered since: %+v new %v, candidates %s", r, isNew, labels())
 	}
 	form.SetPrompt("Fix it")
@@ -285,7 +308,8 @@ func TestFormPreselectsBySource(t *testing.T) {
 // the known set has for no repository is refused as no session.
 func TestJumpKnownName(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
-	fakeSSH(t, `printf "can't find session: x\n" >&2; exit 1`)
+	preflights := filepath.Join(t.TempDir(), "ssh")
+	fakeSSH(t, `echo x >> '`+preflights+`'; printf "can't find session: x\n" >&2; exit 1`)
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n  - name: box\n    ssh: box\n  - name: vm\n    ssh: vm\n    repos: /r\n    worktrees: /w\nagents:\n  claude: {cmd: [claude]}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -313,21 +337,34 @@ func TestJumpKnownName(t *testing.T) {
 	// The worktree has no session and vm's daemon no new: the refusal
 	// is the add line, which says the worktree was found.
 	refusal := "vm/notes-vm/fix has no managed session; laatmux add fix --repo " + notesSource + " --host vm makes one"
+	// The preflight for the session runs once a target names no
+	// worktree, and before the known set is read.
 	for _, c := range []struct {
-		target, want string
-		subs         int
+		target, want     string
+		subs, preflights int
 	}{
-		{"vm/notes-vm/fix", refusal, 1},
-		{"vm/notes/fix", refusal, 3},
-		{"vm/nope/fix", "vm/nope/fix: no such session on the laatmux tmux server", 5},
+		{"vm/notes-vm/fix", refusal, 1, 0},
+		{"vm/notes/fix", refusal, 3, 1},
+		{"vm/nope/fix", "vm/nope/fix: no such session on the laatmux tmux server", 5, 2},
 	} {
 		err := cmdJump(context.Background(), []string{c.target})
 		mu.Lock()
 		n := subs
 		mu.Unlock()
-		if err == nil || !strings.HasPrefix(err.Error(), c.want) || n != c.subs {
-			t.Errorf("jump %s: %v, %d subscriptions; want %q, %d", c.target, err, n, c.want, c.subs)
+		b, _ := os.ReadFile(preflights)
+		if err == nil || !strings.HasPrefix(err.Error(), c.want) || n != c.subs || strings.Count(string(b), "x\n") != c.preflights {
+			t.Errorf("jump %s: %v, %d subscriptions, preflights %q; want %q, %d, %d", c.target, err, n, b, c.want, c.subs, c.preflights)
 		}
+	}
+	// A preflight that could not be made says so: the session may be
+	// there, and the known set is not read.
+	fakeSSH(t, `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`)
+	err := cmdJump(context.Background(), []string{"vm/notes/fix"})
+	mu.Lock()
+	n := subs
+	mu.Unlock()
+	if err == nil || err.Error() != "vm: ssh failed: ssh: connect to host vm port 22: Connection refused" || n != 6 {
+		t.Errorf("jump vm/notes/fix, the preflight refused: %v, %d subscriptions", err, n)
 	}
 }
 
@@ -338,7 +375,7 @@ func TestReadKnown(t *testing.T) {
 	cfg := knownConfig(t)
 	startKnownDaemon(t)
 	k := readKnown(context.Background(), cfg)
-	if !k.Discovered || len(k.Repos) != 2 || k.Repos[0].Name != "proj" || !k.Repos[0].Configured || k.Repos[1].Name != "notes" || len(k.Repos[1].Found) != 1 || k.Repos[1].Found[0].Root != "/r/notes" {
+	if !k.Discovered || len(k.Repos) != 4 || k.Repos[0].Name != "proj" || !k.Repos[0].Configured || k.Repos[1].Name != "notes" || len(k.Repos[1].Found) != 1 || k.Repos[1].Found[0].Root != "/r/notes" {
 		t.Fatalf("known %+v", k)
 	}
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapWorktrees}, nil)

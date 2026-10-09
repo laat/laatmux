@@ -225,9 +225,9 @@ config's entries in their order and then the rest by name, taken again
 from the merged stream as the picker opens. An add of a known
 repository on a host with no checkout of it clones it there under its
 name, as `repo_entry` carries the source: the source as the first host
-in the config's order that has a checkout of it has it as its origin,
-so a host that cannot clone through that transport needs an entry
-that names one it can. The list is for overrides, a name, a source,
+in the config's order that has a checkout of it has it as its origin.
+Where a host cannot clone through that transport, an entry in this
+machine's config names the source every add of the repository carries. The list is for overrides, a name, a source,
 `copy` or `setup`, and for a source to keep known while the hosts that
 have it are paused or down, or before any has it.
 

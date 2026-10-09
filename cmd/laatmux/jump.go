@@ -108,10 +108,15 @@ func cmdJump(ctx context.Context, args []string) error {
 	}
 	if !ok {
 		// No reading of the target names a worktree: it is a managed
-		// session's name, as before, or, last, a name the known set has
-		// for a repository the host labels otherwise (matchKnown).
+		// session's name, as before, or, last, once the host has said it
+		// has no such session, a name the known set has for a
+		// repository the host labels otherwise (matchKnown). A check
+		// that could not be made is its error, as before.
 		serr := checkSession(ctx, h.Host, rest)
 		if serr != nil {
+			if !errors.Is(serr, errNoSession) {
+				return serr
+			}
 			if w, ok, err = matchKnown(worktrees, mains, cfg, h, lazyKnown(ctx, cfg), rest); err != nil {
 				return err
 			}
@@ -599,7 +604,7 @@ func jumpMode(h peer.Host, srv tmux.Server, session string) (jumpKind, error) {
 func checkSession(ctx context.Context, h peer.Host, session string) error {
 	if h.Local() {
 		if !tmux.LaatmuxServer.HasSession(ctx, session) {
-			return fmt.Errorf("%s: no such session on the laatmux tmux server", tmux.Printable(h.Name+"/"+session))
+			return fmt.Errorf("%s: %w", tmux.Printable(h.Name+"/"+session), errNoSession)
 		}
 		return nil
 	}
@@ -619,6 +624,10 @@ func checkSession(ctx context.Context, h peer.Host, session string) error {
 
 const preflightTimeout = 15 * time.Second
 
+// errNoSession is checkSession's answer that the session is not there,
+// as against a check that could not be made.
+var errNoSession = errors.New("no such session on the laatmux tmux server")
+
 // classifyPreflight turns the preflight's outcome into a message that says
 // which of three things happened: the session is absent (tmux exited 1), the
 // transport failed (ssh exits 255, or anything else), or the check timed out.
@@ -634,7 +643,7 @@ func classifyPreflight(host, session string, runErr, ctxErr error, stderr string
 		// tmux has-session: exit 1 means no such session. Its message
 		// ("can't find session") is redundant; a missing server says
 		// "no server running", which is the same thing for jump.
-		return fmt.Errorf("%s: no such session on the laatmux tmux server", tmux.Printable(host+"/"+session))
+		return fmt.Errorf("%s: %w", tmux.Printable(host+"/"+session), errNoSession)
 	}
 	if stderr == "" {
 		stderr = runErr.Error()

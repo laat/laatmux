@@ -100,7 +100,9 @@ func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Kno
 		if r, ok := cfg.RepoByName(label); ok {
 			return r, nil
 		}
-		if r, ok, err := known().ByName(label, ""); ok || err != nil {
+		// The directory is this machine's: its label first.
+		local, _ := cfg.Local()
+		if r, ok, err := known().ByName(label, local.Name); ok || err != nil {
 			return r, err
 		}
 	}
