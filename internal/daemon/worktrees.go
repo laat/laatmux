@@ -146,6 +146,7 @@ func (d *Daemon) readConfig(ctx context.Context) {
 		}
 	case !first && d.hostsFailed():
 		d.rereadHosts()
+		d.pauseRelays()
 	}
 }
 

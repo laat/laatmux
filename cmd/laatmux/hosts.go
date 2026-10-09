@@ -30,8 +30,10 @@ func cmdHosts(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Println(pausedLine(args[1], args[0] == "pause", changed))
-		if note := pauseUnknown(localHello(ctx)); note != "" {
-			fmt.Println(note)
+		if args[0] == "pause" {
+			if note := pauseUnknown(localHello(ctx)); note != "" {
+				fmt.Println(note)
+			}
 		}
 		return nil
 	case len(args) > 0:

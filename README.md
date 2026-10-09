@@ -159,7 +159,8 @@ the daemon drops its merged subscription and removes its records, as
 for a host removed from the config, within its two-second look at the
 file, and takes it up again when it is resumed; the relay does not
 follow its tasks, and closes a connection it has open to the host, an
-add it follows going on on the host; `hosts` does not probe it, and no
+add it follows going on on the host, though a prompt delivery `p` began
+before the pause ends first; `hosts` does not probe it, and no
 PR or checks are asked for its worktrees, which are out of the stream.
 A command aimed at it, `add --host`, `jump`, `rm`, `run`, `path`,
 `new`, `split` and a shell in its workspace, or a task form's submit,
@@ -174,8 +175,8 @@ daemon is not told: pausing is this machine's refusal to dial, nothing
 more. This machine's own entry, which nothing dials, cannot be paused.
 A local daemon of a build older than pause, capability `pause`, reads
 the file without the key and goes on dialling the host: `laatmux hosts
-pause` says so, and `laatmux stop` ends it, the next command starting
-the current build.
+pause` and `H` say so, and `laatmux stop` ends it, the next command
+starting the current build.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below

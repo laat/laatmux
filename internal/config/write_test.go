@@ -668,8 +668,9 @@ func TestSetPausedKeepsFile(t *testing.T) {
 // one with paused on its first line, is written again from its nodes;
 // a paused: false line is made true in place, its comment kept, and a
 // paused line taken out leaves its comment. An entry paused through a
-// mapping merged into it is resumed with paused: false, the other
-// entries that merge it still paused. This machine's entry, a host the
+// mapping merged into it is resumed with a paused: false line, the
+// other entries that merge it still paused, and can be paused and
+// resumed again. This machine's entry, a host the
 // file does not list, and a file of two documents are refused, the file
 // as it was.
 func TestSetPausedShapes(t *testing.T) {
@@ -686,6 +687,13 @@ func TestSetPausedShapes(t *testing.T) {
 		{"hosts:\n  - name: vm\n    paused: false  # costs money\n    ssh: vm\n", true, "hosts:\n  - name: vm\n    paused: true # costs money\n    ssh: vm\n"},
 		{"hosts:\n  - name: vm\n    paused: true  # costs money\n    ssh: vm\n", false, "hosts:\n  - name: vm\n    # costs money\n    ssh: vm\n"},
 		{"hosts:\r\n  - name: vm\r\n    ssh: vm\r\n", true, "hosts:\r\n  - name: vm\r\n    ssh: vm\r\n    paused: true\r\n"},
+		{"hosts:\r\n  - name: vm\r\n    ssh: vm", true, "hosts:\r\n  - name: vm\r\n    ssh: vm\r\n    paused: true\r\n"},
+		// On the item's first line: written again, the comment kept on
+		// the value, or above the entry where the key goes.
+		{"hosts:\n  - paused: false  # costs money\n    name: vm\n    ssh: vm\n", true, "paused: true # costs money"},
+		{"hosts:\n  - paused: true  # costs money\n    name: vm\n    ssh: vm\n", false, "# costs money\n  - name: vm"},
+		// Paused of its own and through a merge: paused: false.
+		{"b: &b {paused: true}\nhosts:\n  - <<: *b\n    name: vm\n    ssh: vm\n    paused: true\n", false, "    ssh: vm\n    paused: false\n"},
 		// The line the text edit would put in goes inside the block
 		// scalars, which the check refuses, so the nodes are written.
 		{"hosts:\n  - name: vm\n    ssh: vm\n    bin: |\n      # not a comment\nicons: ascii\n", true, "paused: true"},
@@ -707,23 +715,28 @@ func TestSetPausedShapes(t *testing.T) {
 		}
 	}
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	merged := "base: &b\n  paused: true\nhosts:\n  - <<: *b\n    name: vm\n    ssh: vm\n  - <<: *b\n    name: box\n    ssh: box\n"
+	// Through a merge, resumed, paused and resumed again, the file's
+	// layout kept: paused: false is a line of the entry's.
+	merged := "base: &b\n  paused: true   # all off\nhosts:\n  - <<: *b\n    name: vm\n    ssh: vm\n  - <<: *b\n    name: box\n    ssh: box\n"
 	if err := os.WriteFile(p, []byte(merged), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if changed, err := SetPaused(p, "vm", false); err != nil || !changed {
-		t.Fatalf("resume through a merge: changed %v, %v", changed, err)
-	}
-	b, _ := os.ReadFile(p)
-	if cfg, err := Parse(b); err != nil || len(cfg.Hosts) != 2 || cfg.Hosts[0].Paused || !cfg.Hosts[1].Paused {
-		t.Fatalf("resumed through a merge: %+v, %v, file:\n%s", cfg.Hosts, err, b)
-	}
-	if changed, err := SetPaused(p, "vm", true); err != nil || !changed {
-		t.Fatalf("pause after a resume through a merge: changed %v, %v", changed, err)
-	}
-	b, _ = os.ReadFile(p)
-	if cfg, err := Parse(b); err != nil || !cfg.Hosts[0].Paused || !cfg.Hosts[1].Paused {
-		t.Fatalf("paused again: %+v, %v, file:\n%s", cfg.Hosts, err, b)
+	resumed := strings.Replace(merged, "    ssh: vm\n", "    ssh: vm\n    paused: false\n", 1)
+	for _, step := range []struct {
+		paused bool
+		want   string
+	}{
+		{false, resumed},
+		{true, strings.Replace(merged, "    ssh: vm\n", "    ssh: vm\n    paused: true\n", 1)},
+		{false, resumed},
+	} {
+		if changed, err := SetPaused(p, "vm", step.paused); err != nil || !changed {
+			t.Fatalf("through a merge, paused %v: changed %v, %v", step.paused, changed, err)
+		}
+		b, _ := os.ReadFile(p)
+		if cfg, err := Parse(b); err != nil || string(b) != step.want || cfg.Hosts[0].Paused != step.paused || !cfg.Hosts[1].Paused {
+			t.Fatalf("through a merge, paused %v: %+v, %v, file:\n%s", step.paused, cfg.Hosts, err, b)
+		}
 	}
 	for _, c := range []struct{ in, host, want string }{
 		{"hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n", "mac", "mac is this machine"},

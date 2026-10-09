@@ -189,6 +189,10 @@ func TestHostPicker(t *testing.T) {
 	if !strings.Contains(string(b), "    worktrees: /w\n    paused: true\n  - name: box") {
 		t.Fatalf("file:\n%s", b)
 	}
+	// The view's config has it at once, for a form opened next.
+	if h, _ := d.cfg.Find("vm"); !h.Paused {
+		t.Fatalf("the view's config after H: %+v", h)
+	}
 	// The stream has not caught up: the config says paused.
 	d.act(m, key)
 	hp = m.Overlay.(*hostPicker)

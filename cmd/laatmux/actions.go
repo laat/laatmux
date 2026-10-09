@@ -327,8 +327,9 @@ func hostState(h config.Host, s merged.Status) string {
 }
 
 // setPaused writes the host's paused to the config and says what that
-// did; the daemon and the views act on the file at their next look, and
-// this view's config takes it at once, for a task form opened next.
+// did, with a pause's note of a local daemon older than pause; the
+// daemon and the views act on the file at their next look, and this
+// view's config takes it at once, for a task form opened next.
 func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 	changed, err := config.SetPaused(config.Path(), name, paused)
 	if err != nil {
@@ -336,6 +337,11 @@ func (d *dash) setPaused(m *view.Model, name string, paused bool) {
 		return
 	}
 	m.Message = pausedLine(name, paused, changed)
+	if paused {
+		if note := pauseUnknown(localHello(d.ctx)); note != "" {
+			m.Message += "; " + note
+		}
+	}
 	if d.reload != nil {
 		if fresh, err := d.reload(); err == nil {
 			d.cfg = fresh

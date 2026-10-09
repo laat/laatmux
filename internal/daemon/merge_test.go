@@ -31,6 +31,8 @@ type fakeRemote struct {
 	hold  chan struct{} // Dial waits for it to close when set, as ssh starting a machine
 	conns []net.Conn    // the remote's end of every connection accepted
 	dials int
+	// byHost counts the dials by the host's name.
+	byHost map[string]int
 }
 
 func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
@@ -62,6 +64,10 @@ func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
 func (r *fakeRemote) dial(ctx context.Context, h peer.Host) (*client.Conn, error) {
 	r.mu.Lock()
 	r.dials++
+	if r.byHost == nil {
+		r.byHost = map[string]int{}
+	}
+	r.byHost[h.Name]++
 	down, hold := r.down, r.hold
 	r.mu.Unlock()
 	if hold != nil {
@@ -96,6 +102,13 @@ func (r *fakeRemote) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.dials
+}
+
+// countHost is the dials of the host by name.
+func (r *fakeRemote) countHost(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.byHost[name]
 }
 
 // publish adds or changes an agent on a daemon and broadcasts it, as a

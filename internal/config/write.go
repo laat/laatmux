@@ -695,16 +695,35 @@ func setPaused(real, host string, paused bool) (bool, error) {
 	} else if n > 1 {
 		return false, fmt.Errorf("%s has %d YAML documents, of which laatmux reads the first; set paused on %s by hand", tmux.Printable(real), n, host)
 	}
-	out, ok := editPaused(b, i, paused)
-	if !ok || checkPaused(b, out, i, paused) != nil {
+	// A resume takes paused out, or, where that leaves the entry
+	// paused through a mapping merged into it, says paused: false.
+	modes := []bool{false}
+	if !paused {
+		modes = append(modes, true)
+	}
+	var out []byte
+	for _, explicit := range modes {
+		if o, ok := editPaused(b, i, paused, explicit); ok && checkPaused(b, o, i, paused) == nil {
+			out = o
+			break
+		}
+	}
+	if out == nil {
 		if laterDocument(b) {
 			return false, fmt.Errorf("%s has a document marker after its first document, which a rewrite of the file would drop; set paused on %s by hand", tmux.Printable(real), host)
 		}
-		if out, err = rewritePaused(b, i, paused); err != nil {
-			return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
-		}
-		if err := checkPaused(b, out, i, paused); err != nil {
-			return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+		for _, explicit := range modes {
+			o, err := rewritePaused(b, i, paused, explicit)
+			if err == nil {
+				err = checkPaused(b, o, i, paused)
+			}
+			if err == nil {
+				out = o
+				break
+			}
+			if explicit == modes[len(modes)-1] {
+				return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+			}
 		}
 	}
 	if err := writeOver(real, out, before); err != nil {
@@ -747,10 +766,11 @@ func hostsEntry(doc *yaml.Node, i int) (seq, entry *yaml.Node, next int) {
 // content, which is the line before the next item's, or before the key
 // after hosts, or the document's end, less the blank and comment lines
 // before it, in the indentation of the entry's keys. To resume: the
-// paused line of the entry's own taken out. A comment on the line is
-// kept. ok is false for any other shape, which rewritePaused takes; so
-// is resuming an entry whose paused comes from a mapping merged into it.
-func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
+// paused line of the entry's own taken out, or, explicit, made paused:
+// false, or put in as paused: true is, for an entry paused through a
+// mapping merged into it. A comment on the line is kept. ok is false
+// for any other shape, which rewritePaused takes.
+func editPaused(b []byte, i int, paused, explicit bool) ([]byte, bool) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
 		return nil, false
@@ -764,45 +784,49 @@ func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
-		lines[n-1] += "\n"
-	}
-	indent := strings.Repeat(" ", entry.Column-1)
 	eol := "\n"
 	if strings.Contains(string(b), "\r\n") {
 		eol = "\r\n"
 	}
-	var key, value *yaml.Node
+	if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
+		lines[n-1] += eol
+	}
+	indent := strings.Repeat(" ", entry.Column-1)
+	value := "paused: true"
+	if !paused {
+		value = "paused: false"
+	}
+	var key, val *yaml.Node
 	for k := 0; k+1 < len(entry.Content); k += 2 {
 		if entry.Content[k].Value == "paused" {
-			key, value = entry.Content[k], entry.Content[k+1]
+			key, val = entry.Content[k], entry.Content[k+1]
 		}
 	}
 	switch {
 	case key != nil:
 		// A line of its own: not the item's first, which has its -,
 		// with the value on it.
-		if key == entry.Content[0] || value.Line != key.Line || key.Column != entry.Column {
+		if key == entry.Content[0] || val.Line != key.Line || key.Column != entry.Column {
 			return nil, false
 		}
-		// The line's comment stays: after the value made true, or on a
+		// The line's comment stays: after the value said again, or on a
 		// line of its own where the key is taken out.
-		comment := value.LineComment
+		comment := val.LineComment
 		if comment == "" {
 			comment = key.LineComment
 		}
 		var line []string
 		switch {
-		case paused && comment != "":
-			line = []string{indent + "paused: true " + comment + eol}
-		case paused:
-			line = []string{indent + "paused: true" + eol}
+		case (paused || explicit) && comment != "":
+			line = []string{indent + value + " " + comment + eol}
+		case paused || explicit:
+			line = []string{indent + value + eol}
 		case comment != "":
 			line = []string{indent + comment + eol}
 		}
 		at := key.Line - 1
 		return []byte(strings.Join(slices.Concat(lines[:at], line, lines[at+1:]), "")), true
-	case !paused:
+	case !paused && !explicit:
 		return nil, false
 	}
 	end := firstDocEnd(lines)
@@ -815,14 +839,16 @@ func editPaused(b []byte, i int, paused bool) ([]byte, bool) {
 	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#")) {
 		end--
 	}
-	return []byte(strings.Join(slices.Concat(lines[:end], []string{indent + "paused: true" + eol}, lines[end:]), "")), true
+	return []byte(strings.Join(slices.Concat(lines[:end], []string{indent + value + eol}, lines[end:]), "")), true
 }
 
 // rewritePaused sets paused: true on the host's entry in the file's
-// nodes, or takes paused out, and writes them again. An entry resumed
-// whose paused is not its own, but a mapping's merged into it with <<,
-// gets paused: false, which the other entries that merge it do not.
-func rewritePaused(b []byte, i int, paused bool) ([]byte, error) {
+// nodes, or takes paused out, or, explicit, sets paused: false, for an
+// entry paused through a mapping merged into it with <<, which the
+// other entries that merge it are not; and writes them again. The
+// comments on a value said again stay on it, and those of a key taken
+// out go above the entry.
+func rewritePaused(b []byte, i int, paused, explicit bool) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
 		return nil, err
@@ -831,26 +857,43 @@ func rewritePaused(b []byte, i int, paused bool) ([]byte, error) {
 	if entry == nil || entry.Kind != yaml.MappingNode {
 		return nil, errors.New("hosts is not a list of mappings")
 	}
-	yes := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}
+	value := "true"
+	if !paused {
+		value = "false"
+	}
 	found := false
 	for k := 0; k+1 < len(entry.Content); k += 2 {
 		if entry.Content[k].Value != "paused" {
 			continue
 		}
 		found = true
-		if paused {
-			entry.Content[k+1] = yes
-		} else {
-			entry.Content = slices.Delete(entry.Content, k, k+2)
+		if paused || explicit {
+			v := entry.Content[k+1]
+			v.Kind, v.Tag, v.Value, v.Style, v.Alias, v.Content = yaml.ScalarNode, "!!bool", value, 0, nil, nil
+			break
 		}
+		var comments []string
+		for _, n := range entry.Content[k : k+2] {
+			for _, c := range []string{n.HeadComment, n.LineComment, n.FootComment} {
+				if c != "" {
+					comments = append(comments, c)
+				}
+			}
+		}
+		if len(comments) > 0 {
+			if entry.HeadComment != "" {
+				comments = append([]string{entry.HeadComment}, comments...)
+			}
+			entry.HeadComment = strings.Join(comments, "\n")
+		}
+		entry.Content = slices.Delete(entry.Content, k, k+2)
 		break
 	}
-	if !found {
-		v := yes
-		if !paused {
-			v = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
-		}
-		entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, v)
+	switch {
+	case !found && (paused || explicit):
+		entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value})
+	case !found:
+		return nil, errors.New("hosts: the entry has no paused of its own to take out")
 	}
 	return encodeLike(b, &doc)
 }
