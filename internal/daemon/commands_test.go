@@ -38,6 +38,7 @@ type fakeServer struct {
 	sessions int // the last session number given
 	killed   []string
 	kills    []string // every id KillSessionID was asked for
+	onKill   func()   // run at each kill, for a test that looks at the world then
 	// pastes records every Paste: the buffer, pane and text; pasteErr
 	// is returned instead when set; newErr fails NewSession; buffers
 	// is what DeleteBuffers was asked to clear.
@@ -162,6 +163,9 @@ func (f *fakeServer) KillSessionID(_ context.Context, id string, serverPID int) 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onKill != nil {
+		f.onKill()
+	}
 	f.kills = append(f.kills, id)
 	listed := func(p tmux.Pane) bool { return p.SessionID == id && p.ServerPID == serverPID }
 	if i := slices.IndexFunc(f.panes, listed); i >= 0 {
@@ -408,6 +412,11 @@ func TestAddThenRm(t *testing.T) {
 	if res, _ := result(t, pc, "r0"); res.OK || !strings.Contains(res.Error, "untracked files") || len(ft.panes) != 1 {
 		t.Fatalf("unforced rm: %+v panes %+v", res, ft.panes)
 	}
+	// Forced, the session is killed before git removes the files, which
+	// takes seconds on a large worktree, and the record is out of the
+	// stream from then on.
+	rootAtKill := false
+	ft.onKill = func() { _, err := os.Stat(root); rootAtKill = err == nil }
 	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "fix/v1.2", Root: root, Force: true})
 	if res, _ := result(t, pc, "r1"); !res.OK {
 		t.Fatalf("rm: %s", res.Error)
@@ -418,6 +427,10 @@ func TestAddThenRm(t *testing.T) {
 	if len(ft.killed) != 1 || ft.killed[0] != "proj/fix/v1%2e2" || len(ft.panes) != 0 {
 		t.Fatalf("killed %v panes %+v", ft.killed, ft.panes)
 	}
+	if !rootAtKill {
+		t.Error("the session was killed only after the files were gone")
+	}
+	ft.onKill = nil
 	d.poll(ctx)
 	d.pollWorktrees(ctx)
 	if wts := d.worktreeRecords(); len(wts) != 0 {

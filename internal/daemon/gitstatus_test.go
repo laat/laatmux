@@ -527,6 +527,7 @@ func TestGitRefreshDuringRemoval(t *testing.T) {
 	}
 	// In flight when the removal starts: dropped.
 	d.markRemoving("/w/a", false)
+	drain(s)
 	f.mu.Lock()
 	f.block = make(chan struct{})
 	block := f.block
@@ -554,9 +555,84 @@ func TestGitRefreshDuringRemoval(t *testing.T) {
 	d.mu.Lock()
 	d.worktrees["/w/a"] = protocol.Worktree{ID: "w/a", Root: "/w/a", Branch: "a"}
 	d.mu.Unlock()
+	drain(s)
 	makeDue(d)
 	refresh(t, d)
 	if ups := upserts(s); len(ups) != 1 {
 		t.Errorf("after a failed removal: %+v", ups)
+	}
+}
+
+// The record of a root being removed leaves the stream and the snapshots
+// when the removal starts, before git has removed the files, stays out
+// while the listing still has the root, comes back when the removal
+// failed, and goes for good when the listing drops it.
+func TestRecordHiddenWhileRemoving(t *testing.T) {
+	installFakeGit(t)
+	d, s := gitDaemon(t)
+	drain(s)
+	rec := worktree.Record{Root: "/w/a", Repo: "proj", Branch: "a"}
+	d.mu.Lock()
+	d.lastList = []worktree.Record{rec}
+	d.mu.Unlock()
+	d.markRemoving("/w/a", true)
+	if rm := removes(s); len(rm) != 1 || rm[0] != d.worktreeID("/w/a") {
+		t.Fatalf("the record was not taken out at once: %v", rm)
+	}
+	d.mu.Lock()
+	d.publishWorktreesLocked(time.Now())
+	snap := d.worktreesLocked(true)
+	_, kept := d.worktrees["/w/a"]
+	d.mu.Unlock()
+	if ups := upserts(s); len(ups) != 0 || len(snap) != 0 || !kept {
+		t.Errorf("while removing and still listed: upserts %+v, snapshot %+v, kept %v", ups, snap, kept)
+	}
+	// Twice is once.
+	d.markRemoving("/w/a", true)
+	if rm := removes(s); len(rm) != 0 {
+		t.Errorf("marked again: %v", rm)
+	}
+	// Failed: back.
+	d.markRemoving("/w/a", false)
+	if ups := upserts(s); len(ups) != 1 || ups[0].Root != "/w/a" {
+		t.Errorf("after a failed removal: %+v", ups)
+	}
+	// Removed: the listing drops it, with the removal's meaning.
+	d.markRemoving("/w/a", true)
+	drain(s)
+	d.mu.Lock()
+	d.lastList = nil
+	d.publishWorktreesLocked(time.Now())
+	_, kept = d.worktrees["/w/a"]
+	removing := d.removing["/w/a"]
+	d.mu.Unlock()
+	if rm := removes(s); len(rm) != 1 || kept || removing {
+		t.Errorf("after the listing dropped it: removes %v, kept %v, removing %v", rm, kept, removing)
+	}
+}
+
+// removes drains the worktree removes sent so far.
+func removes(s *subscriber) []string {
+	var out []string
+	for {
+		select {
+		case m := <-s.ch:
+			if m.Type == protocol.TypeRemove && m.WorktreeID != "" {
+				out = append(out, m.WorktreeID)
+			}
+		default:
+			return out
+		}
+	}
+}
+
+// drain drops every message sent so far.
+func drain(s *subscriber) {
+	for {
+		select {
+		case <-s.ch:
+		default:
+			return
+		}
 	}
 }

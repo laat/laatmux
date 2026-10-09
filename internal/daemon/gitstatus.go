@@ -185,17 +185,28 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 	}
 }
 
-// markRemoving marks root as one an rm is removing, or unmarks it when
-// the removal failed; a removal that worked is unmarked when the record
-// leaves the listing (publishWorktreesLocked).
+// markRemoving marks root as one an rm is removing: its record is
+// taken out of the stream and the snapshots at once, though it stays
+// in the listing until git has removed the worktree, so the user is not
+// shown what takes seconds; the record is put back when the removal
+// failed (off), and goes for good, with what a removal means for the
+// tasks at the root, when the listing drops it (publishWorktreesLocked).
 func (d *Daemon) markRemoving(root string, on bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	w, had := d.worktrees[root]
 	if on {
+		if !d.removing[root] && had {
+			d.broadcastLocked(protocol.Message{Type: protocol.TypeRemove, WorktreeID: w.ID})
+		}
 		d.removing[root] = true
-	} else {
-		delete(d.removing, root)
+		delete(d.gits, root)
+		return
 	}
+	if d.removing[root] && had {
+		d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Worktree: &w})
+	}
+	delete(d.removing, root)
 }
 
 // refreshGit reads one worktree's git state and publishes it when a value
