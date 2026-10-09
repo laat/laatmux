@@ -249,6 +249,30 @@ func TestStreamHoldsEnvironment(t *testing.T) {
 	}
 }
 
+// prune's rm, with head, unused and delete_branch, goes only to a
+// daemon with prune: one without would remove the worktree whatever its
+// HEAD and whatever runs in it, and is refused before anything is
+// sent; one with it gets the three fields.
+func TestRmHeadNeedsPrune(t *testing.T) {
+	caps := []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}
+	rm := Rm{Host: config.Host{Host: peer.Host{Name: "local"}}, Root: "/r/x", Branch: "x", Head: "abc", Unused: true, DeleteBranch: true}
+	f := startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: caps})
+	var ns *NotSent
+	if _, err := rm.Run(context.Background(), Discard{}); err == nil || !strings.Contains(err.Error(), "does not support prune") || !errors.As(err, &ns) {
+		t.Fatalf("without prune: %v", err)
+	}
+	if got := f.commands(); len(got) != 0 {
+		t.Fatalf("sent to a daemon without prune: %+v", got)
+	}
+	f = startFake(t, 0, protocol.Message{EnvironmentID: "env", Capabilities: append(caps, protocol.CapPrune)})
+	if res, err := rm.Run(context.Background(), Discard{}); err != nil || res.Root != "/r/x" {
+		t.Fatalf("with prune: %+v %v", res, err)
+	}
+	if got := f.commands(); len(got) != 1 || got[0].Head != "abc" || !got[0].Unused || !got[0].DeleteBranch {
+		t.Fatalf("sent %+v", got)
+	}
+}
+
 // A follow answered interrupted, by a daemon whose journal knows the
 // add and that died in it, resends the add under its id; the sender
 // lifetime is enforced before any send, so an add submitted more than

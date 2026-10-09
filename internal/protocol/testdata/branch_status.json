@@ -9,7 +9,8 @@
     "number": 1,
     "state": "state",
     "draft": true,
-    "url": "url"
+    "url": "url",
+    "base": "base"
   },
   "checks": {
     "state": "state",

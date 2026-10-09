@@ -1,0 +1,17 @@
+{
+  "root": "root",
+  "branch": "branch",
+  "head": "head",
+  "changed": 1,
+  "ignored": 1,
+  "ignored_dirs": 1,
+  "locked": true,
+  "lock_reason": "lock_reason",
+  "submodules": true,
+  "base": "base",
+  "ahead": 1,
+  "on_origin": true,
+  "pushed": true,
+  "in_use": "in_use",
+  "error": "error"
+}

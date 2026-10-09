@@ -44,7 +44,7 @@ func TestWireGolden(t *testing.T) {
 		{"pane", &Pane{}}, {"run", &Run{}}, {"attention", &Attention{}},
 		{"branch_status", &BranchStatus{}}, {"pending", &Pending{}}, {"handoff", &Handoff{}},
 		{"host_status", &HostStatus{}}, {"session", &Session{}}, {"repo_entry", &RepoEntry{}},
-		{"listing", &Listing{}}, {"identity", &Identity{}},
+		{"listing", &Listing{}}, {"identity", &Identity{}}, {"root_facts", &RootFacts{}},
 	} {
 		fill(t, c.name, reflect.ValueOf(c.v).Elem(), nil)
 		b, err := json.MarshalIndent(c.v, "", "  ")

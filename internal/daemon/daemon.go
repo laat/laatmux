@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -355,6 +356,9 @@ type Daemon struct {
 	sessionsHookErr string
 	// The worktrees' git status refreshes, by root; see gitstatus.go.
 	gits map[string]*gitEntry
+	// factSlots bounds the roots the facts messages of every connection
+	// read at once; see prune.go.
+	factSlots chan struct{}
 	// The branch records and the state of asking GitHub about them,
 	// nil without the branches capability. See branches.go.
 	branches   *branches
@@ -516,6 +520,7 @@ func New(cfg Config) *Daemon {
 		paneRecs:     map[string]protocol.Pane{},
 		runRecs:      map[string]protocol.Run{},
 		gits:         map[string]*gitEntry{},
+		factSlots:    make(chan struct{}, factWorkers),
 		paths:        newResolver(),
 
 		msubs:     map[*subscriber]struct{}{},
@@ -576,7 +581,7 @@ func (d *Daemon) capabilities() []string {
 	if d.cfg.Store != nil {
 		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
 		if d.managed != nil {
-			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry)
+			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry, protocol.CapPrune)
 		}
 		if d.journal != nil {
 			caps = append(caps, protocol.CapTask)
@@ -1204,6 +1209,7 @@ var handlers = map[string]func(*clientConn, protocol.Message) error{
 	protocol.TypeFollow:    (*clientConn).follow,
 	protocol.TypeCancel:    (*clientConn).cancel,
 	protocol.TypeSelect:    (*clientConn).selectPane,
+	protocol.TypeFacts:     (*clientConn).facts,
 	protocol.TypePoke:      (*clientConn).poke,
 	protocol.TypeShutdown:  (*clientConn).shutdown,
 }
@@ -1282,7 +1288,25 @@ func (c *clientConn) newSession(m protocol.Message) error {
 		res.Error = err.Error()
 		return c.pc.Write(res)
 	}
-	made, err := d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+	cwd := m.Cwd
+	create := func() (tmux.Session, error) {
+		return d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: cwd, Cmd: m.Cmd, Host: m.Host})
+	}
+	var made tmux.Session
+	var err error
+	if dir := filepath.Clean(m.Cwd); d.cfg.Store != nil && m.Cwd != "" && d.cfg.Store.Owns(dir) {
+		// In a worktree the session is made at the directory with its
+		// links resolved, as git registers roots, so prune's rm, which
+		// has the worktree closed while it looks and removes, finds no
+		// session made meanwhile by another path to it, and kills the
+		// one made at its root by that root.
+		if real, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+			dir, cwd = real, real
+		}
+		made, err = d.tasks.newInWorktree(c.ctx, dir, m.Name, create)
+	} else {
+		made, err = create()
+	}
 	if err != nil {
 		res.Error = err.Error()
 	} else {

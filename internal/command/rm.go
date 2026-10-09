@@ -27,6 +27,14 @@ type Rm struct {
 	// machine, and a host entry moved to another machine must not remove
 	// that machine's worktree at the same path.
 	Environment string
+	// Head, when set, is the commit the worktree's HEAD must be at for
+	// the removal; Unused refuses a worktree something runs in; and
+	// DeleteBranch deletes the branch too when it is still at Head:
+	// prune's, which decided on that commit with nothing running there.
+	// Each needs a daemon with prune.
+	Head         string
+	Unused       bool
+	DeleteBranch bool
 }
 
 // Removed is what an rm left behind: the root it acted on, "" when
@@ -54,8 +62,16 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	if id == "" {
 		id = ID("rm")
 	}
-	req := protocol.Message{Type: protocol.TypeRm, ID: id, Repo: m.Repo.Source, Branch: m.Branch, Root: m.Root, Force: m.Force}
-	hello, res, err := stream(ctx, m.Host.Host, []string{protocol.CapRm}, req, r, streamOpts{restart: true, environment: m.Environment})
+	req := protocol.Message{Type: protocol.TypeRm, ID: id, Repo: m.Repo.Source, Branch: m.Branch, Root: m.Root, Force: m.Force,
+		Head: m.Head, Unused: m.Unused, DeleteBranch: m.DeleteBranch}
+	caps := []string{protocol.CapRm}
+	if m.Head != "" || m.Unused || m.DeleteBranch {
+		// A daemon without prune would read the rm without them, and
+		// remove the worktree whatever its HEAD and whatever runs in
+		// it.
+		caps = append(caps, protocol.CapPrune)
+	}
+	hello, res, err := stream(ctx, m.Host.Host, caps, req, r, streamOpts{restart: true, environment: m.Environment})
 	if err != nil {
 		return Removed{}, failed("rm", res, err)
 	}

@@ -310,6 +310,9 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		} else if m.Root == "" {
 			return errors.New("rm needs a repository and branch, or a root")
 		}
+		if m.DeleteBranch && (m.Branch == "" || m.Head == "") {
+			return errors.New("rm deletes the branch only given the branch and the commit it is at")
+		}
 		// An older client sends a branch it cannot carry with U+FFFD for
 		// its byte. With no root the branch is all there is, and one no
 		// worktree is on would find nothing and answer ok; with a root,
@@ -421,6 +424,29 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 		// between the mark and the drop.
 		unlockDeliveries := rn.lockDeliveries(root)
 		defer unlockDeliveries()
+		if m.Unused {
+			// prune found nothing running in the worktree; something
+			// started there since, while its question was open say, is
+			// not what it decided to remove.
+			// Closed first, so what starts after the look is refused.
+			defer rn.closeRoot(root)()
+			panes, err := rn.listActive(ctx)
+			if err != nil {
+				return err
+			}
+			if what := rn.inUseAt(root, panes); what != "" {
+				return fmt.Errorf("%s is in use, by %s; not removed", tmux.Printable(root), what)
+			}
+		}
+		if checkout != "" && m.Head != "" {
+			// prune read the worktree at this commit: one made in it
+			// since is not what it decided to remove. Git's own check
+			// below refuses one dirty since.
+			if err := worktree.HeadIs(ctx, root, m.Head); err != nil {
+				return err
+			}
+		}
+		removedFrom := ""
 		if checkout != "" {
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
 			if err != nil {
@@ -433,7 +459,11 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				// the tasks from before it.
 				l := rn.core.stepRevision()
 				res.Listing = &l
+				removedFrom = checkout
 			}
+		}
+		if m.DeleteBranch {
+			rn.deleteBranch(ctx, c, m, removedFrom)
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait

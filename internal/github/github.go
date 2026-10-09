@@ -110,7 +110,7 @@ const Chunk = 32
 
 const prFragment = `fragment P on PullRequestConnection { pageInfo { hasNextPage endCursor } nodes { ...Q } } ` + prNodeFragment
 
-const prNodeFragment = `fragment Q on PullRequest { number state isDraft url isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } }`
+const prNodeFragment = `fragment Q on PullRequest { number state isDraft url baseRefName isCrossRepository commits(last: 1) { nodes { commit { oid statusCheckRollup { ...R } } } } }`
 
 const rollupFragment = `fragment R on StatusCheckRollup { id state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }`
 
@@ -150,6 +150,7 @@ type prNode struct {
 	State           string `json:"state"`
 	IsDraft         bool   `json:"isDraft"`
 	URL             string `json:"url"`
+	BaseRefName     string `json:"baseRefName"`
 	CrossRepository bool   `json:"isCrossRepository"`
 	Commits         struct {
 		Nodes []struct {
@@ -463,7 +464,7 @@ func parse(a *repoAnswer, b Branch) Result {
 		// is where the PR left it, or gone; a branch that moved on,
 		// main after an old main-to-release PR say, is its own.
 		if pr.State == "OPEN" || a.Ref == nil || last == r.HeadOID {
-			r.PR = &protocol.PullRequest{Number: pr.Number, State: strings.ToLower(pr.State), Draft: pr.IsDraft, URL: pr.URL}
+			r.PR = &protocol.PullRequest{Number: pr.Number, State: strings.ToLower(pr.State), Draft: pr.IsDraft, URL: pr.URL, Base: pr.BaseRefName}
 			r.ChecksURL = pr.URL + "/checks"
 			if last != "" {
 				r.HeadOID, rl = last, lastRollup
