@@ -164,6 +164,12 @@ func (m *Model) iconSpan(r rows.Row) Span {
 	default:
 		text = m.Icons.icon(st)
 	}
+	if text == "" && r.Kind == rows.KindTile {
+		// No icon, an idle agent's say: nothing, so the tile's title
+		// starts where its other lines do, not two cells in. A tree
+		// line keeps the blank, which aligns the labels of a list.
+		return Span{}
+	}
 	return Span{Text: pad(fit(text, iconWidth), iconWidth), Fg: statusColor[st]}
 }
 

@@ -15,19 +15,19 @@ S..|‹⟨border:─────────────────────
 .D.|⟨info:▌⟩ ⎇ main @‹box›
 .D.|⟨info:▌⟩ last seen                                ⟨danger:×⟩⟨danger: 2/3⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ scratch                                0:40
+...|⟨border:▌⟩ scratch                                   0:40
 ...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ notes                                  5:00
+...|⟨border:▌⟩ notes                                     5:00
 ...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ proj                                     1h
+...|⟨border:▌⟩ proj                                        1h
 ...|⟨border:▌⟩ ⎇ other @‹vm›
 ...|⟨border:▌⟩ Done. 日本語のタイトル that is long… ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
 ...|‹⟨border:────────────────────────────────────────────────⟩›
-.D.|⟨border:▌⟩ ⟨border:  ⟩ proj                                     3h
+.D.|⟨border:▌⟩ proj                                        3h
 .D.|⟨border:▌⟩ ⎇ dead @‹vm›
 .D.|⟨border:▌⟩ claude gone                              ‹#7› ‹✓›‹?›
 ...|‹⟨border:────────────────────────────────────────────────⟩›
