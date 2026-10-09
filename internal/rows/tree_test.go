@@ -1431,6 +1431,15 @@ func TestMainCheckoutHome(t *testing.T) {
 	if i, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/laatmux/%5" || line.Home() != "laatmux/main" || HomeLine(nodes, "mac", "laatmux/main") != i {
 		t.Errorf("the agent laatmux made at the root working, the home lost: %+v", line)
 	}
+	// The plain session's agent working again: the line shows it, its
+	// Home is the older root agent's session, and the other root agent's
+	// session is the line's for HomeLine all the same.
+	in.Agents[1].Activity, in.Agents[4].Activity = protocol.Working, protocol.Idle
+	nodes = Tree(in)
+	if i, line := find(nodes, "menv/checkout//code/laatmux"); line.Agent == nil || line.Agent.ID != "menv/default/%2" || line.Home() != "laatmux/older" || HomeLine(nodes, "mac", "laatmux/main") != i || HomeLine(nodes, "mac", "laatmux/older") != i {
+		t.Errorf("two root agents, the plain session's working: %+v", line)
+	}
+	in.Agents[1].Activity, in.Agents[4].Activity = protocol.Idle, protocol.Working
 	in.Agents = in.Agents[:len(in.Agents)-1]
 	// The home back with a shell alone in it: the line shows the working
 	// agent in a plain session; with none of its own, no agent.

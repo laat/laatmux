@@ -2,6 +2,7 @@ package rows
 
 import (
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -358,8 +359,11 @@ func (b *builder) worktrees() {
 		// another directory, below the root too (nameClaim).
 		line.Agent = rowAgent(agents, w)
 		if w.Main {
-			if a := madeAgent(agents, w); a != nil && w.Session == "" {
-				line.madeHome = a.Session
+			if w.Session == "" {
+				line.made = madeSessions(agents, w)
+			}
+			if len(line.made) > 0 {
+				line.madeHome = line.made[0]
 			}
 			line.elsewhere = b.madeElsewhere(w, line.ShellSession())
 		}
@@ -988,8 +992,10 @@ func (r Row) home() (session string, own bool) {
 // workspace session attaches to a managed session, the line whose Home
 // it is, or, with no home at all, the line of the worktree the session
 // is named after, or of the main checkout, whose shell session a jump
-// named so and a split gone elsewhere took the home from, say. Of
-// several, the first in the tree's order whose own
+// named so and a split gone elsewhere took the home from, say; a main
+// checkout's line with no home takes the session of any of its root
+// agents as one whose Home it is. Of several, the first in the tree's
+// order whose own
 // session it is; then the first of a worktree the session is named after
 // (namedAfter), whose root agent is in it with the home lost or which
 // has no home at all; then the first. A worktree's root agent moved by
@@ -1017,6 +1023,11 @@ func HomeLine(tree []Row, host, session string) int {
 			continue
 		}
 		home, own := n.home()
+		if home != session && slices.Contains(n.made, session) {
+			// Another session a main checkout's root agent is in, its
+			// home lost too.
+			home, own = session, false
+		}
 		switch {
 		case home != session && home != "":
 		case home == session && own:

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -107,11 +109,14 @@ type Row struct {
 	// madeHome is, on a main checkout's line with no home, the session
 	// of the agent laatmux made at its root, which a split gone elsewhere
 	// took the home from: its Home where the line shows an agent in a
-	// plain session; "" for none.
+	// plain session; "" for none. made is the sessions of every such
+	// agent, of which HomeLine takes any for the line's, as it takes a
+	// worktree's home.
 	// elsewhere is that the session named as its shell session
 	// (ShellSession) is not the line's: a managed agent in it runs in a
 	// pane laatmux made at another directory (nameClaim).
 	madeHome  string
+	made      []string
 	elsewhere bool
 	Agent     *protocol.Agent
 	// Local is the local session for the row, when there is one: the
@@ -527,17 +532,24 @@ func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 	return best
 }
 
-// madeAgent is, of a main checkout's agents, the one laatmux made at its
-// root, in the session a split gone elsewhere took the home from; of
-// several, the first in rowAgent's order; nil for none.
-func madeAgent(agents []*protocol.Agent, w *protocol.Worktree) *protocol.Agent {
-	var best *protocol.Agent
+// madeSessions is, of a main checkout's agents, the sessions of those
+// laatmux made at its root, a split gone elsewhere having taken their
+// home, the first's in rowAgent's order first; nil for none.
+func madeSessions(agents []*protocol.Agent, w *protocol.Worktree) []string {
+	var made []*protocol.Agent
 	for _, a := range agents {
-		if a.Server == protocol.ServerLaatmux && a.Managed && a.Cwd == w.Root && (best == nil || before(a, best)) {
-			best = a
+		if a.Server == protocol.ServerLaatmux && a.Managed && a.Cwd == w.Root {
+			made = append(made, a)
 		}
 	}
-	return best
+	sort.SliceStable(made, func(i, j int) bool { return before(made[i], made[j]) })
+	var sessions []string
+	for _, a := range made {
+		if !slices.Contains(sessions, a.Session) {
+			sessions = append(sessions, a.Session)
+		}
+	}
+	return sessions
 }
 
 // JumpAgent is the agent a jump to a worktree or a main checkout goes
