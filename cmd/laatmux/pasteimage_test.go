@@ -122,9 +122,10 @@ func TestDisplayLiteral(t *testing.T) {
 // elsewhere, once however often it runs; off unbinds it; toggle goes
 // by the binding. A user's binding of C-v is left alone and reported
 // by on, and left by off, one that has the words paste-image run in it
-// too. A failure of list-keys other than no root table, a user's
-// after-list-keys hook, is an error, which binds nothing. With no
-// server running, off has nothing to do and on says so.
+// too. Both hold with C-v the root table's only binding. A failure of
+// list-keys, a user's after-list-keys hook, is an error, which binds
+// nothing. With no server running, off has nothing to do and on says
+// so.
 func TestPasteBinding(t *testing.T) {
 	isolatedDefault(t)
 	ctx := context.Background()
@@ -182,6 +183,11 @@ func TestPasteBinding(t *testing.T) {
 		{"if-shell", "-F", "#{@other}", "run-shell -b 'laatmux paste-image run x'", "send-keys C-v"},
 		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b custom-paste", `display-message "use laatmux paste-image run for images"`},
 		{"if-shell", "-F", "#{@laatmux_attach_pane}", `run-shell -b 'printf "use paste-image run now"'`, "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b 'mytool x run'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b -t 'laatmux paste-image run x'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -C 'laatmux paste-image run x'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b /usr/bin/true ; display-message 'laatmux paste-image run x'", "send-keys C-v"},
+		{"if-shell", "-F", "#{@laatmux_attach_pane}", "run-shell -b /usr/bin/true # laatmux paste-image run x", "send-keys C-v"},
 	} {
 		must(workspace.Server.Run(ctx, append([]string{"bind-key", "-n", "C-v"}, user...)...))
 		was := bound()
@@ -192,7 +198,19 @@ func TestPasteBinding(t *testing.T) {
 			}
 		}
 	}
+	// C-v the root table's only binding: tmux 3.7 to 3.7c show a
+	// listing of one binding on a status line, not on stdout, which a
+	// listing of the root table alone would be.
+	must(workspace.Server.Run(ctx, "unbind-key", "-a", "-T", "root"))
+	for _, sub := range []string{"on", "on"} {
+		if err := pasteSwitch(ctx, sub, exe); err != nil || !strings.Contains(bound(), "paste-image run") {
+			t.Errorf("%s with C-v the only root binding: %v, bound %q", sub, err, bound())
+		}
+	}
 	must(workspace.Server.Run(ctx, "bind-key", "-n", "C-v", "display-message", "use laatmux paste-image run for images"))
+	if err := pasteSwitch(ctx, "on", exe); err == nil || !strings.Contains(bound(), "display-message \"use laatmux") {
+		t.Errorf("on over the user's C-v, the only root binding: %v, bound %q", err, bound())
+	}
 	must(workspace.Server.Run(ctx, "set-hook", "-g", "after-list-keys", "list-keys -T nosuch"))
 	if err := pasteSwitch(ctx, "on", exe); err == nil || !strings.Contains(err.Error(), "table nosuch doesn't exist") {
 		t.Errorf("on with a failing after-list-keys hook: %v", err)

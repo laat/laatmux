@@ -113,18 +113,15 @@ func pasteSwitch(ctx context.Context, sub, exe string) error {
 }
 
 // pasteBinding is C-v's binding in the root table as list-keys prints
-// it, "" when it has none, and whether it is laatmux's (pasteOurs). -N,
-// so a server not running is not started.
+// it, "" when it has none, and whether it is laatmux's (pasteOurs).
+// Every table is listed, not the root table alone: tmux 3.7 to 3.7c
+// show a listing of one binding on a client's status line rather than
+// print it, which the root table's can be, and a table not there is an
+// error. An error, a user's after-list-keys hook that failed say, may
+// hide a binding, and is returned. -N, so a server not running is not
+// started.
 func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
-	out, err := workspace.Server.Run(ctx, "-N", "list-keys", "-T", "root")
-	var te *tmux.Error
-	if errors.As(err, &te) && te.Msg == "table root doesn't exist" {
-		// No root table, for a tmux that drops a table with no key
-		// left in it, is no binding; 3.6 lists such a table empty.
-		// Any other error, a user's after-list-keys hook that failed
-		// say, may hide a binding, and is returned.
-		return "", false, nil
-	}
+	out, err := workspace.Server.Run(ctx, "-N", "list-keys")
 	if err != nil {
 		return "", false, err
 	}
@@ -142,18 +139,20 @@ func pasteBinding(ctx context.Context) (line string, ours bool, err error) {
 
 // pasteOurs reports whether a binding's command, its words, is
 // laatmux's as pasteBindArgs binds it: an if-shell -F on the attach
-// pane's tag whose command for an attach pane is a run-shell of a
-// binary's paste-image run. The words elsewhere, in the other branch
-// or in a string a command prints, make no binding laatmux's.
+// pane's tag whose command for an attach pane is run-shell -b of a
+// shell command that is a binary's paste-image run, whatever arguments
+// follow, so a binding an older build made with others is laatmux's
+// too. The words elsewhere, in the other branch, in a string a command
+// prints or as another flag's value, make no binding laatmux's.
 func pasteOurs(cmd []string) bool {
 	if len(cmd) < 4 || cmd[0] != "if-shell" || cmd[1] != "-F" || cmd[2] != "#{@laatmux_attach_pane}" {
 		return false
 	}
 	run := commandWords(cmd[3])
-	if len(run) < 2 || run[0] != "run-shell" {
+	if len(run) != 3 || run[0] != "run-shell" || run[1] != "-b" {
 		return false
 	}
-	sh := commandWords(run[len(run)-1])
+	sh := commandWords(run[2])
 	return len(sh) >= 3 && sh[1] == "paste-image" && sh[2] == "run"
 }
 
@@ -163,7 +162,11 @@ func pasteOurs(cmd []string) bool {
 // is, inside double quotes too, and blanks part the words. list-keys
 // prints a binding's arguments quoted that way, a command inside a
 // branch quoted again, and the shell command inside run-shell once
-// more.
+// more. Its other escapes, \t or octal for a control byte in a path,
+// are read as the letters or digits, which changes a word but no
+// word's bounds; a ; or a # is a word like any other, which
+// pasteOurs, wanting run-shell -b and one command, takes for no
+// binding of laatmux's.
 func commandWords(s string) []string {
 	var words []string
 	var w strings.Builder
@@ -368,23 +371,29 @@ var sendPaste = func(ctx context.Context, h peer.Host, env, root string, png []b
 
 // pasteNotice shows msg to the client with display-message, for delay
 // or until a key, or for the display-time with no delay: from a key's
-// background job it is the only way the user sees it. A client gone
-// since the key is passed over, display-message then picking one, and
-// a tmux that refuses -d shows it for its display-time. Nothing is
-// returned: there is nowhere else to say it.
+// background job it is the only way the user sees it. -C keeps the
+// panes drawn while it shows, which tmux 3.6 and later stop otherwise;
+// a tmux before 3.6 refuses it, and each try is made again without it.
+// A client gone since the key is passed over, display-message then
+// picking one, and a tmux that refuses -d shows the message for its
+// display-time. Nothing is returned: there is nowhere else to say it.
 func pasteNotice(ctx context.Context, pane, client string, delay time.Duration, msg string) {
 	msg = displayLiteral("laatmux paste-image: " + msg)
 	var d []string
 	if delay > 0 {
 		d = []string{"-d", strconv.FormatInt(delay.Milliseconds(), 10)}
 	}
-	var tries [][]string
+	var bases [][]string
 	if client != "" {
-		tries = append(tries, append([]string{"-c", client}, d...))
+		bases = append(bases, append([]string{"-c", client}, d...))
 	}
-	tries = append(tries, d)
+	bases = append(bases, d)
 	if d != nil {
-		tries = append(tries, nil)
+		bases = append(bases, nil)
+	}
+	var tries [][]string
+	for _, b := range bases {
+		tries = append(tries, append([]string{"-C"}, b...), b)
 	}
 	for _, flags := range tries {
 		args := append(append([]string{"display-message"}, flags...), "-t", pane, msg)
