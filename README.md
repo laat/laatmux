@@ -522,13 +522,19 @@ truth; labels only place new things.
   root with no outcome yet in the journal, a run, or a pane of any
   watched server, each listed then rather than as the last poll saw it,
   that laatmux made at the root, as `rm` kills it, or whose path is
-  under it; a server whose panes cannot be listed refuses it too. The
-  same check bumps the root's removal generation, so a run that
-  resolved before it is refused with `worktree removed; retry`, also
-  when the removal then does not happen. Nothing else starts there
-  before the kill: `rm` holds every repository, which an add holds until
-  its agent runs and `new` holds while it makes a session in a
-  worktree. With `delete_branch` too, once this `rm` has had git remove
+  under it, as tmux reports it or resolved by the daemon's resolver,
+  which never waits on a hung mount; a server whose panes cannot be
+  listed within ten seconds refuses it too, one not running has none.
+  Before it looks, `rm` closes the root until it is done: the root's
+  removal generation is bumped, so a run that resolved before is
+  refused with `worktree removed; retry`, also when the removal then
+  does not happen; no run registers in a closed root (`worktree being
+  removed; retry`); and `new` refuses a session in it, and kills one
+  it made while the root was closed or once its directory went, which
+  tmux would otherwise start in the home directory. An add's session
+  is there by the look, as `rm` waits for every add in flight. A
+  session elsewhere, and one in another worktree, is made as ever,
+  without waiting. With `delete_branch` too, once this `rm` has had git remove
   the worktree, the branch is deleted when it is still at `head`, with
   its reflog and its config, as `git branch -D` deletes them; the
   deletion is `git update-ref --no-deref -d` with `head` as the old
@@ -866,7 +872,8 @@ workspace session; the next `jump` makes it again.
   through `new` (capability `new`): named as `add` names the
   worktree's, the host's label and the encoded branch, at the root, with
   no command, so the host's `default-shell` runs in it; the jump prints
-  what it made. A session of that name, which `new` refuses as a name in
+  what it made. `new` in a worktree needs the worktree's directory, and
+  is refused while `prune` removes that worktree. A session of that name, which `new` refuses as a name in
   use, is attached instead, as one made since the listing by an `add`
   say, unless the host's records place it elsewhere: another worktree's
   home, which two clones' worktrees on one branch can be, or, with no

@@ -3,9 +3,12 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
@@ -103,7 +106,7 @@ func (rn *taskRunner) readFacts(ctx context.Context, slots chan struct{}, roots 
 			case panesErr != nil:
 				f.InUse = "what the host's tmux servers hold, not known: " + panesErr.Error()
 			default:
-				f.InUse = rn.inUseAt(clean, panes, false)
+				f.InUse = rn.inUseAt(clean, panes)
 			}
 			out[i] = f
 		}()
@@ -113,24 +116,33 @@ func (rn *taskRunner) readFacts(ctx context.Context, slots chan struct{}, roots 
 }
 
 // activePane is a pane of a watched server as inUseAt places it: what
-// to call it, the root laatmux made it at when it made it, and its
-// current path as tmux reports it and resolved.
+// to call it, and the root laatmux made it at, when it made it, and its
+// current path, each as tmux reports it and resolved.
 type activePane struct {
 	desc       string
-	made       string
-	path, real string
+	made, path []string
 }
+
+// listTimeout bounds each watched server's listing for prune: rm lists
+// them holding every repository, and a server whose hook hangs must
+// not hold every add with it. A variable for tests.
+var listTimeout = 10 * time.Second
 
 // listActive lists every server the daemon watches now, not as the
 // last poll saw them, since a poll that fails keeps the records it had:
 // the panes something of the user's may run in, laatmux's own left
 // out, as the pane records leave them. A server that is not running
 // has none; any other failure is an error, as a pane it hides may be
-// in a worktree.
+// in a worktree. Paths are resolved by the daemon's resolver, which
+// never waits on the file system: a pane on a hung mount holds up
+// nothing, and its path counts as tmux reports it until the answer is
+// there.
 func (rn *taskRunner) listActive(ctx context.Context) ([]activePane, error) {
 	var out []activePane
 	for _, t := range rn.targets {
-		panes, err := t.Tmux.ListPanes(ctx)
+		lctx, cancel := context.WithTimeout(ctx, listTimeout)
+		panes, err := t.Tmux.ListPanes(lctx)
+		cancel()
 		if err != nil && !tmux.HookOnly(err) {
 			if tmux.NoServer(err) {
 				continue
@@ -141,12 +153,12 @@ func (rn *taskRunner) listActive(ctx context.Context) ([]activePane, error) {
 			if p.Own {
 				continue
 			}
-			a := activePane{desc: fmt.Sprintf("pane %s of session %s on the %s server", p.ID, tmux.Printable(p.Session), t.Label), path: p.CurrentPath}
-			if p.Managed {
-				a.made = p.Cwd
+			a := activePane{desc: fmt.Sprintf("pane %s of session %s on the %s server", p.ID, tmux.Printable(p.Session), t.Label)}
+			if p.Managed && p.Cwd != "" {
+				a.made = []string{p.Cwd, rn.paths.resolve(p.Cwd)}
 			}
-			if real, err := filepath.EvalSymlinks(p.CurrentPath); err == nil {
-				a.real = real
+			if p.CurrentPath != "" {
+				a.path = []string{p.CurrentPath, rn.paths.resolve(p.CurrentPath)}
 			}
 			out = append(out, a)
 		}
@@ -157,35 +169,104 @@ func (rn *taskRunner) listActive(ctx context.Context) ([]activePane, error) {
 // inUseAt is what runs in a worktree root, for prune, which removes
 // only a worktree nothing uses: an add at it with no outcome yet; a
 // run; or a pane of panes, listed by listActive, made at the root, as
-// rm kills it, or with its path under it. "" when nothing does. With
-// fence, rm's, the root's removal generation is bumped where the runs
-// are read, so a run that resolved before cannot register after;
-// should the removal not happen, such a run is refused with a retry.
-// rm holds every repository, which an add holds until its agent runs
-// and new holds while it makes a session in a worktree, so neither
-// starts anything between this and the kill.
-func (rn *taskRunner) inUseAt(root string, panes []activePane, fence bool) string {
-	under := func(p string) bool { return p == root || strings.HasPrefix(p, root+"/") }
+// rm kills it, or with its path under it. "" when nothing does.
+func (rn *taskRunner) inUseAt(root string, panes []activePane) string {
 	if rn.journal != nil {
 		if id := rn.journal.liveAt(root); id != "" {
 			return "add " + id + ", which has no outcome yet"
 		}
 	}
 	rn.mu.Lock()
-	if fence {
-		rn.rootGen[root]++
-	}
 	runs := len(rn.runs[root])
 	rn.mu.Unlock()
 	if runs > 0 {
 		return "a run"
 	}
 	for _, p := range panes {
-		if p.made == root || under(p.path) || p.real != "" && under(p.real) {
+		if slices.Contains(p.made, root) || slices.ContainsFunc(p.path, func(path string) bool { return under(path, root) }) {
 			return p.desc
 		}
 	}
 	return ""
+}
+
+// under reports whether path is root or inside it.
+func under(path, root string) bool { return path == root || strings.HasPrefix(path, root+"/") }
+
+// closeRoot fences a worktree root while rm's unused looks at it and
+// removes it, until the returned func reopens it: a run that resolved
+// before cannot register, by the removal generation bumped here, and
+// none registers while it is closed; new refuses a session in it, and
+// kills one it made meanwhile. rm looks after closing it, so what
+// started before is seen, and what starts after is refused.
+func (rn *taskRunner) closeRoot(root string) func() {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.rootGen[root]++
+	rn.closing[root] = true
+	return func() {
+		rn.mu.Lock()
+		defer rn.mu.Unlock()
+		delete(rn.closing, root)
+	}
+}
+
+// closedRootLocked is the closed root dir is in or at, "" when there is
+// none. Called with rn.mu held.
+func (rn *taskRunner) closedRootLocked(dir string) string {
+	for root := range rn.closing {
+		if under(dir, root) {
+			return root
+		}
+	}
+	return ""
+}
+
+// newInWorktree makes a managed session for new when its directory is
+// in a worktree: refused while rm's unused has the worktree closed,
+// and, made, killed again and refused when the worktree was closed
+// meanwhile or is gone, which tmux would have started it outside of,
+// in the home directory. create makes the session.
+func (rn *taskRunner) newInWorktree(ctx context.Context, dir string, create func() (tmux.Session, error)) (tmux.Session, error) {
+	rn.mu.Lock()
+	closed := rn.closedRootLocked(dir)
+	rn.mu.Unlock()
+	if closed != "" {
+		return tmux.Session{}, fmt.Errorf("the worktree at %s is being removed; not made", tmux.Printable(closed))
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return tmux.Session{}, tmux.PrintablePath(err)
+	}
+	made, err := create()
+	if err != nil {
+		return made, err
+	}
+	rn.mu.Lock()
+	closed = rn.closedRootLocked(dir)
+	rn.mu.Unlock()
+	_, statErr := os.Stat(dir)
+	if closed == "" && statErr == nil {
+		return made, nil
+	}
+	if err := rn.killPane(ctx, made); err != nil {
+		return tmux.Session{}, fmt.Errorf("the worktree at %s was removed while its session was made, and the session made is left: %w", tmux.Printable(dir), err)
+	}
+	return tmux.Session{}, fmt.Errorf("the worktree at %s was removed while its session was made; not made", tmux.Printable(dir))
+}
+
+// killPane kills the managed session the pane made is in, found by
+// its id on the server it was made on; one gone already is no error.
+func (rn *taskRunner) killPane(ctx context.Context, made tmux.Session) error {
+	panes, err := rn.listManaged(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range panes {
+		if p.ID == made.PaneID && p.ServerPID == made.ServerPID {
+			return rn.managed.Tmux.KillSessionID(ctx, p.SessionID, p.ServerPID)
+		}
+	}
+	return nil
 }
 
 // deleteBranch is rm's delete_branch, once git has removed the

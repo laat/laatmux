@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -271,10 +272,32 @@ func TestRmUnused(t *testing.T) {
 	if err := d.tasks.registerRun(&runJob{root: root}, gen); err == nil || err.Error() != "worktree removed; retry" {
 		t.Errorf("a run resolved before rm looked registered after: %v", err)
 	}
+	// While rm has the root closed, a run that resolves then does not
+	// register either.
+	reopen := d.tasks.closeRoot(root)
+	if err := d.tasks.registerRun(&runJob{root: root}, d.tasks.runGen(root)); err == nil || err.Error() != "worktree being removed; retry" {
+		t.Errorf("a run registered in a closed root: %v", err)
+	}
+	reopen()
 	ft.set(func() {
 		ft.panes = []tmux.Pane{{Session: "proj/idle", SessionID: "$7", ID: "%7", CurrentPath: root + "/sub", ServerPID: 5, TTY: "/dev/null"}}
 	})
 	refused("r2", "by pane %7 of session proj/idle on the laatmux server")
+	// Made at a symlink to the root, then cd'd out: the resolver,
+	// which answers once it has asked the file system, places it.
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); d.paths.resolve(alias) != root; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the resolver has not resolved %s", alias)
+		}
+	}
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{Session: "proj/idle", SessionID: "$7", ID: "%7", Cwd: alias, CurrentPath: "/tmp", Managed: true, ServerPID: 5, TTY: "/dev/null"}}
+	})
+	refused("r2a", "by pane %7 of session proj/idle on the laatmux server")
 	ft.set(func() { ft.panes = nil })
 
 	dft.set(func() { dft.panes = []tmux.Pane{{Session: "work", ID: "%3", CurrentPath: root}} })
@@ -304,6 +327,11 @@ func TestRmUnused(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A watched server that is not running has nothing in the root.
+	dft.set(func() { dft.listErr = &tmux.Error{Msg: "no server running on /tmp/lmxt/default"} })
+	if f := facts(); f.InUse != "" {
+		t.Errorf("facts' in_use with a server not running: %q", f.InUse)
+	}
 	if res := rm("r7"); !res.OK {
 		t.Fatalf("rm of an unused worktree: %+v", res)
 	}
@@ -312,37 +340,53 @@ func TestRmUnused(t *testing.T) {
 	}
 }
 
-// A session new makes in a worktree waits for an rm in progress, which
-// holds every repository: none starts between rm's look at the root
-// and the sessions it kills. One elsewhere does not wait.
-func TestNewInWorktreeWaitsForRm(t *testing.T) {
-	store, _ := newStore(t)
-	d, _ := addDaemon(t, store)
+// new in a worktree prune's rm has closed is refused, and a session it
+// made while the root was closed, or once its directory went, is
+// killed again and refused, never left in the home directory tmux
+// would start it in; a session elsewhere, or in another worktree, is
+// made as ever, without waiting on rm.
+func TestNewInClosedWorktree(t *testing.T) {
+	store, remote := newStore(t)
+	_, add := pruneCheckout(t, store, remote)
+	root, other := add("closing"), add("open")
+	d, ft := addDaemon(t, store)
 	pc := conn(t, d)
-	unlock := d.tasks.lockRepos()
-	pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n1", Name: "elsewhere", Cwd: t.TempDir()})
-	if res, _ := result(t, pc, "n1"); !res.OK {
-		t.Fatalf("new elsewhere: %+v", res)
+	newAt := func(id, name, cwd string) protocol.Message {
+		t.Helper()
+		pc.Write(protocol.Message{Type: protocol.TypeNew, ID: id, Name: name, Cwd: cwd})
+		res, _ := result(t, pc, id)
+		return res
 	}
-	pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n2", Name: "in-worktree", Cwd: store.Dirs.Worktree("proj", "x")})
-	got := make(chan protocol.Message, 1)
-	go func() {
-		res, _ := result(t, pc, "n2")
-		got <- res
-	}()
-	select {
-	case res := <-got:
-		t.Fatalf("new in a worktree did not wait for rm: %+v", res)
-	case <-time.After(200 * time.Millisecond):
+	reopen := d.tasks.closeRoot(root)
+	if res := newAt("n1", "in", root+"/sub"); res.OK || !strings.Contains(res.Error, "is being removed; not made") {
+		t.Fatalf("new in a closed worktree: %+v", res)
 	}
-	unlock()
-	select {
-	case res := <-got:
-		if !res.OK {
-			t.Fatalf("new in a worktree: %+v", res)
+	for _, k := range []struct{ name, cwd string }{{"elsewhere", t.TempDir()}, {"other", other}} {
+		if res := newAt("n-"+k.name, k.name, k.cwd); !res.OK {
+			t.Fatalf("new %s while a worktree is closed: %+v", k.name, res)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("new in a worktree still waits")
+	}
+	reopen()
+	if res := newAt("n2", "in", root); !res.OK {
+		t.Fatalf("new in the worktree reopened: %+v", res)
+	}
+	if res := newAt("n3", "gone", store.Dirs.Worktree("proj", "gone")); res.OK || !strings.Contains(res.Error, "no such file or directory") {
+		t.Fatalf("new in a worktree directory that is not there: %+v", res)
+	}
+
+	// Closed while the session was being made: it goes again.
+	made := 0
+	_, err := d.tasks.newInWorktree(context.Background(), root, func() (tmux.Session, error) {
+		s, err := ft.NewSession(context.Background(), tmux.NewSessionOpts{Name: "raced", Cwd: root})
+		made++
+		d.tasks.closeRoot(root)
+		return s, err
+	})
+	if err == nil || !strings.Contains(err.Error(), "was removed while its session was made; not made") || made != 1 {
+		t.Fatalf("made while closed: %v, made %d", err, made)
+	}
+	if !slices.Contains(ft.killed, "raced") {
+		t.Errorf("the session made while closed is left: killed %v", ft.killed)
 	}
 }
 

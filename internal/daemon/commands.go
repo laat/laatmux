@@ -428,11 +428,13 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 			// prune found nothing running in the worktree; something
 			// started there since, while its question was open say, is
 			// not what it decided to remove.
+			// Closed first, so what starts after the look is refused.
+			defer rn.closeRoot(root)()
 			panes, err := rn.listActive(ctx)
 			if err != nil {
 				return err
 			}
-			if what := rn.inUseAt(root, panes, true); what != "" {
+			if what := rn.inUseAt(root, panes); what != "" {
 				return fmt.Errorf("%s is in use, by %s; not removed", tmux.Printable(root), what)
 			}
 		}

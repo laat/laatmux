@@ -38,6 +38,12 @@ type taskRunner struct {
 	runs     map[string]map[*runJob]struct{}
 	rootGen  map[string]uint64
 	stopping bool // stopRuns has begun; no run registers and no paste starts after it
+	// closing is the roots prune's rm has closed, under mu: no run
+	// registers and no session is made in one; see closeRoot.
+	closing map[string]bool
+	// paths is the daemon's resolver, which never waits on the file
+	// system.
+	paths *resolver
 	// The trust watchers: their shared context, cancelled by stopRuns,
 	// and how many run, which stopRuns waits for; see trust.go.
 	trustCtx    context.Context
@@ -72,7 +78,7 @@ type taskCore interface {
 func newRunner(d *Daemon) *taskRunner {
 	return &taskRunner{mu: &d.mu, cfg: &d.cfg, journal: d.journal, managed: d.managed, targets: d.targets, panes: d.panes, gits: d.gits, core: d,
 		cmds: newCommandTable(d.cfg.Timings.CommandTTL), locks: newKeyedLocks(),
-		runs: map[string]map[*runJob]struct{}{}, rootGen: map[string]uint64{}, pasted: map[string]time.Time{}}
+		runs: map[string]map[*runJob]struct{}{}, rootGen: map[string]uint64{}, closing: map[string]bool{}, paths: d.paths, pasted: map[string]time.Time{}}
 }
 
 // listManaged lists the managed server's panes for one command. A

@@ -1288,14 +1288,18 @@ func (c *clientConn) newSession(m protocol.Message) error {
 		res.Error = err.Error()
 		return c.pc.Write(res)
 	}
-	if d.cfg.Store != nil && m.Cwd != "" && d.cfg.Store.Owns(filepath.Clean(m.Cwd)) {
-		// A session in a worktree is made under the hold on every
-		// repository an add takes, so an rm, which holds them all,
-		// never has one start between its look at the root and the
-		// sessions it kills there.
-		defer d.tasks.holdRepos()()
+	create := func() (tmux.Session, error) {
+		return d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
 	}
-	made, err := d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
+	var made tmux.Session
+	var err error
+	if dir := filepath.Clean(m.Cwd); d.cfg.Store != nil && m.Cwd != "" && d.cfg.Store.Owns(dir) {
+		// prune's rm, which has the worktree closed while it looks
+		// and removes, finds no session it would kill made meanwhile.
+		made, err = d.tasks.newInWorktree(c.ctx, dir, create)
+	} else {
+		made, err = create()
+	}
 	if err != nil {
 		res.Error = err.Error()
 	} else {

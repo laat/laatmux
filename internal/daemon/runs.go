@@ -76,6 +76,11 @@ func (rn *taskRunner) registerRun(r *runJob, gen uint64) error {
 	if rn.rootGen[r.root] != gen {
 		return errors.New("worktree removed; retry")
 	}
+	if rn.closedRootLocked(r.root) != "" {
+		// prune's rm has the worktree closed: removed, or found in
+		// use, very soon.
+		return errors.New("worktree being removed; retry")
+	}
 	if rn.runs[r.root] == nil {
 		rn.runs[r.root] = map[*runJob]struct{}{}
 	}

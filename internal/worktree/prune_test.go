@@ -111,13 +111,19 @@ func TestRemovable(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(strings.TrimSpace(run(t, mods, "git", "rev-parse", "--absolute-git-dir")), "modules"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A repository cloned into the worktree and added as a gitlink,
+	// with a .gitmodules and no modules directory: found in the index.
+	link := wt("link")
+	run(t, link, "git", "clone", "-q", f.remote, "vendor/proj")
+	write(t, filepath.Join(link, ".gitmodules"), "[submodule \"vendor/proj\"]\n\tpath = vendor/proj\n\turl = "+f.remote+"\n")
+	run(t, link, "git", "add", ".gitmodules", "vendor/proj")
 	for _, k := range []struct {
 		root       string
 		locked     bool
 		reason     string
 		submodules bool
 	}{
-		{plain, false, "", false}, {locked, true, "keep me", false}, {bare, true, "", false}, {sub, false, "", true}, {mods, false, "", true},
+		{plain, false, "", false}, {locked, true, "keep me", false}, {bare, true, "", false}, {sub, false, "", true}, {mods, false, "", true}, {link, false, "", true},
 	} {
 		got, err := ReadFacts(ctx, k.root)
 		if err != nil {
@@ -128,7 +134,7 @@ func TestRemovable(t *testing.T) {
 		}
 	}
 	// git agrees: each one read as kept is refused without force.
-	for _, root := range []string{locked, bare, sub, mods} {
+	for _, root := range []string{locked, bare, sub, mods, link} {
 		if _, err := Remove(ctx, c, root, false); err == nil {
 			t.Errorf("%s: removed without force", filepath.Base(root))
 		}
