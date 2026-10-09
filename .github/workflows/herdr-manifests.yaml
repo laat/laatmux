@@ -1,9 +1,11 @@
 name: herdr manifests
 
-# Copies the manifests in internal/detect/manifests, and herdr's LICENSE,
-# from herdr's master. When they differ from main, the job pushes the
-# herdr-manifests branch and opens a pull request or updates the open one.
-# CI on that pull request waits for a maintainer to approve the run.
+# Copies the manifests in internal/detect/manifests/upstream, and herdr's
+# LICENSE, from herdr's master, then rebuilds the manifests the engine
+# embeds with laatmux's patches on top (manifests/apply.sh, NOTICE). When
+# they differ from main, the job pushes the herdr-manifests branch and
+# opens a pull request or updates the open one. CI on that pull request
+# waits for a maintainer to approve the run.
 
 on:
   schedule:
@@ -44,7 +46,7 @@ jobs:
           get() {
             gh api "repos/herdrdev/herdr/contents/$1?ref=$sha" -H 'Accept: application/vnd.github.raw'
           }
-          for f in "$DIR"/*.toml; do
+          for f in "$DIR"/upstream/*.toml; do
             get "src/detect/manifests/${f##*/}" > "$f"
           done
           get LICENSE > "$DIR/LICENSE"
@@ -53,6 +55,15 @@ jobs:
             exit 0
           fi
           sed -i -E "s/[0-9a-f]{40}/$sha/" "$DIR/NOTICE"
+          # The local changes on top; a patch that no longer applies
+          # leaves the manifest as it was, for the maintainer to rebase.
+          if "$DIR/apply.sh"; then
+            echo "applied=yes" >> "$GITHUB_OUTPUT"
+          else
+            git checkout -q -- "$DIR"/*.toml
+            rm -f "$DIR"/*.rej "$DIR"/*.orig
+            echo "applied=no" >> "$GITHUB_OUTPUT"
+          fi
           git diff --stat
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
@@ -60,6 +71,7 @@ jobs:
         if: steps.copy.outputs.sha != ''
         env:
           SHA: ${{ steps.copy.outputs.sha }}
+          APPLIED: ${{ steps.copy.outputs.applied }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -76,8 +88,13 @@ jobs:
           git push -qf origin "HEAD:refs/heads/$BRANCH"
 
           title='detect: the manifests from herdr'
+          if [ "$APPLIED" = yes ]; then
+            patched="rebuilds the manifests with the patches in \`patches/\` reapplied."
+          else
+            patched="leaves the manifests as they were: a patch in \`patches/\` no longer applies, and TestManifestsPatched fails until it is rebased (see NOTICE)."
+          fi
           body=$(cat <<EOF
-          The detection manifests or LICENSE in \`$DIR\` differ from herdr's master. This copies them verbatim at herdr commit \`$SHA\` and moves the commit in NOTICE.
+          The detection manifests or LICENSE in \`$DIR\` differ from herdr's master. This copies them verbatim into \`upstream/\` at herdr commit \`$SHA\`, moves the commit in NOTICE and $patched
 
           The detect tests fail on a manifest with a key the port does not know, a pattern RE2 rejects, a \`min_engine_version\` above 3 or a region selector the port lacks. They do not catch a change in what a rule means; read the diff before merging.
 
