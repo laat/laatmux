@@ -1,6 +1,6 @@
 ..B|⟨danger:box  DOWN  ssh: connec⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ laatmux      2:00
-S..|⟨accent:▌⟩    fix-ls @‹vm›       
+S..|⟨accent:▌⟩    ⎇ fix-ls @‹vm›     
 S..|⟨accent:▌⟩    Permission… «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:──────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes 0:01
@@ -8,11 +8,11 @@ S..|‹⟨border:─────────────────────
 ...|⟨info:▌⟩    remote
 ...|‹⟨border:──────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:proj⟩»         0:08
-...|⟨info:▌⟩    task @mac
+...|⟨info:▌⟩    ⎇ task @mac
 ...|⟨info:▌⟩    Editin… ‹#49› ⟨danger:×⟩⟨danger: 3/5⟩
 ...|‹⟨border:──────────────────────⟩›
 .D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ proj        10:00
-.D.|⟨info:▌⟩    main @‹box›
+.D.|⟨info:▌⟩    ⎇ main @‹box›
 .D.|⟨info:▌⟩    last seen   ⟨danger:×⟩⟨danger: 2/3⟩
 ...|‹⟨border:──────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch      0:40
@@ -24,11 +24,11 @@ S..|‹⟨border:─────────────────────
 ...|⟨border:▌⟩
 ...|‹⟨border:──────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ proj           1h
-...|⟨border:▌⟩    other @‹vm›
+...|⟨border:▌⟩    ⎇ other @‹vm›
 ...|⟨border:▌⟩    Done. … ⟨accent:#12⟩ ⟨accent:⠋⟩⟨accent: 1/4⟩
 ...|‹⟨border:──────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ proj           3h
-.D.|⟨border:▌⟩    dead @‹vm›
+.D.|⟨border:▌⟩    ⎇ dead @‹vm›
 .D.|⟨border:▌⟩    claude gone ‹#7› ‹✓›‹?›
 ...|‹⟨border:──────────────────────⟩›
 ...|‹⟨header:▸ 1 stale⟩›
