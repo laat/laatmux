@@ -686,19 +686,20 @@ func TestCopyAndSetupConfig(t *testing.T) {
 }
 
 // The icons and the theme are checked when the config is read: a set,
-// a status or a mode it does not know, and a colour it cannot parse,
+// a status, a kind or a mode it does not know, and a colour it cannot parse,
 // are errors, so no view starts on a config it cannot draw with.
 func TestLook(t *testing.T) {
-	c, err := Parse([]byte("icons: nerdfont\nstatus_icons: {waiting: \"?\"}\nagent_icons: {claude: {icon: C, color: \"#ffffff\"}}\ntheme: {mode: light, custom: {accent: \"#b48ead\"}}\n"))
+	c, err := Parse([]byte("icons: nerdfont\nstatus_icons: {waiting: \"?\"}\nkind_icons: {worktree: \"w\", main: \"~\"}\nagent_icons: {claude: {icon: C, color: \"#ffffff\"}}\ntheme: {mode: light, custom: {accent: \"#b48ead\"}}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Icons != "nerdfont" || c.StatusIcons["waiting"] != "?" || c.AgentIcons["claude"].Icon != "C" || c.Theme.Mode != "light" || c.Theme.Custom["accent"] != "#b48ead" {
+	if c.Icons != "nerdfont" || c.StatusIcons["waiting"] != "?" || c.KindIcons["worktree"] != "w" || c.KindIcons["main"] != "~" || c.AgentIcons["claude"].Icon != "C" || c.Theme.Mode != "light" || c.Theme.Custom["accent"] != "#b48ead" {
 		t.Fatalf("parsed %+v", c)
 	}
 	for _, bad := range []string{
 		"icons: sparkles\n",
 		"status_icons: {idle: x}\n",
+		"kind_icons: {task: x}\n",
 		"agent_icons: {claude: {icon: C, color: pink}}\n",
 		"theme: {mode: solarized}\n",
 		"theme: {custom: {purple: \"#000000\"}}\n",

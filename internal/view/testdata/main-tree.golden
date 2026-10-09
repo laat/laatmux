@@ -1,9 +1,9 @@
 ...| ‹Agents›‹⟨border: │ ⟩›«⟨header:Tree⟩»
 ...|«⟨header:laatmux⟩»
-S..|  ▾ «⟨current_worktree_fg:laatmux⟩» (mac)                            ✎ «⟨success:+12⟩» «⟨danger:-3⟩»  ⟨danger:×⟩⟨danger: 4/5⟩
+S..|  ▾ ⌂ «⟨current_worktree_fg:laatmux⟩» (mac)                          ✎ «⟨success:+12⟩» «⟨danger:-3⟩»  ⟨danger:×⟩⟨danger: 4/5⟩
 ...|    ⟨info:⠋⠙⟩ claude  ‹Reading the README›
 ...|    ⟨border:  ⟩ claude  ‹notes›
-...|  ▸ fix (mac)                                         ‹⟨success:+40⟩› ‹⟨danger:-2⟩›
+...|  ▸ ⎇ fix (mac)                                       ‹⟨success:+40⟩› ‹⟨danger:-2⟩›
 ...|
 ...|
 ...|

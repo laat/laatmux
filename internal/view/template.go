@@ -82,7 +82,7 @@ var tokens = map[string]tokenKind{
 	"primary": tokenFlex, "secondary": tokenFlex, "title": tokenFlex, "subtitle": tokenFlex, "branch": tokenFlex, "repo": tokenFlex, "host": tokenPlain,
 	"session": tokenFlex, "window": tokenFlex, "window_index": tokenPlain, "pane_title": tokenFlex, "pane_suffix": tokenPlain,
 	"status_icon": tokenPlain, "status_label": tokenPlain, "agent_icon": tokenPlain, "agent_label": tokenPlain, "elapsed": tokenPlain,
-	"stripe":    tokenPlain,
+	"stripe": tokenPlain, "kind_icon": tokenPlain,
 	"git_stats": tokenShrink, "git_committed": tokenPlain, "git_uncommitted": tokenPlain, "git_ahead": tokenPlain, "git_behind": tokenPlain,
 	"git_dirty": tokenPlain, "git_conflict": tokenPlain, "git_rebase": tokenPlain, "git_branch": tokenFlex, "git_sync": tokenShrink,
 	"pr_number": tokenPlain, "pr_checks": tokenShrink, "pr_state": tokenPlain, "pr_detail": tokenFlex,
@@ -238,7 +238,9 @@ func Compile(name, src, def string) Compiled {
 // the repository with the branch under it, `{title}` and `{subtitle}`,
 // so a column of tiles reads by the name that groups them, a plain
 // session's by its name; the one-line layouts and the tree lead with
-// the branch, `{primary}` and `{secondary}`. The dashboard's have the git and PR
+// the branch, `{primary}` and `{secondary}`, a tree line's after the
+// glyph saying whether it is a worktree or the main checkout, which a
+// tile's title and subtitle leave out. The dashboard's have the git and PR
 // columns the sidebar's leave out: `{git_sync}` after the stats, where
 // it is the first to shrink, and `{pr_state}` and `{pr_detail}` around
 // the number and the checks; a popup has the width, a sidebar seldom.
@@ -251,14 +253,14 @@ const (
 	DefaultTop2         = "{subtitle} @{host}"
 	DefaultTop3         = "{pane_title}"
 	DefaultRepo         = "#[fg=header,bold]{fold}{repo}"
-	DefaultWorktree     = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
+	DefaultWorktree     = "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
 	DefaultAgent        = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
 	DefaultPane         = "{indent}$ {command}"
 	DefaultRun          = "{indent}▶ {command}{fill}{elapsed}"
 	DefaultDashTile2    = "{stripe}    {subtitle} @{host}{fill}{git_stats}  {git_sync}"
 	DefaultDashTile3    = "{stripe}    {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
 	DefaultDashCompact  = "{stripe} {status_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {elapsed}"
-	DefaultDashWorktree = "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
+	DefaultDashWorktree = "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
 )
 
 // DefaultTiles are the tile's three lines; DefaultTops the strip's
@@ -934,6 +936,10 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 			it.spans = []Span{m.stripe(r)}
 		}
 		return it
+	case "kind_icon":
+		// Plain: the line's colour, dim on a dim line; the viewer's
+		// colour stays on the label.
+		return text(m.Icons.kind(r))
 	case "git_stats":
 		it.spans = gitSpans(r, 1<<20)
 		if len(it.spans) > 0 {

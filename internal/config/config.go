@@ -30,6 +30,7 @@
 //	    compact: "{status_icon} {primary} {pane_suffix}"
 //	icons: emoji              # emoji, nerdfont or ascii; default emoji
 //	status_icons: {waiting: "?"}  # per status: working, waiting, done, stale
+//	kind_icons: {main: "~"}   # {kind_icon}'s, per kind: worktree, main
 //	agent_icons: {claude: {icon: CC, color: "#d97757"}}
 //	theme:
 //	  mode: auto              # auto, dark or light; default auto
@@ -195,10 +196,13 @@ type Config struct {
 	GitHubHosts []string `yaml:"github_hosts"`
 	// Icons is the icon set the views draw statuses with: emoji, the
 	// default, nerdfont or ascii. StatusIcons overrides single icons by
-	// status; "" keeps the set's. AgentIcons overrides the agent icons
-	// by agent name.
+	// status; "" keeps the set's. KindIcons overrides the glyphs the
+	// tree tells a worktree from the main checkout by, by kind, as
+	// StatusIcons does. AgentIcons overrides the agent icons by agent
+	// name.
 	Icons       string               `yaml:"icons"`
 	StatusIcons map[string]string    `yaml:"status_icons"`
+	KindIcons   map[string]string    `yaml:"kind_icons"`
 	AgentIcons  map[string]AgentIcon `yaml:"agent_icons"`
 	// Theme is the views' colours: the mode picks the dark or the light
 	// defaults, auto by asking the terminal, and Custom sets palette
@@ -218,10 +222,12 @@ type Theme struct {
 	Custom map[string]string `yaml:"custom"`
 }
 
-// The icon sets and the statuses an icon can be set for.
+// The icon sets, the statuses an icon can be set for and the kinds a
+// kind icon can.
 var (
 	IconSets     = []string{"emoji", "nerdfont", "ascii"}
 	IconStatuses = []string{"working", "waiting", "done", "stale"}
+	IconKinds    = []string{"worktree", "main"}
 )
 
 // Sidebar configures the sidebar pane: its width in columns and which
@@ -518,6 +524,11 @@ func (c *Config) validateLook() error {
 	for k := range c.StatusIcons {
 		if !slices.Contains(IconStatuses, k) {
 			return fmt.Errorf("status_icons: %q is not one of %s", k, strings.Join(IconStatuses, ", "))
+		}
+	}
+	for k := range c.KindIcons {
+		if !slices.Contains(IconKinds, k) {
+			return fmt.Errorf("kind_icons: %q is not one of %s", k, strings.Join(IconKinds, ", "))
 		}
 	}
 	for name, a := range c.AgentIcons {

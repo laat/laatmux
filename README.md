@@ -132,9 +132,9 @@ hosts, agents, `default_agent`, repositories and `copy` their keys and a
 task form opened from then on use, the hosts and their `paused` on the
 hosts line, this machine's names for the repositories in the rows, the
 sidebar's `sort` and stale settings, the line templates, `icons`,
-`status_icons`, `agent_icons`, the theme, `jump_keys`' labels and the
-strip's `item_width`. A task form, the
-dashboard's or `compose`'s, reads the file again as a chip's picker
+`status_icons`, `kind_icons`, `agent_icons`, the theme, `jump_keys`'
+labels and the strip's `item_width`. A task form, the dashboard's or
+`compose`'s, reads the file again as a chip's picker
 opens: a form left up offers the repositories, hosts and agents listed
 then, each chip kept on its choice when that is still there, else on
 the default the file gives now, and its submit sends that read's `copy`.
@@ -1114,9 +1114,11 @@ list that `Tab` or a click switches:
   the end, a row of its own that `Enter` or `s` opens.
 - **Tree**: one node per repository, by this machine's label for the
   source, else the host's; its worktrees under it by branch, the host in
-  parentheses, with the git stats and the PR on the line; under each
-  its agents by start time, its other panes (`$ zsh`) and its runs (`▶
-  make test 0:42`), from the pane and run records the client now keeps.
+  parentheses, with the git stats and the PR on the line, and before the
+  name `⎇`, a worktree, or `⌂`, the main checkout (`{kind_icon}`,
+  below); under each its agents by start time, its other panes
+  (`$ zsh`) and its runs (`▶ make test 0:42`), from the pane and run
+  records the client now keeps.
   A main checkout in use is a line under its repository like a
   worktree's, before them, with its git stats and its agents in it, in
   plain sessions on its host's default server and in its home, and the
@@ -1232,7 +1234,10 @@ secondary label and host tag after the primary, and in the dashboard
 the third line under it. The icon is the status's: a two-cell braille
 spinner at 250 ms for working, 💬 for blocked or a task that needs the
 user, ✅ for done, 💤 for stale or a settled workspace's agent; `icons: nerdfont` and `icons: ascii` choose other sets, and
-`status_icons` sets single ones. Plain text keeps the
+`status_icons` sets single ones. The set also has the glyphs a tree
+line says what it is by, `⎇` a worktree and `⌂` the main checkout,
+nf-oct-git_branch (U+F418) and nf-fa-home (U+F015) in nerdfont, `+` and
+`=` in ascii; `kind_icons` sets single ones. Plain text keeps the
 terminal's own foreground. `theme.mode: auto` asks the terminal for its
 background with OSC 11 when the view starts, then reads `COLORFGBG`;
 with neither, a tmux popup or a sidebar pane started by a hook say,
@@ -1610,7 +1615,8 @@ jump_keys: false}`; position `left` or `top`, width at least 10
 columns or `1%` to `100%` (unset or 0: 10%, clamped to 25..50), layout `tiles` or `compact`, view `agents`
 or `tree`, scope `all`, `session` or `project`, sort `priority`,
 `recency` or `window`, stale_after a Go duration. The look is set at the top level: `icons: emoji|nerdfont|ascii`,
-`status_icons: {working|waiting|done|stale: "…"}`, `agent_icons:
+`status_icons: {working|waiting|done|stale: "…"}`, `kind_icons:
+{worktree|main: "…"}` for the `{kind_icon}` token, `agent_icons:
 {claude: {icon: CC, color: "#d97757"}}` for the `{agent_icon}` token,
 and `theme: {mode: auto|dark|light, custom: {accent: "#b48ead"}}` with
 the palette `info`, `accent`, `success`, `warning`, `danger`, `dimmed`,
@@ -1633,7 +1639,7 @@ sidebar:
     top: "{status_icon} {title} {pane_suffix}"
     tree:
       repo: "#[fg=header,bold]{fold}{repo}"
-      worktree: "{indent}{fold}{primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
+      worktree: "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
       agent: "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
       pane: "{indent}$ {command}"
       run: "{indent}▶ {command}{fill}{elapsed}"
@@ -1688,8 +1694,16 @@ alike; only the lines it leaves differ.
   (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
   `{repo_count}` on a repository line, `{child_count}` and
   `{worst_status}` (the most pressing agent's icon, on a folded line)
-  on a worktree line, `{command}` on a pane or run line. A token that
-  has nothing on a row is empty.
+  on a worktree line, `{command}` on a pane or run line, `{kind_icon}`
+  (the set's glyph for what the row's checkout is: `⎇` a worktree, a
+  detached one too, `⌂` a main checkout, on its line and on the
+  agents, panes, runs and tiles in it; nothing on a task's line or
+  tile, while it stands for a worktree too, though the agents, panes
+  and runs under it keep the worktree's, and nothing on an orphaned
+  session's line or another session's; plain, so in the line's colour,
+  dim on a dim line and not the viewer's colour, which stays on the
+  label; an override in `kind_icons` is drawn whole or dropped, never
+  cut). A token that has nothing on a row is empty.
 - **`{fill}`** splits the line into a left and a right part, the right
   against the right edge. An empty token takes the adjacent run of
   spaces with it, the one after it, else the one before, so separators

@@ -1,12 +1,12 @@
 ...| ‹Agents›‹⟨border: │ ⟩›«⟨header:Tree⟩»
 ...|«⟨header:anki-llm⟩»
-...|  ▾ batch-processing (mac)
+...|  ▾ ⎇ batch-processing (mac)
 ...|    ⟨accent:💬⟩ claude  ‹Refactoring qu…›
 ...|«⟨header:laatmux⟩»
-S..|  ▸ «⟨current_worktree_fg:agents-con…⟩» (‹vm›) «⟨success:#52⟩» ⟨success:✓⟩  ⟨info:⠋⠙⟩
-...|  ▾ auto-layout (‹vm›) «⟨success:#49⟩» ⟨danger:×⟩⟨danger: 3/5⟩
+S..|  ▸ ⎇ «⟨current_worktree_fg:agents-config⟩» (‹vm›) ⟨success:✓⟩  ⟨info:⠋⠙⟩
+...|  ▾ ⎇ auto-layout (‹vm›)   «⟨success:#49⟩» ⟨danger:×⟩
 ...|    ⟨success:✅⟩ claude  ‹done›
-.D.|    fix-sidebar (mac)  ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
+.D.|    ⎇ fix-sideb… (mac) ✎ «⟨success:+4⟩» «⟨danger:-1⟩»
 .D.|    mac/laatmux/gone (mac)
 ...|‹⟨header:other sessions⟩›
 ...|    scratch‹ (vm/default)›  ⟨accent:💬⟩ c

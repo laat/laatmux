@@ -32,7 +32,7 @@ func TestLook(t *testing.T) {
 		t.Setenv("NO_COLOR", c.noColor)
 		t.Setenv("COLORFGBG", "")
 		asked := false
-		cfg := config.Config{Theme: config.Theme{Mode: c.mode}, Icons: "ascii", StatusIcons: map[string]string{"waiting": "?"}}
+		cfg := config.Config{Theme: config.Theme{Mode: c.mode}, Icons: "ascii", StatusIcons: map[string]string{"waiting": "?"}, KindIcons: map[string]string{"worktree": "W", "main": "M"}}
 		th, icons := lookWith(cfg, func() (bool, bool) { asked = true; return c.answer, c.answered })
 		if asked != c.asks {
 			t.Errorf("%s: asked %v", c.name, asked)
@@ -40,7 +40,7 @@ func TestLook(t *testing.T) {
 		if th.SGR(palette.Text, false) != c.want.SGR(palette.Text, false) || th.Mono != c.want.Mono {
 			t.Errorf("%s: wrong theme", c.name)
 		}
-		if icons.Set != "ascii" || icons.Waiting != "?" {
+		if icons.Set != "ascii" || icons.Waiting != "?" || icons.Worktree != "W" || icons.Main != "M" {
 			t.Errorf("%s: icons %+v", c.name, icons)
 		}
 	}

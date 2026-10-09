@@ -47,10 +47,12 @@ var iconSets = map[string]map[Status]string{
 }
 
 // Icons is the icon set the views draw statuses with, and the icons the
-// config sets by status over it; "" keeps the set's.
+// config sets by status over it; "" keeps the set's. Worktree and Main
+// are the config's kind icons over the set's in the same way.
 type Icons struct {
 	Set                           string
 	Working, Waiting, Done, Stale string
+	Worktree, Main                string
 }
 
 // icon is a status's icon, "" for the spinner on working.
@@ -64,6 +66,39 @@ func (ic Icons) icon(s Status) string {
 		set = iconSets[IconsEmoji]
 	}
 	return set[s]
+}
+
+// kindIcons are the sets' glyphs for what a row's checkout is: a
+// worktree, and a repository's main checkout.
+var kindIcons = map[string]struct{ worktree, main string }{
+	IconsEmoji:    {"⎇", "⌂"},
+	IconsNerdFont: {"\uf418", "\uf015"},
+	IconsASCII:    {"+", "="},
+}
+
+// kind is a row's `{kind_icon}`: the main checkout's glyph on a main
+// checkout's line and the rows under it, the worktree's on a
+// worktree's, a detached one's too; "" on a row in no worktree, an
+// orphaned session's or another session's, and on a task's, which is
+// neither while it stands for one.
+func (ic Icons) kind(r rows.Row) string {
+	if r.Worktree == nil || r.Pending != nil {
+		return ""
+	}
+	set, ok := kindIcons[ic.Set]
+	if !ok {
+		set = kindIcons[IconsEmoji]
+	}
+	if r.Worktree.Main {
+		if ic.Main != "" {
+			return ic.Main
+		}
+		return set.main
+	}
+	if ic.Worktree != "" {
+		return ic.Worktree
+	}
+	return set.worktree
 }
 
 // iconWidth is the cells an icon takes on a line: the spinner's two, so
