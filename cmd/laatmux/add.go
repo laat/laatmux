@@ -10,6 +10,7 @@ import (
 
 	"github.com/laat/laatmux/internal/command"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
@@ -35,7 +36,7 @@ func cmdAdd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, isNew, err := addRepo(ctx, cfg, a.repo)
+	repo, isNew, err := addRepo(ctx, cfg, lazyKnown(ctx, cfg), a.repo, a.host)
 	if err != nil {
 		return err
 	}
@@ -50,17 +51,17 @@ func cmdAdd(ctx context.Context, args []string) error {
 		}
 	}
 	branch, prompt := a.branch, a.prompt
-	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated, Remember: isNew}
+	add := command.Add{Host: h, Repo: repo, Copy: cfg.Copy, Branch: branch, Agent: agentName, Cmd: a.cmd, Prompt: prompt, Generated: a.generated}
 	fmt.Println(add.Describe())
-	// What happens to the config is said once the add is under way: a
-	// submit the daemon refuses promises nothing.
+	// A new repository is said once the add is under way: a submit the
+	// daemon refuses clones nothing.
 	newRepo := func() {
 		if !isNew {
 			return
 		}
-		fmt.Printf("%s is new to the config: added to its repos as %s once the host has made the worktree\n", repo.Source, repo.Name)
+		fmt.Printf("%s is new, as %s: a host without a checkout of it clones it\n", repo.Source, repo.Name)
 		if repo.Source != a.repo {
-			fmt.Println("the credential in --repo is left out of the config and the add")
+			fmt.Println("the credential in --repo is left out of the add")
 		}
 	}
 	if a.detach {
@@ -104,20 +105,20 @@ func cmdAdd(ctx context.Context, args []string) error {
 }
 
 // addRepo is add's repository: resolveRepo's, or a repository's source
-// --repo gives that the config does not list in any form, new to it, as
-// NewRepo names it, which the add carries as its repository entry and
-// appends to the config's repos once the host has made the worktree. A
-// --repo that is neither a listed repository nor a source is
-// resolveRepo's refusal.
-func addRepo(ctx context.Context, cfg config.Config, flag string) (config.Repo, bool, error) {
-	repo, err := resolveRepo(ctx, cfg, flag)
+// --repo gives that no known repository has in any form, new, as
+// NewRepo names it among the known ones, which the add carries as its
+// repository entry: the host clones it under that name. A --repo that
+// is neither a known repository nor a source is resolveRepo's refusal;
+// host is its.
+func addRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag, host string) (config.Repo, bool, error) {
+	repo, err := resolveRepo(ctx, cfg, known, flag, host)
 	if err == nil || flag == "" {
 		return repo, false, err
 	}
 	if _, _, ok := source.Forge(flag); !ok {
 		return config.Repo{}, false, err
 	}
-	repo, err = cfg.NewRepo(flag)
+	repo, err = config.NewRepo(flag, known().Taken())
 	if err != nil {
 		return config.Repo{}, false, err
 	}

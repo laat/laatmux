@@ -257,6 +257,7 @@ func (d *Daemon) reconcileHostsLocked(hosts []peer.Host) {
 			mh.status.Connected, mh.status.Listed = true, d.panesDiscovered && d.worktreesDiscovered
 			mh.status.EnvironmentID, mh.status.Version = d.cfg.EnvironmentID, d.cfg.Version
 			mh.status.Capabilities = d.capabilities()
+			mh.status.Repos = d.repos
 		}
 		d.mhosts[h.Name] = mh
 		st := mh.status
@@ -342,9 +343,11 @@ func (d *Daemon) localListedLocked() {
 }
 
 // forwardLocalLocked publishes one of the daemon's own upserts or removes
-// into the merged stream. Called from broadcastLocked with d.mu held.
+// into the merged stream, but its repositories' upsert: the merged
+// stream has them on the local host's record (publishReposLocked).
+// Called from broadcastLocked with d.mu held.
 func (d *Daemon) forwardLocalLocked(m protocol.Message) {
-	if len(d.msubs) == 0 || d.localHostLocked() == nil {
+	if len(d.msubs) == 0 || d.localHostLocked() == nil || m.Repos != nil {
 		return
 	}
 	d.mbroadcastLocked(m)
@@ -583,6 +586,9 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			d.hostListedLocked(mh.status.EnvironmentID, listed, true)
 		}
 		mh.status.Listed = true
+		// The host's repositories as this connection has them: none
+		// from a daemon without repos, or one not listed yet.
+		mh.status.Repos = msg.Repos
 		mh.status.Since = time.Now()
 		st := mh.status
 		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
@@ -617,6 +623,13 @@ func (d *Daemon) applyRemote(ctx context.Context, mh *mergedHost, msg protocol.M
 			// After the agent's upsert, so a finish's record never names
 			// an agent a subscriber has not had.
 			d.attendLocked(mh.status.Name, false, *msg.Agent)
+		}
+		if msg.Repos != nil {
+			// The host's repositories go on its record.
+			mh.status.Repos = msg.Repos
+			mh.status.Since = time.Now()
+			st := mh.status
+			d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
 		}
 	case protocol.TypeRemove:
 		if msg.AgentID != "" {

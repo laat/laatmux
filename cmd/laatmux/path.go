@@ -34,9 +34,9 @@ func cmdPath(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, ok := cfg.RepoByName(repoLabel)
-	if !ok {
-		return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
+	repo, err := lookupRepo(cfg, lazyKnown(ctx, cfg), repoLabel, *hostFlag)
+	if err != nil {
+		return err
 	}
 	h, _, err := hostFor(cfg, *hostFlag, repo, false)
 	if err != nil {

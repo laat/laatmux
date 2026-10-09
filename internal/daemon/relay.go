@@ -70,10 +70,6 @@ type pendingFile struct {
 	// it; a file from before entries has none, and the host resolves
 	// the source against its own config.
 	RepoEntry *protocol.RepoEntry `json:"repo_entry,omitempty"`
-	// Remember is the add's ask to have its repository entry appended
-	// to the config once the add has succeeded, cleared once it is
-	// there.
-	Remember bool `json:"remember,omitempty"`
 	// ReplacedBy is the worktree id the record retired into, and
 	// RetiredAt when.
 	ReplacedBy string    `json:"replaced_by,omitempty"`
@@ -228,15 +224,12 @@ func (r *relay) removeLocked(id string) error {
 // sweep deletes the records retired longer than the handoff retention
 // that nothing can check any more: keep says which can, a host still
 // configured and answering as the machine the task ran on. Those go
-// with their worktree. A record still asking for its repository's
-// append to this machine's config stays, whatever its host: the append
-// is retried on every change of the file, and only a dismiss, which
-// says so, drops it.
+// with their worktree.
 func (r *relay) sweep(now time.Time, keep func(host, environmentID string) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, p := range r.recs {
-		if !p.retired() || p.Remember || now.Sub(p.RetiredAt) < handoffRetention || keep(p.Host, p.EnvironmentID) {
+		if !p.retired() || now.Sub(p.RetiredAt) < handoffRetention || keep(p.Host, p.EnvironmentID) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(r.dir, FileName(id))); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -250,15 +243,12 @@ func (r *relay) sweep(now time.Time, keep func(host, environmentID string) bool)
 }
 
 // attemptLock serializes the deliveries of one record, and dismiss
-// with them; settleLock serializes its settling; rememberLock its
-// append to the config with its dismissal. Each is taken before r.mu,
-// never under it; settle takes the remember lock under the settle lock,
-// and dismissSettled the attempt lock under the remember lock, with
-// TryLock alone, since a delivery holds the attempt lock for as long as
-// the host takes.
-func (r *relay) attemptLock(id string) *sync.Mutex  { return r.lock("attempt/" + id) }
-func (r *relay) settleLock(id string) *sync.Mutex   { return r.lock("settle/" + id) }
-func (r *relay) rememberLock(id string) *sync.Mutex { return r.lock("remember/" + id) }
+// with them; settleLock serializes its settling. Each is taken before
+// r.mu, never under it; dismissSettled takes the attempt lock with
+// TryLock alone, since a delivery holds it for as long as the host
+// takes.
+func (r *relay) attemptLock(id string) *sync.Mutex { return r.lock("attempt/" + id) }
+func (r *relay) settleLock(id string) *sync.Mutex  { return r.lock("settle/" + id) }
 
 func (r *relay) lock(key string) *sync.Mutex {
 	r.mu.Lock()
@@ -323,10 +313,6 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = wireErr.Error()
 	case m.RepoEntry != nil && !source.Same(m.RepoEntry.Source, m.Repo):
 		res.Error = fmt.Sprintf("the add's repository entry is for %q, not %q", m.RepoEntry.Source, m.Repo)
-	case m.Remember && m.RepoEntry == nil:
-		res.Error = "remember needs the add's repository entry"
-	case m.Remember && d.cfg.AppendRepo == nil:
-		res.Error = "this daemon cannot add a repository to the config"
 	}
 	if res.Error != "" {
 		return res
@@ -369,7 +355,7 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 	p := pendingFile{Pending: protocol.Pending{
 		ID: m.ID, Host: h.Name, EnvironmentID: env, Source: m.Repo, Repo: name, Branch: m.Branch, Generated: m.Generated,
 		Agent: m.AgentName, Cmd: m.Cmd, SubmittedAt: submitted, UpdatedAt: time.Now(),
-	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry, Remember: m.Remember}
+	}, PromptText: m.Prompt, RepoEntry: m.RepoEntry}
 	d.relay.mu.Lock()
 	fresh, err := d.relay.createLocked(p)
 	if err == nil && fresh {
@@ -530,16 +516,6 @@ func (d *Daemon) persist(ctx context.Context, id string, change func(*pendingFil
 // before anything else, a success whose listing has not been seen is
 // waited on, and a retired record is kept for its worktree's life.
 func (d *Daemon) startRelays(ctx context.Context) {
-	// A retired record whose repository is still to be appended to the
-	// config, an append that failed before the handoff, makes it now;
-	// the others make it as they settle.
-	d.relay.mu.Lock()
-	for id, p := range d.relay.recs {
-		if p.retired() && p.Remember {
-			d.startRunnerLocked(ctx, id, d.settle)
-		}
-	}
-	d.relay.mu.Unlock()
 	ps, _ := d.relay.pendings()
 	for _, p := range ps {
 		switch {
@@ -866,17 +842,13 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 	}
 }
 
-// settle brings a record with a successful outcome to rest: the add's
-// repository appended to the config first when the add asked for it,
-// then the listing after the result waited for once, and a record that
-// is complete, prompt delivered or none, whose worktree that listing
+// settle brings a record with a successful outcome to rest: the
+// listing after the result waited for once, and a record that is
+// complete, prompt delivered or none, whose worktree that listing
 // showed handed over. It is called after the result, after every
-// attempt, at start, and for a record still asking for its append when
-// the config file changes (rememberAgain), serialized per record, and
-// decides on the record as it is when each step ends, so a listing
-// that completes while an attempt delivers, or the other way round,
-// strands nothing. An append that fails holds the rest: the task's row
-// says why until the append is made or the task dismissed.
+// attempt and at start, serialized per record, and decides on the
+// record as it is when each step ends, so a listing that completes
+// while an attempt delivers, or the other way round, strands nothing.
 func (d *Daemon) settle(ctx context.Context, id string) {
 	l := d.relay.settleLock(id)
 	l.Lock()
@@ -884,14 +856,6 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	p, ok := d.relay.get(id)
 	if !ok || !p.Done || !p.OK || ctx.Err() != nil {
 		return
-	}
-	if p.Remember {
-		if !d.remember(ctx, id) {
-			return
-		}
-		if p, ok = d.relay.get(id); !ok {
-			return
-		}
 	}
 	if p.retired() {
 		return
@@ -907,101 +871,6 @@ func (d *Daemon) settle(ctx context.Context, id string) {
 	if p.Complete() && p.Listed && !p.Gone && !p.retired() {
 		d.handoff(ctx, id, p.WorktreeID())
 	}
-}
-
-// rememberAgain settles every successful record still asking for its
-// append, after the config file changed: a config that could not take
-// the entry, one that did not parse say, may take it now. Without the
-// remember capability there are none.
-func (d *Daemon) rememberAgain(ctx context.Context) {
-	if d.relay == nil || d.cfg.AppendRepo == nil {
-		return
-	}
-	d.relay.mu.Lock()
-	defer d.relay.mu.Unlock()
-	for id, p := range d.relay.recs {
-		if p.Done && p.OK && p.Remember {
-			d.startRunnerLocked(ctx, id, d.settle)
-		}
-	}
-}
-
-// remember appends the add's repository entry to the config, as the
-// add asked, and reports whether it is there: the ask is cleared then,
-// and so is the error of an earlier try. A failure is logged and put
-// on the record as RememberError, which its row shows, and the ask is
-// kept for the next settle. Called by settle, with its lock held. The
-// record's remember lock is held from the look at the record to the
-// outcome on it in memory (rememberLocked): a dismiss waits for an
-// append under way, and a record dismissed first is not appended, so a
-// dismiss that says the append is dropped (droppedAppend) is right. The
-// file is written after the lock is let go: a write that keeps failing,
-// on a full disk say, must not hold a dismiss.
-func (d *Daemon) remember(ctx context.Context, id string) bool {
-	cleared, ok := d.rememberLocked(id)
-	if !ok || !cleared {
-		return ok
-	}
-	done := func(p *pendingFile) { p.Remember, p.RememberError = false, "" }
-	if _, ok := d.persist(ctx, id, done); !ok {
-		// A record kept for its handoff alone takes no published
-		// change; the ask is cleared in its file, which is all that
-		// carries it. A record dismissed meanwhile is gone, file and
-		// all.
-		d.relay.mu.Lock()
-		if _, ok := d.relay.recs[id]; ok {
-			if _, err := d.relay.updateLocked(id, true, done); err != nil {
-				d.cfg.Logger.Printf("pending: %s: %v", id, err)
-			}
-		}
-		d.relay.mu.Unlock()
-	}
-	return true
-}
-
-// rememberLocked is remember's part under the record's remember lock:
-// the append, and the ask cleared in memory, or the failure put on the
-// record. ok is that the append is there, cleared that it was made now
-// and the file has yet to say so.
-func (d *Daemon) rememberLocked(id string) (cleared, ok bool) {
-	rl := d.relay.rememberLock(id)
-	rl.Lock()
-	defer rl.Unlock()
-	p, ok := d.relay.get(id)
-	if !ok {
-		return false, false
-	}
-	if !p.Remember {
-		return false, true
-	}
-	// change applies to the record in memory, published when the stream
-	// carries it; a record kept for its handoff alone takes no published
-	// change, and keeps it for a dismiss to say.
-	change := func(f func(*pendingFile)) {
-		if _, ok := d.setPending(id, false, f); !ok {
-			d.relay.mu.Lock()
-			if rec, ok := d.relay.recs[id]; ok && rec.retired() {
-				d.relay.updateLocked(id, false, f)
-			}
-			d.relay.mu.Unlock()
-		}
-	}
-	if e := p.RepoEntry; e != nil {
-		added, err := d.cfg.AppendRepo(e.Source, e.Name)
-		if err != nil {
-			d.cfg.Logger.Printf("relay %s: %s not added to the config's repos: %v", id, e.Source, err)
-			change(func(p *pendingFile) { p.RememberError = err.Error() })
-			return false, false
-		}
-		if added {
-			d.cfg.Logger.Printf("relay %s: %s added to the config's repos as %s", id, e.Source, e.Name)
-			if d.cfg.Store != nil {
-				d.pokeWorktrees()
-			}
-		}
-	}
-	change(func(p *pendingFile) { p.Remember, p.RememberError = false, "" })
-	return true, true
 }
 
 // retire waits for the host's listing to reflect a successful add, on
@@ -1213,9 +1082,7 @@ func (d *Daemon) listingHas(ctx context.Context, id string, p pendingFile) (pres
 
 // dismiss drops a record that needs the user: its file goes and the
 // stream says it is gone. A record whose add is still running is not
-// dismissed; the add finishes first. A record that still asked for its
-// repository's append to the config drops the append with it, which
-// the result's detail says and the log has once (droppedAppend).
+// dismissed; the add finishes first.
 func (d *Daemon) dismiss(id string) protocol.Message {
 	res := protocol.Message{Type: protocol.TypeResult, ID: id}
 	if d.relay == nil {
@@ -1232,10 +1099,10 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		// Kept for what its worktree was made for; the user may drop it,
 		// prompt and all, before the worktree goes. Its handoff leaves
 		// the next snapshot, as when the worktree goes.
-		if dropped, err := d.dropRetired(id, "dismissed"); err != nil {
+		if err := d.dropRetired(id); err != nil {
 			res.Error = err.Error()
 		} else {
-			res.OK, res.Detail = true, droppedDetail(dropped)
+			res.OK = true
 		}
 		return res
 	case !p.Sent && !p.Taken:
@@ -1269,28 +1136,22 @@ func (d *Daemon) dismiss(id string) protocol.Message {
 		d.stopRunners(id)
 		p, _ = d.relay.get(id)
 		if !d.hostConfigured(p.Host) || p.Mismatch != "" {
-			rl := d.relay.rememberLock(id)
-			rl.Lock()
 			d.relay.mu.Lock()
 			p, ok := d.relay.recs[id]
 			if ok && !p.retired() {
-				dropped := droppedAppend(p)
 				err := d.relay.removeLocked(id)
 				if err == nil {
 					d.publishRemoved(id, "")
 				}
 				d.relay.mu.Unlock()
-				rl.Unlock()
 				if err != nil {
 					res.Error = err.Error()
 					return res
 				}
-				d.logDropped(id, "dismissed", dropped)
-				res.OK, res.Detail = true, droppedDetail(dropped)
+				res.OK = true
 				return res
 			}
 			d.relay.mu.Unlock()
-			rl.Unlock()
 		}
 		d.restartRunners(id)
 		return d.dismissEnded(id)
@@ -1315,28 +1176,15 @@ func (d *Daemon) dismissEnded(id string) protocol.Message {
 // prompt request cannot open an attempt between the check and the
 // removal; an attempt in flight holds it, and is the refusal, not a
 // wait on the network. The check, the removal and its publication are
-// one step under the relay's mutex, and under the record's remember
-// lock, so an append under way ends before the removal says whether it
-// is dropped.
+// one step under the relay's mutex.
 func (d *Daemon) dismissSettled(id string) (res protocol.Message) {
 	res = protocol.Message{Type: protocol.TypeResult, ID: id}
-	rl := d.relay.rememberLock(id)
-	rl.Lock()
-	defer rl.Unlock()
 	l := d.relay.attemptLock(id)
 	if !l.TryLock() {
 		res.Error = "a delivery attempt is unresolved; it cannot be dismissed until it has an outcome"
 		return res
 	}
 	defer l.Unlock()
-	dropped := ""
-	// Logged and said once the relay's mutex is let go, the record gone.
-	defer func() {
-		if res.OK {
-			d.logDropped(id, "dismissed", dropped)
-			res.Detail = droppedDetail(dropped)
-		}
-	}()
 	d.relay.mu.Lock()
 	defer d.relay.mu.Unlock()
 	p, ok := d.relay.recs[id]
@@ -1358,44 +1206,8 @@ func (d *Daemon) dismissSettled(id string) (res protocol.Message) {
 		return res
 	}
 	res.OK = true
-	dropped = droppedAppend(p)
 	d.publishRemoved(id, "")
 	return res
-}
-
-// droppedAppend is what a dismiss of p drops beside the record: the
-// append of the add's repository to the config, asked for by an add that
-// succeeded and not made, with why when an append failed; "" when there
-// is none. Taken under the record's remember lock, so no append is under
-// way.
-func droppedAppend(p *pendingFile) string {
-	e := p.RepoEntry
-	if !p.Remember || !p.Done || !p.OK || e == nil {
-		return ""
-	}
-	s := "the append of " + tmux.Printable(e.Source) + " to the config's repos as " + tmux.Printable(e.Name) + " is dropped"
-	if p.RememberError != "" {
-		s += " (" + tmux.Printable(p.RememberError) + ")"
-	}
-	return s
-}
-
-// logDropped logs what went with a record removed, why saying what
-// removed it, once: the record is gone, and a second removal finds
-// none.
-func (d *Daemon) logDropped(id, why, dropped string) {
-	if dropped != "" {
-		d.cfg.Logger.Printf("relay %s: %s; %s", id, why, dropped)
-	}
-}
-
-// droppedDetail is a dismiss's result detail for what went with the
-// record, with what the user can do instead; "" for nothing.
-func droppedDetail(dropped string) string {
-	if dropped == "" {
-		return ""
-	}
-	return dropped + "; add it to the config by hand, or paste the source again"
 }
 
 // restartRunners starts again what a dismiss stopped and then did not
@@ -1427,9 +1239,7 @@ func (d *Daemon) restartRunners(id string) {
 // wait in relayConn for the host to be resumed, and an add or a listing
 // followed when the pause came is followed again from the host's
 // journal then; a retired record's gone check is not started again, and
-// the host's next listing after the resume makes one, and a retired
-// record still asking for its repository's append gets the append's
-// goroutine again, which does not reach the host. A connection already
+// the host's next listing after the resume makes one. A connection already
 // up is not kept on a host the user paused, which it would keep
 // running. The goroutines are cancelled at once; each record's are
 // waited for and started again on a goroutine of its own, one at a time
@@ -1475,12 +1285,6 @@ func (d *Daemon) pauseRelays() {
 			defer l.Unlock()
 			for _, r := range rs {
 				<-r.done
-			}
-			if p, ok := d.relay.get(id); ok && p.retired() && p.Remember {
-				d.relay.mu.Lock()
-				d.startRunnerLocked(d.runCtx(), id, d.settle)
-				d.relay.mu.Unlock()
-				return
 			}
 			d.restartRunners(id)
 		}()

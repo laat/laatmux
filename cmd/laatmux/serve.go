@@ -111,7 +111,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	} else {
 		logger.Printf("worktrees: host %s has no repos and worktrees directories configured; add disabled", hostname)
 	}
-	reread, appendRepo := configHooks()
+	reread := configReread()
 	// The shutdown message ends the daemon the way a signal does.
 	ctx, shutdown := context.WithCancel(ctx)
 	defer shutdown()
@@ -121,9 +121,6 @@ func cmdServe(ctx context.Context, args []string) error {
 		Store: store, Reread: reread, Agents: agentCommands(cfg), Shutdown: shutdown,
 		Commands: filepath.Join(home.Dir(), "commands"),
 		Pending:  filepath.Join(home.Dir(), "pending"),
-		// A relayed add of a repository new to the config appends it
-		// once the host's add has succeeded.
-		AppendRepo: appendRepo,
 		// What the user has seen, kept across restarts, and what this
 		// machine's tmux clients show.
 		Attention: filepath.Join(home.Dir(), "attention.json"),
@@ -171,26 +168,21 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 }
 
-// configHooks are the daemon's hooks on this machine's config file.
-// reread is the store's, the adds' and the relay's: the file is looked
-// at every worktree interval and read again when it has changed, so a
-// repository the task form or add appended, or a hand edit, is listed
-// without a restart, a copy rule, a repository's setup or an agent
-// added or edited is used by the next add, and an append a broken file
-// refused is tried again once the file is fixed. appendRepo is the
-// relay's, for an add of a repository new to the config once the host's
-// add has succeeded.
-func configHooks() (reread func() (daemon.ConfigRead, bool, error), appendRepo func(src, name string) (bool, error)) {
+// configReread is the daemon's read of this machine's config file, the
+// store's, the adds' and the relay's: the file is looked at every
+// worktree interval and read again when it has changed, so a
+// repository edited in is labelled by its entry without a restart, and
+// a copy rule, a repository's setup or an agent added or edited is used
+// by the next add.
+func configReread() func() (daemon.ConfigRead, bool, error) {
 	var watch config.Watch
-	reread = func() (daemon.ConfigRead, bool, error) {
+	return func() (daemon.ConfigRead, bool, error) {
 		cfg, changed, err := watch.Changed()
 		if !changed || err != nil {
 			return daemon.ConfigRead{}, false, err
 		}
 		return daemon.ConfigRead{Listed: worktree.ListedFrom(cfg), Agents: agentCommands(cfg)}, true, nil
 	}
-	appendRepo = func(src, name string) (bool, error) { return config.AddRepo(config.Path(), src, name) }
-	return reread, appendRepo
 }
 
 // configHosts is the daemon's read of the hosts the config lists. A

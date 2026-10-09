@@ -39,13 +39,19 @@ func fakeSSH(t *testing.T, script string) {
 
 func TestCheckSessionDistinguishesFailures(t *testing.T) {
 	h := peer.Host{Name: "vm", SSH: "vm"}
+	// absent is that tmux said the session or its server is not there
+	// (errNoSession), which jump's last reading waits for; a tmux that
+	// could not tell is refused in the same words, but not absent.
 	cases := []struct {
 		name, script, want string
+		absent             bool
 	}{
-		{"absent", `printf "cannot find session: =x\n" >&2; exit 1`, "vm/x: no such session"},
-		{"refused", `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`, "vm: ssh failed: ssh: connect to host vm port 22: Connection refused"},
-		{"no server", `printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, "vm/x: no such session"},
-		{"ok", `exit 0`, ""},
+		{"absent", `printf "can't find session: =x:\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"refused", `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`, "vm: ssh failed: ssh: connect to host vm port 22: Connection refused", false},
+		{"no server", `printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"no socket", `printf "error connecting to /tmp/tmux-1001/laatmux (No such file or directory)\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"denied", `printf "error connecting to /tmp/tmux-1001/laatmux (Permission denied)\n" >&2; exit 1`, "vm/x: no such session", false},
+		{"ok", `exit 0`, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -56,8 +62,34 @@ func TestCheckSessionDistinguishesFailures(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("got %v, want %q", err, c.want)
+			case errors.Is(err, errNoSession) != c.absent:
+				t.Fatalf("%v: absent %v, want %v", err, errors.Is(err, errNoSession), c.absent)
 			}
 		})
+	}
+}
+
+// This machine's check is as a remote host's: a tmux that says it has
+// no such session or no server is errNoSession, one that could not tell
+// is refused in the same words but not absent. The tmux is a stand-in.
+func TestCheckSessionLocal(t *testing.T) {
+	for _, c := range []struct {
+		script string
+		absent bool
+	}{
+		{`printf "can't find session: =x:\n" >&2; exit 1`, true},
+		{`printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, true},
+		{`printf "error connecting to /tmp/tmux-1001/laatmux (Permission denied)\n" >&2; exit 1`, false},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\n"+c.script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir)
+		err := checkSession(context.Background(), peer.Host{Name: "mac"}, "x")
+		if err == nil || err.Error() != "mac/x: no such session on the laatmux tmux server" || errors.Is(err, errNoSession) != c.absent {
+			t.Errorf("%s: %v, absent %v", c.script, err, errors.Is(err, errNoSession))
+		}
 	}
 }
 
@@ -306,9 +338,10 @@ func TestDollarQuote(t *testing.T) {
 // branch; a detached worktree, named by its root, needs a branch
 // checked out first, and a root with an ESC in it is named quoted;
 // box's entry has no directories, which add needs first; a repository
-// this machine's config does not list is one
-// --repo refuses, while one it lists under another form of the source
-// is named by its label here. A worktree that lacks more than one is
+// this machine's config does not list is named by its source, which
+// --repo takes as the host's checkout, while one it lists under another
+// form of the source is named by its label here. A worktree that lacks
+// more than one is
 // told all of them. The add line pastes into a shell: a branch git
 // takes with a ' or a $( in it is quoted, an ordinary one is not, and
 // a record without a source leaves the <repo> placeholder bare, and the
@@ -351,7 +384,7 @@ func TestAddHintCanRun(t *testing.T) {
 	}
 	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm --agent claude makes one"
 	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
-	onOther := "vm/other/b has no managed session; laatmux add makes one once git@github.com:laat/other.git is a repository in the config"
+	onOther := "vm/other/b has no managed session; laatmux add b --repo git@github.com:laat/other.git --host vm --agent claude makes one"
 	onApos := `vm/proj/it's has no managed session; laatmux add 'it'\''s' --repo proj --host vm --agent claude makes one`
 	onSubst := "vm/proj/a$(x) has no managed session; laatmux add 'a$(x)' --repo proj --host vm --agent claude makes one"
 	check := func(host rows.Host, w protocol.Worktree, want string) {
@@ -393,7 +426,7 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
-		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
+		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o and host box has repos and worktrees directories in the config"},
 	} {
 		check(c.host, c.w, c.want)
 	}
@@ -434,7 +467,7 @@ func TestAddHintCanRun(t *testing.T) {
 	}
 	lastFile := badLast()
 	check(host("vm", "venv"), bv, onBadLast(lastFile))
-	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, "+other.Source+" is a repository in the config, and "+lastFile+" is readable JSON")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and "+lastFile+" is readable JSON")
 	// One that is not a file cannot be read at all.
 	if err := os.Remove(lastFile); err != nil {
 		t.Fatal(err)
@@ -458,7 +491,7 @@ func TestAddHintCanRun(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", was)
 	d.cfg.DefaultAgentName, d.cfg.Agents = "", nil
 	check(host("vm", "venv"), bv, "vm/proj/b has no managed session; laatmux add makes one once an agent is in the config")
-	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, git@github.com:laat/other.git is a repository in the config, and an agent is in the config")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and an agent is in the config")
 	// jump, from the hosts' records through the local daemon. A
 	// detached worktree is not matched by jump at all.
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {

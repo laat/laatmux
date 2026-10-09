@@ -45,13 +45,13 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux hosts pause vm    # stop dialling vm from this machine; hosts resume vm dials it again
 ./laatmux upgrade vm    # build for the host from this checkout, install over ssh, restart its daemon
 ./laatmux stop      # end this machine's daemon cleanly; the next command starts one again
-./laatmux repos     # each known repository's name and where it lands on each host
+./laatmux repos     # the known repositories: configured, discovered on which hosts, and where each lands
 ./laatmux add fix-ls                          # worktree and agent for the repo of the current directory, on the last-used host
 ./laatmux add fix-ls --repo proj --host vm --agent claude
 ./laatmux add -p 'make ls sort by host'          # branch proposed from the prompt, made unique on the host; the agent gets the prompt
 ./laatmux add fix-ls -p 'make ls sort by host'   # the same with the branch given
 ./laatmux add -p 'make ls sort by host' --detach # hand it to the local daemon and return; laatmux tasks shows it
-./laatmux add -p 'try it' --repo git@github.com:nrkno/pin-scripts.git  # a repository not in the config: added to repos once the worktree is made
+./laatmux add -p 'try it' --repo git@github.com:nrkno/pin-scripts.git  # a repository no host has: the host clones it
 ./laatmux tasks                                  # the background adds and their state; tasks show|dismiss|prompt <id>
 ./laatmux path proj/fix-ls                    # the worktree root on its host
 ./laatmux jump vm/proj/fix-ls                 # switch to the workspace session, creating it if missing
@@ -92,7 +92,7 @@ agents:
     cmd: [claude-safe]        # sandboxing is the launch command's business;
                               # without {prompt} the prompt is typed into the pane
 default_agent: claude         # what add starts when --agent and last.json say nothing
-repos:                        # the known set
+repos:                        # optional: overrides, and sources to keep known
   - git@github.com:laat/laatmux.git
   - source: https://github.com/laat/other.git
     name: notes               # optional; otherwise derived from the source
@@ -101,7 +101,10 @@ repos:                        # the known set
 copy: ["**/.envrc.cache.enc"] # copy rules for every worktree this machine adds or makes
 ```
 
-`hosts`, `agents` and `repos` are read by clients. `tmux_servers` and the
+`hosts`, `agents` and `repos` are read by clients. `repos` is optional:
+the known repositories are the checkouts every host's daemon discovers
+under its `repos` directories, merged by source, and the list's entries
+(below). `tmux_servers` and the
 local host's `repos` and `worktrees` are read by the daemon on the machine
 the file lives on, so the laptop's config cannot change what a remote daemon
 watches or which directories it uses; each host's own config does that. The
@@ -109,12 +112,11 @@ default server list is the managed `laatmux` server alone. The daemon
 follows the file's `repos`, `copy`, `agents` and `hosts`: every two
 seconds it looks at the file, and reads it again when it has changed
 (another file renamed over it, or a new modification time or size), so
-a repository added by hand or by the task form shows in the listing
-without a restart, a `copy` rule, a repository's `copy` and `setup`, or
-an agent added or edited is used by the next add, a host added or
-removed reaches the views already open, and the relay retries the
-appends a broken file refused (below); a daemon whose own entry has no
-directories watches the file for the relay all the same. An add takes
+a repository's name edited in labels its checkouts without a restart, a
+`copy` rule, a repository's `copy` and `setup`, or an agent added or
+edited is used by the next add, and a host added or removed reaches the
+views already open; a daemon whose own entry has no directories watches
+the file for the relay all the same. An add takes
 the repository, its steps and the top-level `copy` from one read, the
 daemon's last as the add starts, whatever the file says while its clone
 runs. `tmux_servers`, `github_hosts` and the local host's directories
@@ -155,8 +157,22 @@ its entry, which `laatmux hosts pause <host>` writes and `laatmux hosts
 resume <host>` takes out, as does `H` in the dashboard and the sidebar,
 a picker of the hosts with their state (connected, paused, down) where
 `Enter` flips the one picked, and a click on the host's entry on the
-hosts line below their list. The write keeps the rest of the file as
-the task form's append does. This machine does not dial a paused host:
+hosts line below their list. The write keeps the file as it was around
+the line, comments and blank lines included: `paused: true` goes after
+the entry's last line, in the indentation of its keys, and a resume
+takes the line out; an entry the line cannot go into, one written
+`{name: vm, ssh: vm}` say, is written again from its parsed YAML, which
+keeps the content and the comments but not the layout. A file of more
+than one YAML document with content is refused, since laatmux reads the
+first and a rewrite would drop the rest; an empty one after it, a `---`
+at the end or one of comments alone, is kept as it is, the line going
+before its marker, though a file that needs the rewrite and has one is
+refused too. The result is parsed before it replaces the file, through
+a temporary renamed over it, the link's target when the config is a
+symlink, with the file's mode. The writes on one machine take turns
+under `config.lock` in the state directory, waiting up to ten seconds
+for another, and a file another writer changed between the read and
+the rename is read again. This machine does not dial a paused host:
 the daemon drops its merged subscription and removes its records, as
 for a host removed from the config, within its two-second look at the
 file, and takes it up again when it is resumed; the relay does not
@@ -180,55 +196,60 @@ the file without the key and goes on dialling the host: `laatmux hosts
 pause` and `H` say so, and `laatmux stop` ends it, the next command
 starting the current build.
 
-A repository the config does not list is added from the task form or
-from `add`: a source in one of the forge forms below
+The known repositories are discovered. Every host's daemon scans its
+`repos` directories and labels each checkout with an origin, listed in
+its config or not (below), and sends the set to the local daemon, whose
+merged stream carries it on the host's record, as it carries the
+host's records, kept while the host is down (capability `repos`,
+below). The known set is those checkouts, merged by source, and this
+machine's `repos` entries: an entry for a source is the repository as
+the entry has it, its name, `copy` and `setup`; a source with no entry
+is known by the label its host gave its checkout, the first host's in
+the config's order where hosts label it differently. `rm`, `run`, `path`
+and `add` resolve `<repo>` and a directory's origin against it: the
+config's entries first, as before, and only for what they do not have
+the local daemon's merged stream, each host waited on until it is
+listed, has failed or is paused, at most 20 s; with no local daemon
+answering, the config's entries alone. A name nobody knows is refused,
+saying it is not checked out on any host and not configured, naming
+the hosts whose checkouts were not read, and listing what is known; a
+name two sources answer to, as the labels of checkouts on two hosts,
+is the one `--host`'s host labels so, else refused naming both, and a
+name for one of them in the list tells them apart. `jump` reads a
+target's `<repo>` as before, by this machine's name, the host's label
+or the managed session's name, and last, when none of those names a
+worktree and the target is no managed session either, as a name of the
+known set's, finding the host's worktree of that source whatever the
+host labels it. The task form's repository picker lists the known set, the
+config's entries in their order and then the rest by name, taken again
+from the merged stream as the picker opens. An add of a known
+repository on a host with no checkout of it clones it there under its
+name, as `repo_entry` carries the source: the source as the first host
+in the config's order that has a checkout of it has it as its origin.
+Where a host cannot clone through that transport, an entry in this
+machine's config names the source every add of the repository carries. The list is for overrides, a name, a source,
+`copy` or `setup`, and for a source to keep known while the hosts that
+have it are paused or down, or before any has it.
+
+A repository no host has and the config does not list is added from
+the task form or from `add`: a source in one of the forge forms below
 (`git@github.com:nrkno/pin-scripts.git`, `ssh://…`, `https://…`) pasted
 into the repository chip's picker, or given to `--repo`, is the add's
-repository, named as the list would derive it (`pin-scripts`), or, when
-that name would rename a listed repository or is no label, under a name
-of its own written with it (`nrkno-scripts`, `next_js`). A credential in
-the source, an https URL's user and token or an ssh URL's password, is
-left out, and the form's footer or add's output says so: it never
-reaches the config, a pending file or a host, and the host clones
-through its own credentials. The add carries it as its `repo_entry`,
-and once the host has made the worktree the source is appended to
-`repos`: by `add` itself in the foreground, and by the local daemon's
-relay for the form and `add --detach`. An add the host refuses, a clone
-that fails say, leaves the config as it was. The relay keeps the ask in
-the task's pending file until the append is made: an append that fails,
-a config that does not parse at that moment say, holds the task, whose
-row then says `done, not added to the config` with the reason and needs
-the user, who may fix the file or dismiss the task with `x`; the relay
-tries again whenever the config file changes and at every start,
-handed-over tasks included, and the task hands over to its worktree row
-once the append is made. A dismiss, by `x` or `laatmux tasks dismiss`,
-drops the append for good: its message names the source, the name it
-would have had and why the append failed, so the entry can be added by
-hand or the source pasted again, and the daemon's log has it once. A
-handed-over task still asking is kept past the day a handoff is kept
-for, and one dropped with its worktree, by `rm` or a listing that finds
-it gone, has the dropped append in the log. A source the list has in
-another form is that repository and is not added again. The repository
-picker reads the config again as it opens, so a repository an earlier
-add appended is a listed candidate, not a new one. The append keeps the file as it was
-around the new line, comments and blank lines included: the line goes
-after the list's last item, in its indentation, or a `repos:` list is
-made; a file the line cannot go into, a list written `[a, b]` say, is
-written again from its parsed YAML, which keeps the content and the
-comments but not the layout. A file of more than one YAML document with
-content is refused, since laatmux reads the first and a rewrite would
-drop the rest; an empty one after it, a `---` at the end or one of
-comments alone, is kept as it is, the line going before its marker,
-though a file that needs the rewrite and has one is refused too. The
-result is parsed before it replaces the file, through a temporary
-renamed over it, the link's target when the config is a symlink, made
-with its directory when the link's target is not there, with the file's
-mode. The appends on one machine take turns under `config.lock` in the
-state directory, waiting up to ten seconds for another, and a file
-another writer changed between the read and the rename is read again. A host's own daemon needs
-no `repos` entry for the add, since `repo_entry` carries the source; its
-listing labels the new checkout by its directory's name, the entry's
-name, with its origin as the source, until its own config names it.
+repository, named for its last path element (`pin-scripts`), else its
+org and that, else that with a hash of the source, the first that no
+known repository goes by, as its name or as a host's label for a
+checkout of it, a name that is no label made one (`nrkno-scripts`,
+`next_js`). A credential in the source, an https
+URL's user and token or an ssh URL's password, is left out, and the
+form's footer or add's output says so: it never reaches a pending file
+or a host, and the host clones through its own credentials. The add
+carries it as its `repo_entry`, and the host clones it under that name;
+nothing is written to the config, and the clone is a known repository
+from the host's next listing. A source known in another form is that
+repository. A host's own daemon needs no `repos` entry for the add,
+since `repo_entry` carries the source; its listing labels the new
+checkout by its directory's name, the entry's name, with its origin as
+the source, until its own config names it.
 
 The repositories are the laptop's to decide. An add carries the repository
 as the sending machine's config has it: source, name, `copy` and `setup`,
@@ -303,11 +324,17 @@ to prefix, the first six hex digits of the source's SHA-256 are appended.
 The derivation is deterministic, so every host derives the same name from
 the same list, and duplicate sources or duplicate final names are rejected.
 Identity is the source, not the name: the name only places new things.
-`laatmux repos` shows each name next to its checkout and worktree paths per
-host, as configured, so a `~` is the host's own; for a host with several
-`repos` directories, a line before the list names them and the first,
-where the checkout path each repository's line shows is cloned when no
-directory has a checkout of it.
+`laatmux repos` shows the known set, each repository's name and source
+marked `configured`, `discovered on` the hosts with a checkout of it, or
+both, and per host its checkout and worktree paths: a checkout the host
+has as the host found it, else where a clone would go, and the worktree
+directory, as configured, so a `~` is the host's own; for a host with
+several `repos` directories, a line before the list names them and the
+first, where the checkout path each repository's line shows is cloned
+when no directory has a checkout of it. A line before the list names the
+hosts no set of checkouts came from, paused, down since the local daemon
+started, or of a daemon without `repos`, whose repositories show only
+where a worktree record or the config has them.
 
 Shared setup lives in `.laatmux.yaml` at the repository root, committed:
 
@@ -477,6 +504,18 @@ truth; labels only place new things.
   refuses a main checkout's root, also where the repos directory is
   under the worktrees one, and `run` takes registered worktrees only,
   as before.
+- **Repositories**, capability `repos` (issue #392): the same poll's
+  checkouts, every main checkout under the `repos` directories with an
+  origin, in use or not, the config's or not, are the host's set of
+  repositories, `{repos: {checkouts: [{repo, source, root}]}}`, `repo`
+  the label the host's records carry, in scan order. It is in the
+  snapshot once the first listing is done, and in an upsert of its own
+  whenever a listing changes it, sent whole. A merging daemon with the
+  capability puts each host's set, and its own, on the host's record as
+  `repos`, replaced whole by every snapshot and set of the host's and
+  kept while the host is down; a host paused or dropped has a record
+  without it. A daemon without the capability sends none, and a client
+  knows its host's repositories by its records alone.
 - **Attribution**, capability `attribution` (issue #55): every polled
   pane, on every server in `tmux_servers`, belongs to the worktree whose
   root contains its path, the recorded `@laatmux_cwd` of a pane laatmux
@@ -532,13 +571,6 @@ truth; labels only place new things.
   `repo_entry` the repository as the sender's config has it, which a
   daemon with `repo-entry` resolves the add against. Without an entry
   `repo` is the source or the label as the daemon's own config knows it.
-  `remember`, on an add relayed through the local daemon, asks a daemon
-  with the `remember` capability to append `repo_entry` to its config's
-  `repos` once the host's add has succeeded; a client sends it only to a
-  daemon with the capability, and an older daemon, which would read the
-  add without the field and add nothing, is refused with a hint to stop
-  it so the current build starts. A pending record's `remember_error`
-  is why that append fails, while it does.
   The key is `agent_name` because `agent` is the upsert's record in the
   same envelope. A branch that is not valid UTF-8, or has U+FFFD, is
   refused: the connection turns such a byte into U+FFFD, so the daemon
@@ -825,12 +857,12 @@ attach ends with status 0 whether the managed session ended with the
 shell its agent left behind or was killed under it, and then the pane
 closes and so the workspace session; the next `jump` makes it again.
 
-- **`add <branch>`** resolves the repository from `--repo`, a listed
-  name or source, or a source in a forge form the config does not list,
-  which is added to it (see the config above), else from the
+- **`add <branch>`** resolves the repository from `--repo`, a known
+  name or source (see the config above), or a source in a forge form no
+  known repository has, which the host clones, else from the
   current directory: its git origin is matched against the known sources,
   since identity is the source and a checkout keeps its directory after a
-  label change; an origin that is not configured is an error rather than
+  label change; an origin that is not known is an error rather than
   a guess from the directory name; only a directory with no origin falls
   back to its place under the local host's `repos` or `worktrees`, the
   more specific first, where the next path component is the label. Host
@@ -1516,15 +1548,15 @@ orphaned row's session exists locally and is switched to.
   submit, and a paste goes into the prompt wherever the focus is but
   the branch line; in a chip's open picker a paste goes into its filter.
   A repository's source pasted into the repository picker is that
-  repository: a listed one in whatever form, else a new one, shown
+  repository: a known one in whatever form, else a new one, shown
   marked `new` and taken by `Enter` or a click even where its text is
-  part of a listed source; the host and agent chips then take what a
-  repository without a last use gets, the footer says the repository
-  is added to the config's `repos` once its worktree is made, and the
-  submit carries it as the add's `repo_entry` (see the config above).
-  Each chip's picker reads the config again as it opens, and every
-  chip takes it (see the config above).
-  With no repository configured the form still opens, saying so, and a
+  part of a known source; the host and agent chips then take what a
+  repository without a last use gets, the footer says the host clones
+  it, and the submit carries it as the add's `repo_entry` (see the
+  config above). Each chip's picker reads the config again as it opens,
+  and the known set with it, and every chip takes them (see the config
+  above).
+  With no repository known the form still opens, saying so, and a
   submit without a repository is refused. A paste whose bytes stop for a second is shown as
   far as it came, with its framing kept, and one whose end marker
   never comes is ended by `Esc` or `Ctrl-C` pressed alone after that
@@ -1818,7 +1850,7 @@ records:
 ```
 
 - **Host records** `{name, ssh, environment_id, connected, listed, error,
-  version, capabilities, since}` are the connectivity axis, one per
+  version, capabilities, repos, since}` are the connectivity axis, one per
   configured host. `connected` is a live connection with a completed
   hello; `listed` is that the host's records come from a snapshot of that
   connection. Records from before a drop stay while `listed` is false,
@@ -1831,7 +1863,8 @@ records:
   and of git is complete, and a merged subscription does not wait for
   that as a plain one does. Records are forwarded unchanged, ids included; a client maps
   a record's `environment_id` to a host name through the host records.
-  `seq` is the merging daemon's own.
+  `repos` is the host's set of repositories, from a merging daemon with
+  the `repos` capability (above). `seq` is the merging daemon's own.
 - **The relay**, capability `relay`, the laptop's side of
   [milestone four](docs/milestone-four.md): `{type: add, id, relay:
   <host>, repo, name, branch, generated, agent_name, cmd, prompt,
@@ -1870,12 +1903,7 @@ records:
   or answers as another machine. No worktree at the root is `gone`, a record
   the user dismisses. A record that needs the user stays, prompt
   retained, until `{type: dismiss, id}` or until `{type: prompt, id}`
-  delivers it. A dismiss's result has in `detail` what went with the
-  record: the append of a repository new to the config that the add
-  asked for (`remember`) and that was not made, with the source, the
-  name and why; the daemon logs it once, a dismiss through `rm` too. The
-  append is not made after the dismiss: the two take turns per record.
-  Its worktree removed meanwhile, by `rm` here or
+  delivers it. Its worktree removed meanwhile, by `rm` here or
   elsewhere or by hand, makes it `gone` too: a removal the host reports,
   and a host's successful listing that lacks the worktree, a
   reconnect's snapshot or a later poll's, have the host asked again, as

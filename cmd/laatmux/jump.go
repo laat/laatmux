@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
@@ -28,6 +30,12 @@ import (
 // attached to the managed session on the host. Local and remote are the
 // same operation, since managed agents live on the dedicated laatmux
 // server, which the user's tmux cannot switch-client into.
+//
+// The <repo> is read as this machine's name for the repository, the
+// host's label, or as part of the managed session's name
+// (matchWorktree); last, when no reading names a worktree and the
+// target is no managed session, as a name of the known set's for a
+// repository the host labels otherwise (matchKnown), as path reads it.
 //
 // A worktree with no managed session and no agent gets one first, with
 // the user's shell at its root, from the host's daemon (newHome); where
@@ -98,6 +106,25 @@ func cmdJump(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if !ok {
+		// No reading of the target names a worktree: it is a managed
+		// session's name, as before, or, last, once the host has said it
+		// has no such session, a name the known set has for a
+		// repository the host labels otherwise (matchKnown). A check
+		// that could not be made is its error, as before.
+		serr := checkSession(ctx, h.Host, rest)
+		if serr != nil {
+			if !errors.Is(serr, errNoSession) {
+				return serr
+			}
+			if w, ok, err = matchKnown(worktrees, mains, cfg, h, lazyKnown(ctx, cfg), rest); err != nil {
+				return err
+			}
+			if !ok {
+				return serr
+			}
+		}
+	}
 	switch a := rows.JumpAgent(snap.Agents, w); {
 	case ok && w.Main && a != nil:
 		// A main checkout with an agent goes as its line goes (rowSpec):
@@ -138,9 +165,6 @@ func cmdJump(ctx context.Context, args []string) error {
 		}
 		spec = worktreeSpec(h, w)
 	default:
-		if err := checkSession(ctx, h.Host, rest); err != nil {
-			return err
-		}
 		spec = attachSpec(h, rest)
 	}
 	name, created, err := workspace.Ensure(ctx, spec)
@@ -207,6 +231,39 @@ func matchMain(mains []protocol.Worktree, cfg config.Config, h config.Host, rest
 		return protocol.Worktree{}, false, err
 	}
 	return protocol.Worktree{}, false, fmt.Errorf("%w; jump --server default %s/<session> goes to the session of an agent in any of them", err, h.Name)
+}
+
+// matchKnown is the last reading of a jump target's <repo>/<branch>:
+// the repository the known set (merged.Known) has by that name, for a
+// name the config does not have, its worktree on the host for the
+// branch, else its main checkout there, whatever the host labels it,
+// as path finds it by source. It is taken only once every other
+// reading has matched nothing and the target is no managed session, so
+// a target that reached a worktree or a session reaches it still, and
+// the merged stream is read only then. A name the known set has for
+// no repository, or for two, is no match.
+func matchKnown(worktrees, mains []protocol.Worktree, cfg config.Config, h config.Host, known func() merged.Known, rest string) (protocol.Worktree, bool, error) {
+	label, branch, _ := strings.Cut(rest, "/")
+	if branch == "" {
+		return protocol.Worktree{}, false, nil
+	}
+	if _, ok := cfg.RepoByName(label); ok {
+		// The config's name, read first by matchWorktree.
+		return protocol.Worktree{}, false, nil
+	}
+	r, ok, err := known().ByName(label, h.Name)
+	if !ok || err != nil {
+		return protocol.Worktree{}, false, nil
+	}
+	// The config read with the known repository under the target's
+	// name, so the readings match it by source.
+	with := cfg
+	with.Repos = append(slices.Clip(cfg.Repos), config.Repo{Source: r.Source, Name: label})
+	w, ok, err := matchWorktree(worktrees, with, rest)
+	if err == nil && !ok {
+		w, ok, err = matchMain(mains, with, h, rest)
+	}
+	return w, ok, err
 }
 
 // splitMains is the records that are worktrees and those that are main
@@ -372,8 +429,10 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 
 // addCommand is the add line for the worktree's branch on the host. Its
 // --repo is resolved against this machine's config, so it names the
-// source as this machine knows it, not by the host's label; a record
-// without a source leaves it to the reader, and the agent with it. The
+// source as this machine knows it, not by the host's label, and a source
+// the config does not list as the record has it, which add knows as a
+// checkout of the record's host; a record without a source leaves it to
+// the reader, and the agent with it. The
 // line is for pasting into a shell, and git takes branches such as it's
 // and a$(x): each word is quoted as ShellJoin quotes it, only when it
 // needs to be, and the placeholder the reader replaces is left as it is.
@@ -382,9 +441,9 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 // branch is written as dollarQuote writes it.
 // It names an agent only where add would refuse to pick one: no agent
 // last used for the repository is still configured (in last, last.json
-// as add reads it, by the config's source), there is no default_agent,
-// and more than one agent is configured. The agent named is then the
-// first, which the add form preselects too.
+// as add reads it, by the config's source, else the record's), there is
+// no default_agent, and more than one agent is configured. The agent
+// named is then the first, which the add form preselects too.
 func addCommand(cfg config.Config, h config.Host, w protocol.Worktree, last home.Last) string {
 	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
 	repo := "<repo>"
@@ -396,8 +455,12 @@ func addCommand(cfg config.Config, h config.Host, w protocol.Worktree, last home
 		branch = dollarQuote(w.Branch)
 	}
 	line := fmt.Sprintf("laatmux add %s --repo %s --host %s", branch, repo, quote(h.Name))
-	if r, ok := cfg.RepoBySource(w.Source); ok {
-		if _, _, err := cfg.DefaultAgent("", last.Get(r.Source).Agent); err != nil && len(cfg.Agents) > 0 {
+	if w.Source != "" {
+		src := w.Source
+		if r, ok := cfg.RepoBySource(w.Source); ok {
+			src = r.Source
+		}
+		if _, _, err := cfg.DefaultAgent("", last.Get(src).Agent); err != nil && len(cfg.Agents) > 0 {
 			line += " --agent " + quote(cfg.AgentNames()[0])
 		}
 	}
@@ -427,9 +490,10 @@ func dollarQuote(s string) string {
 }
 
 // localRepoArg is the record's repository as this machine names it: its
-// label here when the source is known, else the source itself, which
-// the add form matches against the config's sources. --repo takes either
-// only for a repository the config lists.
+// name in the config when the config lists the source, else the source
+// itself, which the add form matches against the known sources and
+// --repo takes for any known repository: the record's host has a
+// checkout of it.
 func localRepoArg(cfg config.Config, w protocol.Worktree) string {
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		return r.Name
@@ -539,10 +603,17 @@ func jumpMode(h peer.Host, srv tmux.Server, session string) (jumpKind, error) {
 // window's own keepalive protection applies.
 func checkSession(ctx context.Context, h peer.Host, session string) error {
 	if h.Local() {
-		if !tmux.LaatmuxServer.HasSession(ctx, session) {
-			return fmt.Errorf("%s: no such session on the laatmux tmux server", tmux.Printable(h.Name+"/"+session))
+		// A session no target reaches is not found, as HasSession has
+		// it; jumpMode refuses one before this.
+		if tmux.CheckTarget(session) != nil {
+			return noSuchSession(h.Name, session, true)
 		}
-		return nil
+		_, err := tmux.LaatmuxServer.Run(ctx, "has-session", "-t", tmux.SessionTarget(session))
+		if err == nil {
+			return nil
+		}
+		var te *tmux.Error
+		return noSuchSession(h.Name, session, errors.As(err, &te) && sessionAbsent(te.Msg))
 	}
 	ctx, cancel := context.WithTimeout(ctx, preflightTimeout)
 	defer cancel()
@@ -560,6 +631,31 @@ func checkSession(ctx context.Context, h peer.Host, session string) error {
 
 const preflightTimeout = 15 * time.Second
 
+// errNoSession is checkSession's answer that tmux said the session is
+// not there, as against a check that could not be made or a tmux that
+// could not tell (sessionAbsent).
+var errNoSession = errors.New("no such session on the laatmux tmux server")
+
+// noSuchSession is checkSession's refusal, worded as it was whatever
+// tmux said; absent, that tmux said the session or its server is not
+// there, makes it errNoSession, which jump's last reading of the target
+// waits for.
+func noSuchSession(host, session string, absent bool) error {
+	name := tmux.Printable(host + "/" + session)
+	if absent {
+		return fmt.Errorf("%s: %w", name, errNoSession)
+	}
+	return fmt.Errorf("%s: %s", name, errNoSession.Error())
+}
+
+// sessionAbsent reports whether tmux's message for a has-session that
+// failed says the session is not there: it cannot find the session, or
+// no server runs, as tmux.NoServer tells it from one that cannot be
+// reached, a socket it may not open say.
+func sessionAbsent(msg string) bool {
+	return strings.Contains(msg, "can't find session") || tmux.NoServer(&tmux.Error{Msg: msg})
+}
+
 // classifyPreflight turns the preflight's outcome into a message that says
 // which of three things happened: the session is absent (tmux exited 1), the
 // transport failed (ssh exits 255, or anything else), or the check timed out.
@@ -574,8 +670,9 @@ func classifyPreflight(host, session string, runErr, ctxErr error, stderr string
 	if errors.As(runErr, &exit) && exit.ExitCode() == 1 {
 		// tmux has-session: exit 1 means no such session. Its message
 		// ("can't find session") is redundant; a missing server says
-		// "no server running", which is the same thing for jump.
-		return fmt.Errorf("%s: no such session on the laatmux tmux server", tmux.Printable(host+"/"+session))
+		// "no server running", which is the same thing for jump. One
+		// that says neither is a tmux that could not tell.
+		return noSuchSession(host, session, sessionAbsent(stderr))
 	}
 	if stderr == "" {
 		stderr = runErr.Error()

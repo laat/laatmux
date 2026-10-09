@@ -1533,7 +1533,8 @@ func TestSelectCommand(t *testing.T) {
 
 // A listing error is logged and published once per change of its text,
 // not once per poll, with the text on the listing record; a listing
-// that works again is published once, with the error cleared.
+// that works again is published once, with the error cleared, after
+// the host's repositories, which the first listing that works has.
 func TestListingErrorOnce(t *testing.T) {
 	dir := t.TempDir()
 	repos := filepath.Join(dir, "repos")
@@ -1553,7 +1554,7 @@ func TestListingErrorOnce(t *testing.T) {
 	}
 	os.Remove(repos)
 	d.pollWorktrees(context.Background())
-	if n, e := state(); n != 2 || e != "" {
+	if n, e := state(); n != 3 || e != "" {
 		t.Fatalf("after recovery: seq %d, listErr %q", n, e)
 	}
 }

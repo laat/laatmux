@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/laat/laatmux/internal/command"
@@ -36,7 +37,7 @@ type dash struct {
 	// submit hands an add to the local daemon; a test replaces it, as
 	// it does dismiss and deliver, a pending task's x and p.
 	submit  func(command.Add) (string, error)
-	dismiss func(id string) (dropped string, err error)
+	dismiss func(id string) error
 	deliver func(id string) (state, reason string, err error)
 	// pending is the task a confirm line asks to dismiss.
 	pending *protocol.Pending
@@ -456,35 +457,53 @@ func (r logReporter) Note(s string) {
 }
 
 // addForm is the a key: the task form, with the candidates its chips
-// were built from, so a choice maps back to the config's entries. The
-// chips preselect what add would take: the repository of the directory
-// the popup was opened from, the host and agent last used for it, else
-// the config's defaults. a on a worktree row that has no session
-// pre-fills the repository, host and branch from the record, the
-// branch explicit. A repository's source pasted into the repository
-// chip's picker that no candidate matches is a candidate after the
-// config's, new to it (pastedRepo).
+// were built from, so a choice maps back to the known repositories:
+// the config's entries and the checkouts the hosts have discovered
+// (merged.Known). The chips preselect what add would take: the
+// repository of the directory the popup was opened from, the host and
+// agent last used for it, else the config's defaults. a on a worktree
+// row that has no session pre-fills the repository, host and branch
+// from the record, the branch explicit. A repository's source pasted
+// into the repository chip's picker that no candidate matches is a
+// candidate after the known ones, new (pastedRepo), which a host
+// without a checkout of it clones.
 type addForm struct {
 	repos  []config.Repo
 	hosts  []config.Host
 	agents []string
+	// known is the known set for a config, the merged stream's; nil
+	// takes the config's entries alone. set is the one the candidates
+	// were last taken from, which a pasted source is named among.
+	known func(config.Config) merged.Known
+	set   merged.Known
 	// cfg is the config the candidates were last taken from, whose
 	// defaults the chips follow and whose copy rules the submit sends.
-	// reload reads the config again as a chip's picker opens, so a
-	// repository added since the form was made, by an earlier add of a
-	// pasted source say, is a listed candidate and not offered as new,
-	// and a host or an agent added or gone, or a default changed, is
-	// taken by a form left up; nil keeps the candidates the form was made
-	// with. uncredentialed is the pasted sources whose credential
-	// NewRepo left out, for the note; configErr is the config file that
-	// did not load on the last read, the form's or the view's, for the
-	// note until a read succeeds.
+	// reload reads the config again as a chip's picker opens, and the
+	// known set is taken again with it, so a repository cloned since the
+	// form was made, by an earlier add of a pasted source say, is a
+	// known candidate and not offered as new, and a host or an agent
+	// added or gone, or a default changed, is taken by a form left up;
+	// nil keeps the candidates the form was made with. uncredentialed is
+	// the pasted sources whose credential NewRepo left out, for the
+	// note; configErr is the config file that did not load on the last
+	// read, the form's or the view's, for the note until a read
+	// succeeds.
 	cfg            config.Config
 	reload         func() (config.Config, error)
 	uncredentialed map[string]bool
 	configErr      string
 	// form is the form the candidates are on, for takePaused.
 	form *view.Form
+}
+
+// take takes the known set for cfg as the candidates.
+func (f *addForm) take(cfg config.Config) {
+	if f.known == nil {
+		f.set = merged.ConfigOnly(cfg)
+	} else {
+		f.set = f.known(cfg)
+	}
+	f.repos = f.set.Configs()
 }
 
 // takePaused brings the paused flag of the hosts the form offers up to
@@ -518,25 +537,26 @@ func addHosts(cfg config.Config) []config.Host {
 	return hosts
 }
 
-// refresh brings the repository chip up to the config read again: its
-// listed candidates the config's now, a pasted one kept after them
-// while the config does not list it, named again among the repositories
-// listed now, and the selection on the repository it was on, by source;
-// the host is told when that is gone. A chip that had none selected,
-// with nothing to choose from before, has none selected after: the user
-// picks.
+// refresh brings the repository chip up to the config read again and
+// the known set taken with it: its known candidates the set's now, a
+// pasted one kept after them while no known repository has it, named
+// again among the known ones, and the selection on the repository it
+// was on, by source; the host is told when that is gone. A chip that
+// had none selected, with nothing to choose from before, has none
+// selected after: the user picks.
 func (f *addForm) refresh(form *view.Form, cfg config.Config) {
 	c := &form.Chips[0]
 	was, _ := f.repo(form, c.Selected)
+	n := len(f.repos)
+	f.take(cfg)
 	var pasted []view.Choice
-	if len(c.Choices) > len(f.repos) {
-		for _, ch := range c.Choices[len(f.repos):] {
-			if r, err := cfg.NewRepo(ch.Detail); err == nil {
+	if len(c.Choices) > n {
+		for _, ch := range c.Choices[n:] {
+			if r, err := config.NewRepo(ch.Detail, f.set.Taken()); err == nil {
 				pasted = append(pasted, view.Choice{Label: r.Name, Detail: r.Source})
 			}
 		}
 	}
-	f.repos = cfg.Repos
 	c.Choices, c.Selected = nil, 0
 	for _, r := range f.repos {
 		c.Choices = append(c.Choices, view.Choice{Label: r.Name, Detail: r.Source})
@@ -557,10 +577,9 @@ func (f *addForm) refresh(form *view.Form, cfg config.Config) {
 	}
 }
 
-// repo is the repository of the repository chip's candidate i: the
-// config's entry, or after them a source pasted into the picker, new to
-// the config, under the name pastedRepo gave it; none for a chip with
-// nothing selected.
+// repo is the repository of the repository chip's candidate i: a known
+// one, or after them a source pasted into the picker, new, under the
+// name pastedRepo gave it; none for a chip with nothing selected.
 func (f *addForm) repo(form *view.Form, i int) (r config.Repo, isNew bool) {
 	switch c := form.Chips[0].Choices; {
 	case i >= 0 && i < len(f.repos):
@@ -572,16 +591,16 @@ func (f *addForm) repo(form *view.Form, i int) (r config.Repo, isNew bool) {
 }
 
 // pastedRepo is the repository chip's entry for a picker filter no
-// candidate matches: the listed repository a source names in another
-// of its forms, else a source new to the config, named as it will be
-// listed, its credential left out, which uncredentialed reports;
+// candidate matches: the known repository a source names in another of
+// its forms, else a source new, named among the known ones as NewRepo
+// names it, its credential left out, which uncredentialed reports;
 // nothing for a filter that is no repository's source.
-func pastedRepo(cfg config.Config, filter string) (c view.Choice, uncredentialed, ok bool) {
+func pastedRepo(known merged.Known, filter string) (c view.Choice, uncredentialed, ok bool) {
 	src := strings.TrimSpace(filter)
-	if r, ok := cfg.RepoBySource(src); ok {
+	if r, ok := known.BySource(src); ok {
 		return view.Choice{Label: r.Name, Detail: r.Source}, false, true
 	}
-	r, err := cfg.NewRepo(src)
+	r, err := config.NewRepo(src, known.Taken())
 	if err != nil {
 		return view.Choice{}, false, false
 	}
@@ -589,7 +608,8 @@ func pastedRepo(cfg config.Config, filter string) (c view.Choice, uncredentialed
 }
 
 func (d *dash) startAdd(m *view.Model) {
-	f := &addForm{repos: d.cfg.Repos, hosts: addHosts(d.cfg), agents: d.cfg.AgentNames(), reload: d.reload, configErr: d.configErr}
+	f := &addForm{hosts: addHosts(d.cfg), agents: d.cfg.AgentNames(), known: d.st.Known, reload: d.reload, configErr: d.configErr}
+	f.take(d.cfg)
 	// A field with nothing to choose from refuses before the form is
 	// up, but the repository, which a source pasted into its picker
 	// gives. So does last.json that cannot be read: the submit's own
@@ -617,30 +637,32 @@ func (d *dash) startAdd(m *view.Model) {
 	preRepo, preHost, branch := "", "", ""
 	switch r := m.Selection(); {
 	case r != nil && r.Worktree != nil && !r.Orphaned:
-		preRepo, preHost = localRepoArg(d.cfg, *r.Worktree), r.Host
+		// By its source, which a name the config gives it could share
+		// with a host's label for another.
+		preRepo, preHost = r.Worktree.Source, r.Host
 		if r.Worktree.Session == "" && !r.Worktree.BranchDisplayOnly && !r.Worktree.Main {
 			branch = r.Worktree.Branch
 		}
 	case r != nil && r.Kind == rows.KindRepo:
 		// By its source, as a worktree's row: the line's name is a
-		// host's label when this machine has none, which another local
-		// repository could share, so a source this machine does not
-		// know preselects nothing. A repository known by a label alone
-		// goes by it.
+		// host's label when this machine has none, which another known
+		// repository could share, so a source no known repository has
+		// preselects nothing. A repository known by a label alone goes
+		// by it.
 		if r.ID() == rows.LabelRepoNode(r.Name) {
 			preRepo = r.Name
 		}
-		for _, repo := range d.cfg.Repos {
+		for _, repo := range f.repos {
 			if rows.RepoNode(repo.Source) == r.ID() {
-				preRepo = repo.Name
+				preRepo = repo.Source
 				break
 			}
 		}
 	default:
 		preRepo, preHost = workspacePreset(d.ctx, f.hosts)
 		if preRepo == "" {
-			if repo, err := resolveRepo(d.ctx, d.cfg, ""); err == nil {
-				preRepo = repo.Name
+			if repo, err := resolveRepo(d.ctx, d.cfg, func() merged.Known { return f.set }, "", ""); err == nil {
+				preRepo = repo.Source
 			}
 		}
 	}
@@ -689,13 +711,15 @@ func presetFor(s protocol.Session, hosts []config.Host) (repo, host string) {
 // up to it, so a form left up while the file changes offers what it
 // lists now.
 func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, branch string, caps func(host string) ([]string, bool)) *view.Form {
-	// The config as a picker last read it: a pasted source is named
-	// among the repositories listed now, and the defaults are its.
+	// The config as a picker last read it, and the known set with it:
+	// a pasted source is named among the repositories known now, and
+	// the defaults are the config's.
 	f.cfg = cfg
+	f.take(cfg)
 	var chips [3]view.Chip
 	chips[0].Title = "repository"
 	chips[0].Other = func(filter string) (view.Choice, bool) {
-		c, uncredentialed, ok := pastedRepo(f.cfg, filter)
+		c, uncredentialed, ok := pastedRepo(f.set, filter)
 		if uncredentialed {
 			if f.uncredentialed == nil {
 				f.uncredentialed = map[string]bool{}
@@ -704,11 +728,19 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 		}
 		return c, ok
 	}
+	// The repository named: by its source, else the first of its name,
+	// the config's entry before a host's label for another source.
+	byName := -1
 	for i, r := range f.repos {
 		chips[0].Choices = append(chips[0].Choices, view.Choice{Label: r.Name, Detail: r.Source})
-		if r.Name == preRepo || source.Same(r.Source, preRepo) {
-			chips[0].Selected = i
+		if byName < 0 && r.Name == preRepo {
+			byName = i
 		}
+	}
+	if i := slices.IndexFunc(f.repos, func(r config.Repo) bool { return source.Same(r.Source, preRepo) }); i >= 0 {
+		chips[0].Selected = i
+	} else if byName >= 0 {
+		chips[0].Selected = byName
 	}
 	var repo config.Repo
 	if len(f.repos) > 0 {
@@ -801,13 +833,13 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 			}
 		}
 		if len(form.Chips[0].Choices) == 0 {
-			return "no repositories configured; enter on the repository takes a pasted source"
+			return "no repositories known; enter on the repository takes a pasted source"
 		}
 		if repo, isNew := f.repo(form, form.Chips[0].Selected); isNew {
 			if f.uncredentialed[repo.Source] {
-				return "a new repository, added to the config's repos once its worktree is made, without the pasted URL's credential"
+				return "a new repository, which the host clones, without the pasted URL's credential"
 			}
-			return "a new repository, added to the config's repos once its worktree is made"
+			return "a new repository, which the host clones"
 		}
 		return ""
 	}
@@ -886,10 +918,10 @@ func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
 		m.Overlay = o
 		return false
 	}
-	repo, isNew := f.repo(o, o.Chips[0].Selected)
+	repo, _ := f.repo(o, o.Chips[0].Selected)
 	add := command.Add{
 		Host: f.hosts[o.Chips[1].Selected], Repo: repo, Copy: f.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],
-		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(), Remember: isNew,
+		Branch: strings.TrimSpace(o.Branch()), Prompt: o.Prompt(), Generated: o.Generated(),
 	}
 	submit := d.submit
 	if submit == nil {
@@ -1010,21 +1042,13 @@ func (d *dash) startDismiss(m *view.Model) {
 	}
 	dismiss := d.dismiss
 	if dismiss == nil {
-		dismiss = func(id string) (string, error) { return command.Dismiss(d.ctx, id) }
+		dismiss = func(id string) error { return command.Dismiss(d.ctx, id) }
 	}
 	what := tmux.Printable(p.Repo+"/"+p.Branch) + " on " + p.Host
-	var dropped string
 	d.start(m, "dismiss "+what, func(command.Reporter) error {
-		var err error
-		dropped, err = dismiss(p.ID)
-		return err
+		return dismiss(p.ID)
 	}, func(m *view.Model) bool {
-		// The append of a repository new to the config goes with the
-		// task, and the message says so.
 		m.Message = "dismissed " + what
-		if dropped != "" {
-			m.Message += "; " + dropped
-		}
 		return false
 	})
 }
@@ -1334,10 +1358,10 @@ func noWorkspaceHint(cfg config.Config, st *merged.State, line rows.Row, resolve
 // with no home: by its branch, which a detached worktree has to have
 // checked out first, and one whose branch is only shown has to have
 // one checked out that laatmux can carry, on a host this machine's
-// config gives the directories add needs, for a repository that config
-// lists, which --repo takes, with an agent in that config for add to
-// start, and last.json readable JSON, which add reads before it picks
-// the host. It names every one of these the worktree lacks, not only
+// config gives the directories add needs, with an agent in that config
+// for add to start, and last.json readable JSON, which add reads before
+// it picks the host. Its repository is one --repo takes, by the config's
+// name or as a checkout of the record's host. It names every one of these the worktree lacks, not only
 // the first. withAgent says add's is the one with an agent, where enter
 // makes one with a shell.
 func addsSession(cfg config.Config, h config.Host, w protocol.Worktree, withAgent bool) string {
@@ -1354,9 +1378,6 @@ func addsSession(cfg config.Config, h config.Host, w protocol.Worktree, withAgen
 	}
 	if !h.CanAdd() {
 		needs = append(needs, "host "+h.Name+" has repos and worktrees directories in the config")
-	}
-	if _, ok := cfg.RepoBySource(w.Source); w.Source != "" && !ok {
-		needs = append(needs, w.Source+" is a repository in the config")
 	}
 	if len(cfg.Agents) == 0 {
 		needs = append(needs, "an agent is in the config")
