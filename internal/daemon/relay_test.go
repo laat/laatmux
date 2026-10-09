@@ -660,13 +660,20 @@ func TestRelayPausedHost(t *testing.T) {
 // still asking for its append has the append's goroutine started again,
 // and another host's records keep theirs.
 func TestPauseRelaysCancels(t *testing.T) {
-	f := newRelayFixture(t, nil)
+	appended := make(chan string, 4)
+	f := newRelayFixtureWith(t, nil, t.TempDir(), t.TempDir(), func(c *Config) {
+		c.AppendRepo = func(src, name string) (bool, error) { appended <- src; return true, nil }
+	})
+	// The records come after the start's resume, which would settle
+	// them itself.
+	f.awaitFirstSweep(t)
 	f.hosts.set(peer.Host{Name: "vm", SSH: "vm", Paused: true}, peer.Host{Name: "box", SSH: "box"})
 	mk := func(id, host string, retired bool) {
 		p := pendingFile{Pending: protocol.Pending{ID: id, Host: host, Source: f.source(), Repo: "proj", Branch: id, Taken: true, Sent: true, Done: true, OK: true,
 			Listed: true, Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()}}
 		if retired {
 			p.ReplacedBy, p.RetiredAt, p.Remember = "henv/worktree//w/proj/"+id, time.Now(), true
+			p.RepoEntry = &protocol.RepoEntry{Source: "git@x:o/r1.git", Name: "r1"}
 		}
 		if _, err := f.local.relay.create(p); err != nil {
 			t.Fatal(err)
@@ -702,6 +709,14 @@ func TestPauseRelaysCancels(t *testing.T) {
 	f.local.pauseRelays()
 	if !gone(stuck) || !gone(check) {
 		t.Fatal("the paused host's goroutines not cancelled")
+	}
+	select {
+	case src := <-appended:
+		if src != "git@x:o/r1.git" {
+			t.Fatalf("appended %s", src)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retired record's append not started again")
 	}
 	f.awaitRecord(t, "r1", 5*time.Second, func(p pendingFile) bool { return !p.Remember })
 	// The first pause's worker still waits on stuck: a goroutine started
