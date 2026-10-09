@@ -257,6 +257,31 @@ func TestPausedHostRefused(t *testing.T) {
 	}
 }
 
+// prune passes over a paused host, saying so, and refuses --host
+// naming it before anything is asked.
+func TestPrunePausedHost(t *testing.T) {
+	pauseFixture(t)
+	cfg, err := config.Parse([]byte(strings.Replace(pauseConfig, "    ssh: vm.invalid   # the coder box\n", "    ssh: vm.invalid\n    paused: true\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := merged.New()
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{
+		{Name: "mac", EnvironmentID: "menv", Connected: true, Listed: true, Capabilities: []string{protocol.CapStatus, protocol.CapWorktrees}},
+		{Name: "vm", SSH: "vm.invalid", Paused: true},
+	}})
+	var out strings.Builder
+	if err := prune(context.Background(), cfg, pruneArgs{}, st.Status(""), &out); err != nil || !strings.HasPrefix(out.String(), "vm  paused; its worktrees are not looked at\n") {
+		t.Errorf("prune: %v\n%s", err, out.String())
+	}
+	if err := os.WriteFile(os.Getenv("LAATMUX_CONFIG"), []byte(strings.Replace(pauseConfig, "    ssh: vm.invalid   # the coder box\n", "    ssh: vm.invalid\n    paused: true\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdPrune(context.Background(), []string{"--host", "vm", "-n"}); err == nil || err.Error() != "host vm is paused; laatmux hosts resume vm connects it" {
+		t.Errorf("prune --host vm: %v", err)
+	}
+}
+
 // The task form lists a paused host as paused, says so when it is the
 // one chosen, and refuses the submit with the message, the form kept
 // up, so no task is queued for a host nothing dials.

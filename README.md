@@ -160,11 +160,11 @@ for a host removed from the config, within its two-second look at the
 file, and takes it up again when it is resumed; the relay does not
 follow its tasks, and closes a connection it has open to the host, an
 add it follows going on on the host, though a prompt delivery `p` began
-before the pause ends first; `hosts` does not probe it, and no
-PR or checks are asked for its worktrees, which are out of the stream.
-A command aimed at it, `add --host`, `jump`, `rm`, `run`, `path`,
-`new`, `split` and a shell in its workspace, or a task form's submit,
-is refused with `host vm is paused; laatmux hosts resume vm connects
+before the pause ends first; `hosts` does not probe it, `prune` passes
+over it, and no PR or checks are asked for its worktrees, which are out
+of the stream. A command aimed at it, `add --host`, `jump`, `rm`,
+`run`, `path`, `new`, `prune --host`, `split` and a shell in its
+workspace, or a task form's submit, is refused with `host vm is paused; laatmux hosts resume vm connects
 it`; `upgrade`, which the user runs by hand, connects it and says so. A
 task queued for it before the pause stays in its file, its row saying
 `host vm is paused` where it waits on the host and not first on the

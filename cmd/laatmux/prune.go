@@ -52,6 +52,9 @@ func cmdPrune(ctx context.Context, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown host %q", a.host)
 		}
+		if h.Paused {
+			return &peer.PausedError{Name: h.Name}
+		}
 		a.host = h.Name
 	}
 	m := merged.New()
@@ -377,6 +380,8 @@ func prune(ctx context.Context, cfg config.Config, a pruneArgs, s merged.Status,
 			continue
 		}
 		switch {
+		case h.Paused:
+			fmt.Fprintf(out, "%s  paused; its worktrees are not looked at\n", h.Name)
 		case h.Connected && h.Listed && h.Worktrees:
 			listed[h.Name] = h
 		case h.Error != "":
