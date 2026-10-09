@@ -334,6 +334,10 @@ func TestHostsLineClick(t *testing.T) {
 	if want := []view.HostEntry{{Name: "vm"}, {Name: "box", Down: true}}; !slices.Equal(m.Hosts, want) {
 		t.Fatalf("the hosts line %+v", m.Hosts)
 	}
+	// The dashboard's a is not the pane's.
+	if vh.Act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Kind: term.KeyRune, Rune: 'a'}}); m.Overlay != nil || m.Message != "" {
+		t.Fatalf("the pane took a: overlay %T, message %q", m.Overlay, m.Message)
+	}
 	// click clicks the first column of the hosts line, the line above
 	// the footer, and hands the action to the pane's host.
 	click := func() view.Action {

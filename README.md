@@ -131,8 +131,9 @@ way, every two seconds. The dashboard and a sidebar pane take the
 hosts, agents, `default_agent`, repositories and `copy` their keys and a
 task form opened from then on use, the hosts and their `paused` on the
 hosts line, this machine's names for the repositories in the rows, the
-sidebar's `sort` and stale settings, the line templates, `icons`, `status_icons`, `agent_icons`, the theme,
-`jump_keys`' labels and the strip's `item_width`. A task form, the
+sidebar's `sort` and stale settings, the line templates, `icons`,
+`status_icons`, `agent_icons`, the theme, `jump_keys`' labels and the
+strip's `item_width`. A task form, the
 dashboard's or `compose`'s, reads the file again as a chip's picker
 opens: a form left up offers the repositories, hosts and agents listed
 then, each chip kept on its choice when that is still there, else on
