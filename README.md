@@ -751,10 +751,11 @@ truth; labels only place new things.
   `launched` after, with the pane and the tmux server instance. The
   pane's command ending, the agent exited to switch its model say,
   drops the pane to the host's login shell at the root rather than
-  closing it: `remain-on-exit` and a `pane-died` hook that respawns the
-  pane as the shell are set in the sequence that makes the session, on
-  every managed session made with a command, `new`'s too; the shell's
-  exit then ends the session as the command's did before. The
+  closing it: the command runs under `/bin/sh` with job control, so
+  tmux reports it and not the wrapper as the pane's command, and the
+  login shell is run in its place when it ends, on every managed
+  session made with a command, `new`'s too; the shell's exit then ends
+  the session as the command's did before. The
   prompt reaches the agent on the argv when the `cmd` has `{prompt}`,
   and `launched` is then `delivered`; otherwise it is typed in once the
   pane is ready: a fresh observation by the detector, after the startup

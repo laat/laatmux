@@ -827,6 +827,21 @@ func widthless(r rune) bool {
 	return r == 0x2028 || r == 0x2029 || r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
 }
 
+// thenShell wraps a managed session's command so its pane drops to the
+// login shell sh when the command ends rather than closing: an agent
+// exited to switch its model, say, leaves the user in a shell at the
+// root, and the shell's exit ends the session as the command's did
+// before. /bin/sh runs the command under job control, so the command
+// is the terminal's foreground process group and tmux reports it, not
+// the wrapper, as the pane's command, then runs the login shell in its
+// own place. A pane-died hook with remain-on-exit did the same, and
+// left the pane dead on a CI runner once for no reason the tmux
+// sources or a reproduction gave; the wrapper keeps no state in tmux.
+func thenShell(argv []string, sh string) []string {
+	script := `set -m; "$@"; exec ` + shellJoin([]string{sh}) + ` -l`
+	return append([]string{"/bin/sh", "-c", script, "laatmux-agent"}, argv...)
+}
+
 // NewSessionOpts describes a managed session.
 type NewSessionOpts struct {
 	Name string
@@ -891,7 +906,11 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 		args = append(args, "-e", k+"="+v)
 	}
 	if len(o.Cmd) > 0 {
-		args = append(args, shellJoin(o.Cmd))
+		cmd := o.Cmd
+		if sh := LoginShell(); s.Managed() && sh != "" {
+			cmd = thenShell(cmd, sh)
+		}
+		args = append(args, shellJoin(cmd))
 	}
 	// The pane target is the session by exact name: a session target with
 	// a trailing colon resolves to its current window's active pane, and
@@ -908,19 +927,6 @@ func (s Server) NewSession(ctx context.Context, o NewSessionOpts) (made Session,
 	}
 	for _, kv := range opts {
 		args = append(args, Next, "set-option", "-p", "-t", target, kv[0], kv[1])
-	}
-	if sh := LoginShell(); len(o.Cmd) > 0 && s.Managed() && sh != "" && !strings.ContainsAny(sh, "'\"\\") {
-		// A pane whose command ends drops to the login shell rather
-		// than closing: an agent exited to switch its model, say,
-		// leaves the user in a shell at the root, and the shell's exit
-		// ends the session as the command's did before. remain-on-exit
-		// keeps the dead pane for the pane hook, which respawns it as
-		// the shell and turns remain-on-exit off again; in the same
-		// sequence as new-session, so the command cannot end before
-		// them. The hook runs with the pane as its target. Only global
-		// hooks are removed by EnsureConfigured.
-		args = append(args, Next, "set-option", "-p", "-t", target, "remain-on-exit", "on",
-			Next, "set-hook", "-p", "-t", target, "pane-died", "respawn-pane 'exec "+sh+" -l' ; set-option -p remain-on-exit off")
 	}
 	// From here on the session may exist whatever the error: the
 	// sequence runs to completion once submitted, and the steps after

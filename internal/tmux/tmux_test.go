@@ -1510,7 +1510,8 @@ func TestNewSessionTagsNoCommand(t *testing.T) {
 
 // A managed session's pane whose command ends drops to the login shell
 // rather than closing, and the shell's exit then ends the session as
-// the command's did before.
+// the command's did before. While the command runs it, not the
+// wrapper, is the pane's command.
 func TestNewSessionCommandEndsInShell(t *testing.T) {
 	sh := LoginShell()
 	if sh == "" {
@@ -1518,16 +1519,23 @@ func TestNewSessionCommandEndsInShell(t *testing.T) {
 	}
 	s := startManaged(t)
 	ctx := context.Background()
-	made, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/agent", Cwd: t.TempDir(), Cmd: []string{"sleep", "1"}})
+	made, err := s.NewSession(ctx, NewSessionOpts{Name: "proj/agent", Cwd: t.TempDir(), Cmd: []string{"sleep", "2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	state := func() string {
-		out, _ := s.Run(ctx, "display-message", "-p", "-t", made.PaneID, "#{pane_dead} #{pane_current_command} #{remain-on-exit}")
+		out, _ := s.Run(ctx, "display-message", "-p", "-t", made.PaneID, "#{pane_dead} #{pane_current_command}")
 		return strings.TrimSpace(string(out))
 	}
-	want := "0 " + filepath.Base(sh) + " off"
 	var got string
+	for i := 0; i < 20 && got != "0 sleep"; i++ {
+		got = state()
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got != "0 sleep" {
+		t.Errorf("while the command runs the pane is %q, want \"0 sleep\"", got)
+	}
+	want := "0 " + filepath.Base(sh)
 	for i := 0; i < 300 && got != want; i++ {
 		time.Sleep(50 * time.Millisecond)
 		got = state()
