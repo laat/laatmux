@@ -2859,3 +2859,46 @@ func TestShellFromPasswd(t *testing.T) {
 		t.Errorf("the login shell %q is not a path", sh)
 	}
 }
+
+// Paste and PasteNoEnter on a real server, into a pane whose cat writes
+// the lines it reads to a file, with an x typed after each and then
+// Enter: Paste's text is a line of its own, the x the next one;
+// PasteNoEnter's is left in the pane's input unsent, and the x joins it
+// on one line. Both delete their buffer.
+func TestPasteNoEnter(t *testing.T) {
+	s := startManaged(t)
+	ctx := context.Background()
+	for _, c := range []struct {
+		name  string
+		paste func(ctx context.Context, buffer, paneID, text string) error
+		want  string
+	}{
+		{"Paste", s.Paste, "/p/a.png\nx\n"},
+		{"PasteNoEnter", s.PasteNoEnter, "/p/a.pngx\n"},
+	} {
+		out := filepath.Join(t.TempDir(), "out")
+		b, err := s.Run(ctx, "new-session", "-d", "-P", "-F", "#{pane_id}", "cat > "+shellJoin([]string{out}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pane := strings.TrimSpace(string(b))
+		if err := c.paste(ctx, "laatmux-test-paste", pane, "/p/a.png"); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if _, err := s.Run(ctx, "send-keys", "-t", pane, "-l", "x", Next, "send-keys", "-t", pane, "Enter"); err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		for i := 0; i < 250 && !strings.HasSuffix(got, "x\n"); i++ {
+			time.Sleep(20 * time.Millisecond)
+			b, _ := os.ReadFile(out)
+			got = string(b)
+		}
+		if got != c.want {
+			t.Errorf("%s: cat read %q, want %q", c.name, got, c.want)
+		}
+		if b, err := s.Run(ctx, "list-buffers", "-F", "#{buffer_name}"); err != nil || strings.Contains(string(b), "laatmux-test-paste") {
+			t.Errorf("%s: buffers after the paste: %q %v", c.name, b, err)
+		}
+	}
+}

@@ -14,7 +14,7 @@ at workmux's level. All of it is built.
 
 | Package | What |
 |---|---|
-| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `prune`, `run`, `path`, `ls`, `watch`, `sidebar`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain`, `version` |
+| `cmd/laatmux` | CLI: `serve`, `bridge`, `add`, `tasks`, `rm`, `prune`, `run`, `path`, `ls`, `watch`, `sidebar`, `paste-image`, `dashboard`, `compose`, `jump`, `shell`, `split`, `settle`, `unsettle`, `new`, `hosts`, `upgrade`, `stop`, `repos`, `explain`, `version` |
 | `internal/protocol` | JSON-lines wire format, protocol version 1, capability flags, agent, worktree, pane, run, host and session records |
 | `internal/daemon` | polls the configured tmux servers and git, derives agent state, streams snapshot + upserts; runs `add`, `rm` and `run` with numbered progress a client follows by id; merges the configured hosts' streams into one for local clients |
 | `internal/worktree` | checkouts found under `repos` by origin, worktrees from `git worktree list`, the git and filesystem stages of `add` |
@@ -659,6 +659,27 @@ truth; labels only place new things.
   index is read for submodules only in a worktree with a
   `.gitmodules`: one nested without it, which git refuses to remove
   all the same, is a removal that fails.
+- **`paste`** `{type: paste, id, environment_id, root, image}`,
+  capability `paste` (a daemon watching the managed server), answers
+  `{type: result, id, ok}`, from `paste-image run` (see Sidebar and
+  dashboard). `image` is a PNG, base64 in the line, which has no limit
+  of length; one that does not start with the PNG signature is refused,
+  as is an `environment_id` not the daemon's own. The agent's pane is
+  found as a prompt delivery without a target finds it: the managed
+  session laatmux made at `root`, alone there, with a verified agent in
+  its single pane; none is a refusal, and nothing is written. The image
+  goes to `<state>/paste/<timestamp>.png`, or
+  `/tmp/laatmux-paste-<timestamp>.png` for a daemon with no state
+  directory, mode 0600, a file there never overwritten, after the
+  images there older than an hour are removed; then its path is typed
+  into the pane by `load-buffer` and `paste-buffer -p`, with no
+  `send-keys Enter`, and the buffer is deleted whatever happened. That
+  runs under the root's delivery lock, so the path never lands between
+  a prompt and its Enter, nor in a root `rm` has taken, and counts as a
+  paste in flight, so a daemon shutting down starts none. `ok` is that
+  the path reached the pane; a buffer that would not load is `paste
+  refused`, and a `paste-buffer` that failed says the path may have
+  reached it.
 - **`run`** `{type: run, id, repo, branch, root, cmd}`, capability `run`,
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
@@ -1510,6 +1531,38 @@ orphaned row's session exists locally and is switched to.
   dropped. The strip's view and layout are its own, never written. The
   dashboard takes the view and, without `--layout`, the layout from the
   file.
+- **`paste-image [toggle|on|off]`** (issue #391), meant for a key
+  binding like `sidebar`, and opt-in: nothing turns it on by itself.
+  Claude Code takes an image on `Ctrl+V` from the clipboard of the
+  machine it runs on, which on a host reached over ssh has none, and
+  the terminal carries only text. `on` binds `C-v` in the default
+  server's root table to `if-shell -F '#{@laatmux_attach_pane}'`
+  running `paste-image run '#{pane_id}' '#{client_name}'` in the
+  background, and `send-keys C-v` in any other pane; `off` unbinds it,
+  `toggle` goes by the binding. `on` again binds once; a binding of the
+  user's on `C-v` is left alone, `on` saying so and `off` leaving it.
+  `run` finds the pane's host by the session's `@laatmux_host`: on this
+  machine it presses `C-v` in the pane, since the agent reads this
+  clipboard itself. Otherwise it reads a PNG from the clipboard: on
+  macOS when `osascript`'s `clipboard info` has PNG data and no file
+  reference, with `pngpaste` when it is on `PATH`, else `osascript`;
+  elsewhere with `wl-paste` under Wayland, else `xclip`, when the
+  clipboard offers `image/png`. No image there presses `C-v` in the
+  pane, so a text paste and every other use of the key are as they
+  were. The image goes to the host's daemon in a `paste` message (see
+  below) over a connection of its own, as every command dials, with the
+  workspace session's key; the daemon writes it to a file and types the
+  file's path into the agent's pane with no Enter, so text can be added
+  before sending, and Claude Code takes the path as the image. A paused
+  host, a daemon without `paste`, a plain attachment, which is no
+  worktree's, and a failed read, send or paste are shown with
+  `display-message` to the client for five seconds, and nothing is
+  typed. It needs `osascript` (macOS) or `wl-paste` or `xclip` here,
+  and a daemon of this build on the host. Not covered: pasting from a
+  machine that does not run laatmux, which needs a terminal protocol
+  for clipboard images; agents that take no path as an image; and a
+  file copied in Finder, a file reference with its icon as image data,
+  which gets `C-v` as without the binding.
 - **`dashboard`** is the same view filling whatever it runs in, compact
   with titles by default, `--layout tiles` otherwise. A jump exits, so
   under `display-popup -E` the popup closes:

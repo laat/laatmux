@@ -121,6 +121,8 @@ func cmdServe(ctx context.Context, args []string) error {
 		Store: store, Reread: reread, Agents: agentCommands(cfg), Shutdown: shutdown,
 		Commands: filepath.Join(home.Dir(), "commands"),
 		Pending:  filepath.Join(home.Dir(), "pending"),
+		// The images paste-image sends from the laptop's clipboard.
+		Paste: filepath.Join(home.Dir(), "paste"),
 		// What the user has seen, kept across restarts, and what this
 		// machine's tmux clients show.
 		Attention: filepath.Join(home.Dir(), "attention.json"),

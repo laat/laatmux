@@ -37,11 +37,12 @@ One binary, three roles:
   sidebar pane, the dashboard popup, `compose`, `tasks`, `jump`, `path`,
   `prune`; `hosts` for its GitHub line, dialling every host itself for
   the rest) dial the local daemon, starting it on demand, and read the
-  merged stream; `add`, `rm`, `run` and `new`, and `prune` for its facts
-  and removals, go through the local daemon's
+  merged stream; `add`, `rm`, `run` and `new`, `prune` for its facts
+  and removals, and `paste-image run` for the image it sends, go
+  through the local daemon's
   relay or dial the host themselves through the bridge (a `jump` to the
   user's default server switches through tmux alone). `sidebar
-  on|off|attach|reap|fit`, `split`, `settle`, `unsettle`, `shell` (a
+  on|off|attach|reap|fit`, `paste-image on|off`, `split`, `settle`, `unsettle`, `shell` (a
   shell window, local or over ssh) and `explain` work tmux directly; the
   sidebar's controls (`next`, `prev`, `jump`, `view`, `scope`) find the
   pane through tmux and write to its socket; `upgrade` builds or takes a
@@ -90,7 +91,7 @@ its file:
 | worktrees | worktrees.go | the git listing, the managed sessions by root, the published join |
 | attribution | attribution.go, resolve.go | which worktree a pane is in, by its path under the listed roots, with a cache of resolved paths |
 | git status | gitstatus.go | diff stats per worktree, refreshed when due |
-| the task runner | runner.go, commands.go, task.go, runs.go, trust.go, prune.go | `add`, `rm`, `run`, prompt delivery, the trust watchers, prune's facts and rm's branch deletion; the command table and the keyed locks |
+| the task runner | runner.go, commands.go, task.go, runs.go, trust.go, prune.go, paste.go | `add`, `rm`, `run`, prompt delivery, the trust watchers, prune's facts and rm's branch deletion, a pasted image's file and path; the command table and the keyed locks |
 | the journal | journal.go | one file per task on the host, what a restart recovers |
 | the merge | merge.go | the hosts dialled, their records kept, the merged stream |
 | the relay | relay.go, gone.go | the pending tasks, their delivery to a host, their handoff to the worktree they became, and what is left of a task once that worktree goes (gone.go) |

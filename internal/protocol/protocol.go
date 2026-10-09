@@ -37,6 +37,7 @@ const (
 	TypeSelect    = "select"    // client -> daemon with select, make a pane and its window the managed server's current; answered with a result
 	TypePrompt    = "prompt"    // client -> daemon, deliver a prompt to the agent an add started, as one numbered attempt; to a relay, without a number, deliver a pending record's prompt now
 	TypeFacts     = "facts"     // client -> daemon with prune, what prune decides on for each of roots; answered with a result carrying facts
+	TypePaste     = "paste"     // client -> daemon with paste, write an image to a file on the host and type its path into the agent's pane at a root, with no Enter; answered with a result
 	TypeDismiss   = "dismiss"   // client -> relay, drop a pending record that needs the user, or one that handed over; with environment_id and root, the finished ones at that worktree, the id then the request's own, and with listing, rm's stamp, the handed-over ones whose add it is after
 	TypeProgress  = "progress"  // daemon -> client, one step of a running add
 	TypeResult    = "result"    // daemon -> client, reply to a command
@@ -178,6 +179,14 @@ const (
 	// runs in it; a client sends them only to a daemon with it. A daemon
 	// with prune has rm.
 	CapPrune = "prune"
+	// CapPaste is the paste message: the daemon writes the PNG it
+	// carries to a file of its own, removing the files there older than
+	// an hour, and types the file's path into the pane of the agent at
+	// the root, found as a prompt delivery adopts it, as one bracketed
+	// paste with no Enter, so the user can add text before sending. The
+	// result is ok when the path reached the pane. A client sends it
+	// only to a daemon with it, and reports one without.
+	CapPaste = "paste"
 )
 
 // Progress states, in Message.State of a progress message. A stage may
@@ -216,6 +225,10 @@ const (
 	// delete_branch: done when it went, skip with why when it stays.
 	StageBranch = "branch"
 )
+
+// PNGSignature is how every PNG begins, and so the image of a paste
+// message; a daemon refuses one that does not.
+const PNGSignature = "\x89PNG\r\n\x1a\n"
 
 // ErrUnknownCommand is the result error a follow gets for an id the
 // daemon does not know: never sent, finished more than the retention
@@ -911,6 +924,11 @@ type Message struct {
 	// is one record per root, in the order asked.
 	Roots []string    `json:"roots,omitempty"`
 	Facts []RootFacts `json:"facts,omitempty"`
+	// Image on paste is the PNG to write on the host, base64 on the
+	// wire as encoding/json writes bytes, starting with PNGSignature;
+	// EnvironmentID and Root are the workspace's key, whose agent gets
+	// the file's path.
+	Image []byte `json:"image,omitempty"`
 
 	// progress, and the failed stage in a result
 	Stage  string `json:"stage,omitempty"`
