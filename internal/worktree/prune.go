@@ -104,6 +104,13 @@ func removable(ctx context.Context, root string) (locked bool, reason string, su
 	if fi, err := os.Stat(filepath.Join(gitDir, "modules")); err == nil && fi.IsDir() {
 		return locked, reason, true, nil
 	}
+	// The index of a large repository is read only where a submodule
+	// may be: a repository with a .gitmodules. A repository nested
+	// without one is a submodule to git all the same, whose removal git
+	// refuses: the cost of the fast path is that failure.
+	if _, err := os.Lstat(filepath.Join(root, ".gitmodules")); err != nil {
+		return locked, reason, false, nil
+	}
 	out, err = statusGit(ctx, root, "ls-files", "--stage", "-z")
 	if err != nil {
 		return false, "", false, err
@@ -208,6 +215,19 @@ func DeleteBranch(ctx context.Context, checkout, branch, head string) (deleted b
 	if now := strings.TrimSpace(out); now != head {
 		return false, fmt.Errorf("it is at %s now, not %s", short(now), short(head))
 	}
+	// A branch made a symbolic ref since names another branch, whose
+	// commit the check above read: not the branch the worktree had.
+	_, err = git(ctx, checkout, "symbolic-ref", "--quiet", ref)
+	switch {
+	case err == nil:
+		return false, errors.New("it is a symbolic ref now")
+	case !errors.As(err, &ee) || ee.ExitCode() != 1:
+		return false, err
+	}
+	// git branch -D also keeps a branch a worktree is rebasing or
+	// bisecting, which the listing shows detached; the worktree this
+	// rm removed had the branch checked out until now, so no other can
+	// be in either on it without a forced checkout.
 	entries, err := ListWorktrees(ctx, checkout)
 	if err != nil {
 		return false, err
@@ -229,9 +249,10 @@ func DeleteBranch(ctx context.Context, checkout, branch, head string) (deleted b
 // deleteRefAt deletes a ref that is at head. With the old value git
 // deletes it only if it is still there under the ref's lock: a commit
 // made on the branch since DeleteBranch looked, by a git of the
-// user's, is refused rather than deleted.
+// user's, is refused rather than deleted. --no-deref deletes the ref
+// itself, never the branch a symbolic ref made since would name.
 func deleteRefAt(ctx context.Context, checkout, ref, head string) error {
-	if _, err := git(ctx, checkout, "update-ref", "-d", ref, head); err != nil {
+	if _, err := git(ctx, checkout, "update-ref", "--no-deref", "-d", ref, head); err != nil {
 		if out, rerr := git(ctx, checkout, "rev-parse", "--verify", "--quiet", ref); rerr == nil && strings.TrimSpace(out) != head {
 			return fmt.Errorf("it is at %s now, not %s", short(strings.TrimSpace(out)), short(head))
 		}

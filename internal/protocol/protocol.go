@@ -557,9 +557,12 @@ const (
 // origin/master, main or master, the first that is a commit, "" when
 // none is, and Ahead, the commits HEAD has that Base does not;
 // OnOrigin, that origin's branch of the name is there as the last
-// fetch left it, and Pushed, that HEAD is in it. Error is why the
-// facts could not be read, a root that is no worktree of the host's
-// under the worktrees directory say; the rest is then empty.
+// fetch left it, and Pushed, that HEAD is in it; InUse, what the host
+// finds running in the worktree, a pane, a run or an add with no
+// outcome yet, "" when nothing, which rm's unused checks again. Error
+// is why the facts could not be read, a root that is no worktree of
+// the host's under the worktrees directory say; the rest is then
+// empty.
 type RootFacts struct {
 	Root        string `json:"root"`
 	Branch      string `json:"branch,omitempty"`
@@ -574,6 +577,7 @@ type RootFacts struct {
 	Ahead       int    `json:"ahead,omitempty"`
 	OnOrigin    bool   `json:"on_origin,omitempty"`
 	Pushed      bool   `json:"pushed,omitempty"`
+	InUse       string `json:"in_use,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 

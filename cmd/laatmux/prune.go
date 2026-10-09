@@ -185,6 +185,8 @@ func decide(in pruneInput) (remove bool, reason string) {
 		return false, tmux.Printable(f.Error)
 	case f.Branch != w.Branch:
 		return false, "the branch is " + branchOrDetachedName(f.Branch) + " now"
+	case f.InUse != "":
+		return false, "in use, by " + tmux.Printable(f.InUse)
 	case f.Changed > 0:
 		return false, "dirty: " + plural(f.Changed, "changed file")
 	case f.Locked && f.LockReason != "":

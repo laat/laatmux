@@ -449,6 +449,7 @@
       "ahead": 1,
       "on_origin": true,
       "pushed": true,
+      "in_use": "in_use",
       "error": "error"
     }
   ],

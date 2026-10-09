@@ -200,12 +200,26 @@ func TestDeleteBranch(t *testing.T) {
 		t.Fatalf("the main checkout's branch: %v %v", deleted, err)
 	}
 
+	// A branch made a symbolic ref to main, at the commit, is not the
+	// branch: it stays, and so does main.
+	run(t, c, "git", "symbolic-ref", "refs/heads/sym", "refs/heads/main")
+	if deleted, err := DeleteBranch(ctx, c, "sym", head); err == nil || deleted || !strings.Contains(err.Error(), "symbolic ref") {
+		t.Fatalf("a symbolic ref: %v %v", deleted, err)
+	}
+
 	// The deletion itself is conditional: a branch moved between the
-	// look and the deletion stays.
+	// look and the deletion stays; one made a symbolic ref goes alone,
+	// not the branch it names.
 	if err := deleteRefAt(ctx, c, "refs/heads/moved", head); err == nil || !strings.Contains(err.Error(), "not "+head[:7]) {
 		t.Fatalf("deleteRefAt of a moved branch: %v", err)
 	}
 	if _, err := git(ctx, c, "rev-parse", "--verify", "refs/heads/moved"); err != nil {
 		t.Fatal("the moved branch went")
+	}
+	if err := deleteRefAt(ctx, c, "refs/heads/sym", head); err != nil {
+		t.Fatalf("deleteRefAt of a symbolic ref: %v", err)
+	}
+	if _, err := git(ctx, c, "rev-parse", "--verify", "refs/heads/main"); err != nil {
+		t.Fatal("the branch a symbolic ref named went")
 	}
 }

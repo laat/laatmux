@@ -34,7 +34,7 @@ func (c *clientConn) facts(m protocol.Message) error {
 	ctx, cancel := c.context()
 	go func() {
 		defer cancel()
-		res.Facts, res.OK = readFacts(ctx, d.cfg.Store, d.factSlots, m.Roots), true
+		res.Facts, res.OK = d.tasks.readFacts(ctx, d.factSlots, m.Roots), true
 		if ctx.Err() != nil {
 			return
 		}
@@ -59,10 +59,14 @@ func (c *clientConn) context() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
-// readFacts is the facts for each root, in order, the listing read
-// once for all of them; slots bounds the roots read at once.
-func readFacts(ctx context.Context, store *worktree.Store, slots chan struct{}, roots []string) []protocol.RootFacts {
+// readFacts is the facts for each root, in order, the listing and the
+// watched servers read once for all of them; slots bounds the roots
+// read at once. What runs in a root is what inUseAt finds there, said
+// in the plan, which rm's unused checks again under its locks.
+func (rn *taskRunner) readFacts(ctx context.Context, slots chan struct{}, roots []string) []protocol.RootFacts {
+	store := rn.cfg.Store
 	recs, listErr := store.List(ctx)
+	panes, panesErr := rn.listActive(ctx)
 	listed := map[string]bool{}
 	for _, r := range recs {
 		listed[r.Root] = true
@@ -93,8 +97,13 @@ func readFacts(ctx context.Context, store *worktree.Store, slots chan struct{}, 
 			defer func() { <-slots }()
 			f, err := worktree.ReadFacts(ctx, clean)
 			f.Root = root
-			if err != nil {
+			switch {
+			case err != nil:
 				f.Error = err.Error()
+			case panesErr != nil:
+				f.InUse = "what the host's tmux servers hold, not known: " + panesErr.Error()
+			default:
+				f.InUse = rn.inUseAt(clean, panes, false)
 			}
 			out[i] = f
 		}()
@@ -103,54 +112,80 @@ func readFacts(ctx context.Context, store *worktree.Store, slots chan struct{}, 
 	return out
 }
 
-// inUse is what runs in a worktree root, for rm's unused, prune's,
-// which removes only a worktree nothing uses: an add at it with no
-// outcome yet; a run; a pane of the managed server, listed now, made
-// at the root or with its current path under it; or a pane of any
-// server the daemon watches whose path the last poll saw under it,
-// laatmux's own panes left out, as the pane records leave them. ""
-// when nothing does. rm holds every repository, so an add's session is
-// there by now or comes after the removal; a session new makes takes
-// no lock, and one made between this and the kill is killed.
-func (rn *taskRunner) inUse(ctx context.Context, root string) (string, error) {
+// activePane is a pane of a watched server as inUseAt places it: what
+// to call it, the root laatmux made it at when it made it, and its
+// current path as tmux reports it and resolved.
+type activePane struct {
+	desc       string
+	made       string
+	path, real string
+}
+
+// listActive lists every server the daemon watches now, not as the
+// last poll saw them, since a poll that fails keeps the records it had:
+// the panes something of the user's may run in, laatmux's own left
+// out, as the pane records leave them. A server that is not running
+// has none; any other failure is an error, as a pane it hides may be
+// in a worktree.
+func (rn *taskRunner) listActive(ctx context.Context) ([]activePane, error) {
+	var out []activePane
+	for _, t := range rn.targets {
+		panes, err := t.Tmux.ListPanes(ctx)
+		if err != nil && !tmux.HookOnly(err) {
+			if tmux.NoServer(err) {
+				continue
+			}
+			return nil, fmt.Errorf("the %s server's panes: %w", t.Label, err)
+		}
+		for _, p := range panes {
+			if p.Own {
+				continue
+			}
+			a := activePane{desc: fmt.Sprintf("pane %s of session %s on the %s server", p.ID, tmux.Printable(p.Session), t.Label), path: p.CurrentPath}
+			if p.Managed {
+				a.made = p.Cwd
+			}
+			if real, err := filepath.EvalSymlinks(p.CurrentPath); err == nil {
+				a.real = real
+			}
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// inUseAt is what runs in a worktree root, for prune, which removes
+// only a worktree nothing uses: an add at it with no outcome yet; a
+// run; or a pane of panes, listed by listActive, made at the root, as
+// rm kills it, or with its path under it. "" when nothing does. With
+// fence, rm's, the root's removal generation is bumped where the runs
+// are read, so a run that resolved before cannot register after;
+// should the removal not happen, such a run is refused with a retry.
+// rm holds every repository, which an add holds until its agent runs
+// and new holds while it makes a session in a worktree, so neither
+// starts anything between this and the kill.
+func (rn *taskRunner) inUseAt(root string, panes []activePane, fence bool) string {
 	under := func(p string) bool { return p == root || strings.HasPrefix(p, root+"/") }
 	if rn.journal != nil {
 		if id := rn.journal.liveAt(root); id != "" {
-			return "add " + id + ", which has no outcome yet", nil
+			return "add " + id + ", which has no outcome yet"
 		}
 	}
 	rn.mu.Lock()
+	if fence {
+		rn.rootGen[root]++
+	}
 	runs := len(rn.runs[root])
-	var seen string
-	for _, st := range rn.panes {
-		if st.observed && !st.pane.Own && under(st.path) {
-			server := "a watched"
-			if st.target != nil {
-				server = "the " + st.target.Label
-			}
-			seen = fmt.Sprintf("pane %s of session %s on %s server", st.pane.ID, tmux.Printable(st.pane.Session), server)
-			break
-		}
-	}
 	rn.mu.Unlock()
-	switch {
-	case runs > 0:
-		return "a run", nil
-	case seen != "":
-		return seen, nil
-	case rn.managed == nil:
-		return "", nil
-	}
-	panes, err := rn.listManaged(ctx)
-	if err != nil && !tmux.NoServer(err) {
-		return "", err
+	if runs > 0 {
+		return "a run"
 	}
 	for _, p := range panes {
-		if p.Managed && p.Cwd == root || under(p.CurrentPath) {
-			return fmt.Sprintf("pane %s of session %s on the %s server", p.ID, tmux.Printable(p.Session), rn.managed.Label), nil
+		if p.made == root || under(p.path) || p.real != "" && under(p.real) {
+			return p.desc
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // deleteBranch is rm's delete_branch, once git has removed the

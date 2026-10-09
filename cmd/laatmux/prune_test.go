@@ -67,6 +67,8 @@ func TestPruneDecide(t *testing.T) {
 		{"dirty", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 3 })}, false, "dirty: 3 changed files"},
 		{"dirty, one file", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 1 })}, false, "dirty: 1 changed file"},
 		{"dirty and merged", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed = 1; f.Ahead = 2 }), Branch: pr("merged", false, "abc")}, false, "dirty: 1 changed file"},
+		{"in use", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.InUse = "add a1, which has no outcome yet" })}, false, "in use, by add a1, which has no outcome yet"},
+		{"in use and dirty", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.InUse, f.Changed = "a run", 2 })}, false, "in use, by a run"},
 		{"dirty and locked", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Changed, f.Locked = 1, true })}, false, "dirty: 1 changed file"},
 		{"locked", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Locked, f.LockReason = true, "keep me" })}, false, "locked: keep me"},
 		{"locked, no reason", pruneInput{Worktree: w, Facts: facts(func(f *protocol.RootFacts) { f.Locked = true })}, false, "locked"},

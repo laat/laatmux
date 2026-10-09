@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1286,6 +1287,13 @@ func (c *clientConn) newSession(m protocol.Message) error {
 	if err := config.CheckCmd(m.Cmd); err != nil {
 		res.Error = err.Error()
 		return c.pc.Write(res)
+	}
+	if d.cfg.Store != nil && m.Cwd != "" && d.cfg.Store.Owns(filepath.Clean(m.Cwd)) {
+		// A session in a worktree is made under the hold on every
+		// repository an add takes, so an rm, which holds them all,
+		// never has one start between its look at the root and the
+		// sessions it kills there.
+		defer d.tasks.holdRepos()()
 	}
 	made, err := d.managed.Tmux.NewSession(c.ctx, tmux.NewSessionOpts{Name: m.Name, Cwd: m.Cwd, Cmd: m.Cmd, Host: m.Host})
 	if err != nil {

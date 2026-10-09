@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,7 +126,8 @@ func TestFactsEndWithConnection(t *testing.T) {
 	slots <- struct{}{}
 	rctx, rcancel := context.WithCancel(context.Background())
 	done := make(chan []protocol.RootFacts, 1)
-	go func() { done <- readFacts(rctx, store, slots, []string{root, root}) }()
+	d, _ := addDaemon(t, store)
+	go func() { done <- d.tasks.readFacts(rctx, slots, []string{root, root}) }()
 	select {
 	case got := <-done:
 		t.Fatalf("read with every slot taken: %+v", got)
@@ -197,23 +199,43 @@ func TestRmHeadAndBranch(t *testing.T) {
 	}
 }
 
-// prune's rm with unused refuses a worktree something runs in since
-// the facts were read, a shell session jump made at its root say, and
-// leaves the worktree, the branch and the session; so does a pane of a
-// watched server the poll saw under the root, a run there and an add
-// at it with no outcome yet. With nothing there the worktree goes.
+// prune's rm with unused refuses a worktree something runs in when it
+// looks, listing every watched server then rather than trusting the
+// last poll: a shell session jump made at its root, also once the
+// shell has cd'd out; a pane of the user's default server under it; a
+// run; an add at it with no outcome yet; and a server whose panes
+// cannot be listed. Each leaves the worktree, the branch and the
+// session; the facts say the same as in_use. A pane in a root that
+// only begins with this one's, or laatmux's own pane, is no use. A run
+// that resolved before rm's look cannot register after it. With
+// nothing there the worktree goes.
 func TestRmUnused(t *testing.T) {
 	store, remote := newStore(t)
 	co, add := pruneCheckout(t, store, remote)
 	root := add("idle")
-	d, ft := addDaemon(t, store)
+	ft, dft := &fakeServer{}, &fakeServer{}
+	d := New(Config{
+		EnvironmentID: "env", Host: "box",
+		Targets: []Target{{Label: "laatmux", Tmux: ft, Managed: true}, {Label: "default", Tmux: dft}},
+		Procs:   &fakeProcs{tables: []procTable{{}}},
+		Store:   store, Agents: map[string][]string{"claude": {"claude"}},
+		Commands: t.TempDir(), Timings: testTimings,
+	})
 	pc := conn(t, d)
-	pc.Write(protocol.Message{Type: protocol.TypeFacts, ID: "f", Roots: []string{root}})
-	res, _ := result(t, pc, "f")
-	if !res.OK || res.Facts[0].Changed != 0 || res.Facts[0].Ahead != 0 {
-		t.Fatalf("facts %+v", res)
+	facts := func() protocol.RootFacts {
+		t.Helper()
+		pc.Write(protocol.Message{Type: protocol.TypeFacts, ID: "f", Roots: []string{root}})
+		res, _ := result(t, pc, "f")
+		if !res.OK || len(res.Facts) != 1 || res.Facts[0].Error != "" {
+			t.Fatalf("facts %+v", res)
+		}
+		return res.Facts[0]
 	}
-	head := res.Facts[0].Head
+	f := facts()
+	if f.Changed != 0 || f.Ahead != 0 || f.InUse != "" {
+		t.Fatalf("facts %+v", f)
+	}
+	head := f.Head
 	rm := func(id string) protocol.Message {
 		t.Helper()
 		pc.Write(protocol.Message{Type: protocol.TypeRm, ID: id, Repo: remote, Branch: "idle", Root: root, Head: head, Unused: true, DeleteBranch: true})
@@ -222,8 +244,8 @@ func TestRmUnused(t *testing.T) {
 	}
 	refused := func(id, by string) {
 		t.Helper()
-		if res := rm(id); res.OK || !strings.Contains(res.Error, "is in use since it was read, by "+by) {
-			t.Fatalf("%s: %+v", id, res)
+		if res := rm(id); res.OK || !strings.Contains(res.Error, by) {
+			t.Fatalf("%s: %+v, want %q", id, res, by)
 		}
 		if _, err := os.Stat(root); err != nil {
 			t.Fatalf("%s: the worktree went: %v", id, err)
@@ -231,42 +253,96 @@ func TestRmUnused(t *testing.T) {
 		if gitOut(t, co, "branch", "--list", "idle") == "" {
 			t.Fatalf("%s: the branch went", id)
 		}
+		if len(ft.kills) != 0 {
+			t.Fatalf("%s: killed %v", id, ft.kills)
+		}
 	}
 
+	// The shell jump made at the root has cd'd out: still its session,
+	// which rm would kill.
 	ft.set(func() {
-		ft.panes = []tmux.Pane{{Session: "proj/idle", SessionID: "$7", ID: "%7", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5, TTY: "/dev/null"}}
+		ft.panes = []tmux.Pane{{Session: "proj/idle", SessionID: "$7", ID: "%7", Cwd: root, CurrentPath: "/tmp", Managed: true, ServerPID: 5, TTY: "/dev/null"}}
 	})
-	refused("r1", "pane %7 of session proj/idle on the laatmux server")
-	if len(ft.kills) != 0 {
-		t.Fatalf("killed %v", ft.kills)
+	gen := d.tasks.runGen(root)
+	if f := facts(); f.InUse != "pane %7 of session proj/idle on the laatmux server" {
+		t.Errorf("facts' in_use: %q", f.InUse)
 	}
+	refused("r1", "is in use, by pane %7 of session proj/idle on the laatmux server; not removed")
+	if err := d.tasks.registerRun(&runJob{root: root}, gen); err == nil || err.Error() != "worktree removed; retry" {
+		t.Errorf("a run resolved before rm looked registered after: %v", err)
+	}
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{Session: "proj/idle", SessionID: "$7", ID: "%7", CurrentPath: root + "/sub", ServerPID: 5, TTY: "/dev/null"}}
+	})
+	refused("r2", "by pane %7 of session proj/idle on the laatmux server")
 	ft.set(func() { ft.panes = nil })
 
+	dft.set(func() { dft.panes = []tmux.Pane{{Session: "work", ID: "%3", CurrentPath: root}} })
+	refused("r3", "by pane %3 of session work on the default server")
+	dft.set(func() { dft.listErr = errors.New("tmux: lost server") })
+	refused("r4", "the default server's panes: tmux: lost server")
+	dft.set(func() {
+		dft.listErr = nil
+		dft.panes = []tmux.Pane{{Session: "work", ID: "%4", CurrentPath: root + "-2"}, {Session: "work", ID: "%5", CurrentPath: root, Own: true}}
+	})
+
 	d.mu.Lock()
-	d.panes["default/%3"] = &paneState{target: &target{Target: Target{Label: "default"}}, observed: true, path: root + "/src", pane: tmux.Pane{ID: "%3", Session: "work"}}
-	d.mu.Unlock()
-	refused("r2", "pane %3 of session work on the default server")
-	d.mu.Lock()
-	delete(d.panes, "default/%3")
 	d.tasks.runs[root] = map[*runJob]struct{}{newRunJob(): {}}
 	d.mu.Unlock()
-	refused("r3", "a run")
+	refused("r5", "by a run")
 	d.mu.Lock()
 	delete(d.tasks.runs, root)
 	d.mu.Unlock()
 	if err := d.journal.create(entry{ID: "add-1", Root: root, Branch: "idle", Source: remote, Repo: "proj"}); err != nil {
 		t.Fatal(err)
 	}
-	refused("r4", "add add-1, which has no outcome yet")
+	if f := facts(); f.InUse != "add add-1, which has no outcome yet" {
+		t.Errorf("facts' in_use: %q", f.InUse)
+	}
+	refused("r6", "by add add-1, which has no outcome yet")
 	if _, err := d.journal.update("add-1", func(e *entry) { e.Result = &protocol.Message{Type: protocol.TypeResult, OK: true} }); err != nil {
 		t.Fatal(err)
 	}
 
-	if res := rm("r5"); !res.OK {
+	if res := rm("r7"); !res.OK {
 		t.Fatalf("rm of an unused worktree: %+v", res)
 	}
 	if _, err := os.Stat(root); err == nil {
 		t.Fatal("the worktree is still there")
+	}
+}
+
+// A session new makes in a worktree waits for an rm in progress, which
+// holds every repository: none starts between rm's look at the root
+// and the sessions it kills. One elsewhere does not wait.
+func TestNewInWorktreeWaitsForRm(t *testing.T) {
+	store, _ := newStore(t)
+	d, _ := addDaemon(t, store)
+	pc := conn(t, d)
+	unlock := d.tasks.lockRepos()
+	pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n1", Name: "elsewhere", Cwd: t.TempDir()})
+	if res, _ := result(t, pc, "n1"); !res.OK {
+		t.Fatalf("new elsewhere: %+v", res)
+	}
+	pc.Write(protocol.Message{Type: protocol.TypeNew, ID: "n2", Name: "in-worktree", Cwd: store.Dirs.Worktree("proj", "x")})
+	got := make(chan protocol.Message, 1)
+	go func() {
+		res, _ := result(t, pc, "n2")
+		got <- res
+	}()
+	select {
+	case res := <-got:
+		t.Fatalf("new in a worktree did not wait for rm: %+v", res)
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case res := <-got:
+		if !res.OK {
+			t.Fatalf("new in a worktree: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("new in a worktree still waits")
 	}
 }
 

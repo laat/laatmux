@@ -519,18 +519,22 @@ truth; labels only place new things.
   keeps it. A root whose directory is gone has nothing to lose and
   passes. With `unused`, it is refused when something runs in the
   worktree, checked under the same locks as the removal: an add at the
-  root with no outcome yet in the journal, a run, a pane of the managed
-  server listed then that was made at the root or whose path is under
-  it, or a pane of any watched server whose path the last poll saw
-  under it. An add's session is there by then, as `rm` waits for every
-  add in flight; a session `new` makes takes no lock, and one made in
-  the moment between the check and the kill is killed. With
-  `delete_branch` too, once this `rm` has had git remove the worktree,
-  the branch is deleted when it is still at `head`, with its reflog and
-  its config, as `git branch -D` deletes them; the deletion is
-  `git update-ref -d` with `head` as the old value, so a commit made on
-  the branch in between is refused rather than deleted. A branch at
-  another commit, or that a worktree has checked out, stays. That is a
+  root with no outcome yet in the journal, a run, or a pane of any
+  watched server, each listed then rather than as the last poll saw it,
+  that laatmux made at the root, as `rm` kills it, or whose path is
+  under it; a server whose panes cannot be listed refuses it too. The
+  same check bumps the root's removal generation, so a run that
+  resolved before it is refused with `worktree removed; retry`, also
+  when the removal then does not happen. Nothing else starts there
+  before the kill: `rm` holds every repository, which an add holds until
+  its agent runs and `new` holds while it makes a session in a
+  worktree. With `delete_branch` too, once this `rm` has had git remove
+  the worktree, the branch is deleted when it is still at `head`, with
+  its reflog and its config, as `git branch -D` deletes them; the
+  deletion is `git update-ref --no-deref -d` with `head` as the old
+  value, so a commit made on the branch in between is refused rather
+  than deleted. A branch at another commit, one made a symbolic ref,
+  or one a worktree has checked out, stays. That is a
   progress line of stage `branch`, `done` or `skip` with why, and the
   result stays the removal's. An `rm` that removes no worktree, one
   already gone when it runs, leaves the branch, since which clone it
@@ -549,7 +553,10 @@ truth; labels only place new things.
   `origin/main`, `origin/master`, `main`, `master`, the first that is a
   commit, and `ahead`, the commits HEAD has that it does not;
   `on_origin`, that `refs/remotes/origin/<branch>` is there as the last
-  fetch left it, and `pushed`, that HEAD is in it. Unlike the git status
+  fetch left it, and `pushed`, that HEAD is in it; `in_use`, what
+  `unused` would find running there, an add with no outcome yet that
+  no client resends among it, without the removal's locks, so the plan
+  says it. Unlike the git status
   object's base, a branch's `laatmux-base` key does not count: what a
   branch was made from need not be where its work lands. Only a root
   git lists as a worktree under `worktrees/` is read, a main checkout's
@@ -557,7 +564,10 @@ truth; labels only place new things.
   listing is the worktree listing's; every read after it is
   `--no-optional-locks` with the refresh's timeout, and none goes to the
   network. Four roots are read at once, those of every connection
-  together, and the reads end with the connection that asked.
+  together, and the reads end with the connection that asked. The
+  index is read for submodules only in a worktree with a
+  `.gitmodules`: one nested without it, which git refuses to remove
+  all the same, is a removal that fails.
 - **`run`** `{type: run, id, repo, branch, root, cmd}`, capability `run`,
   runs `cmd` as a subprocess of the daemon in `root`, which must be a
   registered worktree of a known repository under `worktrees/` and, when
@@ -817,8 +827,9 @@ workspace session; the next `jump` makes it again.
   last commit, since a squash or rebase merge leaves the branch's
   commits ahead of the default branch, a commit made after the merge is
   in no PR, and a PR merged into another branch, the one under it in a
-  stack say, has not put its work in the default branch. A dirty one
-  stays with the count of changed files; a locked one with its reason
+  stack say, has not put its work in the default branch. One the host
+  finds in use stays with what uses it; a dirty one
+  with the count of changed files; a locked one with its reason
   and one with submodules, which git removes only by force; one ahead
   without such a PR with the count, whether it is pushed and its PR;
   the default branch's own worktree; and every worktree of a host
