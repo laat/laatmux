@@ -250,7 +250,7 @@ func (r Row) NeedsUser() bool {
 	case !p.Done || p.AttemptOpen:
 		return false
 	}
-	return !p.Complete() || p.Gone || p.RememberError != ""
+	return !p.Complete() || p.Gone
 }
 
 // Rank is the row's sort group in priority order: pending tasks, then
@@ -373,8 +373,6 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 		return "prompt not delivered", firstOf(p.AttemptError, p.Error)
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
 		return "prompt delivery unknown", firstOf(p.AttemptError, p.Error)
-	case p.Done && p.RememberError != "":
-		return "done, not added to the config", p.RememberError
 	case p.Done && !p.Listed:
 		return "done, awaiting the listing", p.ListingError
 	case p.Done:
@@ -391,15 +389,14 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 
 // WaitsOnHost reports whether the relay is asking the task's host for
 // something, or would be, and nothing else stands in the way: the add,
-// a prompt's delivery, or the listing after a complete add with its
-// repository in the config. Not a task with an outcome that leaves the
-// host out, its add failed or its worktree gone, nor one whose host
-// answers as another machine, nor one that needs the user first, its
-// prompt not delivered or its repository not appended. A task of a
+// a prompt's delivery, or the listing after a complete add. Not a task
+// with an outcome that leaves the host out, its add failed or its
+// worktree gone, nor one whose host answers as another machine, nor one
+// that needs the user first, its prompt not delivered. A task of a
 // paused host that waits on it says the host is paused.
 func WaitsOnHost(p protocol.Pending) bool {
 	return p.Mismatch == "" && !p.Gone && !(p.Done && !p.OK) &&
-		(!p.Done || p.AttemptOpen || !p.Listed && p.Complete() && p.RememberError == "")
+		(!p.Done || p.AttemptOpen || !p.Listed && p.Complete())
 }
 
 // stands is a task that may still become the worktree row at its root,

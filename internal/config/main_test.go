@@ -3,19 +3,18 @@ package config
 import (
 	"fmt"
 	"os"
-	"path"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestMain points the state directory at one of the run's own: AddRepo
+// TestMain points the state directory at one of the run's own: SetPaused
 // takes its lock there, and no test may reach the user's. A child that
-// TestAddRepoTwoProcesses starts appends instead, in the state
+// TestSetPausedTwoProcesses starts pauses instead, in the state
 // directory its parent gave it.
 func TestMain(m *testing.M) {
-	if job := os.Getenv("LAATMUX_TEST_APPEND"); job != "" {
-		os.Exit(appendJob(job))
+	if job := os.Getenv("LAATMUX_TEST_PAUSE"); job != "" {
+		os.Exit(pauseJob(job))
 	}
 	dir, err := os.MkdirTemp("", "lmxc")
 	if err != nil {
@@ -27,14 +26,13 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// appendJob appends the sources of a "<config>|<source>,<source>" job,
-// each named for its last element, with a pause between each write's
-// check and its rename.
-func appendJob(job string) int {
-	file, srcs, _ := strings.Cut(job, "|")
+// pauseJob pauses the hosts of a "<config>|<host>,<host>" job, with a
+// pause between each write's check and its rename.
+func pauseJob(job string) int {
+	file, hosts, _ := strings.Cut(job, "|")
 	testBeforeRename = func() { time.Sleep(200 * time.Millisecond) }
-	for _, src := range strings.Split(srcs, ",") {
-		if _, err := AddRepo(file, src, strings.TrimSuffix(path.Base(src), ".git")); err != nil {
+	for _, h := range strings.Split(hosts, ",") {
+		if _, err := SetPaused(file, h, true); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}

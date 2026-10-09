@@ -437,7 +437,6 @@ func TestPendingState(t *testing.T) {
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryUnknown, Error: "sent, not seen"}, false, "prompt delivery unknown", "sent, not seen"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, AttemptError: "recovery expired", Error: "x"}, false, "prompt not delivered", "recovery expired"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, ListingError: "git failed"}, false, "done, awaiting the listing", "git failed"},
-		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad"}, false, "done, not added to the config", "yaml: bad"},
 		{protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}, false, "done", ""},
 		{protocol.Pending{Unreachable: "ssh: timeout"}, false, "host unreachable, retrying", "ssh: timeout"},
 		{protocol.Pending{}, false, "submitted", ""},
@@ -455,8 +454,7 @@ func TestPendingState(t *testing.T) {
 // the host, for the add, the listing after a complete add or a prompt's
 // delivery, its row says the host is paused, and it does not need the
 // user for that; a task with an outcome the host is not asked about, or
-// one that needs the user first, its prompt not delivered or its
-// repository not appended, says that.
+// one that needs the user first, its prompt not delivered, says that.
 // The host's local workspace sessions are no orphaned lines, its
 // worktrees being out of the stream. Resumed, the task says where it is.
 func TestPausedHostTasks(t *testing.T) {
@@ -470,7 +468,6 @@ func TestPausedHostTasks(t *testing.T) {
 			{ID: "a4", Host: "vm", Repo: "proj", Branch: "four", Source: src, Taken: true, Sent: true, Done: true, Error: "boom"},
 			{ID: "a5", Host: "vm", Repo: "proj", Branch: "five", Source: src, EnvironmentID: "venv", Root: "/r/five", Taken: true, Sent: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready"},
 			{ID: "a6", Host: "vm", Repo: "proj", Branch: "six", Source: src, EnvironmentID: "venv", Root: "/r/six", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready"},
-			{ID: "a7", Host: "vm", Repo: "proj", Branch: "seven", Source: src, EnvironmentID: "venv", Root: "/r/seven", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryNone, RememberError: "yaml: bad"},
 			{ID: "a8", Host: "vm", Repo: "proj", Branch: "eight", Source: src, EnvironmentID: "venv", Root: "/r/eight", Taken: true, Sent: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 2},
 		},
 		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm", Source: src, Branch: "gone"}},
@@ -486,7 +483,6 @@ func TestPausedHostTasks(t *testing.T) {
 		{"a4", "failed", "boom", true},
 		{"a5", "prompt not delivered", "the pane was not ready", true},
 		{"a6", "prompt not delivered", "the pane was not ready", true},
-		{"a7", "done, not added to the config", "yaml: bad", true},
 		{"a8", "host vm is paused", "", false},
 	} {
 		r := byID[c.id]
@@ -500,19 +496,6 @@ func TestPausedHostTasks(t *testing.T) {
 	in.Hosts[0].Paused = false
 	if r := nodesByID(Tree(in))["a1"]; r.Paused || r.State() != "submitted" {
 		t.Errorf("resumed: paused %v state %q", r.Paused, r.State())
-	}
-}
-
-// A task whose repository could not be appended to the config needs
-// the user, though its add is complete: they fix the file or dismiss it.
-func TestNeedsUserRememberError(t *testing.T) {
-	p := protocol.Pending{Done: true, OK: true, Prompt: protocol.DeliveryNone, Listed: true}
-	if (Row{Pending: &p}).NeedsUser() {
-		t.Fatal("a complete task needs the user")
-	}
-	p.RememberError = "yaml: bad"
-	if !(Row{Pending: &p}).NeedsUser() {
-		t.Fatal("a failed append does not need the user")
 	}
 }
 

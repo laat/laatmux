@@ -419,8 +419,8 @@ func TestSubmit(t *testing.T) {
 	if l, _ := home.ReadLast(); l.Get("s").Host != "vm" || l.Get("s").Agent != "claude" {
 		t.Fatalf("last %+v", l)
 	}
-	if dropped, err := Dismiss(context.Background(), id); err != nil || dropped != "" {
-		t.Fatalf("dismiss: %q %v", dropped, err)
+	if err := Dismiss(context.Background(), id); err != nil {
+		t.Fatalf("dismiss: %v", err)
 	}
 	f.answer = func(m protocol.Message) protocol.Message {
 		return protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Prompt: protocol.DeliveryDelivered, Attempt: 1}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,7 +43,7 @@ func cmdTasks(ctx context.Context, args []string) error {
 	case "show":
 		return showTask(id)
 	case "dismiss":
-		return dismissTask(ctx, os.Stdout, id)
+		return command.Dismiss(ctx, id)
 	case "prompt":
 		state, reason, err := command.DeliverPending(ctx, id)
 		if err != nil {
@@ -58,21 +57,6 @@ func cmdTasks(ctx context.Context, args []string) error {
 		return nil
 	}
 	return errors.New("usage: laatmux tasks [show|dismiss|prompt <id>]")
-}
-
-// dismissTask drops a pending record through the local daemon, and
-// says to w what went with it, the append of a repository new to the
-// config, so the user adds it by hand or pastes the source again; a
-// dismiss that dropped nothing more says nothing, as before.
-func dismissTask(ctx context.Context, w io.Writer, id string) error {
-	dropped, err := command.Dismiss(ctx, id)
-	if err != nil {
-		return err
-	}
-	if dropped != "" {
-		fmt.Fprintf(w, "dismissed %s; %s\n", id, dropped)
-	}
-	return nil
 }
 
 // listTasks reads the merged stream's snapshot, which carries the
@@ -169,8 +153,6 @@ func TaskState(p protocol.Pending, configured bool) string {
 		return "prompt not delivered: " + tmux.Printable(p.Error)
 	case p.Done && p.Prompt == protocol.DeliveryUnknown:
 		return "prompt delivery unknown: " + tmux.Printable(p.Error)
-	case p.Done && p.RememberError != "":
-		return "done; not added to the config's repos: " + tmux.Printable(p.RememberError)
 	case p.Done && !p.Listed && p.ListingError != "":
 		return "done, awaiting the listing: " + tmux.Printable(p.ListingError)
 	case p.Done && !p.Listed:

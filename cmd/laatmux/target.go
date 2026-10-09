@@ -59,12 +59,21 @@ func splitRepoBranch(target string) (repo, branch string, err error) {
 // under the local host's repos or worktrees directory, where the next
 // path component is the label. An origin that is not a known source is
 // an error, not a fall back to the label: the label may belong to another
-// source by now.
-func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Repo, error) {
+// source by now. The config's entries are looked at first, as they were
+// before the known set; known, the known set, is asked only for what
+// they do not have.
+func resolveRepo(ctx context.Context, cfg config.Config, known func() merged.Known, flag string) (config.Repo, error) {
 	if flag != "" {
-		r, ok := cfg.Repo(flag)
+		if r, ok := cfg.Repo(flag); ok {
+			return r, nil
+		}
+		k := known()
+		r, ok, err := k.Find(flag)
+		if err != nil {
+			return config.Repo{}, err
+		}
 		if !ok {
-			return config.Repo{}, fmt.Errorf("unknown repository %q; configured: %s", flag, repoList(cfg))
+			return config.Repo{}, k.Unknown(flag)
 		}
 		return r, nil
 	}
@@ -80,14 +89,73 @@ func resolveRepo(ctx context.Context, cfg config.Config, flag string) (config.Re
 		if r, ok := cfg.RepoBySource(origin); ok {
 			return r, nil
 		}
-		return config.Repo{}, fmt.Errorf("%s has origin %s, which is not a configured repository; use --repo (configured: %s)", tmux.Printable(cwd), origin, repoList(cfg))
+		k := known()
+		if r, ok := k.BySource(origin); ok {
+			return r, nil
+		}
+		return config.Repo{}, fmt.Errorf("%s has origin %s, which is %s; use --repo (%s)", tmux.Printable(cwd), origin, k.Missing(), k.List())
 	}
 	if label, ok := labelUnder(cfg, cwd); ok {
 		if r, ok := cfg.RepoByName(label); ok {
 			return r, nil
 		}
+		if r, ok, err := known().ByName(label); ok || err != nil {
+			return r, err
+		}
 	}
-	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (configured: %s)", tmux.Printable(cwd), repoList(cfg))
+	return config.Repo{}, fmt.Errorf("%s is not inside a known repository; use --repo (%s)", tmux.Printable(cwd), known().List())
+}
+
+// lookupRepo is the repository the <repo> of a <repo>/<branch> names:
+// the config's entry of that name, as before the known set, else the
+// known set's, which known reads only then.
+func lookupRepo(cfg config.Config, known func() merged.Known, name string) (config.Repo, error) {
+	if r, ok := cfg.RepoByName(name); ok {
+		return r, nil
+	}
+	k := known()
+	r, ok, err := k.ByName(name)
+	switch {
+	case err != nil:
+		return config.Repo{}, err
+	case !ok:
+		return config.Repo{}, k.Unknown(name)
+	}
+	return r, nil
+}
+
+// readKnown is the known set (merged.Known): the config's entries and
+// the checkouts every host has discovered, from the local daemon's
+// merged stream, the one the sidebar reads, each host waited on until
+// it is listed, has failed or is paused, for at most snapshotTimeout. A
+// host still waited on then counts with what the daemon has of it. With
+// no local daemon that answers, or none with the merged stream, the
+// config's entries alone.
+func readKnown(ctx context.Context, cfg config.Config) merged.Known {
+	c, ok := merged.Dial(ctx)
+	if !ok {
+		return merged.ConfigOnly(cfg)
+	}
+	defer c.Close()
+	m := merged.New()
+	if _, err := m.Read(ctx, c, snapshotTimeout, func(waiting []string) bool { return len(waiting) == 0 }); err != nil {
+		return merged.ConfigOnly(cfg)
+	}
+	return m.Known(cfg)
+}
+
+// lazyKnown is the known set read once, by readKnown, the first time it
+// is asked for: a command whose repository the config lists never
+// waits on the hosts.
+func lazyKnown(ctx context.Context, cfg config.Config) func() merged.Known {
+	var k *merged.Known
+	return func() merged.Known {
+		if k == nil {
+			v := readKnown(ctx, cfg)
+			k = &v
+		}
+		return *k
+	}
 }
 
 // labelUnder is the path component after one of the local host's repos

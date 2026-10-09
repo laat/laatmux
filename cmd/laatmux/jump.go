@@ -372,8 +372,10 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 
 // addCommand is the add line for the worktree's branch on the host. Its
 // --repo is resolved against this machine's config, so it names the
-// source as this machine knows it, not by the host's label; a record
-// without a source leaves it to the reader, and the agent with it. The
+// source as this machine knows it, not by the host's label, and a source
+// the config does not list as the record has it, which add knows as a
+// checkout of the record's host; a record without a source leaves it to
+// the reader, and the agent with it. The
 // line is for pasting into a shell, and git takes branches such as it's
 // and a$(x): each word is quoted as ShellJoin quotes it, only when it
 // needs to be, and the placeholder the reader replaces is left as it is.
@@ -382,9 +384,9 @@ func elsewhere(snap protocol.Message, w protocol.Worktree, name string) (string,
 // branch is written as dollarQuote writes it.
 // It names an agent only where add would refuse to pick one: no agent
 // last used for the repository is still configured (in last, last.json
-// as add reads it, by the config's source), there is no default_agent,
-// and more than one agent is configured. The agent named is then the
-// first, which the add form preselects too.
+// as add reads it, by the config's source, else the record's), there is
+// no default_agent, and more than one agent is configured. The agent
+// named is then the first, which the add form preselects too.
 func addCommand(cfg config.Config, h config.Host, w protocol.Worktree, last home.Last) string {
 	quote := func(s string) string { return tmux.ShellJoin([]string{s}) }
 	repo := "<repo>"
@@ -396,8 +398,12 @@ func addCommand(cfg config.Config, h config.Host, w protocol.Worktree, last home
 		branch = dollarQuote(w.Branch)
 	}
 	line := fmt.Sprintf("laatmux add %s --repo %s --host %s", branch, repo, quote(h.Name))
-	if r, ok := cfg.RepoBySource(w.Source); ok {
-		if _, _, err := cfg.DefaultAgent("", last.Get(r.Source).Agent); err != nil && len(cfg.Agents) > 0 {
+	if w.Source != "" {
+		src := w.Source
+		if r, ok := cfg.RepoBySource(w.Source); ok {
+			src = r.Source
+		}
+		if _, _, err := cfg.DefaultAgent("", last.Get(src).Agent); err != nil && len(cfg.Agents) > 0 {
 			line += " --agent " + quote(cfg.AgentNames()[0])
 		}
 	}
@@ -427,9 +433,10 @@ func dollarQuote(s string) string {
 }
 
 // localRepoArg is the record's repository as this machine names it: its
-// label here when the source is known, else the source itself, which
-// the add form matches against the config's sources. --repo takes either
-// only for a repository the config lists.
+// name in the config when the config lists the source, else the source
+// itself, which the add form matches against the known sources and
+// --repo takes for any known repository: the record's host has a
+// checkout of it.
 func localRepoArg(cfg config.Config, w protocol.Worktree) string {
 	if r, ok := cfg.RepoBySource(w.Source); ok {
 		return r.Name

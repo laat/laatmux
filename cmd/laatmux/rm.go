@@ -59,9 +59,9 @@ func cmdRm(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		repo, ok := cfg.RepoByName(repoLabel)
-		if !ok {
-			return fmt.Errorf("unknown repository %q; configured: %s", repoLabel, repoList(cfg))
+		repo, err := lookupRepo(cfg, lazyKnown(ctx, cfg), repoLabel)
+		if err != nil {
+			return err
 		}
 		if rm.Host, _, err = hostFor(cfg, a.host, repo, false); err != nil {
 			return err

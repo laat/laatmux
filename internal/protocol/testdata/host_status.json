@@ -11,5 +11,14 @@
   "capabilities": [
     "x"
   ],
+  "repos": {
+    "checkouts": [
+      {
+        "repo": "repo",
+        "source": "source",
+        "root": "root"
+      }
+    ]
+  },
   "since": "2026-10-01T12:00:00Z"
 }

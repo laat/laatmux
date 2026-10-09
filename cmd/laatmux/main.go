@@ -171,7 +171,7 @@ func usage() {
             laatmux hosts pause|resume <host>   stop dialling the host from this machine, or start again
   upgrade   laatmux upgrade <host>... [--src dir] [--bin file]   build for the host, install, restart its daemon
   stop      end this machine's daemon cleanly; the next command starts one again
-  repos     known repositories and where each lands on each host
+  repos     known repositories: configured, discovered on which hosts, and where each lands
   explain   laatmux explain <pane-id>       show detection inputs and decision
   version
 

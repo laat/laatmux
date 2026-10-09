@@ -656,14 +656,10 @@ func TestRelayPausedHost(t *testing.T) {
 // pauseRelays cancels every goroutine of a paused host's records at
 // once, a retired record's gone check among them, though an earlier
 // pause's worker still waits on one that has not ended; the waits and
-// the restarts are the workers', one record at a time. A retired record
-// still asking for its append has the append's goroutine started again,
-// and another host's records keep theirs.
+// the restarts are the workers', one record at a time. Another host's
+// records keep theirs.
 func TestPauseRelaysCancels(t *testing.T) {
-	appended := make(chan string, 4)
-	f := newRelayFixtureWith(t, nil, t.TempDir(), t.TempDir(), func(c *Config) {
-		c.AppendRepo = func(src, name string) (bool, error) { appended <- src; return true, nil }
-	})
+	f := newRelayFixtureWith(t, nil, t.TempDir(), t.TempDir(), nil)
 	// The records come after the start's resume, which would settle
 	// them itself.
 	f.awaitFirstSweep(t)
@@ -672,8 +668,7 @@ func TestPauseRelaysCancels(t *testing.T) {
 		p := pendingFile{Pending: protocol.Pending{ID: id, Host: host, Source: f.source(), Repo: "proj", Branch: id, Taken: true, Sent: true, Done: true, OK: true,
 			Listed: true, Prompt: protocol.DeliveryNone, SubmittedAt: time.Now(), UpdatedAt: time.Now()}}
 		if retired {
-			p.ReplacedBy, p.RetiredAt, p.Remember = "henv/worktree//w/proj/"+id, time.Now(), true
-			p.RepoEntry = &protocol.RepoEntry{Source: "git@x:o/r1.git", Name: "r1"}
+			p.ReplacedBy, p.RetiredAt = "henv/worktree//w/proj/"+id, time.Now()
 		}
 		if _, err := f.local.relay.create(p); err != nil {
 			t.Fatal(err)
@@ -710,15 +705,6 @@ func TestPauseRelaysCancels(t *testing.T) {
 	if !gone(stuck) || !gone(check) {
 		t.Fatal("the paused host's goroutines not cancelled")
 	}
-	select {
-	case src := <-appended:
-		if src != "git@x:o/r1.git" {
-			t.Fatalf("appended %s", src)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the retired record's append not started again")
-	}
-	f.awaitRecord(t, "r1", 5*time.Second, func(p pendingFile) bool { return !p.Remember })
 	// The first pause's worker still waits on stuck: a goroutine started
 	// since is cancelled by the next pause all the same.
 	later := start("x1", func(ctx context.Context) { <-ctx.Done() })

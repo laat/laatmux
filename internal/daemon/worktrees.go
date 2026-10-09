@@ -83,6 +83,7 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 		now := time.Now()
 		d.publishWorktreesLocked(now)
 		d.setRootsLocked(roots, now)
+		d.publishReposLocked(mains)
 		d.publishListingLocked()
 		listed := listedIDs(d.worktrees)
 		d.hostListedLocked(d.cfg.EnvironmentID, listed, false)
@@ -93,9 +94,9 @@ func (d *Daemon) pollWorktrees(ctx context.Context) {
 
 // runConfig looks at the config file every worktree interval until ctx
 // is done (readConfig), on a daemon with a store or without one: the
-// relay of a laptop whose own entry has no directories appends too.
-// The first look is Run's, before the relay resumes its records, so a
-// change after a resumed append's read is one the loop sees.
+// relay of a laptop whose own entry has no directories lets go of a
+// host paused too. The first look is Run's, before the relay resumes
+// its records.
 func (d *Daemon) runConfig(ctx context.Context) {
 	t := time.NewTicker(d.cfg.WorktreeInterval)
 	defer t.Stop()
@@ -114,11 +115,10 @@ func (d *Daemon) runConfig(ctx context.Context) {
 // worktree, and the adds the agents' commands, so the next add uses
 // them, and a poll at once labels the checkouts by the repositories;
 // the merged subscribers get the hosts it lists (rereadHosts); the
-// relay lets go of a host paused (pauseRelays) and retries the appends
-// still asked for, which the change may let through. Those last not on
-// the first read, Run's before any subscription and before the relay
-// resumes its records, which then
-// read the file as it found it or later. A file that does not read is
+// relay lets go of a host paused (pauseRelays). Those two not on the
+// first read, Run's before any subscription and before the relay
+// resumes its records, which then read the file as it found it or
+// later. A file that does not read is
 // logged once per change of message, and the daemon keeps what it had.
 // A read of the hosts that failed last, a file being written as a
 // subscription read it say, is made again at every look, the file
@@ -142,7 +142,6 @@ func (d *Daemon) readConfig(ctx context.Context) {
 		if !first {
 			d.rereadHosts()
 			d.pauseRelays()
-			d.rememberAgain(ctx)
 		}
 	case !first && d.hostsFailed():
 		d.rereadHosts()
@@ -167,6 +166,29 @@ func (d *Daemon) stepRevision() protocol.Listing {
 func (d *Daemon) publishListingLocked() {
 	l := d.listing
 	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Listing: &l, ListingError: d.listErr})
+}
+
+// publishReposLocked publishes the host's repositories, the listing's
+// main checkouts, when the set is not the one published last: to its
+// subscribers in an upsert of its own, and into the merged stream on
+// the local host's record, which carries a host's set there. Called
+// with d.mu held.
+func (d *Daemon) publishReposLocked(mains []worktree.Record) {
+	cos := make([]protocol.Checkout, 0, len(mains))
+	for _, r := range mains {
+		cos = append(cos, protocol.Checkout{Repo: r.Repo, Source: r.Source, Root: r.Root})
+	}
+	if d.repos != nil && slices.Equal(d.repos.Checkouts, cos) {
+		return
+	}
+	d.repos = &protocol.RepoSet{Checkouts: cos}
+	d.broadcastLocked(protocol.Message{Type: protocol.TypeUpsert, Repos: d.repos})
+	if mh := d.localHostLocked(); mh != nil {
+		mh.status.Repos = d.repos
+		mh.status.Since = time.Now()
+		st := mh.status
+		d.mbroadcastLocked(protocol.Message{Type: protocol.TypeUpsert, HostStatus: &st})
+	}
 }
 
 // pokeWorktrees asks for a poll now; a poll already pending is enough.

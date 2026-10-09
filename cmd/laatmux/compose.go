@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
@@ -54,8 +56,15 @@ func cmdCompose(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.Follow(ctx, c)
-	f := &addForm{repos: cfg.Repos, hosts: addHosts(cfg), agents: cfg.AgentNames(), reload: config.LoadSettled}
-	// No repository configured is the form with a picker for a pasted
+	// The candidates are the known set, which the merged stream carries:
+	// its snapshot is waited for, and this machine's host listed in it,
+	// whose checkouts the directory's repository is preselected from,
+	// for a moment at most; what the hosts send later is a candidate
+	// once the picker opens.
+	awaitLocal(ctx, st, localWait)
+	f := &addForm{hosts: addHosts(cfg), agents: cfg.AgentNames(), known: st.Known, reload: config.LoadSettled}
+	f.take(cfg)
+	// No repository known is the form with a picker for a pasted
 	// source, as the dashboard's a has.
 	switch {
 	case len(f.hosts) == 0:
@@ -72,8 +81,8 @@ func cmdCompose(ctx context.Context, args []string) error {
 	// opened in.
 	preRepo, preHost := workspacePreset(ctx, f.hosts)
 	if preRepo == "" {
-		if repo, err := resolveRepo(ctx, cfg, ""); err == nil {
-			preRepo = repo.Name
+		if repo, err := resolveRepo(ctx, cfg, func() merged.Known { return f.set }, ""); err == nil {
+			preRepo = repo.Source
 		}
 	}
 	form := buildForm(cfg, f, last, preRepo, preHost, "", st.HostCaps)
@@ -111,6 +120,32 @@ func cmdCompose(ctx context.Context, args []string) error {
 		fmt.Println(c2.outcome)
 	}
 	return err
+}
+
+// localWait bounds compose's wait for the merged stream's snapshot with
+// this machine's host listed: a popup is up within it whatever the
+// daemon is doing, a first poll on a cold one say.
+const localWait = 3 * time.Second
+
+// awaitLocal waits, for at most wait, until the state has the merged
+// stream's snapshot and the local host in it is listed, has failed or
+// is paused.
+func awaitLocal(ctx context.Context, st *merged.State, wait time.Duration) {
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	for {
+		s, waiting := st.Status(""), st.Waiting()
+		if s.Loaded && !slices.ContainsFunc(s.Hosts, func(h merged.Host) bool { return h.Local && slices.Contains(waiting, h.Name) }) {
+			return
+		}
+		select {
+		case <-st.Changed():
+		case <-t.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // composer is compose's view host: the form, then whatever the submit

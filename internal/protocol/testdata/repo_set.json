@@ -1,0 +1,9 @@
+{
+  "checkouts": [
+    {
+      "repo": "repo",
+      "source": "source",
+      "root": "root"
+    }
+  ]
+}

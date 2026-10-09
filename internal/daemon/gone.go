@@ -51,10 +51,10 @@ func (d *Daemon) worktreeRemovedLocked(worktreeID string, at *protocol.Listing) 
 }
 
 // dropRetiredAt drops the tasks that handed over to the worktree whose
-// adds the listing that found it gone reflects, each under its own
-// remember lock (dropRetired); what a record that handed over says of
-// its worktree does not change, so the choice made under the relay's
-// mutex holds after it.
+// adds the listing that found it gone reflects, each in a step of its
+// own (dropRetired); what a record that handed over says of its
+// worktree does not change, so the choice made under the relay's mutex
+// holds after it.
 func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
 	var ids []string
 	d.relay.mu.Lock()
@@ -65,7 +65,7 @@ func (d *Daemon) dropRetiredAt(worktreeID string, at protocol.Listing) {
 	}
 	d.relay.mu.Unlock()
 	for _, id := range ids {
-		d.dropRetired(id, "its worktree is removed")
+		d.dropRetired(id)
 	}
 }
 
@@ -222,7 +222,7 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *proto
 	}
 	d.relay.mu.Unlock()
 	for _, id := range retired {
-		d.dropRetired(id, "dismissed by rm of its worktree")
+		d.dropRetired(id)
 	}
 	for _, id := range ids {
 		d.dismissEnded(id)
@@ -237,32 +237,18 @@ func (d *Daemon) dismissAt(requestID, environmentID, root string, removed *proto
 // dropRetired.
 func (d *Daemon) worktreeGone(ctx context.Context, id string) {
 	if _, ok := d.persist(ctx, id, func(p *pendingFile) { p.Gone = true }); !ok {
-		d.dropRetired(id, "its worktree is gone")
+		d.dropRetired(id)
 	}
 }
 
 // dropRetired removes a record that had handed over, its worktree gone
 // or the user dismissing it: nothing is left for the prompt to say what
 // it was made for. The stream has no message for it; its handoff is
-// absent from the next snapshot. It runs under the record's remember
-// lock, so an append the record still asked for is not made after, and
-// is logged as dropped, why saying what dropped it; dropped is what the
-// log says.
-func (d *Daemon) dropRetired(id, why string) (dropped string, err error) {
-	rl := d.relay.rememberLock(id)
-	rl.Lock()
-	defer rl.Unlock()
+// absent from the next snapshot.
+func (d *Daemon) dropRetired(id string) error {
 	d.relay.mu.Lock()
-	if p, ok := d.relay.recs[id]; ok && p.retired() {
-		dropped = droppedAppend(p)
-	}
-	err = d.dropRetiredLocked(id)
-	d.relay.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-	d.logDropped(id, why, dropped)
-	return dropped, nil
+	defer d.relay.mu.Unlock()
+	return d.dropRetiredLocked(id)
 }
 
 // dropRetiredLocked is dropRetired with the relay's mutex held. A file

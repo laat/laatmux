@@ -110,15 +110,16 @@ const (
 	// source is refused. A daemon without it ignores the entry and
 	// resolves against its own config.
 	CapRepoEntry = "repo-entry"
-	// CapRemember is the relay listing a new repository in this
-	// machine's config: a relayed add with remember has its repo_entry
-	// appended to the config's repos, under the entry's name, once the
-	// host's add has succeeded, and a refused add leaves the config as
-	// it was. A source the config lists in any form is not added again.
-	// A daemon without it reads such an add without the field, and adds
-	// nothing to the config; a client sends remember only to a daemon
-	// with it.
-	CapRemember = "remember"
+	// CapRepos is a host's repositories: every main checkout under its
+	// repos directories with an origin, its config's or not, by the label
+	// the host gives it, sent as repos in the host's snapshot once its
+	// worktrees are listed and in an upsert of its own whenever a listing
+	// changes the set. A merging daemon with it puts each host's set, and
+	// its own, on the host's record, where a client takes the known
+	// repositories from; it keeps a set while the host is down, as it
+	// keeps the host's records. A daemon without it sends none, and its
+	// host's repositories are known by its records alone.
+	CapRepos = "repos"
 	// CapAttribution is the host attributing what runs to its worktrees:
 	// every agent record carries the worktree_id of the worktree whose
 	// root contains its pane's path, so a worktree has any number of
@@ -313,16 +314,11 @@ type Pending struct {
 	AttemptOpen bool   `json:"attempt_open,omitempty"`
 	// AttemptError is the host's refusal of the last attempt, recovery
 	// expired say, kept apart from Error, the add's own outcome.
-	AttemptError string `json:"attempt_error,omitempty"`
-	Listed       bool   `json:"listed,omitempty"`
-	ListingError string `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
-	Gone         bool   `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
-	// RememberError is why the add's repository, new to this machine's
-	// config, could not be appended to it after the add succeeded, while
-	// it cannot: the relay holds the handoff and tries again at start
-	// and whenever the config file changes.
-	RememberError string    `json:"remember_error,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	AttemptError string    `json:"attempt_error,omitempty"`
+	Listed       bool      `json:"listed,omitempty"`
+	ListingError string    `json:"listing_error,omitempty"` // why the host's listing after the result fails, while it does
+	Gone         bool      `json:"gone,omitempty"`          // the listing after the result had no worktree at the root
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Complete reports whether nothing about the add needs the user: it
@@ -684,10 +680,33 @@ type HostStatus struct {
 	// Paused is that the merging daemon's config has the host paused:
 	// it is not dialled and has no records in the stream until the
 	// config resumes it, when the record is replaced by one connecting.
-	Paused       bool      `json:"paused,omitempty"`
-	Version      string    `json:"version,omitempty"`
-	Capabilities []string  `json:"capabilities,omitempty"`
-	Since        time.Time `json:"since"` // when the record last changed
+	Paused       bool     `json:"paused,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	// Repos, from a merging daemon with repos, is the host's
+	// repositories as its daemon last sent them, kept while the host is
+	// down; nil while none has come, from a host without repos say, or
+	// while it is paused.
+	Repos *RepoSet  `json:"repos,omitempty"`
+	Since time.Time `json:"since"` // when the record last changed
+}
+
+// RepoSet is a host's repositories, from a daemon with repos: every
+// main checkout under its repos directories with an origin, in the
+// order its scan finds them. A clone of a repository the host's config
+// does not list is in it too, by the label the host makes of its
+// directory's name.
+type RepoSet struct {
+	Checkouts []Checkout `json:"checkouts"`
+}
+
+// Checkout is one main checkout of a host's: its label, which the
+// host's records carry as their repo, its origin, the source, and its
+// directory.
+type Checkout struct {
+	Repo   string `json:"repo"`
+	Source string `json:"source"`
+	Root   string `json:"root"`
 }
 
 // Local reports whether the host is the merging daemon's own machine.
@@ -764,6 +783,9 @@ type Message struct {
 	Runs         []Run  `json:"runs,omitempty"`
 	Run          *Run   `json:"run,omitempty"`
 	RunID        string `json:"run_id,omitempty"`
+	// Repos, in a snapshot or an upsert of its own from a daemon with
+	// repos, is the host's repositories, the whole set (CapRepos).
+	Repos *RepoSet `json:"repos,omitempty"`
 
 	// merged snapshot / upsert / remove, from a daemon with attention: the
 	// attention records, and on a remove the agent id of the one gone,
@@ -830,11 +852,6 @@ type Message struct {
 	// it, its source Repo's: a daemon with repo-entry resolves the add
 	// against it when its own config does not list the repository.
 	RepoEntry *RepoEntry `json:"repo_entry,omitempty"`
-	// Remember on a relayed add asks a daemon with remember to append
-	// the repo_entry to its config's repos once the add has succeeded:
-	// the repository is new to the config, a source pasted into the
-	// task form or given to add's --repo.
-	Remember bool `json:"remember,omitempty"`
 	// AgentName is the configured agent to start; Cmd, when set, is the
 	// command instead. The key is agent_name because agent is the upsert's
 	// record in this envelope.

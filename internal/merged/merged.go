@@ -140,6 +140,9 @@ type Host struct {
 	// Paused is that the merging daemon's config has the host paused:
 	// not dialled, with no records, until it is resumed.
 	Paused bool
+	// Repos is the host's repositories as its daemon last sent them,
+	// nil while none has come (protocol.HostStatus.Repos).
+	Repos *protocol.RepoSet
 }
 
 // fromStatus is the host record of the merged stream as this state
@@ -147,7 +150,7 @@ type Host struct {
 func fromStatus(st protocol.HostStatus) Host {
 	return Host{Name: st.Name, Local: st.Local(), Connected: st.Connected, Error: st.Error, Reconnecting: st.Reconnecting, Version: st.Version, EnvID: st.EnvironmentID,
 		Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities,
-		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution), Paused: st.Paused}
+		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution), Paused: st.Paused, Repos: st.Repos}
 }
 
 // ready reports whether a one-shot client can stop waiting on the host:

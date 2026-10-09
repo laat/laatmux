@@ -13,6 +13,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/term"
 	"github.com/laat/laatmux/internal/view"
 )
@@ -29,11 +30,11 @@ func pick(form *view.Form, text string) {
 }
 
 // A repository's source pasted into the repository chip's picker that
-// the config does not list becomes the add's repository, named as the
-// config will list it, with the host and agent an unknown repository
-// gets, and the add asks for it to be remembered; the same paste of a
-// listed repository in another form is that repository, and the add
-// does not; a paste that is no source takes nothing.
+// no known repository has becomes the add's repository, named among the
+// known ones, with the host and agent an unknown repository gets, and
+// its entry carries the source for the host to clone; the same paste of
+// a listed repository in another form is that repository; a paste that
+// is no source takes nothing.
 func TestFormPastedSource(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	cfg := dashConfig(t)
@@ -62,7 +63,7 @@ func TestFormPastedSource(t *testing.T) {
 	if !d.submitForm(&view.Model{}, f, form) {
 		t.Fatal("not accepted")
 	}
-	if got.Repo.Source != "git@github.com:nrkno/pin-scripts.git" || got.Repo.Name != "pin-scripts" || !got.Remember || got.Host.Name != "mac" || got.Agent != "claude" {
+	if got.Repo.Source != "git@github.com:nrkno/pin-scripts.git" || got.Repo.Name != "pin-scripts" || got.Host.Name != "mac" || got.Agent != "claude" {
 		t.Fatalf("add %+v", got)
 	}
 	if e := got.Request("x").RepoEntry; e == nil || e.Source != got.Repo.Source || e.Name != "pin-scripts" {
@@ -81,7 +82,7 @@ func TestFormPastedSource(t *testing.T) {
 	form.SetPrompt("Fix it")
 	form.Handle(term.Key{Kind: term.KeyNewline})
 	d.submitForm(&view.Model{}, f, form)
-	if got.Repo.Name != "proj" || got.Remember {
+	if got.Repo.Name != "proj" {
 		t.Fatalf("add %+v", got)
 	}
 
@@ -104,7 +105,7 @@ func TestFormPastedSource(t *testing.T) {
 	if !ok {
 		t.Fatalf("no form without repositories: %q", m.Message)
 	}
-	if n := form.Note(form); !strings.Contains(n, "no repositories configured") {
+	if n := form.Note(form); !strings.Contains(n, "no repositories known") {
 		t.Fatalf("note %q", n)
 	}
 	form.SetPrompt("Fix it")
@@ -114,38 +115,49 @@ func TestFormPastedSource(t *testing.T) {
 	}
 	pick(form, "git@github.com:nrkno/pin-scripts.git")
 	form.Handle(term.Key{Kind: term.KeyNewline})
-	if !d.act(m, m.Poll()) || got.Repo.Name != "pin-scripts" || !got.Remember {
+	if !d.act(m, m.Poll()) || got.Repo.Name != "pin-scripts" {
 		t.Fatalf("add %+v, message %q", got, m.Message)
 	}
 }
 
 // add's --repo: a listed repository by name or by a source in any form,
-// not new; a source the config does not list, new under the name it
-// will be listed as; a name that is neither, refused as before.
+// not new; a repository a host has discovered, by its label or its
+// source, not new either; a source no known repository has, new under a
+// name no known repository has; a name that is neither, refused naming
+// what is known.
 func TestAddRepoFlag(t *testing.T) {
 	cfg := dashConfig(t)
 	ctx := context.Background()
+	st := merged.New()
+	st.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", EnvironmentID: "venv", Connected: true, Listed: true,
+		Repos: &protocol.RepoSet{Checkouts: []protocol.Checkout{{Repo: "notes", Source: "git@github.com:laat/notes.git", Root: "/r/notes"}}}}}})
+	known := func() merged.Known { return st.Known(cfg) }
 	for _, c := range []struct {
 		flag, name string
 		isNew      bool
 	}{
 		{"proj", "proj", false},
 		{"https://github.com/laat/proj", "proj", false},
+		{"notes", "notes", false},
+		{"https://github.com/laat/notes", "notes", false},
 		{"git@github.com:nrkno/pin-scripts.git", "pin-scripts", true},
 		{"https://github.com/nrkno/proj.git", "nrkno-proj", true},
+		// notes is a host's label for another source.
+		{"https://github.com/nrkno/notes.git", "nrkno-notes", true},
 	} {
-		r, isNew, err := addRepo(ctx, cfg, c.flag)
+		r, isNew, err := addRepo(ctx, cfg, known, c.flag)
 		if err != nil || r.Name != c.name || isNew != c.isNew {
 			t.Errorf("%s: %+v %v %v", c.flag, r, isNew, err)
 		}
 	}
-	if _, _, err := addRepo(ctx, cfg, "nope"); err == nil || !strings.Contains(err.Error(), `unknown repository "nope"`) {
+	if _, _, err := addRepo(ctx, cfg, known, "nope"); err == nil || err.Error() != `unknown repository "nope": not checked out on any host and not configured; known: laatmux, proj, notes` {
 		t.Errorf("nope: %v", err)
 	}
-	if _, isNew, err := addRepo(ctx, config.Config{}, "/srv/git/proj.git"); err == nil || isNew {
+	none := func() merged.Known { return merged.ConfigOnly(config.Config{}) }
+	if _, isNew, err := addRepo(ctx, config.Config{}, none, "/srv/git/proj.git"); err == nil || isNew {
 		t.Errorf("a path is no forge source: %v %v", isNew, err)
 	}
-	r, isNew, err := addRepo(ctx, cfg, "https://laat:ghp_secret@github.com/nrkno/pin-scripts.git")
+	r, isNew, err := addRepo(ctx, cfg, known, "https://laat:ghp_secret@github.com/nrkno/pin-scripts.git")
 	if err != nil || !isNew || r.Source != "https://github.com/nrkno/pin-scripts.git" {
 		t.Errorf("a credential: %+v %v %v", r, isNew, err)
 	}
@@ -375,29 +387,29 @@ func TestFormReloadFails(t *testing.T) {
 	}
 }
 
-// serve's hooks on the config file: the read answers the list at first
-// and after the relay's append, and not between, with the copy rules
-// for every worktree, a repository's copy and setup and the agents'
-// commands as the file has them at each read.
-func TestConfigHooks(t *testing.T) {
+// serve's read of the config file answers the list at first and after
+// a change, and not between, with the copy rules for every worktree, a
+// repository's copy and setup and the agents' commands as the file has
+// them at each read.
+func TestConfigReread(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("LAATMUX_CONFIG", p)
 	t.Setenv("LAATMUX_HOME", t.TempDir())
 	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reread, appendRepo := configHooks()
+	reread := configReread()
 	if r, changed, err := reread(); err != nil || !changed || len(r.Listed.Repos) != 1 || r.Listed.Repos[0].Name != "a" || r.Listed.Copy != nil || len(r.Agents) != 0 {
 		t.Fatalf("first read: %+v %v %v", r, changed, err)
 	}
 	if _, changed, _ := reread(); changed {
 		t.Fatal("changed with no change")
 	}
-	if added, err := appendRepo("git@x:o/p.git", "p"); err != nil || !added {
-		t.Fatalf("append: %v %v", added, err)
+	if err := os.WriteFile(p, []byte("repos:\n  - git@x:o/a.git\n  - git@x:o/p.git\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if r, changed, err := reread(); err != nil || !changed || len(r.Listed.Repos) != 2 || r.Listed.Repos[1].Source != "git@x:o/p.git" || r.Listed.Repos[1].Name != "p" {
-		t.Fatalf("after the append: %+v %v %v", r, changed, err)
+		t.Fatalf("after the edit: %+v %v %v", r, changed, err)
 	}
 	edited := "copy: [\"*.local\"]\nagents:\n  claude: {cmd: [claude, --edited]}\nrepos:\n  - source: git@x:o/a.git\n    copy: [.envrc]\n    setup: [make]\n"
 	if err := os.WriteFile(p, []byte(edited), 0o600); err != nil {

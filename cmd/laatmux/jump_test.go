@@ -306,9 +306,10 @@ func TestDollarQuote(t *testing.T) {
 // branch; a detached worktree, named by its root, needs a branch
 // checked out first, and a root with an ESC in it is named quoted;
 // box's entry has no directories, which add needs first; a repository
-// this machine's config does not list is one
-// --repo refuses, while one it lists under another form of the source
-// is named by its label here. A worktree that lacks more than one is
+// this machine's config does not list is named by its source, which
+// --repo takes as the host's checkout, while one it lists under another
+// form of the source is named by its label here. A worktree that lacks
+// more than one is
 // told all of them. The add line pastes into a shell: a branch git
 // takes with a ' or a $( in it is quoted, an ordinary one is not, and
 // a record without a source leaves the <repo> placeholder bare, and the
@@ -351,7 +352,7 @@ func TestAddHintCanRun(t *testing.T) {
 	}
 	onVM := "vm/proj/b has no managed session; laatmux add b --repo proj --host vm --agent claude makes one"
 	onBox := "box/proj/b has no managed session; laatmux add makes one once host box has repos and worktrees directories in the config"
-	onOther := "vm/other/b has no managed session; laatmux add makes one once git@github.com:laat/other.git is a repository in the config"
+	onOther := "vm/other/b has no managed session; laatmux add b --repo git@github.com:laat/other.git --host vm --agent claude makes one"
 	onApos := `vm/proj/it's has no managed session; laatmux add 'it'\''s' --repo proj --host vm --agent claude makes one`
 	onSubst := "vm/proj/a$(x) has no managed session; laatmux add 'a$(x)' --repo proj --host vm --agent claude makes one"
 	check := func(host rows.Host, w protocol.Worktree, want string) {
@@ -393,7 +394,7 @@ func TestAddHintCanRun(t *testing.T) {
 		{host("mac", "menv"), det, "/w/det on mac has no managed session; laatmux add makes one once a branch is checked out in /w/det"},
 		{host("mac", "menv"), detCtl, `"/w/a\x1b]0;x\ab" on mac has no managed session; laatmux add makes one once a branch is checked out in "/w/a\x1b]0;x\ab"`},
 		{host("box", "benv"), detBox, "/w/det on box has no managed session; laatmux add makes one once a branch is checked out in /w/det and host box has repos and worktrees directories in the config"},
-		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and git@github.com:laat/other.git is a repository in the config"},
+		{host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o and host box has repos and worktrees directories in the config"},
 	} {
 		check(c.host, c.w, c.want)
 	}
@@ -434,7 +435,7 @@ func TestAddHintCanRun(t *testing.T) {
 	}
 	lastFile := badLast()
 	check(host("vm", "venv"), bv, onBadLast(lastFile))
-	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, "+other.Source+" is a repository in the config, and "+lastFile+" is readable JSON")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and "+lastFile+" is readable JSON")
 	// One that is not a file cannot be read at all.
 	if err := os.Remove(lastFile); err != nil {
 		t.Fatal(err)
@@ -458,7 +459,7 @@ func TestAddHintCanRun(t *testing.T) {
 	t.Setenv("LAATMUX_HOME", was)
 	d.cfg.DefaultAgentName, d.cfg.Agents = "", nil
 	check(host("vm", "venv"), bv, "vm/proj/b has no managed session; laatmux add makes one once an agent is in the config")
-	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, git@github.com:laat/other.git is a repository in the config, and an agent is in the config")
+	check(host("box", "benv"), detOther, "/w/o on box has no managed session; laatmux add makes one once a branch is checked out in /w/o, host box has repos and worktrees directories in the config, and an agent is in the config")
 	// jump, from the hosts' records through the local daemon. A
 	// detached worktree is not matched by jump at all.
 	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapMerged}, func(pc *protocol.Conn, m protocol.Message) bool {

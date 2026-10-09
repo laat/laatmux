@@ -177,13 +177,11 @@ type Config struct {
 	WorktreeInterval time.Duration
 	// Reread reads the config file again, every WorktreeInterval:
 	// changed when the file changed since the last read, so Store
-	// follows the repositories an add or the task form appended, and
-	// hand edits, without a restart, their steps and the copy rules for
-	// every worktree too, the adds the agents' commands, the merged
-	// subscribers the hosts, and the relay retries the appends a config
-	// it could not take held. A file that does not read keeps what the
-	// daemon has. nil keeps what it was made with, and retries the
-	// appends at start alone.
+	// follows the repositories edited in, without a restart, their
+	// steps and the copy rules for every worktree too, the adds the
+	// agents' commands, and the merged subscribers the hosts. A file
+	// that does not read keeps what the daemon has. nil keeps what it
+	// was made with.
 	Reread func() (read ConfigRead, changed bool, err error)
 	// Commands is the directory of the command journal, one file per
 	// add, which with Store and the managed server is the task
@@ -215,12 +213,8 @@ type Config struct {
 	Timings Timings
 
 	// Pending is the directory of the relay's pending files, which with
-	// Hosts is the relay capability; "" means none. AppendRepo appends
-	// a repository to this machine's config, reporting whether it was
-	// not listed yet, for a relayed add with remember; with the relay
-	// it is the remember capability, and nil means none.
-	Pending    string
-	AppendRepo func(src, name string) (bool, error)
+	// Hosts is the relay capability; "" means none.
+	Pending string
 
 	// Attention is the file the attention state is kept in, which with
 	// Hosts is the attention capability; "" means none. Clients lists
@@ -313,6 +307,11 @@ type Daemon struct {
 	// until its agents are attributed again.
 	lastMains  []worktree.Record
 	mainAgents map[string]bool
+	// repos is the host's repositories as last published, from the
+	// last listing's main checkouts (publishReposLocked); nil until the
+	// first listing. Replaced whole, never changed in place, so a host
+	// record can share it.
+	repos *protocol.RepoSet
 	// retiring is the records replaced at their root, by id, until
 	// nothing names them (retireLocked).
 	retiring     map[string]protocol.Worktree
@@ -579,7 +578,7 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapNew, protocol.CapSelect)
 	}
 	if d.cfg.Store != nil {
-		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
+		caps = append(caps, protocol.CapWorktrees, protocol.CapRun, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts, protocol.CapRepos)
 		if d.managed != nil {
 			caps = append(caps, protocol.CapAdd, protocol.CapRm, protocol.CapRepoEntry, protocol.CapPrune)
 		}
@@ -591,16 +590,13 @@ func (d *Daemon) capabilities() []string {
 		caps = append(caps, protocol.CapMerged, protocol.CapPause)
 		if d.cfg.Store == nil {
 			// It forwards what the hosts attribute, the git objects
-			// they read and their main checkouts, though it has no
-			// worktrees of its own.
-			caps = append(caps, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts)
+			// they read, their main checkouts and their repositories,
+			// though it has no worktrees of its own.
+			caps = append(caps, protocol.CapAttribution, protocol.CapGitStatus, protocol.CapCheckouts, protocol.CapRepos)
 		}
 	}
 	if d.relay != nil {
 		caps = append(caps, protocol.CapRelay, protocol.CapDismissRoot)
-		if d.cfg.AppendRepo != nil {
-			caps = append(caps, protocol.CapRemember)
-		}
 	}
 	if d.attn != nil {
 		caps = append(caps, protocol.CapAttention)
@@ -1088,7 +1084,7 @@ func (d *Daemon) subscribe(drop func(), checkouts bool) (*subscriber, protocol.M
 		agents = append(agents, a)
 	}
 	snap := protocol.Message{Type: protocol.TypeSnapshot, Seq: d.seq, Agents: agentsFor(agents, checkouts), Worktrees: d.worktreesLocked(checkouts),
-		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr}
+		Panes: d.paneRecsLocked(), Runs: d.runRecsLocked(), ListingError: d.listErr, Repos: d.repos}
 	if d.listed {
 		l := d.listing
 		snap.Listing = &l

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/laat/laatmux/internal/source"
@@ -232,4 +233,74 @@ func sourceParts(src string) (org, name string) {
 func sourceHash(src string) string {
 	sum := sha256.Sum256([]byte(src))
 	return hex.EncodeToString(sum[:3])
+}
+
+// NewRepo is the repository a source that none of the known
+// repositories has is taken as, which is what the task form and add
+// take a pasted source as: the source in one of the forge forms,
+// git@host:owner/repo, ssh:// or https://, as source.Forge reads them,
+// under the first name no known repository has of its last path
+// element, its org and that, and that with a hash of the source, a
+// name that is no label made one as a checkout's is, next_js of
+// next.js. A host with no checkout of it clones it under that name. A
+// credential in the source, the user and token of an https URL or the
+// password of an ssh one, is left out (Uncredentialed), so it never
+// reaches a pending file or a host: the repository's source differs
+// from src then. A source that is no forge form, or one known in any
+// form source.Same takes as one, is an error.
+func NewRepo(src string, known []Repo) (Repo, error) {
+	if _, _, ok := source.Forge(src); !ok {
+		return Repo{}, fmt.Errorf("%q is not a repository's source: git@host:owner/repo, ssh://git@host/owner/repo or https://host/owner/repo", src)
+	}
+	src = Uncredentialed(src)
+	taken := map[string]bool{}
+	for _, r := range known {
+		if source.Same(r.Source, src) {
+			return Repo{}, fmt.Errorf("%s is known as %s", src, r.Name)
+		}
+		taken[r.Name] = true
+	}
+	org, base := sourceParts(src)
+	for _, n := range []string{asLabel(base), asLabel(org + "-" + base), asLabel(base) + "-" + sourceHash(src)} {
+		if ValidLabel(n) && !taken[n] {
+			return Repo{Source: src, Name: n}, nil
+		}
+	}
+	return Repo{}, fmt.Errorf("%s: every name made of it is a known repository's", src)
+}
+
+// Uncredentialed is a URL source without the credential it carries: an
+// http or https URL without its user and password, which source.Key
+// does not count either, and an ssh one without the password after its
+// user. Any other source is as it is.
+func Uncredentialed(src string) string {
+	if !strings.Contains(src, "://") {
+		return src
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.User == nil {
+		return src
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		u.User = nil
+	default:
+		if _, set := u.User.Password(); !set {
+			return src
+		}
+		u.User = url.User(u.User.Username())
+	}
+	return u.String()
+}
+
+// asLabel is s with every byte a label does not take made _, and a
+// leading - too.
+func asLabel(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if !('A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-') || i == 0 && c == '-' {
+			b[i] = '_'
+		}
+	}
+	return string(b)
 }
