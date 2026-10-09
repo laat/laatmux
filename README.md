@@ -1741,8 +1741,8 @@ sidebar:
   templates:
     tiles:
       - "{stripe} {status_icon} {title} {pane_suffix}{fill}{elapsed}"
-      - "{stripe}    {kind_icon} {subtitle} @{host}{fill}{git_stats}"
-      - "{stripe}    {pane_title}{fill}{pr_number} {pr_checks}"
+      - "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}"
+      - "{stripe} {pane_title}{fill}{pr_number} {pr_checks}"
     compact: "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
     top: "{status_icon} {title} {pane_suffix}"
     tree:

@@ -1,35 +1,35 @@
 ..B|⟨danger:box  DOWN  ssh: connect to⟩
 S..|⟨accent:▌⟩ ⟨accent:💬⟩ laatmux          2:00
-S..|⟨accent:▌⟩    ⎇ fix-ls @‹vm› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
-S..|⟨accent:▌⟩    Permission to run pn…
+S..|⟨accent:▌⟩ ⎇ fix-ls @‹vm›    ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
+S..|⟨accent:▌⟩ Permission to run pnpm …
 S..|‹⟨border:──────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ remote-notes     0:01
-...|⟨info:▌⟩    @‹vm/default›
-...|⟨info:▌⟩    remote
+...|⟨info:▌⟩ @‹vm/default›
+...|⟨info:▌⟩ remote
 ...|‹⟨border:──────────────────────────⟩›
 ...|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:proj⟩»             0:08
-...|⟨info:▌⟩    ⎇ task @mac         «⟨warning:R⟩»
-...|⟨info:▌⟩    Editing src/api.ts
+...|⟨info:▌⟩ ⎇ task @mac   «⟨warning:R⟩» ‹⟨success:+318⟩› ‹⟨danger:-87⟩›
+...|⟨info:▌⟩ Editing src/api.ts
 ...|‹⟨border:──────────────────────────⟩›
 .D.|⟨info:▌⟩ ⟨info:⠋⠙⟩ proj            10:00
-.D.|⟨info:▌⟩    ⎇ down @‹box›         ✎
-.D.|⟨info:▌⟩    last seen
+.D.|⟨info:▌⟩ ⎇ down @‹box›            ✎
+.D.|⟨info:▌⟩ last seen
 ...|‹⟨border:──────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ scratch          0:40
-...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:──────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ notes            5:00
-...|⟨border:▌⟩    @mac
+...|⟨border:▌⟩ @mac
 ...|⟨border:▌⟩
 ...|‹⟨border:──────────────────────────⟩›
 ...|⟨border:▌⟩ ⟨border:  ⟩ proj               1h
-...|⟨border:▌⟩    ⎇ other @‹vm›  ✎ «⟨success:+4+⟩» «⟨danger:-1⟩»
-...|⟨border:▌⟩    Done. 日本語のタイト…
+...|⟨border:▌⟩ ⎇ other @‹vm›     ✎ «⟨success:+4+⟩» «⟨danger:-1⟩»
+...|⟨border:▌⟩ Done. 日本語のタイトル …
 ...|‹⟨border:──────────────────────────⟩›
 .D.|⟨border:▌⟩ ⟨border:  ⟩ proj               3h
-.D.|⟨border:▌⟩    ⎇ dead @‹vm›   ‹+153›‹ ›‹-41›
-.D.|⟨border:▌⟩    claude gone
+.D.|⟨border:▌⟩ ⎇ dead @‹vm›      ‹+153›‹ ›‹-41›
+.D.|⟨border:▌⟩ claude gone
 ...|‹⟨border:──────────────────────────⟩›
 ...|‹⟨header:▸ 1 stale⟩›
 ...|
