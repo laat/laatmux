@@ -187,6 +187,17 @@ func TestPasteBinding(t *testing.T) {
 		t.Errorf("a failing after-list-keys hook let on bind: %q", bound())
 	}
 	must(workspace.Server.Run(ctx, "kill-server"))
+	// kill-server returns before the server has gone, and a client
+	// that connects meanwhile is told the server exited unexpectedly.
+	for i := 0; ; i++ {
+		if _, err := workspace.Server.Run(ctx, "-N", "list-sessions"); tmux.NoServer(err) {
+			break
+		}
+		if i == 250 {
+			t.Fatal("the server is still there after kill-server")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if err := pasteSwitch(ctx, "off", exe); err != nil {
 		t.Errorf("off with no server: %v", err)
 	}
