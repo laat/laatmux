@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/laat/laatmux/internal/client"
@@ -118,6 +119,7 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 	}
 	st := merged.New()
 	st.Configure(cfg)
+	st.Window = viewerWindow(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go st.Follow(ctx, c)
@@ -259,6 +261,26 @@ func lastPane(ctx context.Context) {
 	if pane := os.Getenv("TMUX_PANE"); pane != "" {
 		_, _ = tmux.Server{}.Run(ctx, "if-shell", "-F", "-t", pane, "#{pane_active}", "last-pane -t "+pane)
 	}
+}
+
+// viewerWindow is the id of the window the view's pane sits in, @N, on
+// the server TMUX names, which for a sidebar pane and a popup is the
+// default one; "" outside tmux or when the lookup fails, and the
+// selection then follows the first of the viewer's tiles as before.
+func viewerWindow(ctx context.Context) string {
+	pane := os.Getenv("TMUX_PANE")
+	if os.Getenv("TMUX") == "" || pane == "" {
+		return ""
+	}
+	out, err := (tmux.Server{}).Run(ctx, "display-message", "-p", "-t", pane, "#{window_id}")
+	if err != nil && !tmux.HookOnly(err) {
+		return ""
+	}
+	id := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(id, "@") {
+		return ""
+	}
+	return id
 }
 
 // taskAction is an action on a pending task: p or x on a task's row,

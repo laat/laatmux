@@ -31,6 +31,12 @@ import (
 // State is the merged stream applied. Every method takes the lock; a
 // reporter reads a Status rather than the maps.
 type State struct {
+	// Window is the id of the window the viewer sits in on this
+	// machine's default server, @N, "" when unknown: set once before
+	// the first Status, it tells the viewer's tile from another of the
+	// viewer's session (rows.Input.Window).
+	Window string
+
 	mu        sync.Mutex
 	agents    map[string]protocol.Agent    // by agent id
 	worktrees map[string]protocol.Worktree // by worktree id
@@ -575,7 +581,7 @@ func (m *State) Status(current string) Status {
 // on being applied.
 func (m *State) inputLocked(current string) rows.Input {
 	after, dim, collapse := m.sidebar.Stale()
-	in := rows.Input{Locals: m.localsLocked(), Current: current, Attention: maps.Clone(m.attentions), Branches: maps.Clone(m.branches), Now: time.Now(),
+	in := rows.Input{Locals: m.localsLocked(), Current: current, Window: m.Window, Attention: maps.Clone(m.attentions), Branches: maps.Clone(m.branches), Now: time.Now(),
 		StaleAfter: after, DimStale: dim, CollapseStale: collapse, Sort: m.sidebar.Sort}
 	for name, st := range m.hosts {
 		// A merging daemon older than attribution forwards agent records

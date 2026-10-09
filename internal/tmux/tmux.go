@@ -483,6 +483,7 @@ type Pane struct {
 	Session        string
 	SessionID      string // $N, which reaches the session whatever its name
 	WindowIndex    int
+	WindowID       string // @N, which a renumbering of the windows keeps
 	WindowName     string
 	ID             string // %N
 	TTY            string
@@ -597,7 +598,7 @@ var paneVars = []string{
 	"#{pane_pid}", "#{pane_current_command}", "#{pane_current_path}", "#{pane_title}",
 	"#{pane_dead}", "#{window_activity}", "#{@laatmux_host}", "#{@laatmux_cwd}", "#{@laatmux_managed}",
 	"#{pid}", "#{pane_in_mode}", "#{@laatmux_sidebar}", "#{@laatmux_attach_pane}", "#{session_id}",
-	"#{@laatmux_nocmd}",
+	"#{@laatmux_nocmd}", "#{window_id}",
 }
 
 // ListPanes returns every pane on the server in one call. A server
@@ -637,6 +638,7 @@ func (s Server) ListPanes(ctx context.Context) ([]Pane, error) {
 		p.Own = f[16] != "" || f[17] != ""
 		p.SessionID = f[18]
 		p.NoCmd = f[19] != ""
+		p.WindowID = f[20]
 		panes = append(panes, p)
 	}
 	return panes, err

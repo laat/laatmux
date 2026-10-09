@@ -543,11 +543,15 @@ func (m *Model) treeFollowed() *rows.Row {
 // through the line whose home its session is, or a tile through its
 // line. So the line of the session the viewer is in is followed over
 // another worktree's line an agent of it visiting marks, and over an
-// agent in other sessions in a window of that session.
+// agent in other sessions in a window of that session. A node or tile
+// of the agent in the viewer's own window (rows' Here), 4: of the
+// viewer's session's several, the one the viewer sits with.
 func viewerRank(r *rows.Row) int {
 	switch {
 	case !r.Current:
 		return 0
+	case r.Here:
+		return 4
 	case !r.Own:
 		return 1
 	case r.Kind == rows.KindWorktree || r.Kind == rows.KindTask:

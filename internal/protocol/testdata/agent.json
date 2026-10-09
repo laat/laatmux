@@ -4,6 +4,7 @@
   "server": "server",
   "session": "session",
   "window": 1,
+  "window_id": "window_id",
   "pane_id": "pane_id",
   "tty": "tty",
   "cwd": "cwd",
