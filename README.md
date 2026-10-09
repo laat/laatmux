@@ -1771,7 +1771,10 @@ alike; only the lines it leaves differ.
   (tmux's `session:index`), `{window_index}`, `{pane_title}` (the
   cleaned title, or on a tile what the row is instead: a task's state,
   `no session`, `claude gone`), `{pane_suffix}` (`(2)` on the second
-  of a worktree's agents). Status: `{stripe}`, `{status_icon}`,
+  of a worktree's agents). Status: `{stripe}`, `{status_icon}` (on a
+  tile nothing when the row has no icon, an idle agent's say, so the
+  title starts where the tile's other lines do; a tree line keeps the
+  blank, which aligns a list),
   `{status_label}` (`waiting`, `working`, `done`, `stale`, `settled`,
   `idle`, `gone`; `no agent` or `no session` on a tile without one; a
   task's state; `worktree gone`, dim, on an orphaned session's line), `{agent_icon}`, `{agent_label}`, `{elapsed}` (the

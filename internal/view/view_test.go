@@ -1367,7 +1367,7 @@ func TestOtherSessionsSettled(t *testing.T) {
 		{true, ".D.|    vm/laatmux/agents-config (mac)  ⟨dimmed:💤⟩ codex\n",
 			".D.|⟨dimmed:▌⟩ ⟨dimmed:💤⟩ vm/laatmux/agents-config @mac                                          0:00\n", true},
 		{false, "...|    vm/laatmux/agents-config (mac)  ⟨border:  ⟩ codex\n",
-			"...|⟨border:▌⟩ ⟨border:  ⟩ vm/laatmux/agents-config @mac                                          0:00\n", false},
+			"...|⟨border:▌⟩ vm/laatmux/agents-config @mac                                             0:00\n", false},
 	} {
 		in := treeInput(now)
 		in.Agents = append(in.Agents, protocol.Agent{ID: id, EnvironmentID: "menv", Server: "default", Session: "vm/laatmux/agents-config", Agent: "codex", Activity: protocol.Idle, ActivityAt: now, Liveness: protocol.Alive, Cwd: "/Users/u"})

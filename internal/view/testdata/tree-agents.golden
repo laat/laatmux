@@ -15,6 +15,6 @@ S..|⟨info:▌⟩ ⟨info:⠋⠙⟩ «⟨current_worktree_fg:laatmux⟩» «⟨
 S..|⟨info:▌⟩ ⎇ agents-config @‹vm›                       ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 S..|⟨info:▌⟩ Adding per-agent config to the loader                «⟨success:#52⟩» ⟨success:✓⟩
 S..|‹⟨border:────────────────────────────────────────────────────────────⟩›
-...|⟨border:▌⟩ ⟨border:  ⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(2)⟩»                                        1:00
+...|⟨border:▌⟩ «⟨current_worktree_fg:laatmux⟩» «⟨current_worktree_fg:(2)⟩»                                           1:00
 ...|⟨border:▌⟩ ⎇ agents-config @‹vm›                       ‹⟨success:+46⟩› ‹⟨danger:-11⟩› ✎ «⟨success:+28⟩» «⟨danger:-3⟩»
 .D.|
