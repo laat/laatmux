@@ -603,10 +603,17 @@ func jumpMode(h peer.Host, srv tmux.Server, session string) (jumpKind, error) {
 // window's own keepalive protection applies.
 func checkSession(ctx context.Context, h peer.Host, session string) error {
 	if h.Local() {
-		if !tmux.LaatmuxServer.HasSession(ctx, session) {
-			return fmt.Errorf("%s: %w", tmux.Printable(h.Name+"/"+session), errNoSession)
+		// A session no target reaches is not found, as HasSession has
+		// it; jumpMode refuses one before this.
+		if tmux.CheckTarget(session) != nil {
+			return noSuchSession(h.Name, session, true)
 		}
-		return nil
+		_, err := tmux.LaatmuxServer.Run(ctx, "has-session", "-t", tmux.SessionTarget(session))
+		if err == nil {
+			return nil
+		}
+		var te *tmux.Error
+		return noSuchSession(h.Name, session, errors.As(err, &te) && sessionAbsent(te.Msg))
 	}
 	ctx, cancel := context.WithTimeout(ctx, preflightTimeout)
 	defer cancel()
@@ -624,9 +631,30 @@ func checkSession(ctx context.Context, h peer.Host, session string) error {
 
 const preflightTimeout = 15 * time.Second
 
-// errNoSession is checkSession's answer that the session is not there,
-// as against a check that could not be made.
+// errNoSession is checkSession's answer that tmux said the session is
+// not there, as against a check that could not be made or a tmux that
+// could not tell (sessionAbsent).
 var errNoSession = errors.New("no such session on the laatmux tmux server")
+
+// noSuchSession is checkSession's refusal, worded as it was whatever
+// tmux said; absent, that tmux said the session or its server is not
+// there, makes it errNoSession, which jump's last reading of the target
+// waits for.
+func noSuchSession(host, session string, absent bool) error {
+	name := tmux.Printable(host + "/" + session)
+	if absent {
+		return fmt.Errorf("%s: %w", name, errNoSession)
+	}
+	return fmt.Errorf("%s: %s", name, errNoSession.Error())
+}
+
+// sessionAbsent reports whether tmux's message for a has-session that
+// failed says the session is not there: it cannot find the session, or
+// no server runs, as tmux.NoServer tells it from one that cannot be
+// reached, a socket it may not open say.
+func sessionAbsent(msg string) bool {
+	return strings.Contains(msg, "can't find session") || tmux.NoServer(&tmux.Error{Msg: msg})
+}
 
 // classifyPreflight turns the preflight's outcome into a message that says
 // which of three things happened: the session is absent (tmux exited 1), the
@@ -642,8 +670,9 @@ func classifyPreflight(host, session string, runErr, ctxErr error, stderr string
 	if errors.As(runErr, &exit) && exit.ExitCode() == 1 {
 		// tmux has-session: exit 1 means no such session. Its message
 		// ("can't find session") is redundant; a missing server says
-		// "no server running", which is the same thing for jump.
-		return fmt.Errorf("%s: %w", tmux.Printable(host+"/"+session), errNoSession)
+		// "no server running", which is the same thing for jump. One
+		// that says neither is a tmux that could not tell.
+		return noSuchSession(host, session, sessionAbsent(stderr))
 	}
 	if stderr == "" {
 		stderr = runErr.Error()

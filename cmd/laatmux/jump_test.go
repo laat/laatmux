@@ -39,13 +39,19 @@ func fakeSSH(t *testing.T, script string) {
 
 func TestCheckSessionDistinguishesFailures(t *testing.T) {
 	h := peer.Host{Name: "vm", SSH: "vm"}
+	// absent is that tmux said the session or its server is not there
+	// (errNoSession), which jump's last reading waits for; a tmux that
+	// could not tell is refused in the same words, but not absent.
 	cases := []struct {
 		name, script, want string
+		absent             bool
 	}{
-		{"absent", `printf "cannot find session: =x\n" >&2; exit 1`, "vm/x: no such session"},
-		{"refused", `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`, "vm: ssh failed: ssh: connect to host vm port 22: Connection refused"},
-		{"no server", `printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, "vm/x: no such session"},
-		{"ok", `exit 0`, ""},
+		{"absent", `printf "can't find session: =x:\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"refused", `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`, "vm: ssh failed: ssh: connect to host vm port 22: Connection refused", false},
+		{"no server", `printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"no socket", `printf "error connecting to /tmp/tmux-1001/laatmux (No such file or directory)\n" >&2; exit 1`, "vm/x: no such session", true},
+		{"denied", `printf "error connecting to /tmp/tmux-1001/laatmux (Permission denied)\n" >&2; exit 1`, "vm/x: no such session", false},
+		{"ok", `exit 0`, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -56,8 +62,34 @@ func TestCheckSessionDistinguishesFailures(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 				t.Fatalf("got %v, want %q", err, c.want)
+			case errors.Is(err, errNoSession) != c.absent:
+				t.Fatalf("%v: absent %v, want %v", err, errors.Is(err, errNoSession), c.absent)
 			}
 		})
+	}
+}
+
+// This machine's check is as a remote host's: a tmux that says it has
+// no such session or no server is errNoSession, one that could not tell
+// is refused in the same words but not absent. The tmux is a stand-in.
+func TestCheckSessionLocal(t *testing.T) {
+	for _, c := range []struct {
+		script string
+		absent bool
+	}{
+		{`printf "can't find session: =x:\n" >&2; exit 1`, true},
+		{`printf "no server running on /tmp/tmux-1001/laatmux\n" >&2; exit 1`, true},
+		{`printf "error connecting to /tmp/tmux-1001/laatmux (Permission denied)\n" >&2; exit 1`, false},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\n"+c.script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir)
+		err := checkSession(context.Background(), peer.Host{Name: "mac"}, "x")
+		if err == nil || err.Error() != "mac/x: no such session on the laatmux tmux server" || errors.Is(err, errNoSession) != c.absent {
+			t.Errorf("%s: %v, absent %v", c.script, err, errors.Is(err, errNoSession))
+		}
 	}
 }
 

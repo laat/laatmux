@@ -359,12 +359,35 @@ func TestJumpKnownName(t *testing.T) {
 	// A preflight that could not be made says so: the session may be
 	// there, and the known set is not read.
 	fakeSSH(t, `printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`)
-	err := cmdJump(context.Background(), []string{"vm/notes/fix"})
-	mu.Lock()
-	n := subs
-	mu.Unlock()
-	if err == nil || err.Error() != "vm: ssh failed: ssh: connect to host vm port 22: Connection refused" || n != 6 {
+	jump := func(script string) (error, int) {
+		t.Helper()
+		fakeSSH(t, script)
+		err := cmdJump(context.Background(), []string{"vm/notes/fix"})
+		mu.Lock()
+		defer mu.Unlock()
+		return err, subs
+	}
+	if err, n := jump(`printf "ssh: connect to host vm port 22: Connection refused\n" >&2; exit 255`); err == nil || err.Error() != "vm: ssh failed: ssh: connect to host vm port 22: Connection refused" || n != 6 {
 		t.Errorf("jump vm/notes/fix, the preflight refused: %v, %d subscriptions", err, n)
+	}
+	// So does a tmux that could not tell, one that may not open the
+	// server's socket.
+	if err, n := jump(`printf "error connecting to /tmp/tmux-1001/laatmux (Permission denied)\n" >&2; exit 1`); err == nil || err.Error() != "vm/notes/fix: no such session on the laatmux tmux server" || n != 7 {
+		t.Errorf("jump vm/notes/fix, tmux could not tell: %v, %d subscriptions", err, n)
+	}
+	// A managed session of the target's name is attached, as before,
+	// after one preflight and without the known set; the local session
+	// through a stand-in for this machine's tmux.
+	log := fakeDefaultTmux(t)
+	once := filepath.Join(t.TempDir(), "ssh")
+	if err, n := jump(`echo x >> '` + once + `'; exit 0`); err != nil || n != 8 {
+		t.Errorf("jump vm/notes/fix to a session of its name: %v, %d subscriptions", err, n)
+	}
+	if b, _ := os.ReadFile(once); string(b) != "x\n" {
+		t.Errorf("preflights %q", b)
+	}
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "new-session -d -s vm/notes/fix") {
+		t.Errorf("no attachment made:\n%s", b)
 	}
 }
 
