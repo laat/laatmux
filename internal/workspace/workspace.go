@@ -592,8 +592,10 @@ func AttachHint(name string) string {
 // Kill kills the session, switching the calling client away first when it
 // is the current one, so the client is not left without a session. A
 // lookup a user's hook failed after has the current session all the
-// same.
-func Kill(ctx context.Context, name string) error {
+// same. A session gone before the kill is not an error and not killed:
+// the one whose attach pane closed when the host killed the managed
+// session it was on, which rm does first, closes on its own.
+func Kill(ctx context.Context, name string) (killed bool, err error) {
 	if cur, err := Current(ctx); (err == nil || tmux.HookOnly(err)) && cur.Name == name && Inside(ctx) {
 		// switch-client -l picks the last session; -n the next. Either
 		// fails when this is the only session, and kill-session then
@@ -602,8 +604,12 @@ func Kill(ctx context.Context, name string) error {
 			_, _ = Server.Run(ctx, "switch-client", "-n")
 		}
 	}
-	_, err := Server.Run(ctx, "kill-session", "-t", tmux.SessionTarget(name))
-	return err
+	_, err = Server.Run(ctx, "kill-session", "-t", tmux.SessionTarget(name))
+	var te *tmux.Error
+	if errors.As(err, &te) && strings.HasPrefix(te.Msg, "can't find session: ") {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // SetSettled sets or clears @laatmux_settled on the session with exactly

@@ -99,10 +99,15 @@ func (m Rm) Run(ctx context.Context, r Reporter) (Removed, error) {
 	key := protocol.SessionKey(hello.EnvironmentID, out.Root)
 	for _, l := range locals {
 		if l.Key == key {
-			if err := workspace.Kill(ctx, l.Name); err != nil {
+			// One gone already, closed with its attach pane when the
+			// host killed the managed session, was not killed here.
+			killed, err := workspace.Kill(ctx, l.Name)
+			if err != nil {
 				return out, err
 			}
-			out.Killed = append(out.Killed, l.Name)
+			if killed {
+				out.Killed = append(out.Killed, l.Name)
+			}
 		}
 	}
 	return out, nil

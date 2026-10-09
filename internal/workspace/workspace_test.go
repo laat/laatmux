@@ -147,11 +147,17 @@ func TestCurrentHookFails(t *testing.T) {
 	if got := session(); got != "w" {
 		t.Fatalf("the client is on %q, want w", got)
 	}
-	if err := Kill(ctx, "w"); err != nil {
-		t.Fatal(err)
+	if killed, err := Kill(ctx, "w"); err != nil || !killed {
+		t.Fatalf("kill: %v %v", killed, err)
 	}
 	if got := session(); got != "a" {
 		t.Errorf("after the kill with the hook the client is on %q, want a", got)
+	}
+	// Gone already: the session that closed with its attach pane when
+	// the host killed the managed session is not an error, and not
+	// killed here.
+	if killed, err := Kill(ctx, "w"); err != nil || killed {
+		t.Errorf("kill of a gone session: %v %v, want false and no error", killed, err)
 	}
 }
 
