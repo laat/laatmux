@@ -47,7 +47,7 @@ func agentIcons(cfg config.Config) map[string]view.AgentIcon {
 // validated when it was read, so the custom colours parse.
 func lookWith(cfg config.Config, background func() (dark, ok bool)) (palette.Theme, view.Icons) {
 	icons := view.Icons{Set: cfg.Icons, Working: cfg.StatusIcons["working"], Waiting: cfg.StatusIcons["waiting"],
-		Done: cfg.StatusIcons["done"], Stale: cfg.StatusIcons["stale"]}
+		Done: cfg.StatusIcons["done"], Stale: cfg.StatusIcons["stale"], Worktree: cfg.KindIcons["worktree"], Main: cfg.KindIcons["main"]}
 	if os.Getenv("NO_COLOR") != "" {
 		return palette.Mono(), icons
 	}

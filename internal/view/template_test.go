@@ -732,11 +732,11 @@ func TestTemplateTreeEdges(t *testing.T) {
 		t.Helper()
 		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}}), "\n")
 	}
-	if got := line(DefaultWorktree, r, 20); got != "  ▸ agents-… (vm) ⠋⠙" {
-		t.Errorf("the icon at 20: %q", got)
+	if got := line(DefaultWorktree, r, 22); got != "  ▸ ⎇ agents-… (vm) ⠋⠙" {
+		t.Errorf("the icon at 22: %q", got)
 	}
-	if got := line(DefaultWorktree, r, 24); got != "  ▸ agents-c… (vm) ✓  ⠋⠙" {
-		t.Errorf("the icon at 24: %q", got)
+	if got := line(DefaultWorktree, r, 26); got != "  ▸ ⎇ agents-c… (vm) ✓  ⠋⠙" {
+		t.Errorf("the icon at 26: %q", got)
 	}
 	r.Host = ""
 	if got := line("{primary} ({host})", r, 40); got != "agents-config (?)" {
@@ -756,6 +756,126 @@ func TestTemplateTreeEdges(t *testing.T) {
 	home := rows.Row{Kind: rows.KindWorktree, Host: "vm", Worktree: &protocol.Worktree{Session: "laatmux/x"}}
 	if got := line("{session}", home, 40); got != "laatmux/x" {
 		t.Errorf("a worktree's session: %q", got)
+	}
+}
+
+// {kind_icon} is the glyph for what a row's checkout is, per set: the
+// main checkout's on its line and the rows under it, the worktree's on
+// a worktree's line, a detached one's too, and on its agents' lines,
+// panes and tiles; nothing on a task's line, standing for a worktree
+// or not, an orphaned session's, a repository's or another session's.
+// The config's glyph is over the set's, one kind at a time. The
+// default tree lines, the sidebar's and the dashboard's, put it before
+// the name in the line's colour: plain on the viewer's line, whose
+// label alone takes the viewer's colour, and so dim on a dim line.
+func TestKindIcon(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	src := "git@github.com:laat/laatmux.git"
+	main := "menv/checkout//code/laatmux"
+	in := treeInput(now)
+	in.Worktrees = append(in.Worktrees,
+		protocol.Worktree{ID: main, EnvironmentID: "menv", Repo: "laatmux", Source: src, Branch: "main", Root: "/code/laatmux", Main: true},
+		protocol.Worktree{ID: "menv/worktree//w/detached", EnvironmentID: "menv", Repo: "laatmux", Source: src, Root: "/w/detached"})
+	in.Agents = append(in.Agents, protocol.Agent{ID: "menv/default/%9", EnvironmentID: "menv", Server: "default", Session: "laatmux", Agent: "claude", Activity: protocol.Blocked,
+		ActivityAt: now, Liveness: protocol.Alive, Identity: &protocol.Identity{PID: 1, StartUnix: 90}, WorktreeID: main})
+	in.Pendings = []protocol.Pending{
+		{ID: "add-al", Host: "vm", EnvironmentID: "venv", Source: src, Repo: "laatmux", Branch: "auto-layout", Root: "/r/auto-layout", Session: "laatmux/auto-layout", Taken: true, SubmittedAt: now},
+		{ID: "add-new", Host: "mac", EnvironmentID: "menv", Source: src, Repo: "laatmux", Branch: "new", SubmittedAt: now},
+	}
+	m := &Model{Now: now, LocalHost: "mac", View: ViewTree, Width: 80, Height: 40}
+	tree := rows.Tree(in)
+	m.SetTree(tree)
+	m.SetRows(rows.Agents(in, tree))
+	m.Render()
+	at := func(id string) rows.Row {
+		t.Helper()
+		i := m.indexOf(id)
+		if i < 0 {
+			t.Fatalf("no %s in the tree", id)
+		}
+		return m.Tree[i]
+	}
+	tile := func(id string) rows.Row {
+		t.Helper()
+		for _, r := range m.Rows.Main {
+			if r.ID() == id {
+				return r
+			}
+		}
+		t.Fatalf("no tile %s", id)
+		return rows.Row{}
+	}
+	if at("add-al").Worktree == nil {
+		t.Fatal("the standing task carries no worktree: the case would not bite")
+	}
+	const none, worktree, checkout = 0, 1, 2
+	kinds := []struct {
+		name string
+		r    rows.Row
+		kind int
+	}{
+		{"main checkout", at(main), checkout},
+		{"main checkout's agent", at("menv/default/%9"), checkout},
+		{"main checkout's tile", tile("menv/default/%9"), checkout},
+		{"worktree", at("venv/worktree//r/agents-config"), worktree},
+		{"worktree's agent", at("venv/laatmux/%1"), worktree},
+		{"worktree's pane", at("venv/pane/laatmux/%7"), worktree},
+		{"worktree's tile", tile("venv/laatmux/%1"), worktree},
+		{"detached worktree", at("menv/worktree//w/detached"), worktree},
+		{"task standing for a worktree", at("add-al"), none},
+		{"task", at("add-new"), none},
+		{"orphaned session", at("session/mac/laatmux/gone"), none},
+		{"repository", at(rows.RepoNode(src)), none},
+		{"other session", at("venv/default/%5"), none},
+	}
+	token := mustParse(t, "{kind_icon}")
+	for _, c := range []struct {
+		icons          Icons
+		worktree, main string
+	}{
+		{Icons{}, "⎇", "🏠"},
+		{Icons{Set: IconsEmoji}, "⎇", "🏠"},
+		{Icons{Set: IconsNerdFont}, "\uf418", "\uf015"},
+		{Icons{Set: IconsASCII}, "+", "="},
+		{Icons{Set: IconsASCII, Main: "~"}, "+", "~"},
+		{Icons{Set: IconsNerdFont, Worktree: "W"}, "W", "\uf015"},
+		{Icons{Worktree: "W", Main: "M"}, "W", "M"},
+	} {
+		m.Icons = c.icons
+		for _, k := range kinds {
+			want := []string{"", c.worktree, c.main}[k.kind]
+			if got := strings.TrimRight(Text([]Line{{Spans: m.line(token, k.r, 80, 0)}}), "\n"); got != want {
+				t.Errorf("%+v: %s {kind_icon} = %q, want %q", c.icons, k.name, got, want)
+			}
+		}
+	}
+	m.Icons = Icons{}
+	dash := CompileTemplatesOver(DashboardDefaults, nil, "", nil, "", "", "", "", "")
+	for _, c := range []struct{ id, want string }{
+		{main, "  ▾ 🏠 laatmux (mac)"},
+		{"venv/worktree//r/agents-config", "  ▾ ⎇ agents-config (vm)"},
+		{"menv/worktree//w/fix-sidebar", "    ⎇ fix-sidebar (mac)"},
+		{"menv/worktree//w/detached", "    ⎇ detached (mac)"},
+		{"add-al", "  ▾ auto-layout (vm)"},
+		{"session/mac/laatmux/gone", "    mac/laatmux/gone (mac)"},
+	} {
+		for _, tm := range []Compiled{DefaultTemplates().Tree.Worktree, dash.Tree.Worktree} {
+			spans := m.line(tm, at(c.id), 80, 0)
+			if got := strings.TrimRight(Text([]Line{{Spans: spans}}), "\n"); got != c.want && !strings.HasPrefix(got, c.want+" ") {
+				t.Errorf("%s with %q:\n%q, want it to start %q", c.id, tm.Source(), got, c.want)
+			}
+			for _, sp := range spans {
+				if (sp.Text == "⎇" || sp.Text == "🏠") && (sp.Fg != "" || sp.Bold || sp.Dim || sp.own) {
+					t.Errorf("%s: the glyph is not in the line's colour: %+v", c.id, sp)
+				}
+			}
+		}
+	}
+	if r := at("venv/worktree//r/agents-config"); !r.Current {
+		t.Error("agents-config is not the viewer's line: the glyph's colour there is not tested")
+	}
+	if r := at("menv/worktree//w/fix-sidebar"); !r.Dim {
+		t.Error("fix-sidebar is not a dim line: the glyph's colour there is not tested")
 	}
 }
 
@@ -1025,10 +1145,10 @@ func TestColumns(t *testing.T) {
 		w    int
 		want string
 	}{
-		{110, "  ▸ fix-ls (vm)                        +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{90, "  ▸ fix-ls (vm)    +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{80, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos…"},
-		{70, "  ▸ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
+		{112, "  ▸ ⎇ fix-ls (vm)                        +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{92, "  ▸ ⎇ fix-ls (vm)    +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{82, "  ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos…"},
+		{72, "  ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
 	} {
 		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w, 0)}}), "\n"); got != c.want {
 			t.Errorf("the dashboard's worktree line at %d:\n%q\n%q", c.w, got, c.want)
