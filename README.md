@@ -1254,7 +1254,9 @@ tile of the agent view or the nth worktree line of the tree, `s` folds
 and unfolds the selected line, `h` and `Left` fold it or go from a
 child to its line, `l` and `Right` unfold, `f` opens every fold when
 any is closed, else closes every one (the stale fold in the agent view),
-`v` toggles the layout, `/` filters by name or host and `Esc` clears,
+`v` toggles the layout, `/` filters by name or host and `Esc` clears
+it (with no filter, `Esc` closes the dashboard as `q` does; a sidebar
+pane ignores it),
 `z` settles or unsettles the selected workspace, `q` quits. A click
 jumps to the row under it, on a fold mark or a repository line folds;
 the wheel moves the selection. Hosts that

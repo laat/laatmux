@@ -2765,3 +2765,22 @@ func TestHostsLineClick(t *testing.T) {
 		}
 	}
 }
+
+// Esc clears a filter; with none it closes a dashboard, as q does, and
+// does nothing in a sidebar pane, which asks before quitting.
+func TestEscCloses(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	m := model(now)
+	m.Filter = "proj"
+	if a := m.Handle(term.Key{Kind: term.KeyEsc}); a.Kind != ActionNone || m.Filter != "" {
+		t.Errorf("esc with a filter: %+v, filter %q", a, m.Filter)
+	}
+	if a := m.Handle(term.Key{Kind: term.KeyEsc}); a.Kind != ActionQuit {
+		t.Errorf("esc with no filter in a dashboard: %+v, want quit", a)
+	}
+	s := model(now)
+	s.AskQuit = true
+	if a := s.Handle(term.Key{Kind: term.KeyEsc}); a.Kind != ActionNone || s.Confirm != "" {
+		t.Errorf("esc in a sidebar pane: %+v, confirm %q", a, s.Confirm)
+	}
+}

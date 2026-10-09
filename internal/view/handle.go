@@ -129,8 +129,18 @@ func (m *Model) Handle(k term.Key) Action {
 		// apart.
 		return m.jump()
 	case term.KeyEsc:
-		m.Filter = ""
-		m.commit()
+		// A filter is cleared; with none, Esc closes a popup as q does,
+		// since a dashboard opened by mistake is left with the key that
+		// closes anything else. A sidebar pane, which asks before it
+		// quits, is left alone.
+		if m.Filter != "" {
+			m.Filter = ""
+			m.commit()
+			break
+		}
+		if !m.AskQuit {
+			return m.quit()
+		}
 	case term.KeyCtrlC:
 		return m.quit()
 	case term.KeyTab:
