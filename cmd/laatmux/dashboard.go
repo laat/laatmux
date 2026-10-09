@@ -65,13 +65,14 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	// The dashboard starts in the view and, without --layout, the layout
 	// last chosen, from sidebar.json.
 	m := &view.Model{Layout: layout, View: view.ViewAgents, Tabs: true, Titles: true, Follow: true,
-		Hint:      "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  s/h/l fold  f all  F scope  v layout  / filter  ? help  q quit",
+		Hint:      "enter jump  tab view  a add  x rm  p prompt  z settle  S shell  o/O PR  H hosts  s/h/l fold  f all  F scope  v layout  / filter  ? help  q quit",
 		HelpTitle: "laatmux dashboard", Help: []string{
 			"a            add a worktree",
 			"x X          remove the worktree, X with force",
 			"p            deliver a task's prompt",
 			"S            open a shell in the workspace session",
 			"o O          open the PR, its checks",
+			"H            pause a host, or resume it",
 			"q Ctrl-C     quit",
 		}}
 	// The dashboard starts at all: a scope the CLI set for the sidebar
@@ -168,10 +169,10 @@ func runView(ctx context.Context, cfg config.Config, w *config.Watch, c *client.
 				return d.jumpAction(m, a)
 			case actions:
 				return d.act(m, a)
-			case taskAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z':
+			case taskAction(m, a), hostAction(m, a), a.Kind == view.ActionOther && a.Key.Kind == term.KeyRune && a.Key.Rune == 'z':
 				// The sidebar takes a task's p and x, and what follows
-				// from them, and z, which settles; none of the
-				// dashboard's other keys.
+				// from them, H and its picker, and z, which settles;
+				// none of the dashboard's other keys.
 				return d.act(m, a)
 			}
 			return false
@@ -271,6 +272,19 @@ func taskAction(m *view.Model, a view.Action) bool {
 	return false
 }
 
+// hostAction is H, or its picker ending, which the sidebar takes as the
+// dashboard does.
+func hostAction(m *view.Model, a view.Action) bool {
+	switch a.Kind {
+	case view.ActionOther:
+		return a.Key.Kind == term.KeyRune && a.Key.Rune == 'H'
+	case view.ActionOverlay:
+		_, ok := m.Overlay.(*hostPicker)
+		return ok
+	}
+	return false
+}
+
 // dialMergedOrExplain connects to the local daemon's merged stream,
 // starting the daemon when it is not running. A dial that fails is a
 // daemon that did not answer, a wedged one or one of another protocol,
@@ -318,7 +332,8 @@ func localHostName(cfg config.Config) string {
 // fill sets the model's rows and header from the merged state: the rows
 // from every record and the local sessions, the day's handoffs, and a
 // header line for the local daemon being down, each host that is not
-// connected and listed, and a failed session listing.
+// connected and listed, a paused one dimmed, and a failed session
+// listing.
 func fill(v *view.Model, s merged.Status) {
 	tree := rows.Tree(s.Input)
 	v.Set(tree, rows.Agents(s.Input, tree), s.Handoffs)
@@ -330,6 +345,8 @@ func fill(v *view.Model, s merged.Status) {
 	for _, st := range s.Hosts {
 		n := st.Name
 		switch {
+		case st.Paused:
+			v.Header = append(v.Header, view.HeaderLine{Text: n + " paused · H connects", Paused: true})
 		case st.Connected && st.Listed:
 		case st.Connected:
 			v.Header = append(v.Header, view.HeaderLine{Text: n + "  connected  (snapshot pending)"})

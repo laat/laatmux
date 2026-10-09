@@ -18,7 +18,9 @@ import (
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/tmux"
 )
 
@@ -99,8 +101,9 @@ func listTasks(ctx context.Context) error {
 }
 
 // taskReport is what tasks prints of the merged state: the pending
-// records, oldest first, then the tasks that handed over, by id, each
-// named by its worktree when that is listed. tasks configures no
+// records, oldest first, a record waiting on a paused host saying so,
+// then the tasks that handed over, by id, each named by its worktree
+// when that is listed. tasks configures no
 // labels, so a worktree's repository is the host's name for it.
 func taskReport(s merged.Status) string {
 	ps := append([]protocol.Pending(nil), s.Input.Pendings...)
@@ -123,10 +126,14 @@ func taskReport(s merged.Status) string {
 	var b strings.Builder
 	sort.Slice(ps, func(i, j int) bool { return ps[i].SubmittedAt.Before(ps[j].SubmittedAt) })
 	for _, p := range ps {
-		_, configured := s.Host(p.Host)
+		h, configured := s.Host(p.Host)
+		state := TaskState(p, configured)
+		if h.Paused && rows.WaitsOnHost(p) {
+			state = (&peer.PausedError{Name: p.Host}).Error()
+		}
 		// git takes a C1 control character and a byte that is not
 		// UTF-8 in a branch.
-		fmt.Fprintf(&b, "%s  %s on %s  %s  %s\n", p.ID, tmux.Printable(p.Repo+"/"+p.Branch), p.Host, p.SubmittedAt.Local().Format(time.DateTime), TaskState(p, configured))
+		fmt.Fprintf(&b, "%s  %s on %s  %s  %s\n", p.ID, tmux.Printable(p.Repo+"/"+p.Branch), p.Host, p.SubmittedAt.Local().Format(time.DateTime), state)
 	}
 	sort.Strings(handed)
 	for _, l := range handed {

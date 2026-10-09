@@ -10,6 +10,7 @@
 //	    repos: [~/src, ~/src/work]  # or several: checkouts found in each,
 //	                                # a clone for add made in the first
 //	    worktrees: ~/src/worktrees
+//	    paused: true          # not dialled from here; see SetPaused
 //	tmux_servers: [laatmux, default]  # what this machine's daemon watches
 //	agents:
 //	  claude:
@@ -580,6 +581,11 @@ func (c *Config) validateHosts() error {
 		seen[h.Name] = i
 		if h.Local() {
 			locals++
+		}
+		// Pausing is this machine's refusal to dial the host over ssh;
+		// this machine is not dialled.
+		if h.Local() && h.Paused {
+			return fmt.Errorf("hosts: %s has paused but no ssh; it is this machine, which nothing dials, and only a host reached over ssh is paused", h.Name)
 		}
 		hasRepos := len(h.Repos) > 0
 		if hasRepos != (h.Worktrees != "") {

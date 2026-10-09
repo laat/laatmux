@@ -73,6 +73,9 @@ func cmdJump(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown host %q", hostName)
 	}
+	if h.Paused {
+		return &peer.PausedError{Name: h.Name}
+	}
 	how, err := jumpMode(h.Host, tmux.Parse(*server), rest)
 	if err != nil {
 		return err

@@ -24,6 +24,8 @@ func render(s merged.Status) string {
 	for _, st := range s.Hosts {
 		n := st.Name
 		switch {
+		case st.Paused:
+			fmt.Fprintf(&b, "%s  paused  laatmux hosts resume %s connects it\n", n, n)
 		case st.Connected && st.Listed:
 			fmt.Fprintf(&b, "%s  connected  %s\n", n, st.Version)
 		case st.Connected:
@@ -74,7 +76,7 @@ func renderTree(b *strings.Builder, nodes []rows.Row, now time.Time) {
 
 // where is a node's host, ? for one no host record claims, with the
 // server for an agent observed off the managed server, as jump --server
-// takes it, and a note when the host is down.
+// takes it, and a note when the host is down or, for a task, paused.
 func where(n rows.Row) string {
 	s := n.HostName()
 	if a := n.Agent; a != nil && n.Kind == rows.KindAgent {
@@ -82,7 +84,10 @@ func where(n rows.Row) string {
 			s += "/" + srv
 		}
 	}
-	if n.HostDown {
+	switch {
+	case n.Paused:
+		s += ", host paused"
+	case n.HostDown:
 		s += ", host down"
 	}
 	return s

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,24 +13,52 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 )
 
+// cmdHosts lists the hosts, each dialled as a client dials it but a
+// paused one, which its line says; with pause or resume and a host's
+// name it sets paused on the host's entry in the config, or takes it
+// off, which every daemon and view that follows the file acts on at its
+// next look.
 func cmdHosts(ctx context.Context, args []string) error {
+	switch {
+	case len(args) == 2 && (args[0] == "pause" || args[0] == "resume"):
+		changed, err := config.SetPaused(config.Path(), args[1], args[0] == "pause")
+		if err != nil {
+			return err
+		}
+		fmt.Println(pausedLine(args[1], args[0] == "pause", changed))
+		return nil
+	case len(args) > 0:
+		return errors.New("usage: laatmux hosts [pause|resume <host>]")
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	rows := make([]hostRow, len(cfg.Hosts))
+	fmt.Print(hostsReport(probeHosts(ctx, cfg.Hosts, client.Dial), version, githubLine(ctx)))
+	return nil
+}
+
+// probeHosts dials the hosts, all at once, but a paused one, whose row
+// says so: nothing that runs on its own dials it.
+func probeHosts(ctx context.Context, hosts []config.Host, dial func(context.Context, peer.Host) (*client.Conn, error)) []hostRow {
+	rows := make([]hostRow, len(hosts))
 	var wg sync.WaitGroup
-	for i, h := range cfg.Hosts {
+	for i, h := range hosts {
+		if h.Paused {
+			rows[i] = hostRow{name: h.Name, status: "paused; laatmux hosts resume " + h.Name + " connects it"}
+			continue
+		}
 		wg.Add(1)
 		go func(i int, h config.Host) {
 			defer wg.Done()
 			dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			start := time.Now()
-			c, err := client.Dial(dctx, h.Host)
+			c, err := dial(dctx, h.Host)
 			if err != nil {
 				rows[i] = hostRow{name: h.Name, status: "unreachable: " + err.Error()}
 				return
@@ -41,8 +70,21 @@ func cmdHosts(ctx context.Context, args []string) error {
 		}(i, h)
 	}
 	wg.Wait()
-	fmt.Print(hostsReport(rows, version, githubLine(ctx)))
-	return nil
+	return rows
+}
+
+// pausedLine says what pausing or resuming the host did, changed being
+// that the config had it the other way.
+func pausedLine(name string, paused, changed bool) string {
+	switch {
+	case !changed && paused:
+		return name + " is paused already"
+	case !changed:
+		return name + " is not paused"
+	case paused:
+		return name + " paused; nothing on this machine dials it until it is resumed"
+	}
+	return name + " resumed; it is dialled again"
 }
 
 // githubLine is the local daemon's GitHub state, from its merged

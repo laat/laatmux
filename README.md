@@ -42,6 +42,7 @@ go build -o laatmux ./cmd/laatmux
 ./laatmux ls        # starts the local daemon on demand, lists workspaces and agents
 ./laatmux watch     # live, redraws on change
 ./laatmux hosts     # reachability, daemon version, capabilities; marks daemons that differ from this build
+./laatmux hosts pause vm    # stop dialling vm from this machine; hosts resume vm dials it again
 ./laatmux upgrade vm    # build for the host from this checkout, install over ssh, restart its daemon
 ./laatmux stop      # end this machine's daemon cleanly; the next command starts one again
 ./laatmux repos     # each known repository's name and where it lands on each host
@@ -82,6 +83,7 @@ hosts:
     repos: [~/src, ~/src/work]  # or several: a checkout is found in any of them,
                                 # a clone for add is made in the first
     worktrees: ~/src/worktrees
+    paused: true              # not dialled from this machine until resumed (below)
 tmux_servers: [laatmux, default]   # what this machine's daemon watches
 agents:
   claude:
@@ -145,6 +147,27 @@ starts, so a theme turned to `auto` later takes that answer, else
 `COLORFGBG`, else dark. A file that does not parse leaves a view as it
 was, with the error in its footer, and in the note of a task form that
 is up, until the file is put right.
+
+A host reached over ssh can be paused, for a machine that costs money
+while it runs, a cloud workspace that ssh starts say: `paused: true` on
+its entry, which `laatmux hosts pause <host>` writes and `laatmux hosts
+resume <host>` takes out, as does `H` in the dashboard and the sidebar,
+a picker of the hosts with their state (connected, paused, down) where
+`Enter` flips the one picked. The write keeps the rest of the file as
+the task form's append does. This machine does not dial a paused host:
+the daemon drops its merged subscription and removes its records, as
+for a host removed from the config, within its two-second look at the
+file, and takes it up again when it is resumed; the relay does not
+follow its tasks, `hosts` does not probe it, and no PR or checks are
+asked for its worktrees, which are out of the stream. A command aimed at
+it, `add --host`, `jump`, `rm`, `run`, `path`, `new`, a shell, or a task
+form's submit, is refused with `host vm is paused; laatmux hosts resume
+vm connects it`; `upgrade`, which the user runs by hand, connects it and
+says so. A task queued for it before the pause stays in its file, its
+row saying `host vm is paused`, and is followed again once the host is
+resumed; nothing is dismissed. The host's own daemon is not told:
+pausing is this machine's refusal to dial, nothing more. This machine's
+own entry, which nothing dials, cannot be paused.
 
 A repository the config does not list is added from the task form or
 from `add`: a source in one of the forge forms below
@@ -1055,7 +1078,9 @@ replacement a client started meanwhile. The next connection starts the new build
 `upgrade` makes that connection last and prints the version. Nothing
 before that connection needs a daemon on the host, so a host whose
 daemon is stopped or whose binary is gone is upgraded too; the script
-says what the old binary was. Each remote step is bounded, so a host
+says what the old binary was. A paused host is upgraded too, the one
+command that dials it, and upgrade says it connects it; it stays
+paused for everything else. Each remote step is bounded, so a host
 that stops answering is reported and skipped rather than holding the
 others. The local host is upgraded in place of the running executable
 the same way. `hosts` marks every
@@ -1218,7 +1243,10 @@ any is closed, else closes every one (the stale fold in the agent view),
 jumps to the row under it, on a fold mark or a repository line folds;
 the wheel moves the selection. Hosts that
 are not connected and listed, and a local daemon that is down, are
-lines above the list.
+lines above the list; a paused host is a dimmed one, `vm paused · H
+connects`, and its rows are gone until it is resumed. `H` opens the
+picker of the hosts reached over ssh, where `Enter` pauses the one
+picked, or resumes it (see the config above).
 
 A jump from a tile, or from an agent or a pane in the tree, goes to the
 pane, routed by the pane's server and session: a pane in a managed
@@ -1507,7 +1535,8 @@ orphaned row's session exists locally and is switched to.
   repository where its worktree will be. Its mark spins while the add runs and is
   `!` once it needs the user, when the row is dim too. The second line
   in tiles, or the state column in compact, says where it is:
-  `adding: <stage>`, `host unreachable, retrying`, `failed at <stage>`,
+  `adding: <stage>`, `host unreachable, retrying`, `host <name> is
+  paused`, `failed at <stage>`,
   `prompt not delivered`, `prompt delivery unknown`, `outcome unknown`,
   `done, awaiting the listing`, `done, worktree gone`, or `host
   removed`; the line under it, the title line in compact, has the
@@ -1518,7 +1547,7 @@ orphaned row's session exists locally and is switched to.
   another machine, or whose worktree is gone. A task that failed, or
   whose worktree was gone after the add, does not stand for the
   worktree row, so one made again at the root is drawn beside it. `p` and `x` on a task's row work in the sidebar as
-  in the dashboard, the sidebar's only keys that act.
+  in the dashboard, the sidebar's only keys that act, with `H`.
 - In both, a working row's mark spins: braille frames in cyan, one per
   tenth of a second from the clock, so every pane spins in step; the
   view redraws at that rate only while a working row is on the list. A
@@ -1833,7 +1862,11 @@ records:
   changed, every two seconds, so a view that stays up, the dashboard or
   a sidebar pane, lists a host added without a restart; the view reads
   the file itself too, for its jumps, removals and task form (the config
-  section above says what else it takes).
+  section above says what else it takes). A host paused there is not
+  dialled: its records are removed as a removed host's are, and its
+  host record comes back with `paused` set and nothing else, which a
+  one-shot client does not wait on; resumed, the record is replaced by
+  one connecting.
 - **Held only while wanted.** Remote subscriptions are opened by the
   first merged subscriber and dropped 60 seconds after the last leaves,
   so a laptop with no sidebar open holds no ssh channels; each remote

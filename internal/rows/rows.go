@@ -40,6 +40,9 @@ type Host struct {
 	// they belong to, and reach the view with it: a worktree row takes
 	// its agent by that, not by session name.
 	Attribution bool
+	// Paused is that the host is paused in the merging daemon's config:
+	// it has no records, and its tasks wait for it.
+	Paused bool
 }
 
 // Input is everything the rows are built from.
@@ -99,9 +102,11 @@ type Row struct {
 	// Replaced that its host answers as another machine than the one
 	// the task was accepted for, which the view sees in the host's
 	// environment id before the relay, having stopped contacting the
-	// host, records it.
+	// host, records it. Paused is that its host is paused: the task
+	// waits for the host to be resumed.
 	Removed  bool
 	Replaced bool
+	Paused   bool
 	Worktree *protocol.Worktree
 	// hostRepo is the host's label of a line's worktree where this
 	// machine names it otherwise (Input.HostRepos), "" where not.
@@ -337,6 +342,9 @@ func (r Row) pendingState() (string, string) {
 	if r.Replaced && !r.Removed && p.Mismatch == "" {
 		return "host replaced", r.Host + " answers as another machine than " + p.EnvironmentID
 	}
+	if r.Paused && !r.Removed && !r.Replaced && WaitsOnHost(p) {
+		return "host " + r.Host + " is paused", ""
+	}
 	return PendingState(p, r.Removed)
 }
 
@@ -379,6 +387,16 @@ func PendingState(p protocol.Pending, removed bool) (state, detail string) {
 		return "adding", p.Detail
 	}
 	return "adding: " + p.Stage, p.Detail
+}
+
+// WaitsOnHost reports whether the relay is asking the task's host for
+// something, or would be: the add, the listing after it, or a prompt's
+// delivery; not for a task with an outcome that leaves the host out,
+// its add failed or its worktree gone, nor for one whose host answers
+// as another machine. A task of a paused host that waits on it says
+// the host is paused.
+func WaitsOnHost(p protocol.Pending) bool {
+	return p.Mismatch == "" && !p.Gone && !(p.Done && !p.OK) && (!p.Done || p.AttemptOpen || !p.Listed)
 }
 
 // stands is a task that may still become the worktree row at its root,

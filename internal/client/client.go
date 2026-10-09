@@ -81,13 +81,17 @@ func (c *Conn) wrap(err error) error {
 	return err
 }
 
-// Dial connects and completes the hello exchange.
+// Dial connects and completes the hello exchange. A paused host is not
+// dialled: the error is a *peer.PausedError, whoever asked.
 func Dial(ctx context.Context, h peer.Host) (*Conn, error) {
 	var (
 		r     io.Reader
 		w     io.Writer
 		close func()
 	)
+	if h.Paused && !h.Local() {
+		return nil, &peer.PausedError{Name: h.Name}
+	}
 	if h.Local() {
 		nc, err := DialLocal(ctx, true)
 		if err != nil {

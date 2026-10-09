@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
@@ -136,6 +137,9 @@ type Host struct {
 	// Attribution is the daemon's attribution capability: its agent
 	// records say which worktree they belong to.
 	Attribution bool
+	// Paused is that the merging daemon's config has the host paused:
+	// not dialled, with no records, until it is resumed.
+	Paused bool
 }
 
 // fromStatus is the host record of the merged stream as this state
@@ -143,15 +147,16 @@ type Host struct {
 func fromStatus(st protocol.HostStatus) Host {
 	return Host{Name: st.Name, Local: st.Local(), Connected: st.Connected, Error: st.Error, Reconnecting: st.Reconnecting, Version: st.Version, EnvID: st.EnvironmentID,
 		Worktrees: protocol.Has(st.Capabilities, protocol.CapWorktrees), Listed: st.Listed, Caps: st.Capabilities,
-		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution)}
+		Attribution: protocol.Has(st.Capabilities, protocol.CapAttribution), Paused: st.Paused}
 }
 
 // ready reports whether a one-shot client can stop waiting on the host:
-// its records are listed or it has failed. A host that is connecting,
+// its records are listed or it has failed, or it is paused, which no
+// wait changes. A host that is connecting,
 // connected with its snapshot pending, or reconnecting after a drop, is
 // neither: a daemon restarted for an upgrade is back within seconds,
 // and the wait is bounded by the snapshot timeout as for a cold host.
-func (h Host) ready() bool { return h.Listed || (h.Error != "" && !h.Reconnecting) }
+func (h Host) ready() bool { return h.Listed || h.Paused || (h.Error != "" && !h.Reconnecting) }
 
 // Down is the host's error as a header line says it: with the reconnect
 // noted when one is under way.
@@ -450,7 +455,8 @@ func (m *State) localsLocked() []protocol.Session {
 // of the host would have fetched it: a hello built from the host record
 // and a snapshot of its records. Not ok when the host is not in the
 // stream; an error when the host is down, as the direct dial would have
-// failed, and when its snapshot has not been listed yet, a host whose
+// failed, when it is paused, as the direct dial is refused, and when
+// its snapshot has not been listed yet, a host whose
 // entry changed say, since the records then are not all of them. A host
 // still reconnecting when the caller stopped waiting is down with its
 // error as well; the caller names it as still waited on first.
@@ -460,6 +466,10 @@ func (m *State) HostSnapshot(name string) (hello, snap protocol.Message, ok bool
 	st, ok := m.hosts[name]
 	if !ok {
 		return hello, snap, false, nil
+	}
+	if st.Paused {
+		// The direct dial is refused too.
+		return hello, snap, true, &peer.PausedError{Name: name}
 	}
 	if st.Error != "" {
 		return hello, snap, true, fmt.Errorf("%s: %s", name, st.Down())
@@ -569,7 +579,7 @@ func (m *State) inputLocked(current string) rows.Input {
 		// without the field, whatever the host sends.
 		in.Hosts = append(in.Hosts, rows.Host{Name: name, Local: st.Local, EnvironmentID: st.EnvID,
 			Connected: st.Connected, Listed: st.Listed, Worktrees: st.Worktrees,
-			Attribution: st.Attribution && !m.stripped})
+			Attribution: st.Attribution && !m.stripped, Paused: st.Paused})
 	}
 	// The rows package attributes records to hosts by environment id,
 	// which every host that has answered a hello has, connected or not.

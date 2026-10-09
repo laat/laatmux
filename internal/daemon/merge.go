@@ -94,11 +94,7 @@ func (d *Daemon) mergedSubscribe(ctx context.Context, drop func(), checkouts boo
 	if err == nil {
 		d.reconcileHostsLocked(hosts)
 	}
-	for _, mh := range d.mhosts {
-		if !mh.host.Local() && mh.cancel == nil {
-			d.startFollowLocked(mh)
-		}
-	}
+	d.startFollowsLocked()
 	d.applySessionsLocked(sessions, serr)
 	d.subMu.Unlock()
 	s := &subscriber{ch: make(chan protocol.Message, subscriberBuffer), drop: drop, merged: true, checkouts: checkouts}
@@ -137,8 +133,14 @@ func (d *Daemon) rereadHosts() {
 		return
 	}
 	d.reconcileHostsLocked(hosts)
+	d.startFollowsLocked()
+}
+
+// startFollowsLocked follows every remote host not followed now, but a
+// paused one: nothing dials it, and its host record says it is paused.
+func (d *Daemon) startFollowsLocked() {
 	for _, mh := range d.mhosts {
-		if !mh.host.Local() && mh.cancel == nil {
+		if !mh.host.Local() && !mh.host.Paused && mh.cancel == nil {
 			d.startFollowLocked(mh)
 		}
 	}
@@ -213,7 +215,7 @@ func (d *Daemon) mergedIdle(gen uint64) {
 			mh.cancel()
 			mh.cancel = nil
 		}
-		if !mh.host.Local() {
+		if !mh.host.Local() && !mh.host.Paused {
 			mh.status.Connected, mh.status.Listed, mh.status.Error, mh.status.Reconnecting, mh.status.Since = false, false, "", false, now
 		}
 	}
@@ -221,7 +223,9 @@ func (d *Daemon) mergedIdle(gen uint64) {
 
 // reconcileHostsLocked brings the host set in line with the config. A
 // host whose entry changed is dropped and added again, since its ssh
-// alias is how it is reached.
+// alias is how it is reached; one paused or resumed so too, which drops
+// its records with its follow, or takes it up again. A paused host has
+// a record that says so, and none of its own.
 func (d *Daemon) reconcileHostsLocked(hosts []peer.Host) {
 	want := map[string]peer.Host{}
 	for _, h := range hosts {
@@ -243,7 +247,7 @@ func (d *Daemon) reconcileHostsLocked(hosts []peer.Host) {
 		if _, ok := d.mhosts[h.Name]; ok {
 			continue
 		}
-		mh := &mergedHost{host: h, status: protocol.HostStatus{Name: h.Name, SSH: h.SSH, Since: now},
+		mh := &mergedHost{host: h, status: protocol.HostStatus{Name: h.Name, SSH: h.SSH, Paused: h.Paused, Since: now},
 			agents: map[string]protocol.Agent{}, worktrees: map[string]protocol.Worktree{},
 			panes: map[string]protocol.Pane{}, runs: map[string]protocol.Run{}}
 		if h.Local() {

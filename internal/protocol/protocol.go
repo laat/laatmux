@@ -674,7 +674,11 @@ type HostStatus struct {
 	// client waits on a reconnecting host as on one still connecting,
 	// since a daemon restarted for an upgrade is back within seconds,
 	// where ssh's own errors mean the host is not reachable now.
-	Reconnecting bool      `json:"reconnecting,omitempty"`
+	Reconnecting bool `json:"reconnecting,omitempty"`
+	// Paused is that the merging daemon's config has the host paused:
+	// it is not dialled and has no records in the stream until the
+	// config resumes it, when the record is replaced by one connecting.
+	Paused       bool      `json:"paused,omitempty"`
 	Version      string    `json:"version,omitempty"`
 	Capabilities []string  `json:"capabilities,omitempty"`
 	Since        time.Time `json:"since"` // when the record last changed

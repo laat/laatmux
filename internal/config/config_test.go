@@ -245,6 +245,7 @@ func TestParseRejects(t *testing.T) {
 		"repos:\n  - git@github.com:laat/foo.js.git\n":                         "set an explicit name",
 		"repos:\n  - source: a/x\n    name: bad.name\n":                        "not a valid label",
 		"repos:\n  - source: \"\"\n":                                           "has no source",
+		"hosts:\n  - name: a\n    paused: true\n":                              "a has paused but no ssh",
 	}
 	for in, want := range cases {
 		_, err := Parse([]byte(in))

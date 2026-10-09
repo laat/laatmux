@@ -340,6 +340,12 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = fmt.Sprintf("host %q is not in the config", m.Relay)
 		return res
 	}
+	// A paused host takes no new task, which would wait on it; one the
+	// relay has, a lost answer asked for again, waits as the others do.
+	if _, had := d.relay.get(m.ID); h.Paused && !had {
+		res.Error = (&peer.PausedError{Name: h.Name}).Error()
+		return res
+	}
 	d.mu.Lock()
 	var env string
 	if mh, ok := d.mhosts[h.Name]; ok && mh.status.EnvironmentID != "" {
@@ -600,7 +606,11 @@ func (d *Daemon) sweepRelay(now time.Time) {
 // relayConn is one connection to the task's host, held to the
 // environment the record is pinned to and checked for the capabilities
 // a relayed add needs. A host never reached has no id yet; the first
-// hello binds it, written before anything is sent.
+// hello binds it, written before anything is sent. A host the config
+// has paused is not dialled: the error is a *peer.PausedError, which the
+// record waits on as on an unreachable host, asking again at the
+// shortest backoff (retry), so it is followed again once the host is
+// resumed.
 func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendingFile, error) {
 	p, ok := d.relay.get(id)
 	if !ok {
@@ -612,6 +622,9 @@ func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendin
 	}
 	if !ok {
 		return nil, p, errHostRemoved
+	}
+	if h.Paused {
+		return nil, p, &peer.PausedError{Name: h.Name}
 	}
 	c, err := d.cfg.Dial(ctx, h)
 	if err != nil {
@@ -655,8 +668,13 @@ type refusal struct{ msg string }
 func (r *refusal) Error() string { return r.msg }
 
 // unreachable marks the record as waiting on the host, with the reason.
+// A record that says so already is left, so a paused host asked about
+// at every retry does not publish the record each time.
 func (d *Daemon) unreachable(id string, err error) {
 	msg := err.Error()
+	if p, ok := d.relay.get(id); ok && !p.Reachable && p.Unreachable == msg {
+		return
+	}
 	d.setPending(id, false, func(p *pendingFile) {
 		p.Reachable = false
 		p.Unreachable = msg
@@ -674,6 +692,20 @@ func (d *Daemon) pause(ctx context.Context, wait *time.Duration) bool {
 	}
 	*wait = min(*wait*2, reconnectMax)
 	return true
+}
+
+// retry is pause after a connection to the task's host that failed with
+// err: for a paused host the shortest wait, the backoff started over,
+// so a resume is taken within it and the dials after it back off from
+// the start; a host that failed otherwise waits the backoff.
+func (d *Daemon) retry(ctx context.Context, wait *time.Duration, err error) bool {
+	var paused *peer.PausedError
+	if errors.As(err, &paused) {
+		*wait = d.cfg.ReconnectMin
+		w := *wait
+		return d.pause(ctx, &w)
+	}
+	return d.pause(ctx, wait)
 }
 
 // runPending runs one task's add against its host until it has an
@@ -722,7 +754,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 				return
 			}
 			d.unreachable(id, err)
-			if !d.pause(ctx, &wait) {
+			if !d.retry(ctx, &wait, err) {
 				return
 			}
 			continue
@@ -1000,7 +1032,7 @@ func (d *Daemon) retire(ctx context.Context, id string) bool {
 			} else {
 				d.unreachable(id, err)
 			}
-			if !d.pause(ctx, &wait) {
+			if !d.retry(ctx, &wait, err) {
 				return false
 			}
 			continue
@@ -1432,6 +1464,12 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = fmt.Sprintf("attempt %d is unresolved", p.Attempt)
 	case p.AttemptError == protocol.ErrRecoveryExpired:
 		res.Error = protocol.ErrRecoveryExpired + "; laatmux tasks show " + id + " prints the prompt"
+	default:
+		// A paused host is not asked: no attempt is opened to wait on
+		// it.
+		if h, ok, _ := d.relayHost(p.Host); ok && h.Paused {
+			res.Error = (&peer.PausedError{Name: h.Name}).Error()
+		}
 	}
 	if res.Error != "" {
 		return res
@@ -1511,7 +1549,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 				p, _ = d.relay.get(id)
 				return p, false
 			}
-			if !d.pause(ctx, &backoff) {
+			if !d.retry(ctx, &backoff, err) {
 				return p, false
 			}
 			continue

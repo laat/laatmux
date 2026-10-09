@@ -1,6 +1,7 @@
 package merged
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 )
@@ -216,6 +218,7 @@ func TestHostReady(t *testing.T) {
 		{Host{Error: "disconnected", Reconnecting: true}, false, "disconnected (reconnecting)"},
 		{Host{Connected: true}, false, ""},
 		{Host{}, false, ""},
+		{Host{Paused: true}, true, ""},
 	}
 	for _, c := range cases {
 		if got := c.st.ready(); got != c.ready {
@@ -232,6 +235,20 @@ func TestHostReady(t *testing.T) {
 	st = fromStatus(protocol.HostStatus{Name: "mac", Capabilities: []string{protocol.CapWorktrees, protocol.CapAttribution}})
 	if !st.Local || !st.Worktrees || !st.Attribution || len(st.Caps) != 2 {
 		t.Errorf("fromStatus: %+v", st)
+	}
+	// A paused host is not waited on, and its snapshot is refused as
+	// the direct dial is.
+	m := New()
+	m.Apply(protocol.Message{Type: protocol.TypeSnapshot, Hosts: []protocol.HostStatus{{Name: "vm", SSH: "vm", Paused: true}}})
+	if w := m.Waiting(); len(w) != 0 {
+		t.Errorf("waiting on %v", w)
+	}
+	if h, ok := m.Status("").Host("vm"); !ok || !h.Paused {
+		t.Errorf("status host %+v %v", h, ok)
+	}
+	var paused *peer.PausedError
+	if _, _, ok, err := m.HostSnapshot("vm"); !ok || !errors.As(err, &paused) || paused.Name != "vm" {
+		t.Errorf("snapshot of a paused host: %v %v", ok, err)
 	}
 }
 

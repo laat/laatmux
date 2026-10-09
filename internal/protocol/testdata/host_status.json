@@ -6,6 +6,7 @@
   "listed": true,
   "error": "error",
   "reconnecting": true,
+  "paused": true,
   "version": "version",
   "capabilities": [
     "x"

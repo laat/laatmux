@@ -566,6 +566,63 @@ func TestRelayLifetimeAndHostRemoved(t *testing.T) {
 	}
 }
 
+// A paused host takes no new task. One accepted before the pause stays,
+// its record saying the host is paused, and the host is not dialled for
+// it, though it would answer; resumed, the add is followed to its
+// outcome. A prompt for a task of a paused host is refused, with no
+// attempt opened.
+func TestRelayPausedHost(t *testing.T) {
+	shortWait(t, time.Second)
+	f := newRelayFixture(t, []string{"loading"})
+	vm, paused := peer.Host{Name: "vm", SSH: "vm"}, peer.Host{Name: "vm", SSH: "vm", Paused: true}
+	const refusal = "host vm is paused; laatmux hosts resume vm connects it"
+	add := func(id string) protocol.Message {
+		return f.request(t, protocol.Message{Type: protocol.TypeAdd, ID: id, Relay: "vm", Repo: f.source(), Name: "proj", Branch: id, AgentName: "claude", Prompt: "later", SubmittedAt: time.Now()})
+	}
+	down := func(err error) {
+		f.remote.mu.Lock()
+		f.remote.down = err
+		f.remote.mu.Unlock()
+	}
+	f.hosts.set(paused)
+	if res := add("p0"); res.OK || res.Error != refusal {
+		t.Fatalf("a task for a paused host: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, FileName("p0"))); !os.IsNotExist(err) {
+		t.Fatalf("pending file for a refused add: %v", err)
+	}
+	f.hosts.set(vm)
+	down(errors.New("ssh: connect refused"))
+	if res := add("p1"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return strings.Contains(p.Unreachable, "connect refused") })
+	f.hosts.set(paused)
+	f.awaitRecord(t, "p1", 5*time.Second, func(p pendingFile) bool { return p.Unreachable == refusal })
+	dials := f.remote.count()
+	down(nil)
+	// Ten of the fixture's shortest backoff.
+	time.Sleep(200 * time.Millisecond)
+	if n := f.remote.count(); n != dials {
+		t.Fatalf("a paused host dialled %d times", n-dials)
+	}
+	if p, _ := f.local.relay.get("p1"); p.Sent || p.Taken || p.Reachable {
+		t.Fatalf("record while paused %+v", p)
+	}
+	f.hosts.set(vm)
+	p := f.awaitRecord(t, "p1", 30*time.Second, func(p pendingFile) bool { return p.Done && p.Listed })
+	if !p.OK || p.Prompt != protocol.DeliveryNotDelivered || !p.Reachable {
+		t.Fatalf("record after the resume %+v", p)
+	}
+	f.hosts.set(paused)
+	if res := f.request(t, protocol.Message{Type: protocol.TypePrompt, ID: "p1"}); res.OK || res.Error != refusal {
+		t.Fatalf("prompt for a paused host: %+v", res)
+	}
+	if p := readPending(t, f.dir, "p1"); p.Attempt != 0 || p.AttemptOpen {
+		t.Fatalf("file after a refused prompt %+v", p)
+	}
+}
+
 // The listing after a success that has no worktree at the root is
 // done, worktree gone: a record kept for the user to dismiss.
 func TestRelayWorktreeGone(t *testing.T) {

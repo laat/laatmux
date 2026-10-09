@@ -234,10 +234,13 @@ func (m *Model) reselect() {
 }
 
 // HeaderLine is a line above the list; Down is that it says something is
-// down, drawn in danger, where connecting and the like are a warning.
+// down, drawn in danger, where connecting and the like are a warning;
+// Paused that it says a host is paused, which the user chose, drawn
+// dimmed.
 type HeaderLine struct {
-	Text string
-	Down bool
+	Text   string
+	Down   bool
+	Paused bool
 }
 
 // Item is one entry of the list as drawn: a row, or a header in the
@@ -525,6 +528,10 @@ func (m *Model) Render() []Line {
 		out = append(out, m.tabs())
 	}
 	for _, h := range m.Header {
+		if h.Paused {
+			out = append(out, dim(h.Text, m.Width))
+			continue
+		}
 		fg := palette.Warning
 		if h.Down {
 			fg = palette.Danger

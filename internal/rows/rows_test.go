@@ -451,6 +451,50 @@ func TestPendingState(t *testing.T) {
 	}
 }
 
+// A task of a paused host waits for it: while the relay would be asking
+// the host, for the add, the listing after it or a prompt's delivery,
+// its row says the host is paused, and it does not need the user for
+// that; a task with an outcome the host is not asked about says that.
+// The host's local workspace sessions are no orphaned lines, its
+// worktrees being out of the stream. Resumed, the task says where it is.
+func TestPausedHostTasks(t *testing.T) {
+	src := "git@x:o/proj.git"
+	in := Input{
+		Hosts: []Host{{Name: "vm", Paused: true}},
+		Pendings: []protocol.Pending{
+			{ID: "a1", Host: "vm", Repo: "proj", Branch: "one", Source: src},
+			{ID: "a2", Host: "vm", Repo: "proj", Branch: "two", Source: src, EnvironmentID: "venv", Root: "/r/two", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryDelivered},
+			{ID: "a3", Host: "vm", Repo: "proj", Branch: "three", Source: src, EnvironmentID: "venv", Root: "/r/three", Taken: true, Sent: true, Done: true, OK: true, Prompt: protocol.DeliveryUnknown, AttemptOpen: true, Attempt: 1},
+			{ID: "a4", Host: "vm", Repo: "proj", Branch: "four", Source: src, Taken: true, Sent: true, Done: true, Error: "boom"},
+			{ID: "a5", Host: "vm", Repo: "proj", Branch: "five", Source: src, EnvironmentID: "venv", Root: "/r/five", Taken: true, Sent: true, Done: true, OK: true, Listed: true, Prompt: protocol.DeliveryNotDelivered, Error: "the pane was not ready"},
+		},
+		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//r/gone", Host: "vm", Source: src, Branch: "gone"}},
+	}
+	byID := nodesByID(Tree(in))
+	for _, c := range []struct {
+		id, state, detail string
+		needs             bool
+	}{
+		{"a1", "host vm is paused", "", false},
+		{"a2", "host vm is paused", "", false},
+		{"a3", "host vm is paused", "", false},
+		{"a4", "failed", "boom", true},
+		{"a5", "prompt not delivered", "the pane was not ready", true},
+	} {
+		r := byID[c.id]
+		if !r.Paused || r.State() != c.state || r.Detail() != c.detail || r.NeedsUser() != c.needs {
+			t.Errorf("%s: paused %v state %q detail %q needs %v", c.id, r.Paused, r.State(), r.Detail(), r.NeedsUser())
+		}
+	}
+	if _, ok := byID["session/vm/proj/gone"]; ok {
+		t.Error("a paused host's session is an orphaned line")
+	}
+	in.Hosts[0].Paused = false
+	if r := nodesByID(Tree(in))["a1"]; r.Paused || r.State() != "submitted" {
+		t.Errorf("resumed: paused %v state %q", r.Paused, r.State())
+	}
+}
+
 // A task whose repository could not be appended to the config needs
 // the user, though its add is complete: they fix the file or dismiss it.
 func TestNeedsUserRememberError(t *testing.T) {
