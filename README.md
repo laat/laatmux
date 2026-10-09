@@ -133,8 +133,8 @@ task form opened from then on use, the hosts and their `paused` on the
 hosts line, this machine's names for the repositories in the rows, the
 sidebar's `sort` and stale settings, the line templates, `icons`,
 `status_icons`, `kind_icons`, `agent_icons`, the theme, `jump_keys`'
-labels and the strip's `item_width`. A task form, the
-dashboard's or `compose`'s, reads the file again as a chip's picker
+labels and the strip's `item_width`. A task form, the dashboard's or
+`compose`'s, reads the file again as a chip's picker
 opens: a form left up offers the repositories, hosts and agents listed
 then, each chip kept on its choice when that is still there, else on
 the default the file gives now, and its submit sends that read's `copy`.
@@ -1116,9 +1116,9 @@ list that `Tab` or a click switches:
   source, else the host's; its worktrees under it by branch, the host in
   parentheses, with the git stats and the PR on the line, and before the
   name `⎇`, a worktree, or `⌂`, the main checkout (`{kind_icon}`,
-  below); under each
-  its agents by start time, its other panes (`$ zsh`) and its runs (`▶
-  make test 0:42`), from the pane and run records the client now keeps.
+  below); under each its agents by start time, its other panes
+  (`$ zsh`) and its runs (`▶ make test 0:42`), from the pane and run
+  records the client now keeps.
   A main checkout in use is a line under its repository like a
   worktree's, before them, with its git stats and its agents in it, in
   plain sessions on its host's default server and in its home, and the
