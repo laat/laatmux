@@ -901,7 +901,7 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	if clients != "a.b" {
 		t.Errorf("clients of a.b: %q", clients)
 	}
-	if err := Kill(ctx, name); err != nil {
+	if killed, err := Kill(ctx, name); err != nil || !killed {
 		t.Fatalf("kill: %v", err)
 	}
 	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
@@ -913,7 +913,7 @@ func TestEnsureDottedManagedSession(t *testing.T) {
 	if name, created, err = Ensure(ctx, spec); err != nil || created || name != "mac/a.b" {
 		t.Fatalf("the earlier build's workspace: %q %v %v", name, created, err)
 	}
-	if err := Kill(ctx, name); err != nil {
+	if killed, err := Kill(ctx, name); err != nil || !killed {
 		t.Fatalf("kill %s: %v", name, err)
 	}
 	if locals, err := List(ctx); err != nil || len(locals) != 1 || locals[0].Name != "mac/a" {
