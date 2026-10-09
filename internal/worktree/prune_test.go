@@ -102,17 +102,22 @@ func TestRemovable(t *testing.T) {
 		run(t, c, "git", "worktree", "add", "-q", "-b", name, root, "main")
 		return root
 	}
-	plain, locked, bare, sub := wt("plain"), wt("locked"), wt("bare-lock"), wt("sub")
+	plain, locked, bare, sub, mods := wt("plain"), wt("locked"), wt("bare-lock"), wt("sub"), wt("mods")
 	run(t, c, "git", "worktree", "lock", "--reason", "keep me", locked)
 	run(t, c, "git", "worktree", "lock", bare)
 	run(t, sub, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", f.remote, "vendor/proj")
+	// A modules directory in the worktree's git dir is a submodule to
+	// git, with none in the index.
+	if err := os.Mkdir(filepath.Join(strings.TrimSpace(run(t, mods, "git", "rev-parse", "--absolute-git-dir")), "modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, k := range []struct {
 		root       string
 		locked     bool
 		reason     string
 		submodules bool
 	}{
-		{plain, false, "", false}, {locked, true, "keep me", false}, {bare, true, "", false}, {sub, false, "", true},
+		{plain, false, "", false}, {locked, true, "keep me", false}, {bare, true, "", false}, {sub, false, "", true}, {mods, false, "", true},
 	} {
 		got, err := ReadFacts(ctx, k.root)
 		if err != nil {
@@ -123,7 +128,7 @@ func TestRemovable(t *testing.T) {
 		}
 	}
 	// git agrees: each one read as kept is refused without force.
-	for _, root := range []string{locked, bare, sub} {
+	for _, root := range []string{locked, bare, sub, mods} {
 		if _, err := Remove(ctx, c, root, false); err == nil {
 			t.Errorf("%s: removed without force", filepath.Base(root))
 		}

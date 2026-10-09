@@ -401,24 +401,33 @@ func TestPruneEnvironment(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		sent = append(sent, m)
-		if m.Type == protocol.TypeSubscribe {
+		switch m.Type {
+		case protocol.TypeSubscribe:
 			// The host's records are of another machine than the one
-			// that answers a dial now.
+			// that answers a dial now; vm is down.
 			pc.Write(protocol.Message{Type: protocol.TypeSnapshot, Seq: 1,
-				Hosts:     []protocol.HostStatus{{Name: "mac", EnvironmentID: "oenv", Connected: true, Listed: true, Version: "fake", Capabilities: caps}},
+				Hosts: []protocol.HostStatus{{Name: "mac", EnvironmentID: "oenv", Connected: true, Listed: true, Version: "fake", Capabilities: caps},
+					{Name: "vm", SSH: "box", Error: "ssh: unreachable"}},
 				Worktrees: []protocol.Worktree{{ID: "oenv/worktree//w/proj/fresh", EnvironmentID: "oenv", Repo: "proj", Branch: "fresh", Root: "/w/proj/fresh", Source: src}},
 			})
+		case protocol.TypeFacts:
+			// Answered, so a guard that let the question through would
+			// show in the plan rather than as a wait.
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true,
+				Facts: []protocol.RootFacts{{Root: "/w/proj/fresh", Branch: "fresh", Head: "f1", Base: "origin/main"}}})
+		case protocol.TypeRm:
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: m.Root})
 		}
 		return true
 	})
 	cfgPath := filepath.Join(os.Getenv("LAATMUX_HOME"), "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("hosts:\n  - name: mac\n    repos: /r\n    worktrees: /w\n  - name: vm\n    ssh: box\nrepos:\n  - "+src+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LAATMUX_CONFIG", cfgPath)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	run := func() (string, error) {
+	run := func(args ...string) (string, error) {
 		t.Helper()
 		f, ferr := os.Create(filepath.Join(t.TempDir(), "stdout"))
 		if ferr != nil {
@@ -426,7 +435,7 @@ func TestPruneEnvironment(t *testing.T) {
 		}
 		stdout := os.Stdout
 		os.Stdout = f
-		err := cmdPrune(context.Background(), []string{"--yes"})
+		err := cmdPrune(context.Background(), append([]string{"--yes"}, args...))
 		os.Stdout = stdout
 		f.Close()
 		out, _ := os.ReadFile(f.Name())
@@ -452,6 +461,12 @@ func TestPruneEnvironment(t *testing.T) {
 	if got := commands(); len(got) != 0 {
 		t.Errorf("sent %q", got)
 	}
+	// --host by the ssh alias names the host the stream has by its
+	// name: vm, which is down, said, and mac not looked at.
+	out, err = run("--host", "box")
+	if err != nil || out != "vm  DOWN  ssh: unreachable; its worktrees are not looked at\nno worktree without a session to look at\n" {
+		t.Errorf("--host box: %v\n%s", err, out)
+	}
 
 	was := hostFacts
 	t.Cleanup(func() { hostFacts = was })
@@ -464,5 +479,23 @@ func TestPruneEnvironment(t *testing.T) {
 	}
 	if got := commands(); len(got) != 0 {
 		t.Errorf("sent %q", got)
+	}
+}
+
+// The question is asked only on a terminal: from a pipe it is an error
+// naming --yes, with nothing read.
+func TestPruneConfirmNeedsTerminal(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	w.WriteString("y\n")
+	stdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = stdin }()
+	if ok, err := confirm(context.Background(), "remove? "); ok || err == nil || !strings.Contains(err.Error(), "give --yes") {
+		t.Errorf("confirm from a pipe: %v %v", ok, err)
 	}
 }
