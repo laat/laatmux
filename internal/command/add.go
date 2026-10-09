@@ -146,6 +146,10 @@ func (a Add) check() error {
 	if a.Host.Name == "" || a.Repo.Source == "" || a.Branch == "" {
 		return errors.New("add needs a host, a repository and a branch")
 	}
+	if a.Host.Paused {
+		// Neither run against it nor queued to wait on it.
+		return &peer.PausedError{Name: a.Host.Name}
+	}
 	return worktree.CheckWire(a.Branch)
 }
 

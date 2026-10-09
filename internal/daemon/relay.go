@@ -340,6 +340,12 @@ func (d *Daemon) acceptRelay(m protocol.Message) protocol.Message {
 		res.Error = fmt.Sprintf("host %q is not in the config", m.Relay)
 		return res
 	}
+	// A paused host takes no new task, which would wait on it; one the
+	// relay has, a lost answer asked for again, waits as the others do.
+	if _, had := d.relay.get(m.ID); h.Paused && !had {
+		res.Error = (&peer.PausedError{Name: h.Name}).Error()
+		return res
+	}
 	d.mu.Lock()
 	var env string
 	if mh, ok := d.mhosts[h.Name]; ok && mh.status.EnvironmentID != "" {
@@ -600,7 +606,11 @@ func (d *Daemon) sweepRelay(now time.Time) {
 // relayConn is one connection to the task's host, held to the
 // environment the record is pinned to and checked for the capabilities
 // a relayed add needs. A host never reached has no id yet; the first
-// hello binds it, written before anything is sent.
+// hello binds it, written before anything is sent. A host the config
+// has paused is not dialled: the error is a *peer.PausedError, which the
+// record waits on as on an unreachable host, asking again at the
+// shortest backoff (retry), so it is followed again once the host is
+// resumed.
 func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendingFile, error) {
 	p, ok := d.relay.get(id)
 	if !ok {
@@ -612,6 +622,14 @@ func (d *Daemon) relayConn(ctx context.Context, id string) (*client.Conn, pendin
 	}
 	if !ok {
 		return nil, p, errHostRemoved
+	}
+	if h.Paused {
+		return nil, p, &peer.PausedError{Name: h.Name}
+	}
+	if !p.Reachable && p.Unreachable == (&peer.PausedError{Name: h.Name}).Error() {
+		// Resumed: the dial, which may start the machine and take a
+		// while, is not said to wait on a resume.
+		d.setPending(id, false, func(p *pendingFile) { p.Unreachable = "" })
 	}
 	c, err := d.cfg.Dial(ctx, h)
 	if err != nil {
@@ -655,8 +673,13 @@ type refusal struct{ msg string }
 func (r *refusal) Error() string { return r.msg }
 
 // unreachable marks the record as waiting on the host, with the reason.
+// A record that says so already is left, so a paused host asked about
+// at every retry does not publish the record each time.
 func (d *Daemon) unreachable(id string, err error) {
 	msg := err.Error()
+	if p, ok := d.relay.get(id); ok && !p.Reachable && p.Unreachable == msg {
+		return
+	}
 	d.setPending(id, false, func(p *pendingFile) {
 		p.Reachable = false
 		p.Unreachable = msg
@@ -674,6 +697,20 @@ func (d *Daemon) pause(ctx context.Context, wait *time.Duration) bool {
 	}
 	*wait = min(*wait*2, reconnectMax)
 	return true
+}
+
+// retry is pause after a connection to the task's host that failed with
+// err: for a paused host the shortest wait, the backoff started over,
+// so a resume is taken within it and the dials after it back off from
+// the start; a host that failed otherwise waits the backoff.
+func (d *Daemon) retry(ctx context.Context, wait *time.Duration, err error) bool {
+	var paused *peer.PausedError
+	if errors.As(err, &paused) {
+		*wait = d.cfg.ReconnectMin
+		w := *wait
+		return d.pause(ctx, &w)
+	}
+	return d.pause(ctx, wait)
 }
 
 // runPending runs one task's add against its host until it has an
@@ -722,7 +759,7 @@ func (d *Daemon) runPending(ctx context.Context, id string) {
 				return
 			}
 			d.unreachable(id, err)
-			if !d.pause(ctx, &wait) {
+			if !d.retry(ctx, &wait, err) {
 				return
 			}
 			continue
@@ -1000,7 +1037,7 @@ func (d *Daemon) retire(ctx context.Context, id string) bool {
 			} else {
 				d.unreachable(id, err)
 			}
-			if !d.pause(ctx, &wait) {
+			if !d.retry(ctx, &wait, err) {
 				return false
 			}
 			continue
@@ -1384,6 +1421,72 @@ func (d *Daemon) restartRunners(id string) {
 	}
 }
 
+// pauseRelays ends the goroutines of the records whose host the config
+// has paused, and a connection of theirs to the host with them, then
+// starts them again, as a dismiss that keeps a record does: the new ones
+// wait in relayConn for the host to be resumed, and an add or a listing
+// followed when the pause came is followed again from the host's
+// journal then; a retired record's gone check is not started again, and
+// the host's next listing after the resume makes one, and a retired
+// record still asking for its repository's append gets the append's
+// goroutine again, which does not reach the host. A connection already
+// up is not kept on a host the user paused, which it would keep
+// running. The goroutines are cancelled at once; each record's are
+// waited for and started again on a goroutine of its own, one at a time
+// per record, so the config's look never waits on a goroutine that
+// waits on a lock: runAttempt's on an attempt that a p delivers, which
+// ends first, its connection with it. Called when the config file has
+// changed, and when a read of the hosts that failed is made again.
+func (d *Daemon) pauseRelays() {
+	if d.relay == nil || d.cfg.Hosts == nil {
+		return
+	}
+	hosts, err := d.cfg.Hosts()
+	if err != nil {
+		return
+	}
+	paused := map[string]bool{}
+	for _, h := range hosts {
+		if h.Paused {
+			paused[h.Name] = true
+		}
+	}
+	if len(paused) == 0 {
+		return
+	}
+	// Every runner is cancelled here, at once, whatever an earlier
+	// pause's worker still waits on; the waits and the restarts are the
+	// workers'.
+	stopped := map[string][]*runner{}
+	d.relay.mu.Lock()
+	for id, rs := range d.relay.runners {
+		if p, ok := d.relay.recs[id]; ok && paused[p.Host] {
+			stopped[id] = append([]*runner(nil), rs...)
+			for _, r := range rs {
+				r.cancel()
+			}
+		}
+	}
+	d.relay.mu.Unlock()
+	for id, rs := range stopped {
+		go func() {
+			l := d.relay.lock("pause/" + id)
+			l.Lock()
+			defer l.Unlock()
+			for _, r := range rs {
+				<-r.done
+			}
+			if p, ok := d.relay.get(id); ok && p.retired() && p.Remember {
+				d.relay.mu.Lock()
+				d.startRunnerLocked(d.runCtx(), id, d.settle)
+				d.relay.mu.Unlock()
+				return
+			}
+			d.restartRunners(id)
+		}()
+	}
+}
+
 // relayPrompt is p on a pending row: one delivery attempt of the
 // record's prompt, numbered one past the last, written to the file
 // before it is sent, one unresolved at a time. The result is the
@@ -1432,6 +1535,12 @@ func (d *Daemon) relayPrompt(ctx context.Context, id string) protocol.Message {
 		res.Error = fmt.Sprintf("attempt %d is unresolved", p.Attempt)
 	case p.AttemptError == protocol.ErrRecoveryExpired:
 		res.Error = protocol.ErrRecoveryExpired + "; laatmux tasks show " + id + " prints the prompt"
+	default:
+		// A paused host is not asked: no attempt is opened to wait on
+		// it.
+		if h, ok, _ := d.relayHost(p.Host); ok && h.Paused {
+			res.Error = (&peer.PausedError{Name: h.Name}).Error()
+		}
 	}
 	if res.Error != "" {
 		return res
@@ -1511,7 +1620,7 @@ func (d *Daemon) runAttemptLocked(ctx context.Context, id string, resumed bool) 
 				p, _ = d.relay.get(id)
 				return p, false
 			}
-			if !d.pause(ctx, &backoff) {
+			if !d.retry(ctx, &backoff, err) {
 				return p, false
 			}
 			continue

@@ -27,9 +27,12 @@ type fakeRemote struct {
 	d     *Daemon
 	ln    net.Listener
 	mu    sync.Mutex
-	down  error      // Dial fails with it when set
-	conns []net.Conn // the remote's end of every connection accepted
+	down  error         // Dial fails with it when set
+	hold  chan struct{} // Dial waits for it to close when set, as ssh starting a machine
+	conns []net.Conn    // the remote's end of every connection accepted
 	dials int
+	// byHost counts the dials by the host's name.
+	byHost map[string]int
 }
 
 func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
@@ -61,8 +64,19 @@ func newFakeRemote(t *testing.T, ctx context.Context, d *Daemon) *fakeRemote {
 func (r *fakeRemote) dial(ctx context.Context, h peer.Host) (*client.Conn, error) {
 	r.mu.Lock()
 	r.dials++
-	down := r.down
+	if r.byHost == nil {
+		r.byHost = map[string]int{}
+	}
+	r.byHost[h.Name]++
+	down, hold := r.down, r.hold
 	r.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if down != nil {
 		return nil, down
 	}
@@ -88,6 +102,13 @@ func (r *fakeRemote) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.dials
+}
+
+// countHost is the dials of the host by name.
+func (r *fakeRemote) countHost(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.byHost[name]
 }
 
 // publish adds or changes an agent on a daemon and broadcasts it, as a
@@ -552,6 +573,83 @@ func TestMergedHostsFollowConfigChange(t *testing.T) {
 	if n := f.hosts.readCount(); n != reads {
 		t.Fatalf("the hosts read again after a read that succeeded: %d", n-reads)
 	}
+}
+
+// A host paused in the config is never dialled, and is a record that
+// says so, with none of its own; resumed, once the daemon sees the file
+// changed, it is dialled and listed with its records; paused again, its
+// records are removed and its record with them, as for a host removed
+// from the config, and the record that says it is paused takes its
+// place, for the subscribers already there and for a new one alike.
+func TestMergedHostPaused(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newMergedFixture(t, ctx, nil)
+	// The merging daemon says it takes paused; one that merges nothing
+	// has no hosts to pause.
+	if !protocol.Has(f.local.capabilities(), protocol.CapPause) || protocol.Has(f.remote.d.capabilities(), protocol.CapPause) {
+		t.Fatalf("capabilities %v, the remote's %v", f.local.capabilities(), f.remote.d.capabilities())
+	}
+	vm, paused := peer.Host{Name: "vm", SSH: "vm"}, peer.Host{Name: "vm", SSH: "vm", Paused: true}
+	f.hosts.set(peer.Host{Name: "here"}, paused)
+	var mu sync.Mutex
+	changed := true
+	f.local.cfg.Reread = func() (ConfigRead, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		c := changed
+		changed = false
+		return ConfigRead{}, c, nil
+	}
+	f.local.readConfig(ctx) // Run's first read
+	edit := func(hosts ...peer.Host) {
+		f.hosts.set(hosts...)
+		mu.Lock()
+		changed = true
+		mu.Unlock()
+		f.local.readConfig(ctx)
+	}
+	isPaused := func(st protocol.HostStatus) bool { return st.Paused && !st.Connected && !st.Listed && st.Error == "" }
+	noDials := func(want int) {
+		t.Helper()
+		// Ten of the fixture's reconnect waits.
+		time.Sleep(100 * time.Millisecond)
+		if n := f.remote.count(); n != want {
+			t.Fatalf("a paused host dialled %d times", n-want)
+		}
+	}
+	c, pc, snap := f.subscribe(t, ctx)
+	defer c.Close()
+	if st, ok := findHost(snap.Hosts, "vm"); !ok || !isPaused(st) {
+		t.Fatalf("snapshot hosts %+v", snap.Hosts)
+	}
+	noDials(0)
+
+	edit(peer.Host{Name: "here"}, vm)
+	msgs := until(t, c, pc, hostStatus("vm", listed))
+	if !slices.ContainsFunc(msgs, hasAgent("renv/laatmux/%1")) {
+		t.Fatalf("resumed host's records not listed: %+v", msgs)
+	}
+
+	edit(peer.Host{Name: "here"}, paused)
+	msgs = until(t, c, pc, hostStatus("vm", isPaused))
+	recordRemoved := slices.IndexFunc(msgs, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.AgentID == "renv/laatmux/%1" })
+	hostRemoved := slices.IndexFunc(msgs, func(m protocol.Message) bool { return m.Type == protocol.TypeRemove && m.HostName == "vm" })
+	if recordRemoved < 0 || hostRemoved < recordRemoved {
+		t.Fatalf("paused host's records not removed before its record: %+v", msgs)
+	}
+	dials := f.remote.count()
+	c2, _, snap := f.subscribe(t, ctx)
+	defer c2.Close()
+	if st, ok := findHost(snap.Hosts, "vm"); !ok || !isPaused(st) {
+		t.Fatalf("snapshot hosts after the pause %+v", snap.Hosts)
+	}
+	for _, a := range snap.Agents {
+		if a.EnvironmentID == "renv" {
+			t.Fatalf("paused host's record in the snapshot: %+v", a)
+		}
+	}
+	noDials(dials)
 }
 
 // Remote subscriptions are dropped once no merged subscriber has been

@@ -28,7 +28,9 @@ import (
 // runs are cancelled and waited for. The next connection starts the new
 // daemon; the last step is that connection, which prints the version.
 // The local host is upgraded the same way, in place of the running
-// executable. A host that is not reachable is reported and skipped.
+// executable. A host that is not reachable is reported and skipped. A
+// paused host is upgraded too, the one command that dials it, and says
+// so; it stays paused for the rest.
 func cmdUpgrade(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	src := fs.String("src", "", "laatmux checkout to build from; default the current directory when it is one")
@@ -49,6 +51,12 @@ func cmdUpgrade(ctx context.Context, args []string) error {
 		h, ok := cfg.Find(name)
 		if !ok {
 			return fmt.Errorf("unknown host %q", name)
+		}
+		if h.Paused {
+			// Asked for by hand: the one command that dials a paused
+			// host, which stays paused for everything else.
+			fmt.Printf("%s: paused; upgrade connects it all the same\n", h.Name)
+			h.Paused = false
 		}
 		hosts = append(hosts, h)
 	}

@@ -588,7 +588,7 @@ func (d *Daemon) capabilities() []string {
 		}
 	}
 	if d.cfg.Hosts != nil {
-		caps = append(caps, protocol.CapMerged)
+		caps = append(caps, protocol.CapMerged, protocol.CapPause)
 		if d.cfg.Store == nil {
 			// It forwards what the hosts attribute, the git objects
 			// they read and their main checkouts, though it has no

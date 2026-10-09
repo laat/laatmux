@@ -625,10 +625,11 @@ func sidebarPane(ctx context.Context, cfg config.Config, w *config.Watch) error 
 		return err
 	}
 	m := &view.Model{Layout: layout, View: vw, Tabs: true, Follow: true, AskQuit: true,
-		Hint:      "tab view  s/h/l fold  f all  F scope  v layout  / filter  z settle  p/x task  ? help  q quit",
+		Hint:      "tab view  s/h/l fold  f all  F scope  v layout  / filter  z settle  p/x task  H hosts  ? help  q quit",
 		HelpTitle: "laatmux sidebar", Help: []string{
 			"p            deliver a task's prompt",
 			"x X          dismiss a task, remove its worktree",
+			"H            pause a host, or resume it",
 			"q Ctrl-C     quit the sidebar, after a question",
 		}}
 	if cfg.Sidebar.Top() {

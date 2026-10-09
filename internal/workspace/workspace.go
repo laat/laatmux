@@ -296,6 +296,11 @@ type Spec struct {
 // listing's when both failed, unless a step failed, whose error is the
 // one returned.
 func Ensure(ctx context.Context, s Spec) (name string, created bool, err error) {
+	// A paused host is not dialled, by a new attach pane or a dead one
+	// respawned.
+	if s.Host.Paused && !s.Host.Local() {
+		return "", false, &peer.PausedError{Name: s.Host.Name}
+	}
 	// The attach tags and the attach command have the managed session's
 	// name, so one that cannot be in them is refused before any is
 	// written, a reuse's or an adoption's too: a U+2063, since the tags

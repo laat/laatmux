@@ -242,8 +242,8 @@ func resolveDir(dir string) (string, error) {
 	}
 }
 
-// lockAppends takes the lock AddRepo's appends on this machine take
-// turns under: an exclusive flock on config.lock in the state
+// lockAppends takes the lock AddRepo's appends and SetPaused's edits on
+// this machine take turns under: an exclusive flock on config.lock in the state
 // directory, a file of its own since the rename replaces the config's
 // inode, and kept out of the config's directory, which may be a
 // dotfiles checkout.
@@ -523,6 +523,12 @@ func rewriteRepo(b []byte, r Repo) ([]byte, error) {
 		return nil, errors.New("repos is not a list")
 	}
 	seq.Content = append(seq.Content, &item)
+	return encodeLike(b, &doc)
+}
+
+// encodeLike writes the document's nodes, with the indentation of the
+// first indented line of b, the file they were read from.
+func encodeLike(b []byte, doc *yaml.Node) ([]byte, error) {
 	indent := 2
 	for _, l := range strings.Split(string(b), "\n") {
 		if t := strings.TrimLeft(l, " "); t != "" && t != l && !strings.HasPrefix(t, "#") {
@@ -533,7 +539,7 @@ func rewriteRepo(b []byte, r Repo) ([]byte, error) {
 	var out bytes.Buffer
 	e := yaml.NewEncoder(&out)
 	e.SetIndent(indent)
-	if err := e.Encode(&doc); err != nil {
+	if err := e.Encode(doc); err != nil {
 		return nil, err
 	}
 	if err := e.Close(); err != nil {
@@ -616,6 +622,326 @@ func writeOver(real string, data []byte, before fs.FileInfo) error {
 			return err
 		}
 		return tmux.PrintablePath(err)
+	}
+	return nil
+}
+
+// SetPaused sets paused on the named host's entry in the config file at
+// path, or takes it off, and reports whether it changed the file: an
+// entry that is so already is left as it is. The file keeps its other
+// content, its comments and its layout, as AddRepo's does: paused: true
+// is a line put after the entry's last line with content, in the
+// indentation of its keys, or a paused: false line of the entry's own
+// said again; resuming takes a paused line of the entry's own out. An
+// entry the line cannot be put in or taken out of, one written {name:
+// vm, ssh: vm} say, or with paused on its first line, is written again
+// from the file's yaml.v3 nodes, which keeps the content and the
+// comments but not the layout. Either way the result must parse as the
+// file's own content with the entry's paused set or gone before it is
+// written, through writeOver, under AddRepo's lock, the file read again
+// when another writer changed it meanwhile. A host the file does not
+// list is an error, and so is this machine's entry, which nothing
+// dials. Errors name the file as tmux.Printable shows it.
+func SetPaused(path, host string, paused bool) (bool, error) {
+	real, err := linkTarget(path)
+	if err != nil {
+		return false, tmux.PrintablePath(err)
+	}
+	unlock, err := lockAppends()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	for range 3 {
+		changed, err := setPaused(real, host, paused)
+		if !errors.Is(err, errChanged) {
+			return changed, err
+		}
+	}
+	return false, fmt.Errorf("%s: %w", tmux.Printable(real), errChanged)
+}
+
+// setPaused is one try of SetPaused on the file at real.
+func setPaused(real, host string, paused bool) (bool, error) {
+	before, _ := os.Stat(real)
+	b, err := os.ReadFile(real)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, tmux.PrintablePath(err)
+	}
+	if testAfterRead != nil {
+		testAfterRead()
+	}
+	cfg, err := Parse(b)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+	}
+	// The hosts as Parse read them are the file's hosts list item by
+	// item; a file without one has the lone local host, refused here.
+	i := slices.IndexFunc(cfg.Hosts, func(h Host) bool { return h.Name == host })
+	switch {
+	case i < 0:
+		names := make([]string, len(cfg.Hosts))
+		for j, h := range cfg.Hosts {
+			names[j] = h.Name
+		}
+		return false, fmt.Errorf("unknown host %q; configured: %s", host, strings.Join(names, ", "))
+	case cfg.Hosts[i].Local():
+		return false, fmt.Errorf("%s is this machine, which nothing dials; only a host reached over ssh is paused", host)
+	case cfg.Hosts[i].Paused == paused:
+		return false, nil
+	}
+	if n, err := documents(b); err != nil {
+		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+	} else if n > 1 {
+		return false, fmt.Errorf("%s has %d YAML documents, of which laatmux reads the first; set paused on %s by hand", tmux.Printable(real), n, host)
+	}
+	// A resume takes paused out, or, where that leaves the entry
+	// paused through a mapping merged into it, says paused: false.
+	modes := []bool{false}
+	if !paused {
+		modes = append(modes, true)
+	}
+	var out []byte
+	for _, explicit := range modes {
+		if o, ok := editPaused(b, i, paused, explicit); ok && checkPaused(b, o, i, paused) == nil {
+			out = o
+			break
+		}
+	}
+	if out == nil {
+		if laterDocument(b) {
+			return false, fmt.Errorf("%s has a document marker after its first document, which a rewrite of the file would drop; set paused on %s by hand", tmux.Printable(real), host)
+		}
+		for _, explicit := range modes {
+			o, err := rewritePaused(b, i, paused, explicit)
+			if err == nil {
+				err = checkPaused(b, o, i, paused)
+			}
+			if err == nil {
+				out = o
+				break
+			}
+			if explicit == modes[len(modes)-1] {
+				return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+			}
+		}
+	}
+	if err := writeOver(real, out, before); err != nil {
+		if errors.Is(err, errChanged) {
+			return false, err
+		}
+		return false, fmt.Errorf("%s: %w", tmux.Printable(real), err)
+	}
+	return true, nil
+}
+
+// hostsEntry is the i-th item of the file's hosts list, with the list
+// and the line of the key after hosts, 0 for none; nil when the file
+// has no such item.
+func hostsEntry(doc *yaml.Node, i int) (seq, entry *yaml.Node, next int) {
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, nil, 0
+	}
+	top := doc.Content[0]
+	for k := 0; k+1 < len(top.Content); k += 2 {
+		if top.Content[k].Value != "hosts" {
+			continue
+		}
+		seq = top.Content[k+1]
+		if k+2 < len(top.Content) {
+			next = top.Content[k+2].Line
+		}
+		if seq.Kind != yaml.SequenceNode || i >= len(seq.Content) {
+			return nil, nil, 0
+		}
+		return seq, seq.Content[i], next
+	}
+	return nil, nil, 0
+}
+
+// editPaused makes the edit in the file's text, on the host's entry, the
+// i-th item of a block list under hosts:, itself a block mapping. To
+// pause: a paused line of the entry's own, not its first, made paused:
+// true, or else paused: true put after the entry's last line with
+// content, which is the line before the next item's, or before the key
+// after hosts, or the document's end, less the blank and comment lines
+// before it, in the indentation of the entry's keys. To resume: the
+// paused line of the entry's own taken out, or, explicit, made paused:
+// false, or put in as paused: true is, for an entry paused through a
+// mapping merged into it. A comment on the line is kept. ok is false
+// for any other shape, which rewritePaused takes.
+func editPaused(b []byte, i int, paused, explicit bool) ([]byte, bool) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, false
+	}
+	seq, entry, next := hostsEntry(&doc, i)
+	if entry == nil || doc.Content[0].Style&yaml.FlowStyle != 0 || seq.Style&yaml.FlowStyle != 0 ||
+		entry.Kind != yaml.MappingNode || entry.Style&yaml.FlowStyle != 0 || len(entry.Content) == 0 {
+		return nil, false
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	eol := "\n"
+	if strings.Contains(string(b), "\r\n") {
+		eol = "\r\n"
+	}
+	if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
+		lines[n-1] += eol
+	}
+	indent := strings.Repeat(" ", entry.Column-1)
+	value := "paused: true"
+	if !paused {
+		value = "paused: false"
+	}
+	var key, val *yaml.Node
+	for k := 0; k+1 < len(entry.Content); k += 2 {
+		if entry.Content[k].Value == "paused" {
+			key, val = entry.Content[k], entry.Content[k+1]
+		}
+	}
+	switch {
+	case key != nil:
+		// A line of its own: not the item's first, which has its -,
+		// with the value on it.
+		if key == entry.Content[0] || val.Line != key.Line || key.Column != entry.Column {
+			return nil, false
+		}
+		// The line's comment stays: after the value said again, or on a
+		// line of its own where the key is taken out.
+		comment := val.LineComment
+		if comment == "" {
+			comment = key.LineComment
+		}
+		var line []string
+		switch {
+		case (paused || explicit) && comment != "":
+			line = []string{indent + value + " " + comment + eol}
+		case paused || explicit:
+			line = []string{indent + value + eol}
+		case comment != "":
+			line = []string{indent + comment + eol}
+		}
+		at := key.Line - 1
+		return []byte(strings.Join(slices.Concat(lines[:at], line, lines[at+1:]), "")), true
+	case !paused && !explicit:
+		return nil, false
+	}
+	end := firstDocEnd(lines)
+	switch {
+	case i+1 < len(seq.Content):
+		end = min(end, seq.Content[i+1].Line-1)
+	case next > 0:
+		end = min(end, next-1)
+	}
+	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#")) {
+		end--
+	}
+	return []byte(strings.Join(slices.Concat(lines[:end], []string{indent + value + eol}, lines[end:]), "")), true
+}
+
+// rewritePaused sets paused: true on the host's entry in the file's
+// nodes, or takes paused out, or, explicit, sets paused: false, for an
+// entry paused through a mapping merged into it with <<, which the
+// other entries that merge it are not; and writes them again. The
+// comments on a value said again stay on it, and those of a key taken
+// out go above the entry.
+func rewritePaused(b []byte, i int, paused, explicit bool) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	_, entry, _ := hostsEntry(&doc, i)
+	if entry == nil || entry.Kind != yaml.MappingNode {
+		return nil, errors.New("hosts is not a list of mappings")
+	}
+	value := "true"
+	if !paused {
+		value = "false"
+	}
+	found := false
+	for k := 0; k+1 < len(entry.Content); k += 2 {
+		if entry.Content[k].Value != "paused" {
+			continue
+		}
+		found = true
+		if paused || explicit {
+			v := entry.Content[k+1]
+			v.Kind, v.Tag, v.Value, v.Style, v.Alias, v.Content = yaml.ScalarNode, "!!bool", value, 0, nil, nil
+			break
+		}
+		var comments []string
+		for _, n := range entry.Content[k : k+2] {
+			for _, c := range []string{n.HeadComment, n.LineComment, n.FootComment} {
+				if c != "" {
+					comments = append(comments, c)
+				}
+			}
+		}
+		if len(comments) > 0 {
+			if entry.HeadComment != "" {
+				comments = append([]string{entry.HeadComment}, comments...)
+			}
+			entry.HeadComment = strings.Join(comments, "\n")
+		}
+		entry.Content = slices.Delete(entry.Content, k, k+2)
+		break
+	}
+	switch {
+	case !found && (paused || explicit):
+		entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "paused"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value})
+	case !found:
+		return nil, errors.New("hosts: the entry has no paused of its own to take out")
+	}
+	return encodeLike(b, &doc)
+}
+
+// checkPaused checks an edit: the result parses as a config with the
+// host's entry paused or not as asked, and decodes as the file did with
+// paused set on that entry, or gone from it, or false on it where the
+// entry resumed has it so, and nothing else changed.
+func checkPaused(old, out []byte, i int, paused bool) error {
+	cfg, err := Parse(out)
+	if err != nil {
+		return err
+	}
+	if i >= len(cfg.Hosts) || cfg.Hosts[i].Paused != paused {
+		return errors.New("hosts: the entry's paused is not as asked after the edit")
+	}
+	var want, got any
+	if err := yaml.Unmarshal(old, &want); err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(out, &got); err != nil {
+		return err
+	}
+	m, _ := want.(map[string]any)
+	hosts, _ := m["hosts"].([]any)
+	if i >= len(hosts) {
+		return errors.New("hosts: the entry is not in the file")
+	}
+	e, ok := hosts[i].(map[string]any)
+	if !ok {
+		return errors.New("hosts: the entry is not a mapping")
+	}
+	gm, _ := got.(map[string]any)
+	gh, _ := gm["hosts"].([]any)
+	var ge map[string]any
+	if i < len(gh) {
+		ge, _ = gh[i].(map[string]any)
+	}
+	switch {
+	case paused:
+		e["paused"] = true
+	case ge["paused"] == false:
+		e["paused"] = false
+	default:
+		delete(e, "paused")
+	}
+	if !reflect.DeepEqual(want, got) {
+		return errors.New("the edit changed more than the host's paused")
 	}
 	return nil
 }

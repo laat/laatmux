@@ -203,9 +203,11 @@ func (d *Daemon) hostsListedLocked() bool {
 	// A listing that succeeded, not only a snapshot: a host whose git
 	// failed sends one with no worktrees.
 	// A host with no worktrees, this machine without a store or a
-	// daemon without the capability, has no branches to wait for.
+	// daemon without the capability, has no branches to wait for; nor
+	// has a paused host, whose worktrees are out of the stream.
 	for _, mh := range d.mhosts {
 		switch {
+		case mh.host.Paused:
 		case mh.host.Local() && d.cfg.Store != nil && !d.listed:
 			return false
 		case !mh.host.Local() && !mh.listed && (!mh.status.Connected || protocol.Has(mh.status.Capabilities, protocol.CapWorktrees)):

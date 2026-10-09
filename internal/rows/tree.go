@@ -310,7 +310,8 @@ func (b *builder) tasks() {
 		p := &in.Pendings[i]
 		h, configured := j.hosts[p.Host]
 		b.taskRows[i] = Row{Kind: KindTask, Host: p.Host, Name: p.Repo + "/" + p.Branch, Pending: p, Removed: !configured,
-			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID}
+			Replaced: configured && h.EnvironmentID != "" && p.EnvironmentID != "" && h.EnvironmentID != p.EnvironmentID,
+			Paused:   configured && h.Paused}
 		if alias := b.taskRows[i].Alias(); alias != "" {
 			b.standing[alias] = append(b.standing[alias], i)
 		}

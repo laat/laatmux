@@ -155,7 +155,7 @@ func usage() {
   sidebar   laatmux sidebar [toggle|on|off]   a list pane on the left of every window
             laatmux sidebar pane | attach <window> | fit <window> | reap | seen   what the pane and the hooks run
   dashboard the list in a popup for display-popup -E: Enter jumps and closes it;
-            a opens the task form, x/X removes, z settles, S opens a shell
+            a opens the task form, x/X removes, z settles, S opens a shell, H pauses a host
   compose   the task form alone, for display-popup -E -d '#{pane_current_path}'
   jump      laatmux jump <host>/<repo>/<branch>   switch to the workspace session, creating it
             laatmux jump [--server default] <host>/<session>   a session that is no worktree's
@@ -168,6 +168,7 @@ func usage() {
   unsettle  laatmux unsettle [<host>/<repo>/<branch>]
   new       laatmux new <name> [--host h] --cwd <path> [-- <cmd>...]   managed session, no worktree
   hosts     reachability and daemon version per host; marks daemons that differ from this build
+            laatmux hosts pause|resume <host>   stop dialling the host from this machine, or start again
   upgrade   laatmux upgrade <host>... [--src dir] [--bin file]   build for the host, install, restart its daemon
   stop      end this machine's daemon cleanly; the next command starts one again
   repos     known repositories and where each lands on each host

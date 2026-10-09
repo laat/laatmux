@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/workspace"
@@ -15,10 +16,14 @@ import (
 // the local workspace session: a local window started in the root, or
 // an ssh window. The window is tagged @laatmux_shell; when the session
 // has one already it is selected rather than opened again. The session
-// must be a workspace session; h is its host, resolved by the caller.
+// must be a workspace session; h is its host, resolved by the caller,
+// and a paused one is refused.
 func Shell(ctx context.Context, h config.Host, l protocol.Session) error {
 	if !l.Workspace() {
 		return fmt.Errorf("%s is not a workspace session", l.Name)
+	}
+	if h.Paused && !h.Local() {
+		return &peer.PausedError{Name: h.Name}
 	}
 	_, root := protocol.SplitSessionKey(l.Key)
 	target := tmux.SessionTarget(l.Name)

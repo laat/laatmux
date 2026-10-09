@@ -604,3 +604,153 @@ func TestAddRepoChecked(t *testing.T) {
 		t.Fatalf("file:\n%s", b)
 	}
 }
+
+const hostsFile = `# where I work
+hosts:
+  - name: mac   # this machine
+    repos: ~/code
+    worktrees: ~/worktrees
+  - name: vm
+    ssh: vm     # the coder box
+    repos: [~/src, ~/src/work]
+    worktrees: ~/wt
+
+    # the old one
+  - name: box
+    ssh: box
+icons: ascii   # plain
+`
+
+// Pausing puts paused: true after the entry's last line with content,
+// in the indentation of its keys, and resuming takes the line out: the
+// rest of the file stays as it was, byte for byte, comments and blank
+// lines included, the last entry's as the others'. A host that is so
+// already is not written.
+func TestSetPausedKeepsFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte(hostsFile), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	step := func(host string, paused bool, want string) {
+		t.Helper()
+		changed, err := SetPaused(p, host, paused)
+		if err != nil || !changed {
+			t.Fatalf("%s %v: changed %v, %v", host, paused, changed, err)
+		}
+		b, _ := os.ReadFile(p)
+		if string(b) != want {
+			t.Fatalf("%s %v: file:\n%s\nwant:\n%s", host, paused, b, want)
+		}
+		if changed, err := SetPaused(p, host, paused); err != nil || changed {
+			t.Fatalf("%s %v again: changed %v, %v", host, paused, changed, err)
+		}
+	}
+	vm := strings.Replace(hostsFile, "    worktrees: ~/wt\n", "    worktrees: ~/wt\n    paused: true\n", 1)
+	both := strings.Replace(vm, "    ssh: box\n", "    ssh: box\n    paused: true\n", 1)
+	step("vm", true, vm)
+	step("box", true, both)
+	b, _ := os.ReadFile(p)
+	cfg, err := Parse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Hosts[0].Paused || !cfg.Hosts[1].Paused || !cfg.Hosts[2].Paused || cfg.Icons != "ascii" {
+		t.Fatalf("parsed %+v", cfg.Hosts)
+	}
+	step("vm", false, strings.Replace(hostsFile, "    ssh: box\n", "    ssh: box\n    paused: true\n", 1))
+	step("box", false, hostsFile)
+	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v, %v", fi.Mode(), err)
+	}
+}
+
+// An entry the line cannot be put in or taken out of, a flow mapping or
+// one with paused on its first line, is written again from its nodes;
+// a paused: false line is made true in place, its comment kept, and a
+// paused line taken out leaves its comment. An entry paused through a
+// mapping merged into it is resumed with a paused: false line, the
+// other entries that merge it still paused, and can be paused and
+// resumed again. This machine's entry, a host the
+// file does not list, and a file of two documents are refused, the file
+// as it was.
+func TestSetPausedShapes(t *testing.T) {
+	for _, c := range []struct {
+		in     string
+		paused bool
+		want   string // what the result has
+	}{
+		{"hosts:\n  - {name: vm, ssh: vm}\n", true, "paused: true"},
+		{"hosts:\n  - {name: vm, ssh: vm, paused: true}\n", false, "ssh: vm"},
+		{"hosts:\n  - paused: true\n    name: vm\n    ssh: vm\n", false, "ssh: vm"},
+		{"hosts:\n  - name: vm\n    paused: false\n    ssh: vm\n", true, "hosts:\n  - name: vm\n    paused: true\n    ssh: vm\n"},
+		{"hosts:\n  - name: vm\n    ssh: vm\nnote: x\n", true, "hosts:\n  - name: vm\n    ssh: vm\n    paused: true\nnote: x\n"},
+		{"hosts:\n  - name: vm\n    paused: false  # costs money\n    ssh: vm\n", true, "hosts:\n  - name: vm\n    paused: true # costs money\n    ssh: vm\n"},
+		{"hosts:\n  - name: vm\n    paused: true  # costs money\n    ssh: vm\n", false, "hosts:\n  - name: vm\n    # costs money\n    ssh: vm\n"},
+		{"hosts:\r\n  - name: vm\r\n    ssh: vm\r\n", true, "hosts:\r\n  - name: vm\r\n    ssh: vm\r\n    paused: true\r\n"},
+		{"hosts:\r\n  - name: vm\r\n    ssh: vm", true, "hosts:\r\n  - name: vm\r\n    ssh: vm\r\n    paused: true\r\n"},
+		// On the item's first line: written again, the comment kept on
+		// the value, or above the entry where the key goes.
+		{"hosts:\n  - paused: false  # costs money\n    name: vm\n    ssh: vm\n", true, "paused: true # costs money"},
+		{"hosts:\n  - paused: true  # costs money\n    name: vm\n    ssh: vm\n", false, "# costs money\n  - name: vm"},
+		// Paused of its own and through a merge: paused: false.
+		{"b: &b {paused: true}\nhosts:\n  - <<: *b\n    name: vm\n    ssh: vm\n    paused: true\n", false, "    ssh: vm\n    paused: false\n"},
+		// The line the text edit would put in goes inside the block
+		// scalars, which the check refuses, so the nodes are written.
+		{"hosts:\n  - name: vm\n    ssh: vm\n    bin: |\n      # not a comment\nicons: ascii\n", true, "paused: true"},
+		{"hosts:\n  - name: vm\n    ssh: vm\n    bin: |+\n      laatmux\n\n  - name: box\n    ssh: box\n", true, "paused: true"},
+	} {
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(c.in), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := SetPaused(p, "vm", c.paused); err != nil || !changed {
+			t.Errorf("%q: changed %v, %v", c.in, changed, err)
+			continue
+		}
+		before, _ := Parse([]byte(c.in))
+		b, _ := os.ReadFile(p)
+		cfg, err := Parse(b)
+		if err != nil || len(cfg.Hosts) != len(before.Hosts) || cfg.Hosts[0].Name != "vm" || cfg.Hosts[0].SSH != "vm" || cfg.Hosts[0].Bin != before.Hosts[0].Bin || cfg.Hosts[0].Paused != c.paused || !strings.Contains(string(b), c.want) {
+			t.Errorf("%q: file %q, %+v, %v", c.in, b, cfg.Hosts, err)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	// Through a merge, resumed, paused and resumed again, the file's
+	// layout kept: paused: false is a line of the entry's.
+	merged := "base: &b\n  paused: true   # all off\nhosts:\n  - <<: *b\n    name: vm\n    ssh: vm\n  - <<: *b\n    name: box\n    ssh: box\n"
+	if err := os.WriteFile(p, []byte(merged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resumed := strings.Replace(merged, "    ssh: vm\n", "    ssh: vm\n    paused: false\n", 1)
+	for _, step := range []struct {
+		paused bool
+		want   string
+	}{
+		{false, resumed},
+		{true, strings.Replace(merged, "    ssh: vm\n", "    ssh: vm\n    paused: true\n", 1)},
+		{false, resumed},
+	} {
+		if changed, err := SetPaused(p, "vm", step.paused); err != nil || !changed {
+			t.Fatalf("through a merge, paused %v: changed %v, %v", step.paused, changed, err)
+		}
+		b, _ := os.ReadFile(p)
+		if cfg, err := Parse(b); err != nil || string(b) != step.want || cfg.Hosts[0].Paused != step.paused || !cfg.Hosts[1].Paused {
+			t.Fatalf("through a merge, paused %v: %+v, %v, file:\n%s", step.paused, cfg.Hosts, err, b)
+		}
+	}
+	for _, c := range []struct{ in, host, want string }{
+		{"hosts:\n  - name: mac\n  - name: vm\n    ssh: vm\n", "mac", "mac is this machine"},
+		{"hosts:\n  - name: vm\n    ssh: vm\n", "box", `unknown host "box"; configured: vm`},
+		{"hosts:\n  - name: vm\n    ssh: vm\n---\nicons: ascii\n", "vm", "has 2 YAML documents"},
+		{"", "vm", "unknown host"},
+	} {
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(c.in), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		changed, err := SetPaused(p, c.host, true)
+		if b, _ := os.ReadFile(p); changed || err == nil || !strings.Contains(err.Error(), c.want) || string(b) != c.in {
+			t.Errorf("%q %s: changed %v, %v, file %q", c.in, c.host, changed, err, b)
+		}
+	}
+}

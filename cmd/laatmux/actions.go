@@ -12,6 +12,7 @@ import (
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/merged"
+	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
 	"github.com/laat/laatmux/internal/rows"
 	"github.com/laat/laatmux/internal/source"
@@ -98,6 +99,8 @@ func (d *dash) act(m *view.Model, a view.Action) bool {
 			return d.shell(m)
 		case 'o', 'O':
 			d.openBranch(m, a.Key.Rune == 'O')
+		case 'H':
+			d.pickHost(m)
 		}
 	case view.ActionConfirm:
 		switch m.ConfirmTag {
@@ -257,9 +260,98 @@ func (d *dash) makeHome(m *view.Model, nh *noHome, before protocol.Message, shel
 	}()
 }
 
+// hostPicker is H's picker: the hosts reached over ssh with their
+// state, Enter on one flipping it between paused and not. names and
+// paused are each candidate's name and paused as the config had it when
+// the picker opened, which the flip turns round.
+type hostPicker struct {
+	*view.Picker
+	names  []string
+	paused []bool
+}
+
+// pickHost opens H's picker over the hosts reached over ssh, read from
+// the config again, each with its state: paused as the config has it,
+// else the host's record in the merged stream's, connected, connecting
+// or down with its error. This machine is not dialled, and not offered.
+func (d *dash) pickHost(m *view.Model) {
+	cfg := d.cfg
+	if d.reload != nil {
+		fresh, err := d.reload()
+		if err != nil {
+			m.Message = err.Error()
+			return
+		}
+		cfg = fresh
+	}
+	s := d.st.Status("")
+	p := &hostPicker{}
+	var choices []view.Choice
+	for _, h := range cfg.Hosts {
+		if h.Local() {
+			continue
+		}
+		p.names = append(p.names, h.Name)
+		p.paused = append(p.paused, h.Paused)
+		choices = append(choices, view.Choice{Label: h.Name, Detail: hostState(h, s)})
+	}
+	if len(choices) == 0 {
+		m.Message = "no host is reached over ssh; nothing to pause"
+		return
+	}
+	p.Picker = view.NewPicker("hosts: enter pauses or resumes", choices, 0)
+	m.Overlay = p
+}
+
+// hostState is a host's state in H's picker: paused as the config says,
+// else as the merged stream has the host. A host still paused there, or
+// with no record there, the daemon has yet to read the config for.
+func hostState(h config.Host, s merged.Status) string {
+	if h.Paused {
+		return "paused"
+	}
+	st, ok := s.Host(h.Name)
+	switch {
+	case !ok:
+		return "connecting"
+	case st.Paused:
+		return "resuming"
+	case st.Connected && st.Listed:
+		return "connected"
+	case st.Connected:
+		return "connected, snapshot pending"
+	case st.Error != "":
+		return "down: " + st.Down()
+	}
+	return "connecting"
+}
+
+// setPaused writes the host's paused to the config and says what that
+// did, with a pause's note of a local daemon older than pause; the
+// daemon and the views act on the file at their next look, and this
+// view's config takes it at once, for a task form opened next.
+func (d *dash) setPaused(m *view.Model, name string, paused bool) {
+	changed, err := config.SetPaused(config.Path(), name, paused)
+	if err != nil {
+		m.Message = err.Error()
+		return
+	}
+	m.Message = pausedLine(name, paused, changed)
+	if paused {
+		if note := pauseUnknown(localHello(d.ctx)); note != "" {
+			m.Message += "; " + note
+		}
+	}
+	if d.reload != nil {
+		if fresh, err := d.reload(); err == nil {
+			d.cfg = fresh
+		}
+	}
+}
+
 // overlayDone reads what the finished overlay decided and moves on:
-// the next picker of an add, the add itself, or the outcome of a
-// command.
+// the next picker of an add, the add itself, the host H paused or
+// resumed, or the outcome of a command.
 func (d *dash) overlayDone(m *view.Model) bool {
 	switch o := m.Overlay.(type) {
 	case *view.Form:
@@ -270,6 +362,11 @@ func (d *dash) overlayDone(m *view.Model) bool {
 			return false
 		}
 		return d.submitForm(m, f, o)
+	case *hostPicker:
+		m.Overlay = nil
+		if o.Chosen >= 0 {
+			d.setPaused(m, o.names[o.Chosen], !o.paused[o.Chosen])
+		}
 	case *view.Log:
 		if o.Quit {
 			return true
@@ -351,6 +448,27 @@ type addForm struct {
 	reload         func() (config.Config, error)
 	uncredentialed map[string]bool
 	configErr      string
+	// form is the form the candidates are on, for takePaused.
+	form *view.Form
+}
+
+// takePaused brings the paused flag of the hosts the form offers up to
+// cfg, by name, with the host chip's details: a host paused or resumed
+// while the form is up is refused, or taken, as the file says now, the
+// candidates and the choice otherwise as they were.
+func (f *addForm) takePaused(cfg config.Config) {
+	paused := map[string]bool{}
+	for _, h := range cfg.Hosts {
+		paused[h.Name] = h.Paused
+	}
+	for i := range f.hosts {
+		if p, ok := paused[f.hosts[i].Name]; ok {
+			f.hosts[i].Paused = p
+		}
+	}
+	if f.form != nil && len(f.form.Chips[1].Choices) == len(f.hosts) {
+		f.form.Chips[1].Choices = hostChoices(f.hosts)
+	}
 }
 
 // addHosts is the hosts the task form offers: those with the
@@ -586,6 +704,7 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 	chips[2].Choices = agentChoices(f.cfg, f.agents)
 	chips[2].Selected = choiceIndex(chips[2].Choices, defaultAgent(repo))
 	form := view.NewForm("add a task", chips, branch)
+	f.form = form
 	form.Propose = worktree.ProposeBranch
 	form.Opening = func(form *view.Form, chip int) {
 		if f.reload == nil {
@@ -630,12 +749,15 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 			form.Chips[2].Selected = choiceIndex(form.Chips[2].Choices, defaultAgent(repo))
 		}
 	}
-	// The note: a config file that does not load, else a host whose
-	// daemon would refuse the task, else what the repository chip needs
-	// or will do.
+	// The note: a config file that does not load, else a host paused,
+	// or one whose daemon would refuse the task, else what the
+	// repository chip needs or will do.
 	form.Note = func(form *view.Form) string {
 		if f.configErr != "" {
 			return f.configErr
+		}
+		if err := f.pausedHost(form); err != nil {
+			return err.Error()
 		}
 		host := form.Chips[1].Label()
 		if caps != nil {
@@ -658,7 +780,8 @@ func buildForm(cfg config.Config, f *addForm, last home.Last, preRepo, preHost, 
 }
 
 // hostChoices is the host chip's candidates: each host by name, with
-// where it is reached and where its worktrees go.
+// where it is reached and where its worktrees go, a paused one said to
+// be.
 func hostChoices(hosts []config.Host) []view.Choice {
 	var out []view.Choice
 	for _, h := range hosts {
@@ -666,9 +789,21 @@ func hostChoices(hosts []config.Host) []view.Choice {
 		if h.SSH != "" {
 			detail = "ssh " + h.SSH + "  " + detail
 		}
+		if h.Paused {
+			detail = "(paused)  " + detail
+		}
 		out = append(out, view.Choice{Label: h.Name, Detail: detail})
 	}
 	return out
+}
+
+// pausedHost is the refusal of the host chip's choice when the host is
+// paused: no task is queued to wait on a host nothing dials.
+func (f *addForm) pausedHost(form *view.Form) error {
+	if i := form.Chips[1].Selected; i >= 0 && i < len(f.hosts) && f.hosts[i].Paused {
+		return &peer.PausedError{Name: f.hosts[i].Name}
+	}
+	return nil
 }
 
 // agentChoices is the agent chip's candidates: each agent by name, with
@@ -711,6 +846,11 @@ func keepChoice(c *view.Chip, choices []view.Choice, want string) {
 // drops the form and keeps the view with the id in the message, so
 // nothing is submitted twice.
 func (d *dash) submitForm(m *view.Model, f *addForm, o *view.Form) bool {
+	if err := f.pausedHost(o); err != nil {
+		o.Reopen(err.Error())
+		m.Overlay = o
+		return false
+	}
 	repo, isNew := f.repo(o, o.Chips[0].Selected)
 	add := command.Add{
 		Host: f.hosts[o.Chips[1].Selected], Repo: repo, Copy: f.cfg.Copy, Agent: f.agents[o.Chips[2].Selected],

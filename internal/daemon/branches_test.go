@@ -482,6 +482,13 @@ func TestBranchesListedWithoutWorktrees(t *testing.T) {
 	if d.hostsListedLocked() {
 		t.Error("a host with worktrees not yet listed does not hold it")
 	}
+	// A paused host, never dialled, has no worktrees in the stream to
+	// wait for.
+	d.reconcileHostsLocked([]peer.Host{{Name: "vm", SSH: "vm"}, {Name: "old", SSH: "old", Paused: true}})
+	d.mhosts["vm"].listed = true
+	if !d.hostsListedLocked() {
+		t.Error("a paused host holds the forgetting")
+	}
 }
 
 // A round that runs out of time keeps the failing names it knows, and a
