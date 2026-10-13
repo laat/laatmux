@@ -19,10 +19,12 @@ var shellsRe = regexp.MustCompile(`(?:^|·)\s*([1-9]\d*) shells?\s*(?:·|$)`)
 // The agents panel: its header `⏺ main`, a line per subagent, `◯ name
 // what it does  7m 6s · ↓ 235.5k tokens` while it runs and `◯ name
 // what it does  idle` after, the cursor's row with `❯` before the
-// mark, and `↓ 1 more` for the lines it folds away.
+// mark, `↓ 1 more` for the lines it folds away, and `◯ 4 idle agents`
+// for the finished ones it folds into one row.
 var (
 	panelHeadRe = regexp.MustCompile(`^\s*(?:❯\s*)?⏺ main\s*$`)
 	panelRowRe  = regexp.MustCompile(`^\s*(?:❯\s*)?◯\s+\S`)
+	panelIdleRe = regexp.MustCompile(`^\s*(?:❯\s*)?◯ [1-9]\d* idle agents?\s*$`)
 	panelMoreRe = regexp.MustCompile(`^\s*↓ ([1-9]\d*) more\s*$`)
 )
 
@@ -86,6 +88,7 @@ func Subagents(in Input) int {
 		case panelHeadRe.MatchString(line):
 			n, inPanel = 0, true
 		case !inPanel:
+		case panelIdleRe.MatchString(line):
 		case panelRowRe.MatchString(line):
 			if !strings.HasSuffix(strings.TrimRight(line, " "), " idle") {
 				n++
