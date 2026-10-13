@@ -306,6 +306,52 @@ func TestObserveExitUnderSurvivingWrapper(t *testing.T) {
 	}
 }
 
+// A dead pane, kept by remain-on-exit, gets no process lookup: its tty
+// is closed, or open again under a newer pane. The agent seen in it is
+// gone, with its last activity, and nothing is logged; the pane
+// respawned with an agent is found again.
+func TestObserveDeadPane(t *testing.T) {
+	fp := &fakeProcs{tables: []procTable{
+		{procs: []procs.Proc{shell, claude}},
+		{err: errors.New("stat /dev/pts/9: no such file or directory")},
+	}}
+	ft := onePane(pane, idleScr)
+	var logged strings.Builder
+	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp, Logger: log.New(&logged, "", 0)})
+	d.poll(context.Background())
+	dead := pane
+	dead.Dead = true
+	ft.panes = []tmux.Pane{dead}
+	for i := 0; i < 3; i++ {
+		d.poll(context.Background())
+	}
+	_, ag := d.agentRecords()
+	if len(ag) != 1 || ag[0].Liveness != protocol.Gone || ag[0].Identity == nil || ag[0].Identity.PID != 101 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("dead pane's agent: %+v", ag)
+	}
+	if fp.i != 1 {
+		t.Fatalf("process lookups in a dead pane: %d", fp.i-1)
+	}
+	if logged.Len() != 0 {
+		t.Fatalf("logged: %s", logged.String())
+	}
+	// A pane dead before any agent was seen is not looked up either.
+	fp2 := &fakeProcs{tables: []procTable{{err: errors.New("stat /dev/pts/9: no such file or directory")}}}
+	d = New(Config{EnvironmentID: "env", Targets: managed(onePane(dead, idleScr)), Procs: fp2, Logger: log.New(&logged, "", 0)})
+	d.poll(context.Background())
+	if _, ag := d.agentRecords(); len(ag) != 0 || fp2.i != 0 || logged.Len() != 0 {
+		t.Fatalf("dead pane looked up: agents %+v lookups %d log %q", ag, fp2.i, logged.String())
+	}
+	// Respawned, the pane has a new agent.
+	fp.tables = append(fp.tables, procTable{procs: []procs.Proc{shell, claude}})
+	ft.panes = []tmux.Pane{pane}
+	d = New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: &fakeProcs{tables: fp.tables[2:]}})
+	d.poll(context.Background())
+	if _, ag := d.agentRecords(); len(ag) != 1 || ag[0].Liveness != protocol.Alive {
+		t.Fatalf("respawned pane: %+v", ag)
+	}
+}
+
 // A process-read error is not absence, and the same
 // instance found again is alive without a reset.
 func TestObserveTransientReadError(t *testing.T) {

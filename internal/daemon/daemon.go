@@ -835,6 +835,16 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	// restored without a reset.
 	checked := true
 	switch {
+	case p.Dead:
+		// A dead pane, kept by remain-on-exit, has no process left: its
+		// tty is closed, so a lookup fails every poll and would log it
+		// each time (190k lines in three days from one attach pane
+		// whose ssh ended), or the tty is open again under a pane made
+		// since, whose processes would be read as this pane's. An agent
+		// seen in it is gone; none is looked for.
+		if st.hasIdentity {
+			st.gone = true
+		}
 	case st.hasIdentity && !st.gone && !st.identity.Tentative:
 		ok, err := d.cfg.Procs.Exists(p.TTY, st.identity)
 		if err != nil {
