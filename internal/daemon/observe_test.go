@@ -422,25 +422,27 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 // in it is published, and a failed capture keeps the last count.
 func TestObserveShells(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
-	ft := onePane(pane, []string{"────", "❯ ", "────", "  ⏵⏵ auto mode on · 2 shells · ← for agents"})
+	ft := onePane(pane, []string{"────", "❯ ", "────", "  ⏵⏵ auto mode on · 2 shells · ← for agents", "  ⏺ main", "  ◯ probe  Reading the config  3s · ↓ 1k tokens"})
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
 	_, ag := d.agentRecords()
-	if ag[0].Shells != 2 || ag[0].Activity != protocol.Idle {
-		t.Fatalf("two shells: %+v", ag[0])
+	if ag[0].Shells != 2 || ag[0].Subagents != 1 || ag[0].Activity != protocol.Working {
+		t.Fatalf("two shells, a subagent: %+v", ag[0])
 	}
 	ft.captureErr = errors.New("capture-pane: pane busy")
 	d.poll(context.Background())
 	_, ag = d.agentRecords()
-	if ag[0].Shells != 2 {
-		t.Fatalf("capture failure changed the count: %+v", ag[0])
+	if ag[0].Shells != 2 || ag[0].Subagents != 1 {
+		t.Fatalf("capture failure changed the counts: %+v", ag[0])
 	}
 	ft.captureErr = nil
 	ft.screen = idleScr
-	d.poll(context.Background())
+	for i := 0; i < 4; i++ {
+		d.poll(context.Background())
+	}
 	_, ag = d.agentRecords()
-	if ag[0].Shells != 0 || ag[0].Activity != protocol.Idle {
-		t.Fatalf("shells gone: %+v", ag[0])
+	if ag[0].Shells != 0 || ag[0].Subagents != 0 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("both gone: %+v", ag[0])
 	}
 }
 
