@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,23 @@ var kindIcons = map[string]struct{ worktree, main string }{
 	IconsEmoji:    {"⎇", "⌂"},
 	IconsNerdFont: {"\uf418", "\uf015"},
 	IconsASCII:    {"+", "="},
+}
+
+// shellIcons are the sets' glyphs for `{shells}`, the background shells
+// an agent runs, before the count.
+var shellIcons = map[string]string{IconsEmoji: "⚙", IconsNerdFont: "\uf120 ", IconsASCII: "$"}
+
+// shells is a row's `{shells}`: the glyph and the count of background
+// shells its agent reports, `⚙2`; "" for none.
+func (ic Icons) shells(r rows.Row) string {
+	if r.Agent == nil || r.Agent.Shells == 0 || r.Agent.Liveness == protocol.Gone {
+		return ""
+	}
+	glyph, ok := shellIcons[ic.Set]
+	if !ok {
+		glyph = shellIcons[IconsEmoji]
+	}
+	return glyph + strconv.Itoa(r.Agent.Shells)
 }
 
 // kind is a row's `{kind_icon}`: the main checkout's glyph on a main

@@ -82,7 +82,7 @@ var tokens = map[string]tokenKind{
 	"primary": tokenFlex, "secondary": tokenFlex, "title": tokenFlex, "subtitle": tokenFlex, "branch": tokenFlex, "repo": tokenFlex, "host": tokenPlain,
 	"session": tokenFlex, "window": tokenFlex, "window_index": tokenPlain, "pane_title": tokenFlex, "pane_suffix": tokenPlain,
 	"status_icon": tokenPlain, "status_label": tokenPlain, "agent_icon": tokenPlain, "agent_label": tokenPlain, "elapsed": tokenPlain,
-	"stripe": tokenPlain, "kind_icon": tokenPlain,
+	"stripe": tokenPlain, "kind_icon": tokenPlain, "shells": tokenPlain,
 	"git_stats": tokenShrink, "git_committed": tokenPlain, "git_uncommitted": tokenPlain, "git_ahead": tokenPlain, "git_behind": tokenPlain,
 	"git_dirty": tokenPlain, "git_conflict": tokenPlain, "git_rebase": tokenPlain, "git_branch": tokenFlex, "git_sync": tokenShrink,
 	"pr_number": tokenPlain, "pr_checks": tokenShrink, "pr_state": tokenPlain, "pr_detail": tokenFlex,
@@ -245,21 +245,21 @@ func Compile(name, src, def string) Compiled {
 // it is the first to shrink, and `{pr_state}` and `{pr_detail}` around
 // the number and the checks; a popup has the width, a sidebar seldom.
 const (
-	DefaultTile1        = "{stripe} {status_icon} {title} {pane_suffix}{fill}{elapsed}"
+	DefaultTile1        = "{stripe} {status_icon} {title} {pane_suffix}{fill}{shells} {elapsed}"
 	DefaultTile2        = "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}"
 	DefaultTile3        = "{stripe} {pane_title}{fill}{pr_number} {pr_checks}"
-	DefaultCompact      = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
+	DefaultCompact      = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {shells} {elapsed}"
 	DefaultTop1         = "{status_icon} {title} {pane_suffix}"
 	DefaultTop2         = "{kind_icon} {subtitle} @{host}"
 	DefaultTop3         = "{pane_title}"
 	DefaultRepo         = "#[fg=header,bold]{fold}{repo}"
 	DefaultWorktree     = "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
-	DefaultAgent        = "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
+	DefaultAgent        = "{indent}{status_icon} {agent_label}  {shells} #[dim]{pane_title}"
 	DefaultPane         = "{indent}$ {command}"
 	DefaultRun          = "{indent}▶ {command}{fill}{elapsed}"
 	DefaultDashTile2    = "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}  {git_sync}"
 	DefaultDashTile3    = "{stripe} {pane_title}{fill}{pr_state} {pr_number} {pr_checks} {pr_detail}"
-	DefaultDashCompact  = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {elapsed}"
+	DefaultDashCompact  = "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats}  {git_sync} {shells} {elapsed}"
 	DefaultDashWorktree = "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {git_sync}  {pr_state} {pr_number} {pr_checks} {pr_detail}  {worst_status}"
 )
 
@@ -940,6 +940,11 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 		// Plain: the line's colour, dim on a dim line; the viewer's
 		// colour stays on the label.
 		return text(m.Icons.kind(r))
+	case "shells":
+		if s := m.Icons.shells(r); s != "" {
+			it.spans = []Span{{Text: s, Fg: palette.Accent}}
+		}
+		return it
 	case "git_stats":
 		it.spans = gitSpans(r, 1<<20)
 		if len(it.spans) > 0 {

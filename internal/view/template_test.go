@@ -62,7 +62,7 @@ func tokenRow(now time.Time) rows.Row {
 	yes := true
 	w := &protocol.Worktree{ID: "venv/worktree//r/fix-ls", EnvironmentID: "venv", Repo: "laatmux", Source: "git@github.com:laat/laatmux.git", Branch: "fix-ls", Root: "/r/fix-ls", Session: "laatmux/fix-ls",
 		Git: &protocol.GitStatus{Base: "origin/main", Committed: [2]int{46, 11}, Uncommitted: [2]int{28, 3}, Dirty: true, Ahead: 2, Behind: 1, Conflict: &yes, Rebasing: true}}
-	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/fix-ls", Window: 2, PaneID: "%1", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "✳ Permission to run pnpm test"}
+	a := &protocol.Agent{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "laatmux/fix-ls", Window: 2, PaneID: "%1", Agent: "claude", Activity: protocol.Blocked, ActivityAt: now.Add(-2 * time.Minute), Liveness: protocol.Alive, Managed: true, Title: "✳ Permission to run pnpm test", Shells: 2}
 	return rows.Row{Kind: rows.KindTile, Host: "vm", Name: "laatmux/fix-ls", Node: a.ID, Worktree: w, Agent: a, Suffix: "(2)", Children: 1,
 		Branch: &protocol.BranchStatus{PR: &protocol.PullRequest{Number: 52, State: "open"}, Checks: &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}}}
 }
@@ -75,7 +75,7 @@ func TestTokens(t *testing.T) {
 	for _, c := range []struct{ token, want string }{
 		{"primary", "fix-ls"}, {"secondary", "laatmux"}, {"branch", "fix-ls"}, {"repo", "laatmux"}, {"host", "vm"},
 		{"session", "laatmux/fix-ls"}, {"window", "laatmux/fix-ls:2"}, {"window_index", "2"}, {"pane_title", "Permission to run pnpm test"}, {"pane_suffix", "(2)"},
-		{"status_icon", "💬"}, {"status_label", "waiting"}, {"agent_icon", "CL"}, {"agent_label", "claude"}, {"elapsed", "2:00"}, {"stripe", "▌"},
+		{"status_icon", "💬"}, {"status_label", "waiting"}, {"agent_icon", "CL"}, {"agent_label", "claude"}, {"elapsed", "2:00"}, {"stripe", "▌"}, {"shells", "⚙2"},
 		{"git_stats", "R +46 -11 ✎ +28 -3"}, {"git_committed", "+46 -11"}, {"git_uncommitted", "✎ +28 -3"}, {"git_ahead", "↑2"}, {"git_behind", "↓1"},
 		{"git_dirty", "✎"}, {"git_conflict", "!"}, {"git_rebase", "R"}, {"git_branch", "origin/main"}, {"git_sync", "! ↑2 ↓1"},
 		{"pr_number", "#52"}, {"pr_checks", "× 3/5"}, {"pr_state", "●"}, {"pr_detail", "test (macos-latest)"}, {"idx", "2"}, {"jump_key", "M-2"},
@@ -90,10 +90,21 @@ func TestTokens(t *testing.T) {
 			t.Errorf("{%s} = %q, want %q", c.token, got, c.want)
 		}
 	}
+	// The shells in the default agent line, after the label's two
+	// spaces, and the line without them, as it was before the token.
+	tm, _ := ParseTemplate(DefaultAgent)
+	if got := Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, 80, 2)}}); !strings.HasPrefix(got, "💬 claude  ⚙2 Permission") {
+		t.Errorf("the agent line with shells: %q", got)
+	}
+	r.Agent.Shells = 0
+	if got := Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, 80, 2)}}); !strings.HasPrefix(got, "💬 claude  Permission") {
+		t.Errorf("the agent line without shells: %q", got)
+	}
+	r.Agent.Shells = 2
 	// The agent's own icon colour, and the default icon for an agent
 	// the config leaves alone.
 	m.AgentIcons = nil
-	tm, _ := ParseTemplate("{agent_icon}")
+	tm, _ = ParseTemplate("{agent_icon}")
 	if sp := m.line(Compiled{Template: tm}, r, 80, 2); len(sp) != 1 || sp[0].Text != "CC" || sp[0].Fg != "#d97757" {
 		t.Errorf("the default agent icon: %+v", sp)
 	}
@@ -1159,7 +1170,7 @@ func TestColumns(t *testing.T) {
 	r.Worktree.Git.Conflict = &yes
 	r.Branch.Checks = &protocol.Checks{State: protocol.ChecksFailure, Passed: 3, Total: 5, Failing: "test (macos-latest)"}
 	lines := m.compact(r, 0)
-	if got := Text(lines); got != "▌ 💬 ⎇ fix-ls (2) laatmux @vm                              R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 2:00\n▌ Permission to run pnpm test                                        ● #52 × 3/5 test (macos-latest)\n"+strings.Repeat("─", 100)+"\n" {
+	if got := Text(lines); got != "▌ 💬 ⎇ fix-ls (2) laatmux @vm                           R +46 -11 ✎ +28 -3  →feature ! ↑2 ↓1 ⚙2 2:00\n▌ Permission to run pnpm test                                        ● #52 × 3/5 test (macos-latest)\n"+strings.Repeat("─", 100)+"\n" {
 		t.Errorf("the dashboard's compact lines:\n%s", got)
 	}
 	// The worktree line with a long base, at widths going down: the

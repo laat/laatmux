@@ -452,7 +452,11 @@ type Agent struct {
 	// is in no listed worktree, or the worktree has not been listed yet.
 	// From a daemon with checkouts, to a subscriber that asked for them,
 	// it may be a main checkout's record's instead (Worktree.Main).
-	WorktreeID string    `json:"worktree_id,omitempty"`
+	WorktreeID string `json:"worktree_id,omitempty"`
+	// Shells is how many background shells the agent says it is running,
+	// read off its screen: Claude Code's footer counts them, `2 shells`.
+	// 0 for none, and for an agent whose screen says nothing of them.
+	Shells     int       `json:"shells,omitempty"`
 	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
 	UpdatedAt  time.Time `json:"updated_at"`
 }

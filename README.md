@@ -524,7 +524,9 @@ truth; labels only place new things.
   `/w/foo`), the deepest root winning; a pane under no root belongs to
   none, and a pane in a main checkout to its record only as said
   above. An agent record carries
-  `worktree_id`, so a worktree has any number of agents. A pane with no
+  `worktree_id`, so a worktree has any number of agents, and `shells`,
+  the background shells its screen counts (Claude Code's footer, `2
+  shells`), left out at 0. A pane with no
   agent inside a root is a pane record, `{id, environment_id, server,
   session, window, pane_id, command, pid, cwd, worktree_id, managed}`,
   `managed` for a pane laatmux made, whose `cwd` is the directory it was
@@ -1750,22 +1752,22 @@ the defaults, `sidebar.templates` in the config:
 sidebar:
   templates:
     tiles:
-      - "{stripe} {status_icon} {title} {pane_suffix}{fill}{elapsed}"
+      - "{stripe} {status_icon} {title} {pane_suffix}{fill}{shells} {elapsed}"
       - "{stripe} {kind_icon} {subtitle} @{host}{fill}{git_stats}"
       - "{stripe} {pane_title}{fill}{pr_number} {pr_checks}"
-    compact: "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {elapsed}"
+    compact: "{stripe} {status_icon} {kind_icon} {primary} {pane_suffix} {secondary} @{host}{fill}{git_stats} {shells} {elapsed}"
     top: "{status_icon} {title} {pane_suffix}"
     tree:
       repo: "#[fg=header,bold]{fold}{repo}"
       worktree: "{indent}{fold}{kind_icon} {primary} ({host}){fill}#[fg=warning]{status_label}#[default] {git_stats}  {pr_number} {pr_checks}  {worst_status}"
-      agent: "{indent}{status_icon} {agent_label}  #[dim]{pane_title}"
+      agent: "{indent}{status_icon} {agent_label}  {shells} #[dim]{pane_title}"
       pane: "{indent}$ {command}"
       run: "{indent}▶ {command}{fill}{elapsed}"
 ```
 
 The dashboard's defaults differ where it has the room a sidebar
 seldom has: `{git_stats}  {git_sync}` on the second tile line and in
-`compact`, `{pr_state} {pr_number} {pr_checks} {pr_detail}` on the
+`compact`, before `{shells} {elapsed}`, `{pr_state} {pr_number} {pr_checks} {pr_detail}` on the
 third, and both on the tree's worktree line before `{worst_status}`.
 A line the config sets applies to the sidebar and the dashboard
 alike; only the lines it leaves differ.
@@ -1788,7 +1790,12 @@ alike; only the lines it leaves differ.
   `{status_label}` (`waiting`, `working`, `done`, `stale`, `settled`,
   `idle`, `gone`; `no agent` or `no session` on a tile without one; a
   task's state; `worktree gone`, dim, on an orphaned session's line), `{agent_icon}`, `{agent_label}`, `{elapsed}` (the
-  time since the status changed; a run's running time). Git:
+  time since the status changed; a run's running time), `{shells}`
+  (the background shells the agent reports running, `⚙2`, in the
+  accent colour: Claude Code counts them in its footer, `2 shells`,
+  and the daemon reads the count off the screen; nothing for none, for
+  a gone agent, or for an agent that does not count them; ` 2` in
+  nerdfont, `$2` in ascii). Git:
   `{git_stats}` (the whole `R +46 -11 ✎ +28 -3`), `{git_committed}`,
   `{git_uncommitted}`, `{git_ahead}` (`↑2`), `{git_behind}` (`↓1`),
   `{git_dirty}` (`✎`), `{git_conflict}` (`!`), `{git_rebase}` (`R`),
