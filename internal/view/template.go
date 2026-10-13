@@ -1099,7 +1099,7 @@ func (m *Model) token(name string, r rows.Row, idx int) item {
 		}
 		return it
 	case "indent":
-		return text(strings.Repeat("  ", r.Depth))
+		return text(strings.Repeat(" ", r.Depth))
 	}
 	return it
 }

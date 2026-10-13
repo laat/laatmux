@@ -150,7 +150,7 @@ func TestTokens(t *testing.T) {
 	// The pane's indent is its depth; a folded line shows the worst
 	// agent's icon.
 	tm, _ = ParseTemplate("{indent}|")
-	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/pane/laatmux/%7"), 80, 0)}}); !strings.HasPrefix(got, "    |") {
+	if got := Text([]Line{{Spans: tree.line(Compiled{Template: tm}, at("venv/pane/laatmux/%7"), 80, 0)}}); !strings.HasPrefix(got, "  |") {
 		t.Errorf("a pane's indent: %q", got)
 	}
 	// A worktree line's host is the worktree's, not its agent's server;
@@ -681,7 +681,7 @@ func TestConfiguredTemplates(t *testing.T) {
 	tree.SetTree(rows.Tree(in))
 	tree.SetRows(rows.Agents(in, rows.Tree(in)))
 	out = Text(tree.Render())
-	if !strings.Contains(out, "laatmux (4)") || !strings.Contains(out, "  ▾ agents-config [4]") {
+	if !strings.Contains(out, "laatmux (4)") || !strings.Contains(out, " ▾ agents-config [4]") {
 		t.Errorf("tree templates:\n%s", out)
 	}
 	if !strings.Contains(out, "template error: unknown token {nope} at column 23 in tree.ag") {
@@ -747,10 +747,10 @@ func TestTemplateTreeEdges(t *testing.T) {
 		t.Helper()
 		return strings.TrimRight(Text([]Line{{Spans: m.line(mustParse(t, src), r, w, 0)}}), "\n")
 	}
-	if got := line(DefaultWorktree, r, 22); got != "  ▸ ⎇ agents-… (vm) ⠋⠙" {
+	if got := line(DefaultWorktree, r, 22); got != " ▸ ⎇ agents-c… (vm) ⠋⠙" {
 		t.Errorf("the icon at 22: %q", got)
 	}
-	if got := line(DefaultWorktree, r, 26); got != "  ▸ ⎇ agents-c… (vm) ✓  ⠋⠙" {
+	if got := line(DefaultWorktree, r, 26); got != " ▸ ⎇ agents-co… (vm) ✓  ⠋⠙" {
 		t.Errorf("the icon at 26: %q", got)
 	}
 	r.Host = ""
@@ -873,13 +873,13 @@ func TestKindIcon(t *testing.T) {
 	m.Icons = Icons{}
 	dash := CompileTemplatesOver(DashboardDefaults, nil, "", nil, "", "", "", "", "")
 	for _, c := range []struct{ id, want string }{
-		{main, "  ▾ ⌂ docs (mac)"},
-		{"menv/worktree//w/main", "    ⎇ laatmux (mac)"},
-		{"venv/worktree//r/agents-config", "  ▾ ⎇ agents-config (vm)"},
-		{"menv/worktree//w/fix-sidebar", "    ⎇ fix-sidebar (mac)"},
-		{"menv/worktree//w/detached", "    ⎇ detached (mac)"},
-		{"add-al", "  ▾ auto-layout (vm)"},
-		{"session/mac/laatmux/gone", "    mac/laatmux/gone (mac)"},
+		{main, " ▾ ⌂ docs (mac)"},
+		{"menv/worktree//w/main", "   ⎇ laatmux (mac)"},
+		{"venv/worktree//r/agents-config", " ▾ ⎇ agents-config (vm)"},
+		{"menv/worktree//w/fix-sidebar", "   ⎇ fix-sidebar (mac)"},
+		{"menv/worktree//w/detached", "   ⎇ detached (mac)"},
+		{"add-al", " ▾ auto-layout (vm)"},
+		{"session/mac/laatmux/gone", "   mac/laatmux/gone (mac)"},
 	} {
 		for _, tm := range []Compiled{DefaultTemplates().Tree.Worktree, dash.Tree.Worktree} {
 			spans := m.line(tm, at(c.id), 80, 0)
@@ -910,7 +910,7 @@ func TestKindIcon(t *testing.T) {
 		dim string
 	}{{dark, dark.SGR(palette.Dimmed, false)}, {palette.Mono(), "\x1b[2m"}} {
 		got := ANSI(Line{Dim: true, Spans: m.line(DefaultTemplates().Tree.Worktree, cur, 80, 0)}, c.th)
-		if !strings.HasPrefix(got, c.dim+"    ⎇ \x1b[") || !strings.Contains(got, "fix-sidebar") {
+		if !strings.HasPrefix(got, c.dim+"   ⎇ \x1b[") || !strings.Contains(got, "fix-sidebar") {
 			t.Errorf("the glyph on the viewer's dim line: %q", got)
 		}
 	}
@@ -1190,10 +1190,10 @@ func TestColumns(t *testing.T) {
 		w    int
 		want string
 	}{
-		{112, "  ▸ ⎇ fix-ls (vm)                        +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{92, "  ▸ ⎇ fix-ls (vm)    +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
-		{82, "  ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos…"},
-		{72, "  ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →feat… ! ↑2 ↓1  ● #52 × test (macos…"},
+		{112, " ▸ ⎇ fix-ls (vm)                         +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{92, " ▸ ⎇ fix-ls (vm)     +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-latest)"},
+		{82, " ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →feature/JI… ! ↑2 ↓1  ● #52 × 3/5 test (macos-…"},
+		{72, " ▸ ⎇ fix-ls (vm) +46 -11 ✎ +28 -3  →featu… ! ↑2 ↓1  ● #52 × test (macos…"},
 	} {
 		if got := strings.TrimRight(Text([]Line{{Spans: m.line(dash.Tree.Worktree, r, c.w, 0)}}), "\n"); got != c.want {
 			t.Errorf("the dashboard's worktree line at %d:\n%q\n%q", c.w, got, c.want)
