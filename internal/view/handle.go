@@ -166,7 +166,7 @@ func (m *Model) Handle(k term.Key) Action {
 			return a
 		}
 		if i := m.hitRow(k.Y, k.At); i >= 0 {
-			if r := m.Visible()[i].Row; r.Foldable() && (r.Kind == rows.KindRepo || r.Kind == rows.KindFold || k.X <= 2*r.Depth+2) {
+			if r := m.Visible()[i].Row; r.Foldable() && (r.Kind == rows.KindRepo || r.Kind == rows.KindFold || k.X <= r.Depth+2) {
 				// A click on a repository or fold line, or on a
 				// line's fold mark, folds.
 				m.moveTo(i)

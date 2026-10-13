@@ -1825,7 +1825,7 @@ alike; only the lines it leaves differ.
   the pending time is then as of the last answer.
   Position: `{idx}` (the row's number, as the digits count),
   `{jump_key}` (`M-2`, with the jump keys on). Tree lines: `{indent}`
-  (two cells a level), `{fold}` (`▾ `, `▸ `, or the space of one),
+  (one cell a level), `{fold}` (`▾ `, `▸ `, or the space of one),
   `{repo_count}` on a repository line, `{child_count}` and
   `{worst_status}` (the most pressing agent's icon, on a folded line)
   on a worktree line, `{command}` on a pane or run line, `{kind_icon}`
