@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/laat/laatmux/internal/daemon"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
+	"github.com/laat/laatmux/internal/logfile"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
@@ -92,7 +94,23 @@ func cmdServe(ctx context.Context, args []string) error {
 	if self, ok := procs.Lookup(os.Getpid()); ok {
 		rt.ProcessStart = self.StartID
 	}
-	logger := log.New(os.Stderr, "laatmux ", log.LstdFlags)
+	// The log goes to daemon.log, rotated by day and capped in size
+	// (logfile), with standard error pointed there too for what the
+	// runtime writes. Run by hand at a terminal it stays on the terminal,
+	// as it did, and so does a daemon whose log file cannot be opened,
+	// which says why there.
+	out := io.Writer(os.Stderr)
+	if st, err := os.Stderr.Stat(); err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		lf, err := logfile.Open(filepath.Join(home.Dir(), "daemon.log"), logfile.Options{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "laatmux: log: %v\n", tmux.PrintablePath(err))
+		} else {
+			defer lf.Close()
+			lf.Stderr()
+			out = lf
+		}
+	}
+	logger := log.New(out, "laatmux ", log.LstdFlags)
 	if store != nil {
 		// Two checkouts whose names make one label are logged once.
 		store.Log = logger

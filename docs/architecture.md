@@ -133,7 +133,7 @@ views are tested as functions of records.
 Under `home.Dir()` (`LAATMUX_HOME`, else `$XDG_STATE_HOME/laatmux`, else
 `~/.local/state/laatmux`): the daemon's socket (`laatmux.sock`), runtime
 file (`runtime.json`) and startup lock (`daemon.lock`), its log
-(`daemon.log`, appended), `environment-id`, the command journal
+(`daemon.log`, rotated to `.1`, `.2` and `.3` after a day or 20 MB, so about three days are kept), `environment-id`, the command journal
 (`commands/`), the relay's pending files (`pending/`), `attention.json`,
 `branches.json`, `last.json` (per repository, the host a successful or
 accepted `add` last used, and the named agent when one was named: the
