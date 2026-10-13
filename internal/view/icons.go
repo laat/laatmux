@@ -77,21 +77,37 @@ var kindIcons = map[string]struct{ worktree, main string }{
 	IconsASCII:    {"+", "="},
 }
 
-// shellIcons are the sets' glyphs for `{shells}`, the background shells
-// an agent runs, before the count.
-var shellIcons = map[string]string{IconsEmoji: "⚙", IconsNerdFont: "\uf120 ", IconsASCII: "$"}
+// shellIcons and subagentIcons are the sets' glyphs for `{shells}` and
+// `{subagents}`, the background shells and the subagents an agent
+// runs, before the count.
+var (
+	shellIcons    = map[string]string{IconsEmoji: "⚙", IconsNerdFont: "\uf120 ", IconsASCII: "$"}
+	subagentIcons = map[string]string{IconsEmoji: "◯", IconsNerdFont: "\U000f06a9 ", IconsASCII: "a"}
+)
 
 // shells is a row's `{shells}`: the glyph and the count of background
 // shells its agent reports, `⚙2`; "" for none.
 func (ic Icons) shells(r rows.Row) string {
-	if r.Agent == nil || r.Agent.Shells == 0 || r.Agent.Liveness == protocol.Gone {
+	return ic.counted(r, shellIcons, func(a *protocol.Agent) int { return a.Shells })
+}
+
+// subagents is a row's `{subagents}`: the glyph and the count of
+// subagents its agent reports running, `◯2`; "" for none.
+func (ic Icons) subagents(r rows.Row) string {
+	return ic.counted(r, subagentIcons, func(a *protocol.Agent) int { return a.Subagents })
+}
+
+// counted is a count the agent reports behind the set's glyph; "" for
+// none, and for a gone agent, whose last screen is stale.
+func (ic Icons) counted(r rows.Row, icons map[string]string, count func(*protocol.Agent) int) string {
+	if r.Agent == nil || r.Agent.Liveness == protocol.Gone || count(r.Agent) == 0 {
 		return ""
 	}
-	glyph, ok := shellIcons[ic.Set]
+	glyph, ok := icons[ic.Set]
 	if !ok {
-		glyph = shellIcons[IconsEmoji]
+		glyph = icons[IconsEmoji]
 	}
-	return glyph + strconv.Itoa(r.Agent.Shells)
+	return glyph + strconv.Itoa(count(r.Agent))
 }
 
 // kind is a row's `{kind_icon}`: the main checkout's glyph on a main

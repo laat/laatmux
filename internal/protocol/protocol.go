@@ -456,7 +456,11 @@ type Agent struct {
 	// Shells is how many background shells the agent says it is running,
 	// read off its screen: Claude Code's footer counts them, `2 shells`.
 	// 0 for none, and for an agent whose screen says nothing of them.
-	Shells     int       `json:"shells,omitempty"`
+	Shells int `json:"shells,omitempty"`
+	// Subagents is how many subagents the agent says are running, read
+	// off its screen too: the rows of Claude Code's agents panel that
+	// are not idle. 0 for none, and for a screen without the panel.
+	Subagents  int       `json:"subagents,omitempty"`
 	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
 	UpdatedAt  time.Time `json:"updated_at"`
 }
