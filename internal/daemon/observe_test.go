@@ -418,6 +418,32 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	}
 }
 
+// The footer's count of background shells is on the record, a change
+// in it is published, and a failed capture keeps the last count.
+func TestObserveShells(t *testing.T) {
+	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
+	ft := onePane(pane, []string{"────", "❯ ", "────", "  ⏵⏵ auto mode on · 2 shells · ← for agents"})
+	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
+	d.poll(context.Background())
+	_, ag := d.agentRecords()
+	if ag[0].Shells != 2 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("two shells: %+v", ag[0])
+	}
+	ft.captureErr = errors.New("capture-pane: pane busy")
+	d.poll(context.Background())
+	_, ag = d.agentRecords()
+	if ag[0].Shells != 2 {
+		t.Fatalf("capture failure changed the count: %+v", ag[0])
+	}
+	ft.captureErr = nil
+	ft.screen = idleScr
+	d.poll(context.Background())
+	_, ag = d.agentRecords()
+	if ag[0].Shells != 0 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("shells gone: %+v", ag[0])
+	}
+}
+
 // Discovery of a managed server reconciles it, once per
 // server instance, including a server that appears after startup.
 func TestDiscoveryConfiguresManagedServer(t *testing.T) {

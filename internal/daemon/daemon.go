@@ -448,6 +448,7 @@ type paneState struct {
 	gone         bool // the known instance no longer exists
 	activity     protocol.Activity
 	activityAt   time.Time
+	shells       int // the background shells the last captured screen counted
 	pendingIdle  *time.Time
 	pendingCount int
 	// obs is what the last observation of the pane saw, for a delivery
@@ -899,7 +900,9 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 			d.cfg.Logger.Printf("capture %s: %v", p.ID, cerr)
 			res = detect.Result{State: detect.Unknown, Reason: "capture_failed", Skip: true}
 		} else {
-			res = detect.Detect(detect.Input{Agent: st.identity.Agent, Title: p.Title, Screen: screen})
+			in := detect.Input{Agent: st.identity.Agent, Title: p.Title, Screen: screen}
+			res = detect.Detect(in)
+			st.shells = detect.Shells(in)
 		}
 	} else {
 		res = detect.Result{State: detect.Unknown, Reason: "no_known_agent"}
@@ -923,6 +926,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		Rule:          res.Rule,
 		Reason:        res.Reason,
 		Managed:       p.Managed,
+		Shells:        st.shells,
 		ActivityAt:    st.activityAt,
 		UpdatedAt:     now,
 	}
@@ -992,7 +996,7 @@ func (d *Daemon) nextActivity(st *paneState, res detect.Result, now time.Time) p
 func sameRecord(a, b protocol.Agent) bool {
 	if a.Activity != b.Activity || a.Liveness != b.Liveness || a.Agent != b.Agent ||
 		a.Title != b.Title || a.Cwd != b.Cwd || a.Session != b.Session || a.Window != b.Window ||
-		a.Managed != b.Managed || a.Rule != b.Rule || a.WorktreeID != b.WorktreeID {
+		a.Managed != b.Managed || a.Rule != b.Rule || a.WorktreeID != b.WorktreeID || a.Shells != b.Shells {
 		return false
 	}
 	switch {
