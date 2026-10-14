@@ -1,6 +1,6 @@
 The files in upstream/ are copied verbatim from herdr
 (https://github.com/herdrdev/herdr), src/detect/manifests/, at upstream
-commit 2563803dca97c040beaf3dc3acdcb5a3221b4238. A daily workflow,
+commit 6521382dbed36f2d001417108149c338aee116ea. A daily workflow,
 .github/workflows/herdr-manifests.yaml, opens a pull request when they change
 upstream.
 
