@@ -1154,28 +1154,59 @@ func (d *dash) rmFor(r rows.Row) (command.Rm, error) {
 
 // startRm runs the confirmed rm; the list returns on success with a
 // message, and a refusal stays on screen with the hint to use X.
+// startRm runs the confirmed removal in the background, the list in
+// use meanwhile: the row goes as soon as the host hides the record,
+// before git's removal, which takes seconds on a large worktree, and a
+// second x need not wait for the first. The outcome is the footer's
+// message; a refusal is the log with its error, as a command run
+// under one ends, once no overlay is up, else the message.
 func (d *dash) startRm(m *view.Model) {
 	rm := d.rm
 	d.rm = command.Rm{}
 	what := fmt.Sprintf("%s on %s", rm.Describe(), rm.Host.Name)
-	var res command.Removed
-	d.start(m, "rm "+what, func(r command.Reporter) error {
-		var err error
-		res, err = rm.Run(d.ctx, r)
+	m.Message = "removing " + what
+	log := view.NewLog("rm " + what)
+	r := logReporter{log: log, st: d.st}
+	go func() {
+		res, err := rm.Run(d.ctx, r)
 		if err != nil && res.Root != "" {
 			// The host's side is done; what failed is the local
 			// session, and the message must not read as a refusal.
-			return fmt.Errorf("removed %s; local session: %w", what, err)
+			err = fmt.Errorf("removed %s; local session: %w", what, err)
+		} else {
+			err = forceHint(err, rm.Force)
 		}
-		return forceHint(err, rm.Force)
-	}, func(m *view.Model) bool {
-		msg := "removed " + what
-		if len(res.Killed) > 0 {
-			msg += "; killed " + strings.Join(res.Killed, ", ")
-		}
-		m.Message = msg
-		return false
-	})
+		log.End(err)
+		d.later(func(m *view.Model) {
+			if err == nil {
+				msg := "removed " + what
+				if len(res.Killed) > 0 {
+					msg += "; killed " + strings.Join(res.Killed, ", ")
+				}
+				m.Message = msg
+				return
+			}
+			if m.Overlay != nil || d.run != nil {
+				m.Message = err.Error()
+				return
+			}
+			m.Overlay = log
+			d.run = &running{done: func(*view.Model) bool { return false }}
+		})
+	}()
+}
+
+// later runs f on the view's goroutine with the model, as a command
+// from outside the terminal runs, once the view takes it; nothing when
+// the view is gone, or none runs, as in a test without the channel.
+func (d *dash) later(f func(m *view.Model)) {
+	if d.cmds == nil {
+		return
+	}
+	select {
+	case d.cmds <- func(m *view.Model) view.Action { f(m); return view.Action{} }:
+	case <-d.ctx.Done():
+	}
 }
 
 // forceHint adds what X does to a refusal that asks for force: git's

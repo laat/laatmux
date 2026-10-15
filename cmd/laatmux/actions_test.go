@@ -2891,3 +2891,75 @@ func TestLastPane(t *testing.T) {
 		t.Fatalf("a second lastPane toggled back to %s", a)
 	}
 }
+
+// A confirmed rm runs in the background: no log overlay, the footer
+// says removing, and the outcome comes to the view's goroutine as a
+// command from outside does. Success is the message; a failure is the
+// ended log, acked by a key, then the message, as a foreground
+// command's; with an overlay up the failure is the message alone.
+func TestRmRunsInBackground(t *testing.T) {
+	startFakeDaemon(t, []string{protocol.CapStatus, protocol.CapRm, protocol.CapFollow}, func(pc *protocol.Conn, m protocol.Message) bool {
+		if m.Type == protocol.TypeRm {
+			pc.Write(protocol.Message{Type: protocol.TypeResult, ID: m.ID, OK: true, Root: "/w/proj/task"})
+		}
+		return true
+	})
+	dir := t.TempDir()
+	tmuxScript := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	cmds := make(chan func(*view.Model) view.Action, 1)
+	d := &dash{ctx: context.Background(), cfg: dashConfig(t), st: merged.New(), cmds: cmds}
+	m := dashModel(d.cfg)
+	outcome := func() func(*view.Model) view.Action {
+		t.Helper()
+		select {
+		case f := <-cmds:
+			return f
+		case <-time.After(10 * time.Second):
+			t.Fatal("no outcome reached the view")
+		}
+		return nil
+	}
+	host := config.Host{Host: peer.Host{Name: "lab"}}
+
+	// Success: the local tmux lists nothing and kills nothing.
+	tmuxScript("exit 0")
+	d.rm = command.Rm{Host: host, Root: "/w/proj/task"}
+	d.startRm(m)
+	if m.Overlay != nil || d.run != nil || m.Message != "removing /w/proj/task on lab" {
+		t.Fatalf("while removing: overlay %v, run %v, message %q", m.Overlay, d.run, m.Message)
+	}
+	outcome()(m)
+	if m.Overlay != nil || m.Message != "removed /w/proj/task on lab" {
+		t.Fatalf("after success: overlay %v, message %q", m.Overlay, m.Message)
+	}
+
+	// Failure of the local step: the ended log, a key, the message.
+	tmuxScript("echo 'tmux: boom' >&2; exit 1")
+	d.rm = command.Rm{Host: host, Root: "/w/proj/task"}
+	d.startRm(m)
+	outcome()(m)
+	log, ok := m.Overlay.(*view.Log)
+	if !ok || !log.Ended() || log.Err() == nil || !strings.Contains(log.Err().Error(), "boom") {
+		t.Fatalf("after failure: overlay %v", m.Overlay)
+	}
+	log.Handle(term.Key{Rune: ' '})
+	if d.act(m, m.Poll()) || m.Overlay != nil || !strings.Contains(m.Message, "boom") {
+		t.Fatalf("after the key: overlay %v, message %q", m.Overlay, m.Message)
+	}
+
+	// Failure with an overlay up: the message alone.
+	m.Overlay = view.NewHelp("help", false)
+	d.rm = command.Rm{Host: host, Root: "/w/proj/task"}
+	d.startRm(m)
+	outcome()(m)
+	if _, help := m.Overlay.(*view.Help); !help || !strings.Contains(m.Message, "boom") {
+		t.Fatalf("failure under an overlay: overlay %v, message %q", m.Overlay, m.Message)
+	}
+	m.Overlay = nil
+}

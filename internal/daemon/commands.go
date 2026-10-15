@@ -327,13 +327,23 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return fmt.Errorf("%s has a \\, as no branch git takes has: a quoted branch a listing shows names its worktree only with the root", tmux.Printable(m.Branch))
 			}
 		}
+		// Every repository is held while the root is resolved: an add
+		// still making its first checkout is done before the checkouts
+		// are scanned. The hold ends once the sessions are killed and
+		// the record hidden, before git's removal, which another rm
+		// must not wait on to send its own off (see below).
 		unlock := rn.lockRepos()
-		defer unlock()
+		held := true
+		release := func() {
+			if held {
+				held = false
+				unlock()
+			}
+		}
+		defer release()
 
-		// The repository is found under the lock: an add still making
-		// its first checkout is done before the checkouts are scanned.
-		// One with no checkout here is still reached by the root, which
-		// finds the session.
+		// The repository is found under the lock. One with no checkout
+		// here is still reached by the root, which finds the session.
 		var repo worktree.Repo
 		if m.Repo != "" {
 			r, ok, err := rn.cfg.Store.Known(ctx, m.Repo)
@@ -348,7 +358,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return fmt.Errorf("unknown repository %q: not in this host's config, and no checkout of it here", m.Repo)
 			}
 		}
-		root, checkout := m.Root, ""
+		root, checkout, src := m.Root, "", ""
 		if root != "" {
 			// The client's root, cleaned so it compares with what git
 			// registered and the pane recorded. Only a root under the
@@ -383,7 +393,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				if m.Branch != "" && !worktree.BranchIs(rec.Branch, m.Branch) {
 					return fmt.Errorf("%s is the worktree for %s of %s, not %s%s", tmux.Printable(root), branchOrDetached(rec.Branch), rec.Repo, tmux.Printable(m.Branch), byRootAlone(rec.Branch))
 				}
-				checkout = co
+				checkout, src = co, rec.Source
 				break
 			}
 			if m.Branch != "" {
@@ -404,7 +414,7 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				return err
 			}
 			if found {
-				root, checkout = rec.Root, co
+				root, checkout, src = rec.Root, co, rec.Source
 			}
 		}
 		if root == "" {
@@ -473,13 +483,31 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				}
 			}
 			rn.core.markRemoving(root, true)
+			// Git's removal is under the repository's own lock, which
+			// add holds for its git, not under every repository's: a
+			// second rm, of another worktree, resolves and sends its
+			// sessions and record off while this one's git runs, and
+			// an add in another repository is not kept waiting. The
+			// lock is taken without the hold, so no add waits on an rm
+			// that waits on it. A dirty worktree, git's to refuse, has
+			// nothing killed yet.
+			release()
+			unlockRepo := rn.repoLock("repo/" + source.Key(src))
+			unlockRepo.Lock()
 			removed, err := worktree.Remove(ctx, checkout, root, m.Force)
 			if err != nil || !removed {
 				rn.core.markRemoving(root, false)
 			}
 			if err != nil {
+				unlockRepo.Unlock()
 				return err
 			}
+			if m.DeleteBranch && removed {
+				// Under the same lock: no add checks the branch out
+				// between the removal and its deletion.
+				rn.deleteBranch(ctx, c, m, checkout)
+			}
+			unlockRepo.Unlock()
 			if removed {
 				// A listing from here on has one worktree fewer. The
 				// result carries the step, which dates the removal
@@ -490,8 +518,9 @@ func (rn *taskRunner) runRm(ctx context.Context, m protocol.Message, c *command)
 				removedFrom = checkout
 			}
 		}
-		if m.DeleteBranch {
-			rn.deleteBranch(ctx, c, m, removedFrom)
+		if m.DeleteBranch && removedFrom == "" {
+			// Nothing removed here: the branch is kept, and said so.
+			rn.deleteBranch(ctx, c, m, "")
 		}
 		// Git has agreed to the removal: what runs in the root is
 		// laatmux's own, like the session, and goes before it. The wait

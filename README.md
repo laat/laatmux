@@ -1365,7 +1365,11 @@ the same selection locally; a pane on a remote host's default server is
 refused as `jump` refuses it. A run's line jumps to its worktree's
 session. `x` and `X` on a tile or an agent remove the agent's worktree,
 the question saying how many agents go with it, and say what they
-remove on a pane, a run, a repository line or the stale fold; on a
+remove on a pane, a run, a repository line or the stale fold; the
+removal runs in the background, the list in use: the row goes as soon
+as the host hides the record, before git's removal, a second `x`
+need not wait for the first, the outcome is the footer's message, and
+a refusal is the log with git's words, acked by a key; on a
 main checkout's line or one of its agents they refuse it as the main
 checkout, and `z` and `S` act on its workspace session as on a
 worktree's, or say it has none; `a`

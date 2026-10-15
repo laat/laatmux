@@ -22,6 +22,7 @@ import (
 	"github.com/laat/laatmux/internal/gittest"
 	"github.com/laat/laatmux/internal/procs"
 	"github.com/laat/laatmux/internal/protocol"
+	"github.com/laat/laatmux/internal/source"
 	"github.com/laat/laatmux/internal/tmux"
 	"github.com/laat/laatmux/internal/worktree"
 )
@@ -1579,5 +1580,67 @@ func TestListingErrorOnce(t *testing.T) {
 	d.pollWorktrees(context.Background())
 	if n, e := state(); n != 3 || e != "" {
 		t.Fatalf("after recovery: seq %d, listErr %q", n, e)
+	}
+}
+
+// A second rm does not wait on the first's git: the sessions go and
+// the record hides before git's removal, which is under the
+// repository's lock alone, held here as the first rm would hold it.
+func TestRmSendsOffBeforeGit(t *testing.T) {
+	d, ft, store, remote := newAddDaemon(t)
+	ctx := context.Background()
+	repo, _ := store.Repo(remote)
+	added, err := store.Add(ctx, repo, "task", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := added.Root
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{Session: "proj/task", SessionID: "$7", ID: "%1", Cwd: root, CurrentPath: root, Managed: true, ServerPID: 5, TTY: "/dev/null"}}
+	})
+	lock := d.tasks.repoLock("repo/" + source.Key(remote))
+	lock.Lock()
+	pc := conn(t, d)
+	pc.Write(protocol.Message{Type: protocol.TypeRm, ID: "r1", Repo: remote, Branch: "task", Root: root, Force: true})
+	got := make(chan protocol.Message, 1)
+	go func() {
+		res, _ := result(t, pc, "r1")
+		got <- res
+	}()
+	killed := false
+	for i := 0; i < 400 && !killed; i++ {
+		ft.mu.Lock()
+		killed = slices.Contains(ft.killed, "proj/task")
+		ft.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !killed {
+		t.Fatal("the session was not killed while git's lock was held")
+	}
+	d.mu.Lock()
+	hidden := d.removing[root]
+	d.mu.Unlock()
+	if !hidden {
+		t.Fatal("the record was not hidden while git's lock was held")
+	}
+	select {
+	case res := <-got:
+		t.Fatalf("rm finished under the repository's lock: %+v", res)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatal("the worktree went under the repository's lock")
+	}
+	lock.Unlock()
+	select {
+	case res := <-got:
+		if !res.OK {
+			t.Fatalf("rm: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("rm did not finish after the lock was released")
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatal("root still exists")
 	}
 }
