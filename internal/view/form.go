@@ -13,9 +13,11 @@ import (
 // prompt as it is typed until the user edits it. Tab and Shift-Tab move
 // between the fields; on a chip Left and Right cycle its candidates,
 // Enter opens the picker with its filter and Ctrl-J submits; in the
-// prompt typing edits, Ctrl-J inserts a newline, and Enter submits when
-// the prompt is not empty; on the branch line typing edits it, and
-// Enter or Ctrl-J submits. So Ctrl-J, and Shift-Enter where the
+// prompt typing edits, Ctrl-J inserts a newline, and Enter submits; on
+// the branch line typing edits it, and Enter or Ctrl-J submits. A form
+// submits with no prompt, which starts the agent on the branch with
+// nothing to do, as add does; the branch must then be given, since
+// none is proposed from an empty prompt. So Ctrl-J, and Shift-Enter where the
 // terminal tells it apart, submits from every field but the prompt,
 // where it breaks a line. Esc cancels the whole form. A field with one candidate is shown, not
 // skipped, so the form reads the same every time. Pasting is text
@@ -230,19 +232,8 @@ func (f *Form) chipKey(k term.Key) {
 		// Ctrl-J or Shift-Enter on a chip submits, as from the prompt
 		// Enter does: the chips are set, the prompt is written, and the
 		// hand need not travel back to it.
-		f.submitPrompt()
+		f.submit()
 	}
-}
-
-// submitPrompt submits from a field other than the branch line: the
-// prompt must not be empty, since an agent started with no prompt is
-// the add as it was, which the branch line alone offers.
-func (f *Form) submitPrompt() {
-	if strings.TrimSpace(string(f.prompt)) == "" {
-		f.Error = "the prompt is empty"
-		return
-	}
-	f.submit()
 }
 
 // setChip selects a chip's candidate and tells the host.
@@ -319,10 +310,9 @@ func (f *Form) promptKey(k term.Key) {
 			f.cursor = end + 1
 		}
 	case term.KeyEnter:
-		// From the prompt, Enter submits when there is one; the branch
-		// line submits without, an agent started on a branch with no
-		// prompt being the add as it was.
-		f.submitPrompt()
+		// Enter submits, with or without a prompt: an agent started on
+		// a branch with nothing to do is the add as it was.
+		f.submit()
 	}
 }
 
@@ -420,8 +410,9 @@ func (f *Form) branchKey(k term.Key) {
 }
 
 // submit ends the form when every chip has a candidate selected and
-// the branch passes validation; a generated branch from an empty prompt
-// is empty, and refused as such.
+// the branch passes validation; a branch proposed from an empty prompt
+// is empty, and refused as such, so a form with no prompt needs the
+// branch typed.
 func (f *Form) submit() {
 	for _, c := range f.Chips {
 		if c.Selected < 0 || c.Selected >= len(c.Choices) {

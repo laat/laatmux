@@ -509,8 +509,8 @@ func TestPromptEditVS16(t *testing.T) {
 
 // Ctrl-J, which Shift-Enter and Ctrl-Enter decode to, submits from a
 // chip and from the branch line, as Enter does from the prompt; on a
-// chip Enter still opens the picker, and an empty prompt is refused
-// from a chip as from the prompt.
+// chip Enter still opens the picker, and with no prompt the branch
+// must be given, from a chip as from the prompt.
 func TestFormChipNewlineSubmits(t *testing.T) {
 	f := NewForm("add a task", chips(), "")
 	f.Propose = propose
@@ -519,7 +519,7 @@ func TestFormChipNewlineSubmits(t *testing.T) {
 		t.Fatalf("focus %d, want the agent chip", f.Focus())
 	}
 	f.Handle(term.Key{Kind: term.KeyNewline})
-	if f.Done() || f.Error != "the prompt is empty" {
+	if f.Done() || f.Error != "no branch name; give one" {
 		t.Fatalf("ctrl-j on a chip with no prompt: done %v, error %q", f.Done(), f.Error)
 	}
 	f.Handle(term.Key{Kind: term.KeyEnter})
@@ -668,5 +668,26 @@ func TestFormReadlineChords(t *testing.T) {
 	ctrl('u')
 	if f.Branch() != "" || !f.edited {
 		t.Errorf("ctrl-u on the branch line: %q edited %v", f.Branch(), f.edited)
+	}
+}
+
+// A form with no prompt submits once the branch is typed: Enter in the
+// empty prompt is refused only for the branch it lacks, and goes
+// through with one, the prompt empty.
+func TestFormNoPromptSubmitsWithBranch(t *testing.T) {
+	f := NewForm("add a task", chips(), "")
+	f.Propose = propose
+	f.Handle(term.Key{Kind: term.KeyEnter})
+	if f.Done() || f.Error != "no branch name; give one" {
+		t.Fatalf("enter with no prompt and no branch: done %v, error %q", f.Done(), f.Error)
+	}
+	f.Handle(term.Key{Kind: term.KeyTab}) // the branch line
+	for _, r := range "spike" {
+		f.Handle(term.Key{Rune: r})
+	}
+	f.Handle(term.Key{Kind: term.KeyShiftTab}) // back to the prompt
+	f.Handle(term.Key{Kind: term.KeyEnter})
+	if !f.Done() || f.Error != "" || f.Prompt() != "" || f.Branch() != "spike" {
+		t.Fatalf("enter with no prompt and a branch: done %v, error %q, prompt %q, branch %q", f.Done(), f.Error, f.Prompt(), f.Branch())
 	}
 }
