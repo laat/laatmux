@@ -723,8 +723,8 @@ func TestNewlineIsEnter(t *testing.T) {
 	f := NewForm("t", chips(), "")
 	f.Handle(term.Key{Kind: term.KeyShiftTab}) // the agent chip
 	f.Handle(term.Key{Kind: term.KeyNewline})
-	if f.picker != nil || f.Error != "the prompt is empty" {
-		t.Fatalf("a newline on a chip is a submit, refused with no prompt: picker %v, error %q", f.picker != nil, f.Error)
+	if f.picker != nil || f.Error != "no branch name; give one" {
+		t.Fatalf("a newline on a chip is a submit, refused with no prompt and no branch: picker %v, error %q", f.picker != nil, f.Error)
 	}
 	f.Handle(term.Key{Kind: term.KeyEnter})
 	if f.picker == nil {

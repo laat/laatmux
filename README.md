@@ -1607,7 +1607,10 @@ orphaned row's session exists locally and is switched to.
   it is edited. `Tab` and `Shift-Tab` move between the fields; on a
   chip `Left` and `Right` cycle, `Enter` opens the picker and `Ctrl-J`
   submits; in the prompt `Enter` submits and `Ctrl-J` inserts a
-  newline; on the branch line either submits. The prompt takes the
+  newline; on the branch line either submits. A form submits with no
+  prompt, as `add` without one: the agent starts on the branch with
+  nothing to do, and the branch must be typed, since none is proposed
+  from an empty prompt. The prompt takes the
   readline chords within a line: `Ctrl-A` and `Ctrl-E` to its start and
   end, `Ctrl-B` and `Ctrl-F` a rune back and forward, `Ctrl-D` the rune
   under the cursor, `Ctrl-U` and `Ctrl-K` the text before and after it,
