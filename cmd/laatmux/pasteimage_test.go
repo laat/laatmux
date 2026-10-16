@@ -222,8 +222,10 @@ func TestPasteBinding(t *testing.T) {
 	}
 	// No binding listed at all, as tmux 3.7 to 3.7c print for a server
 	// whose one binding is C-v: what C-v is bound to cannot be told,
-	// and nothing is bound or unbound.
-	for _, table := range []string{"root", "prefix", "copy-mode", "copy-mode-vi"} {
+	// and nothing is bound or unbound. Every default table is emptied,
+	// tmux 3.8's move table among them; a table a version lacks is an
+	// error, ignored.
+	for _, table := range []string{"root", "prefix", "copy-mode", "copy-mode-vi", "move"} {
 		_, _ = workspace.Server.Run(ctx, "unbind-key", "-a", "-T", table)
 	}
 	for _, sub := range []string{"on", "toggle", "off"} {
