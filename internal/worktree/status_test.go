@@ -552,8 +552,8 @@ func TestStatusPartialSoftReset(t *testing.T) {
 }
 
 // The --write-tree probe: a git whose help lacks it is unsupported; one
-// whose help lists it is supported; a help that did not answer says
-// nothing either way.
+// whose help lists it is supported, exiting 129 as before git 2.56 or 0
+// as from it; a help that did not answer says nothing either way.
 func TestProbeWriteTree(t *testing.T) {
 	path := os.Getenv("PATH")
 	dir := t.TempDir()
@@ -563,6 +563,7 @@ func TestProbeWriteTree(t *testing.T) {
 	}{
 		{"old", "echo 'usage: git merge-tree <base-tree> <branch1> <branch2>' >&2; exit 129", false, true},
 		{"new", "echo 'usage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>'; exit 129", true, true},
+		{"2.56", "echo 'usage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>'; exit 0", true, true},
 		{"failed", "exit 1", false, false},
 		{"killed", "echo 'usage: git merge-tree [--write-tree]'; kill -9 $$", false, false},
 	} {

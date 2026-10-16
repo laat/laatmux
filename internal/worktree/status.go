@@ -339,8 +339,10 @@ var noQuietMerge, noWriteTree atomic.Bool
 // and nothing is remembered from it.
 func probeWriteTree(ctx context.Context, root string) (supported, valid bool) {
 	out, err := statusGit(ctx, root, "merge-tree", "-h")
+	// The help exits 129 before git 2.56 and 0 from it; either is the
+	// help, and any other exit is no answer.
 	var ee *exec.ExitError
-	if !errors.As(err, &ee) || ee.ExitCode() != 129 {
+	if err != nil && (!errors.As(err, &ee) || ee.ExitCode() != 129) {
 		return false, false
 	}
 	return strings.Contains(out, "--write-tree"), true
