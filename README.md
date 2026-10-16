@@ -1885,11 +1885,11 @@ alike; only the lines it leaves differ.
   colour on a style's background (a colourless dim token always,
   `#[dim]` text under a style without `fg`) is not faint in the
   terminal's colour, which can vanish on the background, but drawn in
-  the dim colour that reads on it: of the theme's `dimmed`, the dark
-  and light defaults' (`#565f89`, `#8990b3`) and the background itself
-  half way to white and half way to black, the one with the most
-  contrast against the background. So the dark default's on the
-  lightest backgrounds and the light default's on the darkest, a
+  the dim colour that reads on it: of the theme's `dimmed`, a deep
+  grey (`#565f89`), the light default's `dimmed` (`#8990b3`) and the
+  background itself half way to white and half way to black, the one
+  with the most contrast against the background. So the deep grey on
+  the lightest backgrounds and the light default's on the darkest, a
   `dimmed` of your own where it reads better than the rest, and the
   background's own lighter or darker half on those between, from about
   `colour235` up through a mid grey and the light theme's accents; on

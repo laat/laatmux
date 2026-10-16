@@ -153,7 +153,7 @@ var (
 		Success:           hex("#9ece6a"),
 		Warning:           hex("#e0af68"),
 		Danger:            hex("#f7768e"),
-		Dimmed:            hex("#565f89"),
+		Dimmed:            hex("#737aa2"),
 		Text:              hex("#c0caf5"),
 		Border:            hex("#3b4261"),
 		Header:            hex("#7aa2f7"),
@@ -250,15 +250,22 @@ func (t Theme) color(name string) (Color, bool) {
 	return c, err == nil
 }
 
+// deepDimmed is the dim grey that reads on the lightest backgrounds, a
+// template's yellow say: tokyonight's comment colour, the dark default's
+// dimmed until 2026-10-16, when it proved too dark to read as the hint
+// and the paused hosts on a dark terminal and the dark default moved a
+// step lighter.
+var deepDimmed = hex("#565f89")
+
 // DimmedOn is the escape sequence that sets the foreground of dim text
 // with no colour of its own on bg, a template's background as a palette
 // name or a colour as Parse reads it. The theme's dimmed is chosen to
 // read on the terminal's background, not on bg, and is gone on a
 // background as dark as itself; on a mid-tone one, such as the light
 // theme's accents, neither default's dimmed reaches 2:1. Of it, a
-// user's own among them, the dark and light defaults' dimmed, and bg
-// itself half way to white and half way to black, the one with the
-// most contrast against bg is drawn: the dark default's on the lightest
+// user's own among them, the deep dimmed, the light default's dimmed,
+// and bg itself half way to white and half way to black, the one with
+// the most contrast against bg is drawn: the deep one on the lightest
 // backgrounds, the light default's on the darkest, a user's where it
 // reads better, and bg's own lighter or darker half on those between,
 // colour235 and the dark highlight row's #283457 among them. "" when
@@ -280,7 +287,7 @@ func (t Theme) DimmedOn(bg string) string {
 	var best Color
 	most := 0.0
 	white, black := Color{R: 255, G: 255, B: 255, RGB: true}, Color{RGB: true}
-	for _, d := range []Color{own, Dark[Dimmed], Light[Dimmed], mix(c, white), mix(c, black)} {
+	for _, d := range []Color{own, deepDimmed, Light[Dimmed], mix(c, white), mix(c, black)} {
 		l, ok := d.luminance()
 		if r := contrast(l, lb); ok && r > most {
 			best, most = d, r
