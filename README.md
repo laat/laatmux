@@ -1620,7 +1620,8 @@ orphaned row's session exists locally and is switched to.
   under the cursor, `Ctrl-U` and `Ctrl-K` the text before and after it,
   `Ctrl-W` the word before it; on the branch line, and in the list's
   `/` filter, `Ctrl-U` clears and `Ctrl-W` takes the last word or
-  segment. A click on a field focuses it. `Shift-Enter` and
+  segment. A click on a field focuses it, in the prompt box with the
+  cursor under the click. `Shift-Enter` and
   `Ctrl-Enter` are `Ctrl-J` where the terminal reports them as
   distinct keys, and `Enter` elsewhere: the view asks
   for xterm's modifyOtherKeys at level 1 and reads both the

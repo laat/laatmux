@@ -23,8 +23,10 @@ import (
 // skipped, so the form reads the same every time. Pasting is text
 // inserted where the cursor is, line breaks included, never a submit and
 // never a tab. A click on a field focuses it, by the layout the last
-// Render drew, and on a chip opens its picker. The renderer is a pure function of the fields, the
-// cursor and the size, and records that layout for the click.
+// Render drew, in the prompt box with the cursor under the click, and
+// on a chip opens its picker. The renderer is a pure function of the
+// fields, the cursor and the size, and records that layout for the
+// click.
 type Form struct {
 	Title string
 	Hint  string
@@ -182,8 +184,11 @@ func (f *Form) Handle(k term.Key) {
 		if k.Wheel == 0 {
 			if i := f.fieldAt(k.X, k.Y); i >= 0 {
 				f.focus = i
-				if i < fieldPrompt {
+				switch {
+				case i < fieldPrompt:
 					f.chipKey(term.Key{Kind: term.KeyEnter})
+				case i == fieldPrompt:
+					f.clickPrompt(k.X, k.Y)
 				}
 			}
 		}
@@ -499,6 +504,42 @@ type layout struct {
 	narrow              bool // one chip a line, no frames
 	chipCols            [3][2]int
 	cut                 int
+	// The prompt box as drawn: its inner width, the wrapped line its
+	// first body row shows, and whether the cursor block was drawn,
+	// which takes a cell of its line; a click is mapped by the same
+	// wrapping.
+	inner, scroll int
+	cursorDrawn   bool
+}
+
+// clickPrompt puts the cursor where a click at column x and line y,
+// 1-based as the terminal reports them, landed in the prompt box, by
+// the last Render: before the rune under it, at the end of the line
+// past its text, at the prompt's end below the text; a click on a
+// frame line does nothing.
+func (f *Form) clickPrompt(x, y int) {
+	l := f.layout
+	row, col := y-1+l.cut-(l.box+1), max(x-1-2, 0)
+	if row < 0 || row >= l.boxLines-2 {
+		return
+	}
+	lines, _ := f.wrapLines(l.inner, l.cursorDrawn)
+	j := l.scroll + row
+	if j >= len(lines) {
+		f.cursor = len(f.prompt)
+		return
+	}
+	ln := lines[j]
+	w := 0
+	for k, r := range ln.runes {
+		rw := cellWidth(ln.runes, k, r)
+		if col < w+rw {
+			f.cursor = ln.at[k]
+			return
+		}
+		w += rw
+	}
+	f.cursor = ln.end
 }
 
 // fieldAt is the field under a click at column x and line y, both
@@ -641,6 +682,7 @@ func (f *Form) promptBox(w, n int) []Line {
 	if cursorLine >= body {
 		scroll = cursorLine - body + 1
 	}
+	f.layout.inner, f.layout.scroll, f.layout.cursorDrawn = inner, scroll, f.focus == fieldPrompt
 	bold := fg != ""
 	out := []Line{{Spans: []Span{{Text: fit(top, w), Fg: fg, Bold: bold}}}}
 	for i := 0; i < body; i++ {
@@ -658,22 +700,45 @@ func (f *Form) promptBox(w, n int) []Line {
 // and the index of the cursor's line. A line breaks at a newline, and
 // at the last space that fits, else where the width runs out.
 func (f *Form) wrapPrompt(inner int) ([]string, int) {
-	var lines []string
+	ls, cursorLine := f.wrapLines(inner, f.focus == fieldPrompt)
+	lines := make([]string, len(ls))
+	for i, l := range ls {
+		lines[i] = string(l.runes)
+	}
+	return lines, cursorLine
+}
+
+// wrapLine is one line of the prompt as the box draws it: its runes,
+// the prompt index each stands for (the cursor's for its block, the
+// tab's for each space it is drawn as), and the index a click past
+// its text puts the cursor at: before the newline that ended it, at
+// the space dropped at a soft break, where the width ran out, or the
+// prompt's end.
+type wrapLine struct {
+	runes []rune
+	at    []int
+	end   int
+}
+
+// wrapLines is wrapPrompt's wrapping with the indices kept, the cursor
+// block drawn when drawCursor.
+func (f *Form) wrapLines(inner int, drawCursor bool) ([]wrapLine, int) {
+	var lines []wrapLine
 	cursorLine := 0
 	var cur []rune
+	var at []int
 	curW := 0
-	flush := func() {
-		lines = append(lines, string(cur))
-		cur, curW = nil, 0
+	flush := func(end int) {
+		lines = append(lines, wrapLine{runes: cur, at: at, end: end})
+		cur, at, curW = nil, nil, 0
 	}
-	drawCursor := f.focus == fieldPrompt
 	for i := 0; i <= len(f.prompt); i++ {
 		if i == f.cursor && drawCursor {
 			if curW+1 > inner {
-				flush()
+				flush(i)
 			}
 			cursorLine = len(lines)
-			cur = append(cur, '█')
+			cur, at = append(cur, '█'), append(at, i)
 			curW++
 		}
 		if i == len(f.prompt) {
@@ -681,7 +746,7 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 		}
 		r := f.prompt[i]
 		if r == '\n' {
-			flush()
+			flush(i)
 			continue
 		}
 		if r == '\t' {
@@ -689,12 +754,12 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 			// shows and the cursor moves as the text does.
 			n := tabStop - curW%tabStop
 			if curW+n > inner {
-				flush()
+				flush(i)
 				// Never wider than the box, however narrow.
 				n = min(tabStop, inner)
 			}
 			for range n {
-				cur = append(cur, ' ')
+				cur, at = append(cur, ' '), append(at, i)
 			}
 			curW += n
 			continue
@@ -705,9 +770,11 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 			// past its first third, carrying the word over.
 			if sp := lastSpace(cur); sp > len(cur)/3 {
 				carry := append([]rune(nil), cur[sp+1:]...)
-				cur = cur[:sp]
-				flush()
-				cur = carry
+				carryAt := append([]int(nil), at[sp+1:]...)
+				spAt := at[sp]
+				cur, at = cur[:sp], at[:sp]
+				flush(spAt)
+				cur, at = carry, carryAt
 				curW = 0
 				for k, c := range cur {
 					curW += cellWidth(cur, k, c)
@@ -716,13 +783,13 @@ func (f *Form) wrapPrompt(inner int) ([]string, int) {
 					cursorLine = len(lines)
 				}
 			} else {
-				flush()
+				flush(i)
 			}
 		}
-		cur = append(cur, r)
+		cur, at = append(cur, r), append(at, i)
 		curW += rw
 	}
-	flush()
+	flush(len(f.prompt))
 	return lines, cursorLine
 }
 
