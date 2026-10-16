@@ -131,7 +131,7 @@ func TestDimmedOn(t *testing.T) {
 		// Between, the background's own half: lighter on the dark ones,
 		// darker or lighter, whichever reads, on the mid tones.
 		{dark, "colour235", "#929292", 4.86}, {dark, HighlightRowBg, "#9399ab", 4.30}, {dark, Border, "#9da0b0", 3.78},
-		{dark, "240", "#ababab", 3.10}, {dark, Dimmed, "#aaafc4", 2.84}, {dark, "#808080", "#404040", 2.63},
+		{dark, "240", "#ababab", 3.10}, {dark, Dimmed, "#393d51", 2.57}, {dark, "#808080", "#404040", 2.63},
 		{light, Dimmed, "#444859", 2.89},
 		{light, Info, "#7fb8cb", 2.53}, {light, Accent, "#bba3de", 2.74}, {light, Success, "#abba9c", 2.55},
 		{light, Warning, "#c5b59e", 2.42}, {light, Danger, "#632121", 2.42}, {light, Header, "#173e74", 2.64},
