@@ -691,3 +691,77 @@ func TestFormNoPromptSubmitsWithBranch(t *testing.T) {
 		t.Fatalf("enter with no prompt and a branch: done %v, error %q, prompt %q, branch %q", f.Done(), f.Error, f.Prompt(), f.Branch())
 	}
 }
+
+// A click in the prompt box puts the cursor under it, by the wrapping
+// the last Render drew: before the rune clicked, at the end of a line
+// past its text, after a soft break at the space dropped there, at the
+// prompt's end below the text; the cursor block drawn takes a cell of
+// its line, a tab its spaces, a scrolled box its offset, and a click
+// on a frame moves nothing.
+func TestFormClickCursor(t *testing.T) {
+	f := NewForm("add a task", chips(), "")
+	f.SetPrompt("hello world\n\tsecond line")
+	f.focus = fieldRepo // no cursor block drawn
+	f.Render(80, 12)
+	// 80 by 12: the box is lines 5 to 10, its body 6 to 9, text from
+	// column 3.
+	for _, c := range []struct {
+		x, y, want int
+		why        string
+	}{
+		{3, 6, 0, "the first rune"},
+		{9, 6, 6, "the w of world"},
+		{60, 6, 11, "past the line: before its newline"},
+		{3, 7, 12, "the tab's first space"},
+		{6, 7, 12, "the tab's last space"},
+		{7, 7, 13, "the s after the tab"},
+		{30, 9, 24, "below the text: the end"},
+		{2, 7, 12, "the frame's column: the line's start"},
+	} {
+		f.focus = fieldRepo
+		f.Handle(term.Key{Kind: term.KeyMouse, X: c.x, Y: c.y})
+		if f.Focus() != fieldPrompt || f.cursor != c.want {
+			t.Errorf("click at %d,%d (%s): focus %d, cursor %d, want %d", c.x, c.y, c.why, f.Focus(), f.cursor, c.want)
+		}
+	}
+	// A click on the top frame leaves the cursor.
+	f.cursor = 3
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 10, Y: 5})
+	if f.cursor != 3 {
+		t.Errorf("click on the frame moved the cursor to %d", f.cursor)
+	}
+	// With the block drawn at the start, the text sits a cell right.
+	f.cursor = 0
+	f.Render(80, 12)
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 10, Y: 6})
+	if f.cursor != 6 {
+		t.Errorf("click beside the block: cursor %d, want 6", f.cursor)
+	}
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 6})
+	if f.cursor != 0 {
+		t.Errorf("click on the block: cursor %d, want 0", f.cursor)
+	}
+	// A soft break: the box is 76 cells inside, so a line of two
+	// twenty-letter words and a third breaks at the space before the
+	// third; a click past the first line's text lands at that space.
+	words := strings.Repeat("a", 30) + " " + strings.Repeat("b", 30) + " " + strings.Repeat("c", 30)
+	f.SetPrompt(words)
+	f.cursor = 0
+	f.Render(80, 12)
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 78, Y: 6})
+	if f.cursor != 61 {
+		t.Errorf("click past a soft-broken line: cursor %d, want 61, the dropped space", f.cursor)
+	}
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 4, Y: 7})
+	if f.cursor != 63 {
+		t.Errorf("click on the carried word: cursor %d, want 63", f.cursor)
+	}
+	// Scrolled: six lines in a body of four with the cursor on the
+	// last shows lines three to six; the first body row is line three.
+	f.SetPrompt("1\n2\n3\n4\n5\n6")
+	f.Render(80, 12)
+	f.Handle(term.Key{Kind: term.KeyMouse, X: 3, Y: 6})
+	if f.cursor != 4 {
+		t.Errorf("click on the first row of a scrolled box: cursor %d, want 4, the 3", f.cursor)
+	}
+}
