@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/laat/laatmux/internal/protocol"
@@ -51,9 +52,44 @@ func Binary() string {
 	return p
 }
 
-// CLI runs `galley` with args. The server is never started for it: a
-// lookup from the daemon is no reason to have one running, so a server
-// that is not answering is ErrNotRunning.
+// loginPath is the PATH the user's login shell sets, read once: the
+// daemon, started from a tmux server or left to launchd, runs with a
+// PATH without the user's own tool directories, and galley's CLI is a
+// node script that needs node from one of them. "" when the shell
+// does not say within its time.
+var loginPath = sync.OnceValue(readLoginPath)
+
+func readLoginPath() string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, shell, "-lc", `printf %s "$PATH"`).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// cliPath is the PATH the CLI runs with: the login shell's, then this
+// process's own, so what either has is found.
+func cliPath() string {
+	var parts []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(loginPath()+string(os.PathListSeparator)+os.Getenv("PATH"), string(os.PathListSeparator)) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
+}
+
+// CLI runs `galley` with args, on the login shell's PATH. The server is
+// never started for it: a lookup from the daemon is no reason to have
+// one running, so a server that is not answering is ErrNotRunning.
 func CLI(ctx context.Context, args ...string) ([]byte, error) {
 	bin := Binary()
 	if bin == "" {
@@ -62,7 +98,7 @@ func CLI(ctx context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = append(cmd.Environ(), "GALLEY_NO_AUTOSTART=1", "NO_COLOR=1")
+	cmd.Env = append(cmd.Environ(), "PATH="+cliPath(), "GALLEY_NO_AUTOSTART=1", "NO_COLOR=1")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
