@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -16,10 +17,10 @@ func TestStaged(t *testing.T) {
 	var got []string
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		got = args
-		return []byte(`[{"number":4,"state":"staged","headRefName":"fix-ls","baseRefName":"main","isDraft":false},
+		return []byte(`[{"number":4,"state":"STAGED","headRefName":"fix-ls","baseRefName":"main","isDraft":false},
 			{"number":5,"state":"staged","headRefName":"draft","baseRefName":"main","isDraft":true},
 			{"number":3,"state":"staged","headRefName":"fix-ls","baseRefName":"main","isDraft":false},
-			{"number":2,"state":"published","headRefName":"done","baseRefName":"main","isDraft":false},
+			{"number":2,"state":"PUBLISHED","headRefName":"done","baseRefName":"main","isDraft":false},
 			{"number":1,"state":"closed","headRefName":"gone","baseRefName":"main","isDraft":false}]`), nil
 	}
 	prs, err := Staged(context.Background(), run, "github.com", "laat", "laatmux")
@@ -60,14 +61,28 @@ func TestStaged(t *testing.T) {
 	}
 }
 
-// The CLI runner: galley missing is its own error; the server not
-// running, as the CLI says it without starting one, is its own.
+// The CLI runner: galley missing is its own error; one beside this
+// program is found off PATH; the server not running, as the CLI says
+// it without starting one, is its own.
 func TestCLI(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	if _, err := CLI(context.Background(), "pr", "list"); !errors.Is(err, ErrNoGalley) {
 		t.Errorf("no galley: %v", err)
 	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside := filepath.Join(filepath.Dir(exe), "galley")
+	if err := writeExec(beside, "#!/bin/sh\necho beside\n"); err != nil {
+		t.Skipf("cannot write beside the test binary: %v", err)
+	}
+	defer os.Remove(beside)
+	if out, err := CLI(context.Background(), "pr", "list"); err != nil || string(out) != "beside\n" {
+		t.Errorf("galley beside the program: %q %v", out, err)
+	}
+	os.Remove(beside)
 	script := "#!/bin/sh\n[ \"$GALLEY_NO_AUTOSTART\" = 1 ] || { echo 'autostart allowed' >&2; exit 2; }\necho 'the galley server is not running at http://localhost:24823, and it could not be started. Run `galley serve` to see why.' >&2\nexit 1\n"
 	if err := writeExec(dir+"/galley", script); err != nil {
 		t.Fatal(err)
