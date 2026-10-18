@@ -9,6 +9,7 @@ package protocol
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -539,13 +540,25 @@ type BranchStatus struct {
 // PullRequest is a branch's PR: an open one, else the newest merged or
 // closed, from the source's own repository. State is open, merged or
 // closed; Base is the branch it was opened against, "" from a daemon
-// that did not ask.
+// that did not ask. Staged is one staged in galley, the user's local
+// review server, shown where the branch has none on GitHub: open,
+// numbered as galley numbers it, URL its page in the web UI.
 type PullRequest struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
 	Draft  bool   `json:"draft,omitempty"`
 	URL    string `json:"url"`
 	Base   string `json:"base,omitempty"`
+	Staged bool   `json:"staged,omitempty"`
+}
+
+// Ref is the PR's number as the views and the plans write it: `#4` on
+// GitHub, `s#4` staged in galley.
+func (p PullRequest) Ref() string {
+	if p.Staged {
+		return fmt.Sprintf("s#%d", p.Number)
+	}
+	return fmt.Sprintf("#%d", p.Number)
 }
 
 // Checks is the head commit's check rollup, counted from its aggregates:

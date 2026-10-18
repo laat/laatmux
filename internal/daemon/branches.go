@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/laat/laatmux/internal/galley"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/protocol"
@@ -408,6 +409,7 @@ func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 			// is the daemon's reason for showing nothing there.
 			hostErrs[host] = err.Error()
 		}
+		b.stage(hctx, host, qs, results)
 		answers = append(answers, answer{qs, results})
 	}
 	for _, a := range answers {
@@ -416,6 +418,54 @@ func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 		b.apply(a.qs, a.results, known)
 	}
 	b.publishGitHubErr(hostErrs)
+}
+
+// stage fills in, for the branches GitHub answered with no PR, the one
+// staged in galley, the user's local review server, when galley is
+// installed and its server answers: one listing per repository. A
+// branch GitHub does not have, as one staged and not pushed is not,
+// gets a record with the staged PR alone. galley missing, or its
+// server down, is nothing staged; another failure is logged once.
+func (b *branches) stage(ctx context.Context, host string, qs []branchQuery, results []github.Result) {
+	if b.cfg.Galley == nil {
+		return
+	}
+	type repoKey struct{ owner, repo string }
+	byRepo := map[repoKey][]int{}
+	var repos []repoKey
+	for i, q := range qs {
+		if r := results[i]; r.Err != nil || r.PR != nil {
+			continue
+		}
+		k := repoKey{q.b.Owner, q.b.Repo}
+		if _, seen := byRepo[k]; !seen {
+			repos = append(repos, k)
+		}
+		byRepo[k] = append(byRepo[k], i)
+	}
+	for _, k := range repos {
+		staged, err := galley.Staged(ctx, b.cfg.Galley, host, k.owner, k.repo)
+		if err != nil {
+			if errors.Is(err, galley.ErrNoGalley) || errors.Is(err, galley.ErrNotRunning) || ctx.Err() != nil {
+				return
+			}
+			msg := host + " " + k.owner + "/" + k.repo + ": " + err.Error()
+			b.mu.Lock()
+			if !b.errs[msg] {
+				b.cfg.Logger.Printf("galley: %s", msg)
+			}
+			if b.roundErrs != nil {
+				b.roundErrs[msg] = true
+			}
+			b.mu.Unlock()
+			continue
+		}
+		for _, i := range byRepo[k] {
+			if pr := staged[qs[i].b.Branch]; pr != nil {
+				results[i].PR, results[i].NoRef = pr, false
+			}
+		}
+	}
 }
 
 // publishGitHubErr takes the hosts asked this round, with gh's failure

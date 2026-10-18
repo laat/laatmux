@@ -1817,7 +1817,8 @@ alike; only the lines it leaves differ.
   the branch itself, its `origin/` taken off and at most twelve cells,
   the conflict mark `!`, `↑2 ↓1`; when narrow the base is cut, then
   goes, then `↓`, then `↑`, and the mark stays). PR: `{pr_number}` (an
-  OSC 8 hyperlink to the PR, clickable where the terminal shows them;
+  OSC 8 hyperlink to the PR, `s#N` for one staged in galley, linking
+  to its page there, clickable where the terminal shows them;
   under tmux the outer terminal needs the `hyperlinks` feature, as
   `set -as terminal-features 'xterm*:hyperlinks'`, or tmux drops the
   link and the number is plain text), `{pr_checks}`, `{pr_state}` (the
@@ -2064,6 +2065,17 @@ records:
     as `base`; a branch deleted after its PR merged keeps the PR;
   - the checks of the PR's last commit, or of the branch's own, counted
     from the rollup's aggregates, with the first failing check's name.
+
+  A branch GitHub has no PR for, one it does not have at all among
+  them, as a branch staged and not pushed is not, gets the pull request
+  staged for it in galley, the user's local review server, when
+  `galley` is on this machine's PATH and its server answers: one
+  `galley pr list` per repository a round, the server never started
+  for it (`GALLEY_NO_AUTOSTART`). The record's `pr` is then open,
+  `staged`, numbered as galley numbers it, with its page in galley's
+  web UI (`GALLEY_URL`, else localhost on `GALLEY_PORT` or galley's
+  own port) as the URL, and no checks; the views write it `s#N`. A
+  published one is on GitHub, where the daemon finds it.
 
   The records travel as `branch_statuses` in a snapshot, `branch_status`
   in an upsert and `branch_status_key` in a remove; `github_ok` clears

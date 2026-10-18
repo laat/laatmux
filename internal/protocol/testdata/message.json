@@ -227,7 +227,8 @@
         "state": "state",
         "draft": true,
         "url": "url",
-        "base": "base"
+        "base": "base",
+        "staged": true
       },
       "checks": {
         "state": "state",
@@ -250,7 +251,8 @@
       "state": "state",
       "draft": true,
       "url": "url",
-      "base": "base"
+      "base": "base",
+      "staged": true
     },
     "checks": {
       "state": "state",
