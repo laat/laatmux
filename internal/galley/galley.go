@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,16 +32,36 @@ var (
 // Timeout bounds one galley call.
 const Timeout = 30 * time.Second
 
+// Binary is the galley CLI: on PATH, else beside this program, where
+// a user's installs live together, ~/.local/bin say, and the daemon,
+// started with a PATH without it, would not find it; "" when neither
+// has it.
+func Binary() string {
+	if p, err := exec.LookPath("galley"); err == nil {
+		return p
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "galley")
+	if st, err := os.Stat(p); err != nil || st.IsDir() || st.Mode()&0o111 == 0 {
+		return ""
+	}
+	return p
+}
+
 // CLI runs `galley` with args. The server is never started for it: a
 // lookup from the daemon is no reason to have one running, so a server
 // that is not answering is ErrNotRunning.
 func CLI(ctx context.Context, args ...string) ([]byte, error) {
-	if _, err := exec.LookPath("galley"); err != nil {
+	bin := Binary()
+	if bin == "" {
 		return nil, ErrNoGalley
 	}
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "galley", args...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = append(cmd.Environ(), "GALLEY_NO_AUTOSTART=1", "NO_COLOR=1")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -109,7 +130,8 @@ func parse(out []byte, base, owner, repo string) (map[string]*protocol.PullReque
 	}
 	prs := map[string]*protocol.PullRequest{}
 	for _, s := range list {
-		if s.State != "staged" || s.HeadRefName == "" {
+		// STAGED, as gh writes states; staged in galley's own tables.
+		if !strings.EqualFold(s.State, "staged") || s.HeadRefName == "" {
 			continue
 		}
 		if _, dup := prs[s.HeadRefName]; dup {
