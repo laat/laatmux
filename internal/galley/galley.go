@@ -24,10 +24,13 @@ import (
 type Runner func(ctx context.Context, args ...string) ([]byte, error)
 
 // Errors a runner reports for galley itself, which the daemon takes as
-// nothing staged rather than as a failed lookup.
+// nothing staged rather than as a failed lookup: galley not installed,
+// its server not running, and a repository it does not know, which is
+// every one nothing was staged in.
 var (
-	ErrNoGalley   = errors.New("galley is not installed")
-	ErrNotRunning = errors.New("the galley server is not running")
+	ErrNoGalley    = errors.New("galley is not installed")
+	ErrNotRunning  = errors.New("the galley server is not running")
+	ErrUnknownRepo = errors.New("the repository is not known to galley")
 )
 
 // Timeout bounds one galley call.
@@ -108,6 +111,9 @@ func CLI(ctx context.Context, args ...string) ([]byte, error) {
 	msg := strings.TrimSpace(errb.String())
 	if strings.Contains(msg, "server is not running") || strings.Contains(msg, "nothing answered at") {
 		return nil, ErrNotRunning
+	}
+	if strings.Contains(msg, "is not known to galley") {
+		return nil, ErrUnknownRepo
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
