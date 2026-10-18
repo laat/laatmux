@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,6 +137,60 @@ func URL() string {
 		port = "24823"
 	}
 	return "http://localhost:" + port
+}
+
+// statusTimeout bounds the probe: what answers at the server's URL has
+// this long to say what it is, as the CLI gives it.
+var statusTimeout = 5 * time.Second
+
+// Status is what laatmux hosts says of galley on this machine: "" when
+// it is not installed, which owes no line; else whether its server
+// answers at URL, as the CLI tells it from another program on the
+// port: `ok 0.1.0` with the version it reports, or why not. Nothing
+// taking the connection is the server not running; a connection taken
+// and not answered in time, before or after the headers, says so and
+// not that, since a server stuck there, or another program on the
+// port, is not one to start another beside; a connection taken and
+// answered with something other than HTTP, an ssh banner say, is
+// another program on the port.
+func Status(ctx context.Context) string {
+	if Binary() == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, URL()+"/api/meta", nil)
+	if err != nil {
+		return err.Error()
+	}
+	silent := fmt.Sprintf("nothing answered at %s within %v; galley may be stuck there, or another program holds the port", URL(), statusTimeout)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		var op *net.OpError
+		switch {
+		case ctx.Err() != nil:
+			return silent
+		case errors.As(err, &op) && op.Op == "dial":
+			// Nothing took the connection, or no such host.
+			return "not running at " + URL() + "; galley serve starts it"
+		}
+		return "another program answers at " + URL() + "; GALLEY_URL or GALLEY_PORT names galley's"
+	}
+	defer res.Body.Close()
+	var meta struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&meta); err != nil || meta.Name != "galley" {
+		if ctx.Err() != nil {
+			return silent
+		}
+		return "another program answers at " + URL() + "; GALLEY_URL or GALLEY_PORT names galley's"
+	}
+	if res.StatusCode != http.StatusOK {
+		return "starting at " + URL()
+	}
+	return strings.TrimSpace("ok " + meta.Version)
 }
 
 // staged is what `galley pr list --json` says of one pull request.

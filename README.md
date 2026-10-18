@@ -2085,7 +2085,9 @@ records:
   branch no worktree has had for a day is dropped. A missing or
   logged-out `gh` is the daemon's `github_error`, printed by `laatmux
   hosts` on a `github:` line, which asks gh itself when the daemon has
-  not. The views show `#N` and the checks at the
+  not; a `galley:` line after it, on a machine with galley installed,
+  says `ok` with its version or why its server does not answer. The
+  views show `#N` and the checks at the
   right of a tile's third line: `✓`, `× 3/5` or a spinner and `3/5`,
   dim with `?` when stale; on `main` and `master` only failing checks.
   The dashboard adds the PR's state icon before the number and, after
