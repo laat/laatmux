@@ -24,6 +24,7 @@ import (
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/detect"
+	"github.com/laat/laatmux/internal/galley"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/procs"
@@ -235,7 +236,11 @@ type Config struct {
 	// default in serve; Branches is the file the answers are kept in.
 	// With Hosts, both are the branches capability; nil or "" means
 	// none. See branches.go.
-	GitHub   github.Runner
+	GitHub github.Runner
+	// Galley lists the pull requests staged in galley, the user's local
+	// review server, for a branch GitHub has none for; galley.CLI, or
+	// nil to never ask.
+	Galley   galley.Runner
 	Branches string
 	// GitHubHosts are the GitHub Enterprise hosts the config trusts
 	// beside github.com: a source on any other host is never asked

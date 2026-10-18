@@ -14,6 +14,7 @@ import (
 
 	"github.com/laat/laatmux/internal/config"
 	"github.com/laat/laatmux/internal/daemon"
+	"github.com/laat/laatmux/internal/galley"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/home"
 	"github.com/laat/laatmux/internal/logfile"
@@ -147,6 +148,7 @@ func cmdServe(ctx context.Context, args []string) error {
 		Clients:   listClients,
 		// PR and check state through gh, kept across restarts.
 		GitHub:      github.GH,
+		Galley:      galley.CLI,
 		Branches:    filepath.Join(home.Dir(), "branches.json"),
 		GitHubHosts: cfg.GitHubHosts,
 		// The merged stream: the hosts are re-read from the file on every

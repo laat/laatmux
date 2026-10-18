@@ -216,15 +216,15 @@ func decide(in pruneInput) (remove bool, reason string) {
 	if pr != nil && pr.State == "merged" {
 		switch {
 		case in.Branch.HeadOID == "":
-			return false, fmt.Sprintf("%s; PR #%d is merged, its last commit not known", ahead, pr.Number)
+			return false, fmt.Sprintf("%s; PR %s is merged, its last commit not known", ahead, pr.Ref())
 		case in.Branch.HeadOID == f.Head:
 			into := ""
 			if pr.Base != "" && pr.Base != def {
 				into = " into " + tmux.Printable(pr.Base)
 			}
-			return true, fmt.Sprintf("%s, PR #%d merged%s", clean(f), pr.Number, into)
+			return true, fmt.Sprintf("%s, PR %s merged%s", clean(f), pr.Ref(), into)
 		}
-		return false, fmt.Sprintf("%s; PR #%d is merged, but HEAD is not its last commit", ahead, pr.Number)
+		return false, fmt.Sprintf("%s; PR %s is merged, but HEAD is not its last commit", ahead, pr.Ref())
 	}
 	switch {
 	case !f.OnOrigin:
@@ -237,9 +237,9 @@ func decide(in pruneInput) (remove bool, reason string) {
 	switch {
 	case pr == nil:
 	case pr.Draft && pr.State == "open":
-		ahead += fmt.Sprintf(", draft PR #%d", pr.Number)
+		ahead += fmt.Sprintf(", draft PR %s", pr.Ref())
 	default:
-		ahead += fmt.Sprintf(", PR #%d %s", pr.Number, pr.State)
+		ahead += fmt.Sprintf(", PR %s %s", pr.Ref(), pr.State)
 	}
 	return false, ahead
 }

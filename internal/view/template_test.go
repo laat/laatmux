@@ -90,9 +90,16 @@ func TestTokens(t *testing.T) {
 			t.Errorf("{%s} = %q, want %q", c.token, got, c.want)
 		}
 	}
+	// A PR staged in galley is written s#N, linked to its page.
+	r.Branch.PR.Staged, r.Branch.PR.URL = true, "http://localhost:24823/laat/laatmux/pull/52"
+	tm, _ := ParseTemplate("{pr_number}")
+	if sp := m.line(Compiled{Template: tm}, r, 80, 2); len(sp) != 1 || sp[0].Text != "s#52" || sp[0].Link != r.Branch.PR.URL {
+		t.Errorf("a staged PR's number: %+v", sp)
+	}
+	r.Branch.PR.Staged = false
 	// The shells in the default agent line, after the label's two
 	// spaces, and the line without them, as it was before the token.
-	tm, _ := ParseTemplate(DefaultAgent)
+	tm, _ = ParseTemplate(DefaultAgent)
 	if got := Text([]Line{{Spans: m.line(Compiled{Template: tm}, r, 80, 2)}}); !strings.HasPrefix(got, "💬 claude  ◯3 ⚙2 Permission") {
 		t.Errorf("the agent line with subagents and shells: %q", got)
 	}

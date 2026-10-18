@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/laat/laatmux/internal/galley"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/peer"
 	"github.com/laat/laatmux/internal/protocol"
@@ -587,4 +589,69 @@ func TestBranchesHostErrorsKept(t *testing.T) {
 	if !cleared {
 		t.Errorf("a host no branch is on kept its failure: %+v", msgs)
 	}
+}
+
+// A branch GitHub has no PR for gets the one staged in galley, a branch
+// GitHub does not have among them, with no remove; one GitHub has a PR
+// for keeps it; galley's server down is nothing staged, and the record
+// of the branch GitHub lacks goes.
+func TestBranchesStaged(t *testing.T) {
+	gh := &fakeGH{states: map[string]string{"a": "gone", "b": "SUCCESS", "c": "SUCCESS"}}
+	var galleyErr error
+	var calls []string
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if galleyErr != nil {
+			return nil, galleyErr
+		}
+		return []byte(`[{"number":4,"state":"staged","headRefName":"a","baseRefName":"main","isDraft":false},{"number":5,"state":"staged","headRefName":"b","baseRefName":"main","isDraft":true}]`), nil
+	}
+	hosts := &hostsList{hosts: []peer.Host{{Name: "vm", SSH: "vm"}}}
+	d := New(Config{EnvironmentID: "menv", Hosts: hosts.get, GitHub: gh.run, Galley: run, Branches: filepath.Join(t.TempDir(), "branches.json")})
+	s := &subscriber{ch: make(chan protocol.Message, 256), merged: true}
+	d.mu.Lock()
+	d.reconcileHostsLocked(hosts.hosts)
+	for _, b := range []string{"a", "b", "c"} {
+		root := "/w/" + b
+		d.mhosts["vm"].worktrees["venv/worktree/"+root] = protocol.Worktree{ID: "venv/worktree/" + root, EnvironmentID: "venv", Source: ghSource, Branch: b, Root: root}
+	}
+	d.msubs[s] = struct{}{}
+	d.mu.Unlock()
+	d.fetchNow(t)
+	ups, removes, _ := drainBranches(s)
+	if len(calls) != 1 || calls[0] != "pr list -R o/r -s staged -L 200 --json number,state,headRefName,baseRefName,isDraft" {
+		t.Errorf("galley calls: %q", calls)
+	}
+	if len(removes) != 0 || len(ups) != 3 {
+		t.Fatalf("upserts %+v, removes %+v", ups, removes)
+	}
+	by := map[string]protocol.BranchStatus{}
+	for _, u := range ups {
+		by[u.Branch] = u
+	}
+	if p := by["a"].PR; p == nil || !p.Staged || p.Number != 4 || p.State != "open" || p.URL != galleyURL()+"/o/r/pull/4" || by["a"].Checks != nil {
+		t.Errorf("a, not on GitHub: %+v", by["a"])
+	}
+	if p := by["b"].PR; p == nil || !p.Staged || p.Number != 5 || !p.Draft || by["b"].Checks == nil || by["b"].Checks.State != protocol.ChecksSuccess {
+		t.Errorf("b, on GitHub without a PR: %+v", by["b"])
+	}
+	if by["c"].PR != nil {
+		t.Errorf("c, nothing staged: %+v", by["c"])
+	}
+	galleyErr = galley.ErrNotRunning
+	d.fetchNow(t)
+	ups, removes, _ = drainBranches(s)
+	if len(removes) != 1 || removes[0] != bkey("a") {
+		t.Errorf("server down, removes: %+v", removes)
+	}
+	if len(ups) != 1 || ups[0].Branch != "b" || ups[0].PR != nil {
+		t.Errorf("server down, upserts: %+v", ups)
+	}
+}
+
+func galleyURL() string {
+	if u := os.Getenv("GALLEY_URL"); u != "" {
+		return strings.TrimSuffix(u, "/")
+	}
+	return "http://localhost:24823"
 }
