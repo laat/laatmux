@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -95,6 +97,20 @@ func TestCLI(t *testing.T) {
 	}
 	if out, err := CLI(context.Background(), "pr", "list"); err != nil || string(out) != "[]\n" {
 		t.Errorf("a listing: %q %v", out, err)
+	}
+	// The CLI runs on the login shell's PATH first, this process's
+	// after it: a node the daemon's own PATH lacks is found.
+	if err := writeExec(dir+"/sh-login", "#!/bin/sh\ncase \"$1\" in -lc) printf %s /login/bin:/usr/bin;; esac\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELL", dir+"/sh-login")
+	loginPath = sync.OnceValue(readLoginPath)
+	defer func() { loginPath = sync.OnceValue(readLoginPath) }()
+	if err := writeExec(dir+"/galley", "#!/bin/sh\nprintf %s \"$PATH\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := CLI(context.Background(), "pr", "list"); err != nil || !strings.HasPrefix(string(out), "/login/bin:/usr/bin:"+dir) {
+		t.Errorf("the CLI's PATH: %q %v", out, err)
 	}
 }
 

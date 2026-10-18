@@ -379,6 +379,11 @@ func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 			hctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(hosts)-n))
 		}
 		results, err := github.Fetch(hctx, b.cfg.GitHub, host, bs)
+		if ctx.Err() == nil {
+			// Within the host's share of the round still: galley's
+			// listing, before the share ends.
+			b.stage(hctx, host, qs, results)
+		}
 		cancel()
 		if ctx.Err() != nil {
 			// The round is out of time: what it has is applied, the
@@ -409,7 +414,6 @@ func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 			// is the daemon's reason for showing nothing there.
 			hostErrs[host] = err.Error()
 		}
-		b.stage(hctx, host, qs, results)
 		answers = append(answers, answer{qs, results})
 	}
 	for _, a := range answers {
