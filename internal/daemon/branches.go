@@ -428,8 +428,9 @@ func (b *branches) fetch(ctx context.Context, set map[string]branchQuery) {
 // staged in galley, the user's local review server, when galley is
 // installed and its server answers: one listing per repository. A
 // branch GitHub does not have, as one staged and not pushed is not,
-// gets a record with the staged PR alone. galley missing, or its
-// server down, is nothing staged; another failure is logged once.
+// gets a record with the staged PR alone. galley missing, its server
+// down, or a repository it does not know, one nothing was staged in,
+// is nothing staged; another failure is logged once.
 func (b *branches) stage(ctx context.Context, host string, qs []branchQuery, results []github.Result) {
 	if b.cfg.Galley == nil {
 		return
@@ -452,6 +453,9 @@ func (b *branches) stage(ctx context.Context, host string, qs []branchQuery, res
 		if err != nil {
 			if errors.Is(err, galley.ErrNoGalley) || errors.Is(err, galley.ErrNotRunning) || ctx.Err() != nil {
 				return
+			}
+			if errors.Is(err, galley.ErrUnknownRepo) {
+				continue
 			}
 			msg := host + " " + k.owner + "/" + k.repo + ": " + err.Error()
 			b.mu.Lock()

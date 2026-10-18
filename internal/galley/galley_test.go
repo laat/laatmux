@@ -92,6 +92,12 @@ func TestCLI(t *testing.T) {
 	if _, err := CLI(context.Background(), "pr", "list"); !errors.Is(err, ErrNotRunning) {
 		t.Errorf("server down: %v", err)
 	}
+	if err := writeExec(dir+"/galley", "#!/bin/sh\necho 'repository o/r is not known to galley' >&2\nexit 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CLI(context.Background(), "pr", "list"); !errors.Is(err, ErrUnknownRepo) {
+		t.Errorf("unknown repository: %v", err)
+	}
 	if err := writeExec(dir+"/galley", "#!/bin/sh\necho '[]'\n"); err != nil {
 		t.Fatal(err)
 	}
