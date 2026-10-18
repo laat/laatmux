@@ -3,11 +3,16 @@ package galley
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The listing read into records: staged ones alone, open and marked,
@@ -116,4 +121,102 @@ func TestCLI(t *testing.T) {
 
 func writeExec(path, body string) error {
 	return os.WriteFile(path, []byte(body), 0o755)
+}
+
+// Status: nothing without galley on PATH; with it, the server's answer
+// at /api/meta tells ok and the version, or ok alone without one,
+// starting on galley's body with another status, another program,
+// nothing running, or nothing answering in time, before the headers
+// or after them, which is not "not running".
+func TestStatus(t *testing.T) {
+	defer func(d time.Duration) { statusTimeout = d }(statusTimeout)
+	statusTimeout = 300 * time.Millisecond
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if s := Status(context.Background()); s != "" {
+		t.Errorf("not installed: %q", s)
+	}
+	if err := writeExec(dir+"/galley", "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/meta" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"name":"galley","version":"0.1.0"}`)
+	}))
+	defer srv.Close()
+	t.Setenv("GALLEY_URL", srv.URL)
+	if s := Status(context.Background()); s != "ok 0.1.0" {
+		t.Errorf("running: %q", s)
+	}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "<html>") }))
+	defer other.Close()
+	t.Setenv("GALLEY_URL", other.URL)
+	if s := Status(context.Background()); !strings.HasPrefix(s, "another program answers at "+other.URL) {
+		t.Errorf("another program: %q", s)
+	}
+	t.Setenv("GALLEY_URL", "http://127.0.0.1:1")
+	if s := Status(context.Background()); !strings.HasPrefix(s, "not running at http://127.0.0.1:1") {
+		t.Errorf("down: %q", s)
+	}
+	starting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"name":"galley","version":"0.1.0"}`)
+	}))
+	defer starting.Close()
+	t.Setenv("GALLEY_URL", starting.URL)
+	if s := Status(context.Background()); s != "starting at "+starting.URL {
+		t.Errorf("starting: %q", s)
+	}
+	unversioned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"name":"galley"}`) }))
+	defer unversioned.Close()
+	t.Setenv("GALLEY_URL", unversioned.URL)
+	if s := Status(context.Background()); s != "ok" {
+		t.Errorf("no version: %q", s)
+	}
+	// A service that is not HTTP, an ssh banner say: another program
+	// on the port, not a server to start another beside.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			fmt.Fprint(c, "SSH-2.0-OpenSSH_9.9\r\n")
+			c.Close()
+		}
+	}()
+	t.Setenv("GALLEY_URL", "http://"+ln.Addr().String())
+	if s := Status(context.Background()); !strings.HasPrefix(s, "another program answers at http://"+ln.Addr().String()) {
+		t.Errorf("an ssh banner: %q", s)
+	}
+	// Stalled before the headers, and after them with galley's own
+	// body cut short: neither is a server to start another beside.
+	stall := func(headers bool) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if headers {
+				fmt.Fprint(w, `{"name":"gal`)
+				w.(http.Flusher).Flush()
+			}
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		}))
+	}
+	for _, headers := range []bool{false, true} {
+		srv := stall(headers)
+		t.Setenv("GALLEY_URL", srv.URL)
+		if s := Status(context.Background()); !strings.HasPrefix(s, "nothing answered at "+srv.URL+" within 300ms") {
+			t.Errorf("stalled (headers %v): %q", headers, s)
+		}
+		srv.Close()
+	}
 }

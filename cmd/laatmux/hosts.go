@@ -11,6 +11,7 @@ import (
 
 	"github.com/laat/laatmux/internal/client"
 	"github.com/laat/laatmux/internal/config"
+	"github.com/laat/laatmux/internal/galley"
 	"github.com/laat/laatmux/internal/github"
 	"github.com/laat/laatmux/internal/merged"
 	"github.com/laat/laatmux/internal/peer"
@@ -43,7 +44,7 @@ func cmdHosts(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Print(hostsReport(probeHosts(ctx, cfg.Hosts, client.Dial), version, githubLine(ctx)))
+	fmt.Print(hostsReport(probeHosts(ctx, cfg.Hosts, client.Dial), version, githubLine(ctx), galleyLine(ctx)))
 	return nil
 }
 
@@ -151,6 +152,19 @@ func githubLine(ctx context.Context) string {
 	return fmt.Sprintf("  %-16s %s", "github:", status)
 }
 
+// galleyLine is galley on this machine, for the pull requests staged
+// there: ok with its version, or why its server does not answer; ""
+// when it is not installed, and no line is owed.
+func galleyLine(ctx context.Context) string {
+	status := galleyStatus(ctx)
+	if status == "" {
+		return ""
+	}
+	return fmt.Sprintf("  %-16s %s", "galley:", status)
+}
+
+var galleyStatus = galley.Status
+
 // ghStatus is whether gh on this machine can read github.com: "ok", or
 // why not, from the smallest query the daemon's own reading would make,
 // so the two tell the same failures apart.
@@ -196,7 +210,7 @@ type hostRow struct {
 // hostsReport is the listing, with a mark on every daemon whose build is
 // not this client's and a line saying what the mark means. Versions are
 // git describe strings, so they are equal or not, never ordered.
-func hostsReport(rows []hostRow, build, github string) string {
+func hostsReport(rows []hostRow, build string, lines ...string) string {
 	var b strings.Builder
 	marked := false
 	for _, r := range rows {
@@ -206,8 +220,10 @@ func hostsReport(rows []hostRow, build, github string) string {
 		}
 		fmt.Fprintf(&b, "%s %-16s %s\n", mark, r.name, r.status)
 	}
-	if github != "" {
-		b.WriteString(github + "\n")
+	for _, l := range lines {
+		if l != "" {
+			b.WriteString(l + "\n")
+		}
 	}
 	if marked {
 		fmt.Fprintf(&b, "* daemon build differs from this client's (%s); laatmux upgrade <host> installs this one\n", build)
