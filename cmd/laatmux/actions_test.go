@@ -1924,6 +1924,51 @@ func TestRmFor(t *testing.T) {
 	}
 }
 
+// An agent laatmux made at a worktree's root outlives the worktree,
+// removed under it by the agent after a merge: its tile is no
+// worktree's, and its session is the orphaned line's Home. Enter on the
+// tile attaches the orphaned workspace session by its key, not a plain
+// attachment, whose name that session holds; x asks to remove what x on
+// the orphaned line removes, its root by the session's tags, the
+// agent's session named; S says the worktree is gone.
+func TestAgentOutlivesWorktree(t *testing.T) {
+	cfg := dashConfig(t)
+	d := &dash{ctx: context.Background(), cfg: cfg, st: merged.New()}
+	in := rows.Input{
+		Hosts: []rows.Host{{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true}},
+		Agents: []protocol.Agent{{ID: "venv/laatmux/%1", EnvironmentID: "venv", Server: "laatmux", Session: "proj/gone", PaneID: "%1", Agent: "claude",
+			Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, Cwd: "/w/proj/gone"}},
+		Locals: []protocol.Session{{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "gone"}},
+	}
+	m := &view.Model{Width: 80, Height: 20}
+	m.SetTree(rows.Tree(in))
+	m.SetRows(rows.Agents(in, rows.Tree(in)))
+	m.Render()
+	tile := *selectRow(t, m, "proj/gone")
+	p, ok := paneOf(tile)
+	line := m.LineFor(tile.Host, p.session)
+	if !ok || line == nil || !line.Orphaned {
+		t.Fatalf("the tile's line: %+v", line)
+	}
+	h, _ := cfg.Find("vm")
+	if spec := paneSpec(cfg, h, line, tile, p); spec.Name != "vm/proj/gone" || spec.Key != "venv//w/proj/gone" || spec.Managed != "proj/gone" {
+		t.Errorf("enter: spec %+v", spec)
+	}
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'x'}})
+	if d.rm.Root != "/w/proj/gone" || d.rm.Branch != "gone" || d.rm.Repo.Source != cfg.Repos[1].Source || d.rm.Environment != "venv" || d.rm.Host.Name != "vm" {
+		t.Errorf("x: rm = %+v", d.rm)
+	}
+	if want := "remove proj/gone on vm (/w/proj/gone) with its agent's session proj/gone? y/n"; m.Confirm != want || m.ConfirmTag != "rm" {
+		t.Errorf("x: confirm %q tag %q, want %q", m.Confirm, m.ConfirmTag, want)
+	}
+	m.Handle(term.Key{Rune: 'n'})
+	m.Message = ""
+	d.act(m, view.Action{Kind: view.ActionOther, Key: term.Key{Rune: 'S'}})
+	if !strings.Contains(m.Message, "its worktree is gone") {
+		t.Errorf("S: message %q", m.Message)
+	}
+}
+
 // x and X refuse a main checkout, from its line in the tree and from
 // its agent's tile, with no question asked; a preselects its repository
 // and host, not its branch. With its agent in a plain session and no

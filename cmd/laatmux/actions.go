@@ -954,6 +954,12 @@ func (d *dash) askRm(m *view.Model, force bool) {
 	if r == nil {
 		return
 	}
+	if l := ownerLine(m, *r); l != nil && l.Orphaned {
+		// The tile or the line of an agent laatmux made at the root of
+		// a worktree removed under it: what x on the orphaned line
+		// removes, the agent's session with the workspace session.
+		r = l
+	}
 	rm, err := d.rmFor(*r)
 	if err != nil {
 		m.Message = err.Error()
@@ -966,7 +972,8 @@ func (d *dash) askRm(m *view.Model, force bool) {
 		verb = "force-remove"
 	}
 	with := ""
-	if r.Worktree != nil {
+	switch {
+	case r.Worktree != nil:
 		// From an agent's tile or line: the worktree goes, and every
 		// agent in it with it, counted as the tree joins them.
 		switch n := m.AgentsUnder(r.Worktree.ID); {
@@ -975,6 +982,8 @@ func (d *dash) askRm(m *view.Model, force bool) {
 		case n > 1:
 			with = fmt.Sprintf(" with its %d agents", n)
 		}
+	case r.Orphaned && r.Home() != "":
+		with = " with its agent's session " + tmux.Printable(r.Home())
 	}
 	m.Ask(fmt.Sprintf("%s %s on %s (%s)%s? y/n", verb, rm.Describe(), rm.Host.Name, tmux.Printable(rm.Root), with), "rm")
 }

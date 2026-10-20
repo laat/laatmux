@@ -120,9 +120,10 @@ type Row struct {
 	// madeHome is, on a main checkout's line with no home, the session
 	// of the agent laatmux made at its root, which a split gone elsewhere
 	// took the home from: its Home where the line shows an agent in a
-	// plain session; "" for none. made is the sessions of every such
-	// agent, of which HomeLine takes any for the line's, as it takes a
-	// worktree's home.
+	// plain session; on an orphaned line, the session of the agent
+	// laatmux made at the root the worktree was removed from; "" for
+	// none. made is the sessions of every such agent, of which HomeLine
+	// takes any for the line's, as it takes a worktree's home.
 	// elsewhere is that the session named as its shell session
 	// (ShellSession) is not the line's: a managed agent in it runs in a
 	// pane laatmux made at another directory (nameClaim).
@@ -562,7 +563,8 @@ func mainAgent(agents []*protocol.Agent) *protocol.Agent {
 
 // madeSessions is, of a main checkout's agents, the sessions of those
 // laatmux made at its root, a split gone elsewhere having taken their
-// home, the first's in rowAgent's order first; nil for none.
+// home, the first's in rowAgent's order first; nil for none. An
+// orphaned line's are those made at its key's root.
 func madeSessions(agents []*protocol.Agent, w *protocol.Worktree) []string {
 	var made []*protocol.Agent
 	for _, a := range agents {
