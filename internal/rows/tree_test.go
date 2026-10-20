@@ -391,6 +391,61 @@ func TestObservedAgentSettled(t *testing.T) {
 	}
 }
 
+// An agent laatmux made at a worktree's root outlives the worktree,
+// removed under it by the agent after a merge: the orphaned line's Home
+// is the agent's session, so HomeLine routes the agent's pane jump to
+// the line, and the agent, which stays in other sessions, is the
+// viewer's in the line's workspace session and shows its settled state,
+// as one in a line's home session does. An agent laatmux made elsewhere,
+// and one made at the same root on another machine, are not the line's;
+// an orphaned line with no agent has no Home.
+func TestOrphanedLineHome(t *testing.T) {
+	agent := func(id, env, session, cwd string) protocol.Agent {
+		return protocol.Agent{ID: id, EnvironmentID: env, Server: "laatmux", Session: session, Agent: "claude", Activity: protocol.Idle, Liveness: protocol.Alive, Managed: true, Cwd: cwd}
+	}
+	in := Input{
+		Hosts: []Host{
+			{Name: "vm", EnvironmentID: "venv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+			{Name: "box", EnvironmentID: "benv", Connected: true, Listed: true, Worktrees: true, Attribution: true},
+		},
+		Agents: []protocol.Agent{
+			agent("venv/laatmux/%1", "venv", "proj/gone", "/w/proj/gone"),
+			agent("venv/laatmux/%2", "venv", "scratch", "/home/u"),
+			agent("benv/laatmux/%3", "benv", "proj/other", "/w/proj/gone"),
+		},
+		Locals: []protocol.Session{
+			{Name: "vm/proj/gone", Key: "venv//w/proj/gone", Host: "vm", Source: "git@github.com:laat/proj.git", Branch: "gone", Settled: true},
+			{Name: "vm/proj/empty", Key: "venv//w/proj/empty", Host: "vm"},
+		},
+		Current: "vm/proj/gone",
+	}
+	tree := Tree(in)
+	homes := map[string]string{}
+	for _, n := range tree {
+		if n.Orphaned {
+			homes[n.Name] = n.Home()
+		}
+	}
+	if want := map[string]string{"vm/proj/gone": "proj/gone", "vm/proj/empty": ""}; !reflect.DeepEqual(homes, want) {
+		t.Errorf("orphaned lines' homes %v, want %v", homes, want)
+	}
+	if i := HomeLine(tree, "vm", "proj/gone"); i < 0 || tree[i].Name != "vm/proj/gone" {
+		t.Errorf("HomeLine(vm, proj/gone) = %d", i)
+	}
+	if i := HomeLine(tree, "vm", "scratch"); i >= 0 {
+		t.Errorf("HomeLine(vm, scratch) = %q", tree[i].Name)
+	}
+	for _, n := range tree {
+		if n.Kind != KindAgent {
+			continue
+		}
+		mine := n.Agent.ID == "venv/laatmux/%1"
+		if n.Depth != 1 || n.Current != mine || n.Settled != mine {
+			t.Errorf("%s: depth %d current %v settled %v", n.Agent.ID, n.Depth, n.Current, n.Settled)
+		}
+	}
+}
+
 // A managed agent of no worktree in a worktree's home session, started
 // in another directory from a split there, stands in other sessions
 // with the settled state of the worktree's workspace session, where its

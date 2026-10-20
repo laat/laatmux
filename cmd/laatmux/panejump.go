@@ -111,8 +111,14 @@ const selectTimeout = 5 * time.Second
 // pane of one worktree in another's session so goes to the other's
 // workspace session, and a plain attachment takes no workspace
 // session's name, unless a pane was left in a session a worktree's
-// root agent moved out of.
+// root agent moved out of. An orphaned line's is the workspace session
+// it has, by its key: the agent laatmux made at the root outlives the
+// worktree, and the session is named after it already.
 func paneSpec(cfg config.Config, h config.Host, line *rows.Row, r rows.Row, p paneTarget) workspace.Spec {
+	if line != nil && line.Orphaned && line.Local != nil {
+		l := line.Local
+		return workspace.Spec{Host: h.Host, Managed: p.session, Name: l.Name, Key: l.Key, Branch: l.Branch, Source: l.Source}
+	}
 	if line != nil {
 		// The line's own jump, when it attaches the pane's session:
 		// the same spec, so the session is named alike whichever jump

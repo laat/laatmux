@@ -582,6 +582,12 @@ func (b *builder) looseTasks() {
 // orphans places the orphaned sessions, workspace sessions no worktree,
 // nor a task neither gone nor failed, accounts for: under their
 // repository by the source tag, or kept for other sessions without one.
+// An agent laatmux made at the root outlives a worktree removed under
+// it, by the agent itself after a merge say: its session is the line's
+// Home, as a main checkout's with the home lost is, so its pane jump
+// lands in the workspace session the line has and x on it removes what
+// the line's x does. The agent stays in other sessions, as one in a
+// line's home session whose directory is in no worktree does.
 func (b *builder) orphans() {
 	in, j := b.in, b.j
 	for i := range in.Locals {
@@ -589,11 +595,20 @@ func (b *builder) orphans() {
 		if !l.Workspace() || b.seenKey[l.Key] {
 			continue
 		}
-		env, _ := protocol.SplitSessionKey(l.Key)
+		env, root := protocol.SplitSessionKey(l.Key)
 		if !j.up(env) {
 			continue
 		}
 		line := Row{Kind: KindWorktree, Node: "session/" + l.Name, Host: j.byEnv[env], Name: l.Name, Local: l, Orphaned: true, Settled: l.Settled, Depth: 1}
+		var agents []*protocol.Agent
+		for k := range in.Agents {
+			if a := &in.Agents[k]; a.EnvironmentID == env {
+				agents = append(agents, a)
+			}
+		}
+		if line.made = madeSessions(agents, &protocol.Worktree{Root: root}); len(line.made) > 0 {
+			line.madeHome = line.made[0]
+		}
 		j.finish(&line)
 		if l.Source != "" {
 			rp := b.repoOf(l.Source, "")
@@ -957,10 +972,10 @@ func (r Row) Wants() bool {
 }
 
 // Home is the managed session a depth-1 line's workspace session
-// attaches to: the worktree's home session; with the home lost, the
-// session of the agent laatmux made at its root; a task's before the
-// host lists the worktree, or while it lists it without a home; "" for
-// a line with none.
+// attaches to: the worktree's home session; with the home lost, or the
+// worktree gone (an orphaned line), the session of the agent laatmux
+// made at its root; a task's before the host lists the worktree, or
+// while it lists it without a home; "" for a line with none.
 func (r Row) Home() string {
 	home, _ := r.home()
 	return home
