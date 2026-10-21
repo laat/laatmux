@@ -77,12 +77,13 @@ var kindIcons = map[string]struct{ worktree, main string }{
 	IconsASCII:    {"+", "="},
 }
 
-// shellIcons and subagentIcons are the sets' glyphs for `{shells}` and
-// `{subagents}`, the background shells and the subagents an agent
-// runs, before the count.
+// shellIcons, subagentIcons and monitorIcons are the sets' glyphs for
+// `{shells}`, `{subagents}` and `{monitors}`, the background shells,
+// the subagents and the monitors an agent runs, before the count.
 var (
 	shellIcons    = map[string]string{IconsEmoji: "⚙", IconsNerdFont: "\uf120 ", IconsASCII: "$"}
 	subagentIcons = map[string]string{IconsEmoji: "◯", IconsNerdFont: "\U000f06a9 ", IconsASCII: "a"}
+	monitorIcons  = map[string]string{IconsEmoji: "◎", IconsNerdFont: "\uf441 ", IconsASCII: "m"}
 )
 
 // shells is a row's `{shells}`: the glyph and the count of background
@@ -95,6 +96,12 @@ func (ic Icons) shells(r rows.Row) string {
 // subagents its agent reports running, `◯2`; "" for none.
 func (ic Icons) subagents(r rows.Row) string {
 	return ic.counted(r, subagentIcons, func(a *protocol.Agent) int { return a.Subagents })
+}
+
+// monitors is a row's `{monitors}`: the glyph and the count of monitors
+// its agent reports, `◎1`; "" for none.
+func (ic Icons) monitors(r rows.Row) string {
+	return ic.counted(r, monitorIcons, func(a *protocol.Agent) int { return a.Monitors })
 }
 
 // counted is a count the agent reports behind the set's glyph; "" for

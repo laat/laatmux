@@ -37,6 +37,42 @@ func TestShells(t *testing.T) {
 	}
 }
 
+// The footer's count of monitors, an item of the same line: Claude
+// Code 2.1.306's `· 1 monitor`, beside the shells; the turn's closing
+// line above the prompt box, which says the monitor is still running,
+// is not counted.
+func TestMonitors(t *testing.T) {
+	screen := func(f string) []string {
+		return []string{
+			"⏺ Monitor event: PostgreSQL (./internal/apiv2/...): success 388s · Test run 39677707767 job completions on PR #460",
+			"✻ Sautéed for 3s · done 11:25 PM · 3 monitors still running",
+			"───────────────────────────────────────────────────────────",
+			"❯ ",
+			"───────────────────────────────────────────────────────────",
+			"  󰪣 Opus 5.5[1M] ctx 81% │ 5h 100% │ plattform-lock-search/ (ci/parallel-tests)",
+			f,
+		}
+	}
+	for _, c := range []struct {
+		name   string
+		agent  string
+		screen []string
+		want   int
+	}{
+		{"one", "claude", screen("  ⏵⏵ bypass permissions on · PR #460 · 1 monitor"), 1},
+		{"two beside shells", "claude", screen("  ⏵⏵ auto mode on · 2 shells · 2 monitors · ← for agents"), 2},
+		{"none", "claude", screen("  ⏵⏵ bypass permissions on · PR #460"), 0},
+		{"codex", "codex", screen("  ⏵⏵ bypass permissions on · 1 monitor"), 0},
+	} {
+		if got := Monitors(Input{Agent: c.agent, Screen: c.screen}); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+	if got := Shells(Input{Agent: "claude", Screen: screen("  ⏵⏵ auto mode on · 2 shells · 2 monitors · ← for agents")}); got != 2 {
+		t.Errorf("the shells beside the monitors: %d", got)
+	}
+}
+
 // The agents panel's rows that are not idle, the folded ones counted,
 // after the `⏺ main` header; a panel under a dialog, with no rule
 // before it, counts too.

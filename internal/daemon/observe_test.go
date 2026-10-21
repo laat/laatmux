@@ -418,21 +418,22 @@ func TestObserveCaptureFailureKeepsBlocked(t *testing.T) {
 	}
 }
 
-// The footer's count of background shells is on the record, a change
-// in it is published, and a failed capture keeps the last count.
+// The footer's counts of background shells and monitors and the
+// panel's subagents are on the record, a change in them is published,
+// and a failed capture keeps the last counts.
 func TestObserveShells(t *testing.T) {
 	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
-	ft := onePane(pane, []string{"────", "❯ ", "────", "  ⏵⏵ auto mode on · 2 shells · ← for agents", "  ⏺ main", "  ◯ probe  Reading the config  3s · ↓ 1k tokens"})
+	ft := onePane(pane, []string{"────", "❯ ", "────", "  ⏵⏵ auto mode on · 2 shells · 1 monitor · ← for agents", "  ⏺ main", "  ◯ probe  Reading the config  3s · ↓ 1k tokens"})
 	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
 	d.poll(context.Background())
 	_, ag := d.agentRecords()
-	if ag[0].Shells != 2 || ag[0].Subagents != 1 || ag[0].Activity != protocol.Working {
-		t.Fatalf("two shells, a subagent: %+v", ag[0])
+	if ag[0].Shells != 2 || ag[0].Monitors != 1 || ag[0].Subagents != 1 || ag[0].Activity != protocol.Working {
+		t.Fatalf("two shells, a monitor, a subagent: %+v", ag[0])
 	}
 	ft.captureErr = errors.New("capture-pane: pane busy")
 	d.poll(context.Background())
 	_, ag = d.agentRecords()
-	if ag[0].Shells != 2 || ag[0].Subagents != 1 {
+	if ag[0].Shells != 2 || ag[0].Monitors != 1 || ag[0].Subagents != 1 {
 		t.Fatalf("capture failure changed the counts: %+v", ag[0])
 	}
 	ft.captureErr = nil
@@ -441,8 +442,8 @@ func TestObserveShells(t *testing.T) {
 		d.poll(context.Background())
 	}
 	_, ag = d.agentRecords()
-	if ag[0].Shells != 0 || ag[0].Subagents != 0 || ag[0].Activity != protocol.Idle {
-		t.Fatalf("both gone: %+v", ag[0])
+	if ag[0].Shells != 0 || ag[0].Monitors != 0 || ag[0].Subagents != 0 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("all gone: %+v", ag[0])
 	}
 }
 

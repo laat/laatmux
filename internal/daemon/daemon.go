@@ -455,6 +455,7 @@ type paneState struct {
 	activityAt   time.Time
 	shells       int // the background shells the last captured screen counted
 	subagents    int // the subagents it listed running
+	monitors     int // the monitors it counted
 	pendingIdle  *time.Time
 	pendingCount int
 	// obs is what the last observation of the pane saw, for a delivery
@@ -908,7 +909,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		} else {
 			in := detect.Input{Agent: st.identity.Agent, Title: p.Title, Screen: screen}
 			res = detect.Detect(in)
-			st.shells, st.subagents = detect.Shells(in), detect.Subagents(in)
+			st.shells, st.subagents, st.monitors = detect.Shells(in), detect.Subagents(in), detect.Monitors(in)
 		}
 	} else {
 		res = detect.Result{State: detect.Unknown, Reason: "no_known_agent"}
@@ -934,6 +935,7 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		Managed:       p.Managed,
 		Shells:        st.shells,
 		Subagents:     st.subagents,
+		Monitors:      st.monitors,
 		ActivityAt:    st.activityAt,
 		UpdatedAt:     now,
 	}
@@ -1003,7 +1005,7 @@ func (d *Daemon) nextActivity(st *paneState, res detect.Result, now time.Time) p
 func sameRecord(a, b protocol.Agent) bool {
 	if a.Activity != b.Activity || a.Liveness != b.Liveness || a.Agent != b.Agent ||
 		a.Title != b.Title || a.Cwd != b.Cwd || a.Session != b.Session || a.Window != b.Window ||
-		a.Managed != b.Managed || a.Rule != b.Rule || a.WorktreeID != b.WorktreeID || a.Shells != b.Shells || a.Subagents != b.Subagents {
+		a.Managed != b.Managed || a.Rule != b.Rule || a.WorktreeID != b.WorktreeID || a.Shells != b.Shells || a.Subagents != b.Subagents || a.Monitors != b.Monitors {
 		return false
 	}
 	switch {

@@ -24,6 +24,7 @@
   "worktree_id": "worktree_id",
   "shells": 1,
   "subagents": 1,
+  "monitors": 1,
   "activity_at": "2026-10-01T12:00:00Z",
   "updated_at": "2026-10-01T12:00:00Z"
 }
