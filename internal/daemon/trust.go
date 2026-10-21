@@ -29,7 +29,11 @@ import (
 //     after it, naming exactly that root, with exactly its two options
 //     and one cursor on them;
 //   - each key under the root's delivery lock, which a paste into the
-//     pane also takes, on a capture made under that lock.
+//     pane also takes, on a capture made under that lock;
+//   - the first key once the question was on screen at an earlier look
+//     too: Claude Code draws it a moment before it reads keys (Claude
+//     Code 2.1.306 dropped a key pressed 100 ms after the first frame
+//     and took one at 200 ms), and a key lost there is the one move.
 //
 // Anything else is left alone, and the wait for the agent times out as
 // before. A user who moves the selection between the capture and the
@@ -220,7 +224,7 @@ func (rn *taskRunner) startTrust(t trustTarget) {
 // another process in its place, a wrapper's second run say, ends the
 // watcher.
 func (rn *taskRunner) answerTrust(ctx context.Context, t trustTarget, poll time.Duration) {
-	moved := false
+	var p trustProgress
 	var bound *procs.Identity
 	for ctx.Err() == nil {
 		gone, claude, ready, id := rn.trustState(t)
@@ -236,7 +240,7 @@ func (rn *taskRunner) answerTrust(ctx context.Context, t trustTarget, poll time.
 			if bound == nil {
 				bound = &id
 			}
-			done, stop := rn.trustStep(ctx, t, *bound, &moved)
+			done, stop := rn.trustStep(ctx, t, *bound, &p)
 			if done || stop {
 				return
 			}
@@ -248,9 +252,17 @@ func (rn *taskRunner) answerTrust(ctx context.Context, t trustTarget, poll time.
 	}
 }
 
+// trustProgress is what a watcher's looks have found and done: seen,
+// the question on screen at an earlier look, which the first key waits
+// for; moved, the moves pressed, which are pressed once.
+type trustProgress struct {
+	seen, moved bool
+}
+
 // trustStep is one look and, when the question is there, one action,
 // under the root's delivery lock: the moves that bring the cursor to
-// yes, pressed once and never again, or Enter with the cursor on yes.
+// yes, pressed once and never again, or Enter with the cursor on yes;
+// none at the look that first finds the question, which only notes it.
 // The cursor starts off yes, so a capture that shows it on yes after the
 // moves was made after them; one that still shows it elsewhere is a
 // screen that lags or keys that went astray, and the watcher gives up
@@ -261,7 +273,7 @@ func (rn *taskRunner) answerTrust(ctx context.Context, t trustTarget, poll time.
 // lock the pane itself is looked at first: still there and alive, in
 // the launched session, on the launched server instance, its working
 // directory the root, which is also the folder Claude asks about.
-func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.Identity, moved *bool) (done, stop bool) {
+func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.Identity, p *trustProgress) (done, stop bool) {
 	unlock := rn.lockDeliveries(t.root)
 	defer unlock()
 	gone, claude, _, id := rn.trustState(t)
@@ -306,8 +318,14 @@ func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.
 	if !ok {
 		return false, false
 	}
+	if !p.seen {
+		// The question's first frame can come before Claude reads keys:
+		// the next look, a poll on, presses.
+		p.seen = true
+		return false, false
+	}
 	if moves != 0 {
-		if *moved {
+		if p.moved {
 			return false, true
 		}
 		key, n := "Down", moves
@@ -318,7 +336,7 @@ func (rn *taskRunner) trustStep(ctx context.Context, t trustTarget, bound procs.
 		for i := range keys {
 			keys[i] = key
 		}
-		*moved = true
+		p.moved = true
 		if err := rn.managed.Tmux.SendKeys(ctx, t.pane, keys...); err != nil {
 			return false, true
 		}
