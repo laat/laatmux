@@ -7,14 +7,21 @@ import (
 )
 
 // What Claude Code says under the prompt box, read for the record: the
-// footer line counts its background shells, and the agents panel under
-// the footer lists its subagents.
+// footer line counts its background shells and its monitors, and the
+// agents panel under the footer lists its subagents.
 
 // shellsRe is Claude Code's count of its background shells, an item of
 // its footer line: `⏵⏵ auto mode on · 2 shells · ← for agents`, or
 // `1 shell`. The item is bounded by the footer's separators or the
 // line's ends, so a prompt that mentions shells does not count.
 var shellsRe = regexp.MustCompile(`(?:^|·)\s*([1-9]\d*) shells?\s*(?:·|$)`)
+
+// monitorsRe is its count of the monitors it runs, the Monitor tool's
+// background watches whose events start a turn of their own, an item
+// of the same line: `⏵⏵ bypass permissions on · PR #460 · 1 monitor`.
+// The turn's closing line above the prompt box, `· 1 monitor still
+// running`, is not the footer's.
+var monitorsRe = regexp.MustCompile(`(?:^|·)\s*([1-9]\d*) monitors?\s*(?:·|$)`)
 
 // The agents panel: its header `⏺ main`, a line per subagent, `◯ name
 // what it does  7m 6s · ↓ 235.5k tokens` while it runs and `◯ name
@@ -59,9 +66,17 @@ func footerLines(in Input) []string {
 // Shells is how many background shells the agent's screen says it is
 // running: Claude Code counts them in the footer. 0 for none, and for
 // an agent that does not count them.
-func Shells(in Input) int {
+func Shells(in Input) int { return footerCount(in, shellsRe) }
+
+// Monitors is how many monitors the agent's screen says it is running:
+// Claude Code counts them in the footer too. 0 for none, and for an
+// agent that does not count them.
+func Monitors(in Input) int { return footerCount(in, monitorsRe) }
+
+// footerCount is the count the footer item re matches, 0 for none.
+func footerCount(in Input, re *regexp.Regexp) int {
 	for _, line := range footerLines(in) {
-		if m := shellsRe.FindStringSubmatch(line); m != nil {
+		if m := re.FindStringSubmatch(line); m != nil {
 			n, _ := strconv.Atoi(m[1])
 			return n
 		}

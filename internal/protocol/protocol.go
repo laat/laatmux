@@ -461,7 +461,11 @@ type Agent struct {
 	// Subagents is how many subagents the agent says are running, read
 	// off its screen too: the rows of Claude Code's agents panel that
 	// are not idle. 0 for none, and for a screen without the panel.
-	Subagents  int       `json:"subagents,omitempty"`
+	Subagents int `json:"subagents,omitempty"`
+	// Monitors is how many monitors the agent says it runs, background
+	// watches whose events start a turn of their own: Claude Code's
+	// footer counts them, `1 monitor`. 0 for none.
+	Monitors   int       `json:"monitors,omitempty"`
 	ActivityAt time.Time `json:"activity_at"` // when Activity last changed
 	UpdatedAt  time.Time `json:"updated_at"`
 }
