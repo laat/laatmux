@@ -218,33 +218,37 @@ func TestTrustWatcherBounds(t *testing.T) {
 	// bound, ends the watcher.
 	target := trustTarget{pane: "%9", session: "proj/w", root: root, serverPID: 5}
 	_, _, _, id := d.tasks.trustState(target)
-	moved := false
+	var p trustProgress
 	ft.set(func() { ft.panes[len(ft.panes)-1].CurrentPath = "/elsewhere" })
-	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); done || stop || keys() != 0 {
 		t.Fatalf("elsewhere: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() {
 		ft.panes[len(ft.panes)-1].CurrentPath = root
 		ft.panes[len(ft.panes)-1].InMode = true
 	})
-	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); done || stop || keys() != 0 {
 		t.Fatalf("in a mode: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() {
 		ft.panes[len(ft.panes)-1].InMode = false
 		ft.panes[len(ft.panes)-1].ServerPID = 6
 	})
-	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || !stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); done || !stop || keys() != 0 {
 		t.Fatalf("another server: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() { ft.panes[len(ft.panes)-1].ServerPID = 5 })
 	other := id
 	other.PID++
-	if done, stop := d.tasks.trustStep(context.Background(), target, other, &moved); done || !stop || keys() != 0 {
+	if done, stop := d.tasks.trustStep(context.Background(), target, other, &p); done || !stop || keys() != 0 {
 		t.Fatalf("another Claude: done %v stop %v keys %d", done, stop, keys())
 	}
-	// With all of it as launched, the cursor already on yes: Enter.
-	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); !done || stop || keys() != 1 {
+	// With all of it as launched, the cursor already on yes: the look
+	// that first reads the question presses nothing, the next Enter.
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); done || stop || keys() != 0 {
+		t.Fatalf("first sight: done %v stop %v keys %d", done, stop, keys())
+	}
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); !done || stop || keys() != 1 {
 		t.Fatalf("as launched: done %v stop %v keys %d", done, stop, keys())
 	}
 	ft.set(func() { ft.keys = nil })
@@ -289,6 +293,44 @@ func TestTrustNoSecondMove(t *testing.T) {
 	ft.mu.Unlock()
 	if len(keys) != 1 || strings.Join(keys[0], " ") != "%1 Down" {
 		t.Fatalf("keys %v, want one Down", keys)
+	}
+}
+
+// Claude Code draws the question a moment before it reads keys, and a
+// key pressed at its first frame is lost: the look that first reads the
+// question presses nothing, the next one moves the cursor, and the one
+// after that, with the cursor on yes, presses Enter.
+func TestTrustWaitsALook(t *testing.T) {
+	d, ft, _, _ := newAddDaemon(t)
+	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
+	root := t.TempDir()
+	id, _ := procs.FindIn([]procs.Proc{shell, claude})
+	d.mu.Lock()
+	d.panes[paneKey(d.managed.Label, "%1")] = &paneState{obs: observation{session: "s", serverPID: 5, verified: true, identity: id}}
+	d.mu.Unlock()
+	ft.set(func() {
+		ft.panes = []tmux.Pane{{ID: "%1", Session: "s", ServerPID: 5, CurrentPath: root, Managed: true}}
+		ft.screen = trustScreen(root, false)
+		ft.onKeys = func(f *fakeServer, keys []string) {
+			if keys[len(keys)-1] == "Down" {
+				f.screen = trustScreen(root, true)
+			}
+		}
+	})
+	target := trustTarget{pane: "%1", session: "s", root: root, real: root, serverPID: 5}
+	var p trustProgress
+	for i, want := range []string{"", "%1 Down", "%1 Enter"} {
+		ft.set(func() { ft.keys = nil })
+		done, stop := d.tasks.trustStep(context.Background(), target, id, &p)
+		ft.mu.Lock()
+		got := ""
+		if len(ft.keys) > 0 {
+			got = strings.Join(ft.keys[0], " ")
+		}
+		ft.mu.Unlock()
+		if got != want || stop || done != (i == 2) {
+			t.Fatalf("look %d: keys %q done %v stop %v, want %q", i+1, got, done, stop, want)
+		}
 	}
 }
 
@@ -383,8 +425,8 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 	type step struct{ done, stop bool }
 	got := make(chan step, 1)
 	go func() {
-		moved := false
-		done, stop := d.tasks.trustStep(context.Background(), target, id, &moved)
+		p := trustProgress{seen: true}
+		done, stop := d.tasks.trustStep(context.Background(), target, id, &p)
 		got <- step{done, stop}
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -409,8 +451,8 @@ func TestTrustStepLockAndSymlink(t *testing.T) {
 	// The process table without the bound Claude, whatever the last poll
 	// saw: nothing is pressed and the watcher stops.
 	d.cfg.Procs = &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell}}}}
-	moved := false
-	if done, stop := d.tasks.trustStep(context.Background(), target, id, &moved); done || !stop {
+	var p trustProgress
+	if done, stop := d.tasks.trustStep(context.Background(), target, id, &p); done || !stop {
 		t.Fatalf("replaced: done %v stop %v", done, stop)
 	}
 	ft.mu.Lock()
@@ -478,8 +520,8 @@ func TestManagedListingHookError(t *testing.T) {
 		ft.screen = trustScreen(real, true)
 		ft.listErr = &tmux.HookError{Err: &tmux.Error{Args: []string{"list-panes", "-a"}, Msg: "can't find session: nosuch"}}
 	})
-	moved := false
-	if done, stop := d.tasks.trustStep(ctx, trustTarget{pane: "%1", session: "s", root: real, real: real, serverPID: 5}, id, &moved); !done || stop {
+	p := trustProgress{seen: true}
+	if done, stop := d.tasks.trustStep(ctx, trustTarget{pane: "%1", session: "s", root: real, real: real, serverPID: 5}, id, &p); !done || stop {
 		t.Fatalf("trust with the hook: done %v stop %v, want Enter pressed", done, stop)
 	}
 	d.mu.Lock()
