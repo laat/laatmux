@@ -210,7 +210,8 @@ func TestFindEnvHintIsTentative(t *testing.T) {
 // leader on a pty, stays listed; Lookup still finds the zombie, whose
 // pid names it until the reap. The parent's argv, an empty argument in
 // it, reads back whole: macOS's parse dropped the empty string and took
-// the first env string into argv.
+// the first env string into argv. Exists, which reads the one process,
+// agrees: the leader is on the tty, the zombie is not.
 func TestListTTYDropsZombies(t *testing.T) {
 	tru, err := exec.LookPath("true")
 	if err != nil {
@@ -313,8 +314,37 @@ func TestListTTYDropsZombies(t *testing.T) {
 	if !zombieOn(t, zombie, tty) {
 		t.Fatalf("pid %d is not a zombie on %s", zombie, tty)
 	}
-	if p, ok := Lookup(zombie); !ok || p.Comm != "claude" {
-		t.Fatalf("Lookup of the zombie %d: %+v ok=%v, want it found as claude", zombie, p, ok)
+	z, ok := Lookup(zombie)
+	if !ok || z.Comm != "claude" {
+		t.Fatalf("Lookup of the zombie %d: %+v ok=%v, want it found as claude", zombie, z, ok)
+	}
+	// Exists reads the one process: the live leader is on the tty; the
+	// zombie is not, nor the leader under another start or on another
+	// tty.
+	list, err := ListTTY(tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lead Proc
+	for _, p := range list {
+		if p.PID == parent.Process.Pid {
+			lead = p
+		}
+	}
+	_, other := openPTY(t)
+	for _, c := range []struct {
+		name, tty string
+		id        Identity
+		want      bool
+	}{
+		{"the leader", tty, Identity{PID: lead.PID, Start: lead.Start}, true},
+		{"the zombie", tty, Identity{PID: zombie, Start: z.Start}, false},
+		{"the leader started again", tty, Identity{PID: lead.PID, Start: lead.Start.Add(time.Second)}, false},
+		{"the leader on another tty", other, Identity{PID: lead.PID, Start: lead.Start}, false},
+	} {
+		if got, err := Exists(c.tty, c.id); err != nil || got != c.want {
+			t.Errorf("%s: %v %v, want %v", c.name, got, err, c.want)
+		}
 	}
 }
 

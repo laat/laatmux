@@ -63,6 +63,8 @@ type fakeServer struct {
 	// configured counts EnsureConfigured.
 	listErr    error
 	captureErr error
+	batches    int // CaptureAll calls
+	captures   int // Capture calls
 	configured int
 }
 
@@ -91,7 +93,21 @@ func (f *fakeServer) ListPanes(context.Context) ([]tmux.Pane, error) {
 func (f *fakeServer) Capture(context.Context, string, int) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.captures++
 	return append([]string(nil), f.screen...), f.captureErr
+}
+func (f *fakeServer) CaptureAll(_ context.Context, ids []string, _ int) (map[string][]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batches++
+	if f.captureErr != nil {
+		return nil, f.captureErr
+	}
+	out := map[string][]string{}
+	for _, id := range ids {
+		out[id] = append([]string(nil), f.screen...)
+	}
+	return out, nil
 }
 func (f *fakeServer) EnsureConfigured(context.Context) error {
 	f.mu.Lock()

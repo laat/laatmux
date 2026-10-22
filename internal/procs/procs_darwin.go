@@ -52,6 +52,17 @@ func ListTTY(tty string) ([]Proc, error) {
 	return out, nil
 }
 
+// existsOn is Exists on a tty's device number: kern.proc.pid for the
+// identity's pid, a live process whose controlling terminal it is.
+func existsOn(dev uint64, id Identity) bool {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", id.PID)
+	if err != nil || int(kp.Proc.P_pid) != id.PID || kp.Proc.P_stat == sZomb {
+		return false
+	}
+	start := time.Unix(kp.Proc.P_starttime.Sec, int64(kp.Proc.P_starttime.Usec)*1000)
+	return uint32(kp.Eproc.Tdev) == uint32(dev) && start.Equal(id.Start)
+}
+
 // Lookup is the process with the pid: its comm, start time and start
 // identity, the last two with the pid identifying it as Identity does
 // an agent; not ok when there is no such process. Unlike ListTTY it

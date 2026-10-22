@@ -654,11 +654,79 @@ func (s Server) Capture(ctx context.Context, paneID string, n int) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	return screenLines(string(out), n), nil
+}
+
+// screenLines is a capture's output as Capture returns it: trailing
+// blank lines dropped, at most n lines from the bottom when n is set.
+func screenLines(out string, n int) []string {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if n > 0 && len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return lines, nil
+	return lines
+}
+
+// captureBatch bounds the panes CaptureAll puts in one invocation, so
+// the argv stays short whatever the server holds; a variable for the
+// tests.
+var captureBatch = 50
+
+// CaptureAll is Capture for several panes, by id, in one tmux
+// invocation per captureBatch of them: each capture-pane follows a
+// display-message that prints a mark drawn for the call and the pane's
+// index, which no screen holds, and the output is split at the marks.
+// The captures cost the server little; a tmux client started for each,
+// for every agent several times a second, cost the poll most of its
+// time. Any error fails the call, a pane gone since the listing say,
+// and nothing is returned with it: the caller captures the panes one by
+// one instead, each with its own error.
+func (s Server) CaptureAll(ctx context.Context, paneIDs []string, n int) (map[string][]string, error) {
+	screens := make(map[string][]string, len(paneIDs))
+	for start := 0; start < len(paneIDs); start += captureBatch {
+		ids := paneIDs[start:min(start+captureBatch, len(paneIDs))]
+		// base32 after a letter: no % for display-message to expand as
+		// strftime does, no # for a format, no $ for tmux 3.4 to escape.
+		mark := "laatmux-capture-" + rand.Text() + "-"
+		var a []string
+		for i, id := range ids {
+			if i > 0 {
+				a = append(a, Next)
+			}
+			a = append(a, "display-message", "-p", "-t", id, mark+strconv.Itoa(i), Next, "capture-pane", "-p", "-t", id)
+		}
+		out, err := s.Run(ctx, a...)
+		if err != nil {
+			return nil, err
+		}
+		blocks := map[int]string{}
+		cur := -1
+		var b strings.Builder
+		for _, line := range strings.SplitAfter(string(out), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), mark); ok {
+				if i, err := strconv.Atoi(rest); err == nil && i >= 0 && i < len(ids) {
+					if cur >= 0 {
+						blocks[cur] = b.String()
+					}
+					cur = i
+					b.Reset()
+					continue
+				}
+			}
+			b.WriteString(line)
+		}
+		if cur >= 0 {
+			blocks[cur] = b.String()
+		}
+		for i, id := range ids {
+			out, ok := blocks[i]
+			if !ok {
+				return nil, fmt.Errorf("tmux capture-pane: no screen for %s in the batch", id)
+			}
+			screens[id] = screenLines(out, n)
+		}
+	}
+	return screens, nil
 }
 
 // Managed is true for the server laatmux owns and may configure. A named

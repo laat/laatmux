@@ -72,6 +72,13 @@ func ListTTY(tty string) ([]Proc, error) {
 	return out, nil
 }
 
+// existsOn is Exists on a tty's device number: /proc/<pid>/stat of the
+// identity's pid, a live process whose tty_nr it is.
+func existsOn(dev uint64, id Identity) bool {
+	p, tty, exited, ok := readStat(id.PID)
+	return ok && !exited && tty == dev && p.Start.Equal(id.Start)
+}
+
 // Lookup is the process with the pid: its comm, start time and start
 // identity, the last two with the pid identifying it as Identity does
 // an agent; not ok when there is no such process. Unlike ListTTY it

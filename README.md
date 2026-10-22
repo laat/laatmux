@@ -389,11 +389,15 @@ truth; labels only place new things.
     later), `rebasing`, and `stale` when the last refresh timed out.
 
   Two workers beside the listing refresh it: every 5 s for a worktree
-  or a main checkout with a home session and for a main checkout with
-  an agent in it, every 30 s otherwise, and at once after an add, a
-  run ending, or a change to `HEAD`, `index` or the refs of the branch
-  and its base. A refresh is at least 2 s after the last one, never waits
-  on the listing, and upserts only when a value changed. Git runs with
+  or a main checkout an agent works in, working or blocked or with its
+  status changed in the last minute, every 30 s otherwise, a home
+  session's included, and at once after an add, a run ending, or a
+  change to `HEAD`, `index` or the refs of the branch and its base. A
+  refresh is at least 2 s after the last one, never waits on the
+  listing, and upserts only when a value changed. One that took long
+  stretches both: git status walks the whole tree, 0.8 s of CPU in a
+  checkout of 28k files, so the next refresh is at least five times as
+  long after it began and the next periodic one twenty times. Git runs with
   `--no-optional-locks`, the diff against HEAD without refreshing the
   index, the diffs with `--no-ext-diff --no-textconv`, and no transport
   allowed: a refresh never takes the index lock, runs a diff driver, or
@@ -465,7 +469,7 @@ truth; labels only place new things.
   managed session with a pane laatmux made at its root, all of whose
   panes are inside it, which a jump makes with the user's shell (`jump`
   below) and `add` never makes; its `git` object is read as a
-  worktree's, every 5 s while it has a home or an agent is in it. The
+  worktree's, every 5 s while an agent works in it. The
   rest of the checkouts under `repos`, many on a machine
   that clones there by hand, have no record, line or refresh. A HEAD
   that cannot be read, in a checkout with no worktree whose origin the
@@ -1918,7 +1922,8 @@ only to managed sessions.
   root and prefix key tables unbound) and `new` creates sessions there. A
   daemon whose list leaves it out does not advertise the `new` capability.
 - Every other server in `tmux_servers`, the user's `default` included, is
-  observed read-only: `list-panes` and `capture-pane`, nothing else. No
+  observed read-only: `list-panes`, `capture-pane` and the
+  `display-message -p` that marks the captures, nothing else. No
   workmux config, state or hooks are read. `default` selects `-L default`
   explicitly, so a daemon started from inside another tmux server still
   polls the default one rather than following the inherited `TMUX`.
@@ -2149,7 +2154,15 @@ records:
   counts as claude.
 - **Detection** evaluates herdr's rule manifests against the pane title and the
   visible screen every 300 ms. Captures are unconditional and never include
-  scrollback, so a dismissed dialog in history cannot override the prompt. A
+  scrollback, so a dismissed dialog in history cannot override the prompt.
+  The panes whose agent the last poll saw alive are captured in one tmux
+  invocation per server, each `capture-pane` after a `display-message -p`
+  that prints a mark drawn for the call, and the output split at the marks:
+  a tmux client per pane, several times a second, was most of what a poll
+  cost. A pane whose agent is new is captured on its own, and so is every
+  pane when the batch fails, one gone since the listing say. laatmux's own
+  panes, the sidebars and the workspace sessions' attach panes, are not
+  looked up for an agent. A
   failed capture is an unavailable observation, not an empty screen: the last
   activity is kept. Working to idle
   is debounced (3 confirmations, 700 ms cap); a visible idle prompt bypasses it.

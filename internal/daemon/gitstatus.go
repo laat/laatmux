@@ -16,19 +16,26 @@ import (
 // Git status: each listed worktree's git object, read beside the listing
 // rather than in it, since the listing is serialized and stamps the
 // listings that retire tasks, and a slow repository must not hold it. A
-// pool of gitWorkers takes the worktrees due for a refresh: one with a
-// home session, or a main checkout with an agent in it, every
-// gitSessionEvery, any other every gitIdleEvery, and any at once when
-// add or a run ending makes it due or an mtime the loop stats every
-// gitTick changes: HEAD and index in its git dir, and in
-// the common dir packed-refs, shallow and the loose refs of the branch
-// and its base. No worktree is refreshed more than once per gitMinGap.
+// pool of gitWorkers takes the worktrees due for a refresh: one an
+// agent works in, working or blocked or with its activity changed
+// within gitRecent, every gitSessionEvery, any other every
+// gitIdleEvery, and any at once when add or a run ending makes it due
+// or an mtime the loop stats every gitTick changes: HEAD and index in
+// its git dir, and in the common dir packed-refs, shallow and the loose
+// refs of the branch and its base. No worktree is refreshed more than
+// once per gitMinGap. A refresh that takes long stretches both: git
+// status walks the whole tree, 0.8 s of CPU in a checkout of 28k
+// files, and the next one comes no sooner than gitCostGap times as long
+// after it, nor the next periodic one sooner than gitCostEvery times.
 const (
 	gitWorkers      = 2
 	gitTick         = time.Second
 	gitSessionEvery = 5 * time.Second
 	gitIdleEvery    = 30 * time.Second
 	gitMinGap       = 2 * time.Second
+	gitRecent       = time.Minute
+	gitCostGap      = 5
+	gitCostEvery    = 20
 )
 
 // The git reads, variables so a test can stand in for git.
@@ -50,7 +57,8 @@ type gitEntry struct {
 	paths   worktree.Paths
 	mtimes  map[string]time.Time
 	due     bool
-	last    time.Time // when the last refresh began
+	last    time.Time     // when the last refresh began
+	took    time.Duration // how long it ran
 	running bool
 	lastErr string // the last error logged, cleared by a read that works
 }
@@ -149,19 +157,29 @@ func (d *Daemon) gitRound(ctx context.Context, slots chan struct{}) {
 		root string
 		e    *gitEntry
 	}
+	// The worktrees an agent works in, whose files change: a home
+	// session's or a main checkout's with its agents idle for longer is
+	// read as any other, its HEAD, index and refs watched all the same.
+	busy := map[string]bool{}
+	for _, a := range d.agents {
+		if a.WorktreeID != "" && a.Liveness != protocol.Gone &&
+			(a.Activity == protocol.Working || a.Activity == protocol.Blocked || now.Sub(a.ActivityAt) < gitRecent) {
+			busy[a.WorktreeID] = true
+		}
+	}
 	var due []job
 	for root, e := range d.gits {
 		if changed[root] {
 			e.due = true
 		}
-		if e.running || now.Sub(e.last) < gitMinGap || d.removing[root] {
+		if e.running || now.Sub(e.last) < max(gitMinGap, gitCostGap*e.took) || d.removing[root] {
 			continue
 		}
 		every := gitIdleEvery
-		if w := d.worktrees[root]; w.Session != "" || d.mainAgents[w.ID] {
+		if busy[d.worktrees[root].ID] {
 			every = gitSessionEvery
 		}
-		if e.due || now.Sub(e.last) >= every {
+		if e.due || now.Sub(e.last) >= max(every, gitCostEvery*e.took) {
 			due = append(due, job{root, e})
 		}
 	}
@@ -223,14 +241,16 @@ func (d *Daemon) refreshGit(ctx context.Context, root string, e *gitEntry) {
 	if files := e.watched(); len(files) > 0 {
 		before = statMtimes(files)
 	}
+	began := time.Now()
 	st, head, paths, err := gitStatusRead(ctx, root, e.name, &e.cache)
 	after := ""
 	if err == nil {
 		after, err = gitHeadRead(ctx, root)
 	}
+	took := time.Since(began)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	e.running = false
+	e.running, e.took = false, took
 	if ctx.Err() != nil || d.gits[root] != e {
 		return
 	}

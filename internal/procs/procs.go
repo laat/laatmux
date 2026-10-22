@@ -10,8 +10,11 @@
 package procs
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -150,13 +153,32 @@ func Find(tty string) (Identity, bool, error) {
 	return id, ok, nil
 }
 
-// Exists reports whether the identity's process is still on the tty.
+// Exists reports whether the identity's process is still on the tty:
+// the process with its pid, started when it was, not a zombie, with the
+// tty as its controlling terminal. It reads that one process, not every
+// process on the tty with its argv and environment as ListTTY does: a
+// poll asks it of every agent, and macOS hands back a buffer of
+// kern.argmax for each process's arguments.
 func Exists(tty string, id Identity) (bool, error) {
-	procs, err := ListTTY(tty)
+	dev, err := ttyDev(tty)
 	if err != nil {
 		return false, err
 	}
-	return ExistsIn(procs, id), nil
+	return existsOn(dev, id), nil
+}
+
+// ttyDev is the device number of a tty, which a process's controlling
+// terminal is matched by.
+func ttyDev(tty string) (uint64, error) {
+	st, err := os.Stat(tty)
+	if err != nil {
+		return 0, err
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("procs: unexpected stat type for %s", tty)
+	}
+	return uint64(sys.Rdev), nil
 }
 
 // ExistsIn is Exists on a listed process table.
