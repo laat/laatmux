@@ -502,6 +502,70 @@ func TestGitTriggerDuringRead(t *testing.T) {
 	}
 }
 
+// A worktree is read every gitSessionEvery while an agent works in it,
+// working, blocked or with its activity changed within gitRecent, and
+// every gitIdleEvery otherwise, its home session or not; a refresh that
+// took long stretches the cadence by gitCostEvery and the gap after it,
+// which a due worktree waits out, by gitCostGap.
+func TestGitCadence(t *testing.T) {
+	f := installFakeGit(t)
+	d, _ := gitDaemon(t)
+	f.head["/w/a"] = "h1"
+	refresh(t, d)
+	reads := func(ago, took time.Duration, due bool) int {
+		t.Helper()
+		d.mu.Lock()
+		e := d.gits["/w/a"]
+		e.last, e.took, e.due = time.Now().Add(-ago), took, due
+		d.mu.Unlock()
+		f.mu.Lock()
+		n := f.reads
+		f.mu.Unlock()
+		refresh(t, d)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.reads - n
+	}
+	agent := func(act protocol.Activity, changed time.Duration) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.agents["laatmux/%1"] = protocol.Agent{ID: "env/laatmux/%1", WorktreeID: d.worktreeID("/w/a"), Activity: act, Liveness: protocol.Alive, ActivityAt: time.Now().Add(-changed)}
+	}
+	session := gitSessionEvery + time.Second
+	if n := reads(session, 0, false); n != 0 {
+		t.Errorf("no agent, a home session, past the session cadence: %d reads", n)
+	}
+	if n := reads(gitIdleEvery+time.Second, 0, false); n != 1 {
+		t.Errorf("no agent, past the idle cadence: %d reads", n)
+	}
+	for _, c := range []struct {
+		act     protocol.Activity
+		changed time.Duration
+		want    int
+	}{
+		{protocol.Working, time.Hour, 1}, {protocol.Blocked, time.Hour, 1},
+		{protocol.Idle, 10 * time.Second, 1}, {protocol.Idle, gitRecent + time.Minute, 0},
+	} {
+		agent(c.act, c.changed)
+		if n := reads(session, 0, false); n != c.want {
+			t.Errorf("an agent %s, changed %v ago: %d reads, want %d", c.act, c.changed, n, c.want)
+		}
+	}
+	agent(protocol.Working, time.Hour)
+	if n := reads(session, time.Second, false); n != 0 {
+		t.Errorf("a refresh that took 1s, read again after %v: %d reads", session, n)
+	}
+	if n := reads(gitCostEvery*time.Second+time.Second, time.Second, false); n != 1 {
+		t.Errorf("a refresh that took 1s, past its stretched cadence: %d reads", n)
+	}
+	if n := reads(gitMinGap+time.Second, time.Second, true); n != 0 {
+		t.Errorf("due, a refresh that took 1s, inside its stretched gap: %d reads", n)
+	}
+	if n := reads(gitCostGap*time.Second+time.Second, time.Second, true); n != 1 {
+		t.Errorf("due, past its stretched gap: %d reads", n)
+	}
+}
+
 // A root an rm is removing gets no git status: a refresh is not
 // started for it, and one in flight is dropped, so the files going
 // under the read are never published as deletions. A removal that

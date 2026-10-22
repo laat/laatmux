@@ -389,11 +389,15 @@ truth; labels only place new things.
     later), `rebasing`, and `stale` when the last refresh timed out.
 
   Two workers beside the listing refresh it: every 5 s for a worktree
-  or a main checkout with a home session and for a main checkout with
-  an agent in it, every 30 s otherwise, and at once after an add, a
-  run ending, or a change to `HEAD`, `index` or the refs of the branch
-  and its base. A refresh is at least 2 s after the last one, never waits
-  on the listing, and upserts only when a value changed. Git runs with
+  or a main checkout an agent works in, working or blocked or with its
+  status changed in the last minute, every 30 s otherwise, a home
+  session's included, and at once after an add, a run ending, or a
+  change to `HEAD`, `index` or the refs of the branch and its base. A
+  refresh is at least 2 s after the last one, never waits on the
+  listing, and upserts only when a value changed. One that took long
+  stretches both: git status walks the whole tree, 0.8 s of CPU in a
+  checkout of 28k files, so the next refresh is at least five times as
+  long after it began and the next periodic one twenty times. Git runs with
   `--no-optional-locks`, the diff against HEAD without refreshing the
   index, the diffs with `--no-ext-diff --no-textconv`, and no transport
   allowed: a refresh never takes the index lock, runs a diff driver, or
@@ -465,7 +469,7 @@ truth; labels only place new things.
   managed session with a pane laatmux made at its root, all of whose
   panes are inside it, which a jump makes with the user's shell (`jump`
   below) and `add` never makes; its `git` object is read as a
-  worktree's, every 5 s while it has a home or an agent is in it. The
+  worktree's, every 5 s while an agent works in it. The
   rest of the checkouts under `repos`, many on a machine
   that clones there by hand, have no record, line or refresh. A HEAD
   that cannot be read, in a checkout with no worktree whose origin the
