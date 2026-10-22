@@ -99,6 +99,9 @@ func (t Timings) withDefaults() Timings {
 type Panes interface {
 	ListPanes(ctx context.Context) ([]tmux.Pane, error)
 	Capture(ctx context.Context, paneID string, n int) ([]string, error)
+	// CaptureAll is Capture for several panes at once, by id; an error
+	// is the whole call's, with nothing returned.
+	CaptureAll(ctx context.Context, paneIDs []string, n int) (map[string][]string, error)
 	EnsureConfigured(ctx context.Context) error
 	NewSession(ctx context.Context, o tmux.NewSessionOpts) (tmux.Session, error)
 	// KillSessionID kills the session with the id a pane is listed
@@ -785,13 +788,39 @@ func (d *Daemon) pollTarget(ctx context.Context, t *target, now time.Time) error
 			t.configuredServer = panes[0].ServerPID
 		}
 	}
+	screens := d.prefetch(ctx, t, panes)
 	seen := map[string]bool{}
 	for _, p := range panes {
 		seen[paneKey(t.Label, p.ID)] = true
-		d.observe(ctx, t, p, now)
+		d.observe(ctx, t, p, now, screens)
 	}
 	d.removeUnseen(t, seen)
 	return nil
+}
+
+// prefetch captures, in one go (CaptureAll), the screens of the panes
+// whose agent the last poll saw alive: those are the ones observe
+// captures, every poll, and a tmux client for each was most of what a
+// poll cost. A pane whose agent is new this poll is captured on its
+// own, and so is every pane when the batch fails, a pane gone since the
+// listing say; nil then.
+func (d *Daemon) prefetch(ctx context.Context, t *target, panes []tmux.Pane) map[string][]string {
+	var ids []string
+	d.mu.Lock()
+	for _, p := range panes {
+		if st, ok := d.panes[paneKey(t.Label, p.ID)]; ok && st.hasIdentity && !st.gone && !p.Dead {
+			ids = append(ids, p.ID)
+		}
+	}
+	d.mu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	screens, err := t.Tmux.CaptureAll(ctx, ids, d.cfg.CaptureLines)
+	if err != nil {
+		return nil
+	}
+	return screens
 }
 
 // removeUnseen forgets this server's panes that are not in seen. A remove is
@@ -821,7 +850,7 @@ func (d *Daemon) agentID(key string) string { return d.cfg.EnvironmentID + "/" +
 // any. A pane is published as an agent once an agent instance has been
 // identified in it; before that it is a pane record, while it is inside a
 // worktree root.
-func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.Time) {
+func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.Time, screens map[string][]string) {
 	key := paneKey(t.Label, p.ID)
 	path := d.paths.resolve(panePath(p))
 	d.mu.Lock()
@@ -853,6 +882,10 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 		if st.hasIdentity {
 			st.gone = true
 		}
+	case p.Own && !st.hasIdentity:
+		// A sidebar pane or a workspace session's attach pane is
+		// laatmux's own and runs no agent; its processes are not
+		// looked up every poll for one.
 	case st.hasIdentity && !st.gone && !st.identity.Tentative:
 		ok, err := d.cfg.Procs.Exists(p.TTY, st.identity)
 		if err != nil {
@@ -900,7 +933,11 @@ func (d *Daemon) observe(ctx context.Context, t *target, p tmux.Pane, now time.T
 	// Screen and title.
 	var res detect.Result
 	if !st.gone {
-		screen, cerr := t.Tmux.Capture(ctx, p.ID, d.cfg.CaptureLines)
+		screen, ok := screens[p.ID]
+		var cerr error
+		if !ok {
+			screen, cerr = t.Tmux.Capture(ctx, p.ID, d.cfg.CaptureLines)
+		}
 		if cerr != nil {
 			// An unavailable screen is not an empty screen. Keep the last
 			// activity rather than letting the idle fallback erase a prompt.

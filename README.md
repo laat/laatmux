@@ -1918,7 +1918,8 @@ only to managed sessions.
   root and prefix key tables unbound) and `new` creates sessions there. A
   daemon whose list leaves it out does not advertise the `new` capability.
 - Every other server in `tmux_servers`, the user's `default` included, is
-  observed read-only: `list-panes` and `capture-pane`, nothing else. No
+  observed read-only: `list-panes`, `capture-pane` and the
+  `display-message -p` that marks the captures, nothing else. No
   workmux config, state or hooks are read. `default` selects `-L default`
   explicitly, so a daemon started from inside another tmux server still
   polls the default one rather than following the inherited `TMUX`.
@@ -2149,7 +2150,15 @@ records:
   counts as claude.
 - **Detection** evaluates herdr's rule manifests against the pane title and the
   visible screen every 300 ms. Captures are unconditional and never include
-  scrollback, so a dismissed dialog in history cannot override the prompt. A
+  scrollback, so a dismissed dialog in history cannot override the prompt.
+  The panes whose agent the last poll saw alive are captured in one tmux
+  invocation per server, each `capture-pane` after a `display-message -p`
+  that prints a mark drawn for the call, and the output split at the marks:
+  a tmux client per pane, several times a second, was most of what a poll
+  cost. A pane whose agent is new is captured on its own, and so is every
+  pane when the batch fails, one gone since the listing say. laatmux's own
+  panes, the sidebars and the workspace sessions' attach panes, are not
+  looked up for an agent. A
   failed capture is an unavailable observation, not an empty screen: the last
   activity is kept. Working to idle
   is debounced (3 confirmations, 700 ms cap); a visible idle prompt bypasses it.

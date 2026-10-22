@@ -447,6 +447,40 @@ func TestObserveShells(t *testing.T) {
 	}
 }
 
+// A poll captures the screens of the agents the last one saw alive in
+// one batch, and a pane whose agent is new this poll on its own; a
+// failed batch falls back to a capture per pane. A pane laatmux made for
+// itself, a sidebar or an attach pane, is not looked up for an agent:
+// the fake's process table, which answers every tty alike, would
+// otherwise make one of it.
+func TestPollBatchesCaptures(t *testing.T) {
+	fp := &fakeProcs{tables: []procTable{{procs: []procs.Proc{shell, claude}}}}
+	own := pane
+	own.ID, own.TTY, own.Own = "%2", "/dev/pts/10", true
+	ft := &fakeServer{panes: []tmux.Pane{pane, own}, screen: blkScr}
+	d := New(Config{EnvironmentID: "env", Targets: managed(ft), Procs: fp})
+	d.poll(context.Background())
+	if ft.batches != 0 {
+		t.Fatalf("batched before an agent was known: %d", ft.batches)
+	}
+	d.poll(context.Background())
+	_, ag := d.agentRecords()
+	if len(ag) != 1 || ag[0].PaneID != "%1" || ag[0].Activity != protocol.Blocked || ft.batches != 1 || ft.captures != 1 {
+		t.Fatalf("one batch for the known agent, none for its own pane: %+v, %d batches, %d captures", ag, ft.batches, ft.captures)
+	}
+	ft.captureErr = errors.New("capture-pane: pane busy")
+	d.poll(context.Background())
+	ft.captureErr = nil
+	ft.screen = idleScr
+	for i := 0; i < 4; i++ {
+		d.poll(context.Background())
+	}
+	_, ag = d.agentRecords()
+	if len(ag) != 1 || ag[0].Activity != protocol.Idle {
+		t.Fatalf("after a failed batch: %+v", ag)
+	}
+}
+
 // Discovery of a managed server reconciles it, once per
 // server instance, including a server that appears after startup.
 func TestDiscoveryConfiguresManagedServer(t *testing.T) {

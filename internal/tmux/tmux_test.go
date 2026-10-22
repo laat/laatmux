@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -888,6 +889,56 @@ func TestListPanesEmptyServer(t *testing.T) {
 	panes, err := s.ListPanes(ctx)
 	if err != nil || len(panes) != 0 {
 		t.Fatalf("empty server: %v %v", panes, err)
+	}
+}
+
+// CaptureAll gives each pane the screen Capture gives it, over more
+// panes than one invocation takes, a screen with trailing blank lines
+// and one cut to n lines; a pane gone since the listing fails the call,
+// with nothing returned.
+func TestCaptureAll(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	s := Server{Name: fmt.Sprintf("laatmux-capture-%d", os.Getpid())}
+	if _, err := s.Run(ctx, "-f", "/dev/null", "new-session", "-d", "-x", "60", "-y", "10", "printf 'one\\ntwo\\n'; sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Run(ctx, "kill-server") })
+	for _, cmd := range []string{"printf 'a\\n\\n\\nb\\n'; sleep 600", "printf 'x'; sleep 600"} {
+		if _, err := s.Run(ctx, "split-window", "-d", cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	panes, err := s.ListPanes(ctx)
+	if err != nil || len(panes) != 3 {
+		t.Fatalf("panes %v %v", panes, err)
+	}
+	var ids []string
+	for _, p := range panes {
+		ids = append(ids, p.ID)
+	}
+	defer func(n int) { captureBatch = n }(captureBatch)
+	captureBatch = 2
+	for _, n := range []int{0, 1} {
+		got, err := s.CaptureAll(ctx, ids, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			want, err := s.Capture(ctx, id, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got[id], want) {
+				t.Errorf("n=%d %s: %q, want %q", n, id, got[id], want)
+			}
+		}
+	}
+	if got, err := s.CaptureAll(ctx, append(ids, "%999"), 0); err == nil || got != nil {
+		t.Errorf("a pane gone: %v %v", got, err)
 	}
 }
 
